@@ -293,6 +293,7 @@ func TestEachURLShapeReachesTheCatalogAsItsOwnScope(t *testing.T) {
 		{"/app/7/mcp", scope{kind: scopeAll}},
 		{"/app/7/mcp/applications", scope{kind: scopeCategory, category: "applications"}},
 		{"/app/7/mcp/elitea_core/applications", scope{kind: scopeCategory, category: "elitea_core/applications"}},
+		{"/app/7/mcp/elitea_core/skills", scope{kind: scopeCategory, category: "elitea_core/skills"}},
 		{"/app/7/mcp/toolkits", scope{kind: scopeCategory, category: "toolkits"}},
 		{"/app/7/mcp/toolkit/42", scope{kind: scopeResource, resourceType: "toolkit", resourceID: 42}},
 		{"/app/7/mcp/agent/42", scope{kind: scopeResource, resourceType: "application", resourceID: 42}},

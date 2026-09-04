@@ -68,6 +68,7 @@ var mcpEntityTypes = map[string]string{
 var mcpCategories = map[string]string{
 	"applications":             "agents in this project whose version carries the `mcp` tag",
 	"elitea_core/applications": "fixed internal application-builder operations",
+	"elitea_core/skills":       "fixed internal skill-builder operations",
 	"toolkits":                 "toolkits in this project flagged meta.mcp_options.available_by_mcp",
 }
 

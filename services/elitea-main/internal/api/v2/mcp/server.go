@@ -275,6 +275,9 @@ func (h *Handler) callTool(r *http.Request, schema string, s scope, message rpcM
 	if target.internalApplicationOperation != "" {
 		return newResult(message.ID, h.callInternalApplicationTool(r, projectID, target, params.Arguments))
 	}
+	if target.internalSkillOperation != "" {
+		return newResult(message.ID, h.callInternalSkillTool(r, projectID, target, params.Arguments))
+	}
 
 	// NO RUNTIME. The composition root had no AgentStart use case to give this
 	// handler, which is what `runtime.enabled` being off looks like from here.
@@ -311,6 +314,43 @@ func (h *Handler) callInternalApplicationTool(
 	target Tool,
 	arguments map[string]any,
 ) map[string]any {
+	if h.internalApplications == nil {
+		return errorResult("this deployment cannot execute internal application tools; nothing was executed")
+	}
+	return h.callInternalTool(r, projectID, target, arguments, "application", func(actorID int64) (internalApplicationExecution, error) {
+		return h.internalApplications.Execute(
+			r.Context(), projectID, actorID, target.internalApplicationOperation, arguments,
+		)
+	})
+}
+
+func (h *Handler) callInternalSkillTool(
+	r *http.Request,
+	projectID int64,
+	target Tool,
+	arguments map[string]any,
+) map[string]any {
+	if h.internalSkills == nil {
+		return errorResult("this deployment cannot execute internal skill tools; nothing was executed")
+	}
+	return h.callInternalTool(r, projectID, target, arguments, "skill", func(actorID int64) (internalApplicationExecution, error) {
+		return h.internalSkills.Execute(
+			r.Context(), projectID, actorID, target.internalSkillOperation, arguments,
+		)
+	})
+}
+
+func (h *Handler) callInternalTool(
+	r *http.Request,
+	projectID int64,
+	target Tool,
+	arguments map[string]any,
+	category string,
+	execute func(int64) (internalApplicationExecution, error),
+) map[string]any {
+	if arguments == nil {
+		arguments = make(map[string]any)
+	}
 	if supplied, present := arguments["project_id"]; present {
 		text := scalarArgument(supplied)
 		parsed, err := strconv.ParseInt(text, 10, 64)
@@ -335,17 +375,12 @@ func (h *Handler) callInternalApplicationTool(
 	if refusal != nil {
 		return refusal
 	}
-	if h.internalApplications == nil {
-		return errorResult("this deployment cannot execute internal application tools; nothing was executed")
-	}
-	execution, err := h.internalApplications.Execute(
-		r.Context(), projectID, actorID, target.internalApplicationOperation, arguments,
-	)
+	execution, err := execute(actorID)
 	if err != nil {
-		return errorResult("the internal application operation failed; nothing else was disclosed")
+		return errorResult("the internal " + category + " operation failed; nothing else was disclosed")
 	}
 	if execution.status >= http.StatusInternalServerError || !json.Valid(execution.body) {
-		return errorResult("the internal application operation failed; nothing else was disclosed")
+		return errorResult("the internal " + category + " operation failed; nothing else was disclosed")
 	}
 	text := strings.TrimSpace(string(execution.body))
 	if text == "" {

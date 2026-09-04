@@ -184,6 +184,8 @@ type Handler struct {
 	// category in process. It is nil only in protocol unit tests or when Main
 	// has no database composition.
 	internalApplications internalApplicationExecutor
+	// internalSkills executes the fixed internal skill-builder category.
+	internalSkills internalSkillExecutor
 }
 
 // AgentStartUseCase is the narrow slice of
@@ -241,6 +243,7 @@ func NewHandler(
 	if pool != nil {
 		handler.registry = mcpregistry.NewStore(pool)
 		handler.internalApplications = newPostgresInternalApplicationExecutor(pool)
+		handler.internalSkills = newPostgresInternalSkillExecutor(pool)
 	}
 	return handler
 }

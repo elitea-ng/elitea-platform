@@ -67,6 +67,9 @@ type Tool struct {
 	// internalApplicationOperation is populated only for the fixed
 	// elitea_core/applications category. It is never serialized.
 	internalApplicationOperation internalApplicationOperation
+	// internalSkillOperation is populated only for the fixed skills category.
+	// It is never serialized.
+	internalSkillOperation internalSkillOperation
 	// permission is re-checked for each internal API invocation.
 	permission string
 }
@@ -124,6 +127,9 @@ func (p postgresToolSource) tools(ctx context.Context, schema string, s scope) (
 	case scopeCategory:
 		if s.category == internalApplicationsCategory {
 			return internalApplicationTools(), nil
+		}
+		if s.category == internalSkillsCategory {
+			return internalSkillTools(), nil
 		}
 		if s.category == "applications" {
 			return p.agentTools(ctx, schema)
