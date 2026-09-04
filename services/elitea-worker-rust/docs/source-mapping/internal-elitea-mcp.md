@@ -356,6 +356,33 @@ stored toolkit parameters, internal PATs are restricted to the configured Main
 origin, and external origins receive no delegated platform credential. The
 existing Rust configured-MCP tests remain the worker-side protocol proof.
 
+### External direct-tool execution boundary
+
+The current platform resolves an opted-in toolkit row in
+`elitea_core/utils/mcp_service.py::__get_toolkit_by_name`, then
+`methods/runtool.py` schedules the exact saved toolkit ID, operation name, and
+arguments. The SDK's `runtime/clients/client.py::test_toolkit_tool` builds that
+one toolkit and invokes the selected operation directly. It does not ask an LLM
+to plan the call.
+
+Rust now has the matching direct execution kernel in
+`src/toolkits/direct_execution.rs`. It accepts exactly one already-materialized
+toolset and an original toolkit/operation identity retained by Main, enumerates
+the toolset once with the shared bound, and invokes the exact operation with an
+out-of-loop ADK context. It rejects a missing or duplicated target, bounded
+argument violations, over-limit results, tools requiring unprojected ADK user
+scopes, and every operation whose runtime `Tool::is_read_only()` is false.
+Delegated authorization remains a typed redacted outcome instead of becoming a
+generic provider failure.
+
+This kernel is intentionally not a production capability yet. The next slice
+must carry one immutable toolkit snapshot through a reference-only command,
+claim-scoped materialization, durable terminal result, and Main's synchronous
+MCP `tools/call` waiter. Effectful operations remain closed until a durable
+effect identity/receipt makes redelivery safe; reusing `agent.execute.adhoc.v1`
+would be incorrect because it would add a model turn and change the current
+direct-call semantics.
+
 ## Remaining gates
 
 Other internal categories must be mapped operation by operation. No generic

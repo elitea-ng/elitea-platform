@@ -7,6 +7,7 @@
 #![allow(dead_code)] // Materialization remains capability-gated.
 
 mod delegated_auth;
+mod direct_execution;
 mod families;
 mod invocation;
 mod materialize;
@@ -52,6 +53,8 @@ mod aha_tests;
 mod azure_search_tests;
 #[cfg(test)]
 mod azure_tests;
+#[cfg(test)]
+mod direct_execution_tests;
 #[cfg(test)]
 mod elastic_tests;
 #[cfg(test)]
