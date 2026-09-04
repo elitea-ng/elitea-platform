@@ -132,6 +132,33 @@ func contains(names []string, want string) bool {
 	return false
 }
 
+type staticToolkitArgumentSchemas map[string]map[string]map[string]any
+
+func (s staticToolkitArgumentSchemas) ToolkitArgumentSchemas(
+	toolkitType string,
+) (map[string]map[string]any, bool, error) {
+	schemas, found := s[toolkitType]
+	return schemas, found, nil
+}
+
+func listedTool(t *testing.T, router chi.Router, target, name string) map[string]any {
+	t.Helper()
+	recorder := do(t, router, http.MethodPost, target, `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("%s: status = %d (%s)", target, recorder.Code, recorder.Body.String())
+	}
+	result, _ := decode(t, recorder)["result"].(map[string]any)
+	entries, _ := result["tools"].([]any)
+	for _, entry := range entries {
+		tool, _ := entry.(map[string]any)
+		if tool["name"] == name {
+			return tool
+		}
+	}
+	t.Fatalf("tool %q missing from %v", name, entries)
+	return nil
+}
+
 /* ── seeds ─────────────────────────────────────────────────────────────── */
 
 // seedAgent creates an application with one version, optionally tagged.
@@ -271,6 +298,55 @@ func TestToolsListServesOnlyToolkitsFlaggedAvailableByMCP(t *testing.T) {
 	}
 	if contains(names, "Private_get_issue") {
 		t.Fatalf("unflagged toolkit leaked into %v", names)
+	}
+}
+
+// The external MCP schema comes from the same digest-pinned SDK catalogue as
+// the toolkit editor. Dynamic types remain explicit open objects because their
+// operation schemas are discovered from a server or OpenAPI document at run
+// time and therefore cannot appear in the built-in snapshot.
+func TestToolkitToolsUsePinnedArgumentSchemasAndDynamicFallback(t *testing.T) {
+	pool := newMCPPool(t)
+	schemas := staticToolkitArgumentSchemas{
+		"github": {
+			"get_issue": {
+				"type": "object",
+				"properties": map[string]any{
+					"issue_number": map[string]any{"type": "integer"},
+				},
+				"required": []string{"issue_number"},
+			},
+		},
+		"openapi": {},
+	}
+	handler := mcp.NewHandler(
+		pool,
+		apimw.NewDBPersonalProjectResolver(pool),
+		nil,
+		nil,
+		mcp.WithToolkitArgumentSchemas(schemas),
+	)
+	router := newRouter(handler, callerUserID)
+
+	seedToolkit(t, pool, homeSchema, "Repo", "github", availableByMCP, "get_issue")
+	seedToolkit(t, pool, homeSchema, "Dynamic", "openapi", availableByMCP, "search")
+
+	pinned := listedTool(t, router, "/app/"+homeProject+"/mcp", "Repo_get_issue")
+	pinnedSchema, _ := pinned["inputSchema"].(map[string]any)
+	properties, _ := pinnedSchema["properties"].(map[string]any)
+	issueNumber, _ := properties["issue_number"].(map[string]any)
+	if issueNumber["type"] != "integer" {
+		t.Fatalf("pinned input schema = %v, want integer issue_number", pinnedSchema)
+	}
+	required, _ := pinnedSchema["required"].([]any)
+	if len(required) != 1 || required[0] != "issue_number" {
+		t.Fatalf("pinned required = %v, want [issue_number]", required)
+	}
+
+	dynamic := listedTool(t, router, "/app/"+homeProject+"/mcp", "Dynamic_search")
+	dynamicSchema, _ := dynamic["inputSchema"].(map[string]any)
+	if dynamicSchema["additionalProperties"] != true {
+		t.Fatalf("dynamic input schema = %v, want explicit open object", dynamicSchema)
 	}
 }
 

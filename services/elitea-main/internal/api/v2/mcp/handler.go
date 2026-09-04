@@ -172,6 +172,11 @@ type Handler struct {
 	// off (`runtime.enabled`), which is why every use of it is guarded — see
 	// callTool, which then answers the untouched ToolExecutionUnavailableReason.
 	start AgentStartUseCase
+	// toolkitArgumentSchemas supplies the digest-pinned SDK argument schemas
+	// used by external Elitea-as-MCP toolkit tools. Dynamic toolkit families
+	// legitimately have no pinned schema and retain the explicit open-object
+	// fallback in catalog.go.
+	toolkitArgumentSchemas ToolkitArgumentSchemaSource
 	// permissions authorizes an EXECUTION, and only an execution.
 	//
 	// The endpoint as a whole is gated at the MEMBERSHIP tier
@@ -205,6 +210,26 @@ type Handler struct {
 // arguments. Internal builder executors are optional because protocol-only unit
 // tests and runtime-disabled deployments may deliberately omit them.
 type Option func(*Handler)
+
+// ToolkitArgumentSchemaSource supplies one built-in toolkit type's per-tool
+// argument JSON Schemas, keyed by the SDK operation name. found=false means
+// the type is not in the pinned built-in catalogue; an empty map is a valid
+// answer for a dynamic family such as MCP or OpenAPI.
+//
+// The narrow interface lives here because the implementation is owned by
+// internal/runtimecomposition, which imports the API layer to compose routes.
+type ToolkitArgumentSchemaSource interface {
+	ToolkitArgumentSchemas(toolkitType string) (map[string]map[string]any, bool, error)
+}
+
+// WithToolkitArgumentSchemas gives external Elitea-as-MCP the same immutable
+// SDK schema snapshot used by the toolkit editor. The source is actor-neutral;
+// project and selected-tool admission remain row-backed in catalog.go.
+func WithToolkitArgumentSchemas(source ToolkitArgumentSchemaSource) Option {
+	return func(handler *Handler) {
+		handler.toolkitArgumentSchemas = source
+	}
+}
 
 // WithInternalToolkitHandler reuses the fully composed Main toolkit handler for
 // internal MCP calls. The caller must pass the same instance used by the REST

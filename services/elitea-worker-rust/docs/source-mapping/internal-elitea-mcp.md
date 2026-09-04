@@ -2,9 +2,11 @@
 
 Status: the applications and skills categories, five Main-owned toolkit
 builder operations, five Main-owned configuration operations, and three
-Main-owned notification operations are implemented. Live per-instance toolkit
-discovery, typed model configuration operations, the wider internal builder
-family, and external Elitea-as-MCP publishing remain partial.
+Main-owned notification operations are implemented. External Elitea-as-MCP
+listing uses the current opt-ins and built-in SDK argument schemas; toolkit
+execution remains capability-closed. Live per-instance toolkit discovery,
+typed model configuration operations, the wider internal builder family, and
+external Elitea-as-MCP execution remain partial.
 
 This ledger keeps three MCP products separate:
 
@@ -20,6 +22,31 @@ This ledger keeps three MCP products separate:
    identity, transport, and execution rules.
 
 Implementing one layer does not complete either of the other two.
+
+## External Elitea-as-MCP catalogue
+
+The project-wide external endpoint publishes only two current-platform opt-ins:
+application versions tagged `mcp`, and toolkit rows whose
+`meta.mcp_options.available_by_mcp` is true. Application tools retain the
+current one-string `task` schema. Each selected built-in toolkit operation now
+uses its exact argument schema from Main's digest-pinned SDK snapshot, the same
+source used by the toolkit editor. The schema is loaded once per toolkit row,
+not once per selected operation.
+
+The row query is a translation of the current SQLAlchemy application-version,
+tag-association, and `elitea_tools` model reads. It stays behind the MCP
+catalogue boundary because the tenant schema name is selected at runtime and a
+PostgreSQL identifier cannot be expressed as a sqlc value parameter. Fixed
+schema reads elsewhere continue to use sqlc repositories.
+
+The descriptor also retains the exact toolkit row ID and original selected
+operation name as private, non-JSON fields. This does not activate execution;
+it prevents the later durable executor from trying to reverse the sanitized
+MCP name into a row. Dynamic `mcp`, `mcp_config`, and `openapi` operations have
+no built-in schema by design and receive an explicit open-object fallback until
+their already-discovered instance schemas are projected into this catalogue.
+Snapshot failures abort listing with the existing redacted protocol error
+instead of silently weakening every built-in tool schema.
 
 ## Applications category
 

@@ -151,6 +151,8 @@ func TestToolWireShapeExcludesTargetDiscriminator(t *testing.T) {
 		InputSchema:          map[string]any{"type": "object"},
 		applicationID:        41,
 		applicationVersionID: 99,
+		toolkitID:            73,
+		toolkitToolName:      "get_issue",
 	}
 	bare := Tool{
 		Name:        "my_agent",

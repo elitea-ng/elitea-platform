@@ -64,6 +64,13 @@ type Tool struct {
 	// ResolveCurrentApplicationTurn), so a target with no version cannot be
 	// admitted at all.
 	applicationVersionID int64
+	// toolkitID and toolkitToolName pin an external toolkit call to the exact
+	// opted-in row and selected SDK operation that produced this descriptor.
+	// They are populated now even though durable toolkit execution remains
+	// capability-closed, so that later execution cannot reverse a lossy MCP
+	// name back into an arbitrary row.
+	toolkitID       int64
+	toolkitToolName string
 	// internalApplicationOperation is populated only for the fixed
 	// elitea_core/applications category. It is never serialized.
 	internalApplicationOperation internalApplicationOperation
@@ -284,7 +291,7 @@ func (p postgresToolSource) toolkitTools(ctx context.Context, schema string, too
 		return nil, errNoPool
 	}
 	query := fmt.Sprintf(`
-		SELECT name, type, COALESCE(description, ''), COALESCE(settings -> 'selected_tools', '[]'::jsonb)
+		SELECT id, name, type, COALESCE(description, ''), COALESCE(settings -> 'selected_tools', '[]'::jsonb)
 		FROM %s.elitea_tools
 		WHERE meta #>> '{mcp_options,available_by_mcp}' = 'true'`, schema)
 	args := []any{}
@@ -302,20 +309,32 @@ func (p postgresToolSource) toolkitTools(ctx context.Context, schema string, too
 
 	var tools []Tool
 	for rows.Next() {
+		var id int64
 		var name, toolkitType, description string
 		var selected []byte
-		if err := rows.Scan(&name, &toolkitType, &description, &selected); err != nil {
+		if err := rows.Scan(&id, &name, &toolkitType, &description, &selected); err != nil {
+			return nil, err
+		}
+		argumentSchemas, schemasKnown, err := p.toolkitSchemas(toolkitType)
+		if err != nil {
 			return nil, err
 		}
 		for _, tool := range selectedToolNames(selected) {
+			inputSchema := unknownToolkitToolSchema()
+			if schemasKnown {
+				if schema, found := argumentSchemas[tool]; found {
+					inputSchema = schema
+				}
+			}
 			tools = append(tools, Tool{
 				Name: toolIdentifier(name + "_" + tool),
-				// pylon's exact sentence. It is the only description a toolkit
-				// tool has: the per-tool text lives in the SDK's argument
-				// schemas, which this service does not hold (see below).
+				// pylon's exact sentence. Per-argument descriptions remain in
+				// InputSchema, from the same SDK snapshot used by the editor.
 				Description: fmt.Sprintf(
 					"Tool '%s' from toolkit type '%s'. Toolkit description: %s", tool, toolkitType, description),
-				InputSchema: toolkitToolSchema(),
+				InputSchema:     inputSchema,
+				toolkitID:       id,
+				toolkitToolName: tool,
 			})
 		}
 	}
@@ -325,28 +344,38 @@ func (p postgresToolSource) toolkitTools(ctx context.Context, schema string, too
 	return dedupeByName(tools), nil
 }
 
-// toolkitToolSchema is the input schema a toolkit tool advertises.
+// toolkitSchemas obtains one detached per-type schema map. It is deliberately
+// called once per toolkit row rather than once per selected operation: the
+// digest-pinned source performs a bounded deep clone, and repeating that work
+// for every selected tool would turn a 44-tool GitHub toolkit into 44 clones of
+// the same catalogue entry.
+func (p postgresToolSource) toolkitSchemas(toolkitType string) (map[string]map[string]any, bool, error) {
+	if p.handler == nil || p.handler.toolkitArgumentSchemas == nil {
+		return nil, false, nil
+	}
+	return p.handler.toolkitArgumentSchemas.ToolkitArgumentSchemas(toolkitType)
+}
+
+// unknownToolkitToolSchema is the fallback for an argument schema the pinned
+// catalogue genuinely cannot know.
 //
 // pylon fills this from `get_toolkit_schemas(...)[type].properties.selected_tools
 // .args_schemas[tool]` — a registry the Python worker builds by importing the
-// SDK and calling `schema()` on every toolkit class. This service holds a
-// projection of that registry
-// (`internal/runtimecomposition/current_toolkit_schema_snapshot.json`), but the
-// projection carries only the settings-expansion and naming annotations, not
-// per-tool argument schemas, so there is nothing here to read.
+// SDK and calling `schema()` on every toolkit class. Main's composition root
+// injects the equivalent digest-pinned projection from
+// `internal/runtimecomposition/current_toolkit_schema_snapshot.json`.
 //
-// An open object is what pylon itself emits whenever the lookup misses
-// (`.get(tool, {})`), and it is the honest schema for a tool whose arguments
-// this service genuinely does not know: it says "an object, contents
-// unconstrained" rather than "no arguments", which `{"type":"object",
-// "properties":{}}` with no additionalProperties would imply to a strict client.
-func toolkitToolSchema() map[string]any {
+// Dynamic MCP, MCP-config and OpenAPI tools are discovered from a remote server
+// or specification and therefore legitimately have no built-in argument
+// schema. An open object is honest for those and for stale selected-tool names:
+// it says "object, contents unconstrained", not "this tool takes no input".
+func unknownToolkitToolSchema() map[string]any {
 	return map[string]any{
 		"type":                 "object",
 		"properties":           map[string]any{},
 		"additionalProperties": true,
-		"description": "Argument schema unavailable: toolkit tool argument schemas live in the Python SDK " +
-			"registry, which this service does not hold. Arguments are passed through unchanged.",
+		"description": "Argument schema unavailable in the pinned built-in toolkit catalogue; " +
+			"the operation may be dynamically discovered or no longer present. Arguments are passed through unchanged.",
 	}
 }
 

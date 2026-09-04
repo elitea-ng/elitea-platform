@@ -700,6 +700,7 @@ func mountMCPServerRoutes(
 	toolkitHandler *v2toolkits.Handler,
 	configurationsHandler *v2configs.Handler,
 	notificationStore notificationapp.Store,
+	toolkitArgumentSchemas v2mcp.ToolkitArgumentSchemaSource,
 ) {
 	handler := v2mcp.NewHandler(
 		pool,
@@ -709,6 +710,7 @@ func mountMCPServerRoutes(
 		v2mcp.WithInternalToolkitHandler(toolkitHandler),
 		v2mcp.WithInternalConfigurationHandler(configurationsHandler),
 		v2mcp.WithInternalNotificationStore(notificationStore),
+		v2mcp.WithToolkitArgumentSchemas(toolkitArgumentSchemas),
 	)
 	r.Group(func(r chi.Router) {
 		r.Use(authenticate)
@@ -1135,6 +1137,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	mountMCPServerRoutes(
 		r, cfg.Pool, authenticate, cfg.MCPAgentStart,
 		toolkitHandler, configurationsHandler, cfg.CurrentNotificationStore,
+		cfg.ToolkitArgumentSchemas,
 	)
 
 	// This group holds the whole JSON API — the `/api/v2` route below is its
