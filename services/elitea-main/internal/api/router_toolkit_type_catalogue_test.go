@@ -151,7 +151,7 @@ func TestInternalMCPToolkitBuilderReusesTheComposedRESTHandler(t *testing.T) {
 	source := readRouterSource(t)
 	for description, pattern := range map[string]string{
 		"single composed handler":    `toolkitHandler := newToolkitHandler\(cfg, prebuiltMCPStore\)`,
-		"MCP mount receives handler": `mountMCPServerRoutes\(r, cfg\.Pool, authenticate, cfg\.MCPAgentStart, toolkitHandler, configurationsHandler\)`,
+		"MCP mount receives handler": `mountMCPServerRoutes\([\s\S]*toolkitHandler, configurationsHandler, cfg\.CurrentNotificationStore`,
 		"MCP handler option":         `v2mcp\.WithInternalToolkitHandler\(toolkitHandler\)`,
 	} {
 		if !regexp.MustCompile(pattern).MatchString(source) {
@@ -169,11 +169,41 @@ func TestInternalMCPConfigurationsReuseTheComposedRESTHandler(t *testing.T) {
 	source := readRouterSource(t)
 	for description, pattern := range map[string]string{
 		"single composed handler":    `configurationsHandler := v2configs\.NewHandler\(`,
-		"MCP mount receives handler": `mountMCPServerRoutes\(r, cfg\.Pool, authenticate, cfg\.MCPAgentStart, toolkitHandler, configurationsHandler\)`,
+		"MCP mount receives handler": `mountMCPServerRoutes\([\s\S]*toolkitHandler, configurationsHandler, cfg\.CurrentNotificationStore`,
 		"MCP handler option":         `v2mcp\.WithInternalConfigurationHandler\(configurationsHandler\)`,
 	} {
 		if !regexp.MustCompile(pattern).MatchString(source) {
 			t.Errorf("router.go is missing %s; Internal MCP and REST configuration behavior can diverge", description)
+		}
+	}
+}
+
+// Internal MCP notifications use the same actor-scoped repository as the
+// current REST/UI route. This source-level gate catches the invisible wiring
+// failure where the tools list correctly but every call has a nil executor.
+func TestInternalMCPNotificationsReuseTheComposedRESTStore(t *testing.T) {
+	t.Parallel()
+
+	source := readRouterSource(t)
+	for description, pattern := range map[string]string{
+		"MCP mount receives store": `toolkitHandler, configurationsHandler, cfg\.CurrentNotificationStore`,
+		"MCP handler option":       `v2mcp\.WithInternalNotificationStore\(notificationStore\)`,
+	} {
+		if !regexp.MustCompile(pattern).MatchString(source) {
+			t.Errorf("router.go is missing %s; Internal MCP notification calls cannot share REST behavior", description)
+		}
+	}
+
+	main, err := os.ReadFile(filepath.Join("..", "..", "cmd", "elitea-main", "main.go"))
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	for description, pattern := range map[string]string{
+		"shared repository assignment": `currentNotificationStore\s*=\s*notificationRepository`,
+		"production router assignment": `CurrentNotificationStore:\s*currentNotificationStore`,
+	} {
+		if !regexp.MustCompile(pattern).Match(main) {
+			t.Errorf("cmd/elitea-main/main.go is missing %s", description)
 		}
 	}
 }

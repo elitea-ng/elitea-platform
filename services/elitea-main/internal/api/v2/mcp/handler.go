@@ -43,12 +43,13 @@
 //     `meta.mcp_options.available_by_mcp` — by catalog.go. The REST `tools_list`
 //     reads the durable MCP server store (registry.go, issue 335). Nothing
 //     about either is hardcoded or invented.
-//   - REAL. `tools/list` and `tools/call` for the fixed
-//     `elitea_core/applications` internal category. The eight operations match
-//     the current platform's explicit `mcp_tool=True` application operations.
-//     Main reuses its application handlers where their contracts match and
-//     owns the transactional safe-update path where a full backup and an
-//     optimistic instruction patch must be atomic.
+//   - REAL. `tools/list` and `tools/call` for the fixed applications, skills,
+//     toolkits, configurations, and notifications internal categories. Every
+//     operation matches a current-platform `mcp_tool=True` opt-in and has an
+//     explicit permission and schema. Main reuses its current handlers where
+//     their contracts match and owns the transactional application safe-update
+//     path where a full backup and an optimistic instruction patch must be
+//     atomic.
 //   - REAL, ON A DEPLOYMENT WITH THE RUNTIME. `tools/call` on an AGENT tool.
 //     It admits an ordinary agent turn through the same use case the chat
 //     start route drives, waits for it, bounded, and answers with the text the
@@ -95,9 +96,9 @@
 //
 // Instead, each internal category is added only after its operations have
 // explicit schemas, permissions, project clamping, and an in-process executor.
-// The first such category is `elitea_core/applications`. Anything else is a 400
-// that names the valid set, which is how pylon answers an unknown tag too. See
-// scope.go.
+// Applications, skills, toolkits, configurations, and notifications currently
+// meet that bar. Anything else is a 400 that names the valid set, which is how
+// pylon answers an unknown tag too. See scope.go.
 //
 // # The SSE pair is dropped, not deferred
 //
@@ -133,8 +134,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	configurationsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/configurations"
+	notificationsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/notifications"
 	toolkitsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkits"
 	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	notificationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/notifications"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpregistry"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
@@ -193,6 +196,9 @@ type Handler struct {
 	// internalConfigurations executes the fixed internal configurations
 	// category through the same policy-complete handler as REST.
 	internalConfigurations internalConfigurationExecutor
+	// internalNotifications executes the actor-scoped fixed notifications
+	// category through Main's current notification store.
+	internalNotifications internalNotificationExecutor
 }
 
 // Option configures an MCP handler without weakening the required constructor
@@ -217,6 +223,15 @@ func WithInternalToolkitHandler(handler *toolkitsapi.Handler) Option {
 func WithInternalConfigurationHandler(handler *configurationsapi.Handler) Option {
 	return func(mcpHandler *Handler) {
 		mcpHandler.internalConfigurations = newHandlerInternalConfigurationExecutor(handler)
+	}
+}
+
+// WithInternalNotificationStore composes the fixed notification tools over
+// the same user-scoped store used by the current REST route.
+func WithInternalNotificationStore(store notificationapp.Store) Option {
+	return func(mcpHandler *Handler) {
+		toolHandler := notificationsapi.NewCurrentNotificationToolHandler(store)
+		mcpHandler.internalNotifications = newHandlerInternalNotificationExecutor(toolHandler)
 	}
 }
 

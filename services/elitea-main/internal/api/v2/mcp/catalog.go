@@ -76,6 +76,9 @@ type Tool struct {
 	// internalConfigurationOperation is populated only for the fixed
 	// configurations category. It is never serialized.
 	internalConfigurationOperation internalConfigurationOperation
+	// internalNotificationOperation is populated only for the fixed
+	// notifications category. It is never serialized.
+	internalNotificationOperation internalNotificationOperation
 	// permission is re-checked for each internal API invocation.
 	permission string
 }
@@ -142,6 +145,9 @@ func (p postgresToolSource) tools(ctx context.Context, schema string, s scope) (
 		}
 		if s.category == internalConfigurationsCategory {
 			return internalConfigurationTools(), nil
+		}
+		if s.category == internalNotificationsCategory {
+			return internalNotificationTools(), nil
 		}
 		if s.category == "applications" {
 			return p.agentTools(ctx, schema)

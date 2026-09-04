@@ -1,10 +1,10 @@
 # Internal Elitea MCP source mapping
 
 Status: the applications and skills categories, five Main-owned toolkit
-builder operations, and five Main-owned configuration operations are
-implemented. Live per-instance toolkit discovery, typed model configuration
-operations, the wider internal builder family, and external Elitea-as-MCP
-publishing remain partial.
+builder operations, five Main-owned configuration operations, and three
+Main-owned notification operations are implemented. Live per-instance toolkit
+discovery, typed model configuration operations, the wider internal builder
+family, and external Elitea-as-MCP publishing remain partial.
 
 This ledger keeps three MCP products separate:
 
@@ -187,11 +187,51 @@ mutation is an explicit 503. Production REST uses separate typed services for
 those paths. Internal MCP must reuse those same services before it can publish
 the names; returning the compatibility answers would be plausible but wrong.
 
+## Notifications category
+
+The notifications category is available at
+`/app/{projectID}/mcp/notifications`. Main publishes exactly the three current
+operations marked `mcp_tool=True`; bulk mutation and deletion remain REST-only.
+
+| Current platform evidence | Permission | Main tool |
+| --- | --- | --- |
+| `notifications/api/v2/notifications.py::PromptLibAPI.get` | `models.notifications.notifications.list` | `get_notifications_notifications` |
+| `notifications/api/v2/notification.py::PromptLibAPI.get` | `models.notifications.notification.details` | `get_notifications_notification` |
+| `notifications/api/v2/notification.py::PromptLibAPI.put` | `models.notifications.notification.update` | `put_notifications_notification` |
+
+The current source paths above are relative to `pylon_main/plugins`. The list
+contract is global user-scoped: the endpoint project authorizes the call but
+does not filter notification rows. Main preserves that behavior, so a
+notification whose payload names a different project can still appear in its
+owner's list. The authenticated MCP principal is the only source of `user_id`.
+
+Main deliberately closes an authorization hole in the current single-item
+SQLAlchemy handlers. Their detail and mark-seen queries filter only by
+notification ID. The existing Go notification store filters by both ID and
+authenticated user for every read or write, and Internal MCP reuses that same
+store. A caller therefore cannot read or mark another user's notification even
+when numeric IDs are known.
+
+The fixed queries are source-derived rather than a second handwritten MCP data
+path. `internal/db/queries/notifications.sql` translates the current
+SQLAlchemy filters into sqlc-generated operations: user scope, unseen and
+event filters, escaped case-insensitive `meta.message` word matching, the
+current sort fields, pagination, detail, and mark-seen. Count and row retrieval
+are separate so `only_total` never loads rows. Mark-seen uses one idempotent
+update-plus-fallback query: an unseen row changes once, while a row already
+seen is returned without rewriting its timestamp.
+
+The executor reuses the current REST handler's normalization and response DTO.
+MCP adds strict bounds before the handler: maximum 1,000 rows, 32 search terms,
+256 bytes per term, a bounded event type, and an explicit sort whitelist. It
+does not forward unknown fields or publish bulk update, single delete, or bulk
+delete.
+
 ## Main ownership
 
 Main owns listing, execution, authorization, project clamping, and mutation.
 The fixed catalogues are in
-`internal/api/v2/mcp/internal_{applications,skills,toolkits,configurations}_catalog.go`.
+`internal/api/v2/mcp/internal_{applications,skills,toolkits,configurations,notifications}_catalog.go`.
 Application and skill executors reuse Main business repositories. The toolkit
 executor deliberately reuses the fully composed REST handler so every toolkit
 mutation crosses the same policy and secret boundaries. Application version
@@ -237,7 +277,7 @@ Core-to-Indexer-to-SDK execution split.
 
 ## Verification
 
-Main unit tests pin all four catalogues, wire schemas, permissions, project clamps,
+Main unit tests pin all five catalogues, wire schemas, permissions, project clamps,
 runtime-independent dispatch, business-error shapes, and redacted
 infrastructure failures. Validation tests cover application and skill inputs.
 
@@ -266,6 +306,15 @@ actor, derives the correct section, partially updates it without erasing data,
 and reads and lists the persisted row. A second PostgreSQL proof pins tracing
 containment for ordinary project members, project admins, and the actor's own
 personal project.
+
+Notification tests pin the three-operation catalogue, omission of bulk and
+delete operations, exact permissions, project clamping, authenticated actor
+projection, bounded filter translation, current defaults, path-authoritative
+notification identity, refusal before handler invocation, nil-executor
+failure, and redacted infrastructure errors. An isolated PostgreSQL lifecycle
+proof covers global per-user listing across project metadata, search and event
+filters, `only_total`, cross-user detail refusal, persisted mark-seen, and an
+idempotent second mark that does not change the row timestamp.
 
 Prebuilt materialization tests prove that runtime placeholders cannot become
 stored toolkit parameters, internal PATs are restricted to the configured Main

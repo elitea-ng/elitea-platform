@@ -53,6 +53,7 @@ import (
 	v2toolkits "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkits"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/webhook"
 	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
+	notificationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/notifications"
 	socialapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/social"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/authcomposition"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
@@ -278,6 +279,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	var currentSocialAuthors *socialapi.CurrentAuthorsRoute
 	var currentSocialAvatar *socialapi.CurrentAvatarRoute
 	var currentNotifications *notificationsapi.CurrentNotificationAPIRoute
+	var currentNotificationStore notificationapp.Store
 	var currentNotificationEvents *notificationsapi.CurrentNotificationEventsRoute
 	var formGraph *authcomposition.FormGraph
 	var authReadiness health.Checker
@@ -446,6 +448,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		if repositoryErr != nil {
 			return fmt.Errorf("compose current notification repository: %w", repositoryErr)
 		}
+		currentNotificationStore = notificationRepository
 		currentNotifications, err = notificationsapi.NewCurrentNotificationAPIRoute(
 			notificationRepository,
 			apimw.AuthConfig{
@@ -656,6 +659,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		if repositoryErr != nil {
 			return fmt.Errorf("compose OIDC-only notification repository: %w", repositoryErr)
 		}
+		currentNotificationStore = notificationRepository
 		// Same principal-validator reasoning as the two branches above: the
 		// session cookie is the only credential here, and without a validator a
 		// deactivated user's unexpired cookie reads and deletes notifications
@@ -1815,6 +1819,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		CurrentIndexScheduleUpdate: currentIndexScheduleUpdate,
 		CurrentIndexScheduleDelete: currentIndexScheduleDelete,
 		CurrentNotifications:       currentNotifications,
+		CurrentNotificationStore:   currentNotificationStore,
 		CurrentNotificationEvents:  currentNotificationEvents,
 		CurrentModelCatalog:        currentModelCatalog,
 		CurrentModelDefault:        currentModelDefault,

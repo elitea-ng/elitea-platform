@@ -55,6 +55,7 @@ import (
 	v2tracing "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/tracing"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/webhook"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/artifactbootstrap"
+	notificationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/notifications"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/personalproject"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
@@ -318,11 +319,15 @@ type RouterConfig struct {
 	CurrentIndexScheduleUpdate http.Handler
 	CurrentIndexScheduleDelete http.Handler
 	CurrentNotifications       http.Handler
-	CurrentNotificationEvents  http.Handler
-	CurrentModelCatalog        http.Handler
-	CurrentModelDefault        http.Handler
-	LLMProxy                   http.Handler
-	LLMProjectResolver         apimw.PersonalProjectResolver
+	// CurrentNotificationStore is the same actor-scoped store behind
+	// CurrentNotifications. Internal MCP receives this exact instance so its
+	// three notification operations cannot drift from the REST/UI projection.
+	CurrentNotificationStore  notificationapp.Store
+	CurrentNotificationEvents http.Handler
+	CurrentModelCatalog       http.Handler
+	CurrentModelDefault       http.Handler
+	LLMProxy                  http.Handler
+	LLMProjectResolver        apimw.PersonalProjectResolver
 	// GatewayProxy is the mTLS streaming reverse proxy to elitea-llm-gateway-svc
 	// (BF0.9c). When non-nil, it is mounted at /llm with Auth+Project middleware
 	// in the production router.
@@ -694,6 +699,7 @@ func mountMCPServerRoutes(
 	agentStart v2mcp.AgentStartUseCase,
 	toolkitHandler *v2toolkits.Handler,
 	configurationsHandler *v2configs.Handler,
+	notificationStore notificationapp.Store,
 ) {
 	handler := v2mcp.NewHandler(
 		pool,
@@ -702,6 +708,7 @@ func mountMCPServerRoutes(
 		legacyrbac.NewPostgresResolver(pool),
 		v2mcp.WithInternalToolkitHandler(toolkitHandler),
 		v2mcp.WithInternalConfigurationHandler(configurationsHandler),
+		v2mcp.WithInternalNotificationStore(notificationStore),
 	)
 	r.Group(func(r chi.Router) {
 		r.Use(authenticate)
@@ -1125,7 +1132,10 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 
 	// The MCP server (issue 252). Outside the /api/v2 group for the reasons in
 	// mountMCPServerRoutes.
-	mountMCPServerRoutes(r, cfg.Pool, authenticate, cfg.MCPAgentStart, toolkitHandler, configurationsHandler)
+	mountMCPServerRoutes(
+		r, cfg.Pool, authenticate, cfg.MCPAgentStart,
+		toolkitHandler, configurationsHandler, cfg.CurrentNotificationStore,
+	)
 
 	// This group holds the whole JSON API — the `/api/v2` route below is its
 	// only member. Compression sits at the top of it, ABOVE the shadow

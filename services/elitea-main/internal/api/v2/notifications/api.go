@@ -118,6 +118,37 @@ type currentNotificationAPIHandler struct {
 	store notificationapp.Store
 }
 
+// CurrentNotificationToolHandler exposes only the three operations the
+// current platform marks as Internal MCP tools. It deliberately reuses the
+// same HTTP normalization and response projection as the browser REST route;
+// authentication and permission checks remain at the MCP boundary.
+type CurrentNotificationToolHandler struct {
+	handler *currentNotificationAPIHandler
+}
+
+// NewCurrentNotificationToolHandler returns nil when no store is composed so
+// the MCP category can list its fixed contract while execution fails closed.
+func NewCurrentNotificationToolHandler(store notificationapp.Store) *CurrentNotificationToolHandler {
+	if store == nil {
+		return nil
+	}
+	return &CurrentNotificationToolHandler{
+		handler: &currentNotificationAPIHandler{store: store},
+	}
+}
+
+func (handler *CurrentNotificationToolHandler) List(writer http.ResponseWriter, request *http.Request) {
+	handler.handler.list(writer, request)
+}
+
+func (handler *CurrentNotificationToolHandler) Details(writer http.ResponseWriter, request *http.Request) {
+	handler.handler.details(writer, request)
+}
+
+func (handler *CurrentNotificationToolHandler) MarkSeen(writer http.ResponseWriter, request *http.Request) {
+	handler.handler.markSeen(writer, request)
+}
+
 type currentNotificationResponse struct {
 	ID        int32           `json:"id"`
 	UUID      string          `json:"uuid"`

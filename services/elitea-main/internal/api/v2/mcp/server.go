@@ -284,6 +284,9 @@ func (h *Handler) callTool(r *http.Request, schema string, s scope, message rpcM
 	if target.internalConfigurationOperation != "" {
 		return newResult(message.ID, h.callInternalConfigurationTool(r, projectID, target, params.Arguments))
 	}
+	if target.internalNotificationOperation != "" {
+		return newResult(message.ID, h.callInternalNotificationTool(r, projectID, target, params.Arguments))
+	}
 
 	// NO RUNTIME. The composition root had no AgentStart use case to give this
 	// handler, which is what `runtime.enabled` being off looks like from here.
@@ -374,6 +377,22 @@ func (h *Handler) callInternalConfigurationTool(
 	return h.callInternalTool(r, projectID, target, arguments, "configuration", func(actorID int64) (internalApplicationExecution, error) {
 		return h.internalConfigurations.Execute(
 			r.Context(), projectID, actorID, target.internalConfigurationOperation, arguments,
+		)
+	})
+}
+
+func (h *Handler) callInternalNotificationTool(
+	r *http.Request,
+	projectID int64,
+	target Tool,
+	arguments map[string]any,
+) map[string]any {
+	if h.internalNotifications == nil {
+		return errorResult("this deployment cannot execute internal notification tools; nothing was executed")
+	}
+	return h.callInternalTool(r, projectID, target, arguments, "notification", func(actorID int64) (internalApplicationExecution, error) {
+		return h.internalNotifications.Execute(
+			r.Context(), projectID, actorID, target.internalNotificationOperation, arguments,
 		)
 	})
 }
