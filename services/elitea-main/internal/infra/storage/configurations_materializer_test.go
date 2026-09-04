@@ -34,6 +34,8 @@ type currentAgentPrebuiltMCPResolverStub struct {
 
 func (stub *currentAgentPrebuiltMCPResolverStub) ResolveCurrentAgentPrebuiltMCP(
 	_ context.Context,
+	_ int32,
+	_ int32,
 	toolType string,
 	settings map[string]any,
 	_ func(map[string]any) (map[string]any, error),

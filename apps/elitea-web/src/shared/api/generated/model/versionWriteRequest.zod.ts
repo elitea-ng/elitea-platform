@@ -64,11 +64,11 @@ export const VersionWriteRequest = zod.object({
     .array(VersionTag)
     .optional()
     .describe(
-      "NOTE(#345): the version's topical tags. Send the key to replace the stored set; an empty array removes every association row. Omit the key to leave the stored set alone. Each entry is matched by `name`: an existing `tags` row is reused, a new name creates one. Only the PUT (UpdateVersion) writes them — the two create paths still ignore the key, exactly as they ignore `meta`.\n",
+      "NOTE(#345): the version's topical tags. Send the key to replace the stored set; an empty array removes every association row. Omit the key to leave the stored set alone. Each entry is matched by `name`: an existing `tags` row is reused, a new name creates one. The application and version create paths persist supplied tags and return the stored set. PUT persists the supplied set and leaves existing tags unchanged when the key is absent.\n",
     ),
   meta: VersionMeta.optional(),
   pipeline_settings: PipelineSettings.optional().describe(
-    "Pipeline flow-graph layout ({nodes, edges, orientation, layout_version}). Written verbatim to the application_versions.pipeline_settings jsonb column; omit the key to leave the stored value untouched.\n",
+    "Pipeline flow-graph layout ({nodes, edges, orientation, layout_version}). Written verbatim to the application_versions.pipeline_settings jsonb column by create and update operations. On update, omit the key to leave the stored value untouched.\n",
   ),
 });
 

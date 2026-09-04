@@ -510,6 +510,10 @@ func insertVersion(ctx context.Context, q querier, s, applicationID string, v ap
 	if err != nil {
 		return applications.Version{}, err
 	}
+	pipelineSettingsJSON, err := encodeJSONObject(v.PipelineSettings)
+	if err != nil {
+		return applications.Version{}, err
+	}
 
 	// The INSERT ... RETURNING is wrapped in a CTE so the read projection —
 	// which needs the owning applications row for is_default — is the same
@@ -518,15 +522,15 @@ func insertVersion(ctx context.Context, q querier, s, applicationID string, v ap
 		WITH v AS (
 			INSERT INTO %s.application_versions
 				(application_id, name, status, author_id, agent_type, instructions,
-				 welcome_message, llm_settings, conversation_starters, meta)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10::jsonb)
+				 welcome_message, llm_settings, conversation_starters, meta, pipeline_settings)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10::jsonb, $11::jsonb)
 			RETURNING *
 		)
 		SELECT `+versionColumns+` FROM v JOIN %s.applications a ON a.id = v.application_id`, s, s)
 
 	ver, err := scanVersion(q.QueryRow(ctx, query,
 		applicationID, name, status, v.AuthorID, agentType, v.Instructions,
-		v.WelcomeMessage, llmJSON, startersJSON, metaJSON,
+		v.WelcomeMessage, llmJSON, startersJSON, metaJSON, pipelineSettingsJSON,
 	))
 	if err != nil {
 		return applications.Version{}, fmt.Errorf("applications: create version: %w", err)

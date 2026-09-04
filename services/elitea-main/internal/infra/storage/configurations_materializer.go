@@ -39,6 +39,8 @@ type CurrentConfigurationsMaterializer struct {
 type CurrentAgentPrebuiltMCPResolver interface {
 	ResolveCurrentAgentPrebuiltMCP(
 		context.Context,
+		int32,
+		int32,
 		string,
 		map[string]any,
 		func(map[string]any) (map[string]any, error),
@@ -90,7 +92,8 @@ func (m *CurrentConfigurationsMaterializer) MaterializeContent(
 		if !ok {
 			return nil, ErrContentRejected
 		}
-		if _, ok := positiveCurrentMaterializationID(authorization.ActorID); !ok {
+		actorID, ok := positiveCurrentMaterializationID(authorization.ActorID)
+		if !ok {
 			return nil, ErrContentRejected
 		}
 		if authorization.SemanticRole != executiondomain.AgentExecutionRequestRole {
@@ -99,6 +102,7 @@ func (m *CurrentConfigurationsMaterializer) MaterializeContent(
 		return m.materializeAgentExecution(
 			ctx,
 			projectID,
+			actorID,
 			authorization.CapabilityID,
 			source,
 			maxBytes,
@@ -144,6 +148,7 @@ func (m *CurrentConfigurationsMaterializer) MaterializeContent(
 func (m *CurrentConfigurationsMaterializer) materializeAgentExecution(
 	ctx context.Context,
 	projectID int32,
+	actorID int32,
 	capabilityID string,
 	source []byte,
 	maxBytes int64,
@@ -174,7 +179,7 @@ func (m *CurrentConfigurationsMaterializer) materializeAgentExecution(
 		if !ok {
 			return nil, ErrContentRejected
 		}
-		if err := m.materializeCurrentAgentTools(ctx, projectID, tools, &walker); err != nil {
+		if err := m.materializeCurrentAgentTools(ctx, projectID, actorID, tools, &walker); err != nil {
 			return nil, currentMaterializationError(ctx, err)
 		}
 		version["tools"] = tools
@@ -188,7 +193,7 @@ func (m *CurrentConfigurationsMaterializer) materializeAgentExecution(
 		if decodeErr != nil {
 			return nil, ErrContentRejected
 		}
-		if err := m.materializeCurrentAgentTools(ctx, projectID, tools, &walker); err != nil {
+		if err := m.materializeCurrentAgentTools(ctx, projectID, actorID, tools, &walker); err != nil {
 			return nil, currentMaterializationError(ctx, err)
 		}
 		request.Tools, err = encodeCurrentMaterializationArray(tools, maxBytes)
@@ -210,6 +215,7 @@ func (m *CurrentConfigurationsMaterializer) materializeAgentExecution(
 func (m *CurrentConfigurationsMaterializer) materializeCurrentAgentTools(
 	ctx context.Context,
 	projectID int32,
+	actorID int32,
 	tools []any,
 	walker *currentFrozenConfigurationWalker,
 ) error {
@@ -238,6 +244,8 @@ func (m *CurrentConfigurationsMaterializer) materializeCurrentAgentTools(
 			}
 			materialized, ok, err = m.prebuilt.ResolveCurrentAgentPrebuiltMCP(
 				ctx,
+				projectID,
+				actorID,
 				toolkitType,
 				settings,
 				func(admitted map[string]any) (map[string]any, error) {

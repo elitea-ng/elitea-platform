@@ -73,4 +73,7 @@ Runtime post-discovery authorization failures need typed RMCP call errors before
 
 Legacy descriptor migration remains a separate deployment capability.
 
-Internal PAT stamping and Elitea-as-MCP exposure remain separate platform capabilities.
+Trusted internal PAT stamping is implemented for configured Main-origin
+`/app/{project}/mcp/...` endpoints. Internal builder categories and external
+Elitea-as-MCP exposure remain separate platform capabilities; see
+`internal-elitea-mcp.md`.

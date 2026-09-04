@@ -1717,19 +1717,16 @@ components:
         fetchVersionDetails always adds created_at/agent_type/instructions/
         welcome_message/llm_settings/meta/conversation_starters/
         pipeline_settings/author_id/tools/tags/variables
-        (internal/api/v2/applications/handler.go:325-342); CreateVersion adds
-        author + is_forked but no pipeline_settings (:783-801); UpdateVersion
-        emits the 10-key subset without created_at/author/tools (:913-919);
-        Fork adds is_forked and omits pipeline_settings
-        (eliteacore/handler.go:2440-2456, is_forked at :2452); the import
-        detail map has NO is_forked and omits created_at, but DOES carry
-        meta, variables and tags — it reports what the import actually
-        persisted, since the import began writing the canonical variable
-        and tag stores; publicApplicationDetail omits
-        variables, created_at, author and is_forked (:1460-1475).
+        (internal/api/v2/applications/handler.go). The application and version
+        create paths return that same stored pipeline-settings and tag state.
+        UpdateVersion emits a smaller subset without created_at, author, or
+        tools. Fork adds is_forked and omits pipeline_settings. The import
+        detail map has no is_forked and omits created_at, but carries meta,
+        variables, and tags from the canonical stores. Public application
+        details omit variables, created_at, author, and is_forked.
         Empty-vs-missing: instructions and welcome_message are always
         present as "" when the DB column is NULL (COALESCE / pointer deref
-        to "" — applications/handler.go:222-229).
+        to "" in applications/handler.go).
 
     AttachedSkill:
       type: object
@@ -1911,8 +1908,9 @@ components:
             the stored set; an empty array removes every association row.
             Omit the key to leave the stored set alone. Each entry is matched
             by `name`: an existing `tags` row is reused, a new name creates
-            one. Only the PUT (UpdateVersion) writes them — the two create
-            paths still ignore the key, exactly as they ignore `meta`.
+            one. The application and version create paths persist supplied
+            tags and return the stored set. PUT persists the supplied set and
+            leaves existing tags unchanged when the key is absent.
         meta:
           allOf: [{ $ref: '#/components/schemas/VersionMeta' }]
         pipeline_settings:
@@ -1920,8 +1918,9 @@ components:
           description: >
             Pipeline flow-graph layout ({nodes, edges, orientation,
             layout_version}). Written verbatim to the
-            application_versions.pipeline_settings jsonb column; omit the key
-            to leave the stored value untouched.
+            application_versions.pipeline_settings jsonb column by create and
+            update operations. On update, omit the key to leave the stored
+            value untouched.
       additionalProperties: true
       x-elitea-passthrough: >-
         NOTE(W2): decoded into map[string]any; the handlers read

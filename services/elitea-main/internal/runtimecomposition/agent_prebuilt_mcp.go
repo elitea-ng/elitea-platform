@@ -3,6 +3,10 @@ package runtimecomposition
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/url"
+	"strconv"
+	"strings"
 
 	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
@@ -15,7 +19,13 @@ type currentPrebuiltMCPStore interface {
 
 // currentAgentPrebuiltMCP exposes enabled fixed HTTP definitions to agent execution.
 type currentAgentPrebuiltMCP struct {
-	store currentPrebuiltMCPStore
+	store          currentPrebuiltMCPStore
+	internalOrigin string
+	actorTokens    currentActorTokenIssuer
+}
+
+type currentActorTokenIssuer interface {
+	IssueToken(context.Context, int64) (string, error)
 }
 
 type currentAgentToolkitSettingsResolver struct {
@@ -30,6 +40,27 @@ func newCurrentAgentPrebuiltMCP(
 		return nil, errors.New("current agent prebuilt MCP store is required")
 	}
 	return &currentAgentPrebuiltMCP{store: store}, nil
+}
+
+func newCurrentAgentRuntimePrebuiltMCP(
+	store currentPrebuiltMCPStore,
+	currentMainBaseURL string,
+	actorTokens currentActorTokenIssuer,
+) (*currentAgentPrebuiltMCP, error) {
+	resolver, err := newCurrentAgentPrebuiltMCP(store)
+	if err != nil {
+		return nil, err
+	}
+	origin, err := internalMCPOrigin(currentMainBaseURL)
+	if err != nil {
+		return nil, err
+	}
+	if actorTokens == nil {
+		return nil, errors.New("current agent actor token issuer is required")
+	}
+	resolver.internalOrigin = origin
+	resolver.actorTokens = actorTokens
+	return resolver, nil
 }
 
 func (resolver currentAgentToolkitSettingsResolver) Resolve(
@@ -88,6 +119,8 @@ func (source *currentAgentPrebuiltMCP) FindCurrentActorVisibleToolkitSchema(
 
 func (source *currentAgentPrebuiltMCP) ResolveCurrentAgentPrebuiltMCP(
 	ctx context.Context,
+	projectID int32,
+	actorID int32,
 	toolkitType string,
 	settings map[string]any,
 	materialize func(map[string]any) (map[string]any, error),
@@ -135,6 +168,19 @@ func (source *currentAgentPrebuiltMCP) ResolveCurrentAgentPrebuiltMCP(
 			return nil, false, err
 		}
 	}
+	if source.trustedInternalMCP(entry, projectID) {
+		parameters["project_id"] = strconv.FormatInt(int64(projectID), 10)
+		if prebuiltTemplateUses(entry, "personal_token") {
+			if actorID <= 0 || source.actorTokens == nil {
+				return nil, false, errors.New("current agent internal MCP actor token issuer is unavailable")
+			}
+			token, issueErr := source.actorTokens.IssueToken(ctx, int64(actorID))
+			if issueErr != nil {
+				return nil, false, fmt.Errorf("issue current agent internal MCP actor token: %w", issueErr)
+			}
+			parameters["personal_token"] = token
+		}
+	}
 	endpoint, fixedHeaders, err := mcpregistry.MaterializePrebuiltTemplates(entry, parameters)
 	if err != nil {
 		return nil, false, err
@@ -166,6 +212,45 @@ func (source *currentAgentPrebuiltMCP) ResolveCurrentAgentPrebuiltMCP(
 		}
 	}
 	return resolved, true, nil
+}
+
+func internalMCPOrigin(raw string) (string, error) {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" || parsed.User != nil ||
+		parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") {
+		return "", errors.New("current Main origin is invalid")
+	}
+	return strings.ToLower(parsed.Scheme + "://" + parsed.Host), nil
+}
+
+func (source *currentAgentPrebuiltMCP) trustedInternalMCP(
+	entry mcpregistry.PrebuiltServer,
+	projectID int32,
+) bool {
+	if source == nil || source.internalOrigin == "" || projectID <= 0 ||
+		!strings.Contains(entry.ServerURL, "{project_id}") {
+		return false
+	}
+	probe := strings.ReplaceAll(entry.ServerURL, "{project_id}", strconv.FormatInt(int64(projectID), 10))
+	parsed, err := url.Parse(probe)
+	if err != nil || strings.ToLower(parsed.Scheme+"://"+parsed.Host) != source.internalOrigin {
+		return false
+	}
+	prefix := "/app/" + strconv.FormatInt(int64(projectID), 10) + "/mcp/"
+	return strings.HasPrefix(parsed.Path, prefix) && len(parsed.Path) > len(prefix)
+}
+
+func prebuiltTemplateUses(entry mcpregistry.PrebuiltServer, name string) bool {
+	token := "{" + name + "}"
+	if strings.Contains(entry.ServerURL, token) {
+		return true
+	}
+	for _, value := range entry.Headers {
+		if strings.Contains(value, token) {
+			return true
+		}
+	}
+	return false
 }
 
 func (source *currentAgentPrebuiltMCP) selectSettings(

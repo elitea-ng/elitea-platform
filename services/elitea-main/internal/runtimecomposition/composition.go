@@ -497,8 +497,10 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if targetErr != nil {
 			return nil, fmt.Errorf("construct nested application version reader: %w", targetErr)
 		}
-		agentPrebuiltMCP, prebuiltErr := newCurrentAgentPrebuiltMCP(
+		agentPrebuiltMCP, prebuiltErr := newCurrentAgentRuntimePrebuiltMCP(
 			mcpregistry.NewPrebuiltStore(dependencies.AdmissionPool),
+			config.CurrentMainBaseURL,
+			dependencies.ActorTokenIssuer,
 		)
 		if prebuiltErr != nil {
 			return nil, fmt.Errorf("construct current agent prebuilt MCP resolver: %w", prebuiltErr)

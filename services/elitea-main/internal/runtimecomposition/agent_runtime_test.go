@@ -31,6 +31,19 @@ type currentPrebuiltMCPStoreStub struct {
 	calls  int
 }
 
+type currentActorTokenIssuerStub struct {
+	token  string
+	err    error
+	userID int64
+	calls  int
+}
+
+func (stub *currentActorTokenIssuerStub) IssueToken(_ context.Context, userID int64) (string, error) {
+	stub.calls++
+	stub.userID = userID
+	return stub.token, stub.err
+}
+
 func (stub *currentPrebuiltMCPStoreStub) Lookup(
 	_ context.Context,
 	name string,
@@ -143,6 +156,8 @@ func TestCurrentAgentPrebuiltMCPResolvesFixedHTTPAuthority(t *testing.T) {
 	}
 	resolved, found, err := resolver.ResolveCurrentAgentPrebuiltMCP(
 		context.Background(),
+		0,
+		0,
 		"mcp_config",
 		settings,
 		identityPrebuiltMaterializer,
@@ -188,6 +203,8 @@ func TestCurrentAgentPrebuiltMCPMaterializesDeclaredProjectParameters(t *testing
 	var admitted map[string]any
 	resolved, found, err := resolver.ResolveCurrentAgentPrebuiltMCP(
 		context.Background(),
+		0,
+		0,
 		"mcp_release_intelligence",
 		map[string]any{
 			"api_token":      "{{secret.PROJECT_TOKEN}}",
@@ -228,6 +245,63 @@ func TestCurrentAgentPrebuiltMCPMaterializesDeclaredProjectParameters(t *testing
 	}
 }
 
+func TestCurrentAgentPrebuiltMCPInjectsActorPATOnlyIntoTrustedInternalOrigin(t *testing.T) {
+	entry := enabledPrebuiltMCPEntry()
+	entry.Key = "elitea_applications"
+	entry.ServerURL = "https://main.example.test/app/{project_id}/mcp/elitea_core/applications"
+	entry.Headers = map[string]string{"Authorization": "Bearer {personal_token}"}
+	issuer := &currentActorTokenIssuerStub{token: "ephemeral-actor-token"}
+	resolver, err := newCurrentAgentRuntimePrebuiltMCP(
+		&currentPrebuiltMCPStoreStub{entry: entry},
+		"https://main.example.test",
+		issuer,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resolved, found, err := resolver.ResolveCurrentAgentPrebuiltMCP(
+		context.Background(), 7, 42, "mcp_elitea_applications", map[string]any{}, identityPrebuiltMaterializer,
+	)
+	if err != nil || !found {
+		t.Fatalf("found=%v error=%v", found, err)
+	}
+	if resolved["url"] != "https://main.example.test/app/7/mcp/elitea_core/applications" {
+		t.Fatalf("resolved=%#v", resolved)
+	}
+	headers := resolved["headers"].(map[string]any)
+	if headers["Authorization"] != "Bearer ephemeral-actor-token" {
+		t.Fatalf("headers=%#v", headers)
+	}
+	if issuer.calls != 1 || issuer.userID != 42 {
+		t.Fatalf("issuer calls=%d user=%d", issuer.calls, issuer.userID)
+	}
+}
+
+func TestCurrentAgentPrebuiltMCPNeverSendsActorPATToAnotherOrigin(t *testing.T) {
+	entry := enabledPrebuiltMCPEntry()
+	entry.ServerURL = "https://attacker.example.test/app/{project_id}/mcp/elitea_core/applications"
+	entry.Headers = map[string]string{"Authorization": "Bearer {personal_token}"}
+	issuer := &currentActorTokenIssuerStub{token: "must-not-leave"}
+	resolver, err := newCurrentAgentRuntimePrebuiltMCP(
+		&currentPrebuiltMCPStoreStub{entry: entry},
+		"https://main.example.test",
+		issuer,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, found, err := resolver.ResolveCurrentAgentPrebuiltMCP(
+		context.Background(), 7, 42, "mcp_external", map[string]any{}, identityPrebuiltMaterializer,
+	); !errors.Is(err, mcpregistry.ErrInvalidPrebuiltParameters) || found {
+		t.Fatalf("found=%v error=%v", found, err)
+	}
+	if issuer.calls != 0 {
+		t.Fatalf("external origin issued %d actor tokens", issuer.calls)
+	}
+}
+
 func TestCurrentAgentPrebuiltMCPRejectsUnknownOrDisabledResolution(t *testing.T) {
 	store := &currentPrebuiltMCPStoreStub{err: mcpregistry.ErrPrebuiltNotFound}
 	resolver, err := newCurrentAgentPrebuiltMCP(store)
@@ -235,7 +309,7 @@ func TestCurrentAgentPrebuiltMCPRejectsUnknownOrDisabledResolution(t *testing.T)
 		t.Fatal(err)
 	}
 	if _, found, err := resolver.ResolveCurrentAgentPrebuiltMCP(
-		context.Background(), "mcp_missing", map[string]any{}, identityPrebuiltMaterializer,
+		context.Background(), 0, 0, "mcp_missing", map[string]any{}, identityPrebuiltMaterializer,
 	); err != nil || found {
 		t.Fatalf("missing found=%v error=%v", found, err)
 	}
@@ -243,12 +317,12 @@ func TestCurrentAgentPrebuiltMCPRejectsUnknownOrDisabledResolution(t *testing.T)
 	store.entry = enabledPrebuiltMCPEntry()
 	store.entry.Enabled = false
 	if _, found, err := resolver.ResolveCurrentAgentPrebuiltMCP(
-		context.Background(), "mcp_release_intelligence", map[string]any{}, identityPrebuiltMaterializer,
+		context.Background(), 0, 0, "mcp_release_intelligence", map[string]any{}, identityPrebuiltMaterializer,
 	); err != nil || found {
 		t.Fatalf("disabled found=%v error=%v", found, err)
 	}
 	if _, found, err := resolver.ResolveCurrentAgentPrebuiltMCP(
-		context.Background(), "mcp_config", map[string]any{}, identityPrebuiltMaterializer,
+		context.Background(), 0, 0, "mcp_config", map[string]any{}, identityPrebuiltMaterializer,
 	); err != nil || found {
 		t.Fatalf("missing selector found=%v error=%v", found, err)
 	}

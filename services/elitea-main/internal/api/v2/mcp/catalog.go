@@ -2,7 +2,7 @@ package mcp
 
 // Per-project tool assembly — the half of issue 252 that serves REAL data.
 //
-// Two sources, both rows in the project's own schema, both matching what pylon
+// The external project listing has two row-backed sources, matching what pylon
 // `utils/mcp_service.py:__get_all_tools` reads:
 //
 //	AGENTS   — `applications` whose version carries the tag named `mcp`. One
@@ -13,11 +13,10 @@ package mcp
 //	           One tool per entry of `settings.selected_tools`, named
 //	           `<toolkit>_<tool>`.
 //
-// Nothing here is hardcoded and nothing is invented: a project with no tagged
-// agents and no flagged toolkits gets an empty list, which for THIS endpoint is
-// a true statement about the project's rows (unlike the empty list registry.go
-// refuses to fabricate, which would be a statement about sockets attached to a
-// different process).
+// A separate fixed source serves internal builder categories. It is selected
+// only by an exact category path and never enters the external project listing.
+// A project with no tagged agents and no flagged toolkits therefore still gets
+// an empty external list, which is a true statement about the project's rows.
 
 import (
 	"context"
@@ -65,6 +64,11 @@ type Tool struct {
 	// ResolveCurrentApplicationTurn), so a target with no version cannot be
 	// admitted at all.
 	applicationVersionID int64
+	// internalApplicationOperation is populated only for the fixed
+	// elitea_core/applications category. It is never serialized.
+	internalApplicationOperation internalApplicationOperation
+	// permission is re-checked for each internal API invocation.
+	permission string
 }
 
 // runnableAgent reports whether this descriptor names an agent this service can
@@ -118,6 +122,9 @@ func (p postgresToolSource) tools(ctx context.Context, schema string, s scope) (
 		}
 		return p.agentToolForVersion(ctx, schema, s.resourceID)
 	case scopeCategory:
+		if s.category == internalApplicationsCategory {
+			return internalApplicationTools(), nil
+		}
 		if s.category == "applications" {
 			return p.agentTools(ctx, schema)
 		}

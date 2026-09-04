@@ -28,6 +28,15 @@ var reservedPrebuiltParameterNames = map[string]struct{}{
 	"base_url": {}, "cache_ttl": {}, "client_id": {}, "client_secret": {},
 	"enable_caching": {}, "excluded_tools": {}, "headers": {}, "selected_tools": {},
 	"server_name": {}, "ssl_verify": {}, "timeout": {}, "url": {},
+	// These values belong to the authenticated execution. An operator can use
+	// them in a trusted prebuilt template, but a toolkit form must never ask a
+	// user to provide or persist either value.
+	"personal_token": {}, "project_id": {},
+}
+
+var runtimePrebuiltParameterNames = map[string]struct{}{
+	"personal_token": {},
+	"project_id":     {},
 }
 
 // ValidatePrebuiltServer validates operator-owned templates and parameter metadata.
@@ -53,14 +62,21 @@ func ValidatePrebuiltServer(entry PrebuiltServer) error {
 		}
 		declared[name] = struct{}{}
 	}
-	if err := validatePrebuiltURLTemplate(entry.ServerURL, declared); err != nil {
+	templateParameters := make(map[string]struct{}, len(declared)+len(runtimePrebuiltParameterNames))
+	for name := range declared {
+		templateParameters[name] = struct{}{}
+	}
+	for name := range runtimePrebuiltParameterNames {
+		templateParameters[name] = struct{}{}
+	}
+	if err := validatePrebuiltURLTemplate(entry.ServerURL, templateParameters); err != nil {
 		return err
 	}
 	for name, value := range entry.Headers {
 		if strings.Contains(name, "{") || strings.Contains(name, "}") {
 			return invalidPrebuiltParameter("header names cannot contain placeholders")
 		}
-		if err := validatePrebuiltTemplate(value, declared); err != nil {
+		if err := validatePrebuiltTemplate(value, templateParameters); err != nil {
 			return err
 		}
 	}
@@ -131,6 +147,17 @@ func MaterializePrebuiltTemplates(
 			continue
 		}
 		formatted, err := formatPrebuiltParameter(value, propertyType(property))
+		if err != nil {
+			return "", nil, err
+		}
+		values[name] = formatted
+	}
+	for name := range runtimePrebuiltParameterNames {
+		value, present := settings[name]
+		if !present {
+			continue
+		}
+		formatted, err := formatPrebuiltParameter(value, "string")
 		if err != nil {
 			return "", nil, err
 		}

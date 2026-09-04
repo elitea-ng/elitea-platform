@@ -52,23 +52,23 @@ var mcpEntityTypes = map[string]string{
 
 // mcpCategories is the category vocabulary this server accepts.
 //
-// It is NOT pylon's. pylon's tag-filtered endpoint takes an OpenAPI swagger
-// section name (`elitea_core/applications`, `secrets`, `artifacts`, …) and
-// answers with tools synthesised from the REST endpoints in that section —
-// which this service deliberately does not serve, for the reasons in the
-// package header. Accepting pylon's spelling and answering with a DIFFERENT
-// tool set under the same URL would be the worst of the options: a legacy
-// client would get a plausible listing that contains none of the tools it asked
-// for. So a pylon tag is refused, and the refusal names what is served instead.
+// Pylon's tag-filtered endpoint takes an OpenAPI section name
+// (`elitea_core/applications`, `secrets`, `artifacts`, …) and synthesizes tools
+// from selected REST operations. Main admits one such category only after its
+// operations have explicit schemas, permissions, project clamping, and an
+// in-process executor. Unknown legacy categories remain refused rather than
+// returning a plausible but unrelated project-tool listing.
 //
-// The two categories here are the two real sources the project has, split the
+// The project categories are the two real sources the project has, split the
 // way pylon's own docstring says its tag endpoint splits them — "for
 // elitea_core/applications, also includes agents tagged with 'mcp'. For
 // elitea_core/toolkits, also includes toolkit instance tools marked
-// available_by_mcp" — a claim its code never actually implemented.
+// available_by_mcp". The internal applications category is a separate fixed
+// builder surface and does not change those external opt-in rules.
 var mcpCategories = map[string]string{
-	"applications": "agents in this project whose version carries the `mcp` tag",
-	"toolkits":     "toolkits in this project flagged meta.mcp_options.available_by_mcp",
+	"applications":             "agents in this project whose version carries the `mcp` tag",
+	"elitea_core/applications": "fixed internal application-builder operations",
+	"toolkits":                 "toolkits in this project flagged meta.mcp_options.available_by_mcp",
 }
 
 // parseScope classifies the path tail after `/mcp`.
@@ -78,6 +78,9 @@ func parseScope(tail string) (scope, error) {
 		return scope{kind: scopeAll}, nil
 	}
 	segments := strings.Split(tail, "/")
+	if _, known := mcpCategories[tail]; known {
+		return scope{kind: scopeCategory, category: tail}, nil
+	}
 
 	if len(segments) == 2 {
 		if id, err := strconv.ParseInt(segments[1], 10, 64); err == nil && id > 0 {
@@ -90,16 +93,9 @@ func parseScope(tail string) (scope, error) {
 		}
 	}
 
-	if len(segments) == 1 {
-		if _, known := mcpCategories[segments[0]]; known {
-			return scope{kind: scopeCategory, category: segments[0]}, nil
-		}
-	}
-
 	return scope{}, fmt.Errorf(
 		"unknown category: %s. Valid categories: %s. This server serves the project's own agents and toolkits; "+
-			"pylon's OpenAPI-section categories (elitea_core/..., secrets, configurations, artifacts) publish REST "+
-			"operations as tools and are not served here", tail, sortedKeys(mcpCategories))
+			"only explicitly ported internal categories are served", tail, sortedKeys(mcpCategories))
 }
 
 // titleCase upper-cases the first byte. The inputs are the fixed ASCII keys of
@@ -130,7 +126,8 @@ func (s scope) serverIdentity() (name, instructions string) {
 		return fmt.Sprintf("ELITEA-%s-%d", strings.ToUpper(s.resourceType), s.resourceID),
 			fmt.Sprintf("ELITEA %s (ID: %d)", titleCase(s.resourceType), s.resourceID)
 	case scopeCategory:
-		return fmt.Sprintf("ELITEA-%s", strings.ToUpper(s.category)), fmt.Sprintf("ELITEA %s", s.category)
+		name := strings.NewReplacer("/", "-", "_", "-").Replace(strings.ToUpper(s.category))
+		return fmt.Sprintf("ELITEA-%s", name), fmt.Sprintf("ELITEA %s", s.category)
 	default:
 		return "ELITEA MCP SERVER", "ELITEA"
 	}

@@ -460,6 +460,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	// is invisible to List (which INNER JOINs application_versions) and cannot
 	// be opened in the agent editor, so a half-created agent must not commit.
 	var initialVariables []any
+	var initialTags []any
 	if versions, ok := body["versions"].([]any); ok && len(versions) > 0 {
 		if vBody, ok := versions[0].(map[string]any); ok {
 			// Validate model_project_id if llm_settings provided
@@ -474,6 +475,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 			}
 			req.InitialVersion = versionFromBody(vBody, ownerID)
 			initialVariables, _ = vBody["variables"].([]any)
+			initialTags, _ = vBody["tags"].([]any)
 		}
 	}
 
@@ -512,6 +514,19 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	var storedInitialTags []map[string]any
+	if len(initialTags) > 0 && len(app.Versions) > 0 {
+		if err := h.replaceVersionTags(r.Context(), projectID, app.Versions[0].ID, initialTags); err != nil {
+			if delErr := h.repo.Delete(r.Context(), projectID, app.ID); delErr != nil {
+				slog.ErrorContext(r.Context(), "rollback of a half-created tagged application failed",
+					"application_id", app.ID, "err", delErr)
+			}
+			apierr.Write(w, err)
+			return
+		}
+		s, _ := tenantSchema(projectID)
+		storedInitialTags = h.versionTagsOrEmpty(r.Context(), s, app.Versions[0].ID)
+	}
 
 	resp := map[string]any{
 		"id":          app.ID,
@@ -523,9 +538,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		"created_at":  app.CreatedAt,
 	}
 	if len(app.Versions) > 0 {
-		// Create writes no tag association, so the echo says "none" and is
-		// true. `tags` on the write body is read by UpdateVersion only.
-		versionDetails := versionDetailsResponse(app.Versions[0], user, userID, nil)
+		versionDetails := versionDetailsResponse(app.Versions[0], user, userID, storedInitialTags)
 		resp["version_details"] = versionDetails
 		resp["versions"] = []any{versionDetails}
 	}
@@ -543,6 +556,7 @@ func versionFromBody(vBody map[string]any, authorID int64) *applications.Version
 	welcomeMessage, _ := vBody["welcome_message"].(string)
 	llmSettings, _ := vBody["llm_settings"].(map[string]any)
 	starters, _ := vBody["conversation_starters"].([]any)
+	pipelineSettings, _ := vBody["pipeline_settings"].(map[string]any)
 
 	meta, _ := vBody["meta"].(map[string]any)
 	if meta == nil {
@@ -564,6 +578,7 @@ func versionFromBody(vBody map[string]any, authorID int64) *applications.Version
 		LLMSettings:          llmSettings,
 		ConversationStarters: starters,
 		Meta:                 meta,
+		PipelineSettings:     pipelineSettings,
 	}
 }
 
@@ -587,6 +602,10 @@ func versionDetailsResponse(ver applications.Version, user auth.User, userID str
 	if starters == nil {
 		starters = []any{}
 	}
+	pipelineSettings := ver.PipelineSettings
+	if pipelineSettings == nil {
+		pipelineSettings = map[string]any{}
+	}
 	variables, _ := ver.Meta["variables"].([]any)
 	if variables == nil {
 		variables = []any{}
@@ -607,6 +626,7 @@ func versionDetailsResponse(ver applications.Version, user auth.User, userID str
 		"welcome_message":       ver.WelcomeMessage,
 		"llm_settings":          llm,
 		"conversation_starters": starters,
+		"pipeline_settings":     pipelineSettings,
 		"tools":                 []any{},
 		"variables":             variables,
 		"tags":                  tags,
@@ -877,9 +897,20 @@ func (h *Handler) CreateVersion(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// "Save as a new version" clones no tag association — see the `tags`
-	// note on VersionWriteRequest in api/openapi/v2.yaml.
-	writeJSON(w, http.StatusCreated, versionDetailsResponse(ver, user, userID, nil))
+	var storedTags []map[string]any
+	if tags, present := body["tags"].([]any); present {
+		if err := h.replaceVersionTags(r.Context(), projectID, ver.ID, tags); err != nil {
+			if delErr := h.repo.DeleteVersion(r.Context(), projectID, applicationID, ver.ID); delErr != nil {
+				slog.ErrorContext(r.Context(), "rollback of a half-created tagged version failed",
+					"application_id", applicationID, "version_id", ver.ID, "err", delErr)
+			}
+			apierr.Write(w, err)
+			return
+		}
+		s, _ := tenantSchema(projectID)
+		storedTags = h.versionTagsOrEmpty(r.Context(), s, ver.ID)
+	}
+	writeJSON(w, http.StatusCreated, versionDetailsResponse(ver, user, userID, storedTags))
 }
 
 func (h *Handler) UpdateVersion(w http.ResponseWriter, r *http.Request) {

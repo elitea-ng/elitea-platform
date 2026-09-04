@@ -92,7 +92,7 @@ these are *known* gaps, not bugs.
 
 | Surface | Route / file | State |
 |---|---|---|
-| **MCP `tools/call` execution** | `v2/mcp/server.go:217`, `registry.go:71,188` | Listing is real; running is not. Needs the agent runtime (agents) and the Python worker's toolkit dispatch (toolkits). Returns `isError: true` naming what is missing, never an empty success |
+| **MCP `tools/call` execution** | `v2/mcp/{server.go,internal_applications_*.go}`, `registry.go:71,188` | Agent tools run when the agent runtime is enabled. The fixed internal `elitea_core/applications` category now lists and executes its eight explicitly selected Main operations without the agent runtime. External toolkit tools still need an execution owner and return `isError: true` naming what is missing, never an empty success |
 | **MCP SSE pair** (`GET /<pid>/sse` + `POST /<pid>/messages`) | `v2/mcp/handler.go:21` | Not ported. The modern streamable-HTTP transport is; this is the deprecated one |
 | **Analytics by agent** | `repos/analytics.go:44-56` | Only the AGENT dimension is missing: a gateway request knows its model, not the agent that composed it, and nothing correlates the two. Tool is a weaker, different problem — nothing records a tool call outside a chat turn |
 | ~~Billing dimensions~~ | — | **WRONG, struck.** Migration `0084_budget_usage_dimensions.sql` added `gateway.llm_usage_events` carrying project, user, provider, model, prompt/completion/total tokens, api_requests and cost_usd, with two writers and three readers. Four of the five dimensions ship today |

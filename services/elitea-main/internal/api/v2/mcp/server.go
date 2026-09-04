@@ -11,6 +11,7 @@ package mcp
 // inline (`auth.current_user()` then `list_user_projects`).
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
@@ -229,19 +230,16 @@ const ToolExecutionUnavailableReason = "this MCP server can list this project's 
 
 func (h *Handler) callTool(r *http.Request, schema string, s scope, message rpcMessage) rpcResponse {
 	var params struct {
-		Name      string `json:"name"`
-		Arguments struct {
-			// The agent tool schema every listing advertises has exactly one
-			// property, `task`, and it is required (agentTaskSchema). Decoding
-			// only that is not a shortcut: an unknown argument is IGNORED by
-			// the specification's own reading of a tool's input schema, and
-			// silently forwarding one into the agent's prompt would make the
-			// tool's advertised contract a lie.
-			Task string `json:"task"`
-		} `json:"arguments"`
+		Name      string         `json:"name"`
+		Arguments map[string]any `json:"arguments"`
 	}
-	if err := json.Unmarshal(message.Params, &params); err != nil || strings.TrimSpace(params.Name) == "" {
+	decoder := json.NewDecoder(bytes.NewReader(message.Params))
+	decoder.UseNumber()
+	if err := decoder.Decode(&params); err != nil || strings.TrimSpace(params.Name) == "" {
 		return newError(message.ID, codeInvalidParams, "tools/call requires a 'name' parameter")
+	}
+	if params.Arguments == nil {
+		params.Arguments = map[string]any{}
 	}
 
 	// The name is resolved against the SAME listing tools/list serves, in the
@@ -268,6 +266,16 @@ func (h *Handler) callTool(r *http.Request, schema string, s scope, message rpcM
 		return newError(message.ID, codeInvalidParams, "unknown tool: "+params.Name)
 	}
 
+	projectID, ok := runProjectID(r)
+	if !ok {
+		// Unreachable in practice: Endpoint already refused a project id that
+		// is not a plain positive integer before this handler was reached.
+		return newError(message.ID, codeInvalidParams, "invalid project id")
+	}
+	if target.internalApplicationOperation != "" {
+		return newResult(message.ID, h.callInternalApplicationTool(r, projectID, target, params.Arguments))
+	}
+
 	// NO RUNTIME. The composition root had no AgentStart use case to give this
 	// handler, which is what `runtime.enabled` being off looks like from here.
 	// The answer is the sentence this endpoint has always given, unchanged —
@@ -280,7 +288,8 @@ func (h *Handler) callTool(r *http.Request, schema string, s scope, message rpcM
 		return newResult(message.ID, errorResult(ToolkitExecutionUnavailableReason))
 	}
 
-	task := strings.TrimSpace(params.Arguments.Task)
+	task, _ := params.Arguments["task"].(string)
+	task = strings.TrimSpace(task)
 	if task == "" {
 		// `task` is `required` in the schema this very server published, so an
 		// empty one is the request being wrong rather than the tool failing.
@@ -288,18 +297,66 @@ func (h *Handler) callTool(r *http.Request, schema string, s scope, message rpcM
 			"tools/call on an agent requires a non-empty 'task' argument")
 	}
 
-	projectID, ok := runProjectID(r)
-	if !ok {
-		// Unreachable in practice: Endpoint already refused a project id that
-		// is not a plain positive integer before this handler was reached.
-		return newError(message.ID, codeInvalidParams, "invalid project id")
-	}
 	actorUserID, refusal := h.authorizeRun(r, projectID)
 	if refusal != nil {
 		return newResult(message.ID, refusal)
 	}
 
 	return newResult(message.ID, h.runAgentTool(r.Context(), schema, projectID, actorUserID, target, task))
+}
+
+func (h *Handler) callInternalApplicationTool(
+	r *http.Request,
+	projectID int64,
+	target Tool,
+	arguments map[string]any,
+) map[string]any {
+	if supplied, present := arguments["project_id"]; present {
+		text := scalarArgument(supplied)
+		parsed, err := strconv.ParseInt(text, 10, 64)
+		if err != nil || parsed <= 0 {
+			return errorResult("project_id must be a positive integer; nothing was executed")
+		}
+		if parsed != projectID {
+			return errorResult("project_id must match the project in this MCP endpoint; nothing was executed")
+		}
+	}
+	// The path is the authority. Injection also lets an MCP client omit the
+	// otherwise repetitive project field without creating a second defaulting
+	// rule in each operation.
+	arguments["project_id"] = json.Number(strconv.FormatInt(projectID, 10))
+
+	if target.permission == "" {
+		return errorResult("this internal MCP tool has no permission contract, so nothing was executed")
+	}
+	actorID, refusal := h.authorizePermission(
+		r, projectID, target.permission, "using internal MCP tool '"+target.Name+"'",
+	)
+	if refusal != nil {
+		return refusal
+	}
+	if h.internalApplications == nil {
+		return errorResult("this deployment cannot execute internal application tools; nothing was executed")
+	}
+	execution, err := h.internalApplications.Execute(
+		r.Context(), projectID, actorID, target.internalApplicationOperation, arguments,
+	)
+	if err != nil {
+		return errorResult("the internal application operation failed; nothing else was disclosed")
+	}
+	if execution.status >= http.StatusInternalServerError || !json.Valid(execution.body) {
+		return errorResult("the internal application operation failed; nothing else was disclosed")
+	}
+	text := strings.TrimSpace(string(execution.body))
+	if text == "" {
+		text = "{}"
+	}
+	if execution.status < http.StatusOK || execution.status >= http.StatusMultipleChoices {
+		return errorResult(text)
+	}
+	return map[string]any{
+		"content": []map[string]any{{"type": "text", "text": text}},
+	}
 }
 
 // authorizeRun decides whether this caller may EXECUTE in this project, and
@@ -318,15 +375,24 @@ func (h *Handler) callTool(r *http.Request, schema string, s scope, message rpcM
 // wrong way. If those constants ever change, TestMCPRunUsesTheChatStartPermission
 // fails.
 func (h *Handler) authorizeRun(r *http.Request, projectID int64) (int64, map[string]any) {
+	return h.authorizePermission(r, projectID, runPermission, "running an agent")
+}
+
+func (h *Handler) authorizePermission(
+	r *http.Request,
+	projectID int64,
+	permission string,
+	action string,
+) (int64, map[string]any) {
 	user, ok := auth.UserFromContext(r.Context())
 	if !ok {
-		return 0, errorResult("running an agent requires an authenticated caller; nothing was executed")
+		return 0, errorResult(action + " requires an authenticated caller; nothing was executed")
 	}
 	if h.permissions == nil {
 		// FAIL CLOSED. A handler with no resolver cannot decide, and "cannot
 		// decide" must not mean "allowed" for the one capability on this
 		// endpoint that spends money and drives tools.
-		return 0, errorResult("this deployment cannot authorize an MCP agent run, so nothing was executed")
+		return 0, errorResult("this deployment cannot authorize " + action + ", so nothing was executed")
 	}
 	resolution, err := h.permissions.ResolvePermissions(
 		r.Context(), user, runPermissionMode, strconv.FormatInt(projectID, 10),
@@ -335,14 +401,14 @@ func (h *Handler) authorizeRun(r *http.Request, projectID int64) (int64, map[str
 		return 0, errorResult("your permissions for this project could not be resolved, so nothing was executed")
 	}
 	allowed := false
-	for _, permission := range resolution.Permissions {
-		if permission == runPermission {
+	for _, heldPermission := range resolution.Permissions {
+		if heldPermission == permission {
 			allowed = true
 			break
 		}
 	}
 	if !allowed {
-		return 0, errorResult("running an agent in this project requires the '" + runPermission +
+		return 0, errorResult(action + " in this project requires the '" + permission +
 			"' permission, which this caller does not hold. Nothing was executed.")
 	}
 	if resolution.UserID <= 0 {

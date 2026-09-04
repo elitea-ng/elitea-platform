@@ -1,8 +1,11 @@
-// Package mcp is the MCP SERVER surface — issue 252. It is the half of Elitea's
-// Model Context Protocol story that had no Go counterpart at all: the platform
-// speaking MCP *to* external clients, so an agent host (Claude Desktop, Cursor,
-// the MCP Inspector, any SDK client) can list and drive a project's agents and
-// toolkits as MCP tools.
+// Package mcp is Main's streamable-HTTP MCP server surface — issue 252. It
+// serves two deliberately separate products:
+//
+//   - external project capabilities that a client such as Claude Desktop,
+//     Cursor, the MCP Inspector, or an SDK client can discover; and
+//   - fixed internal builder categories that an Elitea chat can use to manage
+//     project entities. Each internal operation has an explicit schema,
+//     permission, project clamp, and in-process executor.
 //
 // What already existed here is the CLIENT side and its plumbing —
 // `mcp_oauth_proxy`, `mcp_dcr_proxy`, `mcp_sync_tools` in
@@ -29,7 +32,7 @@
 //
 // # What serves real data and what refuses
 //
-// The three answers this package can give are kept strictly apart, because the
+// The answers this package can give are kept strictly apart, because the
 // failure this repo keeps rediscovering (issue 128) is a route that answers 200
 // while nothing behind it is wired:
 //
@@ -40,6 +43,12 @@
 //     `meta.mcp_options.available_by_mcp` — by catalog.go. The REST `tools_list`
 //     reads the durable MCP server store (registry.go, issue 335). Nothing
 //     about either is hardcoded or invented.
+//   - REAL. `tools/list` and `tools/call` for the fixed
+//     `elitea_core/applications` internal category. The eight operations match
+//     the current platform's explicit `mcp_tool=True` application operations.
+//     Main reuses its application handlers where their contracts match and
+//     owns the transactional safe-update path where a full backup and an
+//     optimistic instruction patch must be atomic.
 //   - REAL, ON A DEPLOYMENT WITH THE RUNTIME. `tools/call` on an AGENT tool.
 //     It admits an ordinary agent turn through the same use case the chat
 //     start route drives, waits for it, bounded, and answers with the text the
@@ -62,7 +71,7 @@
 //     reach a client-hosted one. See registry.go for why a remote MCP toolkit
 //     loses nothing by this.
 //
-// # The `api` tool category is deliberately not ported
+// # Internal API categories are explicit, not inferred
 //
 // pylon's listing has a third source besides agents and toolkits:
 // `openapi_registry.get_mcp_api_tools()`, which republishes pylon's own REST
@@ -70,7 +79,8 @@
 // `mcp_tool=True`, and `McpApiToolExecutor` runs them by re-entering the Flask
 // WSGI app with the caller's cookies and headers.
 //
-// That source is not reproduced here, for two reasons that are not "no time":
+// That source is not reproduced generically here, for two reasons that are not
+// "no time":
 //
 //  1. The opt-in list does not exist in this stack. Which REST operations an
 //     external MCP client may drive is a security decision made one endpoint at
@@ -83,9 +93,10 @@
 //     recursion, auth-forwarding and middleware-re-entry design. That is a
 //     surface to specify, not to improvise inside a parity port.
 //
-// So the category vocabulary this server accepts is the two categories it can
-// actually serve, `applications` and `toolkits`; anything else is a 400 that
-// names the valid set, which is how pylon answers an unknown tag too. See
+// Instead, each internal category is added only after its operations have
+// explicit schemas, permissions, project clamping, and an in-process executor.
+// The first such category is `elitea_core/applications`. Anything else is a 400
+// that names the valid set, which is how pylon answers an unknown tag too. See
 // scope.go.
 //
 // # The SSE pair is dropped, not deferred
@@ -169,6 +180,10 @@ type Handler struct {
 	// route: a route-level gate would also refuse `tools/list` to a viewer,
 	// which is a read they are entitled to.
 	permissions auth.PermissionResolver
+	// internalApplications executes the fixed internal application-builder
+	// category in process. It is nil only in protocol unit tests or when Main
+	// has no database composition.
+	internalApplications internalApplicationExecutor
 }
 
 // AgentStartUseCase is the narrow slice of
@@ -225,6 +240,7 @@ func NewHandler(
 	handler.source = postgresToolSource{handler: handler}
 	if pool != nil {
 		handler.registry = mcpregistry.NewStore(pool)
+		handler.internalApplications = newPostgresInternalApplicationExecutor(pool)
 	}
 	return handler
 }

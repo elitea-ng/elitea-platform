@@ -49,6 +49,47 @@ func TestMaterializePrebuiltTemplatesMatchesCurrentADOConfiguration(t *testing.T
 	}
 }
 
+func TestMaterializePrebuiltTemplatesAcceptsRuntimeOwnedInternalValues(t *testing.T) {
+	entry := PrebuiltServer{
+		Key:         "elitea_applications",
+		DisplayName: "Elitea Applications",
+		ServerURL:   "https://elitea.example.test/app/{project_id}/mcp/elitea_core/applications",
+		Headers: map[string]string{
+			"Authorization": "Bearer {personal_token}",
+		},
+		Enabled: true,
+	}
+
+	endpoint, headers, err := MaterializePrebuiltTemplates(entry, map[string]any{
+		"project_id":     "42",
+		"personal_token": "ephemeral-bearer",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if endpoint != "https://elitea.example.test/app/42/mcp/elitea_core/applications" {
+		t.Fatalf("endpoint=%q", endpoint)
+	}
+	if headers["Authorization"] != "Bearer ephemeral-bearer" {
+		t.Fatalf("authorization=%q", headers["Authorization"])
+	}
+	if names, err := PrebuiltParameterNames(entry); err != nil || len(names) != 0 {
+		t.Fatalf("runtime values reached toolkit schema: names=%v error=%v", names, err)
+	}
+}
+
+func TestPrebuiltSchemaRejectsRuntimeOwnedValues(t *testing.T) {
+	for _, name := range []string{"project_id", "personal_token"} {
+		t.Run(name, func(t *testing.T) {
+			entry := parameterizedPrebuiltServer()
+			entry.ConfigSchema["properties"].(map[string]any)[name] = map[string]any{"type": "string"}
+			if err := ValidatePrebuiltServer(entry); !errors.Is(err, ErrInvalidPrebuiltParameters) {
+				t.Fatalf("runtime-owned field error=%v", err)
+			}
+		})
+	}
+}
+
 func TestPrebuiltTemplatesRejectUndeclaredOrAuthorityPlaceholders(t *testing.T) {
 	entry := parameterizedPrebuiltServer()
 	entry.Headers["X-Unknown"] = "{missing}"
