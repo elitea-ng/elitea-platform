@@ -141,6 +141,25 @@ func TestToolkitArgumentSchemasAreWiredFromTheCompositionRoot(t *testing.T) {
 	}
 }
 
+// Internal MCP must not construct a reduced toolkit handler of its own. The
+// shared instance is what keeps MCP create/update behind the same dynamic MCP
+// schemas, secret sealing, credential-reference validation and guardrail
+// policy as the REST/UI entry point.
+func TestInternalMCPToolkitBuilderReusesTheComposedRESTHandler(t *testing.T) {
+	t.Parallel()
+
+	source := readRouterSource(t)
+	for description, pattern := range map[string]string{
+		"single composed handler":    `toolkitHandler := newToolkitHandler\(cfg, prebuiltMCPStore\)`,
+		"MCP mount receives handler": `mountMCPServerRoutes\(r, cfg\.Pool, authenticate, cfg\.MCPAgentStart, toolkitHandler\)`,
+		"MCP handler option":         `v2mcp\.WithInternalToolkitHandler\(toolkitHandler\)`,
+	} {
+		if !regexp.MustCompile(pattern).MatchString(source) {
+			t.Errorf("router.go is missing %s; Internal MCP and REST toolkit mutations can diverge", description)
+		}
+	}
+}
+
 // The instance list keeps its own route. Moving ListTypeSchemas onto /toolkits/
 // must not be "fixed" by moving List off /tools/ as well: the web client calls
 // both (toolkits.ts:562 and :764).

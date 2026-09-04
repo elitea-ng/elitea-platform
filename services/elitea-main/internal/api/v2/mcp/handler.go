@@ -132,6 +132,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	toolkitsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkits"
 	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpregistry"
@@ -186,6 +187,23 @@ type Handler struct {
 	internalApplications internalApplicationExecutor
 	// internalSkills executes the fixed internal skill-builder category.
 	internalSkills internalSkillExecutor
+	// internalToolkits executes the fixed internal toolkit-builder category.
+	internalToolkits internalToolkitExecutor
+}
+
+// Option configures an MCP handler without weakening the required constructor
+// arguments. Internal builder executors are optional because protocol-only unit
+// tests and runtime-disabled deployments may deliberately omit them.
+type Option func(*Handler)
+
+// WithInternalToolkitHandler reuses the fully composed Main toolkit handler for
+// internal MCP calls. The caller must pass the same instance used by the REST
+// routes so guardrails, dynamic schemas, secret sealing and credential
+// validation cannot diverge between the two surfaces.
+func WithInternalToolkitHandler(handler *toolkitsapi.Handler) Option {
+	return func(mcpHandler *Handler) {
+		mcpHandler.internalToolkits = newHandlerInternalToolkitExecutor(handler)
+	}
 }
 
 // AgentStartUseCase is the narrow slice of
@@ -237,6 +255,7 @@ func NewHandler(
 	personal PersonalProjectResolver,
 	start AgentStartUseCase,
 	permissions auth.PermissionResolver,
+	opts ...Option,
 ) *Handler {
 	handler := &Handler{pool: pool, personal: personal, start: start, permissions: permissions}
 	handler.source = postgresToolSource{handler: handler}
@@ -244,6 +263,9 @@ func NewHandler(
 		handler.registry = mcpregistry.NewStore(pool)
 		handler.internalApplications = newPostgresInternalApplicationExecutor(pool)
 		handler.internalSkills = newPostgresInternalSkillExecutor(pool)
+	}
+	for _, opt := range opts {
+		opt(handler)
 	}
 	return handler
 }

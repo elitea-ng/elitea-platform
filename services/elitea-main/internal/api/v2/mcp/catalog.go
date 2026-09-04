@@ -70,6 +70,9 @@ type Tool struct {
 	// internalSkillOperation is populated only for the fixed skills category.
 	// It is never serialized.
 	internalSkillOperation internalSkillOperation
+	// internalToolkitOperation is populated only for the fixed toolkit-builder
+	// category. It is never serialized.
+	internalToolkitOperation internalToolkitOperation
 	// permission is re-checked for each internal API invocation.
 	permission string
 }
@@ -130,6 +133,9 @@ func (p postgresToolSource) tools(ctx context.Context, schema string, s scope) (
 		}
 		if s.category == internalSkillsCategory {
 			return internalSkillTools(), nil
+		}
+		if s.category == internalToolkitsCategory {
+			return internalToolkitTools(), nil
 		}
 		if s.category == "applications" {
 			return p.agentTools(ctx, schema)

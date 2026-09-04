@@ -278,6 +278,9 @@ func (h *Handler) callTool(r *http.Request, schema string, s scope, message rpcM
 	if target.internalSkillOperation != "" {
 		return newResult(message.ID, h.callInternalSkillTool(r, projectID, target, params.Arguments))
 	}
+	if target.internalToolkitOperation != "" {
+		return newResult(message.ID, h.callInternalToolkitTool(r, projectID, target, params.Arguments))
+	}
 
 	// NO RUNTIME. The composition root had no AgentStart use case to give this
 	// handler, which is what `runtime.enabled` being off looks like from here.
@@ -336,6 +339,22 @@ func (h *Handler) callInternalSkillTool(
 	return h.callInternalTool(r, projectID, target, arguments, "skill", func(actorID int64) (internalApplicationExecution, error) {
 		return h.internalSkills.Execute(
 			r.Context(), projectID, actorID, target.internalSkillOperation, arguments,
+		)
+	})
+}
+
+func (h *Handler) callInternalToolkitTool(
+	r *http.Request,
+	projectID int64,
+	target Tool,
+	arguments map[string]any,
+) map[string]any {
+	if h.internalToolkits == nil {
+		return errorResult("this deployment cannot execute internal toolkit tools; nothing was executed")
+	}
+	return h.callInternalTool(r, projectID, target, arguments, "toolkit", func(actorID int64) (internalApplicationExecution, error) {
+		return h.internalToolkits.Execute(
+			r.Context(), projectID, actorID, target.internalToolkitOperation, arguments,
 		)
 	})
 }

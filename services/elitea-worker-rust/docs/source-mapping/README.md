@@ -57,7 +57,8 @@ Detailed ledgers:
 - `prebuilt-mcp.md` maps fixed catalogue-backed HTTP MCP execution.
 - `internal-elitea-mcp.md` separates internal builder categories from external
   Elitea-as-MCP publishing. It maps the Main-owned applications and skills
-  categories.
+  categories plus the currently truthful toolkit builder operations and its
+  live-discovery gate.
 - `indexing.md` maps indexing behavior and its later Rust capability.
 
 Maintained Rust runtime ownership registry:

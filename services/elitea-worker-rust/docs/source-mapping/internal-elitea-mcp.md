@@ -1,7 +1,9 @@
 # Internal Elitea MCP source mapping
 
-Status: the applications and skills categories are implemented. The wider
-internal builder family and external Elitea-as-MCP publishing remain partial.
+Status: the applications and skills categories and five Main-owned toolkit
+builder operations are implemented. Live per-instance toolkit discovery, the
+wider internal builder family, and external Elitea-as-MCP publishing remain
+partial.
 
 This ledger keeps three MCP products separate:
 
@@ -85,12 +87,56 @@ The Python list also supports tags, author, status, IDs, limit, and offset.
 Main currently supports text, page, page size, and sorting. The narrower MCP
 schema advertises only filters that Main honors.
 
+## Toolkits category
+
+The toolkit builder category is available at
+`/app/{projectID}/mcp/elitea_core/toolkits`. Main currently publishes five of
+the six operations marked `mcp_tool=True` by the current platform.
+
+| Current platform evidence | Permission | Main tool |
+| --- | --- | --- |
+| `elitea_core/api/v2/toolkits.py::PromptLibAPI.get` | `models.applications.toolkits.details` | `get_elitea_core_toolkits` |
+| `elitea_core/api/v2/tools.py::PromptLibAPI.get` | `models.applications.tools.list` | `get_elitea_core_tools` |
+| `elitea_core/api/v2/tools.py::PromptLibAPI.post` | `models.applications.tools.create` | `post_elitea_core_tools` |
+| `elitea_core/api/v2/tool.py::PromptLibAPI.put` | `models.applications.tool.update` | `put_elitea_core_tool` |
+| `elitea_core/api/v2/tool.py::PromptLibAPI.patch` | `models.applications.tool.patch` | `patch_elitea_core_tool` |
+
+The executor reuses the same fully composed toolkit handler as the REST/UI
+routes. Dynamic prebuilt-MCP schemas, settings definitions, secret sealing,
+credential-reference validation, and guardrail policy therefore cannot drift
+between the two entry points. Actor identity is derived from the authenticated
+MCP principal. Project, author, owner, and object identities supplied inside
+the model arguments cannot replace the URL and claim identities.
+
+The Main instance list currently implements only pagination and name ordering.
+The MCP schema consequently exposes only bounded `limit` and `offset`; it does
+not pretend to support the current Python endpoint's query, sort, type, MCP,
+application, author, artifact, or ID filters.
+
+Toolkit-to-agent mutation preserves the meaningful distinction between an
+absent `selected_tools` value and an explicitly empty array. The first attaches
+without replacing a saved selection; the second records that the user selected
+no tools. Published and embedded agent versions retain the REST handler's
+mutation guard.
+
+`get_elitea_core_toolkit_available_tools` is deliberately not published yet.
+The current Python operation expands the exact saved toolkit configuration for
+the current user and asks the SDK/provider for its live tool catalogue. Main's
+present `AvailableTools` repository query instead reads toolkit attachments
+from `entity_tool_mapping`; `DiscoverTools` reads stored rows by type. Neither
+is live per-instance discovery, so exposing either through this name would
+return plausible but incorrect data. The operation remains closed until Main
+composes built-in pinned schemas, OpenAPI operation parsing, and remote MCP
+discovery with claim-scoped settings expansion.
+
 ## Main ownership
 
 Main owns listing, execution, authorization, project clamping, and mutation.
 The fixed catalogues are in
-`internal/api/v2/mcp/internal_{applications,skills}_catalog.go`. Their
-in-process executors reuse Main business repositories. Application version
+`internal/api/v2/mcp/internal_{applications,skills,toolkits}_catalog.go`.
+Application and skill executors reuse Main business repositories. The toolkit
+executor deliberately reuses the fully composed REST handler so every toolkit
+mutation crosses the same policy and secret boundaries. Application version
 updates use a dedicated PostgreSQL transaction.
 
 The version read returns `instructions_sha256`. A settings update cannot change
@@ -133,7 +179,7 @@ Core-to-Indexer-to-SDK execution split.
 
 ## Verification
 
-Main unit tests pin both catalogues, wire schemas, permissions, project clamps,
+Main unit tests pin all three catalogues, wire schemas, permissions, project clamps,
 runtime-independent dispatch, business-error shapes, and redacted
 infrastructure failures. Validation tests cover application and skill inputs.
 
@@ -146,6 +192,13 @@ Skill executor tests prove bounded filtering, nested create input, current name
 rules, partial-update merging, exact version ownership, and relation keys. A
 PostgreSQL lifecycle test proves create, update, attach, list, and detach.
 
+Toolkit executor tests prove bounded pagination, authenticated actor ownership,
+write-field allowlists, path-authoritative identities, input refusal before
+mutation, and absent-versus-empty selected tool semantics. Its PostgreSQL
+lifecycle test proves create, partial update, attach, explicit empty selection,
+list, and detach. Router composition tests pin that REST and Internal MCP share
+one policy-complete toolkit handler.
+
 Prebuilt materialization tests prove that runtime placeholders cannot become
 stored toolkit parameters, internal PATs are restricted to the configured Main
 origin, and external origins receive no delegated platform credential. The
@@ -155,6 +208,11 @@ existing Rust configured-MCP tests remain the worker-side protocol proof.
 
 Other internal categories must be mapped operation by operation. No generic
 OpenAPI self-dispatch is allowed.
+
+The sixth toolkit operation, live available-tool discovery, remains an explicit
+Main parity gate. It must use the exact saved instance and current actor's
+expanded configuration. The existing attachment/type SQL is not an acceptable
+fallback.
 
 Skill draft generation remains gated because Main does not yet own its model
 operation. Multi-version skills, rich tag metadata, extended list filters, and

@@ -692,8 +692,15 @@ func mountMCPServerRoutes(
 	pool *pgxpool.Pool,
 	authenticate func(http.Handler) http.Handler,
 	agentStart v2mcp.AgentStartUseCase,
+	toolkitHandler *v2toolkits.Handler,
 ) {
-	handler := v2mcp.NewHandler(pool, apimw.NewDBPersonalProjectResolver(pool), agentStart, legacyrbac.NewPostgresResolver(pool))
+	handler := v2mcp.NewHandler(
+		pool,
+		apimw.NewDBPersonalProjectResolver(pool),
+		agentStart,
+		legacyrbac.NewPostgresResolver(pool),
+		v2mcp.WithInternalToolkitHandler(toolkitHandler),
+	)
 	r.Group(func(r chi.Router) {
 		r.Use(authenticate)
 		r.Use(apimw.RequireProjectAccess(pool))
@@ -702,6 +709,33 @@ func mountMCPServerRoutes(
 		r.Get("/app/{projectID}/mcp/*", handler.Endpoint)
 		r.Post("/app/{projectID}/mcp/*", handler.Endpoint)
 	})
+}
+
+// newToolkitHandler builds the one toolkit handler shared by REST and the
+// fixed internal MCP category. Sharing the instance is the contract: a toolkit
+// created through MCP must cross the same dynamic-schema secret sealing,
+// credential validation and live guardrail checks as one created in the UI.
+func newToolkitHandler(
+	cfg RouterConfig,
+	prebuiltMCPStore *mcpregistry.PrebuiltStore,
+) *v2toolkits.Handler {
+	options := []v2toolkits.Option{
+		v2toolkits.WithArgumentSchemas(cfg.ToolkitArgumentSchemas),
+		v2toolkits.WithSettingsDefinitions(cfg.ToolkitSettingsDefinitions),
+	}
+	if cfg.Pool != nil {
+		options = append(options,
+			v2toolkits.WithDynamicTypeSchemas(prebuiltMCPStore),
+			v2toolkits.WithSecretSealer(configurationSecretSealer(cfg.Pool)),
+		)
+	}
+	if cfg.ToolkitSettingsValidator != nil {
+		options = append(options, v2toolkits.WithSettingsValidator(cfg.ToolkitSettingsValidator))
+	}
+	if guardrailPolicies, err := platformconfig.NewGuardrailPolicyAdapter(cfg.Pool); err == nil {
+		options = append(options, v2toolkits.WithGuardrails(guardrailPolicies))
+	}
+	return v2toolkits.NewHandler(cfg.Pool, options...)
 }
 
 // compressJSONResponses gzips a JSON API response when the caller asks for it.
@@ -1081,10 +1115,15 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		Authenticate: authenticate,
 		Resolver:     artifactResolver,
 	})
+	// Construct these collaborators before either route family is mounted.
+	// The REST toolkit surface, the internal MCP toolkit builder and the MCP
+	// admin/runtime paths must all read the same durable catalogue.
+	prebuiltMCPStore := mcpregistry.NewPrebuiltStore(cfg.Pool)
+	toolkitHandler := newToolkitHandler(cfg, prebuiltMCPStore)
 
 	// The MCP server (issue 252). Outside the /api/v2 group for the reasons in
 	// mountMCPServerRoutes.
-	mountMCPServerRoutes(r, cfg.Pool, authenticate, cfg.MCPAgentStart)
+	mountMCPServerRoutes(r, cfg.Pool, authenticate, cfg.MCPAgentStart, toolkitHandler)
 
 	// This group holds the whole JSON API — the `/api/v2` route below is its
 	// only member. Compression sits at the top of it, ABOVE the shadow
@@ -1163,7 +1202,6 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			// v2secrets.NewHandler is used as the vault here for the same reason
 			// projectprovisioning uses it: it is the one type in this service
 			// that can open and write a centry vault.
-			prebuiltMCPStore := mcpregistry.NewPrebuiltStore(cfg.Pool)
 			prebuiltMCPVault := v2secrets.NewHandler(cfg.Pool)
 
 			// The TYPED identity provider definitions (shared migration 0095) —
@@ -2057,37 +2095,10 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				}
 
 				// Toolkits
-				// The guardrails source is constructed here rather than injected
-				// through RouterConfig: it needs only the pool this config
-				// already carries, and internal/platformconfig is a leaf the api
-				// layer already depends on (eliteacore reads its flags). A
-				// deployment with no pool gets no source, and every toolkit
-				// surface behaves as it did before guardrails existed — which is
-				// the only honest answer when there is no store to read a policy
-				// from.
-				toolkitOptions := []v2toolkits.Option{
-					v2toolkits.WithArgumentSchemas(cfg.ToolkitArgumentSchemas),
-					v2toolkits.WithSettingsDefinitions(cfg.ToolkitSettingsDefinitions),
-				}
-				if cfg.Pool != nil {
-					toolkitOptions = append(toolkitOptions,
-						v2toolkits.WithDynamicTypeSchemas(prebuiltMCPStore),
-						v2toolkits.WithSecretSealer(configurationSecretSealer(cfg.Pool)),
-					)
-				}
-				// Guarded rather than appended unconditionally: an Option that
-				// stored a nil interface would still leave h.settingsValidator
-				// nil, but a caller that later boxes a typed nil pointer here
-				// would not, and the handler's own nil check is the whole
-				// fallback. Keep the nil out of the option list.
-				if cfg.ToolkitSettingsValidator != nil {
-					toolkitOptions = append(toolkitOptions,
-						v2toolkits.WithSettingsValidator(cfg.ToolkitSettingsValidator))
-				}
-				if guardrailPolicies, err := platformconfig.NewGuardrailPolicyAdapter(cfg.Pool); err == nil {
-					toolkitOptions = append(toolkitOptions, v2toolkits.WithGuardrails(guardrailPolicies))
-				}
-				toolkitHandler := v2toolkits.NewHandler(cfg.Pool, toolkitOptions...)
+				// toolkitHandler is shared with the fixed internal MCP toolkit
+				// category. It was composed once above the route groups so both
+				// entry points enforce the same schemas, credentials and
+				// guardrails.
 				// /tool(s)/ and /toolkits/ paths route to toolkitHandler (toolkit instances, not skills).
 				//
 				// NOTE the split, which was wrong until #129: /tools/ is the
