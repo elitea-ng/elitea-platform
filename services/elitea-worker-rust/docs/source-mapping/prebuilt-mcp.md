@@ -31,6 +31,18 @@ At claim materialization, Main admits only fixed controls and fields declared by
 
 The project still owns `selected_tools`, `excluded_tools`, caching controls, and the attached toolkit name.
 
+## Live catalogue updates
+
+PostgreSQL is the authoritative catalogue. Main does not keep a process-local copy.
+
+Admin saves replace one full definition atomically. Later toolkit catalogue reads and execution claims use the new definition across replicas.
+
+Admin withdrawal or deletion removes the definition from later toolkit catalogues. Later execution claims fail closed.
+
+The Admin UI invalidates every active project toolkit catalogue after a successful save or deletion.
+
+An existing execution keeps its signed, claim-materialized input. A catalogue edit never changes authority during that execution.
+
 Rust receives only Main's claim-materialized input. It accepts prebuilt authority from admitted `mcp_config` and `mcp_*` types.
 
 Direct `mcp` retains its existing strict authority path.
@@ -49,7 +61,9 @@ Claim tests cover forged-marker removal, authoritative connection replacement, r
 
 Rust tests cover static headers, header sensitivity, exclusions, reserved headers, unresolved-template rejection, token precedence, aliases, and authorization identity.
 
-Admin UI tests cover YAML mapping edits, write bodies, invalid mappings, secret preservation, and server refusal messages.
+Admin UI tests cover YAML edits, write bodies, invalid mappings, secret preservation, server refusals, and toolkit catalogue invalidation.
+
+PostgreSQL integration tests cover immediate update and deletion visibility across independent service instances.
 
 ## Remaining gates
 
@@ -57,6 +71,6 @@ Stdio remains assigned to an external runner with explicit process, package, env
 
 Runtime post-discovery authorization failures need typed RMCP call errors before automatic reauthorization can be safe.
 
-Legacy descriptor migration and hot reload remain separate deployment capabilities.
+Legacy descriptor migration remains a separate deployment capability.
 
 Internal PAT stamping and Elitea-as-MCP exposure remain separate platform capabilities.

@@ -118,6 +118,58 @@ func TestPrebuiltStoreUpsertReplacesRatherThanMerges(t *testing.T) {
 	require.Len(t, all, 1)
 }
 
+// Admin writes and runtime reads can use different service instances.
+// PostgreSQL is the shared live catalogue, so no process cache needs a reload.
+func TestPrebuiltStoreChangesAreVisibleAcrossLiveServiceInstances(t *testing.T) {
+	pool := newCataloguePool(t)
+	adminStore := mcpregistry.NewPrebuiltStore(pool)
+	catalogueStore := mcpregistry.NewPrebuiltStore(pool)
+	runtimeStore := mcpregistry.NewPrebuiltStore(pool)
+	ctx := context.Background()
+
+	_, err := adminStore.Upsert(ctx, mcpregistry.PrebuiltServer{
+		Key: "live_server", DisplayName: "Live Server", Enabled: true,
+		ServerURL: "https://first.example.com/{tenant}/mcp",
+		ConfigSchema: map[string]any{"properties": map[string]any{
+			"tenant": map[string]any{"type": "string", "required": true},
+		}},
+	})
+	require.NoError(t, err)
+
+	initialSchemas, err := catalogueStore.ListToolkitTypeSchemas(ctx)
+	require.NoError(t, err)
+	require.Contains(t, initialSchemas, "mcp_live_server")
+	initialRuntime, err := runtimeStore.Lookup(ctx, "mcp_live_server")
+	require.NoError(t, err)
+	require.Equal(t, "https://first.example.com/{tenant}/mcp", initialRuntime.ServerURL)
+
+	_, err = adminStore.Upsert(ctx, mcpregistry.PrebuiltServer{
+		Key: "live_server", DisplayName: "Live Server", Enabled: true,
+		ServerURL: "https://second.example.com/{workspace}/mcp",
+		ConfigSchema: map[string]any{"properties": map[string]any{
+			"workspace": map[string]any{"type": "string", "required": true},
+		}},
+	})
+	require.NoError(t, err)
+
+	updatedSchemas, err := catalogueStore.ListToolkitTypeSchemas(ctx)
+	require.NoError(t, err)
+	properties := updatedSchemas["mcp_live_server"]["properties"].(map[string]any)
+	require.Contains(t, properties, "workspace")
+	require.NotContains(t, properties, "tenant")
+	updatedRuntime, err := runtimeStore.Lookup(ctx, "live_server")
+	require.NoError(t, err)
+	require.Equal(t, "https://second.example.com/{workspace}/mcp", updatedRuntime.ServerURL)
+
+	_, err = adminStore.Delete(ctx, "live_server")
+	require.NoError(t, err)
+	deletedSchemas, err := catalogueStore.ListToolkitTypeSchemas(ctx)
+	require.NoError(t, err)
+	require.NotContains(t, deletedSchemas, "mcp_live_server")
+	_, err = runtimeStore.Lookup(ctx, "live_server")
+	require.ErrorIs(t, err, mcpregistry.ErrPrebuiltNotFound)
+}
+
 // A disabled entry is STORED, not hidden, so an operator can withdraw a server
 // without losing its sealed secret reference. Resolve is what declines it.
 func TestPrebuiltStoreKeepsDisabledEntriesVisible(t *testing.T) {
