@@ -151,11 +151,29 @@ func TestInternalMCPToolkitBuilderReusesTheComposedRESTHandler(t *testing.T) {
 	source := readRouterSource(t)
 	for description, pattern := range map[string]string{
 		"single composed handler":    `toolkitHandler := newToolkitHandler\(cfg, prebuiltMCPStore\)`,
-		"MCP mount receives handler": `mountMCPServerRoutes\(r, cfg\.Pool, authenticate, cfg\.MCPAgentStart, toolkitHandler\)`,
+		"MCP mount receives handler": `mountMCPServerRoutes\(r, cfg\.Pool, authenticate, cfg\.MCPAgentStart, toolkitHandler, configurationsHandler\)`,
 		"MCP handler option":         `v2mcp\.WithInternalToolkitHandler\(toolkitHandler\)`,
 	} {
 		if !regexp.MustCompile(pattern).MatchString(source) {
 			t.Errorf("router.go is missing %s; Internal MCP and REST toolkit mutations can diverge", description)
+		}
+	}
+}
+
+// Internal MCP must also reuse the configuration handler assembled for REST.
+// That single instance owns the dynamic catalogue, shared-project composition,
+// secret sealing and tracing-configuration containment.
+func TestInternalMCPConfigurationsReuseTheComposedRESTHandler(t *testing.T) {
+	t.Parallel()
+
+	source := readRouterSource(t)
+	for description, pattern := range map[string]string{
+		"single composed handler":    `configurationsHandler := v2configs\.NewHandler\(`,
+		"MCP mount receives handler": `mountMCPServerRoutes\(r, cfg\.Pool, authenticate, cfg\.MCPAgentStart, toolkitHandler, configurationsHandler\)`,
+		"MCP handler option":         `v2mcp\.WithInternalConfigurationHandler\(configurationsHandler\)`,
+	} {
+		if !regexp.MustCompile(pattern).MatchString(source) {
+			t.Errorf("router.go is missing %s; Internal MCP and REST configuration behavior can diverge", description)
 		}
 	}
 }

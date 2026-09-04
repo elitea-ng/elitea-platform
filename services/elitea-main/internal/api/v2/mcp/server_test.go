@@ -343,7 +343,7 @@ func TestPylonAPICategoriesAreRefusedRatherThanReinterpreted(t *testing.T) {
 	source := staticSource(Tool{Name: "some_agent"})
 	router := newTestRouter(newTestHandler(t, source))
 
-	for _, tag := range []string{"elitea_core/chat", "secrets", "configurations", "api"} {
+	for _, tag := range []string{"elitea_core/chat", "secrets", "api"} {
 		recorder := post(t, router, "/app/7/mcp/"+tag, `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
 		if recorder.Code != http.StatusBadRequest {
 			t.Fatalf("%s: status = %d, want 400 (%s)", tag, recorder.Code, recorder.Body.String())

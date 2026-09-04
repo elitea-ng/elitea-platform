@@ -20,6 +20,12 @@ type Querier interface {
 	AuthorizeRuntimeValidationProject(ctx context.Context, arg AuthorizeRuntimeValidationProjectParams) (bool, error)
 	BulkDeleteCurrentNotifications(ctx context.Context, arg BulkDeleteCurrentNotificationsParams) (int64, error)
 	BulkSetCurrentNotificationsSeen(ctx context.Context, arg BulkSetCurrentNotificationsSeenParams) (int64, error)
+	// Exact current-platform containment for tracing credentials. Project role
+	// identifiers are compared exactly: billing-admin does
+	// not carry administrator authority. The personal-project signal is
+	// independent of role assignment so a missing role row cannot revoke an
+	// owner's access to project_user_<userID>.
+	CanManageCurrentTracingConfiguration(ctx context.Context, arg CanManageCurrentTracingConfigurationParams) (bool, error)
 	CancelCurrentAgentExecution(ctx context.Context, arg CancelCurrentAgentExecutionParams) (CancelCurrentAgentExecutionRow, error)
 	// Claim only the oldest unfinished revision for each configuration. A lower
 	// pending, retrying, processing, or dead revision remains an explicit ordering

@@ -132,6 +132,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	configurationsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/configurations"
 	toolkitsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkits"
 	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
@@ -189,6 +190,9 @@ type Handler struct {
 	internalSkills internalSkillExecutor
 	// internalToolkits executes the fixed internal toolkit-builder category.
 	internalToolkits internalToolkitExecutor
+	// internalConfigurations executes the fixed internal configurations
+	// category through the same policy-complete handler as REST.
+	internalConfigurations internalConfigurationExecutor
 }
 
 // Option configures an MCP handler without weakening the required constructor
@@ -203,6 +207,16 @@ type Option func(*Handler)
 func WithInternalToolkitHandler(handler *toolkitsapi.Handler) Option {
 	return func(mcpHandler *Handler) {
 		mcpHandler.internalToolkits = newHandlerInternalToolkitExecutor(handler)
+	}
+}
+
+// WithInternalConfigurationHandler reuses the fully composed Main
+// configuration handler for internal MCP calls. Sharing it with REST keeps
+// registry lookup, provider admission, vault sealing and shared-project
+// behavior on one implementation path.
+func WithInternalConfigurationHandler(handler *configurationsapi.Handler) Option {
+	return func(mcpHandler *Handler) {
+		mcpHandler.internalConfigurations = newHandlerInternalConfigurationExecutor(handler)
 	}
 }
 

@@ -56,9 +56,9 @@ Detailed ledgers:
 - `configuration-toolsets.md` maps saved configuration and toolkit families.
 - `prebuilt-mcp.md` maps fixed catalogue-backed HTTP MCP execution.
 - `internal-elitea-mcp.md` separates internal builder categories from external
-  Elitea-as-MCP publishing. It maps the Main-owned applications and skills
-  categories plus the currently truthful toolkit builder operations and its
-  live-discovery gate.
+  Elitea-as-MCP publishing. It maps the Main-owned applications, skills,
+  toolkit, and configuration operations plus their deliberately closed live
+  discovery and typed-model gates.
 - `indexing.md` maps indexing behavior and its later Rust capability.
 
 Maintained Rust runtime ownership registry:

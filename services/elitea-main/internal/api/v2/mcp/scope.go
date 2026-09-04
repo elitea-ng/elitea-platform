@@ -70,6 +70,7 @@ var mcpCategories = map[string]string{
 	"elitea_core/applications": "fixed internal application-builder operations",
 	"elitea_core/skills":       "fixed internal skill-builder operations",
 	"elitea_core/toolkits":     "fixed internal toolkit-builder operations",
+	"configurations":           "fixed internal configuration-builder operations",
 	"toolkits":                 "toolkits in this project flagged meta.mcp_options.available_by_mcp",
 }
 

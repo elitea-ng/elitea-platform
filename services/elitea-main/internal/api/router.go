@@ -693,6 +693,7 @@ func mountMCPServerRoutes(
 	authenticate func(http.Handler) http.Handler,
 	agentStart v2mcp.AgentStartUseCase,
 	toolkitHandler *v2toolkits.Handler,
+	configurationsHandler *v2configs.Handler,
 ) {
 	handler := v2mcp.NewHandler(
 		pool,
@@ -700,6 +701,7 @@ func mountMCPServerRoutes(
 		agentStart,
 		legacyrbac.NewPostgresResolver(pool),
 		v2mcp.WithInternalToolkitHandler(toolkitHandler),
+		v2mcp.WithInternalConfigurationHandler(configurationsHandler),
 	)
 	r.Group(func(r chi.Router) {
 		r.Use(authenticate)
@@ -1123,7 +1125,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 
 	// The MCP server (issue 252). Outside the /api/v2 group for the reasons in
 	// mountMCPServerRoutes.
-	mountMCPServerRoutes(r, cfg.Pool, authenticate, cfg.MCPAgentStart, toolkitHandler)
+	mountMCPServerRoutes(r, cfg.Pool, authenticate, cfg.MCPAgentStart, toolkitHandler, configurationsHandler)
 
 	// This group holds the whole JSON API — the `/api/v2` route below is its
 	// only member. Compression sits at the top of it, ABOVE the shadow

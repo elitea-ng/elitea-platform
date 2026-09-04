@@ -73,6 +73,9 @@ type Tool struct {
 	// internalToolkitOperation is populated only for the fixed toolkit-builder
 	// category. It is never serialized.
 	internalToolkitOperation internalToolkitOperation
+	// internalConfigurationOperation is populated only for the fixed
+	// configurations category. It is never serialized.
+	internalConfigurationOperation internalConfigurationOperation
 	// permission is re-checked for each internal API invocation.
 	permission string
 }
@@ -136,6 +139,9 @@ func (p postgresToolSource) tools(ctx context.Context, schema string, s scope) (
 		}
 		if s.category == internalToolkitsCategory {
 			return internalToolkitTools(), nil
+		}
+		if s.category == internalConfigurationsCategory {
+			return internalConfigurationTools(), nil
 		}
 		if s.category == "applications" {
 			return p.agentTools(ctx, schema)

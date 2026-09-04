@@ -17,6 +17,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
 	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
@@ -71,6 +72,11 @@ type Handler struct {
 	// response's `shared` block serves. Zero means "not configured", and the
 	// block is then empty — see sharedConfigurationSchema.
 	publicProjectID int
+	// tracingAccess contains the current platform's temporary containment:
+	// tracing credentials may be managed only by project admins or inside the
+	// actor's own personal project. It is derived from the same pool by default
+	// so REST and Internal MCP cannot forget to compose it independently.
+	tracingAccess tracingAccessChecker
 }
 
 type Option func(*Handler)
@@ -126,6 +132,9 @@ func WithPublicProjectID(projectID int) Option {
 
 func NewHandler(pool *pgxpool.Pool, opts ...Option) *Handler {
 	handler := &Handler{pool: pool}
+	if pool != nil {
+		handler.tracingAccess = postgresTracingAccessChecker{queries: sqlcgen.New(pool)}
+	}
 	// A malformed embedded snapshot must not stop the process: every other
 	// route in this handler is independent of the catalogue. Available alone
 	// reports the failure, as an explicit "catalog is unavailable" error
@@ -324,6 +333,9 @@ func (h *Handler) Available(w http.ResponseWriter, r *http.Request) {
 		writeCurrentConfigurationError(w, status, "configuration catalog is unavailable")
 		return
 	}
+	entries = h.filterAvailableTracingTypes(
+		r.Context(), availableProjectID(r.URL.Query().Get("project_id")), entries,
+	)
 	writeJSON(w, http.StatusOK, newCurrentAvailableConfigurationTypesDTO(entries))
 }
 
@@ -933,6 +945,11 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 		apierr.WriteStatus(w, http.StatusNotFound, "configuration not found")
 		return
 	}
+	projectIDNumber, parseErr := strconv.ParseInt(projectID, 10, 64)
+	if parseErr != nil || h.tracingWriteForbidden(ctx, projectIDNumber, c.Type) {
+		apierr.WriteStatus(w, http.StatusNotFound, "configuration not found")
+		return
+	}
 	if err := json.Unmarshal(data, &c.Data); err != nil {
 		apierr.WriteStatus(w, http.StatusInternalServerError, "invalid stored configuration")
 		return
@@ -977,6 +994,15 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	configType := strVal(body, "type")
+	projectIDNumber, parseErr := strconv.ParseInt(projectID, 10, 64)
+	if parseErr != nil {
+		apierr.WriteStatus(w, http.StatusBadRequest, "invalid project")
+		return
+	}
+	if h.tracingWriteForbidden(ctx, projectIDNumber, configType) {
+		apierr.WriteStatus(w, http.StatusForbidden, "tracing configurations are managed by project admins")
+		return
+	}
 	// The api_key the caller sends must never reach the row. It goes to the
 	// project vault, and the row keeps the {{secret.NAME}} reference.
 	sealedData, secretMutations, failure := h.sealConfigurationSecrets(ctx, configType, dataMap)
@@ -1158,6 +1184,17 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	if h.pool == nil {
 		apierr.WriteStatus(w, http.StatusServiceUnavailable, "the configuration store is not available")
+		return
+	}
+	storedType, typeErr := h.storedConfigurationType(ctx, schema, configID)
+	if typeErr != nil {
+		writeConfigurationUpdateFailure(ctx, w, projectID, configID, typeErr)
+		return
+	}
+	requestedType := strVal(body, "type")
+	if h.tracingWriteForbidden(ctx, int64(pID), storedType) ||
+		h.tracingWriteForbidden(ctx, int64(pID), requestedType) {
+		apierr.WriteStatus(w, http.StatusForbidden, "tracing configurations are managed by project admins")
 		return
 	}
 

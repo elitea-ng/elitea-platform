@@ -1,9 +1,10 @@
 # Internal Elitea MCP source mapping
 
-Status: the applications and skills categories and five Main-owned toolkit
-builder operations are implemented. Live per-instance toolkit discovery, the
-wider internal builder family, and external Elitea-as-MCP publishing remain
-partial.
+Status: the applications and skills categories, five Main-owned toolkit
+builder operations, and five Main-owned configuration operations are
+implemented. Live per-instance toolkit discovery, typed model configuration
+operations, the wider internal builder family, and external Elitea-as-MCP
+publishing remain partial.
 
 This ledger keeps three MCP products separate:
 
@@ -129,11 +130,68 @@ return plausible but incorrect data. The operation remains closed until Main
 composes built-in pinned schemas, OpenAPI operation parsing, and remote MCP
 discovery with claim-scoped settings expansion.
 
+## Configurations category
+
+The configurations category is available at
+`/app/{projectID}/mcp/configurations`. Main currently publishes five of the
+eight operations marked `mcp_tool=True` by the current platform.
+
+| Current platform evidence | Permission | Main tool |
+| --- | --- | --- |
+| `configurations/api/v2/available.py::API.get` | see authorization note below | `get_configurations_available` |
+| `configurations/api/v2/configurations.py::API.get` | `configurations.configurations.list` | `get_configurations_configurations` |
+| `configurations/api/v2/configurations.py::API.post` | `configurations.configuration.create` | `post_configurations_configurations` |
+| `configurations/api/v2/configuration.py::API.get` | `configurations.configuration.details` | `get_configurations_configuration` |
+| `configurations/api/v2/configuration.py::API.put` | `configurations.configuration.update` | `put_configurations_configuration` |
+
+The current source paths above are relative to
+`pylon_main/plugins/configurations`. The available catalogue REST endpoint is
+authenticated but carries no project permission. Internal MCP is itself a
+project-scoped execution surface and the catalogue exists to construct project
+configuration writes, so Main deliberately strengthens that one tool to
+`configurations.configurations.list`. It does not add a weaker execution path
+through MCP for a caller who cannot list configurations in the project.
+
+The executor reuses the exact fully composed configuration handler used by the
+REST and UI routes. Dynamic configuration schemas, public-project shared rows,
+schema-declared password sealing, stored-reference handling, provider
+admission, and self-reference guards consequently stay on one implementation
+path. The authenticated MCP actor becomes `author_id`; project, author, source,
+status, section, type-on-update, and path identities supplied in tool arguments
+cannot replace server-owned values.
+
+The shared handler also preserves the current platform's tracing-credential
+containment. Configuration types whose registry metadata includes the
+`tracing` category (plus the legacy `langfuse` fallback) are visible and
+mutable only to project `admin`, `super_admin`, or `system` roles, or to a
+caller inside that user's `project_user_<userID>` personal project. Those are
+independent signals: missing role-assignment data cannot revoke access to the
+caller's own personal project. Catalogue, detail, create, and update paths fail
+closed on an unavailable role lookup.
+The inventory list remains unfiltered because agent runtime composition relies
+on it, matching the current platform behavior.
+
+List supports only the filters Main implements: repeated type and section,
+label query, bounded project and shared pagination, shared inclusion, and the
+Main sort whitelist. The current Python `ids` filter is not advertised because
+the composed Main list handler cannot honor it. Create derives section from the
+current registry and accepts the current OpenAPI create fields. Update is
+partial and publishes only `elitea_title`, `label`, `data`, `meta`, and
+`shared`; it cannot replace configuration type or section.
+
+`get_configurations_types`, `get_configurations_models`, and
+`post_configurations_models` remain deliberately closed. Main's compatibility
+types handler ignores the requested section, its compatibility model list does
+not implement section/shared/default semantics, and its compatibility default
+mutation is an explicit 503. Production REST uses separate typed services for
+those paths. Internal MCP must reuse those same services before it can publish
+the names; returning the compatibility answers would be plausible but wrong.
+
 ## Main ownership
 
 Main owns listing, execution, authorization, project clamping, and mutation.
 The fixed catalogues are in
-`internal/api/v2/mcp/internal_{applications,skills,toolkits}_catalog.go`.
+`internal/api/v2/mcp/internal_{applications,skills,toolkits,configurations}_catalog.go`.
 Application and skill executors reuse Main business repositories. The toolkit
 executor deliberately reuses the fully composed REST handler so every toolkit
 mutation crosses the same policy and secret boundaries. Application version
@@ -179,7 +237,7 @@ Core-to-Indexer-to-SDK execution split.
 
 ## Verification
 
-Main unit tests pin all three catalogues, wire schemas, permissions, project clamps,
+Main unit tests pin all four catalogues, wire schemas, permissions, project clamps,
 runtime-independent dispatch, business-error shapes, and redacted
 infrastructure failures. Validation tests cover application and skill inputs.
 
@@ -199,6 +257,16 @@ lifecycle test proves create, partial update, attach, explicit empty selection,
 list, and detach. Router composition tests pin that REST and Internal MCP share
 one policy-complete toolkit handler.
 
+Configuration tests pin the five-operation catalogue, private wire fields,
+permissions, project clamping, redacted failures, bounded repeated filters,
+sort and pagination translation, title normalization, create/update field
+allowlists, and refusal before handler invocation. Its isolated PostgreSQL
+lifecycle proof creates a registry-backed configuration with the authenticated
+actor, derives the correct section, partially updates it without erasing data,
+and reads and lists the persisted row. A second PostgreSQL proof pins tracing
+containment for ordinary project members, project admins, and the actor's own
+personal project.
+
 Prebuilt materialization tests prove that runtime placeholders cannot become
 stored toolkit parameters, internal PATs are restricted to the configured Main
 origin, and external origins receive no delegated platform credential. The
@@ -217,6 +285,10 @@ fallback.
 Skill draft generation remains gated because Main does not yet own its model
 operation. Multi-version skills, rich tag metadata, extended list filters, and
 actor attribution also remain Main parity gates.
+
+The three typed configuration operations and the Python list `ids` filter
+remain explicit Main parity gates. They must reuse the production typed model
+catalogue/default services rather than the reduced compatibility handlers.
 
 The extended application-list filters and version-copy skill option remain
 explicit parity gates. Main must own their durable data and validation before
