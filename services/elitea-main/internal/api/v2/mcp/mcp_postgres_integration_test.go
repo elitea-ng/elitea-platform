@@ -350,6 +350,32 @@ func TestToolkitToolsUsePinnedArgumentSchemasAndDynamicFallback(t *testing.T) {
 	}
 }
 
+// The current Python dispatcher refuses an external toolkit name that maps to
+// more than one opted-in row. Main strengthens the catalogue side of that
+// contract too: an MCP client must not be told that an ambiguous tool is
+// callable when dispatch cannot safely choose its target. Direct resource
+// scopes remain usable because the URL pins the toolkit row.
+func TestToolkitNameCollisionsAreOmittedProjectWideButRemainResourceScoped(t *testing.T) {
+	pool := newMCPPool(t)
+	router := newRouter(mcp.NewHandler(pool, apimw.NewDBPersonalProjectResolver(pool), nil, nil), callerUserID)
+
+	first := seedToolkit(t, pool, homeSchema, "Shared Name", "github", availableByMCP, "get_issue")
+	second := seedToolkit(t, pool, homeSchema, "Shared/Name", "github", availableByMCP, "get_issue")
+
+	all := listToolNames(t, router, "/app/"+homeProject+"/mcp")
+	if contains(all, "Shared_Name_get_issue") {
+		t.Fatalf("ambiguous toolkit tool was advertised project-wide: %v", all)
+	}
+
+	for _, toolkitID := range []int64{first, second} {
+		scoped := listToolNames(t, router,
+			fmt.Sprintf("/app/%s/mcp/toolkit/%d", homeProject, toolkitID))
+		if len(scoped) != 1 || scoped[0] != "Shared_Name_get_issue" {
+			t.Fatalf("toolkit %d scope served %v, want its exact selected tool", toolkitID, scoped)
+		}
+	}
+}
+
 // Tenant isolation, asserted the only way that discriminates: identical rows in
 // two schemas, and each endpoint serves exactly its own.
 func TestListingIsScopedToTheProjectInTheURL(t *testing.T) {

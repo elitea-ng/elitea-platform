@@ -48,6 +48,14 @@ their already-discovered instance schemas are projected into this catalogue.
 Snapshot failures abort listing with the existing redacted protocol error
 instead of silently weakening every built-in tool schema.
 
+Project-wide toolkit-name collisions fail closed. If two opted-in toolkit
+targets collapse to the same sanitized MCP name, Main advertises neither one;
+the current Python dispatcher already refuses to choose either target. This
+removes its misleading "list the first, reject the call" behavior. A
+resource-scoped `/mcp/toolkit/{id}` endpoint remains usable because the URL
+pins one exact toolkit row. Duplicate copies of the same selected operation
+collapse to one descriptor.
+
 ## Applications category
 
 The first internal category is available at

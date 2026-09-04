@@ -341,7 +341,7 @@ func (p postgresToolSource) toolkitTools(ctx context.Context, schema string, too
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	return dedupeByName(tools), nil
+	return rejectAmbiguousToolkitNames(tools), nil
 }
 
 // toolkitSchemas obtains one detached per-type schema map. It is deliberately
@@ -428,6 +428,52 @@ func dedupeByName(tools []Tool) []Tool {
 	seen := make(map[string]struct{}, len(tools))
 	unique := make([]Tool, 0, len(tools))
 	for _, tool := range tools {
+		if _, duplicate := seen[tool.Name]; duplicate {
+			continue
+		}
+		seen[tool.Name] = struct{}{}
+		unique = append(unique, tool)
+	}
+	return unique
+}
+
+// rejectAmbiguousToolkitNames makes the project-wide toolkit catalogue agree
+// with the current platform's dispatch guard: a sanitised name produced by two
+// different toolkit targets resolves to neither target. Advertising whichever
+// row happened to be read first would be misleading because a later
+// tools/call cannot safely choose between them.
+//
+// Repeated copies of the same selected operation are harmless legacy data and
+// collapse to one descriptor. A resource-scoped catalogue still exposes its
+// exact toolkit row because there is no second target in that scope.
+func rejectAmbiguousToolkitNames(tools []Tool) []Tool {
+	if len(tools) == 0 {
+		return nil
+	}
+	type target struct {
+		toolkitID int64
+		toolName  string
+	}
+	firstTargets := make(map[string]target, len(tools))
+	ambiguous := make(map[string]struct{})
+	for _, tool := range tools {
+		current := target{toolkitID: tool.toolkitID, toolName: tool.toolkitToolName}
+		first, found := firstTargets[tool.Name]
+		if !found {
+			firstTargets[tool.Name] = current
+			continue
+		}
+		if first != current {
+			ambiguous[tool.Name] = struct{}{}
+		}
+	}
+
+	unique := make([]Tool, 0, len(tools))
+	seen := make(map[string]struct{}, len(tools))
+	for _, tool := range tools {
+		if _, rejected := ambiguous[tool.Name]; rejected {
+			continue
+		}
 		if _, duplicate := seen[tool.Name]; duplicate {
 			continue
 		}
