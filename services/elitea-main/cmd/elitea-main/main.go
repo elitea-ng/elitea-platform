@@ -676,6 +676,37 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		logger.Info("notification API route enabled (OIDC-only auth)")
 	}
 
+	// The credential set the whole /api/v2 group authenticates with — built
+	// here, ahead of the capability gates and the provider facades, because
+	// they take the SAME set (ADR-0023 decision 5): under production Form
+	// authentication that is the graph's token validator and the
+	// forwarded-identity verifier; under OIDC-only it is the session cookie
+	// plus the LocalValidator for the tokens APPLICATION_SECRET_KEY signs —
+	// which is also how a provider's callback bearer, minted by the same key,
+	// is read back on its upload. See apiGroupAuthConfig for the two shapes
+	// and why each carries a principal validator.
+	//
+	// It is built HERE rather than below the capability gates because it is
+	// also the input to productionAuthenticationComposed, the predicate those
+	// gates ask. Every field it reads is final at this point: formGraph,
+	// principalValidator and forwardedIdentityVerifier are assigned only
+	// inside the `authEnabled` block above, and oidcSessionHandler only inside
+	// the single-sign-on block above. Nothing between here and the former
+	// position assigned any of them.
+	var sessionTokens apimw.TokenValidator
+	if secretKey := os.Getenv("APPLICATION_SECRET_KEY"); secretKey != "" && pool != nil {
+		sessionTokens = authsvc.NewLocalValidator(pool, secretKey)
+	}
+	apiGroupAuth := apiGroupAuthConfig(
+		formGraph,
+		principalValidator,
+		forwardedIdentityVerifier,
+		authsvc.NewPrincipalValidator(pool),
+		sessionTokens,
+		os.Getenv("APPLICATION_SECRET_KEY"),
+		oidcSessionHandler != nil,
+	)
+
 	currentProjectInfoSettings, err := currentProjectInfoConfigFromEnv(os.LookupEnv)
 	if err != nil {
 		return fmt.Errorf("load current project-info settings: %w", err)
@@ -781,8 +812,23 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if err != nil {
 		return fmt.Errorf("load current Configurations settings: %w", err)
 	}
-	if currentConfigurationsConfig.Enabled && (formGraph == nil || principalValidator == nil || forwardedIdentityVerifier == nil) {
-		return errors.New("ELITEA_CONFIGURATIONS_ENABLED requires production authentication")
+	// The gate is the credential plane, NOT the FormGraph (gap G2).
+	//
+	// This used to read `formGraph == nil || principalValidator == nil ||
+	// forwardedIdentityVerifier == nil`, and all three are assigned only
+	// inside the `authEnabled` block. ELITEA_AUTH_CONFIG_FILE was therefore
+	// the only way to satisfy it, so an install with real corporate single
+	// sign-on — the shape deploy/helm/elitea/values-auth-minimal.yaml
+	// describes — was refused the whole Configurations plane: no credential
+	// create, no model catalogue, no project vector store. Every LLM setup
+	// step fell back to deploy/scripts/seed-llm-api.py or raw SQL.
+	//
+	// productionAuthenticationComposed asks what the routes actually need: a
+	// reader of the caller's credential plus a PrincipalValidator. A
+	// deployment with NO authentication still fails it, because
+	// apiGroupAuthConfig hands back the zero AuthConfig there.
+	if currentConfigurationsConfig.Enabled && !productionAuthenticationComposed(apiGroupAuth) {
+		return errors.New("ELITEA_CONFIGURATIONS_ENABLED requires an authenticated deployment")
 	}
 	var currentConfigurationsRoot *runtimecomposition.CurrentConfigurationsRuntime
 	// The toolkit settings resolver the Inventory facade expands a source with.
@@ -798,13 +844,20 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// composed from the same Configurations graph agent-version freezing uses,
 	// so it exists only where that graph does.
 	//
-	// DISCLOSED: deploy/helm/elitea/values.yaml leaves
-	// ELITEA_CONFIGURATIONS_ENABLED "false", so a DEFAULT install still saves
-	// toolkit credential references unresolved. Only values-standalone.yaml and
-	// the standalone compose file turn it on. Composing a second graph from a
-	// second vault key source to close that would reproduce #399's
-	// one-key-source defect on the model catalogue the resolver reads, which is
-	// a worse failure than the one it would fix.
+	// DISCLOSED, and now SMALLER: an install that composes no Configurations
+	// runtime still saves toolkit credential references unresolved. That used
+	// to mean every Kubernetes install except values-standalone.yaml, because
+	// deploy/helm/elitea/values.yaml stated ELITEA_CONFIGURATIONS_ENABLED
+	// "false" and no OIDC-only install could state otherwise. The chart now
+	// derives the flag from the deployment (see
+	// elitea-main.configurationsEnabled in the chart's _helpers.tpl), so an
+	// install with any authentication and a public project id composes the
+	// graph. What is left is the shape with NO authentication.
+	//
+	// Composing a second graph from a second vault key source to close the
+	// remainder would reproduce #399's one-key-source defect on the model
+	// catalogue the resolver reads, which is a worse failure than the one it
+	// would fix.
 	var toolkitSettingsValidator v2toolkits.ToolkitSettingsValidator
 	var currentConfigurationRead http.Handler
 	var currentConfigurationAvailable http.Handler
@@ -859,22 +912,35 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		// read is what the provider receives; a second would be a second answer
 		// to "which credentials can this caller see".
 		inventorySourceSettings = toolkitSettingsResolver
-		currentAuth := apimw.AuthConfig{
-			Validator:                 formGraph,
-			PrincipalValidator:        principalValidator,
-			ForwardedIdentityVerifier: forwardedIdentityVerifier,
-			// The browser's only credential (#292), same reasoning as the
-			// agent-start route above. These are the configuration reads the
-			// UI makes on every chat page — the model catalogue among them —
-			// and without a session they answered 401 to the product's own
-			// model picker, which then rendered empty. A user could not choose
-			// a model, so the turn was rejected for not naming one: a chat that
-			// cannot run, with every configuration row present and correct.
-			//
-			// Reads only widen to a session; each route still resolves
-			// permissions through currentPermissions below.
-			SessionSecret: os.Getenv("APPLICATION_SECRET_KEY"),
-		}
+		// The SAME credential set the /api/v2 group authenticates with.
+		//
+		// These routes are registered on the ROOT mux by
+		// mountReviewedProductionRoutes, so they carry their own AuthConfig
+		// and inherit nothing from the group. This block used to build one
+		// inline from formGraph, which is nil on an OIDC-only deployment.
+		// Reusing apiGroupAuth keeps the two planes symmetric and, on
+		// OIDC-only, keeps the personal access token working: the reviewed
+		// read routes shadow the compatibility handler at the same patterns,
+		// so an AuthConfig without a token validator would turn an SDK call
+		// that answered 200 into a 401.
+		//
+		// The Form shape is byte-identical to the AuthConfig this block built
+		// before: the graph as token validator, the production principal
+		// validator, the forwarded-identity verifier, and the browser session
+		// secret.
+		//
+		// The session secret is the browser's only credential (#292), same
+		// reasoning as the agent-start route above. These are the
+		// configuration reads the UI makes on every chat page — the model
+		// catalogue among them — and without a session they answered 401 to
+		// the product's own model picker, which then rendered empty. A user
+		// could not choose a model, so the turn was rejected for not naming
+		// one: a chat that cannot run, with every configuration row present
+		// and correct.
+		//
+		// Reads only widen to a session; each route still resolves
+		// permissions through currentPermissions below.
+		currentAuth := apiGroupAuth
 		currentPermissions := legacyrbac.NewPostgresResolver(pool)
 		currentConfigurationAvailable, err = configurationapi.NewCurrentAvailableRoute(
 			currentConfigurationsRoot.AvailableCatalog(),
@@ -1097,28 +1163,6 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	}
 	var runtimeRoot *runtimecomposition.Runtime
 	var productionRuntime *api.ProductionRuntimeRoutes
-	// The credential set the whole /api/v2 group authenticates with — built
-	// here, ahead of the provider facades, because they take the SAME set
-	// (ADR-0023 decision 5): under production Form authentication that is the
-	// graph's token validator and the forwarded-identity verifier; under
-	// OIDC-only it is the session cookie plus the LocalValidator for the
-	// tokens APPLICATION_SECRET_KEY signs — which is also how a provider's
-	// callback bearer, minted by the same key, is read back on its upload.
-	// See apiGroupAuthConfig for the two shapes and why each carries a
-	// principal validator.
-	var sessionTokens apimw.TokenValidator
-	if secretKey := os.Getenv("APPLICATION_SECRET_KEY"); secretKey != "" && pool != nil {
-		sessionTokens = authsvc.NewLocalValidator(pool, secretKey)
-	}
-	apiGroupAuth := apiGroupAuthConfig(
-		formGraph,
-		principalValidator,
-		forwardedIdentityVerifier,
-		authsvc.NewPrincipalValidator(pool),
-		sessionTokens,
-		os.Getenv("APPLICATION_SECRET_KEY"),
-		oidcSessionHandler != nil,
-	)
 
 	// The DeepWiki facade (ADR-0022 P2). Composed OUTSIDE the runtime-plane
 	// block: it proxies to an independently deployed service and needs nothing

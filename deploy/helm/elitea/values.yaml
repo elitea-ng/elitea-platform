@@ -640,8 +640,27 @@ main:
 
     # The Configurations plane: eight configuration and model-catalogue routes,
     # and the dependency that agent dispatch and index ingest both compose
-    # through. NEEDS production authentication.
-    ELITEA_CONFIGURATIONS_ENABLED: "false"
+    # through.
+    #
+    # EMPTY MEANS "FOLLOW THIS DEPLOYMENT", not "off". templates/main/
+    # _helpers.tpl's elitea-main.configurationsEnabled renders "true" when the
+    # install has the two prerequisites the chart can see — authentication
+    # (fileConfig.authConfig OR env.OIDC_ISSUER_URL) and ELITEA_AI_PROJECT_ID
+    # below — and "false" otherwise. State "true" or "false" here to decide it
+    # yourself; a stated value always wins.
+    #
+    # It used to ship a literal "false", and an install could not turn it on
+    # without the Form authentication document: cmd/elitea-main tested the
+    # FormGraph, which only ELITEA_AUTH_CONFIG_FILE builds. An install with
+    # real corporate single sign-on therefore got NO credential routes, NO
+    # model catalogue and no project vector store, and every LLM setup step
+    # fell back to deploy/scripts/seed-llm-api.py or raw SQL. The composition
+    # root now asks for a credential plane instead, and either plane answers.
+    #
+    # It does not ship a literal "true" either. This file states no
+    # authentication and no public project id, so a literal would make
+    # `helm template` fail with no overrides and, past that, CrashLoopBackOff.
+    ELITEA_CONFIGURATIONS_ENABLED: ""
 
     # A SECOND set of three configuration WRITE routes. Needs
     # ELITEA_CONFIGURATIONS_ENABLED and runtime.enabled; this file has neither.
