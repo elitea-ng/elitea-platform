@@ -672,6 +672,25 @@ services:
       OIDC_CLIENT_SECRET: "elitea-standalone-secret"
       OIDC_REDIRECT_URI: "http://localhost:${STANDALONE_PORT:-8084}/forward-auth/auth_oidc/callback"
       COOKIE_SECURE: "false"
+      # First-login administrator grant (v2auth.InitialGlobalAdminsFromEnv,
+      # cmd/elitea-main/main.go). deploy/runtime/auth.form.yml's
+      # `identity.initial_global_admins` is deliberately empty (Form is a
+      # structural requirement here, not the login path — see that file's
+      # header), so THIS is the only place that document's empty list can be
+      # overridden for the OIDC plane the browser actually uses. Empty by
+      # default so a fresh clone stays unprivileged until an operator opts in;
+      # set it to make the first login of a matching identity a global
+      # administrator, without hand-written SQL.
+      #
+      # Comma-separated entries. Two accepted forms today, matched against the
+      # federated login planes' stored (prefixed) provider references:
+      #   oidc:<sub>     the OIDC subject claim, e.g. oidc:alice
+      #   saml:<nameid>  the SAML NameID
+      # `email:<verified address>` is landing in a parallel branch — matching
+      # the login's verified e-mail claim instead of a provider-specific
+      # subject. See matchesInitialGlobalAdmin in
+      # internal/api/v2/auth/first_login.go for the exact matching rule.
+      ELITEA_INITIAL_GLOBAL_ADMINS: "${ELITEA_INITIAL_GLOBAL_ADMINS-}"
       # Object storage
       STORAGE_BACKEND: "s3"
       STORAGE_CONTAINER: "elitea-artifacts"
@@ -1098,6 +1117,54 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # Authorizes the worker's certificate identity by upserting the row
+  # elitea_runtime.workload_sessions that every runtime control-plane call is
+  # checked against. Without this row every chat turn dies in the worker with
+  # AUTHORIZATION_FAILED / delivery_quarantined and the browser shows nothing
+  # (#282). Helm automates the same step with a pre-install/pre-upgrade hook
+  # Job (deploy/helm/elitea/templates/worker/runtime-session-job.yaml); this
+  # service runs the SAME script — deploy/runtime/provision-runtime-session.sh
+  # is a verbatim mirror of that Job's container command, kept in sync by hand
+  # because Helm charts here stay self-contained (see the `config:` comment
+  # next to `otelCollector` in deploy/helm/elitea/values.yaml for the same
+  # rule applied to a different file).
+  #
+  # `standalone-stack.sh seed-runtime` still does this by hand, as a fallback
+  # if this service is skipped (`--no-deps`) or the operator restores a
+  # database from a backup that predates it; it is no longer required on a
+  # normal `up`.
+  runtime-session-init:
+    image: postgres:18
+    entrypoint: ["/bin/sh", "/opt/provision-runtime-session.sh"]
+    environment:
+      PGURL: "postgres://elitea:elitea@postgres:5432/elitea?sslmode=disable"
+      # Keep these two in sync with deploy/runtime/worker-runtime.json's
+      # workload_session_id / producer_id and with the seed-runtime fallback
+      # in standalone-stack.sh — all three read the same tuple.
+      SESSION_ID: "${RUNTIME_WORKER_SESSION_ID:-standalone-agent-worker-1}"
+      PRODUCER_ID: "${RUNTIME_WORKER_PRODUCER_ID:-standalone-agent-worker-1}"
+      # Not optional here the way Helm's default is: this stack mints the
+      # worker's certificate itself (gen-runtime-certs.sh), so it already
+      # knows the identity the certificate carries and can assert it for
+      # free. A mismatch means the wrong certificate landed in the worker's
+      # volume, which is worth failing loudly on rather than authorizing
+      # whatever the certificate happens to say.
+      EXPECTED_IDENTITY: "${RUNTIME_WORKER_SPIFFE_ID:-spiffe://elitea.standalone/ns/default/sa/agent-worker}"
+      # Same defaults deploy/helm/elitea/values.yaml sets under
+      # worker.runtimeSession — ttl, waitAttempts, waitIntervalSeconds.
+      TTL: "${RUNTIME_WORKER_SESSION_TTL:-2160h}"
+      WAIT_ATTEMPTS: "${RUNTIME_WORKER_SESSION_WAIT_ATTEMPTS:-60}"
+      WAIT_INTERVAL: "${RUNTIME_WORKER_SESSION_WAIT_INTERVAL:-5}"
+    volumes:
+      - ./runtime/provision-runtime-session.sh:/opt/provision-runtime-session.sh:ro
+      - standalone_runtime_worker:/run/elitea-runtime:ro
+    depends_on:
+      runtime-material:
+        condition: service_completed_successfully
+      elitea-migrate:
+        condition: service_completed_successfully
+    restart: "no"
+
   # The NodeEvent producer. Go admits and projects executions but has no
   # agent-token producer of its own, so without this service an admitted run
   # streams nothing and ends in a terminal failure.
@@ -1150,6 +1217,8 @@ services:
       runtime-redis:
         condition: service_healthy
       runtime-bootstrap:
+        condition: service_completed_successfully
+      runtime-session-init:
         condition: service_completed_successfully
       elitea-main:
         condition: service_healthy

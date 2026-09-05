@@ -15,6 +15,100 @@ a SAN-bearing workload certificate, an Ed25519 signing keyring, production auth
 and a workload-session row. [`runtime/README.md`](runtime/README.md) documents
 that contract and the permission rules its material must satisfy.
 
+## Compose — the standalone stack
+
+`deploy/docker-compose.standalone-full.yml`, driven by
+`deploy/scripts/standalone-stack.sh`, is the one-host path: the whole topology,
+including the runtime plane, on one machine.
+
+### Operator quick start (no seeders)
+
+The `standalone-stack.sh seed*` subcommands (`seed`, `seed-runtime`, `seed-llm`,
+`seed-index`) are E2E and local-development conveniences, not required steps.
+A fresh install reaches a working, logged-in stack with:
+
+```bash
+deploy/scripts/standalone-stack.sh certs
+deploy/scripts/standalone-stack.sh build
+deploy/scripts/standalone-stack.sh up
+# log in through the browser, then configure from the UI
+```
+
+Everything a hand-written `INSERT` used to cover is now automatic on `up`:
+schema bootstrap (`db-init`, `elitea-migrate`), the `agentstate` database and
+the `vector` extension (`db-init`), the artifact bucket (`rustfs-bucket-init`),
+RBAC roles and a per-user PAT and personal project (first-login provisioning
+in `cmd/elitea-main`), and — since this fix — the worker's
+`elitea_runtime.workload_sessions` authorization (`runtime-session-init`,
+below). `standalone-stack.sh`'s own header comment carries the equivalent
+E2E/dev run, with every seeder, for local development and CI.
+
+The one bootstrap floor an operator still sets by hand is
+`GATEWAY_EGRESS_ALLOWLIST` on the `elitea-llm-gateway` service: it is the
+comma-separated `host:port` allowlist the gateway checks a saved credential's
+`api_base` against before it will proxy to it
+(`internal/config/config.go`, `internal/account/egress.go`), and it defaults
+to the compose network's own mock/real LLM services. Add a private model
+host (a self-hosted vLLM instance, for example) to it before saving a
+credential that points there, or the gateway refuses the connection with what
+reads as the model being down.
+
+### `ELITEA_INITIAL_GLOBAL_ADMINS` — the first administrator
+
+Every standalone/production-shaped compose file passes this variable through
+to `elitea-main` (`v2auth.InitialGlobalAdminsFromEnv`,
+`cmd/elitea-main/main.go`). It is read only as a fallback, when the
+deployment's authentication configuration document has an empty
+`identity.initial_global_admins` list — which is the case for
+`deploy/runtime/auth.form.yml`, the standalone stack's document, on purpose:
+Form is a structural requirement there, not the login path, and the document
+is not where this stack names its administrator.
+
+Set it to a comma-separated list of entries. Two forms are accepted today,
+matching the federated login planes' stored (prefixed) provider references —
+see `matchesInitialGlobalAdmin` in
+`services/elitea-main/internal/api/v2/auth/first_login.go` for the exact rule:
+
+- `oidc:<sub>` — the OIDC subject claim
+- `saml:<nameid>` — the SAML NameID
+
+`email:<verified address>` — matching the login's verified e-mail claim
+instead of a provider-specific subject — is landing in a parallel branch.
+
+The variable is empty by default in every compose file, so a fresh clone
+stays unprivileged until an operator opts in.
+
+### `runtime-session-init` — authorizing the worker automatically
+
+The agent worker cannot start serving chat until a row exists in
+`elitea_runtime.workload_sessions` naming its certificate identity;
+`WorkloadSessionsRepository` has no process-local registration or fallback
+allowlist by design, so nothing mints that row on its own. Helm automates
+this with a pre-install/pre-upgrade hook Job
+(`deploy/helm/elitea/templates/worker/runtime-session-job.yaml`, plus a
+recurring renewal CronJob — nothing else re-stamps `expires_at`, so a
+deployment left un-upgraded goes dark on a timer otherwise).
+
+`docker-compose.standalone-full.yml` now runs the equivalent as a one-shot
+`runtime-session-init` service, ordered before the worker with
+`depends_on: condition: service_completed_successfully`. It runs
+`deploy/runtime/provision-runtime-session.sh` — the same upsert-and-verify
+shell script the Helm Job runs (extracting the worker's SPIFFE identity from
+its certificate's SAN, waiting for the schema, upserting the row, then
+re-checking it with the exact conjunction `VerifyActiveSession` applies) —
+kept as a byte-for-byte mirror rather than a shared file, because charts here
+stay self-contained artifacts independent of the monorepo layout they ship
+from. Its session id, producer id, TTL and wait behavior are configurable
+through `RUNTIME_WORKER_SESSION_ID`, `RUNTIME_WORKER_PRODUCER_ID`,
+`RUNTIME_WORKER_SESSION_TTL`, `RUNTIME_WORKER_SESSION_WAIT_ATTEMPTS` and
+`RUNTIME_WORKER_SESSION_WAIT_INTERVAL`, defaulting to the same values
+`deploy/helm/elitea/values.yaml`'s `worker.runtime` and
+`worker.runtimeSession` blocks default to.
+
+`standalone-stack.sh seed-runtime` still exists as a manual fallback — a
+database restored from a backup that predates this row, or a worker brought
+up with `--no-deps` — but a normal `up` no longer needs it.
+
 ## Composition decision (issue #240)
 
 `deploy/helm/elitea-platform/` used to be an empty `.gitkeep` — an umbrella

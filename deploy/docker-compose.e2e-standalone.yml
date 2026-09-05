@@ -181,6 +181,17 @@ services:
       OIDC_CLIENT_SECRET: "elitea-e2e-secret"
       OIDC_REDIRECT_URI: "http://localhost:${E2E_PORT:-8082}/forward-auth/auth_oidc/callback"
       COOKIE_SECURE: "false"
+      # First-login administrator grant (v2auth.InitialGlobalAdminsFromEnv,
+      # cmd/elitea-main/main.go). Empty by default: this stack's E2E seeder
+      # (apps/elitea-web/scripts/e2e-stack.sh) grants its admin fixture
+      # directly against centry's RBAC tables rather than through first login,
+      # so it does not need this variable set. It exists here for the same
+      # reason it exists on every stack — an operator who runs this compose
+      # file WITHOUT the seeder still needs a way to make the first account a
+      # global administrator. Comma-separated `oidc:<sub>` / `saml:<nameid>`
+      # entries; see the note on the elitea-main service in
+      # docker-compose.yml for the full contract.
+      ELITEA_INITIAL_GLOBAL_ADMINS: "${ELITEA_INITIAL_GLOBAL_ADMINS-}"
       # Object storage: point at the local rustfs S3-compatible store
       STORAGE_BACKEND: "s3"
       STORAGE_CONTAINER: "elitea-artifacts"
