@@ -8,21 +8,28 @@
 # deployment gap, it is a CAPABILITY gap — the write route that stores those
 # rows exists, and no Kubernetes install could turn it on.
 #
-# It could not be turned on because ELITEA_CONFIGURATIONS_ENABLED refuses to
-# compose without "production authentication"
-# (cmd/elitea-main/main.go: "ELITEA_CONFIGURATIONS_ENABLED requires production
-# authentication"), and production authentication in this codebase means the
-# FormGraph + principal validator + forwarded-identity verifier triple, which
-# cmd/elitea-main assigns ONLY inside `if authEnabled {` — that is, only when
-# ELITEA_AUTH_CONFIG_FILE names an authentication configuration document.
+# It could not be turned on because ELITEA_CONFIGURATIONS_ENABLED refused to
+# compose without "production authentication", and production authentication in
+# this codebase meant the FormGraph + principal validator + forwarded-identity
+# verifier triple, which cmd/elitea-main assigns ONLY inside `if authEnabled {`
+# — that is, only when ELITEA_AUTH_CONFIG_FILE names an authentication
+# configuration document.
 #
-# Read that carefully, because it is the surprising part: an OIDC-only install,
-# however real its SSO, builds NO FormGraph and therefore cannot enable this
-# capability. internal/authcomposition/config.go accepts `provider.kind: form`
-# and refuses every other value. The Form provider here is a STRUCTURAL
-# requirement of the composition root, not a login path anyone has to use —
-# cmd/elitea-main composes the OIDC session plane beside it, and the browser
-# keeps logging in exactly as before.
+# THAT IS FIXED. An OIDC-only install, or one that federates SAML through a
+# typed identity provider, now gets the whole configuration plane. The
+# composition root asks productionAuthenticationComposed — a reader of the
+# caller's credential plus a principal validator — and the OIDC session plane
+# carries both. Set env.OIDC_ISSUER_URL and env.ELITEA_AI_PROJECT_ID and the
+# chart turns the plane on by itself; read the deploy/README.md section
+# "ELITEA_CONFIGURATIONS_ENABLED follows the deployment".
+#
+# So this file is no longer the ONLY way to reach the configuration write path.
+# It stays the recipe for an install that wants the FORM plane itself: a login
+# page this deployment owns, with no external identity provider. The Form
+# provider is that login path, not a structural requirement any more —
+# internal/authcomposition/config.go still accepts `provider.kind: form` and
+# refuses every other value, and cmd/elitea-main composes the OIDC session
+# plane beside it when both are configured.
 #
 # values-standalone.yaml already proves the whole capability set. It also turns
 # on the RUNTIME PLANE, which needs a second Secret of certificates and signing
@@ -35,9 +42,10 @@
 # runtimeRedis to the runtime plane. So this shape renders, and it is the
 # cheapest one that composes the Configurations write path.
 #
-# It is ADDITIVE. It changes no default: values.yaml still ships every
-# capability flag "false", and an install that does not pass this file is
-# exactly what it was.
+# It is ADDITIVE. values.yaml still ships every OTHER capability flag "false".
+# ELITEA_CONFIGURATIONS_ENABLED is the exception: it ships EMPTY there, which
+# the chart reads as "follow this deployment". This file states "true"
+# explicitly below, so nothing here depends on that derivation.
 #
 # WHAT YOU GET
 #   * POST/PUT /api/v2/configurations/configurations/{projectID} — the

@@ -42,10 +42,21 @@ func TestChatWriteRoutesAcceptABrowserSession(t *testing.T) {
 	// model picker rendered EMPTY, so no model could be chosen and the turn was
 	// then rejected for not naming one (#292): a chat that cannot run, with
 	// every configuration row present and correct.
-	shared := authConfigVariable(t, file, "currentAuth")
-	if !authConfigHasField(shared, "SessionSecret") {
-		t.Fatal("the shared configuration AuthConfig has no SessionSecret: the " +
-			"model picker cannot read its own catalogue in a browser (#292)")
+	//
+	// `currentAuth` is no longer an inline literal. It is the apiGroupAuth
+	// composition, because the inline one was built from formGraph and formGraph
+	// is nil on every OIDC-only deployment (gap G2). So the assertion moves with
+	// it: the session credential is now pinned by apiGroupAuthConfig's own
+	// tests, in BOTH branches —
+	// TestAPIGroupAuthConfigKeepsTheProductionCredentials for the Form shape and
+	// TestAPIGroupAuthConfigDoesNotReuseTheProductionValidator for the OIDC one.
+	// What this test still owns is the WIRE: that the configuration routes read
+	// that composition and not a second, private one.
+	if !assignsIdentifier(file, "currentAuth", "apiGroupAuth") {
+		t.Fatal("the shared configuration AuthConfig is no longer the " +
+			"apiGroupAuth composition: an inline literal here loses the " +
+			"session secret the model picker needs (#292), and loses it " +
+			"silently on OIDC-only deployments (gap G2)")
 	}
 
 	// The project switcher is another browser-only caller. In the standalone

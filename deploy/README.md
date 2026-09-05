@@ -302,7 +302,7 @@ file whose capability set matches `docker-compose.standalone-full.yml`.
 | Flag | Default install | `values-standalone.yaml` | Prerequisite |
 |---|---|---|---|
 | `ELITEA_ARTIFACTS_ENABLED` | on | on | object storage configured |
-| `ELITEA_CONFIGURATIONS_ENABLED` | off | **on** | production authentication |
+| `ELITEA_CONFIGURATIONS_ENABLED` | **derived** | **on** | any authentication **and** `ELITEA_AI_PROJECT_ID` |
 | `ELITEA_PROJECT_INFO_ENABLED` | off | **on** | production authentication |
 | `ELITEA_AI_PROJECT_ID` | empty | **set** | must name a project that exists |
 | `ELITEA_CONFIGURATIONS_MUTATION_ENABLED` | off | off | `ELITEA_CONFIGURATIONS_ENABLED` **and** `runtime.enabled` — read below |
@@ -313,6 +313,34 @@ file whose capability set matches `docker-compose.standalone-full.yml`.
 | `ELITEA_RUNTIME_ENABLED` and its block | off | **on** | production authentication **and** runtime material — read below |
 
 No flag stays off in **both** files any more.
+
+### `ELITEA_CONFIGURATIONS_ENABLED` follows the deployment
+
+This flag no longer ships a literal value. `values.yaml` leaves it **empty**,
+and `templates/main/_helpers.tpl` renders `"true"` for an install that has both
+prerequisites the chart can see:
+
+1. **Any authentication.** `fileConfig.authConfig` (the Form document) **or**
+   `env.OIDC_ISSUER_URL` (the single-sign-on plane, which a SAML or typed
+   identity provider composes through).
+2. **`env.ELITEA_AI_PROJECT_ID`.** The binary refuses to start without it once
+   the plane is on, so the chart refuses the manifest instead.
+
+State `"true"` or `"false"` under `main.env` to decide it yourself. A stated
+value always wins.
+
+**An OIDC-only install gets the configuration plane.** It could not before.
+`cmd/elitea-main` tested the FormGraph, and only `ELITEA_AUTH_CONFIG_FILE`
+builds one, so an install with real corporate single sign-on was refused every
+credential route, the whole model catalogue and the project vector store —
+however real its SSO. Each LLM setup step then fell back to
+`deploy/scripts/seed-llm-api.py` or hand-written SQL. The composition root now
+asks `productionAuthenticationComposed`: a reader of the caller's credential
+plus a `PrincipalValidator`. The OIDC session plane carries both.
+
+A deployment with **no** authentication is still refused, in the chart and in
+the binary. That is the shape a default `values.yaml` describes, which is why
+the default install still renders the flag `"false"`.
 
 ### `values-auth-minimal.yaml` — the cheapest install that can seed itself
 
@@ -337,10 +365,16 @@ authentication keeps its session store there and
 
 Two things it does **not** change:
 
-- No default. `values.yaml` still ships every capability flag `"false"`; an
-  install that does not pass this file is exactly what it was.
+- No default for the flags it does not name. `values.yaml` still ships
+  `ELITEA_PROJECT_INFO_ENABLED`, `ELITEA_INDEX_TYPES_ENABLED` and
+  `ELITEA_APPLICATION_SKILLS_ENABLED` as `"false"`.
 - Not the mutation flag. It is deliberately absent, which leaves `"false"` in
   force — read the section below for why that flag is a separate cutover.
+
+It is also no longer the **only** way to reach the configuration write path.
+An OIDC-only install reaches it by naming `env.ELITEA_AI_PROJECT_ID`, with no
+Form document and no TLS Redis at all. This file stays the recipe for an
+install that wants the Form plane itself.
 
 `deploy/scripts/standalone-stack.sh seed-llm` writes its rows through that
 route now (`deploy/scripts/seed-llm-api.py`), not with `INSERT`. Two database
@@ -364,7 +398,10 @@ same rows, so the halves cannot disagree:
 
 Both are off in a default install only because the capability needs production
 authentication, which a default install does not build — the same reason
-`ELITEA_CONFIGURATIONS_ENABLED` and `ELITEA_PROJECT_INFO_ENABLED` are off there.
+`ELITEA_PROJECT_INFO_ENABLED` is off there. Both still test the FormGraph in
+`cmd/elitea-main`; only `ELITEA_CONFIGURATIONS_ENABLED` was moved to the
+credential-plane predicate, because it is the one that blocks a fresh install
+from seeding its own LLM configuration.
 
 Turning the skills flag off again is a safe rollback: `internal/api/router.go`
 serves the same path from the skills handler, with the same rows in the same

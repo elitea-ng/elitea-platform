@@ -38,6 +38,58 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
+elitea-main.authenticationComposed — does this install authenticate at all?
+
+"true" when the chart composes ANY credential plane, empty otherwise. Two
+planes qualify, and neither is more real than the other:
+
+  * fileConfig.authConfig — the Form authentication document. It is what
+    cmd/elitea-main turns into a FormGraph.
+  * env.OIDC_ISSUER_URL — the OIDC browser-session plane. A SAML or typed
+    identity provider composes through the SAME session plane, so an install
+    that federates SAML sets this too.
+
+This helper exists because the chart used to spell "authenticated" as
+"fileConfig.authConfig.enabled", which silently meant "Form only".
+*/}}
+{{- define "elitea-main.authenticationComposed" -}}
+{{- $env := .Values.main.env | default dict -}}
+{{- if or .Values.main.fileConfig.authConfig.enabled (get $env "OIDC_ISSUER_URL" | toString) -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{/*
+elitea-main.configurationsEnabled — the EFFECTIVE ELITEA_CONFIGURATIONS_ENABLED.
+
+An operator's stated value always wins. values.yaml ships the key EMPTY, which
+means "follow this deployment": the plane comes on when the install has both
+prerequisites the chart can see — authentication, and the public project id
+the binary requires — and stays off otherwise.
+
+Why not ship a literal "true": the default values file has no authentication
+and no public project id, so a literal would turn `helm template` with no
+overrides into a failure and, past that, a CrashLoopBackOff. Why not keep the
+literal "false": that is the gap. An install that HAS single sign-on and HAS
+named its public project was still shipped a dark configuration plane, and had
+to discover the flag to get credential and model-catalogue routes at all.
+
+The rendered ConfigMap and every check below read this one helper, so the
+manifest and the guards cannot disagree about what the plane is doing.
+*/}}
+{{- define "elitea-main.configurationsEnabled" -}}
+{{- $env := .Values.main.env | default dict -}}
+{{- $stated := get $env "ELITEA_CONFIGURATIONS_ENABLED" | toString -}}
+{{- if $stated -}}
+{{- $stated -}}
+{{- else if and (eq (include "elitea-main.authenticationComposed" .) "true") (get $env "ELITEA_AI_PROJECT_ID" | toString) -}}
+true
+{{- else -}}
+false
+{{- end -}}
+{{- end -}}
+
+{{/*
 elitea-main.validateCapabilities — issue #382.
 
 The composition root gates whole capabilities on environment variables, and it
@@ -60,14 +112,37 @@ because it passes a manifest the binary then rejects.
 {{- $runtime := .Values.main.runtime | default dict -}}
 
 {{/*
-  cmd/elitea-main/main.go: "ELITEA_CONFIGURATIONS_ENABLED requires production
-  authentication". Production authentication is the FormGraph + principal
-  validator + forwarded-identity verifier triple, and this chart builds it only
-  from an auth configuration file. fileConfig.authConfig.enabled is that file.
+  cmd/elitea-main/main.go: "ELITEA_CONFIGURATIONS_ENABLED requires an
+  authenticated deployment".
+
+  This check used to demand fileConfig.authConfig — the Form authentication
+  DOCUMENT — because the composition root tested the FormGraph. That was never
+  the requirement, and it made an install with real corporate single sign-on
+  unable to turn the plane on at all: OIDC builds no FormGraph, so the whole
+  credential and model-catalogue surface was unreachable and every LLM setup
+  step fell back to deploy/scripts/seed-llm-api.py or raw SQL.
+
+  cmd/elitea-main now asks productionAuthenticationComposed, which wants a
+  reader of the caller's credential plus a principal validator. The OIDC
+  session plane carries both, and the SAML/typed-provider plane composes with
+  it. So this check asks for SOME authentication: fileConfig.authConfig (the
+  Form document) or env.OIDC_ISSUER_URL (the single-sign-on plane).
+
+  A deployment with NEITHER is still refused, in the chart and in the binary.
+  The composition root hands the zero AuthConfig to that shape, and mounting
+  credential write routes behind no credential is the failure this stops.
 */}}
-{{- if eq (get $env "ELITEA_CONFIGURATIONS_ENABLED" | toString) "true" -}}
-{{- if not .Values.main.fileConfig.authConfig.enabled -}}
-{{- fail "env.ELITEA_CONFIGURATIONS_ENABLED=\"true\" needs production authentication. Set fileConfig.authConfig.enabled=true and point fileConfig.authConfig.configMapName at an auth configuration ConfigMap. Without it cmd/elitea-main refuses to start with \"ELITEA_CONFIGURATIONS_ENABLED requires production authentication\"." -}}
+{{- if eq (include "elitea-main.configurationsEnabled" .) "true" -}}
+{{- if ne (include "elitea-main.authenticationComposed" .) "true" -}}
+{{- fail "env.ELITEA_CONFIGURATIONS_ENABLED=\"true\" needs an authenticated deployment. Set fileConfig.authConfig.enabled=true and point fileConfig.authConfig.configMapName at an auth configuration ConfigMap, OR set env.OIDC_ISSUER_URL for a single-sign-on install. Without either, cmd/elitea-main refuses to start with \"ELITEA_CONFIGURATIONS_ENABLED requires an authenticated deployment\"." -}}
+{{- end -}}
+{{/*
+  cmd/elitea-main/configurations_config.go: "ELITEA_AI_PROJECT_ID is required".
+  The variable is read only on the enabled path, so this pair looks from the
+  outside like a pod that starts, exits and restarts. State it here instead.
+*/}}
+{{- if not (get $env "ELITEA_AI_PROJECT_ID" | toString) -}}
+{{- fail "env.ELITEA_CONFIGURATIONS_ENABLED=\"true\" needs env.ELITEA_AI_PROJECT_ID. Name the project whose configurations are PUBLIC and merge into every other project's option lookups; it must name a project that EXISTS. cmd/elitea-main/configurations_config.go refuses to start with \"ELITEA_AI_PROJECT_ID is required\"." -}}
 {{- end -}}
 {{- end -}}
 
@@ -104,7 +179,7 @@ because it passes a manifest the binary then rejects.
   when the capability itself is off.
 */}}
 {{- if eq (get $env "ELITEA_CONFIGURATIONS_MUTATION_ENABLED" | toString) "true" -}}
-{{- if ne (get $env "ELITEA_CONFIGURATIONS_ENABLED" | toString) "true" -}}
+{{- if ne (include "elitea-main.configurationsEnabled" .) "true" -}}
 {{- fail "env.ELITEA_CONFIGURATIONS_MUTATION_ENABLED=\"true\" needs env.ELITEA_CONFIGURATIONS_ENABLED=\"true\". cmd/elitea-main/configurations_config.go rejects the mutation flag on its own." -}}
 {{- end -}}
 {{/*
@@ -489,7 +564,7 @@ upsert to guard.
 */}}
 {{- define "elitea-main.validateSelfLLMOrigins" -}}
 {{- $env := .Values.main.env | default dict -}}
-{{- if eq (get $env "ELITEA_CONFIGURATIONS_ENABLED" | toString) "true" -}}
+{{- if eq (include "elitea-main.configurationsEnabled" .) "true" -}}
 {{- if not (or (get $env "ELITEA_SELF_LLM_ORIGINS") (get $env "DEPLOYMENT_URL")) -}}
 {{- fail "env.ELITEA_CONFIGURATIONS_ENABLED=\"true\" needs env.DEPLOYMENT_URL or env.ELITEA_SELF_LLM_ORIGINS. With both empty, internal/api/v2/configurations/selfref.go builds an empty self-origin list and the SELF_REFERENTIAL_CREDENTIAL guard (spec §2.6 guard #1) admits every credential, including one whose api_base points back at this platform's own /llm origin. Set env.DEPLOYMENT_URL to this deployment's public base URL (the guard then appends \"/llm\" itself), or list the origins explicitly in env.ELITEA_SELF_LLM_ORIGINS." -}}
 {{- end -}}
@@ -741,7 +816,7 @@ question is what this release may consume WITHOUT anybody doing anything —
   The index-ingest handlers compose through the Configurations dependency, so
   the flag is useless without it.
 */}}
-{{- if ne (get $env "ELITEA_CONFIGURATIONS_ENABLED" | toString) "true" -}}
+{{- if ne (include "elitea-main.configurationsEnabled" .) "true" -}}
 {{- fail "runtime.indexIngestDispatch.enabled=true needs env.ELITEA_CONFIGURATIONS_ENABLED=\"true\". The index-ingest handlers compose through the Configurations dependency, and the embedding binding resolves from the same configuration rows." -}}
 {{- end -}}
 {{- if not $ingest.commandStream -}}
