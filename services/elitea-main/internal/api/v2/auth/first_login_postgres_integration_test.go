@@ -117,6 +117,63 @@ func TestADemotedInitialAdminIsNotRepromotedByTheNextLogin(t *testing.T) {
 	require.Equal(t, []string{"user"}, administrationRoles(t, pool, userID))
 }
 
+/* ── the `email:` spelling ─────────────────────────────────────────────── */
+
+// The shape that makes a fresh Azure AD or Okta deployment administrable at
+// all. The OIDC subject there is an opaque identifier nobody knows before the
+// first sign-in, so a reference entry cannot be written in advance. The address
+// can.
+func TestAnEmailEntryGrantsTheRoleToAVerifiedAddress(t *testing.T) {
+	pool := newFirstLoginPool(t)
+	handler := (&OIDCHandler{pool: pool}).WithFirstLoginPolicy(
+		FirstLoginPolicy{InitialGlobalAdmins: []string{"email:Alice@Corp.com"}})
+
+	userID := signInWithVerifiedOIDC(t, handler,
+		"00000000-1111-2222-3333-444444444444", "alice@corp.com", true)
+
+	require.Equal(t, []string{identity.InitialAdministrationRole},
+		administrationRoles(t, pool, userID),
+		"a verified address named by an email: entry was provisioned with no role")
+}
+
+// THE ROW THAT MUST NOT EXIST. Without a stated verification the address is a
+// claim, and an identity provider that can assert an address must not be able
+// to assert its way into the administration role.
+func TestAnEmailEntryGrantsNothingWithoutAStatedVerification(t *testing.T) {
+	unverified := false
+	for name, emailVerified := range map[string]*bool{
+		// The common shape: many identity providers never send the claim.
+		"the claim is absent": nil,
+		// Callback refuses this login before provisioning, so this case is
+		// defence in depth on the layer below it.
+		"the claim states false": &unverified,
+	} {
+		t.Run(name, func(t *testing.T) {
+			pool := newFirstLoginPool(t)
+			handler := (&OIDCHandler{pool: pool}).WithFirstLoginPolicy(
+				FirstLoginPolicy{InitialGlobalAdmins: []string{"email:alice@corp.com"}})
+
+			id, err := handler.provisionUser(context.Background(),
+				"mallory-sub", "alice@corp.com", "Mallory", emailVerified, false)
+			require.NoError(t, err)
+
+			require.Empty(t, administrationRoles(t, pool, atoiUserID(t, id)))
+		})
+	}
+}
+
+// The SAML plane states nothing about the address it carries, so an `email:`
+// entry can never name a SAML login. The operator uses `saml:<nameid>`.
+func TestAnEmailEntryGrantsNothingOnTheSAMLPlane(t *testing.T) {
+	pool := newFirstLoginPool(t)
+	handler := (&SAMLHandler{pool: pool}).WithFirstLoginPolicy(
+		FirstLoginPolicy{InitialGlobalAdmins: []string{"email:alice@corp.com"}})
+
+	userID := signInWithSAML(t, handler, "alice-nameid", "alice@corp.com")
+
+	require.Empty(t, administrationRoles(t, pool, userID))
+}
+
 /* ── the actor personal access token ───────────────────────────────────── */
 
 // The token the agent runtime signs its calls with. Without this row the
@@ -209,6 +266,19 @@ func TestRevokingEveryKeyIsHealedByTheNextLogin(t *testing.T) {
 func signInWithOIDC(t *testing.T, handler *OIDCHandler, sub, email string) int {
 	t.Helper()
 	id, err := handler.provisionUser(context.Background(), sub, email, "Alice", nil, false)
+	require.NoError(t, err)
+	return atoiUserID(t, id)
+}
+
+// signInWithVerifiedOIDC is signInWithOIDC with the `email_verified` claim the
+// identity provider sent. Only an explicit `true` opens the `email:` spelling
+// of `initial_global_admins`.
+func signInWithVerifiedOIDC(
+	t *testing.T, handler *OIDCHandler, sub, email string, emailVerified bool,
+) int {
+	t.Helper()
+	id, err := handler.provisionUser(
+		context.Background(), sub, email, "Alice", &emailVerified, false)
 	require.NoError(t, err)
 	return atoiUserID(t, id)
 }

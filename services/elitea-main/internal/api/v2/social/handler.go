@@ -95,6 +95,27 @@ type AuthorResponse struct {
 	// absence is what the client's own defaults are for.
 	DefaultContextManagement *contextsettings.ContextManagement `json:"default_context_management,omitempty"`
 	DefaultSummarization     *contextsettings.Summarization     `json:"default_summarization,omitempty"`
+
+	// ProviderRefs are the caller's OWN federated identity references, exactly
+	// as `auth_core__user_provider.provider_ref` stores them.
+	//
+	// WHY A PROFILE ENDPOINT CARRIES AN OPERATIONS VALUE. `identity.
+	// initial_global_admins` names a login by this reference, it is read at
+	// boot, and with Azure AD or Okta the OIDC subject inside it is an opaque
+	// identifier that nobody knows in advance. Making the first administrator
+	// of a fresh deployment therefore meant `SELECT provider_ref FROM
+	// auth_core__user_provider` against the production database. This is that
+	// same value, served to the person it belongs to, over the endpoint the SPA
+	// already calls for "who am I".
+	//
+	// IT IS THE CALLER'S OWN, AND ONLY THEIR OWN. The lookup is keyed on the
+	// authenticated principal's user id, never on the joined social row, which
+	// is matched on email OR id and could name somebody else.
+	//
+	// Omitted when the account holds none. A password login through the Form
+	// plane creates no `auth_core__user_provider` row, and `initial_global_
+	// admins` has nothing to name on such an account.
+	ProviderRefs []string `json:"provider_refs,omitempty"`
 }
 
 func (h *Handler) GetAuthor(w http.ResponseWriter, r *http.Request) {
@@ -156,6 +177,7 @@ func (h *Handler) GetAuthor(w http.ResponseWriter, r *http.Request) {
 	// the joined row (which is matched on email OR id and could in principle
 	// select a different user's profile).
 	resp.ID = user.ID
+	resp.ProviderRefs = h.resolveProviderRefs(ctx, user)
 	resp.PersonalProjectID = h.resolvePersonalProjectID(ctx, user.ID)
 	if resp.PersonalProjectID == "" {
 		h.ensurePersonalProject(user)
@@ -194,6 +216,55 @@ func (h *Handler) ensurePersonalProject(user auth.User) {
 		return
 	}
 	h.personalProject.EnsureAsync(id)
+}
+
+// resolveProviderRefs reads the caller's own `auth_core__user_provider`
+// references. See AuthorResponse.ProviderRefs for why this endpoint carries
+// them.
+//
+// FAILURE IS SILENCE, NOT AN ERROR. This is one extra field on a response the
+// SPA calls on every boot, so a database fault here must not take out the
+// profile, the personal-project id, or the memory defaults beside it. The
+// caller gets the field omitted, and the cause goes to the log.
+//
+// `OwningUserID`, not a parse of `user.ID`: it is this repository's reviewed
+// answer to "which auth_core__user owns this principal", and it refuses a
+// principal whose id is a TOKEN id — which would key this read on the wrong
+// row entirely.
+func (h *Handler) resolveProviderRefs(ctx context.Context, user auth.User) []string {
+	if h.pool == nil {
+		return nil
+	}
+	id, ok := user.OwningUserID()
+	if !ok {
+		return nil
+	}
+	rows, err := h.pool.Query(ctx, `
+		SELECT provider_ref
+		FROM public.auth_core__user_provider
+		WHERE user_id = $1::bigint AND provider_ref IS NOT NULL
+		ORDER BY provider_ref
+	`, id)
+	if err != nil {
+		slog.Warn("social: read provider references", "err", err, "user_id", id)
+		return nil
+	}
+	defer rows.Close()
+
+	var refs []string
+	for rows.Next() {
+		var ref string
+		if err := rows.Scan(&ref); err != nil {
+			slog.Warn("social: scan provider reference", "err", err, "user_id", id)
+			return nil
+		}
+		refs = append(refs, ref)
+	}
+	if err := rows.Err(); err != nil {
+		slog.Warn("social: iterate provider references", "err", err, "user_id", id)
+		return nil
+	}
+	return refs
 }
 
 // resolvePersonalProjectID answers "which project do this user's private

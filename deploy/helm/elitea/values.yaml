@@ -812,15 +812,40 @@ main:
     # and it is exactly the shape that otherwise has no way to name its first
     # administrator except an INSERT into auth_core__user_role.
     #
-    # An entry is the provider reference, NOT the email address: the OIDC
-    # subject (`sub`) or the SAML NameID. Either spelling of it is accepted —
-    # bare (`8f3c...`) or namespaced as stored (`oidc:8f3c...`, `saml:...`).
-    # The address is deliberately not matched, because an identity provider that
-    # can assert an address would then be able to assert its way into the role.
+    # THE LIST APPLIES TO OIDC AND TO SAML LOGINS, since v1.39.0. An entry
+    # takes one of three shapes:
+    #
+    #   oidc:<sub>            the OIDC subject, as stored
+    #   saml:<nameid>         the SAML NameID, as stored
+    #   email:<address>       a VERIFIED e-mail address (see below)
+    #
+    # A reference may also be written BARE (`8f3c...`), with no namespace. The
+    # namespaced spelling is what the database holds, so prefer it.
+    #
+    # READ YOUR OWN REFERENCE WITHOUT psql. Sign in once, then call
+    # `GET /api/v2/social/author` with that session. The `provider_refs` field
+    # holds the exact values this list accepts. That removes the old procedure
+    # of a SELECT against the production database, which was unavoidable with
+    # Azure AD or Okta: their OIDC `sub` is an opaque identifier nobody can
+    # know in advance.
+    #
+    # `email:` MATCHES A VERIFIED ADDRESS ONLY. The comparison ignores case. It
+    # applies to an OIDC login whose id_token carries `"email_verified": true`,
+    # and to nothing else. A provider that OMITS the claim cannot be matched
+    # this way — and OIDC_REQUIRE_EMAIL_VERIFIED above does not change that,
+    # because it gates account ADOPTION and not account creation. SAML carries
+    # no verified-address statement at all, so a SAML deployment names its
+    # first administrator by `saml:<nameid>`, which is often the address
+    # already. An identity provider that merely asserts an address can never
+    # assert its way into the role.
     #
     # The grant is one-shot per account: someone who already holds any
     # administration-mode role is left as the operator left them, so a demotion
     # is never undone by the next login. Empty grants nobody.
+    #
+    # A malformed entry WARNS at start-up and is ignored. The pod logs how many
+    # entries are reference-shaped and how many are address-shaped, so a
+    # misspelling is visible at boot instead of at somebody's first sign-in.
     ELITEA_INITIAL_GLOBAL_ADMINS: ""
 
     # Filesystem path to a brand pack FILE — the middle of the three brand

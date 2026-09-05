@@ -5095,6 +5095,19 @@ components:
           $ref: '#/components/schemas/MemoryContextManagement'
         default_summarization:
           $ref: '#/components/schemas/MemorySummarization'
+        provider_refs:
+          type: array
+          items: { type: string }
+          description: >
+            The caller's own federated identity references, exactly as
+            public.auth_core__user_provider.provider_ref stores them
+            (`oidc:<sub>`, `saml:<nameid>`, or a pylon-era bare subject).
+            An operator copies one of these into the deployment's
+            `identity.initial_global_admins` to make a global administrator,
+            which previously needed a SELECT against the production database.
+            Absent when the account holds none: a Form password login creates
+            no provider row. Never another user's — the read is keyed on the
+            authenticated principal's own user id.
       description: >
         NOTE(W2): AuthorResponse struct (internal/api/v2/social/handler.go:41-49),
         served by GetAuthor (:51-123). All string fields except
