@@ -242,6 +242,66 @@ the parameters out of the Application, renders the chart from them, and reads
 DATABASE_URL back out of the manifest, so an Application that stops supplying
 its values fails there.
 
+### The first global administrator (`identity.initial_global_admins`)
+
+A fresh database holds one administrator, `dev@elitea.ai`. That account has no
+password on a single-sign-on deployment, so it cannot sign in. Name your own
+account instead.
+
+Supply the list in ONE of two places. The authentication configuration document
+wins when the deployment has one:
+
+- `main.authConfig...identity.initial_global_admins` — a YAML list.
+- `main.env.ELITEA_INITIAL_GLOBAL_ADMINS` — a comma-separated string. Use this
+  on a single-sign-on-only deployment, which carries no document.
+
+**An entry takes one of three shapes.** Since v1.39.0 the list applies to OIDC
+and to SAML logins alike.
+
+| Shape | Matches |
+|---|---|
+| `oidc:<sub>` | the OIDC subject, as the database stores it |
+| `saml:<nameid>` | the SAML NameID, as the database stores it |
+| `email:<address>` | a VERIFIED e-mail address, case-insensitive |
+
+A reference may also be written bare, with no `oidc:` / `saml:` namespace. The
+namespaced spelling is what the database holds, so prefer it.
+
+**Read your own reference without a database session.** Sign in once, then call
+the endpoint the application already serves:
+
+```bash
+curl -s -H "Cookie: elitea_session=<your session>" \
+  https://elitea.example.com/api/v2/social/author | jq .provider_refs
+```
+
+`provider_refs` holds the exact values this list accepts. Before this endpoint
+carried the field, an operator on Azure AD or Okta had no other way to learn it:
+their OIDC `sub` is an opaque identifier that nobody can know before the first
+sign-in, so the procedure was a `SELECT provider_ref FROM
+auth_core__user_provider` against the production database.
+
+**`email:` needs a stated verification.** It matches an OIDC login whose
+id_token carries `"email_verified": true`, and nothing else. A provider that
+OMITS the claim cannot be matched by an address — use `oidc:<sub>` there.
+`OIDC_REQUIRE_EMAIL_VERIFIED` does not change this: that variable gates account
+ADOPTION by address, not account creation, so it states nothing about a first
+login. SAML carries no verified-address statement at all, so a SAML deployment
+names its administrator by `saml:<nameid>`, which is often the address already.
+An identity provider that merely asserts an address can never assert its way
+into the administration role.
+
+**The grant is one-shot per account.** Somebody who already holds ANY
+administration-mode role is left exactly as you left them, so a demotion is
+never undone by the next sign-in. An account that holds none still receives the
+grant, so the normal recovery works: add the entry, restart the pod, sign in
+again. Only `dev@elitea.ai` is seeded with an administration-mode role, and only
+in a fresh database.
+
+**A malformed entry warns and is ignored.** The pod logs how many entries are
+reference-shaped and how many are address-shaped, and warns about the rest, so a
+misspelling is visible at boot rather than at somebody's first sign-in.
+
 ## Distribution — the charts are published to GHCR as OCI artifacts
 
 Every chart in the table above is packaged and pushed on each release by the

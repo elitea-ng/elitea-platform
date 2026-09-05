@@ -511,6 +511,18 @@ func samlAttribute(assertion *saml2.AssertionInfo, authored string, fallbacks []
 // `email_verified` claim: an assertion's attributes are what the identity
 // provider asserts, and there is no separate statement about the address to
 // require. Passing true would refuse every SAML login.
+//
+// FOR THE SAME REASON THE VERIFIED ADDRESS PASSED BELOW IS "". An `email:`
+// entry of `initial_global_admins` matches a STATED verification, and a SAML
+// assertion states nothing about the address it carries. To treat the address
+// as verified here would hand the administration role to whoever the identity
+// provider says the person is, which is the takeover class this plane refuses
+// by construction. A SAML deployment names its first administrator by
+// `saml:<nameid>` — a value the operator can read off
+// `GET /api/v2/social/author` after one sign-in, and one that is often the
+// address already. If a future SAML document gains an explicit operator flag
+// that marks its address attribute trusted, this is the ONE call site that
+// reads it.
 func (h *SAMLHandler) provisionUser(ctx context.Context, nameID, email, name string) (string, error) {
 	tx, err := h.pool.Begin(ctx)
 	if err != nil {
@@ -523,7 +535,7 @@ func (h *SAMLHandler) provisionUser(ctx context.Context, nameID, email, name str
 	if err != nil {
 		return "", err
 	}
-	if err := applyFirstLoginGrants(ctx, tx, userID, providerRef, h.firstLogin); err != nil {
+	if err := applyFirstLoginGrants(ctx, tx, userID, providerRef, "", h.firstLogin); err != nil {
 		return "", err
 	}
 	if err := tx.Commit(ctx); err != nil {

@@ -53,6 +53,7 @@ import (
 	v2toolkits "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkits"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/webhook"
 	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
+	identityapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/identity"
 	socialapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/social"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/authcomposition"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
@@ -543,10 +544,6 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		if len(firstLoginPolicy.InitialGlobalAdmins) == 0 {
 			firstLoginPolicy.InitialGlobalAdmins = v2auth.InitialGlobalAdminsFromEnv()
 		}
-		if len(firstLoginPolicy.InitialGlobalAdmins) != 0 {
-			logger.Info("initial global administrators configured for the single sign-on plane",
-				"count", len(firstLoginPolicy.InitialGlobalAdmins))
-		}
 		oidcSessionHandler = v2auth.NewSessionHandler(pool, appSecretKey)
 		oidcOIDCHandler, err = v2auth.NewOIDCHandler(ctx, oidcCfg, pool, appSecretKey)
 		if err != nil {
@@ -578,6 +575,16 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			logger.Info("SAML authentication enabled from an authored identity provider")
 		}
 	}
+
+	// ONE call site, placed AFTER both assignments above.
+	//
+	// `initial_global_admins` reaches this variable from two sources — the
+	// authentication configuration document, and the environment fallback that
+	// only a single-sign-on-only deployment uses — and the value is final here
+	// whichever one supplied it. The line the SSO block used to print reported
+	// a bare count, and it printed nothing at all for a deployment that
+	// configures the list in a document and mounts no SSO plane.
+	logInitialGlobalAdminShapes(logger, firstLoginPolicy.InitialGlobalAdmins)
 
 	// Wire currentProjectList with OIDC-only auth when formGraph is absent.
 	// formGraph (ELITEA_AUTH_CONFIG_FILE) wires it above with full validators;
@@ -2091,6 +2098,35 @@ func configuredAuthConfigPath(lookup func(string) (string, bool)) (string, bool,
 		return "", false, errors.New("ELITEA_AUTH_CONFIG_FILE is invalid")
 	}
 	return path, true, nil
+}
+
+// logInitialGlobalAdminShapes reports what `identity.initial_global_admins`
+// holds, BY SHAPE.
+//
+// The list is consumed at a first login that can happen days after this boot,
+// and a wrong entry produces silence: the person signs in and simply is not an
+// administrator. The count alone did not separate the two shapes, so an
+// operator who wrote `alice@corp.com` when they meant `email:alice@corp.com`
+// saw the same log line as one who wrote it correctly.
+//
+// A MALFORMED ENTRY WARNS AND DOES NOT STOP THE BOOT. This value only changes
+// what a first login receives; refusing to start would turn one bad list entry
+// into an outage of a running deployment.
+func logInitialGlobalAdminShapes(logger *slog.Logger, admins []string) {
+	if logger == nil || len(admins) == 0 {
+		return
+	}
+	shapes := identityapp.ClassifyInitialGlobalAdmins(admins)
+	logger.Info("initial global administrators configured",
+		"total", len(admins),
+		"provider_references", shapes.References,
+		"verified_emails", shapes.Emails)
+	if len(shapes.Malformed) != 0 {
+		logger.Warn("initial global administrator entries match nothing and are ignored",
+			"count", len(shapes.Malformed),
+			"entries", shapes.Malformed,
+			"accepted_shapes", "oidc:<sub>, saml:<nameid>, <bare subject>, email:<verified address>")
+	}
 }
 
 type publicServerLifecycle interface {

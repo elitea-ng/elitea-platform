@@ -451,6 +451,28 @@ func oidcRequiresVerifiedEmail() bool {
 	return strings.EqualFold(os.Getenv("OIDC_REQUIRE_EMAIL_VERIFIED"), "true")
 }
 
+// verifiedEmailClaim answers the address that an `email:` entry of
+// `initial_global_admins` may be compared against, and "" when there is none.
+//
+// THE ONLY ACCEPTED PROOF IS AN EXPLICIT `"email_verified": true`. An ABSENT
+// claim is not proof, and OIDC_REQUIRE_EMAIL_VERIFIED does not make it one.
+// That variable gates joinAccountByEmail — the step where an unknown subject
+// ADOPTS an existing account — and nothing else. A brand new subject with no
+// `email_verified` claim still provisions a new account with the variable set
+// to true, so reading the variable here would report a verification that no
+// component performed. An operator whose provider omits the claim names the
+// login by `oidc:<sub>` instead, and reads that value off
+// `GET /api/v2/social/author`.
+//
+// An explicit `"email_verified": false` never reaches here: Callback refuses
+// the login outright.
+func verifiedEmailClaim(email string, emailVerified *bool) string {
+	if emailVerified == nil || !*emailVerified {
+		return ""
+	}
+	return email
+}
+
 // provisionUser resolves the account this login belongs to.
 //
 // THE PROVIDER SUBJECT IS THE IDENTITY, and the email claim is only an
@@ -492,7 +514,9 @@ func (h *OIDCHandler) provisionUser(
 	if err != nil {
 		return "", err
 	}
-	if err := applyFirstLoginGrants(ctx, tx, userID, providerRef, h.firstLogin); err != nil {
+	if err := applyFirstLoginGrants(
+		ctx, tx, userID, providerRef, verifiedEmailClaim(email, emailVerified), h.firstLogin,
+	); err != nil {
 		return "", err
 	}
 
