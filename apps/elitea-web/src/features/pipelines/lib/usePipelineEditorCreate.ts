@@ -6,6 +6,7 @@ import type { AgentLlmSettings } from '@/shared/api/agentLlmSettings';
 import type { ApplicationCreatedResponse } from '@/shared/api/generated/model';
 
 import { setFieldValueAtPath } from './pipelineFieldChange';
+import { PIPELINE_STARTER_TEMPLATE } from './pipelineStarterTemplate';
 import type { PipelineDraftValues, PipelineFieldChange } from '../model/types';
 
 /**
@@ -119,7 +120,13 @@ const EMPTY_CREATE_VALUES: PipelineDraftValues = {
   name: '',
   description: '',
   version_details: {
-    instructions: '',
+    // `instructions` IS the pipeline's YAML graph — `usePipelineVersionSync`
+    // parses it back out of the saved version and seeds the flow editor with
+    // it. An empty string stored a pipeline with no graph, which no runtime
+    // can run: the compiler refuses an empty document, so the first chat turn
+    // failed. Ship the starter graph instead. See
+    // `./pipelineStarterTemplate.ts` for why those exact keys.
+    instructions: PIPELINE_STARTER_TEMPLATE,
     welcome_message: '',
     tags: [],
     variables: [],

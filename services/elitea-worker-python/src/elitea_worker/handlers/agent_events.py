@@ -57,6 +57,9 @@ _CUSTOM_EVENTS: dict[str, tuple[str, frozenset[str]]] = {
 }
 _MAX_TRACE_TEXT_BYTES = 128 * 1024
 _MAX_AUTHORIZATION_REQUESTS = 16
+# The exact literal the pinned SDK writes when it converts a node exception
+# into message content (elitea_sdk/runtime/tools/llm.py, LLMNode.invoke).
+_NODE_ERROR_PREFIX = "Error: "
 _LOADED_SKILL_PREFIX_RE = re.compile(r'^Skill "([^"]+)" is now active')
 _LOAD_SKILL_ALREADY_ACTIVE_RE = re.compile(
     r'^Skill "([^"]+)" is already (?:loaded|active)'
@@ -123,6 +126,91 @@ def _normalize_hitl_pause(
     return singular, plural
 
 
+def agent_terminal_failure(
+    result: Any,
+    *,
+    model_responded: bool,
+) -> str | None:
+    """Classify a terminal SDK result that is not a completed turn.
+
+    The SDK does not always raise when a graph node fails. Two shapes reach
+    this worker as an ordinary returned object:
+
+    * The flattened failure envelope, ``{"success": False, "error": ...}``.
+      ``_sdk_failure_category`` in the delivery module already trusts this
+      shape on the index path.
+    * The node-error-to-message conversion in the pinned SDK's
+      ``elitea_sdk/runtime/tools/llm.py``. ``LLMNode.invoke`` catches every
+      non-budget exception from ``_invoke_llm_internal`` and replaces the whole
+      node result with one ``AIMessage`` whose content is ``f"Error: {e}"``.
+      LangGraph therefore records no ``__error__`` write, the graph reaches
+      ``END``, and the worker receives a normal result.
+
+    ``AgentExecutionResultV1`` has no failed terminal state, and
+    ``build_output_frame`` maps every one of them to
+    ``EXECUTION_OUTCOME_V1_SUCCEEDED``. A failure must therefore leave this
+    worker as a ``RuntimeErrorV1`` frame instead, which is what the caller does
+    with the value returned here.
+
+    ``model_responded`` states whether any model call completed in this turn.
+    It gates the message-marker arm so that a model that answers with the word
+    ``Error:`` keeps its answer. The gate makes the arm conservative: a node
+    that fails AFTER a successful model call in the same turn is not reported.
+
+    Returns a short stage name for the worker log, or None for a completed turn
+    and for every intentional pause.
+    """
+
+    if not isinstance(result, dict):
+        return "malformed_result"
+    # Intentional pauses own their own terminal events. HITL, delegated
+    # toolkit authorization and a parked parallel fan-out are all incomplete
+    # ON PURPOSE, and none of them is a failure.
+    if result.get("hitl_interrupt") is not None or result.get("hitl_interrupts"):
+        return None
+    if result.get("paused") is True or result.get("parallel_parked") is True:
+        return None
+    if result.get("execution_finished") is False:
+        return None
+    if result.get("success") is False:
+        return "sdk_reported_failure"
+    content = _extract_response_content(result).strip()
+    if not content:
+        # A finished turn with no assistant content cannot be shown to anybody.
+        # The SDK's own "output is None" sentinel is non-empty, so an empty
+        # result means the extraction chain found nothing at all.
+        return "empty_terminal_output"
+    if not model_responded and _is_node_error_message(result, content):
+        return "node_error"
+    return None
+
+
+def _is_node_error_message(result: dict[str, Any], content: str) -> bool:
+    """Match the SDK's swallowed node error, and only that.
+
+    Require both halves: the terminal content is the whole marker string, and
+    the last entry of the ``messages`` channel is the assistant message that
+    carries it. A node that writes its result to a named state variable never
+    reaches the ``messages`` channel, so it cannot match here.
+    """
+
+    if not content.startswith(_NODE_ERROR_PREFIX):
+        return False
+    messages = result.get("messages")
+    if not isinstance(messages, list) or not messages:
+        return False
+    last = messages[-1]
+    if isinstance(last, dict):
+        role = last.get("type") or last.get("role")
+        raw = last.get("content")
+    else:
+        role = getattr(last, "type", None)
+        raw = getattr(last, "content", None)
+    if role is not None and str(role).lower() in {"human", "user", "system"}:
+        return False
+    return isinstance(raw, str) and raw.strip() == content
+
+
 @dataclass(frozen=True, slots=True)
 class CurrentAgentNodeEventContext:
     execution_id: str
@@ -162,6 +250,21 @@ class CurrentAgentNodeEventCallback(BaseCallbackHandler):
         ] = {}
         self._nested_skills_by_name: dict[str, dict[str, Any] | None] = {}
         self._tool_skill_identities: dict[str, dict[str, Any]] = {}
+        # Counts completed model calls in this turn. `agent_terminal_failure`
+        # reads it to keep a model answer that starts with "Error: ".
+        self._model_responses = 0
+
+    @property
+    def model_responded(self) -> bool:
+        """Report whether any model call completed in this turn."""
+
+        with self._lock:
+            return self._model_responses > 0
+
+    def terminal_failure_stage(self, result: Any) -> str | None:
+        """Classify the SDK result this callback observed being produced."""
+
+        return agent_terminal_failure(result, model_responded=self.model_responded)
 
     def configure_skills(
         self,
@@ -725,6 +828,7 @@ class CurrentAgentNodeEventCallback(BaseCallbackHandler):
         selected = _run_id(run_id)
         with self._lock:
             state = dict(self._llm.pop(selected, {}))
+            self._model_responses += 1
         step = _thinking_step(response, selected, state)
         self._emit(
             "agent_llm_end",
