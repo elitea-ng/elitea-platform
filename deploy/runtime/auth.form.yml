@@ -89,9 +89,20 @@ authorization:
   main_configured_public_rules: []
 
 identity:
-  # Empty on purpose. A non-empty list enrolls global admins at startup; the
-  # standalone stack's admin is seeded through the E2E seeder against the OIDC
-  # identities, and a second source of truth here would fight it.
+  # Empty on purpose. This is NOT where the standalone stack's operator names
+  # its first administrator — the browser logs in through oidc-mock (see this
+  # file's header), and cmd/elitea-main/main.go only reads this document's
+  # list for the plane that document itself composes. The OIDC plane the
+  # browser actually uses falls back to the ELITEA_INITIAL_GLOBAL_ADMINS
+  # environment variable whenever this list is empty
+  # (v2auth.InitialGlobalAdminsFromEnv) — set that variable on the elitea-main
+  # service in docker-compose.standalone-full.yml instead. It takes a
+  # comma-separated list of `oidc:<sub>` or `saml:<nameid>` entries (matching
+  # the federated login planes' prefixed provider references — see
+  # matchesInitialGlobalAdmin in internal/api/v2/auth/first_login.go), with
+  # `email:<verified address>` landing in a parallel branch. Setting a value
+  # here as well would give this deployment two sources of truth for the same
+  # policy; leave it empty and use the environment variable.
   initial_global_admins: []
 
 provider:

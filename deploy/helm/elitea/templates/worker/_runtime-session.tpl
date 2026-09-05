@@ -13,6 +13,15 @@ Extracted here rather than duplicated so the two callers cannot drift: the
 CronJob has to run EXACTLY the upsert-and-verify logic the pre-install hook
 runs, including the SPIFFE-SAN extraction and validation, or a renewal could
 silently authorize a different identity than the one actually presented.
+
+deploy/runtime/provision-runtime-session.sh is a VERBATIM MIRROR of the shell
+script embedded in the `command:` block below, run by compose's
+`runtime-session-init` service so the standalone stack authorizes the same
+row before its worker starts. It is a second copy, not a shared file the two
+render from, because Helm charts here stay self-contained artifacts
+independent of the monorepo layout they ship from — see the comment on
+`config:` next to `otelCollector` in values.yaml for the same rule applied to
+a different file. Change one script, change the other, in the same commit.
 */}}
 
 {{- define "elitea-worker-python.runtimeSessionContainer" -}}
