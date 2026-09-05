@@ -162,30 +162,155 @@ func TestCheckConnection_NilPolicyFailsClosed(t *testing.T) {
 
 // TestCheckConnection_CloudProviderNeverDialsPrivateAddress is the core SSRF
 // regression test: even when the operator's name-based allowlist says yes,
-// a cloud-class credential (open_ai — not self-hosted) must never actually
-// reach a private/loopback address, because GetConfigForProvider's real
-// production policy never grants AllowPrivateNetwork to that class either.
-// The fake provider here IS reachable (it is a real, listening loopback
-// server) — proving the block is enforced at the dial layer, not merely
-// because the target happened to be down.
+// a CLOUD credential must never actually reach a private/loopback address,
+// because GetConfigForProvider's real production policy never grants
+// AllowPrivateNetwork to that class either. The fake provider here IS
+// reachable (it is a real, listening loopback server) — proving the block is
+// enforced at the dial layer, not merely because the target happened to be
+// down.
+//
+// The type is azure_open_ai. It used to be open_ai, and that was wrong: an
+// open_ai credential whose api_base is not OpenAI's own origin is dispatched
+// through bifrost's vLLM provider, so the request path treats it as
+// self-hosted. Measuring the cloud rule with it measured the opposite rule —
+// see TestCheckConnection_OpenAIWithAPrivateBaseProbesLikeTheRequestPath.
 func TestCheckConnection_CloudProviderNeverDialsPrivateAddress(t *testing.T) {
 	fp := newFakeProvider(http.StatusOK)
 	defer fp.Close()
 
-	// Allowlist says yes (operator named this host), but open_ai is not a
-	// self-hosted class, so private destinations must still be refused.
+	// Allowlist says yes (operator named this host), but Azure is a cloud
+	// class, so private destinations must still be refused.
 	h := newCheckConnectionHandler(fakeEgressPolicy{allow: true, configured: true})
-	rec := doCheckConnection(t, h, checkConnectionRequest{Type: "open_ai", APIBase: fp.URL, APIKey: "sk-test"})
+	rec := doCheckConnection(t, h, checkConnectionRequest{
+		Type: "azure_open_ai", APIBase: fp.URL, APIKey: "sk-test",
+	})
 
 	resp := decodeCheckConnectionResponse(t, rec)
 	if resp.Success {
-		t.Fatal("open_ai must never report success against a private address")
+		t.Fatal("azure_open_ai must never report success against a private address")
 	}
 	if resp.Reason != checkConnectionReasonUnreachable {
 		t.Fatalf("reason = %q, want %q", resp.Reason, checkConnectionReasonUnreachable)
 	}
 	if fp.Hits() != 0 {
 		t.Fatalf("the provider handler must never have run — the dial itself must be refused, got %d hits", fp.Hits())
+	}
+}
+
+// TestCheckConnection_OpenAIWithAPrivateBaseProbesLikeTheRequestPath is the
+// defect a live fresh install found.
+//
+// An `open_ai` credential naming a private OpenAI-compatible host — a vLLM
+// server at http://192.168.29.60:8000/v1, say — SERVES completions: the
+// request path resolves it through account.ProviderForCredential to bifrost's
+// vLLM provider, and GetConfigForProvider grants AllowPrivateNetwork to that
+// class. The probe refused the same credential with
+// `no permitted address for "192.168.29.60"`, because it read a static
+// per-type flag instead. The Test connection button called a working
+// credential broken.
+//
+// The probe now answers with the same predicate, so the two agree.
+func TestCheckConnection_OpenAIWithAPrivateBaseProbesLikeTheRequestPath(t *testing.T) {
+	fp := newFakeProvider(http.StatusOK)
+	defer fp.Close()
+
+	h := newCheckConnectionHandler(fakeEgressPolicy{allow: true, configured: true})
+	rec := doCheckConnection(t, h, checkConnectionRequest{
+		Type: "open_ai", APIBase: fp.URL + "/v1", APIKey: "sk-test",
+	})
+
+	resp := decodeCheckConnectionResponse(t, rec)
+	if !resp.Success {
+		t.Fatalf("resp = %+v, want success: this credential serves completions", resp)
+	}
+	if fp.Hits() != 1 {
+		t.Fatalf("expected exactly one real round trip, got %d", fp.Hits())
+	}
+	if fp.lastPath != "/v1/models?" {
+		t.Fatalf("path = %q, want the OpenAI-compatible /v1/models listing", fp.lastPath)
+	}
+}
+
+// TestCheckConnection_OpenAIWithAPrivateBaseStillNeedsTheAllowlist keeps the
+// gate the fix above must not remove. The private-network carve-out is
+// conditional on the operator having armed GATEWAY_EGRESS_ALLOWLIST, exactly
+// as GetConfigForProvider's carve-out is. With no allowlist no tenant can
+// steer this probe into the cluster.
+func TestCheckConnection_OpenAIWithAPrivateBaseStillNeedsTheAllowlist(t *testing.T) {
+	fp := newFakeProvider(http.StatusOK)
+	defer fp.Close()
+
+	h := newCheckConnectionHandler(fakeEgressPolicy{allow: true, configured: false})
+	rec := doCheckConnection(t, h, checkConnectionRequest{
+		Type: "open_ai", APIBase: fp.URL + "/v1", APIKey: "sk-test",
+	})
+
+	resp := decodeCheckConnectionResponse(t, rec)
+	if resp.Success {
+		t.Fatal("a private destination must stay refused while no allowlist is armed")
+	}
+	if fp.Hits() != 0 {
+		t.Fatalf("the dial must be refused, got %d hits", fp.Hits())
+	}
+}
+
+// TestCheckConnection_VLLMProbesTheOpenAISurface pins the probe of the new
+// `vllm` credential type.
+//
+// It must NOT be Ollama's /api/tags: vLLM does not serve that path and answers
+// 404, which classifyCheckConnectionProbeError reports as upstream_error — an
+// operator reads that as a rejected credential. vLLM serves the
+// OpenAI-compatible surface, so the probe is GET {api_base}/models, which with
+// the customary api_base is /v1/models.
+func TestCheckConnection_VLLMProbesTheOpenAISurface(t *testing.T) {
+	fp := newFakeProvider(http.StatusOK)
+	defer fp.Close()
+
+	h := newCheckConnectionHandler(fakeEgressPolicy{allow: true, configured: true})
+	rec := doCheckConnection(t, h, checkConnectionRequest{
+		Type: "vllm", APIBase: fp.URL + "/v1",
+	})
+
+	resp := decodeCheckConnectionResponse(t, rec)
+	if !resp.Success {
+		t.Fatalf("resp = %+v, want a successful vLLM probe", resp)
+	}
+	if fp.lastPath != "/v1/models?" {
+		t.Fatalf("path = %q, want /v1/models and never Ollama's /api/tags", fp.lastPath)
+	}
+	if fp.Hits() != 1 {
+		t.Fatalf("expected exactly one real round trip, got %d", fp.Hits())
+	}
+}
+
+// TestCheckConnectionAllowsPrivateNetwork covers the predicate itself, per
+// credential rather than per type. It is the one decision the probe and the
+// request path must agree on.
+func TestCheckConnectionAllowsPrivateNetwork(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		configType string
+		apiBase    string
+		want       bool
+	}{
+		{"vllm is self-hosted", "vllm", "http://10.1.2.3:8000/v1", true},
+		{"ollama is self-hosted", "ollama", "http://10.1.2.3:11434", true},
+		{"open_ai with a private base is dispatched as vllm", "open_ai", "http://192.168.29.60:8000/v1", true},
+		{"open_ai at its own origin is cloud", "open_ai", "https://api.openai.com/v1", false},
+		{"open_ai with no base is cloud", "open_ai", "", false},
+		{"azure is cloud whatever the base", "azure_open_ai", "http://10.1.2.3:8000", false},
+		{"the alias is cloud too", "open_ai_azure", "http://10.1.2.3:8000", false},
+		{"anthropic is cloud", "anthropic", "http://10.1.2.3:8000", false},
+		{"an unknown type gets nothing", "github", "http://10.1.2.3:8000", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got := checkConnectionAllowsPrivateNetwork(checkConnectionRequest{
+				Type: test.configType, APIBase: test.apiBase,
+			})
+			if got != test.want {
+				t.Fatalf("checkConnectionAllowsPrivateNetwork = %v, want %v", got, test.want)
+			}
+		})
 	}
 }
 

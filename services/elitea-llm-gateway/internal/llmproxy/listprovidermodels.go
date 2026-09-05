@@ -117,8 +117,10 @@ type providerModelLister func(ctx context.Context, client *http.Client, req chec
 var providerModelListers = map[string]providerModelLister{
 	"open_ai":        listOpenAICompatibleModels,
 	"azure_open_ai":  listAzureDeployments,
+	"open_ai_azure":  listAzureDeployments,
 	"ai_dial":        listAzureDeployments,
 	"ollama":         listOllamaTags,
+	"vllm":           listOpenAICompatibleModels,
 	"amazon_bedrock": listBedrockFoundationModels,
 	"vertex_ai":      listVertexPublisherModels,
 }
@@ -194,7 +196,7 @@ func (h *Handler) ListProviderModels(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	allowPrivate := provider.selfHosted && h.egressPolicy.EgressAllowlistConfigured()
+	allowPrivate := checkConnectionAllowsPrivateNetwork(req) && h.egressPolicy.EgressAllowlistConfigured()
 	client := newCheckConnectionProbeClient(allowPrivate)
 
 	ctx, cancel := context.WithTimeout(r.Context(), checkConnectionProbeTimeout)

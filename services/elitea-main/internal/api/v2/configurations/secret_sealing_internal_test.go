@@ -2,6 +2,7 @@ package configurations
 
 import (
 	"context"
+	"net/http"
 	"regexp"
 	"strings"
 	"testing"
@@ -64,22 +65,98 @@ func TestSealConfigurationSecretsReplacesTheProviderKey(t *testing.T) {
 	}
 }
 
-// A type the pinned catalogue does not describe keeps its data. The catalogue
-// is the only authority on which field is a secret.
-func TestSealConfigurationSecretsKeepsAnUnknownType(t *testing.T) {
+// A type the pinned catalogue does not describe is REFUSED (#G3).
+//
+// The catalogue is the only authority on which field is a secret, so "no
+// entry" used to mean "no field is a secret" and the whole object was stored
+// verbatim. A `token`, an `api_key` or a password then sat in clear text in
+// p_{project}.configuration, and migrations/shared/0072 grants the read of
+// that column to the project VIEWER role. Absence must fail closed.
+func TestSealConfigurationSecretsRefusesAnUnknownType(t *testing.T) {
+	t.Parallel()
+	handler := NewHandler(nil, WithSecretSealer(stubSecretSealer{}))
+
+	data := map[string]any{"token": "plain"}
+	sealed, mutations, failure := handler.sealConfigurationSecrets(
+		context.Background(), "not_a_registered_type", data)
+	if failure == nil {
+		t.Fatalf("an undescribed type was accepted; it would store %v in plaintext", sealed)
+	}
+	if failure.status != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", failure.status, http.StatusBadRequest)
+	}
+	if failure.message == "" {
+		t.Fatal("the refusal carries no message, so the caller cannot act on it")
+	}
+	// The refusal must not echo the value it refused.
+	if strings.Contains(failure.message, "plain") {
+		t.Fatalf("the message repeats the submitted value: %q", failure.message)
+	}
+	if sealed != nil || len(mutations) != 0 {
+		t.Fatalf("a refused write returned data=%v mutations=%d", sealed, len(mutations))
+	}
+}
+
+// A type with no `type` at all is the same refusal. The create route reads
+// `type` from the body, so an absent one used to store free-form data with no
+// schema behind it.
+func TestSealConfigurationSecretsRefusesAnAbsentType(t *testing.T) {
+	t.Parallel()
+	handler := NewHandler(nil, WithSecretSealer(stubSecretSealer{}))
+
+	_, _, failure := handler.sealConfigurationSecrets(
+		context.Background(), "", map[string]any{"api_key": "sk-live-secret-value"})
+	if failure == nil {
+		t.Fatal("a write with no configuration type must be refused")
+	}
+	if failure.status != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", failure.status, http.StatusBadRequest)
+	}
+}
+
+// An EMPTY data object still passes. The row then carries nothing to seal, and
+// refusing it would break a write that stores only `shared` or a label.
+func TestSealConfigurationSecretsAllowsAnEmptyObject(t *testing.T) {
 	t.Parallel()
 	handler := NewHandler(nil)
 
-	data := map[string]any{"token": "plain"}
-	sealed, mutations, failure := handler.sealConfigurationSecrets(context.Background(), "not_a_registered_type", data)
+	sealed, mutations, failure := handler.sealConfigurationSecrets(
+		context.Background(), "not_a_registered_type", map[string]any{})
 	if failure != nil {
-		t.Fatalf("the write was refused: %d %s", failure.status, failure.message)
+		t.Fatalf("an empty object was refused: %d %s", failure.status, failure.message)
 	}
-	if len(mutations) != 0 {
-		t.Fatalf("expected no vault mutation, got %d", len(mutations))
+	if len(sealed) != 0 || len(mutations) != 0 {
+		t.Fatalf("sealed=%v mutations=%d, want empty", sealed, len(mutations))
 	}
-	if sealed["token"] != "plain" {
-		t.Fatalf("the data must not change, got %v", sealed["token"])
+}
+
+// The three types this platform could dispatch to and could not describe.
+// Each one now seals its key and keeps its other fields (#G3).
+func TestSealConfigurationSecretsSealsTheGatewayOnlyCredentialTypes(t *testing.T) {
+	t.Parallel()
+	handler := NewHandler(nil, WithSecretSealer(stubSecretSealer{}))
+
+	for _, configType := range []string{"anthropic", "open_ai_azure", "vllm"} {
+		data := map[string]any{
+			"api_key":  "sk-live-secret-value",
+			"api_base": "https://provider.example.test",
+		}
+		sealed, mutations, failure := handler.sealConfigurationSecrets(
+			context.Background(), configType, data)
+		if failure != nil {
+			t.Fatalf("%s: the write was refused: %d %s", configType, failure.status, failure.message)
+		}
+		reference, _ := sealed["api_key"].(string)
+		if !hiddenSecretReference.MatchString(reference) {
+			t.Fatalf("%s: api_key must become a hidden-secret reference, got %q", configType, reference)
+		}
+		if len(mutations) != 1 || mutations[0].Value != "sk-live-secret-value" {
+			t.Fatalf("%s: the vault must receive the one plaintext, got %d mutations",
+				configType, len(mutations))
+		}
+		if sealed["api_base"] != "https://provider.example.test" {
+			t.Fatalf("%s: api_base must not change, got %v", configType, sealed["api_base"])
+		}
 	}
 }
 

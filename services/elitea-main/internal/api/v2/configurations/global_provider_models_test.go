@@ -189,21 +189,56 @@ func TestAModelListingOfAnUnlistableTypeSaysSo(t *testing.T) {
 
 // TestTheListableTypesAreTheCheckableTypes pins the one set.
 //
-// The gateway serves both surfaces from the same six dialects. A type this
-// side would list but that side cannot answers "unsupported_type", which reads
-// to an operator as a failed credential rather than a missing feature — the
-// same drift check_connection.go's own header demands for its map.
+// The gateway serves both surfaces from the same dialects. A type this side
+// would list but that side cannot answers "unsupported_type", which reads to an
+// operator as a failed credential rather than a missing feature — the same
+// drift check_connection.go's own header demands for its map.
+//
+// `open_ai_azure` and `vllm` joined the set with their gateway probes and
+// listers. `anthropic` did NOT: the gateway carries neither for it.
 func TestTheListableTypesAreTheCheckableTypes(t *testing.T) {
 	for _, configType := range []string{
-		"open_ai", "azure_open_ai", "ai_dial", "ollama", "amazon_bedrock", "vertex_ai",
+		"open_ai", "azure_open_ai", "open_ai_azure", "ai_dial", "ollama", "vllm",
+		"amazon_bedrock", "vertex_ai",
 	} {
 		if _, ok := checkableConnectionTypes[configType]; !ok {
 			t.Fatalf("type %q is listed by the gateway but not admitted here", configType)
 		}
 	}
-	if len(checkableConnectionTypes) != 6 {
-		t.Fatalf("the checkable set has %d types; the gateway's listers cover six. "+
+	if _, ok := checkableConnectionTypes["anthropic"]; ok {
+		t.Fatal("anthropic has no gateway probe or lister; admitting it produces unsupported_type")
+	}
+	if len(checkableConnectionTypes) != 8 {
+		t.Fatalf("the checkable set has %d types; the gateway's listers cover eight. "+
 			"Add the lister on that side before widening this set.", len(checkableConnectionTypes))
+	}
+}
+
+// TestTheCredentialCatalogueAdvertisesOnlyCheckableTests pins the third copy of
+// the same answer: the `has_test_connection` flag the catalogue publishes.
+//
+// The web form draws its Test connection button from that flag alone. A
+// credential type that advertises the button and is not checkable answers
+// "Checking connection is not supported yet", which reads as a broken feature.
+// A checkable type that does not advertise it hides a control that works.
+//
+// The rule is scoped to ai_credentials. A toolkit type advertises the flag for
+// the SDK's own check, which does not use this map.
+func TestTheCredentialCatalogueAdvertisesOnlyCheckableTests(t *testing.T) {
+	handler := providerHandler()
+	entries := handler.catalog.PinnedEntries(GlobalProviderSection)
+	if len(entries) == 0 {
+		t.Fatal("the catalogue describes no credential type; this case measures nothing")
+	}
+	for _, entry := range entries {
+		_, checkable := checkableConnectionTypes[entry.Type]
+		if entry.HasTestConnection != checkable {
+			t.Errorf(
+				"type %q advertises has_test_connection = %v and is checkable = %v; "+
+					"the button and the check must agree",
+				entry.Type, entry.HasTestConnection, checkable,
+			)
+		}
 	}
 }
 
