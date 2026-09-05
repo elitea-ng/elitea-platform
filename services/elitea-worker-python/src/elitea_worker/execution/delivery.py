@@ -291,6 +291,19 @@ class _IndexProgressTransportFailure(RuntimeError):
     """Progress delivery lost its exact durable sequence authority."""
 
 
+class _AgentTerminalFailure(RuntimeError):
+    """The SDK returned a failed turn instead of raising for it.
+
+    The stage name is operator diagnostics for the worker log only. It never
+    crosses the output boundary: the runtime error message is canonicalized by
+    code in `protocol/codec.py`.
+    """
+
+    def __init__(self, stage: str) -> None:
+        super().__init__(stage)
+        self.stage = stage
+
+
 def _emit_index_internal_failure(
     *,
     stage: str,
@@ -2275,6 +2288,17 @@ class AgentExecutionDeliveryProcessor(IndexIngestDeliveryProcessor):
                     sdk_result=paused,
                 )
             callback.raise_if_failed()
+            # A failed graph node does not always raise. The pinned SDK
+            # converts one into message content, and it also returns a
+            # flattened failure envelope. Both arrive here as an ordinary
+            # object, and `AgentExecutionResultV1` has no failed terminal
+            # state: every one of them settles SUCCEEDED. Classify the result
+            # BEFORE any response event is published, so a failed turn leaves
+            # this worker as a RuntimeErrorV1 frame and reaches the
+            # conversation as the same error turn a raised failure produces.
+            failure_stage = callback.terminal_failure_stage(result.sdk_result)
+            if failure_stage is not None:
+                raise _AgentTerminalFailure(failure_stage)
             completed_content = callback.completed_response_content(result.sdk_result)
             if completed_content is not None:
                 callback.emit_completed_response(result.sdk_result)
@@ -2331,6 +2355,17 @@ class AgentExecutionDeliveryProcessor(IndexIngestDeliveryProcessor):
             raise
         except WorkerError:
             raise
+        except _AgentTerminalFailure as error:
+            # The turn ran and reported a failure. It is terminal: a retry
+            # replays the same graph over the same immutable input and fails
+            # the same way. INTERNAL is the non-retryable arm, and it is the
+            # exact outcome a raised node failure already produces.
+            _emit_agent_internal_failure(
+                stage=f"terminal_{error.stage}",
+                execution_id=receipt.identity.execution_id,
+                error=error,
+            )
+            raise InternalFailure() from None
         except Exception as error:
             if isinstance(error, SdkBudgetExceeded):
                 # The same mapping the index path makes, for the same reason.
