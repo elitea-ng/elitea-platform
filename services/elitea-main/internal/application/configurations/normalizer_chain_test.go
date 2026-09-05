@@ -22,8 +22,8 @@ func TestCurrentConfigurationDataNormalizerOwnsEveryPinnedTypeExactlyOnce(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 49 {
-		t.Fatalf("catalog entries = %d, want 49", len(entries))
+	if len(entries) != 52 {
+		t.Fatalf("catalog entries = %d, want 52", len(entries))
 	}
 
 	sdkTypes := 0
@@ -41,6 +41,9 @@ func TestCurrentConfigurationDataNormalizerOwnsEveryPinnedTypeExactlyOnce(t *tes
 			owners++
 		}
 		if currentLiteLLMCredentialType(entry.Type) {
+			owners++
+		}
+		if currentGatewayCredentialType(entry.Type) {
 			owners++
 		}
 		if currentArtifactsConfigurationType(entry.Type) {
@@ -115,8 +118,10 @@ func currentNormalizerChainValidCreateData(typeName string) map[string]any {
 		return map[string]any{"key": "code_assistant", "prompt": "Prompt"}
 	case "environment_settings", "project_context", "project_icon":
 		return map[string]any{}
-	case "open_ai", "azure_open_ai", "ai_dial", "ollama":
+	case "open_ai", "azure_open_ai", "ai_dial", "ollama", "open_ai_azure", "vllm":
 		return map[string]any{"api_base": "https://example.test"}
+	case "anthropic":
+		return map[string]any{"api_key": "key"}
 	case "amazon_bedrock":
 		return map[string]any{}
 	case "vertex_ai":

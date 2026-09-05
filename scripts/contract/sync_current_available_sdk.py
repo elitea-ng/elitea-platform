@@ -31,7 +31,11 @@ EXPECTED_SDK_REVISION = "b5113a129329b85d23c2d5c2bf55f18e307414ec"
 # its independently versioned source identity remains at the producing commit.
 SDK_CONFIGURATION_CATALOG_REVISION = "a78d3654f99d8ff89ca7233f20a66d676e564f79"
 EXPECTED_SDK_ENTRY_COUNT = 32
-EXPECTED_NON_SDK_ENTRY_COUNT = 17
+# 17 platform-owned entries plus the three gateway-dispatchable credential
+# types (anthropic, open_ai_azure, vllm). Those three carry no SDK model and
+# no LiteLLM registration: the LLM data plane is the Bifrost gateway, and
+# providerConfigTypes in its account package is the source of their shape.
+EXPECTED_NON_SDK_ENTRY_COUNT = 20
 SNAPSHOT_SCHEMA_VERSION = "elitea.current-configuration-available-snapshot.v1"
 SDK_ENTRY_ANCHOR = "github"
 NEW_SDK_ENTRY = "aha"
@@ -316,17 +320,17 @@ def main() -> int:
             SDK_CONFIGURATION_CATALOG_REVISION,
         )
         if len(synchronized["entries"]) != EXPECTED_NON_SDK_ENTRY_COUNT + EXPECTED_SDK_ENTRY_COUNT:
-            raise ContractSyncError("aggregate snapshot does not contain the expected 49 entries")
+            raise ContractSyncError("aggregate snapshot does not contain the expected 52 entries")
         rendered = canonical_json(synchronized)
         if args.check:
             if raw != rendered:
                 raise ContractSyncError(
                     "snapshot is stale; run sync_current_available_sdk.py without --check"
                 )
-            print(f"configuration catalog is current ({len(registry)} SDK, 49 total)")
+            print(f"configuration catalog is current ({len(registry)} SDK, 52 total)")
             return 0
         args.snapshot.write_bytes(rendered)
-        print(f"updated {args.snapshot} ({len(registry)} SDK, 49 total)")
+        print(f"updated {args.snapshot} ({len(registry)} SDK, 52 total)")
         return 0
     except (ContractSyncError, OSError, ValueError, TypeError) as exc:
         print(f"configuration catalog sync failed: {exc}", file=sys.stderr)

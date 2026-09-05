@@ -684,21 +684,26 @@ func encodeGlobalBody(
 //     credential read is `WHERE section = 'ai_credentials'`. The credential is
 //     stored, listed, admitted by provider admission, and invisible.
 //   - `sealConfigurationSecrets` reads the entry's data schema to find the
-//     password fields. No entry means "keep the data verbatim" — so the api_key
-//     is written into the row IN PLAINTEXT, in the public project's schema,
-//     which is the one schema every tenant on the platform can read.
+//     password fields. No entry used to mean "keep the data verbatim" — so the
+//     api_key was written into the row IN PLAINTEXT, in the public project's
+//     schema, which is the one schema every tenant on the platform can read.
+//     That write is refused now, but the refusal is a 400 an operator meets
+//     late; this list keeps such a type off the screen in the first place.
 //
-// `CurrentProviderCredentialType` alone admits nine types; the catalogue
-// describes six. The three it does not — `open_ai_azure`, `anthropic` and
-// `vllm` — are exactly the three the gateway added on its own
-// (lifecycle_reconciler.go says so). Publishing one of those from here would
-// produce an inert row with a plaintext key in it, and every signal on the
-// admin screen would still read healthy.
+// The catalogue now describes all nine types `CurrentProviderCredentialType`
+// admits. `open_ai_azure`, `anthropic` and `vllm` — the three the gateway added
+// on its own (lifecycle_reconciler.go says so) — were refused here while the
+// catalogue held only six, because publishing one produced an inert row with a
+// plaintext key in it and every signal on the admin screen still read healthy.
 //
-// They are REFUSED rather than special-cased. Making them work means adding
-// them to the pinned catalogue with their data schemas, which is a change to
-// the registry snapshot and belongs there — not a bypass here that reproduces
-// the sealing gap under a different name.
+// The refusal was never a statement about those providers. It was the
+// intersection doing its job. They were fixed the documented way: their data
+// schemas were added to the pinned registry snapshot, so `sectionFor` places
+// them and `sealConfigurationSecrets` vaults their key. This function is
+// unchanged, and it admits them now because the catalogue does.
+//
+// KEEP IT AN INTERSECTION. A hard-coded list here would publish a type the
+// next catalogue change removes, and that is the same defect in reverse.
 func (h *Handler) admittedGlobalProviderTypes() []string {
 	if h.catalog == nil {
 		return nil

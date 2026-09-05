@@ -33,15 +33,21 @@ import { server } from '@/test/setup';
 import { LlmProxyProvidersPanel } from './LlmProxyProvidersPanel';
 import { renderAdminRoute } from './__tests__/testRouter';
 
-/** What the server's catalogue admits — six types, not the gateway's nine. */
+/** What the shipped catalogue admits — all nine the gateway dispatches to. */
 const PROVIDER_TYPES = [
   'open_ai',
   'azure_open_ai',
+  'open_ai_azure',
   'ai_dial',
+  'anthropic',
+  'ollama',
   'amazon_bedrock',
   'vertex_ai',
-  'ollama',
+  'vllm',
 ];
+
+/** A deployment whose catalogue is narrower than this build's form model. */
+const NARROWED_PROVIDER_TYPES = ['open_ai', 'azure_open_ai', 'ai_dial', 'amazon_bedrock', 'vertex_ai', 'ollama'];
 
 const SEALED_OPENAI = {
   id: 4,
@@ -58,14 +64,14 @@ const SEALED_OPENAI = {
   updated_at: '2026-08-01T00:00:00Z',
 };
 
-function useProviders(items: unknown[], publicProjectID = 1): void {
+function useProviders(items: unknown[], publicProjectID = 1, providerTypes: readonly string[] = PROVIDER_TYPES): void {
   server.use(
     http.get('*/admin/gateway/providers', () =>
       HttpResponse.json({
         items,
         total: items.length,
         public_project_id: publicProjectID,
-        provider_types: PROVIDER_TYPES,
+        provider_types: providerTypes,
       }),
     ),
   );
@@ -460,21 +466,38 @@ describe('LlmProxyProvidersPanel — the gateway shared scope', () => {
 
 describe('LlmProxyProvidersPanel — the offered provider types', () => {
   // The select must show what the SERVER admits, not what this app can draw.
-  // The gateway dispatches to nine types; a deployment's catalogue describes
-  // six, and a type outside it cannot be given a `section` or have its key
-  // sealed. Offering one would produce a save the server refuses — or worse, on
-  // a build whose check drifted, an inert row with a plaintext key.
+  // A type outside the server's catalogue cannot be given a `section` or have
+  // its key sealed. Offering one would produce a save the server refuses — or
+  // worse, on a build whose check drifted, an inert row with a plaintext key.
+  // A NARROWED server list is used, because the shipped catalogue describes all
+  // nine: with the full list this case could not tell "follows the server" from
+  // "draws everything it knows".
   it('offers only the types the server admits', async () => {
-    useProviders([]);
+    useProviders([], 1, NARROWED_PROVIDER_TYPES);
     renderAdminRoute(<LlmProxyProvidersPanel />);
 
     await userEvent.click(await screen.findByTestId('llm-providers-add'));
     await userEvent.click(await screen.findByRole('combobox'));
 
     expect(await screen.findByRole('option', { name: 'OpenAI' })).toBeVisible();
-    // The three the gateway supports and the catalogue does not describe.
+    // The three this server's catalogue does not describe.
     for (const absent of ['Anthropic', 'vLLM', 'Azure OpenAI (legacy naming)']) {
       expect(screen.queryByRole('option', { name: absent })).toBeNull();
+    }
+  });
+
+  // The other direction: a server that DOES describe them offers all nine. The
+  // shipped catalogue is that server, so an operator can publish a platform
+  // credential for every provider the gateway dispatches to.
+  it('offers every type a full catalogue admits', async () => {
+    useProviders([]);
+    renderAdminRoute(<LlmProxyProvidersPanel />);
+
+    await userEvent.click(await screen.findByTestId('llm-providers-add'));
+    await userEvent.click(await screen.findByRole('combobox'));
+
+    for (const present of ['OpenAI', 'Anthropic', 'vLLM', 'Azure OpenAI (legacy naming)']) {
+      expect(await screen.findByRole('option', { name: present })).toBeVisible();
     }
   });
 

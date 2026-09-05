@@ -121,27 +121,72 @@ func TestListOpenAICompatibleModels_ReadsTheListing(t *testing.T) {
 }
 
 // TestListProviderModels_NeverReachesAPrivateAddress proves this route
-// inherits the checkers' address-level SSRF guard: a cloud-class credential
-// pointed at a loopback address is refused even when the operator's allowlist
-// names that host, because the guard is about the resolved ADDRESS.
+// inherits the checkers' address-level SSRF guard: a CLOUD credential pointed
+// at a loopback address is refused even when the operator's allowlist names
+// that host, because the guard is about the resolved ADDRESS.
+//
+// The type is azure_open_ai rather than open_ai. An open_ai credential with a
+// non-OpenAI api_base resolves to the vLLM provider on the request path, so it
+// is a self-hosted credential, and this case would then measure the opposite
+// rule — see TestListProviderModels_OpenAIWithAPrivateBaseListsLikeTheRequestPath.
 func TestListProviderModels_NeverReachesAPrivateAddress(t *testing.T) {
 	fp := newFakeListProvider(http.StatusOK, `{"data":[{"id":"gpt-4o"}]}`)
 	defer fp.Close()
 
-	// Allowlist says yes; open_ai is not self-hosted, so private is still out.
+	// Allowlist says yes; Azure is a cloud class, so private is still out.
 	h := newCheckConnectionHandler(fakeEgressPolicy{allow: true, configured: true})
 	resp := doListProviderModels(t, h, checkConnectionRequest{
-		Type: "open_ai", APIBase: fp.URL, APIKey: "sk-test",
+		Type: "azure_open_ai", APIBase: fp.URL, APIKey: "sk-test",
 	})
 
 	if resp.Success {
-		t.Fatal("open_ai must never list models from a private address")
+		t.Fatal("azure_open_ai must never list models from a private address")
 	}
 	if resp.Reason != checkConnectionReasonUnreachable {
 		t.Fatalf("reason = %q, want %q", resp.Reason, checkConnectionReasonUnreachable)
 	}
 	if fp.Hits() != 0 {
 		t.Fatalf("a private address was reached %d times", fp.Hits())
+	}
+}
+
+// TestListProviderModels_OpenAIWithAPrivateBaseListsLikeTheRequestPath is the
+// listing half of the defect the probe carried: the admin model picker could
+// not read the models of a self-hosted OpenAI-compatible endpoint that serves
+// completions perfectly well.
+func TestListProviderModels_OpenAIWithAPrivateBaseListsLikeTheRequestPath(t *testing.T) {
+	fp := newFakeListProvider(http.StatusOK, `{"data":[{"id":"qwen3-0.6b"}]}`)
+	defer fp.Close()
+
+	h := newCheckConnectionHandler(fakeEgressPolicy{allow: true, configured: true})
+	resp := doListProviderModels(t, h, checkConnectionRequest{
+		Type: "open_ai", APIBase: fp.URL + "/v1", APIKey: "sk-test",
+	})
+
+	if !resp.Success {
+		t.Fatalf("resp = %+v, want the listing of a self-hosted OpenAI-compatible host", resp)
+	}
+	if len(resp.Models) != 1 || resp.Models[0] != "qwen3-0.6b" {
+		t.Fatalf("models = %v, want [qwen3-0.6b]", resp.Models)
+	}
+}
+
+// TestListProviderModels_VLLMListsFromTheOpenAISurface pins the vLLM listing
+// path. vLLM serves /v1/models, never Ollama's /api/tags.
+func TestListProviderModels_VLLMListsFromTheOpenAISurface(t *testing.T) {
+	fp := newFakeListProvider(http.StatusOK, `{"data":[{"id":"qwen3-0.6b"}]}`)
+	defer fp.Close()
+
+	h := newCheckConnectionHandler(fakeEgressPolicy{allow: true, configured: true})
+	resp := doListProviderModels(t, h, checkConnectionRequest{
+		Type: "vllm", APIBase: fp.URL + "/v1",
+	})
+
+	if !resp.Success {
+		t.Fatalf("resp = %+v, want a successful vLLM listing", resp)
+	}
+	if !strings.HasPrefix(fp.lastPath, "/v1/models") {
+		t.Fatalf("path = %q, want /v1/models", fp.lastPath)
 	}
 }
 
@@ -221,7 +266,9 @@ func TestListProviderModels_UnsupportedTypeNeverDials(t *testing.T) {
 	defer fp.Close()
 
 	h := newCheckConnectionHandler(fakeEgressPolicy{allow: true, configured: true})
-	for _, providerType := range []string{"", "anthropic", "github", "vllm"} {
+	// vllm is listable now, so it is no longer one of these. anthropic still
+	// is: providerConfigTypes can build a key for it, and no lister exists.
+	for _, providerType := range []string{"", "anthropic", "github", "pgvector"} {
 		resp := doListProviderModels(t, h, checkConnectionRequest{Type: providerType, APIBase: fp.URL})
 		if resp.Success || resp.Reason != checkConnectionReasonUnsupported {
 			t.Fatalf("type %q: resp = %+v, want unsupported_type", providerType, resp)

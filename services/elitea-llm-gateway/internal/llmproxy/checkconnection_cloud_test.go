@@ -739,12 +739,21 @@ func TestCheckConnection_CloudMissingFieldsNeverDials(t *testing.T) {
 }
 
 // TestCheckConnection_CloudNeverDialsPrivateAddress is the address-level half
-// of the SSRF policy for the two new types. Neither is self-hosted, so even
-// with the allowlist armed the probe client must refuse a private destination.
+// of the SSRF policy for the two cloud types. Neither resolves to a
+// self-hosted provider class, so even with the allowlist armed the probe
+// client must refuse a private destination.
+//
+// The decision is read through checkConnectionAllowsPrivateNetwork, which is
+// the predicate the handler itself uses. A private api_base is supplied as
+// well, to prove the answer does not become true when the endpoint looks
+// self-hosted.
 func TestCheckConnection_CloudNeverDialsPrivateAddress(t *testing.T) {
 	for _, configType := range []string{"amazon_bedrock", "vertex_ai"} {
-		if checkConnectionProviders[configType].selfHosted {
-			t.Errorf("%s must not be marked selfHosted: it must never reach a private address", configType)
+		for _, apiBase := range []string{"", "http://10.0.0.5:8000/v1"} {
+			req := checkConnectionRequest{Type: configType, APIBase: apiBase}
+			if checkConnectionAllowsPrivateNetwork(req) {
+				t.Errorf("%s (api_base %q) may not reach a private address", configType, apiBase)
+			}
 		}
 	}
 }

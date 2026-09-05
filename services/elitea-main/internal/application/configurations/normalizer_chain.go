@@ -32,6 +32,9 @@ func NewCurrentConfigurationDataNormalizer(
 		if currentLiteLLMCredentialType(entry.Type) {
 			owners++
 		}
+		if currentGatewayCredentialType(entry.Type) {
+			owners++
+		}
 		if currentArtifactsConfigurationType(entry.Type) {
 			owners++
 		}
@@ -43,6 +46,7 @@ func NewCurrentConfigurationDataNormalizer(
 	var fallback CurrentConfigurationDataNormalizer = CurrentPoVDataNormalizer{}
 	fallback = NewCurrentLocalDataNormalizer(fallback)
 	fallback = NewCurrentLiteLLMDataNormalizer(fallback)
+	fallback = NewCurrentGatewayCredentialDataNormalizer(fallback)
 	fallback = NewCurrentArtifactsDataNormalizer(fallback)
 	return NewCurrentSDKDataNormalizer(catalog, expander, validator, fallback)
 }
