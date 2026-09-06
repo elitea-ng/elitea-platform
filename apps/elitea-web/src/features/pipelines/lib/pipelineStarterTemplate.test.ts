@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { YamlPipelineDocument } from './flow-editor/helpers/pipelineFlow.types';
 import { collectGraphAdmissionIssues } from './graphAdmission.helpers';
-import { PIPELINE_STARTER_ENTRY_NODE_ID, PIPELINE_STARTER_TEMPLATE } from './pipelineStarterTemplate';
+import { PIPELINE_STARTER_ENTRY_NODE_ID, PIPELINE_STARTER_TEMPLATE } from '@/shared/lib/pipelineStarterTemplate';
 
 function starterDocument(): YamlPipelineDocument {
   return load(PIPELINE_STARTER_TEMPLATE) as YamlPipelineDocument;

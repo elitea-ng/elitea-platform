@@ -208,8 +208,15 @@ export default memo(
     const statusText = useMemo(() => getConfigurationStatus(health?.statusOk ?? true, isShared), [health?.statusOk, isShared]);
 
     const handleCardClick = useCallback(() => {
-      if (!disabled) {
-        onClick?.(configuration.id as string);
+      // `configuration.id` is a NUMBER on this wire (`ConfigurationItem.id`),
+      // and the `as string` cast that used to sit here handed that number to
+      // a `(configurationId: string)` callback — a declaration the value never
+      // satisfied. `toConfigurationId` is the same narrowing the health dot
+      // beside this title already uses. A row with no usable id opens nothing,
+      // rather than routing to an edit URL with `undefined` in it.
+      const configurationId = toConfigurationId(configuration.id);
+      if (!disabled && configurationId !== '') {
+        onClick?.(configurationId);
       }
     }, [disabled, onClick, configuration.id]);
 

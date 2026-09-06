@@ -48,6 +48,40 @@ export function EmailSourceTag({ source, field }: { readonly source: AdminEmailS
   );
 }
 
+/**
+ * The layer that decided the PASSWORD, which is not a member of the settings
+ * document and so is not described by `sources`.
+ *
+ * DEFECT this repairs. The tag read `sources.password`, and the server's
+ * `sources` map covers the settings document alone — host, port, tls, username,
+ * from, reply_to, public_base_url. The password is sealed in the vault and
+ * reported on its own two fields, so that key is simply absent. After an
+ * operator saved a password the tag therefore still read "Not set", beside a
+ * control whose placeholder said one was stored and a "Remove the stored
+ * password" button that only appears when one is: three controls on one row,
+ * contradicting each other.
+ *
+ * `password_source` is the read's own answer and wins whenever it names a
+ * layer, so a password the deployment supplies through SMTP_PASSWORD stays
+ * tagged "From the environment" instead of being claimed as this page's.
+ * `password_set` is the fallback for a server that reports the fact and not the
+ * layer: a password IS in force, and the only layer this page can account for
+ * is its own.
+ *
+ * A module-level function, not an expression in the component body: the branch
+ * count belongs to this name rather than to `AdminEmailFields`, which is at its
+ * §3.5 complexity budget.
+ */
+function passwordSourceOf(
+  sources: Readonly<Record<string, AdminEmailSource>>,
+  passwordSet: boolean,
+  passwordSource: AdminEmailSource | undefined,
+): AdminEmailSource {
+  const declared = sources['password'] ?? passwordSource;
+  if (declared !== undefined && declared !== 'unset') return declared;
+  return passwordSet ? 'database' : 'unset';
+}
+
 /** One labelled row: the control, then its tag. */
 export function EmailField({
   field,
@@ -84,6 +118,7 @@ export function AdminEmailFields({
   effective,
   sources,
   passwordSet,
+  passwordSource,
   password,
   onChange,
   onPasswordChange,
@@ -94,6 +129,8 @@ export function AdminEmailFields({
   readonly effective: Record<string, string>;
   readonly sources: Readonly<Record<string, AdminEmailSource>>;
   readonly passwordSet: boolean;
+  /** The layer the stored password came from, when the read names one. */
+  readonly passwordSource?: AdminEmailSource | undefined;
   /** `undefined` while the operator has not touched the password. */
   readonly password: string | undefined;
   readonly onChange: (field: keyof EmailFormValues, value: string) => void;
@@ -101,6 +138,7 @@ export function AdminEmailFields({
   readonly onClearPassword: () => void;
 }) {
   const sourceOf = (field: string): AdminEmailSource => sources[field] ?? 'unset';
+  const passwordTagSource = passwordSourceOf(sources, passwordSet, passwordSource);
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: '1rem', maxWidth: '44rem' }}>
@@ -168,7 +206,7 @@ export function AdminEmailFields({
       {/* The password is WRITE-ONLY. No endpoint returns it, so there is
           nothing to echo and a "reveal" control would be a lie. What the
           operator gets instead is whether one is set, and a way to clear it. */}
-      <EmailField field="password" source={sourceOf('password')}>
+      <EmailField field="password" source={passwordTagSource}>
         <TextField
           fullWidth
           size="small"

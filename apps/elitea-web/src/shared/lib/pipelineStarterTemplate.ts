@@ -7,13 +7,26 @@
  * (`compiler.rs:459`, mirrored by the `document.node-count` admission rule),
  * and the user's only signal was a failed turn in another process.
  *
+ * ## Why it lives in `shared/lib`
+ *
+ * A pipeline is created from TWO places, and they sit in different layers: the
+ * chat surface's `features/pipelines/lib/usePipelineEditorCreate.ts`, and
+ * `pages/pipelines/CreatePipeline.tsx` — the `/pipelines/create` route, which
+ * is the flow a person takes and the one that kept storing an empty document.
+ * `no-deep-slice-import` forbids the page from reaching into the feature's
+ * `lib/`, and the feature's curated barrel is at its §3.5 budget of 20 exports.
+ * The constant depends on nothing in either slice, so it belongs below both.
+ *
  * ## Why these exact keys
  *
  * The template is the smallest document BOTH runtimes accept and run.
  *
- * * The native runtime admits it whole. `pipelineStarterTemplate.test.ts`
- *   runs it through `collectGraphAdmissionIssues`, the mirror of
+ * * The native runtime admits it whole.
+ *   `features/pipelines/lib/pipelineStarterTemplate.test.ts` runs it through
+ *   `collectGraphAdmissionIssues`, the mirror of
  *   `services/elitea-worker-rust/src/agents/graph/`, and requires zero issues.
+ *   That test stays in the pipelines slice because the admission helper it
+ *   checks against does.
  * * The Python worker's SDK needs `system` AND `task` in `input_mapping`.
  *   `LLMNode._invoke_llm_internal` selects its pipeline flow on
  *   `'system' in func_args` (`elitea_sdk/runtime/tools/llm.py:1138`) and

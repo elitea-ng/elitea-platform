@@ -186,6 +186,7 @@ export function AdminEmailEditor() {
         effective={toPlaceholders(state.data.effective)}
         sources={state.data.sources}
         passwordSet={state.data.password_set}
+        passwordSource={state.data.password_source}
         password={password}
         onChange={change}
         onPasswordChange={setPassword}
