@@ -34,6 +34,10 @@ func TestPinnedCurrentAvailableCatalogMatchesCurrentFixedRegistry(t *testing.T) 
 		"llm_model", "embedding_model", "image_generation_model", "asr_model", "tts_model",
 		"service_prompt", "environment_settings", "project_context", "project_icon",
 		"open_ai", "azure_open_ai", "ai_dial", "amazon_bedrock", "vertex_ai", "ollama",
+		// The three the gateway dispatches to and no legacy plugin registers.
+		// They are catalogued so their rows get a section and their keys get
+		// sealed — see provider_admission_test.go (#G3).
+		"anthropic", "open_ai_azure", "vllm",
 		"s3", "s3_api_credentials", "github", "pgvector", "ado", "gitlab", "qtest",
 		"bitbucket", "confluence", "jira", "postman", "service_now", "testrail", "slack",
 		"azure_search", "delta_lake", "bigquery", "xray", "zephyr", "zephyr_enterprise",
@@ -129,8 +133,8 @@ func TestCurrentAvailableCatalogFiltersSectionsLikeCurrentEndpoint(t *testing.T)
 	if err != nil {
 		t.Fatalf("CompleteEntries(ai_credentials) error = %v", err)
 	}
-	if len(aiCredentials) != 6 {
-		t.Fatalf("ai_credentials count = %d, want 6", len(aiCredentials))
+	if len(aiCredentials) != 9 {
+		t.Fatalf("ai_credentials count = %d, want 9", len(aiCredentials))
 	}
 	for _, entry := range aiCredentials {
 		if entry.Section != "ai_credentials" {

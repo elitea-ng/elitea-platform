@@ -160,11 +160,20 @@ type Ensurer struct {
 	logger      *slog.Logger
 	timeout     time.Duration
 
-	// inFlight holds the user ids being provisioned by THIS process. The SPA
-	// polls `/social/author` every five seconds while it waits, and every one
-	// of those polls resolves an empty personal project id and asks again —
+	// inFlight maps each user id being provisioned by THIS process to the
+	// channel that attempt closes when it ends. The SPA polls
+	// `/social/author` every five seconds while it waits, and every one of
+	// those polls resolves an empty personal project id and asks again —
 	// without this, each poll would start another provisioning attempt, and
 	// they would queue up on the advisory lock behind the first.
+	//
+	// IT HOLDS THE CHANNEL, NOT A MARKER, so a second caller for the same user
+	// can JOIN the attempt instead of only learning that it exists. Every
+	// value stored here is a `chan struct{}` that some code path closes: the
+	// attempt's goroutine when it ends, or EnsureStarted itself when a full
+	// slot budget drops the attempt before any goroutine exists. A value that
+	// nothing closes would park every later caller for this user until their
+	// own deadline expired.
 	inFlight sync.Map
 
 	// slots is the concurrency budget maxConcurrentProvisions describes.
@@ -174,6 +183,17 @@ type Ensurer struct {
 	// outside this package, and a send on its nil channel would block forever —
 	// leaking a goroutine and leaving that user marked in-flight for good.
 	slots chan struct{}
+
+	// attempt runs ONE provisioning attempt for one user. It is Ensure for
+	// every ensurer NewEnsurer builds.
+	//
+	// IT IS THE ONE SEAM A TEST REPLACES. What EnsureStarted has to get right
+	// is pure concurrency — who starts the attempt, who joins it, who is
+	// dropped — and none of that is about PostgreSQL. Driving it through the
+	// real Ensure would need a tenant migration corpus and would turn a
+	// deterministic test into a timing race against it. The postgres suite
+	// beside this file covers Ensure itself.
+	attempt func(ctx context.Context, userID int64) (int64, error)
 }
 
 // Option configures an Ensurer at construction time.
@@ -213,6 +233,7 @@ func NewEnsurer(pool *pgxpool.Pool, provisioner Provisioner, options ...Option) 
 		timeout:     defaultProvisionTimeout,
 		slots:       make(chan struct{}, maxConcurrentProvisions),
 	}
+	ensurer.attempt = ensurer.Ensure
 	for _, option := range options {
 		option(ensurer)
 	}
@@ -240,22 +261,79 @@ func NewEnsurer(pool *pgxpool.Pool, provisioner Provisioner, options ...Option) 
 // A nil receiver, and an Ensurer built without NewEnsurer, are both no-ops, so
 // a composition that could not build one needs no branch at the call site.
 func (e *Ensurer) EnsureAsync(userID int64) {
-	if e == nil || e.slots == nil {
-		return
+	_ = e.EnsureStarted(userID)
+}
+
+// EnsureStarted is EnsureAsync with a completion signal.
+//
+// It returns a channel that is CLOSED when the attempt for this user has
+// finished — the one this call started, OR the one that was already running
+// when this call arrived. It returns nil only when there is NO attempt to wait
+// for: a nil or unconfigured ensurer, or a full slot budget.
+//
+// A CONCURRENT CALLER JOINS RATHER THAN GETTING NOTHING. The SPA sends two
+// `GET /social/author` requests at boot, inside the same second. The first
+// starts the provisioning and waits for it; the second used to find the
+// in-flight marker, receive nil, and answer `personal_project_id: ""` while
+// the first answered the real id. One boot, two contradictory answers, and the
+// SPA routes on that field — so which of the two won decided whether a
+// first-time user landed on the product or on `/onboarding`. The two callers
+// now wait on the SAME channel and read the same world after it closes.
+//
+// THE CHANNEL BOUNDS THE WAIT, NEVER THE WORK. The goroutine keeps the
+// detached `context.Background()` deadline EnsureAsync always gave it, so a
+// caller that stops waiting does not cancel the provisioning. Cancelling it
+// would leave a `create_success = false` row for the next attempt's repair
+// branch to clean up, on every first login, which is worse than the wait it
+// saves. A joiner cannot cancel it either: it holds the receive end only.
+//
+// The close is the LAST deferred action, after the in-flight entry is
+// released and the slot is returned. A caller woken by this channel therefore
+// re-reads a world where nothing about this user is still pending.
+//
+// A DROPPED ATTEMPT IS STILL NOT JOINABLE FOREVER. The slot is taken before
+// any goroutine exists, so a full budget abandons the attempt — and it closes
+// the channel it just published on the way out. A caller that joined in that
+// window is released immediately and falls back to the poll, instead of
+// waiting for a goroutine that was never started.
+//
+// It exists for `GET /social/author`, which is both the endpoint that observes
+// a missing personal project and the answer the SPA routes on: answering ""
+// on the very request that provisions the project sends a first-time user to
+// the onboarding screen for a project that already exists.
+func (e *Ensurer) EnsureStarted(userID int64) <-chan struct{} {
+	if e == nil || e.slots == nil || e.attempt == nil {
+		return nil
 	}
-	if _, running := e.inFlight.LoadOrStore(userID, struct{}{}); running {
-		return
+	// The channel is made BEFORE the store, because the store publishes it:
+	// LoadOrStore is the single point at which this call learns whether it owns
+	// the attempt for this user or joins one.
+	done := make(chan struct{})
+	if running, joined := e.inFlight.LoadOrStore(userID, done); joined {
+		// Somebody else owns the attempt. Wait on THEIR channel, which their
+		// goroutine closes — or which their drop path already closed.
+		existing, ok := running.(chan struct{})
+		if !ok {
+			// Unreachable: this method is the only writer, and it stores
+			// nothing else. Answering nil keeps a corrupted map from parking a
+			// request handler for its whole wait.
+			return nil
+		}
+		return existing
 	}
 	select {
 	case e.slots <- struct{}{}:
 	default:
-		// The budget is full. Release the in-flight marker so the caller's next
+		// The budget is full. Release the in-flight entry so the caller's next
 		// poll is a fresh attempt rather than a no-op against a user nobody is
-		// provisioning.
+		// provisioning — and THEN close, in that order, so a joiner woken by
+		// the close cannot find the entry of an attempt that no longer exists.
 		e.inFlight.Delete(userID)
-		return
+		close(done)
+		return nil
 	}
 	go func() {
+		defer close(done)
 		defer e.inFlight.Delete(userID)
 		defer func() { <-e.slots }()
 		// context.Background(), not the request's: the request that triggered
@@ -264,11 +342,12 @@ func (e *Ensurer) EnsureAsync(userID int64) {
 		// repair.
 		ctx, cancel := context.WithTimeout(context.Background(), e.timeout)
 		defer cancel()
-		if _, err := e.Ensure(ctx, userID); err != nil {
+		if _, err := e.attempt(ctx, userID); err != nil {
 			e.logger.ErrorContext(ctx, "personal project provisioning failed",
 				"user_id", userID, "err", err)
 		}
 	}()
+	return done
 }
 
 // Ensure returns the id of the user's personal project, creating it if there is

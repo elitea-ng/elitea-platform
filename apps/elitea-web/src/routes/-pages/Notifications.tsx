@@ -253,7 +253,10 @@ export function NotificationsPage() {
   return (
     <Paper elevation={0} sx={styles.root}>
       <DrawerPageHeader
-        title={t('routes.settings.notifications.title', 'Notifications')}
+        /* "Notifications Center", not "Notifications" — the drawer item is
+           already called Notifications, and the page's own title in
+           production names the screen. */
+        title={t('routes.settings.notifications.title', 'Notifications Center')}
         showSearchInput
         showAddButton
         showBorder

@@ -21,8 +21,11 @@ type Handler struct {
 }
 
 // DecisionMailer is the seam to internal/application/mailer.
+//
+// Configured takes a context for the reason `eliteacore.InviteMailer` states:
+// the mail configuration is a database read, not a boot-time fact (gap G7).
 type DecisionMailer interface {
-	Configured() bool
+	Configured(ctx context.Context) bool
 	SendModerationDecision(ctx context.Context, decision appmailer.ModerationDecision) error
 }
 

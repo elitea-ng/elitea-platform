@@ -7,6 +7,26 @@
 */ -}}
 {{- $env := .Values.main.env | default dict }}
 {{- if not (get $env "REDIS_URL") }}{{- $env = merge (deepCopy $env) (dict "REDIS_URL" (include "elitea.serviceAddr" (dict "svc" $.Values.redis "ctx" $))) }}{{- end }}
+{{- /*
+  The public project, from the ONE place an operator sets it. Filled only when
+  something names a project: with the Configurations plane off, elitea-main
+  refuses to start when this variable is PRESENT at all, so a chart that always
+  wrote a value here would stop a default install. See elitea.aiProjectId.
+*/ -}}
+{{- $aiProjectId := include "elitea.aiProjectId" . }}
+{{- if and $aiProjectId (not (get $env "ELITEA_AI_PROJECT_ID")) }}{{- $env = merge (deepCopy $env) (dict "ELITEA_AI_PROJECT_ID" $aiProjectId) }}{{- end }}
+{{- /*
+  ELITEA_CONFIGURATIONS_ENABLED is DERIVED when the operator states nothing.
+  values.yaml ships it empty, which means "follow this deployment": the plane
+  comes on for an install that has authentication and a public project id, and
+  stays off otherwise. A stated "true" or "false" always wins.
+
+  The whole map is rendered verbatim below, so the derived value is merged in
+  HERE rather than computed at the point of use. Every capability guard in
+  _helpers.tpl reads the same helper, so the manifest and the guards cannot
+  disagree about whether the plane is on.
+*/ -}}
+{{- $env = set (deepCopy $env) "ELITEA_CONFIGURATIONS_ENABLED" (include "elitea-main.configurationsEnabled" $) }}
 apiVersion: v1
 kind: ConfigMap
 metadata:

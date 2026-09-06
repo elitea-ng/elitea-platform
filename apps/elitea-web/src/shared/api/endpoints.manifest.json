@@ -2192,6 +2192,110 @@
             "usedBy": [
                 "features/chat-messages"
             ]
+        },
+        {
+            "$comment": "Admin > Budgets and Settings > Usage (gap G4/G13). HANDWRITTEN, YET NAMING AN operationId, the shape credentials.checkStoredConfigurationConnection documents: `source` says how the APP calls the route, `operationId` says which api/openapi/v2.yaml operation describes it. v2.yaml describes all eight and orval generates a hook for each, but the app calls them through src/pages/admin/api/adminBudgetsApi.ts and src/pages/settings/api/projectUsageApi.ts, which shape the listing's `counts` map and keep the three-state nats_fail_mode a generated signature cannot express. Keep the id: elitea-main's TestSpecRouterConformance/manifest_reverse_check matches a manifest entry to the spec BY operationId, so a null id there reads as 'the spec does not describe this'.",
+            "id": "budgets.listProjectBudgets",
+            "method": "GET",
+            "path": "/elitea_core/project_budgets/administration",
+            "operationId": "listProjectBudgets",
+            "source": "handwritten",
+            "responseSchema": "ProjectBudgetListing",
+            "fixture": null,
+            "usedBy": [
+                "pages/admin"
+            ]
+        },
+        {
+            "$comment": "Budgets family - see budgets.listProjectBudgets's $comment above.",
+            "id": "budgets.getProjectBudgetAdmin",
+            "method": "GET",
+            "path": "/elitea_core/project_budget/administration/{project_id}/budget",
+            "operationId": "getProjectBudgetAdmin",
+            "source": "handwritten",
+            "responseSchema": "ProjectBudget",
+            "fixture": null,
+            "usedBy": [
+                "pages/admin"
+            ]
+        },
+        {
+            "$comment": "Budgets family - see budgets.listProjectBudgets's $comment above.",
+            "id": "budgets.setProjectBudget",
+            "method": "PUT",
+            "path": "/elitea_core/project_budget/administration/{project_id}/budget",
+            "operationId": "setProjectBudget",
+            "source": "handwritten",
+            "responseSchema": "ProjectBudget",
+            "fixture": null,
+            "usedBy": [
+                "pages/admin"
+            ]
+        },
+        {
+            "$comment": "Budgets family - see budgets.listProjectBudgets's $comment above.",
+            "id": "budgets.clearProjectBudget",
+            "method": "DELETE",
+            "path": "/elitea_core/project_budget/administration/{project_id}/budget",
+            "operationId": "clearProjectBudget",
+            "source": "handwritten",
+            "responseSchema": "ProjectBudget",
+            "fixture": null,
+            "usedBy": [
+                "pages/admin"
+            ]
+        },
+        {
+            "$comment": "Budgets family - see budgets.listProjectBudgets's $comment above.",
+            "id": "budgets.listMemberBudgetsAdmin",
+            "method": "GET",
+            "path": "/elitea_core/user_budgets/administration/{project_id}",
+            "operationId": "listMemberBudgetsAdmin",
+            "source": "handwritten",
+            "responseSchema": "MemberBudgetListing",
+            "fixture": null,
+            "usedBy": [
+                "pages/admin"
+            ]
+        },
+        {
+            "$comment": "Budgets family - see budgets.listProjectBudgets's $comment above.",
+            "id": "budgets.setMemberBudget",
+            "method": "PUT",
+            "path": "/elitea_core/user_budget/administration/{project_id}/user_budget/{user_id}",
+            "operationId": "setMemberBudget",
+            "source": "handwritten",
+            "responseSchema": "MemberBudget",
+            "fixture": null,
+            "usedBy": [
+                "pages/admin"
+            ]
+        },
+        {
+            "$comment": "Budgets family - see budgets.listProjectBudgets's $comment above.",
+            "id": "budgets.clearMemberBudget",
+            "method": "DELETE",
+            "path": "/elitea_core/user_budget/administration/{project_id}/user_budget/{user_id}",
+            "operationId": "clearMemberBudget",
+            "source": "handwritten",
+            "responseSchema": "MemberBudget",
+            "fixture": null,
+            "usedBy": [
+                "pages/admin"
+            ]
+        },
+        {
+            "$comment": "Budgets family - see budgets.listProjectBudgets's $comment above.",
+            "id": "budgets.getProjectUsage",
+            "method": "GET",
+            "path": "/elitea_core/usage/prompt_lib/{project_id}/usage",
+            "operationId": "getProjectUsage",
+            "source": "handwritten",
+            "responseSchema": "ProjectUsage",
+            "fixture": null,
+            "usedBy": [
+                "pages/settings"
+            ]
         }
     ]
 }

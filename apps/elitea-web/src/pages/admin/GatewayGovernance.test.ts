@@ -9,7 +9,12 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { isEditableGovernanceRow, type GovernanceRow } from './api/adminGovernanceApi';
+import {
+  GOVERNANCE_TYPES,
+  isEditableGovernanceRow,
+  isGlobalGovernanceType,
+  type GovernanceRow,
+} from './api/adminGovernanceApi';
 import { describeScope } from './GovernanceTable';
 import {
   draftToData,
@@ -212,7 +217,7 @@ describe('isEditableGovernanceRow', () => {
   });
 
   it('permits every type this page can actually author', () => {
-    for (const type of ['budget', 'rate_limit', 'model_config', 'mcp_allowlist', 'credential_policy', 'routing_rule']) {
+    for (const type of GOVERNANCE_TYPES) {
       expect(isEditableGovernanceRow(row({ type }))).toBe(true);
     }
   });
@@ -229,5 +234,59 @@ describe('isEditableGovernanceRow', () => {
     const roundTripped = draftToData(rowToDraft(stored));
     expect(roundTripped).not.toHaveProperty('enabled');
     expect(roundTripped).not.toHaveProperty('threshold_pct');
+  });
+});
+
+describe('egress_allowlist rows', () => {
+  it('writes the payload the gateway compiles', () => {
+    const data = draftToData(
+      draft({
+        type: 'egress_allowlist',
+        egressAllowlist: 'vllm.ml.svc.cluster.local:8000\n192.168.29.0/24, *.openai.azure.com',
+      }),
+    );
+    expect(data.egress).toEqual({
+      allowlist: ['vllm.ml.svc.cluster.local:8000', '192.168.29.0/24', '*.openai.azure.com'],
+    });
+  });
+
+  it('never writes a scope, whatever the draft carries', () => {
+    // The row is GLOBAL: half of what it governs is decided by the gateway with
+    // no project in hand, so the server refuses a scoped one. A scope written
+    // here would produce a 400 naming a field the dialog no longer shows.
+    const data = draftToData(
+      draft({
+        type: 'egress_allowlist',
+        egressAllowlist: 'a.example.com',
+        scopeProjectIds: '7, 9',
+        scopeProviders: 'openai',
+        scopeModels: 'gpt-4o',
+      }),
+    );
+    expect(data.scope).toBeUndefined();
+    expect(isGlobalGovernanceType('egress_allowlist')).toBe(true);
+    expect(isGlobalGovernanceType('budget')).toBe(false);
+  });
+
+  it('reads a stored row back into the field', () => {
+    const back = rowToDraft(
+      row({
+        type: 'egress_allowlist',
+        name: 'on-prem',
+        data: { egress: { allowlist: ['192.168.29.60:8000', '192.168.29.0/24'] } },
+      }),
+    );
+    expect(back.egressAllowlist).toBe('192.168.29.60:8000, 192.168.29.0/24');
+  });
+
+  it('describes the destinations in the scope column', () => {
+    // "all projects" is true for every egress row and tells the operator
+    // nothing. The column shows what the row actually permits.
+    expect(
+      describeScope(
+        row({ type: 'egress_allowlist', data: { egress: { allowlist: ['a.example.com'] } } }),
+      ),
+    ).toBe('a.example.com');
+    expect(describeScope(row({ type: 'egress_allowlist', data: {} }))).toBe('no destinations');
   });
 });

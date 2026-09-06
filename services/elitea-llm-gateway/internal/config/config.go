@@ -238,19 +238,26 @@ type Config struct {
 	// exactly one or more leading labels.
 	//
 	// Issue #13. This is the operator's egress policy for the three provider
-	// classes whose endpoint is tenant-supplied (Ollama, Azure, vLLM), and it
-	// controls TWO things in internal/account:
+	// classes whose endpoint is tenant-supplied (Ollama, Azure, vLLM).
 	//
-	//   empty (default) — no host restriction, AND bifrost's SSRF-safe dialer
-	//     stays ON for every provider (AllowPrivateNetwork is never set). A
-	//     default install therefore cannot be steered at an RFC-1918 address at
-	//     all; self-hosted vLLM/Ollama on a private network does not work until
-	//     an operator opts in below.
-	//   non-empty — every credential api_base must match an entry (checked
-	//     BEFORE the Fernet vault resolves its secret, so a non-allowlisted
-	//     destination never sees a decrypted key), and private-network dialing
-	//     is enabled for the self-hosted classes, whose destinations are now
-	//     operator-enumerated.
+	// GAP G6: it is the BOOTSTRAP FLOOR, not the whole policy. internal/account
+	// merges it with the `egress_allowlist` rows internal/policy compiles from
+	// gateway.governance_config, and enforces the UNION. An authored row can
+	// only ADD a destination; nothing authored at runtime withdraws a host this
+	// variable names, because the chart and the admin console are different
+	// authorities.
+	//
+	// Entries are also accepted as CIDR blocks, and that matters:
+	//
+	//   host restriction — off while BOTH sources are empty. The first entry
+	//     from either source turns it on, and every credential api_base must
+	//     then match (checked BEFORE the Fernet vault resolves its secret, so a
+	//     non-allowlisted destination never sees a decrypted key).
+	//   private network — bifrost's SSRF-safe dialer is relaxed for the
+	//     self-hosted classes only when an entry EXPLICITLY names a private
+	//     host or block. It used to follow from "is any allowlist configured",
+	//     which relaxed the dialer for an allowlist of public SaaS hosts and
+	//     still left an on-premise endpoint unreachable without a chart edit.
 	EgressAllowlist []string
 
 	// LoopBreakerThreshold / LoopBreakerWindow / LoopBreakerOpenFor are the

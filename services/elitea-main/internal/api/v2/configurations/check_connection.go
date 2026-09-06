@@ -73,11 +73,22 @@ const (
 // could therefore hold a worker for hours. It is a var so a test can shorten it.
 var batchConnectionCheckBudget = 30 * time.Second
 
+// checkableConnectionTypes must hold exactly the types the gateway carries a
+// probe AND a lister for (checkConnectionProviders and providerModelListers in
+// services/elitea-llm-gateway/internal/llmproxy). A type here that the gateway
+// does not serve answers "unsupported_type", which an operator reads as a
+// failed credential rather than a missing feature.
+//
+// `anthropic` is deliberately absent: no read-only probe is written for it, and
+// the catalogue advertises has_test_connection = false for it, so no button is
+// offered. Add all three together, or none.
 var checkableConnectionTypes = map[string]struct{}{
 	"open_ai":        {},
 	"azure_open_ai":  {},
+	"open_ai_azure":  {},
 	"ai_dial":        {},
 	"ollama":         {},
+	"vllm":           {},
 	"amazon_bedrock": {},
 	"vertex_ai":      {},
 }

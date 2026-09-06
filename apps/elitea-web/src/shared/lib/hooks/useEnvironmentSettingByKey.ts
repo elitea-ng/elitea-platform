@@ -27,7 +27,16 @@ export const ENVIRONMENT_KEYS = {
 export const DEFAULT_TOAST_DURATION = 5000;
 
 /** Default system sender name, old-app `constants.js` fallback. */
-export const DEFAULT_PARTICIPANT_NAME = 'Assistant';
+/**
+ * `apps/elitea-ui/src/common/constants.js:89` — `'Elitea'`, not `'Assistant'`.
+ *
+ * This is the name every assistant transcript row is captioned with when a
+ * deployment states no `system_sender_name`, which is the default. It said
+ * `'Assistant'` here alone; the app's two OTHER copies of the same constant
+ * (`shared/lib/copy.ts`, `entities/participant/model/selectors.ts`) already
+ * carry the baseline's `'Elitea'`, so the three disagreed.
+ */
+export const DEFAULT_PARTICIPANT_NAME = 'Elitea';
 
 /**
  * Result shape returned by `useEnvironmentSettingByKey`.

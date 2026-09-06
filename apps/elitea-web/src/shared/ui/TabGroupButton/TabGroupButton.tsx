@@ -22,6 +22,14 @@ export interface TabGroupButtonProps {
   ariaLabel?: string;
   id?: string;
   sx?: SxProps<Theme>;
+  /**
+   * Styles applied to EVERY button in the row — a fixed width, for instance.
+   * A caller that needs one size for the whole group states it here. Reaching
+   * from the group's own `sx` into the buttons underneath it names a MUI
+   * internal class, which R-T6 (`elitea/no-mui-internal-selector`) bans
+   * outside `shared/brand/mui-overrides/`.
+   */
+  itemSx?: SxProps<Theme>;
 }
 
 /**
@@ -60,6 +68,7 @@ export function TabGroupButton({
   ariaLabel,
   id,
   sx,
+  itemSx,
 }: TabGroupButtonProps): ReactNode {
   const generatedId = useId();
   const groupId = id ?? `tab-group-button-${generatedId}`;
@@ -102,6 +111,7 @@ export function TabGroupButton({
           key={item.value}
           item={item}
           {...(disableTooltip !== undefined ? { disableTooltip } : {})}
+          {...(itemSx !== undefined ? { sx: itemSx } : {})}
         />
       ))}
     </ToggleButtonGroup>

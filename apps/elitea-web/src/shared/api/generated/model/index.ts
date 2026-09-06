@@ -237,6 +237,7 @@ export * from "./projectAnalytics.zod";
 export * from "./projectBudget.zod";
 export * from "./projectBudgetListing.zod";
 export * from "./projectBudgetRow.zod";
+export * from "./projectBudgetWrite.zod";
 export * from "./projectContext.zod";
 export * from "./projectContextUpdateRequest.zod";
 export * from "./projectGroup.zod";

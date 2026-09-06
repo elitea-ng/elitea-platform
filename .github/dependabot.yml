@@ -78,6 +78,7 @@ updates:
       - /services/elitea-scheduler
       - /services/elitea-subapp-host
       - /libs/go/authlib
+      - /libs/go/egresslib
       - /libs/go/eventslib
       - /libs/go/observability
       - /libs/go/rpclib

@@ -30,6 +30,8 @@ import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 
 import { ApplicationAnswerActions } from './ApplicationAnswerActions';
+import { AssistantAvatar } from './MessageAvatar';
+import { MessageHeaderRow } from './MessageHeaderRow';
 import { actionKey, asDraft, ApplicationAnswerThinking, swarmChildContent } from './ApplicationAnswerThinking';
 import { ChatContinue } from '../chat-continue/ChatContinue';
 import type { McpAuthRequiredAction } from '../chat-continue/ChatContinue';
@@ -37,6 +39,7 @@ import { ChatHitlActions } from '../chat-hitl-actions/ChatHitlActions';
 import type { HitlInterrupt, HitlResumePayload } from '../chat-hitl-actions/ChatHitlActions';
 import { ErrorTrace } from '../error-trace/ErrorTrace';
 
+import { t } from '@/shared/i18n';
 import { BasicAccordion } from '@/shared/ui/BasicAccordion';
 import { Markdown } from '@/shared/ui/Markdown';
 import { TOOL_ACTION_TYPES, ToolActionStatus } from '@/shared/lib/chat';
@@ -87,6 +90,21 @@ export interface ApplicationAnswerHitl {
   readonly onHitlResume?: ((payload: HitlResumePayload) => void) | undefined;
 }
 
+/** Caption-line identity: who answered, and whether this row is a sub-agent's. Grouped to stay under the §3.5 component-props budget. */
+export interface ApplicationAnswerAuthor {
+  /**
+   * The answering participant's display name, shown in the caption line
+   * (`<mark> Elitea to Message`). Supplied by the list, which is where the
+   * conversation's participants are known — `entities/message`'s assistant
+   * normaliser drops the participant, so the row cannot resolve it alone.
+   */
+  readonly participantName?: string | undefined;
+  /** Whether this is a swarm child message. */
+  readonly isSwarmChild?: boolean;
+  /** Display name of the swarm agent. */
+  readonly swarmAgentName?: string;
+}
+
 /** @public Props for `ApplicationAnswer`. */
 export interface ApplicationAnswerProps {
   /** The AI answer message to render. */
@@ -95,14 +113,12 @@ export interface ApplicationAnswerProps {
   readonly messageId: string;
   /** Tool actions for this answer (thinking steps, tool calls, swarm children). */
   readonly toolActions?: readonly SubAgentGroupable[] | undefined;
-  /** Whether this is a swarm child message. */
-  readonly isSwarmChild?: boolean;
-  /** Display name of the swarm agent. */
-  readonly swarmAgentName?: string;
   /** Whether auto-speak mode is active. */
   readonly isSpeakingMode?: boolean;
   /** Whether this is the last message. */
   readonly isLastMessage?: boolean;
+  /** Who the row is captioned as, grouped to stay under the component-props budget. */
+  readonly author?: ApplicationAnswerAuthor;
   readonly status?: ApplicationAnswerStatus;
   readonly actions?: ApplicationAnswerActionHandlers;
   readonly tts?: ApplicationAnswerTts;
@@ -139,10 +155,9 @@ export function ApplicationAnswer({
   answer,
   messageId,
   toolActions = [],
-  isSwarmChild = false,
-  swarmAgentName = '',
   isSpeakingMode = false,
   isLastMessage = false,
+  author: { participantName, isSwarmChild = false, swarmAgentName = '' } = {},
   status: { isLoading = false, isStreaming = false, isRegenerating = false } = {},
   actions: { onCopy, onDelete, onRegenerate, shouldDisableRegenerate = false } = {},
   tts: { onAutoSpeak, speakingMessageId } = {},
@@ -212,20 +227,35 @@ export function ApplicationAnswer({
       sx={{
         display: 'flex',
         flexDirection: 'column',
-        gap: 0.5,
-        mb: 1,
+        alignItems: 'flex-start',
+        alignSelf: 'stretch',
+        width: '100%',
+        // baseline `applicationAnswerStyles.userMessageContainer` (vertical):
+        // `padding: 0.75rem 0; gap: 0.5rem`. Measured identically on the
+        // production transcript's own `<li>`.
+        gap: '0.5rem',
+        padding: '0.75rem 0',
+        borderRadius: '0.25rem',
         ...(isSwarmChild
           ? { ml: 6, pl: 2, borderLeft: '3px solid', borderColor: 'primary.main' }
           : {}),
       }}
     >
-      {isSwarmChild && swarmAgentName && (
+      {isSwarmChild && swarmAgentName ? (
         <Typography variant="caption" sx={{ color: 'text.secondary' }}>
           {swarmAgentName}
         </Typography>
+      ) : (
+        <MessageHeaderRow
+          avatar={<AssistantAvatar />}
+          name={participantName ?? ''}
+          sentToName={t('features.chatMessages.replyTo', 'Message')}
+          sentToInteractive
+          createdAt={answer.createdAt}
+        />
       )}
 
-      {nonSwarmChildActions.length > 0 && <ApplicationAnswerThinking actions={nonSwarmChildActions} />}
+      {nonSwarmChildActions.length > 0 && <ApplicationAnswerThinking actions={nonSwarmChildActions} isStreaming={isProcessing} />}
 
       {!isProcessing && swarmChildActions.length > 0 && (
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, mb: 0.5 }}>
@@ -248,10 +278,20 @@ export function ApplicationAnswer({
         <Box
           data-testid={isLastMessage ? 'skill-test-last-response' : 'chat-answer-content'}
           sx={(theme) => ({
+            // baseline `applicationAnswerStyles.answerBlock`, confirmed against
+            // the live production row: `12px 16px` padding (not a uniform 12),
+            // an 8px radius, a 3rem floor so a one-line answer keeps the same
+            // card height, and the 0.5rem gap under the thinking accordion.
+            width: '100%',
+            boxSizing: 'border-box',
             backgroundColor: theme.vars.palette.background.aiAnswerBkg,
+            color: theme.vars.palette.text.secondary,
+            boxShadow: theme.vars.palette.boxShadow.aiAnswer,
             borderRadius: theme.vars.shape.radiusMd,
-            p: 1.5,
-            '&:hover .actionButtons': { visibility: 'visible' },
+            padding: '0.75rem 1rem',
+            minHeight: '3rem',
+            position: 'relative',
+            marginTop: nonSwarmChildActions.length > 0 || !!exception ? '0.5rem' : 0,
           })}
         >
           {canRenderContent && !!answer.content && textItems.length === 0 && <Markdown>{answer.content}</Markdown>}

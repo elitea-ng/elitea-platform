@@ -196,6 +196,50 @@ describe('PlatformModelsPanel', () => {
       'no platform provider is named ghost',
     );
   });
+
+  /*
+   * DEFECT this pins. The dialog opened on `modelTypes[0]`, and `model_types`
+   * arrives in the SERVER's order — `asr_model` first, as `MODEL_TYPES` above
+   * reproduces. So "Add a platform model" opened on "Speech to text". An
+   * operator adding a chat model had to notice the wrong Kind and change it;
+   * one who did not published a model the gateway dispatches to the ASR
+   * section, and the model then answered nothing a chat caller asked for.
+   */
+  it('opens a new platform model on Chat / completion, whatever order the server lists the kinds in', async () => {
+    useModels([]);
+    const bodies: unknown[] = [];
+    server.use(
+      http.post('*/admin/gateway/platform_models', async ({ request }) => {
+        bodies.push(await request.json());
+        return HttpResponse.json({ id: 12 }, { status: 201 });
+      }),
+    );
+    renderAdminRoute(<PlatformModelsPanel />);
+
+    await userEvent.click(await screen.findByTestId('platform-models-add'));
+
+    expect(await screen.findByRole('combobox', { name: 'Kind' })).toHaveTextContent('Chat / completion');
+
+    // Asserted on the wire too: the visible label and the value sent are two
+    // different things, and it is the value the gateway routes on.
+    await userEvent.type(screen.getByTestId('platform-model-name'), 'my-model');
+    await userEvent.type(screen.getByTestId('platform-model-wire-name'), 'gpt-4o-mini');
+    await userEvent.click(screen.getByTestId('platform-model-save'));
+
+    await waitFor(() => expect(bodies).toHaveLength(1));
+    expect((bodies[0] as { type: string }).type).toBe('llm_model');
+  });
+
+  /* The default is a preference, not an override: a deployment that does not
+     dispatch chat models must still get a Kind it can actually publish. */
+  it('falls back to the first kind the deployment does dispatch', async () => {
+    useModels([], { model_types: ['asr_model', 'tts_model'] });
+    renderAdminRoute(<PlatformModelsPanel />);
+
+    await userEvent.click(await screen.findByTestId('platform-models-add'));
+
+    expect(await screen.findByRole('combobox', { name: 'Kind' })).toHaveTextContent('Speech to text');
+  });
 });
 
 

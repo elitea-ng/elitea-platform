@@ -1,10 +1,12 @@
 export type {
   ArtifactListItem,
   ArtifactStorageConfiguration,
+  ArtifactTreeItem,
 } from './model/types';
 export {
+  buildFileTree as buildArtifactTree,
   expandFoldersToArtifactKeys,
-  getItemsUnderFolder,
+  getExpandedPathsFromFileKey as getExpandedArtifactPaths,
 } from './lib/fileTree';
 export {
   artifactQueryKeys,
@@ -13,11 +15,7 @@ export {
   useArtifacts,
   useArtifactStorageConfigurations,
 } from './model/useArtifacts';
-export {
-  buildArtifactUploadPlan,
-  keepBothFileNames,
-  useArtifactUpload,
-} from './model/useArtifactUpload';
+export { useArtifactUpload } from './model/useArtifactUpload';
 export { useZipDownload } from './model/useZipDownload';
 export { ArtifactTable } from './ui/ArtifactTable';
 export { BucketSidebar } from './ui/BucketSidebar';

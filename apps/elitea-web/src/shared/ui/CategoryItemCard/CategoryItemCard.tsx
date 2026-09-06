@@ -126,6 +126,9 @@ export function CategoryItemCard({
             alignItems: 'center',
             justifyContent: 'center',
             flexShrink: 0,
+            // Baseline `itemIconContainer`: the glyph fills the 1.25rem box
+            // regardless of the intrinsic size of the SVG handed in.
+            '& svg': { width: '100%', height: '100%' },
           }}
         >
           {icon}

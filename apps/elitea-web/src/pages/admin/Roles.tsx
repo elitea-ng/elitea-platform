@@ -14,6 +14,18 @@
  * central administration matrix; `internal/api/v2/admin/roles.go` implements all
  * of them for real, covered by write-then-re-read tests.
  *
+ * Role DEFINITIONS — create, rename, delete — arrived later (gap G9) and are
+ * real too: `POST | PUT | DELETE /admin/roles/{scope}/{mode}`, gated on
+ * `configuration.roles.roles.{create,edit,delete}` and granted by
+ * migrations/shared/0111. Before them the matrix could edit the CELLS of a
+ * table whose columns already existed and nothing could change the columns, so
+ * a deployment that wanted a `security_reviewer` role had to INSERT it by hand.
+ * Dialogs live in `./AdminRoleDialogs`.
+ *
+ * A created STANDARD role reaches projects that already exist through the
+ * "Apply to Projects" button beside it, which is the control that already
+ * pushed the standard matrix out. No second control was invented for it.
+ *
  * The one thing that can be unavailable is the SUPPORT tab, and only when the
  * deployment has not configured a support project (`SUPPORT_PROJECT_ID`). That
  * is the pylon behaviour too — its handler 404s with the same meaning — and it
@@ -46,14 +58,24 @@ import { SimpleSearchBar } from '@/shared/ui/SimpleSearchBar';
 import { t } from '@/shared/i18n';
 import { DrawerPage } from '@/shared/ui/settings/DrawerPage';
 
+import { RoleDeleteDialog, RoleNameDialog } from './AdminRoleDialogs';
 import { PermissionMatrix } from './PermissionMatrix';
 import { useAdminRolesPage, type AdminRolesPageState } from './useAdminRolesPage';
 
 
 function savedText(message: string): string {
-  return message === 'synced'
-    ? t('pages.admin.roles.saved.synced', 'Permissions synced to shared projects.')
-    : t('pages.admin.roles.saved.matrix', 'Permissions saved.');
+  if (message === 'synced') {
+    return t('pages.admin.roles.saved.synced', 'Permissions synced to shared projects.');
+  }
+  if (message === 'roleCreated') {
+    return t(
+      'pages.admin.roles.saved.roleCreated',
+      'Role created. Grant its permissions below, then use Apply to Projects to push a standard role to existing projects.',
+    );
+  }
+  if (message === 'roleRenamed') return t('pages.admin.roles.saved.roleRenamed', 'Role renamed.');
+  if (message === 'roleDeleted') return t('pages.admin.roles.saved.roleDeleted', 'Role deleted.');
+  return t('pages.admin.roles.saved.matrix', 'Permissions saved.');
 }
 
 function errorText(message: string): string {
@@ -64,9 +86,38 @@ function errorText(message: string): string {
   return message;
 }
 
+/**
+ * The dialogs' own fallback sentences. A refusal from the SERVER is shown
+ * verbatim instead of these: a 409 names the role and, for a delete, how many
+ * members still hold it, and that count is the fact the operator acts on.
+ */
+function roleWriteText(message: string | undefined): string | undefined {
+  if (message === undefined) return undefined;
+  if (message === 'roleCreate') {
+    return t('pages.admin.roles.error.roleCreate', 'Failed to create the role.');
+  }
+  if (message === 'roleRename') {
+    return t('pages.admin.roles.error.roleRename', 'Failed to rename the role.');
+  }
+  if (message === 'roleDelete') {
+    return t('pages.admin.roles.error.roleDelete', 'Failed to delete the role.');
+  }
+  return message;
+}
+
 function RolesActions({ state }: { readonly state: AdminRolesPageState }) {
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+      {state.onCreateRole && !state.isDirty ? (
+        <Button
+          variant="secondary"
+          size="small"
+          disabled={state.isWritingRole || state.isSaving}
+          onClick={state.onCreateRole}
+        >
+          {t('pages.admin.roles.action.newRole', 'New role')}
+        </Button>
+      ) : null}
       {state.onApplyToProjects && !state.isDirty ? (
         <Button
           variant="elitea" color="primary"
@@ -114,6 +165,8 @@ function RolesBody({ state }: { readonly state: AdminRolesPageState }) {
       search={state.search}
       readOnly={!state.canEdit}
       onChange={state.onChange}
+      renameHandlerFor={state.renameHandlerFor}
+      deleteHandlerFor={state.deleteHandlerFor}
     />
   );
 }
@@ -181,6 +234,25 @@ export function AdminRoles() {
       <Box sx={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
         <RolesBody state={state} />
       </Box>
+
+      <RoleNameDialog
+        open={state.roleDialog !== null}
+        mode={state.roleDialog?.mode ?? 'create'}
+        role={state.roleDialog?.role ?? ''}
+        existingRoles={state.roles}
+        isSubmitting={state.isWritingRole}
+        failureReason={roleWriteText(state.roleWriteFailure)}
+        onClose={state.onCloseRoleDialog}
+        onSubmit={state.onSubmitRoleDialog}
+      />
+      <RoleDeleteDialog
+        open={state.roleToDelete !== null}
+        role={state.roleToDelete ?? ''}
+        isSubmitting={state.isWritingRole}
+        failureReason={roleWriteText(state.roleWriteFailure)}
+        onClose={state.onCloseRoleDialog}
+        onConfirm={state.onConfirmDeleteRole}
+      />
     </DrawerPage>
   );
 }

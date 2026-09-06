@@ -1,48 +1,37 @@
-import type { ReactNode } from 'react';
+import { useMemo, type ReactNode } from 'react';
 
 import Box from '@mui/material/Box';
-import List from '@mui/material/List';
-import ListItem from '@mui/material/ListItem';
-import ListItemButton from '@mui/material/ListItemButton';
-import ListItemText from '@mui/material/ListItemText';
-import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
-import { BaseBtn } from '@/shared/ui/BaseBtn';
 import { t } from '@/shared/i18n';
-import { NoResultsMessage } from '@/shared/ui/NoResultsMessage';
+import { BaseBtn } from '@/shared/ui/BaseBtn';
+import { EntityCardList, EntityEmptyState, entityTypeIcon, type EntityListItem } from '@/shared/ui/EntityCardList';
 
 /**
- * Shared row-rendering surface for `Latest`/`MyLiked`/`Trending`/
- * `PrivatePipelinesList` (this unit, A2m) — the data-bearing replacement for
- * the baseline's `CardList` (`apps/elitea-ui/src/components/CardList.jsx`)
- * for THESE four pages' purposes only. Same disclosed-scope-reduction shape
- * `pages/agents/ui/ApplicationListPanel.tsx` (Wave-2 unit A1g) already
- * established for the sibling agents domain — `CardList` itself (card grid,
- * drag handles, per-card menus, infinite-scroll sentinel, the `Categories`/
- * `TrendingAuthors` right rail) has no confirmed `shared/ui`/`widgets` port
- * and is out of this unit's ownership fence to add. This renders the same
- * rows as a plain, accessible list plus a "Load more" button instead of a
- * card grid, and drops the tag-filter/trending-authors side panel entirely.
+ * The card grid for `Latest`/`MyLiked`/`Trending`/`PrivatePipelinesList` —
+ * the port of the baseline's `components/CardList.jsx` for these four pages,
+ * now that the grid itself exists as `shared/ui/EntityCardList`.
  *
- * A page-owned component (`pages/pipelines/ui/`), not `features/` or
- * `entities/` — it holds no fetching or domain logic of its own.
+ * This file used to render a plain MUI `<List>` of `name`/`description`
+ * rows, a disclosed scope reduction from the era when no card grid was
+ * ported anywhere. It is a grid of real entity cards now — the pipeline
+ * flow glyph in a round gradient tile, a two-line title, and a bottom row
+ * of author avatars and divider-separated tag chips, matching
+ * `apps/elitea-ui/src/components/Card.jsx` and the production reference.
  *
- * Deliberately a near-duplicate of `pages/agents/ui/ApplicationListPanel.tsx`
- * rather than a shared import: `pages/` is not a depcruise-sliced layer (no
- * `no-sideways-pages` rule exists), so importing it directly would be
- * technically legal, but `pages/agents` and `pages/pipelines` are two
- * independently-landing Wave-2 sub-units with no ownership relationship to
- * each other — coupling one page slice's internals to another's private
- * `ui/` directory would make either impossible to evolve or delete on its
- * own, the same "each page-owned surface is independently
- * deletable/replaceable" posture this codebase's `pages/user-public/ui/`
- * precedent already established.
+ * A page-owned component (`pages/pipelines/ui/`) and still deliberately NOT
+ * an import of `pages/agents/ui/ApplicationListPanel.tsx`: the two page
+ * slices land and evolve independently. What they now share is the real
+ * shared surface underneath (`shared/ui/EntityCardList`), which is where
+ * the duplication actually belonged.
  */
 export interface PipelineListRow {
   readonly id: string;
   readonly name: string;
   readonly description: string;
+  readonly authors?: readonly { readonly id?: string; readonly name: string; readonly avatar?: string }[];
+  readonly tags?: readonly string[];
+  readonly createdAt?: string;
 }
 
 export interface PipelineListPanelProps {
@@ -50,12 +39,14 @@ export interface PipelineListPanelProps {
   readonly isLoading: boolean;
   readonly isError: boolean;
   readonly errorMessage: string;
-  readonly emptyTitle: ReactNode;
-  readonly emptyDescription: ReactNode;
+  readonly emptyTitle: string;
+  readonly emptyDescription: string;
   readonly onSelect: (id: string) => void;
   readonly hasMore: boolean;
   readonly isLoadingMore: boolean;
   readonly onLoadMore: () => void;
+  /** Wired to the empty state's `+ Create` CTA when the caller can route to a create page. */
+  readonly onCreate?: () => void;
 }
 
 export function PipelineListPanel({
@@ -69,67 +60,54 @@ export function PipelineListPanel({
   hasMore,
   isLoadingMore,
   onLoadMore,
+  onCreate,
 }: PipelineListPanelProps): ReactNode {
-  if (isLoading) {
-    return <Typography variant="bodyMedium">{t('pages.pipelines.list.loading', 'Loading…')}</Typography>;
-  }
-  if (isError) {
-    return (
-      <Typography
-        role="alert"
-        variant="bodyMedium"
-      >
-        {errorMessage}
-      </Typography>
-    );
-  }
-  if (rows.length === 0) {
-    return (
-      <NoResultsMessage
-        title={emptyTitle}
-        description={emptyDescription}
-      />
-    );
-  }
+  const items = useMemo<EntityListItem[]>(
+    () =>
+      rows.map((row) => ({
+        id: row.id,
+        name: row.name,
+        description: row.description,
+        icon: entityTypeIcon('pipeline'),
+        authors: row.authors ?? [],
+        tags: (row.tags ?? []).map((tag) => ({ id: tag, name: tag })),
+        ...(row.createdAt === undefined ? {} : { createdAt: row.createdAt }),
+        onClick: () => {
+          onSelect(row.id);
+        },
+      })),
+    [rows, onSelect],
+  );
+
   return (
-    <Box sx={containerSx}>
-      <List>
-        {rows.map((row) => (
-          // <ListItem disablePadding> wrapper: see ApplicationListPanel for why
-          // `component="li"` on the button is not the fix.
-          <ListItem
-            key={row.id}
-            disablePadding
-          >
-            <ListItemButton
-              data-testid="pipeline-list-row"
-              onClick={() => {
-                onSelect(row.id);
-              }}
-            >
-              <ListItemText
-                primary={row.name}
-                secondary={row.description}
-              />
-            </ListItemButton>
-          </ListItem>
-        ))}
-      </List>
+    <>
+      <EntityCardList
+        items={items}
+        isLoading={isLoading}
+        isError={isError}
+        errorMessage={errorMessage}
+        emptyState={
+          <EntityEmptyState
+            title={emptyTitle}
+            description={emptyDescription}
+            art="applications"
+            {...(onCreate === undefined ? {} : { onCreateClick: onCreate })}
+          />
+        }
+      />
       {hasMore && (
-        <BaseBtn
-          variant="secondary"
-          disabled={isLoadingMore}
-          onClick={onLoadMore}
-        >
-          {t('pages.pipelines.list.loadMore', 'Load more')}
-        </BaseBtn>
+        <Box sx={loadMoreSx}>
+          <BaseBtn
+            variant="secondary"
+            disabled={isLoadingMore}
+            onClick={onLoadMore}
+          >
+            {t('pages.pipelines.list.loadMore', 'Load more')}
+          </BaseBtn>
+        </Box>
       )}
-    </Box>
+    </>
   );
 }
 
-const containerSx: SxProps<Theme> = (theme: Theme) => ({
-  display: 'flex',
-  flexDirection: 'column',
-  gap: theme.spacing(2),
-});
+const loadMoreSx: SxProps<Theme> = (theme: Theme) => ({ display: 'flex', justifyContent: 'center', padding: theme.spacing(2) });

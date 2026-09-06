@@ -165,11 +165,14 @@ group "deepwiki" {
 }
 
 # Standalone module pinned to Go 1.26.4 (bifrost/core). The Containerfile pins
-# golang:1.26.4 internally, so the correct toolchain is used regardless of the
-# build runner. Context is the module directory (self-contained, off go.work).
+# golang:1.26 internally, so the correct toolchain is used regardless of the
+# build runner. Context is the repository ROOT: the module replaces
+# libs/go/egresslib, which lives outside the service directory. go.work is not
+# copied into the image and the build sets GOWORK=off, so the module still
+# builds off the workspace.
 target "elitea-llm-gateway" {
-  context    = "./services/elitea-llm-gateway"
-  dockerfile = "Containerfile"
+  context    = "."
+  dockerfile = "services/elitea-llm-gateway/Containerfile"
   tags       = ["${REGISTRY}/elitea-llm-gateway:${TAG}"]
   cache-from = ["type=gha,scope=elitea-llm-gateway"]
   cache-to   = ["type=gha,mode=max,scope=elitea-llm-gateway"]

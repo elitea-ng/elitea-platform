@@ -34,7 +34,7 @@ function renderList(overrides: Partial<Parameters<typeof SkillsList>[0]> = {}) {
 
 describe('SkillsList', () => {
   it('renders loading, failure, and both empty-state variants', () => {
-    const { rerender } = renderWithProviders(
+    const { rerender, container } = renderWithProviders(
       <SkillsList
         items={[]}
         isLoading
@@ -45,7 +45,9 @@ describe('SkillsList', () => {
         onExport={vi.fn()}
       />,
     );
-    expect(screen.getByText('Loading skills…')).toBeInTheDocument();
+    // The grid paints card skeletons while the first page loads, replacing the
+    // "Loading skills…" text line the old <List> rendered.
+    expect(container.querySelectorAll('[data-testid="entity-card-skeleton"]').length).toBeGreaterThan(0);
     rerender(
       <SkillsList
         items={[]}
@@ -87,7 +89,7 @@ describe('SkillsList', () => {
   it('routes row, export, and delete actions to the caller', async () => {
     const user = userEvent.setup();
     const props = renderList();
-    await user.click(screen.getByTestId('skill-list-row'));
+    await user.click(screen.getByTestId('entity-card'));
     await user.click(screen.getByRole('button', { name: 'Export' }));
     await user.click(screen.getByRole('button', { name: 'Delete' }));
     expect(props.onSelect).toHaveBeenCalledWith('1');

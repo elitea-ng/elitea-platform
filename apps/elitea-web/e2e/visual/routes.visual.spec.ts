@@ -269,7 +269,7 @@ const ROUTES: readonly VisualRoute[] = [
     // strip renders during load (loaded YES, stalled YES) — it is chrome. The
     // empty-state copy renders only from a resolved, empty list: loaded YES,
     // stalled no.
-    landmark: (page) => page.getByText('You have no agents.'),
+    landmark: (page) => page.getByText('No agents yet'),
     light: true,
   },
   {
@@ -292,7 +292,7 @@ const ROUTES: readonly VisualRoute[] = [
     name: 'pipelines-list-empty',
     path: '/app/pipelines/latest',
     // Loaded YES, stalled no.
-    landmark: (page) => page.getByText('You have no pipelines.'),
+    landmark: (page) => page.getByText('No pipelines yet'),
   },
   {
     // @covers /pipelines/create
@@ -340,7 +340,7 @@ const ROUTES: readonly VisualRoute[] = [
     name: 'credentials-list-empty',
     path: '/app/credentials/latest',
     // Loaded YES, stalled no.
-    landmark: (page) => page.getByText('You have no credentials.'),
+    landmark: (page) => page.getByText('No credentials yet'),
   },
   {
     // @covers /settings/secrets
@@ -364,13 +364,47 @@ const ROUTES: readonly VisualRoute[] = [
     // @covers /settings/model-configuration
     name: 'settings-model-configuration',
     path: '/app/settings/model-configuration',
-    // The `Configurations` HEADING, not the tab of the same name and not the
-    // `OpenAI-BaseURL`/`Server URL`/`Project ID` header block — that block is
-    // static and renders during load (loaded YES, stalled YES). Under a stall
-    // the content area renders a literal "Loading…"; measured, the heading is
-    // loaded YES / stalled no and "Loading…" is loaded no / stalled YES, which
-    // is the same fact from both directions.
-    landmark: (page) => page.getByRole('heading', { name: 'Configurations' }),
+    // MOVED, because the element it named no longer exists. The landmark was
+    // the `Configurations` HEADING that `ConfigurationsPanel` drew above its
+    // own toolbar. The settings parity work (fedca78b) deleted it: production
+    // shows one title bar per settings tab, and this page had two — the
+    // page's `DrawerPageHeader` ("AI Providers") and the panel's own heading
+    // and rule under it. The panel row is now a right-aligned toolbar with no
+    // heading at all, so this locator matched nothing and the shot was never
+    // taken (`element(s) not found`, run 34016199152). A landmark that names
+    // deleted chrome fails LOUDLY, which is the good half of this class — the
+    // dangerous half is a landmark that survives a restructure by matching
+    // something a loading state also renders.
+    //
+    // The LLMs section accordion replaces it, and it is a strictly stronger
+    // landmark than the heading was:
+    //   - `useConfigurationsBySection` returns `data: null` while ANY of its
+    //     seven section queries is in flight, and `AIConfiguration` renders a
+    //     literal "Loading…" in place of the panel for a null `data`. So no
+    //     part of the panel exists during load.
+    //   - `ConfigurationSection` returns its own "Loading…" line while
+    //     `isLoading`, and `null` for an empty list. The accordion — and this
+    //     testid with it — is reachable only from a RESOLVED, NON-EMPTY LLM
+    //     list. The seed guarantees one (`scripts/e2e-stack.sh`'s
+    //     `e2e-mock-model-llm` row, `section = 'llm'` in `p_1.configuration`).
+    //
+    // Re-measured under this file's own method rather than admitted on that
+    // reading: `**\/api\/v2\/configurations\/**` stalled for five minutes with
+    // the shell's four endpoints let through, sampled at 3/8/15/22/30/45/60s.
+    // The testid was absent at every sample and "Loading…" present at every
+    // sample; loaded, the testid is there and "Loading…" is gone. Loaded YES,
+    // stalled no — the same fact from both directions, as before.
+    //
+    // NOT the section TITLE text ("LLMs"), even though it measures the same
+    // today. `ConfigurationSection` prints that title from TWO branches — the
+    // resolved accordion and its own "LLMs / Loading…" line — and only the
+    // hook's current shape (`data` is null whenever anything is in flight)
+    // keeps the second one unreachable from this page. The testid is on the
+    // resolved branch alone, so it does not depend on that coincidence.
+    //
+    // THE BASELINE PNG MUST BE REGENERATED with this change: the page is the
+    // rebuilt one (page header, pill-wrapped labelled selects, accordions).
+    landmark: (page) => page.getByTestId('ai-providers-section-llms'),
   },
   {
     // @covers /toolkits/create

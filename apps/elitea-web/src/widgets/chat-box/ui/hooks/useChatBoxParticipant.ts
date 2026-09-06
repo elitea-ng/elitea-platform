@@ -10,6 +10,7 @@ import { useMemo } from 'react';
 import type { Participant } from '@/entities/participant';
 import { normaliseVersionSummaries } from '@/entities/version';
 import { useActiveParticipantDetails } from '@/features/chat-participants';
+import { useParticipantName } from '@/features/chat-messages';
 
 import { toParticipant, toParticipants } from '../ChatBox.helpers';
 
@@ -29,6 +30,14 @@ export interface UseChatBoxParticipantResult {
   readonly normalisedParticipants: Participant[] | undefined;
   readonly agentEditorParticipantDetails: AgentEditorParticipantDetails | undefined;
   readonly isFetchingParticipantDetails: boolean;
+  /**
+   * The active participant's display name, captioned on every assistant
+   * transcript row (baseline `ApplicationAnswer.jsx`'s own
+   * `useParticipantName(participant)`). Falls back to the deployment's
+   * `system_sender_name` — "Elitea" by default — when the conversation has no
+   * named participant, which is the plain-model case.
+   */
+  readonly assistantName: string;
 }
 
 export function useChatBoxParticipant({
@@ -36,6 +45,7 @@ export function useChatBoxParticipant({
   conversationParticipants,
 }: UseChatBoxParticipantParams): UseChatBoxParticipantResult {
   const participantForEditor = useMemo(() => toParticipant(activeParticipant), [activeParticipant]);
+  const assistantName = useParticipantName(activeParticipant as Parameters<typeof useParticipantName>[0]);
   const normalisedParticipants = useMemo(
     () => toParticipants(conversationParticipants),
     [conversationParticipants],
@@ -55,5 +65,5 @@ export function useChatBoxParticipant({
     return { ...(id !== undefined ? { id } : {}), ...(name !== undefined ? { name } : {}), ...(versions !== undefined ? { versions } : {}) };
   }, [rawParticipantDetails]);
 
-  return { participantForEditor, normalisedParticipants, agentEditorParticipantDetails, isFetchingParticipantDetails };
+  return { participantForEditor, normalisedParticipants, agentEditorParticipantDetails, isFetchingParticipantDetails, assistantName };
 }

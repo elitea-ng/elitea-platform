@@ -149,6 +149,24 @@ describe('TabGroupButton', () => {
     expect(queryByRole('tooltip')).not.toBeInTheDocument();
   });
 
+  it('forwards itemSx to every button, not to the group', () => {
+    // The one caller that needs it (`ThemeModeToggle`) wants ONE width for
+    // the whole row. Written on the group's own `sx` it would have to name
+    // the button's MUI class, which R-T6 bans outside
+    // `shared/brand/mui-overrides/`. So the style goes on each button.
+    const { getAllByRole, getByRole } = renderWithTheme(
+      <TabGroupButton
+        items={items}
+        ariaLabel="View toggle"
+        itemSx={{ minWidth: '6.25rem' }}
+      />,
+    );
+    for (const button of getAllByRole('button')) {
+      expect(window.getComputedStyle(button).minWidth).toBe('6.25rem');
+    }
+    expect(window.getComputedStyle(getByRole('group')).minWidth).not.toBe('6.25rem');
+  });
+
   it('renders an empty group with nothing selected when items is empty and no defaultValue is given', () => {
     const { getByRole, queryByRole } = renderWithTheme(<TabGroupButton items={[]} />);
     expect(getByRole('group')).toBeInTheDocument();

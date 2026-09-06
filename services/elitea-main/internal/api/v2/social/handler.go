@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -27,6 +28,10 @@ type Handler struct {
 	// tenant migration corpus, and this is a read endpoint the SPA polls. See
 	// GetAuthor.
 	personalProject personalproject.AsyncEnsurer
+
+	// personalProjectWait bounds the wait GetAuthor puts on an ensure it just
+	// started. Zero means defaultPersonalProjectWait, the production value.
+	personalProjectWait time.Duration
 }
 
 // Option configures a Handler at construction time.
@@ -42,6 +47,22 @@ type Option func(*Handler)
 // route uses.
 func WithPersonalProjectEnsurer(ensurer personalproject.AsyncEnsurer) Option {
 	return func(h *Handler) { h.personalProject = ensurer }
+}
+
+// WithPersonalProjectWait replaces the bounded wait GetAuthor puts on an
+// ensure it started. Zero and negative values are ignored.
+//
+// It exists for the integration suite, which must be able to state the two
+// outcomes SEPARATELY: a wait long enough to prove the first read reports the
+// project, and a wait short enough to prove the endpoint still answers "" and
+// lets the poll finish the job. A test that took the production value would
+// measure how fast the machine applies a migration corpus.
+func WithPersonalProjectWait(wait time.Duration) Option {
+	return func(h *Handler) {
+		if wait > 0 {
+			h.personalProjectWait = wait
+		}
+	}
 }
 
 func NewHandler(pool *pgxpool.Pool, options ...Option) *Handler {
@@ -95,6 +116,27 @@ type AuthorResponse struct {
 	// absence is what the client's own defaults are for.
 	DefaultContextManagement *contextsettings.ContextManagement `json:"default_context_management,omitempty"`
 	DefaultSummarization     *contextsettings.Summarization     `json:"default_summarization,omitempty"`
+
+	// ProviderRefs are the caller's OWN federated identity references, exactly
+	// as `auth_core__user_provider.provider_ref` stores them.
+	//
+	// WHY A PROFILE ENDPOINT CARRIES AN OPERATIONS VALUE. `identity.
+	// initial_global_admins` names a login by this reference, it is read at
+	// boot, and with Azure AD or Okta the OIDC subject inside it is an opaque
+	// identifier that nobody knows in advance. Making the first administrator
+	// of a fresh deployment therefore meant `SELECT provider_ref FROM
+	// auth_core__user_provider` against the production database. This is that
+	// same value, served to the person it belongs to, over the endpoint the SPA
+	// already calls for "who am I".
+	//
+	// IT IS THE CALLER'S OWN, AND ONLY THEIR OWN. The lookup is keyed on the
+	// authenticated principal's user id, never on the joined social row, which
+	// is matched on email OR id and could name somebody else.
+	//
+	// Omitted when the account holds none. A password login through the Form
+	// plane creates no `auth_core__user_provider` row, and `initial_global_
+	// admins` has nothing to name on such an account.
+	ProviderRefs []string `json:"provider_refs,omitempty"`
 }
 
 func (h *Handler) GetAuthor(w http.ResponseWriter, r *http.Request) {
@@ -156,16 +198,51 @@ func (h *Handler) GetAuthor(w http.ResponseWriter, r *http.Request) {
 	// the joined row (which is matched on email OR id and could in principle
 	// select a different user's profile).
 	resp.ID = user.ID
+	resp.ProviderRefs = h.resolveProviderRefs(ctx, user)
 	resp.PersonalProjectID = h.resolvePersonalProjectID(ctx, user.ID)
-	if resp.PersonalProjectID == "" {
-		h.ensurePersonalProject(user)
+	if resp.PersonalProjectID == "" && h.ensurePersonalProject(ctx, user) {
+		// The attempt this request started has FINISHED, so the answer this
+		// request can give has changed. Re-reading is the whole point: the
+		// value below is what the SPA routes on, and reporting "" for a
+		// project that now exists sends a first-time user to the onboarding
+		// screen for five minutes of nothing.
+		resp.PersonalProjectID = h.resolvePersonalProjectID(ctx, user.ID)
 	}
 
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// ensurePersonalProject asks for the caller's personal project to be created,
-// and does not wait for it.
+// startedEnsurer is the completion-aware half of *personalproject.Ensurer,
+// declared at the consumer.
+//
+// The field stays `personalproject.AsyncEnsurer`, because the OTHER reader of
+// "the caller's personal project" — api/middleware's project resolver — wants
+// exactly the fire-and-forget method and nothing more. Widening the shared
+// interface would force a wait it has no request to hold open for.
+type startedEnsurer interface {
+	EnsureStarted(userID int64) <-chan struct{}
+}
+
+// defaultPersonalProjectWait bounds how long this read waits for a personal
+// project it just asked for.
+//
+// SHORT ON PURPOSE. The request must still answer; the wait only decides
+// whether it answers with the id or with "". Three seconds is inside the
+// browser's patience and well under the SPA's five-second poll, so a slower
+// provisioning run degrades to exactly the behaviour that shipped before —
+// "" now, the real id on a later poll — rather than to a hung request.
+const defaultPersonalProjectWait = 3 * time.Second
+
+// ensurePersonalProject asks for the caller's personal project to be created
+// and waits a bounded moment for the answer. It reports whether the attempt for
+// this user finished, which is the caller's cue to re-resolve.
+//
+// THE ATTEMPT IS NOT NECESSARILY THIS REQUEST'S. The SPA sends two of these
+// requests at boot, inside the same second. EnsureStarted gives BOTH of them
+// the running attempt's channel, so both wait for the same work and both
+// answer the same id. It used to give the second one nil, and that request
+// answered "" while its twin answered the real project — one boot, two
+// contradictory answers, on the field the SPA routes on.
 //
 // WHY HERE. This endpoint is the one that answers "which project do your
 // private things live in", it is authenticated on every plane, and the SPA
@@ -175,13 +252,22 @@ func (h *Handler) GetAuthor(w http.ResponseWriter, r *http.Request) {
 // layer, for every authenticated request, through the `auth_visitor` event
 // (legacy/plugins/projects/events/projects.py:8).
 //
+// WHY IT WAITS AT ALL. The account is provisioned BY THIS REQUEST, and the
+// request then reported that it had no personal project. The SPA routes on
+// that field, so a first login landed on `/onboarding` ("about 5 minutes")
+// while the project it was waiting for already existed; a reload went straight
+// to chat. The wait closes the gap between the two answers.
+//
+// WHAT IT DOES NOT DO. It never cancels the provisioning — EnsureStarted keeps
+// the detached deadline — and it never queues behind a full slot budget. A
+// dropped attempt returns a nil channel and this function falls back to the
+// previous behaviour: answer "" and let the poll ask again.
+//
 // It costs nothing on an account that HAS a personal project, because it is
-// reached only when the resolver above answered "". A first-time caller gets
-// "" on this response and the real id on a later one, which is exactly the
-// contract the onboarding screen is written against.
-func (h *Handler) ensurePersonalProject(user auth.User) {
+// reached only when the resolver answered "".
+func (h *Handler) ensurePersonalProject(ctx context.Context, user auth.User) bool {
 	if h.personalProject == nil {
-		return
+		return false
 	}
 	// `OwningUserID`, not a fresh parse of `user.ID`: it is this repository's
 	// reviewed answer to "which auth_core__user owns this principal". It reads
@@ -191,9 +277,85 @@ func (h *Handler) ensurePersonalProject(user auth.User) {
 	// of.
 	id, ok := user.OwningUserID()
 	if !ok {
-		return
+		return false
 	}
-	h.personalProject.EnsureAsync(id)
+
+	awaitable, canWait := h.personalProject.(startedEnsurer)
+	if !canWait {
+		h.personalProject.EnsureAsync(id)
+		return false
+	}
+	done := awaitable.EnsureStarted(id)
+	if done == nil {
+		// No attempt exists for this user at all — the slot budget dropped it.
+		// There is nothing to wait for, so answer as this endpoint always did
+		// and let the SPA's poll ask again.
+		return false
+	}
+
+	wait := h.personalProjectWait
+	if wait <= 0 {
+		wait = defaultPersonalProjectWait
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return true
+	case <-timer.C:
+		return false
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// resolveProviderRefs reads the caller's own `auth_core__user_provider`
+// references. See AuthorResponse.ProviderRefs for why this endpoint carries
+// them.
+//
+// FAILURE IS SILENCE, NOT AN ERROR. This is one extra field on a response the
+// SPA calls on every boot, so a database fault here must not take out the
+// profile, the personal-project id, or the memory defaults beside it. The
+// caller gets the field omitted, and the cause goes to the log.
+//
+// `OwningUserID`, not a parse of `user.ID`: it is this repository's reviewed
+// answer to "which auth_core__user owns this principal", and it refuses a
+// principal whose id is a TOKEN id — which would key this read on the wrong
+// row entirely.
+func (h *Handler) resolveProviderRefs(ctx context.Context, user auth.User) []string {
+	if h.pool == nil {
+		return nil
+	}
+	id, ok := user.OwningUserID()
+	if !ok {
+		return nil
+	}
+	rows, err := h.pool.Query(ctx, `
+		SELECT provider_ref
+		FROM public.auth_core__user_provider
+		WHERE user_id = $1::bigint AND provider_ref IS NOT NULL
+		ORDER BY provider_ref
+	`, id)
+	if err != nil {
+		slog.Warn("social: read provider references", "err", err, "user_id", id)
+		return nil
+	}
+	defer rows.Close()
+
+	var refs []string
+	for rows.Next() {
+		var ref string
+		if err := rows.Scan(&ref); err != nil {
+			slog.Warn("social: scan provider reference", "err", err, "user_id", id)
+			return nil
+		}
+		refs = append(refs, ref)
+	}
+	if err := rows.Err(); err != nil {
+		slog.Warn("social: iterate provider references", "err", err, "user_id", id)
+		return nil
+	}
+	return refs
 }
 
 // resolvePersonalProjectID answers "which project do this user's private

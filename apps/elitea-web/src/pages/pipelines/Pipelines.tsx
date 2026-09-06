@@ -8,7 +8,7 @@ import { useNavigate, useParams } from '@tanstack/react-router';
 import { t } from '@/shared/i18n';
 import { BaseTab } from '@/shared/ui/BaseTab';
 import { BaseTabs } from '@/shared/ui/BaseTabs';
-import { EntityListRail, RAIL_CONTENT_WIDTH, useEntityRailVisible } from '@/shared/ui/EntityRail';
+import { EntityListRail } from '@/shared/ui/EntityRail';
 import { useSidebarCollapsedStore } from '@/widgets/sidebar';
 
 import { isPublicPipelinesProject } from './lib/isPublicPipelinesProject';
@@ -37,7 +37,6 @@ const tabPanelSx: SxProps<Theme> = {
 };
 
 /** `CARD_LIST_WIDTH` (`apps/elitea-ui/src/common/constants.js:511`) — see `pages/agents/Applications.tsx` for the shared rationale. */
-const contentWidthSx = (railVisible: boolean): SxProps<Theme> => ({ width: railVisible ? RAIL_CONTENT_WIDTH : '100%' });
 
 /** The public feeds plus the Admin tab pin the rail to "Trending Authors" (`pages/Applications/PrivateAgentsList.jsx:141-151`, the same component the pipelines domain reuses). */
 const TRENDING_AUTHOR_TABS: readonly string[] = ['latest', 'my-liked', 'trending', 'admin'];
@@ -113,7 +112,6 @@ export function Pipelines(): ReactNode {
     void navigate({ to: '/pipelines/$tab', params: { tab: nextTab.value } });
   };
 
-  const railVisible = useEntityRailVisible(navRailCollapsed);
 
   return (
     <Box sx={pageSx}>
@@ -136,7 +134,7 @@ export function Pipelines(): ReactNode {
         sx={tabPanelSx}
         role="tabpanel"
       >
-        <Box sx={contentWidthSx(railVisible)}>{selectedIndex !== -1 ? visibleTabs[selectedIndex]?.content : null}</Box>
+        {selectedIndex !== -1 ? visibleTabs[selectedIndex]?.content : null}
       </Box>
       <EntityListRail
         projectId={projectId}

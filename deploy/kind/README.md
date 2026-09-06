@@ -136,8 +136,10 @@ this stack started. It cannot satisfy check 3, and the chain is short:
   `cmd/elitea-main/configurations_config.go` answers
   `current Configurations settings require explicit enablement`, and it is a
   boot failure, not a warning;
-* `ELITEA_CONFIGURATIONS_ENABLED=true` requires production authentication, and
-  cmd/elitea-main builds a principal validator only from the Form graph;
+* `ELITEA_CONFIGURATIONS_ENABLED=true` requires an authenticated deployment —
+  a credential reader plus a principal validator. Either plane answers now
+  (`cmd/elitea-main/production_authentication.go`), so an OIDC-only install
+  satisfies it too; this file uses the Form plane;
 * the Form graph keeps its session and attempt store in a **mutually
   authenticated** Redis (`internal/authcomposition/redis.go` always builds a
   TLS config), which is why `runtimeRedis` is on.

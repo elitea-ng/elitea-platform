@@ -1,6 +1,11 @@
 import { type ReactNode, useCallback, useMemo, useState } from 'react';
 
+// `shared/ui/icons/` has no back-arrow glyph (only S2's baseline-used icons
+// were ported) — the same documented fallback `features/analytics`'
+// `DetailHeader.tsx` already uses for this exact glyph.
+import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import Box from '@mui/material/Box';
+import IconButton from '@mui/material/IconButton';
 import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
@@ -15,16 +20,33 @@ import { useSelectedProjectId } from './lib/useSelectedProjectId';
 import type { EditToolDetail } from './lib/toolkitFormTypes';
 
 const pageSx: SxProps<Theme> = { height: '100%', display: 'flex', flexDirection: 'column' };
-const tabBarSx: SxProps<Theme> = {
+/**
+ * The baseline's own tab bar (`StyledTabs`' `tabBar`): `minHeight: 3.75rem`,
+ * `padding: 0 1.5rem`, `gap: 0.75rem`, and a `border.table` bottom rule. The
+ * previous 3rem/`divider` pair was ~12px short and drew the wrong grey.
+ */
+const tabBarSx: SxProps<Theme> = (theme: Theme) => ({
   flexShrink: 0,
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'space-between',
-  borderBottom: 1,
-  borderColor: 'divider',
-  padding: '0 1.5rem',
-  minHeight: '3rem',
-};
+  gap: theme.spacing(1),
+  borderBottom: `0.0625rem solid ${theme.vars.palette.border.table}`,
+  backgroundColor: theme.vars.palette.background.eliteaDefault,
+  padding: theme.spacing(0, 3),
+  minHeight: '3.75rem',
+  boxSizing: 'border-box',
+});
+/** Back button + title, the baseline's `leftSection`. */
+const tabBarLeftSx: SxProps<Theme> = (theme: Theme) => ({ display: 'flex', alignItems: 'center', gap: theme.spacing(1.5), minWidth: 0 });
+const backButtonSx: SxProps<Theme> = { margin: 0 };
+/**
+ * The TYPE PICKER paints its own full-bleed filter band and divider
+ * (`CategoryFilter`), so the page must not inset it — the baseline says the
+ * same thing with `panelStyle={styles.emptyPanelStyle}` (`padding: 0 0`) while
+ * no type is selected, and only pads the panel once the form is on screen.
+ */
+const selectorContentSx: SxProps<Theme> = { flex: 1, minHeight: 0, overflowY: 'auto' };
 const contentSx: SxProps<Theme> = { flex: 1, minHeight: 0, overflowY: 'auto', padding: '1.5rem' };
 const errorSx: SxProps<Theme> = { marginBottom: '1rem' };
 
@@ -281,10 +303,33 @@ export function CreateToolkit({ isMCP = false, isApplication = false, deps }: Cr
 
   const title = useMemo(() => resolveCreateTitle(isApplication, isMCP), [isApplication, isMCP]);
 
+  /**
+   * The baseline renders `StyledTabs` with its `BackButton` (`hideBackButton`
+   * is never set on this page), so every create screen opens with a back arrow
+   * left of the title; this port had none. `BackButton`'s own fallback —
+   * `NavigationHelpers.getListRouteByPageType` — is the destination modelled
+   * here: the list this entity type is created from.
+   */
+  const handleBack = useCallback(() => {
+    if (isMCP) void navigate({ to: '/mcps/$tab', params: { tab: 'all' } });
+    else if (isApplication) void navigate({ to: '/apps/$tab', params: { tab: 'all' } });
+    else void navigate({ to: '/toolkits/$tab', params: { tab: 'all' } });
+  }, [navigate, isMCP, isApplication]);
+
   return (
     <Box sx={pageSx}>
       <Box sx={tabBarSx}>
-        <Typography variant="headingSmall">{title}</Typography>
+        <Box sx={tabBarLeftSx}>
+          <IconButton
+            onClick={handleBack}
+            size="small"
+            aria-label={t('pages.toolkits.createToolkit.back', 'Back')}
+            sx={backButtonSx}
+          >
+            <ArrowBackIcon fontSize="small" />
+          </IconButton>
+          <Typography variant="headingSmall">{title}</Typography>
+        </Box>
         {editToolDetail && (
           <CreateToolkitToolTabBar
             toolkitType={editToolDetail.type}
@@ -299,7 +344,7 @@ export function CreateToolkit({ isMCP = false, isApplication = false, deps }: Cr
           />
         )}
       </Box>
-      <Box sx={contentSx}>
+      <Box sx={editToolDetail ? contentSx : selectorContentSx}>
         {createError !== undefined && (
           <Typography
             role="alert"

@@ -27,7 +27,14 @@ import (
 // does not help, because a deactivated user's RBAC rows survive deactivation.
 // This is the defect #301 fixed on chat_config and #314 fixed on the project
 // list and the notification event stream, at the scope of the whole group
-// (#370). See chatConfigAuthConfig and oidcSessionAuthConfig.
+// (#370). See chatConfigAuthConfig.
+//
+// This is now the ONLY apimw.AuthConfig composition in cmd/elitea-main.
+// Every per-route AuthConfig literal in main.go is gone: sixteen of the
+// twenty-one left SessionSecret empty, so a browser holding a valid
+// session got `401 missing authorization header` on the routes only a
+// browser calls. TestNoPrivateAuthConfigLiteralsInMain fails the build if
+// a second composition appears.
 //
 // sessionPrincipals is a parameter rather than something this function builds,
 // and formGraph stays a concrete *authcomposition.FormGraph rather than the

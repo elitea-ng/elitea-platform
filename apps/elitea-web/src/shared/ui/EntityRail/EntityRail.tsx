@@ -119,7 +119,19 @@ const railSx = (theme: Theme) => ({
   right: `${String(RAIL_RIGHT_PX)}px`,
   top: theme.spacing(2),
   width: `${String(RAIL_WIDTH_PX)}px`,
-  maxHeight: `calc(100vh - ${theme.spacing(4)})`,
+  // CONTENT-box, deliberately. `RightPanel.jsx`'s `FixedGrid` is
+  // `width: 328px; padding-left: 16px` and measures 344px wide in production,
+  // i.e. the gutter sits OUTSIDE the 328px column. Under the app's global
+  // `border-box` the same declarations shrank the column to 312px, so every
+  // chip row, the "TAGS" heading and the author card were inset 16px further
+  // from the viewport edge than production's.
+  boxSizing: 'content-box',
+  // A HEIGHT, not a max-height. `RightInfoPanel.jsx` sizes its column to
+  // `100dvh` so the tags panel (`flex: 1`) can absorb the slack and the
+  // author card below it lands on the viewport's bottom edge — which is
+  // where production shows it. A max-height let the column shrink-wrap its
+  // children, stacking the card immediately under the chips.
+  height: `calc(100dvh - ${theme.spacing(4)})`,
   paddingLeft: theme.spacing(2),
   zIndex: 1000,
   display: 'flex',

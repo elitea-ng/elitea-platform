@@ -73,6 +73,7 @@ import {
 } from '@tanstack/react-query';
 
 import { EliteaApiError, eliteaFetch } from '@/shared/api/generated/mutator';
+import { platformModelKeys } from './adminLlmPlatformModelsApi';
 import { unwrapBody } from '@/shared/api/unwrap';
 
 const PROVIDERS_URL = '/admin/gateway/providers';
@@ -81,12 +82,12 @@ const PROVIDERS_URL = '/admin/gateway/providers';
  * Every credential type this app knows how to draw a form for.
  *
  * IT IS NOT THE LIST THE SELECT OFFERS. What a deployment will actually publish
- * comes from the server, as `provider_types` on the listing, and is narrower:
- * the gateway can dispatch to nine types while the pinned configuration
- * catalogue describes six, and a type outside the catalogue cannot be given a
- * `section` or have its key sealed. This list exists so the form has field
- * definitions ready when a deployment's catalogue grows — see
- * `../llmProviderForm.ts`.
+ * comes from the server, as `provider_types` on the listing. A type outside the
+ * server's own catalogue cannot be given a `section` or have its key sealed, so
+ * the server refuses it. The shipped catalogue describes all nine today; a
+ * deployment's may describe fewer, and the select must follow the server either
+ * way. This list exists so the form has field definitions ready for whatever
+ * the server offers — see `../llmProviderForm.ts`.
  *
  * The server's refusal is the security boundary, never this list.
  */
@@ -175,6 +176,18 @@ const providerKeys = {
   all: ['admin', 'llmProxy', 'providers'] as const,
 };
 
+/**
+ * A provider write changes TWO listings: this one, and the platform-MODEL
+ * listing whose `credential_names` fills the model dialog's "Platform
+ * provider" select (see `platformModelKeys`' own comment). Every mutation goes
+ * through this, deletes included — a withdrawn provider must stop being
+ * offered for the same reason a new one must start.
+ */
+function invalidateProviderResource(queryClient: ReturnType<typeof useQueryClient>): void {
+  void queryClient.invalidateQueries({ queryKey: providerKeys.all });
+  void queryClient.invalidateQueries({ queryKey: platformModelKeys.all });
+}
+
 /** `GET /admin/gateway/providers`. */
 export function useAdminLlmProviders(): UseQueryResult<LlmProviderList, Error> {
   return useQuery({
@@ -210,7 +223,7 @@ export function useCreateAdminLlmProvider(): UseMutationResult<void, Error, LlmP
         body: JSON.stringify(draft),
       });
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: providerKeys.all }),
+    onSuccess: () => { invalidateProviderResource(queryClient); },
   });
 }
 
@@ -235,7 +248,7 @@ export function useUpdateAdminLlmProvider(): UseMutationResult<
         body: JSON.stringify(draft),
       });
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: providerKeys.all }),
+    onSuccess: () => { invalidateProviderResource(queryClient); },
   });
 }
 
@@ -253,7 +266,7 @@ export function useDeleteAdminLlmProvider(): UseMutationResult<void, Error, numb
     mutationFn: async (id: number) => {
       await eliteaFetch<unknown>(`${PROVIDERS_URL}/${String(id)}`, { method: 'DELETE' });
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: providerKeys.all }),
+    onSuccess: () => { invalidateProviderResource(queryClient); },
   });
 }
 

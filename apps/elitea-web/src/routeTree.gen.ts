@@ -53,10 +53,12 @@ import { Route as ShellSettingsModelConfigurationRouteImport } from './routes/_s
 import { Route as ShellSettingsNotificationsRouteImport } from './routes/_shell/settings/notifications'
 import { Route as ShellSettingsPersonalizationRouteImport } from './routes/_shell/settings/personalization'
 import { Route as ShellSettingsPreferencesRouteImport } from './routes/_shell/settings/preferences'
+import { Route as ShellSettingsProfileRouteImport } from './routes/_shell/settings/profile'
 import { Route as ShellSettingsProjectParamsRouteImport } from './routes/_shell/settings/project-params'
 import { Route as ShellSettingsPromptsRouteImport } from './routes/_shell/settings/prompts'
 import { Route as ShellSettingsSecretsRouteImport } from './routes/_shell/settings/secrets'
 import { Route as ShellSettingsTokensRouteImport } from './routes/_shell/settings/tokens'
+import { Route as ShellSettingsUsageRouteImport } from './routes/_shell/settings/usage'
 import { Route as ShellSettingsUsersRouteImport } from './routes/_shell/settings/users'
 import { Route as ShellSkillsIndexRouteImport } from './routes/_shell/skills/index'
 import { Route as ShellSkillsTabRouteImport } from './routes/_shell/skills/$tab'
@@ -319,6 +321,11 @@ const ShellSettingsPreferencesRoute =
     path: '/preferences',
     getParentRoute: () => ShellSettingsRouteRoute,
   } as any)
+const ShellSettingsProfileRoute = ShellSettingsProfileRouteImport.update({
+  id: '/profile',
+  path: '/profile',
+  getParentRoute: () => ShellSettingsRouteRoute,
+} as any)
 const ShellSettingsProjectParamsRoute =
   ShellSettingsProjectParamsRouteImport.update({
     id: '/project-params',
@@ -338,6 +345,11 @@ const ShellSettingsSecretsRoute = ShellSettingsSecretsRouteImport.update({
 const ShellSettingsTokensRoute = ShellSettingsTokensRouteImport.update({
   id: '/tokens',
   path: '/tokens',
+  getParentRoute: () => ShellSettingsRouteRoute,
+} as any)
+const ShellSettingsUsageRoute = ShellSettingsUsageRouteImport.update({
+  id: '/usage',
+  path: '/usage',
   getParentRoute: () => ShellSettingsRouteRoute,
 } as any)
 const ShellSettingsUsersRoute = ShellSettingsUsersRouteImport.update({
@@ -554,10 +566,12 @@ export interface FileRoutesByFullPath {
   '/settings/notifications': typeof ShellSettingsNotificationsRoute
   '/settings/personalization': typeof ShellSettingsPersonalizationRoute
   '/settings/preferences': typeof ShellSettingsPreferencesRoute
+  '/settings/profile': typeof ShellSettingsProfileRoute
   '/settings/project-params': typeof ShellSettingsProjectParamsRoute
   '/settings/prompts': typeof ShellSettingsPromptsRoute
   '/settings/secrets': typeof ShellSettingsSecretsRoute
   '/settings/tokens': typeof ShellSettingsTokensRoute
+  '/settings/usage': typeof ShellSettingsUsageRoute
   '/settings/users': typeof ShellSettingsUsersRoute
   '/skills/$tab': typeof ShellSkillsTabRouteWithChildren
   '/skills/create': typeof ShellSkillsCreateRoute
@@ -634,10 +648,12 @@ export interface FileRoutesByTo {
   '/settings/notifications': typeof ShellSettingsNotificationsRoute
   '/settings/personalization': typeof ShellSettingsPersonalizationRoute
   '/settings/preferences': typeof ShellSettingsPreferencesRoute
+  '/settings/profile': typeof ShellSettingsProfileRoute
   '/settings/project-params': typeof ShellSettingsProjectParamsRoute
   '/settings/prompts': typeof ShellSettingsPromptsRoute
   '/settings/secrets': typeof ShellSettingsSecretsRoute
   '/settings/tokens': typeof ShellSettingsTokensRoute
+  '/settings/usage': typeof ShellSettingsUsageRoute
   '/settings/users': typeof ShellSettingsUsersRoute
   '/skills/$tab': typeof ShellSkillsTabRouteWithChildren
   '/skills/create': typeof ShellSkillsCreateRoute
@@ -717,10 +733,12 @@ export interface FileRoutesById {
   '/_shell/settings/notifications': typeof ShellSettingsNotificationsRoute
   '/_shell/settings/personalization': typeof ShellSettingsPersonalizationRoute
   '/_shell/settings/preferences': typeof ShellSettingsPreferencesRoute
+  '/_shell/settings/profile': typeof ShellSettingsProfileRoute
   '/_shell/settings/project-params': typeof ShellSettingsProjectParamsRoute
   '/_shell/settings/prompts': typeof ShellSettingsPromptsRoute
   '/_shell/settings/secrets': typeof ShellSettingsSecretsRoute
   '/_shell/settings/tokens': typeof ShellSettingsTokensRoute
+  '/_shell/settings/usage': typeof ShellSettingsUsageRoute
   '/_shell/settings/users': typeof ShellSettingsUsersRoute
   '/_shell/skills/$tab': typeof ShellSkillsTabRouteWithChildren
   '/_shell/skills/create': typeof ShellSkillsCreateRoute
@@ -800,10 +818,12 @@ export interface FileRouteTypes {
     | '/settings/notifications'
     | '/settings/personalization'
     | '/settings/preferences'
+    | '/settings/profile'
     | '/settings/project-params'
     | '/settings/prompts'
     | '/settings/secrets'
     | '/settings/tokens'
+    | '/settings/usage'
     | '/settings/users'
     | '/skills/$tab'
     | '/skills/create'
@@ -880,10 +900,12 @@ export interface FileRouteTypes {
     | '/settings/notifications'
     | '/settings/personalization'
     | '/settings/preferences'
+    | '/settings/profile'
     | '/settings/project-params'
     | '/settings/prompts'
     | '/settings/secrets'
     | '/settings/tokens'
+    | '/settings/usage'
     | '/settings/users'
     | '/skills/$tab'
     | '/skills/create'
@@ -962,10 +984,12 @@ export interface FileRouteTypes {
     | '/_shell/settings/notifications'
     | '/_shell/settings/personalization'
     | '/_shell/settings/preferences'
+    | '/_shell/settings/profile'
     | '/_shell/settings/project-params'
     | '/_shell/settings/prompts'
     | '/_shell/settings/secrets'
     | '/_shell/settings/tokens'
+    | '/_shell/settings/usage'
     | '/_shell/settings/users'
     | '/_shell/skills/$tab'
     | '/_shell/skills/create'
@@ -1325,6 +1349,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ShellSettingsPreferencesRouteImport
       parentRoute: typeof ShellSettingsRouteRoute
     }
+    '/_shell/settings/profile': {
+      id: '/_shell/settings/profile'
+      path: '/profile'
+      fullPath: '/settings/profile'
+      preLoaderRoute: typeof ShellSettingsProfileRouteImport
+      parentRoute: typeof ShellSettingsRouteRoute
+    }
     '/_shell/settings/project-params': {
       id: '/_shell/settings/project-params'
       path: '/project-params'
@@ -1351,6 +1382,13 @@ declare module '@tanstack/react-router' {
       path: '/tokens'
       fullPath: '/settings/tokens'
       preLoaderRoute: typeof ShellSettingsTokensRouteImport
+      parentRoute: typeof ShellSettingsRouteRoute
+    }
+    '/_shell/settings/usage': {
+      id: '/_shell/settings/usage'
+      path: '/usage'
+      fullPath: '/settings/usage'
+      preLoaderRoute: typeof ShellSettingsUsageRouteImport
       parentRoute: typeof ShellSettingsRouteRoute
     }
     '/_shell/settings/users': {
@@ -1607,10 +1645,12 @@ interface ShellSettingsRouteRouteChildren {
   ShellSettingsNotificationsRoute: typeof ShellSettingsNotificationsRoute
   ShellSettingsPersonalizationRoute: typeof ShellSettingsPersonalizationRoute
   ShellSettingsPreferencesRoute: typeof ShellSettingsPreferencesRoute
+  ShellSettingsProfileRoute: typeof ShellSettingsProfileRoute
   ShellSettingsProjectParamsRoute: typeof ShellSettingsProjectParamsRoute
   ShellSettingsPromptsRoute: typeof ShellSettingsPromptsRoute
   ShellSettingsSecretsRoute: typeof ShellSettingsSecretsRoute
   ShellSettingsTokensRoute: typeof ShellSettingsTokensRoute
+  ShellSettingsUsageRoute: typeof ShellSettingsUsageRoute
   ShellSettingsUsersRoute: typeof ShellSettingsUsersRoute
   ShellSettingsIndexRoute: typeof ShellSettingsIndexRoute
   ShellSettingsEditConfigurationCredential_uidRoute: typeof ShellSettingsEditConfigurationCredential_uidRoute
@@ -1629,10 +1669,12 @@ const ShellSettingsRouteRouteChildren: ShellSettingsRouteRouteChildren = {
   ShellSettingsNotificationsRoute: ShellSettingsNotificationsRoute,
   ShellSettingsPersonalizationRoute: ShellSettingsPersonalizationRoute,
   ShellSettingsPreferencesRoute: ShellSettingsPreferencesRoute,
+  ShellSettingsProfileRoute: ShellSettingsProfileRoute,
   ShellSettingsProjectParamsRoute: ShellSettingsProjectParamsRoute,
   ShellSettingsPromptsRoute: ShellSettingsPromptsRoute,
   ShellSettingsSecretsRoute: ShellSettingsSecretsRoute,
   ShellSettingsTokensRoute: ShellSettingsTokensRoute,
+  ShellSettingsUsageRoute: ShellSettingsUsageRoute,
   ShellSettingsUsersRoute: ShellSettingsUsersRoute,
   ShellSettingsIndexRoute: ShellSettingsIndexRoute,
   ShellSettingsEditConfigurationCredential_uidRoute:

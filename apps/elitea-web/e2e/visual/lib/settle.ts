@@ -92,14 +92,94 @@ export async function shellSettled(
 }
 
 /**
- * Fonts loaded, animations frozen, caret hidden — the three things that make
- * two renders of an unchanged screen differ.
+ * Animations frozen, images decoded, fonts loaded, caret hidden — the four
+ * things that make two renders of an unchanged screen differ.
+ *
+ * ── WHY IMAGES ARE WAITED FOR, AND FONTS ARE NOT ENOUGH ────────────────────
+ *
+ * Playwright's own screenshot path already does two of these for us: the call
+ * log of every shot in this suite reads "disabled all CSS animations" and
+ * "waiting for fonts to load … fonts loaded". It does NOT wait for images, and
+ * on this branch that is the gap that matters.
+ *
+ * The illustrated empty states (`shared/ui/EntityCardList/EntityEmptyState`)
+ * paint `src/assets/empty-states/*.webp`. They USED to paint them at
+ * `width: 15rem; height: auto` with no width/height attributes and no
+ * `aspect-ratio`, so the box was ZERO high until the WebP's header arrived and
+ * 170.65625px high afterwards (720x512 source painted 240px wide) — the
+ * heading, the description and the `+ Create` pill all moved by 170px between
+ * those two states. An un-waited image is not a small difference in such a
+ * shot; it is a different screenshot, and `--update-snapshots` would pin
+ * whichever one the shutter caught. `waitForTimeout(300)` was the only thing
+ * covering that, and a fixed sleep is a hope, not a wait.
+ *
+ * That component now declares a whole-pixel box in both axes, so the reserved
+ * and the decoded layouts are the same one. This wait is no longer what stands
+ * between the suite and a 170px jump THERE — but every other image in every
+ * other shot is still sized by its bitmap, so it stays.
+ *
+ * SAID PLAINLY: this wait has not been caught doing work. On the standalone
+ * stack, with the assets already in the HTTP cache, both `<img>` elements
+ * reported `complete` at the landmark in 8 of 8 loads of
+ * `/app/pipelines/latest`. It guards a cold cache and a slow runner, which is
+ * where the 170px state lives, and it is not offered as a reproduction.
+ *
+ * ── WHAT THESE SHOTS ARE SENSITIVE TO, AND WHAT NO WAIT CAN FIX ────────────
+ *
+ * The illustration's height WAS not a whole pixel: 240 * 512 / 720 is 170.666…,
+ * laid out at 170.65625, so every box under it sat off the pixel grid. Measured
+ * in the pinned image against the standalone stack, on all 8 loads: the
+ * empty-state heading reported `getBoundingClientRect().top = 361.40625` and
+ * the description 401.40625 — device rows 722.8125 and 802.8125 at this
+ * project's `deviceScaleFactor: 2`. Layout was REPRODUCIBLE (the same values
+ * every load); what is not guaranteed is how a renderer rounds a glyph run onto
+ * a device row eight tenths of a pixel away.
+ *
+ * Issue #819 is what that looks like when two runs round it differently. The
+ * `pipelines-list-empty` failure is 1342 pixels, all of them 400-weight 14px
+ * text — the two-line description and the rail's "No tags to display." The
+ * illustration, the 600-weight heading and the `+ Create` pill are
+ * byte-identical, so nothing MOVED; the same glyphs rasterised differently.
+ * Two facts place the blame on the baseline rather than on the render: the
+ * failing capture is byte-identical, over that text, to the baseline this one
+ * REPLACED (846e55f0) and to the `agents-list-empty` baseline recorded in the
+ * same regeneration run. One capture in that run disagreed with everything
+ * before and after it, and it is the one that was committed.
+ *
+ * So a baseline recorded here can be an outlier, and no amount of waiting
+ * prevents that. Two things do, both outside this helper. Regenerating in
+ * `ci-web-e2e.yml`'s `full_visual_refresh` and reading
+ * `scripts/compare-visual-baselines.mjs` is the general one, and still applies
+ * to every shot.
+ *
+ * The empty states got the specific one: `EntityEmptyState` now declares a
+ * whole-pixel painted box per illustration (240x171 dark, 240x170 or 240x165
+ * light, `object-fit: contain` absorbing the ≤0.34px rounding), and
+ * `RailTagsPanel`'s "No tags to display." reads the pack's 24px `bodyMedium`
+ * leading instead of MUI's fractional `body2` 20.02px. Measured in Chromium at
+ * `deviceScaleFactor: 2`, against the same component and theme: the
+ * description's slot-relative top went from 290.65625 to 291 in dark and from
+ * 285.328125 to 285 in light — whole device rows 582 and 570. Both 14px/400
+ * bands the #819 diff is made of are on the grid; the shots moved by ≤0.34px
+ * and need a `full_visual_refresh` once.
+ *
+ * ── WHY THE FONT WAIT IS WRITTEN OUT ───────────────────────────────────────
+ *
+ * `page.evaluate(() => document.fonts.ready)` handed Playwright's serialiser a
+ * `FontFaceSet` to marshal back. `await`ing it inside the page and returning
+ * nothing is the same wait without the round trip.
+ *
+ * It stays even though it is currently a no-op: measured on the E2E stack,
+ * `document.fonts` reports `status: "loaded"`, `size: 0`, no faces at all —
+ * the served pack is the product default, which declares no `typography.
+ * fontFaces`, so `"Montserrat", Roboto, Arial, sans-serif` resolves to the
+ * container's own sans. A deployment pack MAY declare self-hosted faces
+ * (`shared/brand/fontFaces.ts`), and then this is the wait that keeps a
+ * fallback-metrics layout out of a baseline.
  */
 export async function settle(page: Page): Promise<void> {
-  // Fonts must be loaded before the snapshot, or the first run captures a
-  // fallback-font layout and pins it as truth.
-  await page.evaluate(() => document.fonts.ready);
-  // Kill animation/transition timing as a diff source.
+  // Frozen FIRST, so anything that starts while the waits below run is already
+  // static by the time it is asked to settle.
   await page.addStyleTag({
     content: `*, *::before, *::after {
       animation-duration: 0s !important;
@@ -109,6 +189,35 @@ export async function settle(page: Page): Promise<void> {
       caret-color: transparent !important;
     }`,
   });
+  // Every image has its intrinsic size, so nothing under it can still move.
+  // A broken image is `complete` too, which is correct here: it will never
+  // produce a size, and waiting for one would hang instead of photographing
+  // the alt box the screen actually shows.
+  await page.waitForFunction(
+    () => Array.from(document.images).every((image) => image.complete),
+    undefined,
+    { timeout: 20_000 },
+  );
+  // Decoded as well as loaded: `complete` settles LAYOUT, `decode()` settles
+  // the PIXELS, and a first paint of an undecoded image is blank.
+  await page.evaluate(async () => {
+    await Promise.all(
+      Array.from(document.images).map((image) => image.decode().catch(() => undefined)),
+    );
+    await document.fonts.ready;
+  });
+  // Two frames: the frozen styles above, the decoded images and the loaded
+  // fonts have all been through one full lifecycle before the shutter.
+  await page.evaluate(
+    async () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            resolve();
+          });
+        });
+      }),
+  );
   await page.waitForTimeout(300);
 }
 

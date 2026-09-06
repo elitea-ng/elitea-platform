@@ -11,7 +11,11 @@ import type { SvgIconComponent } from '../svg-icon.types';
  * XxxIcon } from './svg/xxx.svg?react'`) generated from the 193 icons ported
  * from apps/elitea-ui/src/assets/**, plus `LogoMarkIcon` — the gradient brand
  * ORB, which that port did not carry over (the sidebar substituted the
- * wordmark for it and rendered an illegible smudge). 194 in total. Per-icon hand-written tests would be
+ * wordmark for it and rendered an illegible smudge), plus the three brand
+ * glyphs the toolkit-type catalogue needs (`GithubIcon`/`GitlabIcon`/
+ * `ConfluenceIcon`) — the baseline keeps those as inline JSX under
+ * `src/components/Icons/` rather than as files under `src/assets/`, which is
+ * why the asset sweep missed them. 197 in total. Per-icon hand-written tests would be
  * pure boilerplate, so this file auto-discovers every sibling icon module via
  * `import.meta.glob` and asserts, for each one:
  *  - it renders an <svg> element (the vite-plugin-svgr transform produced a
@@ -39,9 +43,13 @@ const icons: IconEntry[] = Object.entries(modules).flatMap(([moduleId, mod]) =>
 );
 
 describe('shared/ui/icons — full-set smoke test', () => {
-  it('discovered the full ported set (194 icons, see final report for the merge/rename ledger)', () => {
-    // 193 ported + `LogoMarkIcon` (see this file's header).
-    expect(icons.length).toBe(194);
+  it('discovered the full ported set (199 icons, see final report for the merge/rename ledger)', () => {
+    // 193 ported + `LogoMarkIcon` + the 3 catalogue brand glyphs (see this
+    // file's header) + two the settings port added because the baseline maps
+    // them and this set did not hold them: `BellIcon` (Settings › Notifications'
+    // nav item, which fell back to the generic gear) and `ContrastIcon` (the
+    // theme toggle's "System").
+    expect(icons.length).toBe(199);
   });
 
   it('every discovered export has a unique PascalCase "*Icon" name', () => {

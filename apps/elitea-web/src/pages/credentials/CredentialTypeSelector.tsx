@@ -3,23 +3,37 @@
  * type to create" grid, shown by `CredentialForm` before a type is picked.
  * Ported from `apps/elitea-ui/src/pages/Credentials/CredentialTypeSelector.jsx`.
  *
- * DISCLOSED SIMPLIFICATION: the baseline resolves a per-type icon via
- * `getToolIconByType` (`common/toolkitUtils`, the toolkits domain's icon
- * resolver — out of this unit's ownership fence) and groups items by
- * `config_schema.properties.data.metadata.categories[0]`. This port drops
- * the per-type icon (every tile renders with no leading icon — a real,
- * disclosed visual regression, not a functional one) and groups by the
- * same category field, defaulting to "Other" exactly as the baseline does.
- * Search is a local `useState`, not the baseline's `useGroupedCategories`
- * (`shared/lib/hooks`, unconfirmed to exist within this unit's ownership).
+ * CORRECTED (visual-parity pass). Two of this file's three disclosed
+ * simplifications are closed, because both were VISIBLE on screen and both had
+ * a real implementation available:
+ *  - The baseline renders `Category.GroupedCategory`, i.e. the same
+ *    centred title + rounded search field + category-chip row + per-category
+ *    uppercase section chrome the toolkit/MCP pickers use. This port rendered
+ *    a bare `<div>` with a `SimpleSearchBar` above an ungrouped list: no
+ *    title, no chips, nothing centred. It now composes `CategoryFilter` around
+ *    `GroupedCategory`, exactly as `features/toolkits`' `ToolkitTypeSelector`
+ *    does, with `shared/lib/hooks/useGroupedCategories` (the ported baseline
+ *    hook) owning search + chip state instead of the local `useState`.
+ *  - The per-type icon (baseline `getToolIconByType`) is restored via
+ *    `shared/ui/ToolkitTypeIcon`; every tile used to render with no leading
+ *    glyph.
+ *
+ * STILL DISCLOSED: this screen has no sub-header of its own ("New Credential"
+ * / "New Configuration" with the route's own back affordance). That bar
+ * belongs to the credentials route/page shell, which also wraps the credential
+ * FORM — out of this change's fence, and noted rather than silently added.
  */
-import { useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useMemo, type ReactNode } from 'react';
+
+import type { SxProps, Theme } from '@mui/material/styles';
 
 import { t } from '@/shared/i18n';
+import { useGroupedCategories } from '@/shared/lib/hooks/useGroupedCategories';
+import { CategoryFilter } from '@/shared/ui/CategoryFilter';
 import { CategorySection } from '@/shared/ui/CategorySection';
 import { GroupedCategory } from '@/shared/ui/GroupedCategory';
 import { NoResultsMessage } from '@/shared/ui/NoResultsMessage';
-import { SimpleSearchBar } from '@/shared/ui/SimpleSearchBar';
+import { ToolkitTypeIcon } from '@/shared/ui/ToolkitTypeIcon';
 import type { CategoryItem } from '@/shared/ui/CategoryItemCard';
 
 import type { ConfigurationTypeDescriptor } from '@/features/credentials';
@@ -44,57 +58,81 @@ function displayLabel(item: ConfigurationTypeDescriptor): string {
   return item.config_schema?.metadata?.label ?? item.config_schema?.title ?? item.type;
 }
 
-function category(item: ConfigurationTypeDescriptor): string {
+function categoryOf(item: ConfigurationTypeDescriptor): string {
   return item.config_schema?.properties?.['data']?.metadata?.categories?.[0] ?? 'Other';
 }
 
+interface CredentialTypeMenuItem {
+  readonly key: string;
+  readonly label: string;
+  readonly category: string;
+  readonly icon: ReactNode;
+}
+
+function itemCategory(item: CredentialTypeMenuItem): string {
+  return item.category;
+}
+
+/** Same full-width centred column `ToolkitTypeSelector` needs — see that file. */
+const groupedItemsSx: SxProps<Theme> = (theme: Theme) => ({
+  width: '100%',
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  gap: theme.spacing(3),
+});
+
 export function CredentialTypeSelector({ configurationsData, isFetching, onSelectType }: CredentialTypeSelectorProps): ReactNode {
-  const [query, setQuery] = useState('');
+  const items = useMemo<readonly CredentialTypeMenuItem[]>(
+    () =>
+      (configurationsData ?? [])
+        .filter((item) => item.config_schema?.metadata?.hidden !== true)
+        .map((item) => ({ key: item.type, label: displayLabel(item), category: categoryOf(item), icon: <ToolkitTypeIcon type={item.type} /> })),
+    [configurationsData],
+  );
 
-  const visibleItems = useMemo(() => {
-    const items = (configurationsData ?? []).filter((item) => item.config_schema?.metadata?.hidden !== true);
-    const needle = query.trim().toLowerCase();
-    const filtered = needle === '' ? items : items.filter((item) => displayLabel(item).toLowerCase().includes(needle));
-    return [...filtered].sort((a, b) => displayLabel(a).toLowerCase().localeCompare(displayLabel(b).toLowerCase()));
-  }, [configurationsData, query]);
+  const handleSelect = useCallback((item: CredentialTypeMenuItem) => { onSelectType(item.key); }, [onSelectType]);
 
-  const allCategories = useMemo(() => [...new Set(visibleItems.map(category))].sort((a, b) => a.localeCompare(b)), [visibleItems]);
+  const { allCategories, groupedItems, selectedCategories, searchQuery, onSearchChange, onSelectCategory } = useGroupedCategories<CredentialTypeMenuItem>(
+    items,
+    itemCategory,
+    handleSelect,
+  );
 
-  const groupedItems = useMemo(() => {
-    const groups: Record<string, CategoryItem[]> = {};
-    for (const item of visibleItems) {
-      const key = category(item);
-      const entry: CategoryItem = { key: item.type, label: displayLabel(item), onClick: () => { onSelectType(item.type); } };
-      (groups[key] ??= []).push(entry);
-    }
-    return groups;
-  }, [visibleItems, onSelectType]);
+  const renderCategory = useCallback(
+    (category: string, categoryItems: readonly CategoryItem[]): ReactNode => (
+      <CategorySection
+        category={category}
+        items={categoryItems}
+      />
+    ),
+    [],
+  );
 
   return (
-    <div>
-      <SimpleSearchBar
-        value={query}
-        onChange={setQuery}
-        placeholder={t('credentials.typeSelector.search', 'Search credentials')}
-      />
+    <CategoryFilter
+      title={t('credentials.typeSelector.title', 'Choose the credentials type')}
+      searchPlaceholder={t('credentials.typeSelector.search', 'Search credentials')}
+      searchQuery={searchQuery}
+      onSearchChange={onSearchChange}
+      allCategories={[...allCategories]}
+      selectedCategories={[...selectedCategories]}
+      onSelectCategory={onSelectCategory}
+    >
       <GroupedCategory
         isLoading={isFetching}
         allCategories={allCategories}
+        selectedCategories={selectedCategories}
         groupedItems={groupedItems}
-        renderCategory={(cat, items) => (
-          <CategorySection
-            key={cat}
-            category={cat}
-            items={items}
-          />
-        )}
+        renderCategory={renderCategory}
         noResultsSlot={
           <NoResultsMessage
             title={t('credentials.typeSelector.noResultsTitle', 'No credentials found')}
             description={t('credentials.typeSelector.noResultsDescription', 'Try adjusting your search terms or category filters')}
           />
         }
+        sx={groupedItemsSx}
       />
-    </div>
+    </CategoryFilter>
   );
 }

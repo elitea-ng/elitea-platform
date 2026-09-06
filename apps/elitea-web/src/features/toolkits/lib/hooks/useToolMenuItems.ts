@@ -3,6 +3,7 @@ import { useMemo } from 'react';
 import { ToolTypes, toolkitTypeMenuEntries } from '@/entities/toolkit';
 import type { ToolkitTypeSchemaMap } from '@/entities/toolkit';
 
+import { McpCategory } from '../constants/mcp.constants';
 import { getToolkitIcon } from '../helpers/toolkits.helpers';
 import type { ToolkitIconInfo } from '../helpers/toolkits.helpers';
 
@@ -51,7 +52,45 @@ interface ToolMenuItem {
   readonly key: string;
   readonly label: string;
   readonly iconKind: ToolkitIconInfo['iconKind'];
+  /**
+   * The catalogue section this type is filed under — baseline
+   * `useToolkitSearch.js`'s `getCategoryForToolkit`, which is what
+   * `Category.GroupedCategory` groups and chips the type picker by. It was
+   * dropped in the first port (the picker rendered one flat, chip-less grid);
+   * computing it HERE rather than in the selector is what keeps the selector
+   * from having to re-fetch the schema map it would need to read
+   * `metadata.categories` itself.
+   */
+  readonly category: string;
   readonly onClick: () => void;
+}
+
+/** `'code repositories'` -> `'Code Repositories'` (baseline: same word-wise Title Case). */
+function titleCaseCategory(value: string): string {
+  return value
+    .split(' ')
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(' ');
+}
+
+/**
+ * Baseline `useToolkitSearch.js:31-56`. On the MCP tab a type is either the
+ * pre-built remote entry or one of the user's own discovered servers; off it,
+ * the backend's first declared category wins, `'mcp'` is renamed to the
+ * platform's MCP label, and everything uncategorised falls to `'Other'`.
+ *
+ * DISCLOSED: the baseline's MCP label is `useMcpCategoryName()`
+ * (`platform_settings.mcp_category_name`). That field is not on this app's
+ * generated `PlatformSettings` (see `../../api/useIsMcpVisible.ts`, which
+ * documents the same settings object), so the baseline's own default — the
+ * literal `'MCP'` — is used.
+ */
+function toolkitCategory(key: string, toolSchemas: ToolkitTypeSchemaMap, isMCP: boolean): string {
+  if (isMCP) return key === 'mcp' ? McpCategory.Remote : McpCategory.Local;
+  const categories = (metadataOf(toolSchemas[key])['categories'] ?? []) as readonly string[];
+  const first = categories[0];
+  if (typeof first !== 'string' || first === '') return 'Other';
+  return first.toLowerCase() === 'mcp' ? 'MCP' : titleCaseCategory(first);
 }
 
 export interface UseToolMenuItemsParams {
@@ -103,6 +142,7 @@ export function useToolMenuItems({ onAddTool, isMCP = false, isApplication = fal
       key,
       label,
       iconKind: getToolkitIcon({ type: key }, toolSchemas, isMCP).iconKind,
+      category: toolkitCategory(key, toolSchemas, isMCP),
       onClick: onAddTool ? onAddTool(key, toolSchemas) : () => {},
     }));
 
@@ -112,6 +152,7 @@ export function useToolMenuItems({ onAddTool, isMCP = false, isApplication = fal
         key: ToolTypes.custom.value,
         label: ToolTypes.custom.label,
         iconKind: 'toolkit',
+        category: toolkitCategory(ToolTypes.custom.value, toolSchemas, isMCP),
         onClick: onAddTool ? onAddTool(ToolTypes.custom.value, toolSchemas) : () => {},
       });
     }

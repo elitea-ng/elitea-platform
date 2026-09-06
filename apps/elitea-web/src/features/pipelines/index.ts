@@ -127,3 +127,14 @@ export { resetPipelineDraft } from './model/resetPipelineDraft';
  * export here and not two.
  */
 export { useLivePipelineGraphAdmission } from './lib/livePipelineGraphAdmission';
+
+/*
+ * `PIPELINE_STARTER_TEMPLATE` is deliberately NOT here. It used to live in
+ * `./lib/`, and publishing it would have taken this curated API to 21 symbols
+ * — one over the §3.5 budget of 20. It has no dependency on this slice, and
+ * two layers outside it now need it: `pages/pipelines/CreatePipeline.tsx` (the
+ * create flow a person actually takes) and `./lib/usePipelineEditorCreate.ts`
+ * (the chat surface's). So it sits in `shared/lib/pipelineStarterTemplate.ts`,
+ * which both may import directly — no barrel entry, no budget spent, and no
+ * `no-deep-slice-import` breach for the page.
+ */

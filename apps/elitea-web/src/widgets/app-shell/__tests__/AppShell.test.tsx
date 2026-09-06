@@ -351,4 +351,167 @@ describe('AppShell', () => {
     );
     expect(screen.getByTestId('sidebar-create-button')).toBeInTheDocument();
   });
+
+  /*
+   * DEFECT this pins. On the very first login the browser asks for everything
+   * at mount, and `GET /social/author` is the only request that WAITS for
+   * provisioning. The project list and the permission list are therefore
+   * answered against a user who has no personal project yet, and both come
+   * back empty. Nothing re-asked: `staleTime` is 30s and both queries had
+   * SUCCEEDED, so the shell opened on "Project: No projects" with every
+   * permission-gated nav row missing — Chats, Toolkits & Indexes, MCPs, Credentials,
+   * Artifacts — until the user reloaded the page.
+   *
+   * Both handlers below answer empty ONCE and then the real thing, which is
+   * the sequence the server actually produces. A test whose handlers answered
+   * the same thing every time could not tell a re-read from a first read.
+   */
+  it('re-reads the project and permission lists when provisioning lands after them', async () => {
+    let projectCalls = 0;
+    let permissionCalls = 0;
+    server.use(
+      http.get('*/projects/project/default/:publicProjectId', () => {
+        projectCalls += 1;
+        return HttpResponse.json(projectCalls === 1 ? [] : [projectRow(11, 'Public'), projectRow(2, 'Acme')]);
+      }),
+      http.get('*/auth/permissions/prompt_lib/:projectId', () => {
+        permissionCalls += 1;
+        return HttpResponse.json(
+          permissionCalls === 1
+            ? []
+            : [
+                { name: 'models.chat.folders.get', enabled: true },
+                { name: 'models.applications.tools.list', enabled: true },
+                { name: 'configuration.artifacts.artifacts.view', enabled: true },
+              ],
+        );
+      }),
+      authorHandler('2'),
+    );
+
+    await renderWithNavigation(
+      <AppShell>
+        <div>page content</div>
+      </AppShell>,
+    );
+
+    // The switcher names the SELECTED project by finding it in the list, so
+    // the stale empty list is what made it read "No projects" beside a
+    // perfectly good selection.
+    expect(await screen.findByRole('button', { name: /Project:\s*Acme/ })).toBeInTheDocument();
+    expect(screen.queryByText('No projects')).not.toBeInTheDocument();
+
+    // The nav rows the empty permission answer had dropped.
+    expect(await screen.findByText('Chats')).toBeInTheDocument();
+    expect(screen.getByText('Toolkits & Indexes')).toBeInTheDocument();
+    expect(screen.getByText('MCPs')).toBeInTheDocument();
+    expect(screen.getByText('Credentials')).toBeInTheDocument();
+    expect(screen.getByText('Artifacts')).toBeInTheDocument();
+  });
+
+  /*
+   * DEFECT this pins, and it is the one that shipped. The test above fixes the
+   * project list while the AUTHOR query answers correctly at once. On the real
+   * first login it does not: the SPA sends two `/social/author` requests at
+   * boot, and only the one that starts provisioning waits for it. Measured
+   * verbatim on the standalone stack, both inside the same second:
+   *
+   *   GET /api/v2/social/author/  ->  "personal_project_id":"5"
+   *   GET /api/v2/social/author   ->  "personal_project_id":""
+   *
+   * The shell reads the second. `""` is not an error, so nothing retried, and
+   * the auto-select effect — which refuses to select while no project is named
+   * — never ran. The settle hook above waited for a selection that could not
+   * happen, so neither list was ever re-read: "Project: No projects" and a nav
+   * missing every permission-gated row, until the user reloaded the page.
+   *
+   * The whole sequence is served here, in the order the server produces it.
+   */
+  it(
+    'settles the shell when the first author answer names no project yet',
+    { timeout: 30_000 },
+    async () => {
+      let authorCalls = 0;
+      let projectCalls = 0;
+      let permissionCalls = 0;
+      server.use(
+        http.get('*/social/author', () => {
+          authorCalls += 1;
+          return HttpResponse.json({
+            id: 'user-1',
+            name: 'Test User',
+            email: 'test@example.com',
+            avatar: '',
+            description: '',
+            // Provisioning is still running on the first read, exactly as the
+            // server answers it.
+            personal_project_id: authorCalls === 1 ? '' : '2',
+          });
+        }),
+        http.get('*/projects/project/default/:publicProjectId', () => {
+          projectCalls += 1;
+          return HttpResponse.json(projectCalls === 1 ? [] : [projectRow(11, 'Public'), projectRow(2, 'Acme')]);
+        }),
+        http.get('*/auth/permissions/prompt_lib/:projectId', () => {
+          permissionCalls += 1;
+          return HttpResponse.json(
+            permissionCalls === 1
+              ? []
+              : [
+                  { name: 'models.chat.folders.get', enabled: true },
+                  { name: 'models.applications.tools.list', enabled: true },
+                  { name: 'configuration.artifacts.artifacts.view', enabled: true },
+                ],
+          );
+        }),
+      );
+
+      await renderWithNavigation(
+        <AppShell>
+          <div>page content</div>
+        </AppShell>,
+      );
+
+      // The state the user was left in, permanently, before this fix.
+      expect(await screen.findByText('No projects')).toBeInTheDocument();
+
+      // …and the state they reach WITHOUT reloading the page.
+      expect(await screen.findByRole('button', { name: /Project:\s*Acme/ }, { timeout: 20_000 })).toBeInTheDocument();
+      expect(screen.queryByText('No projects')).not.toBeInTheDocument();
+      expect(await screen.findByText('Chats', undefined, { timeout: 20_000 })).toBeInTheDocument();
+      expect(screen.getByText('Toolkits & Indexes')).toBeInTheDocument();
+      expect(screen.getByText('MCPs')).toBeInTheDocument();
+      expect(screen.getByText('Credentials')).toBeInTheDocument();
+      expect(screen.getByText('Artifacts')).toBeInTheDocument();
+
+      // The author query is what had to be asked again; the two lists follow
+      // from its answer.
+      expect(authorCalls).toBeGreaterThan(1);
+      expect(projectCalls).toBeGreaterThan(1);
+    },
+  );
+
+  /* The retry is for the race, not for every page load: an ordinary login
+     already lists the personal project, and paying two extra requests on each
+     of those would be a fix that costs more than the defect. */
+  it('asks for neither list a second time when the first answer already carries the personal project', async () => {
+    let projectCalls = 0;
+    server.use(
+      http.get('*/projects/project/default/:publicProjectId', () => {
+        projectCalls += 1;
+        return HttpResponse.json([projectRow(11, 'Public'), projectRow(2, 'Acme')]);
+      }),
+      getPermissionListMockHandler([{ name: 'models.chat.folders.get', enabled: true }]),
+      authorHandler('2'),
+    );
+
+    await renderWithNavigation(
+      <AppShell>
+        <div>page content</div>
+      </AppShell>,
+    );
+
+    expect(await screen.findByRole('button', { name: /Project:\s*Acme/ })).toBeInTheDocument();
+    await waitFor(() => expect(projectCalls).toBe(1));
+  });
 });

@@ -641,7 +641,7 @@ func TestCheckConnection_BedrockEgressDeniedNeverDials(t *testing.T) {
 	fp := newFakeCloudProvider(http.StatusOK, http.StatusOK)
 	defer fp.Close()
 
-	h := newCheckConnectionHandler(fakeEgressPolicy{allow: false, configured: true})
+	h := newCheckConnectionHandler(fakeEgressPolicy{allow: false, privateNetwork: true})
 	rec := doCheckConnection(t, h, checkConnectionRequest{
 		Type: "amazon_bedrock", AWSAccessKeyID: "AKIA", AWSSecretAccessKey: "s", AWSRegionName: "us-east-1",
 	})
@@ -663,7 +663,7 @@ func TestCheckConnection_VertexEgressDeniedNeverDials(t *testing.T) {
 	fp := newFakeCloudProvider(http.StatusOK, http.StatusOK)
 	defer fp.Close()
 
-	h := newCheckConnectionHandler(fakeEgressPolicy{allow: false, configured: true})
+	h := newCheckConnectionHandler(fakeEgressPolicy{allow: false, privateNetwork: true})
 	rec := doCheckConnection(t, h, checkConnectionRequest{
 		Type: "vertex_ai", VertexProject: "p", VertexLocation: "us-central1",
 		VertexCredentials: jsonTextField(`{"type":"service_account","token_uri":"https://sts.example.com/token"}`),
@@ -719,7 +719,7 @@ func TestCheckConnection_CloudMissingFieldsNeverDials(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			h := newCheckConnectionHandler(fakeEgressPolicy{allow: true, configured: true})
+			h := newCheckConnectionHandler(fakeEgressPolicy{allow: true, privateNetwork: true})
 			rec := doCheckConnection(t, h, c.req)
 			resp := decodeCheckConnectionResponse(t, rec)
 			if resp.Success {
@@ -739,12 +739,21 @@ func TestCheckConnection_CloudMissingFieldsNeverDials(t *testing.T) {
 }
 
 // TestCheckConnection_CloudNeverDialsPrivateAddress is the address-level half
-// of the SSRF policy for the two new types. Neither is self-hosted, so even
-// with the allowlist armed the probe client must refuse a private destination.
+// of the SSRF policy for the two cloud types. Neither resolves to a
+// self-hosted provider class, so even with the allowlist armed the probe
+// client must refuse a private destination.
+//
+// The decision is read through checkConnectionAllowsPrivateNetwork, which is
+// the predicate the handler itself uses. A private api_base is supplied as
+// well, to prove the answer does not become true when the endpoint looks
+// self-hosted.
 func TestCheckConnection_CloudNeverDialsPrivateAddress(t *testing.T) {
 	for _, configType := range []string{"amazon_bedrock", "vertex_ai"} {
-		if checkConnectionProviders[configType].selfHosted {
-			t.Errorf("%s must not be marked selfHosted: it must never reach a private address", configType)
+		for _, apiBase := range []string{"", "http://10.0.0.5:8000/v1"} {
+			req := checkConnectionRequest{Type: configType, APIBase: apiBase}
+			if checkConnectionAllowsPrivateNetwork(req) {
+				t.Errorf("%s (api_base %q) may not reach a private address", configType, apiBase)
+			}
 		}
 	}
 }

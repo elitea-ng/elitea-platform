@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/EliteaAI/elitea-platform/libs/go/egresslib"
 )
 
 // Row is one raw `gateway.governance_config` row as the gateway reads it.
@@ -123,6 +125,38 @@ func Compile(rows []Row, now time.Time) *Snapshot {
 			}
 			snap.mcpLists = append(snap.mcpLists, MCPAllowlistDef{Name: name, Scope: scope, Allowlist: list})
 
+		case TypeEgressAllowlist:
+			// A scope on this row cannot be honoured for half of what the row
+			// governs — see EgressAllowlistDef. Refuse it rather than apply it
+			// more widely than it was authored.
+			if scope.specificity() > 0 {
+				reject("an egress_allowlist row is global and carries no scope: the private-network half of the " +
+					"decision is made without a project, so a scoped row would apply to every project anyway. " +
+					"Remove the scope")
+				continue
+			}
+			raw := stringSlice(subMap(data, "egress"), "allowlist")
+			if len(raw) == 0 {
+				raw = stringSlice(data, "allowlist")
+			}
+			if len(raw) == 0 {
+				// NOT the same meaning as an empty mcp.allowlist. An empty MCP
+				// list turns that control off; an empty egress list would be
+				// read as "no entry", and an operator who cleared the field
+				// would think they had removed a restriction when they had
+				// removed a permission. Say so.
+				inert("egress.allowlist is empty, so this row permits no destination and widens nothing. " +
+					"Delete the row, or list the hosts it should permit")
+				snap.egressLists = append(snap.egressLists, EgressAllowlistDef{Name: name})
+				continue
+			}
+			def, err := parseEgressAllowlist(name, raw)
+			if err != nil {
+				reject(err.Error())
+				continue
+			}
+			snap.egressLists = append(snap.egressLists, def)
+
 		case TypeRoutingRule:
 			// A routing row carries either one rule inline, or the array the
 			// admin form's `routing.rules` field produces. Both shapes reach
@@ -193,6 +227,23 @@ func routingPayloads(data map[string]any) []map[string]any {
 		}
 	}
 	return out
+}
+
+// parseEgressAllowlist validates every entry against the ONE grammar
+// (libs/go/egresslib), the same parser that reads GATEWAY_EGRESS_ALLOWLIST and
+// the same one elitea-main validates a write with.
+//
+// One bad entry rejects the WHOLE row rather than being dropped from it. An
+// allowlist that silently lost a member is an allowlist that refuses a
+// destination the operator believes they permitted, and the resulting symptom —
+// one provider failing with EGRESS_HOST_NOT_ALLOWED while the row sits in the
+// admin list looking correct — is exactly what this surface exists to prevent.
+func parseEgressAllowlist(name string, raw []string) (EgressAllowlistDef, error) {
+	list, err := egresslib.Parse(raw)
+	if err != nil {
+		return EgressAllowlistDef{}, fmt.Errorf("egress.allowlist: %w", err)
+	}
+	return EgressAllowlistDef{Name: name, Entries: list.Entries()}, nil
 }
 
 func parseBudget(name string, scope Scope, data map[string]any) (BudgetDef, error) {

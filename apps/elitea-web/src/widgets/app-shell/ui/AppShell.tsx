@@ -6,8 +6,6 @@ import { useRouterState } from '@tanstack/react-router';
 
 import { getConfig } from '@/shared/config';
 import { usePlatformAnnouncements } from '@/shared/lib/hooks/usePlatformAnnouncements';
-import type { SocialAuthorProfile } from '@/shared/api/generated/model';
-import { useGetCurrentAuthor } from '@/shared/api/generated/social/social';
 import { SupportAssistantWidget } from '@/widgets/support-assistant';
 import {
   Sidebar,
@@ -18,7 +16,9 @@ import {
   COLLAPSED_SIDE_BAR_WIDTH_PX,
 } from '@/widgets/sidebar';
 
+import { usePersonalProjectId } from '../model/usePersonalProjectId';
 import { useSelectedProject } from '../model/useSelectedProject.hooks';
+import { useSettleShellAfterProvisioning } from '../model/useSettleShellAfterProvisioning';
 import { MaintenanceSplash } from './MaintenanceSplash';
 import { NavBlockerDialog } from './NavBlockerDialog';
 import { PlatformBanner } from './PlatformBanner';
@@ -26,18 +26,6 @@ import { PageTitleSetter } from './PageTitleSetter';
 
 export interface AppShellProps {
   children: ReactNode;
-}
-
-/**
- * `useGetCurrentAuthor()`'s `.data` is the same enveloped `{data, status,
- * headers}` shape `pages/chat/useChatPageData.ts`'s `currentAuthorOf` reads
- * through (`getCurrentAuthorResponse200`, `shared/api/generated/social/
- * social.ts`) — `eliteaFetch` throws on non-2xx (§3.6 unwrap contract), so
- * the 401 branch is declared but unreachable at this read site, same
- * established precedent.
- */
-function personalProjectIdOf(data: unknown): string | undefined {
-  return (data as { readonly data?: SocialAuthorProfile } | undefined)?.data?.personal_project_id;
 }
 
 /** Old app: `RouteDefinitions.Onboarding` (`routes.js`), matched by exact pathname equality (`useIsOnboarding.hooks.js`). */
@@ -126,16 +114,32 @@ export function AppShell({ children }: AppShellProps): ReactNode {
   const configResult = getConfig();
   const publicProjectId = configResult.status === 'ok' ? configResult.config.vite_public_project_id : '';
 
-  const authorQuery = useGetCurrentAuthor();
-  const personalProjectId = personalProjectIdOf(authorQuery.data);
+  // Re-asked until the server names a project — see the hook's own header.
+  // A first login is answered "" here while provisioning is still running.
+  const personalProjectId = usePersonalProjectId();
   const { project, selectProject } = useSelectedProject();
   const { projects, isLoading: projectsLoading } = useProjectOptions(publicProjectId, personalProjectId);
-  const permissions = usePermissionSet(project?.id);
+  /* Read once. Three call sites needed it, and three separate optional chains
+     put this function over the §3.5 complexity budget on their own. */
+  const selectedProjectId = project?.id;
+  const permissions = usePermissionSet(selectedProjectId);
   const collapsed = useSidebarCollapsedStore((state) => state.collapsed);
   const pathname = useRouterState({ select: (routerState) => routerState.location.pathname });
   const { banner, maintenance } = usePlatformAnnouncements();
   const isOnboardingPage = pathname === ONBOARDING_PATHNAME;
   const hideSidebar = isOnboardingPage && !personalProjectId;
+
+  // First login: both lists above were answered before provisioning created
+  // the personal project, and nothing re-asked. See the hook's own header —
+  // it is what keeps the shell from opening on "Project: No projects" and a
+  // nav missing every permission-gated row until the user reloads the page.
+  useSettleShellAfterProvisioning({
+    personalProjectId,
+    publicProjectId,
+    projects,
+    projectsLoading,
+    selectedProjectId,
+  });
 
   // Old app: `settings.js`'s `authorDetails.matchFulfilled` extraReducer
   // defaults the selected project to the CALLER'S OWN personal/private
@@ -191,14 +195,32 @@ export function AppShell({ children }: AppShellProps): ReactNode {
 
   return (
     <Box sx={{ display: 'flex' }}>
-      {!hideSidebar && (
-        <Sidebar
-          permissions={permissions}
-          projects={projects}
-          selectedProjectId={project?.id}
-          onSelectProject={selectProject}
-        />
-      )}
+      {/*
+       * The assistant widget wraps the SIDEBAR now, and the reason is the
+       * render prop it has always had: `SidebarBody.jsx` puts a "Support Bot"
+       * hit area in the rail's footer bar whenever a deployment has an
+       * assistant to open, and the only place that `onToggleAssistant` handle
+       * exists is inside this render prop. It used to be called with `() =>
+       * null`, so the footer bar had nothing to render and the rail fell back
+       * to a plain Help Center row on every deployment, enabled or not.
+       *
+       * The widget renders a FRAGMENT — the children plus its own
+       * fixed-position overlay — so both stay direct flex children of this
+       * row exactly as before; nothing about the overlay's placement changes.
+       */}
+      <SupportAssistantWidget project={project ?? undefined}>
+        {({ onToggleAssistant }) =>
+          hideSidebar ? null : (
+            <Sidebar
+              permissions={permissions}
+              projects={projects}
+              selectedProjectId={selectedProjectId}
+              onSelectProject={selectProject}
+              onToggleAssistant={onToggleAssistant}
+            />
+          )
+        }
+      </SupportAssistantWidget>
       <Box
         component="main"
         sx={{
@@ -220,29 +242,6 @@ export function AppShell({ children }: AppShellProps): ReactNode {
         {children}
         <NavBlockerDialog />
       </Box>
-      {/*
-       * The in-app support assistant.
-       *
-       * MOUNTED HERE, OUTSIDE `main`, and last: it is a floating overlay with
-       * its own fixed positioning, so putting it inside the scrolling content
-       * column would scroll the button off the page.
-       *
-       * It renders NOTHING on a deployment that has not enabled it — the
-       * component asks `GET /support_assistant/config` and mounts the overlay
-       * only on `enabled: true`, which the server answers only when an operator
-       * has turned the section on AND chosen a support agent. That check is the
-       * whole reason the widget is mounted unconditionally here rather than
-       * behind a flag read in this file: there is one place that decides, and it
-       * is the one that also knows whether the assistant can actually answer.
-       *
-       * The render-prop child is `null` on purpose. `onToggleAssistant` exists
-       * so a caller can offer its own "ask support" affordance; this shell has
-       * no such affordance to offer, and the assistant's own floating button is
-       * how a user opens it. A future caller — the baseline's
-       * `CredentialWarningBanner`, whose `onMount` was written for exactly this
-       * — reaches the same handle through `useEliteaAssistantRef()`.
-       */}
-      <SupportAssistantWidget project={project ?? undefined}>{() => null}</SupportAssistantWidget>
     </Box>
   );
 }

@@ -390,22 +390,33 @@ VALUES ($1, 'journey-member@test.local', 'Journey member')
 ON CONFLICT (id) DO NOTHING`, credentialJourneyUserID); err != nil {
 		t.Fatalf("seed the caller: %v", err)
 	}
+	// The role is LOOKED UP, not minted with an id of this fixture's choosing.
+	// shared/0111 gives project 1 the four roles every provisioned project has,
+	// so `editor` is already there and an insert of a second one violates
+	// auth_core__project_role's (project_id, name) uniqueness. Resolving the
+	// row the corpus wrote is also what production does.
 	if _, err := pool.Exec(ctx, `
-INSERT INTO public.auth_core__project_role (id, project_id, name)
-VALUES ($1, 1, 'editor')
-ON CONFLICT (id) DO NOTHING`, credentialJourneyUserID); err != nil {
+INSERT INTO public.auth_core__project_role (project_id, name)
+VALUES (1, 'editor')
+ON CONFLICT (project_id, name) DO NOTHING`); err != nil {
 		t.Fatalf("seed the project role: %v", err)
+	}
+	var editorRoleID int
+	if err := pool.QueryRow(ctx,
+		`SELECT id FROM public.auth_core__project_role WHERE project_id = 1 AND name = 'editor'`,
+	).Scan(&editorRoleID); err != nil {
+		t.Fatalf("resolve the project's editor role: %v", err)
 	}
 	if _, err := pool.Exec(ctx, `
 INSERT INTO public.auth_core__project_user_role (project_id, user_id, role_id)
-VALUES (1, $1, $1)
-ON CONFLICT DO NOTHING`, credentialJourneyUserID); err != nil {
+VALUES (1, $1, $2)
+ON CONFLICT DO NOTHING`, credentialJourneyUserID, editorRoleID); err != nil {
 		t.Fatalf("assign the project role: %v", err)
 	}
 	if _, err := pool.Exec(ctx, `
 INSERT INTO public.auth_core__project_role_permission (project_id, role_id, permission)
 SELECT 1, $1, permission FROM unnest($2::text[]) AS permission
-ON CONFLICT DO NOTHING`, credentialJourneyUserID, seeded); err != nil {
+ON CONFLICT DO NOTHING`, editorRoleID, seeded); err != nil {
 		t.Fatalf("seed the per-project permissions: %v", err)
 	}
 }

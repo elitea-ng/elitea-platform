@@ -156,7 +156,8 @@ func (recorder *streamingRecorder) Flush() { recorder.ResponseRecorder.Flush() }
 // ...}` with no PrincipalValidator, and apimw.validatePrincipal returns the
 // session user UNCHANGED when that field is nil. A deactivated user's
 // unexpired cookie therefore reached the handler with 200. Deleting the
-// PrincipalValidator field from oidcSessionAuthConfig turns the first row red.
+// PrincipalValidator field from apiGroupAuthConfig's OIDC-only branch turns
+// the first row red.
 func TestCurrentProjectListOIDCOnlyAuthRejectsADeactivatedSession(t *testing.T) {
 	for _, testCase := range []struct {
 		name       string
@@ -183,7 +184,7 @@ func TestCurrentProjectListOIDCOnlyAuthRejectsADeactivatedSession(t *testing.T) 
 			projects := &listerStub{}
 			route, err := v2projects.NewCurrentProjectListRoute(
 				projects,
-				oidcSessionAuthConfig(testCase.principals, oidcSessionTestSecret),
+				oidcOnlySessionAuth(testCase.principals),
 				permissions,
 			)
 			if err != nil {
@@ -253,7 +254,7 @@ func TestCurrentNotificationEventsOIDCOnlyAuthRejectsADeactivatedSession(t *test
 			events := &eventReaderStub{}
 			route, err := notificationsapi.NewCurrentNotificationEventsRoute(
 				events,
-				oidcSessionAuthConfig(testCase.principals, oidcSessionTestSecret),
+				oidcOnlySessionAuth(testCase.principals),
 				permissions,
 			)
 			if err != nil {
@@ -336,7 +337,7 @@ func TestCurrentNotificationListOIDCOnlyAuthServesASessionCookie(t *testing.T) {
 			store := &notificationStoreStub{}
 			route, err := notificationsapi.NewCurrentNotificationAPIRoute(
 				store,
-				oidcSessionAuthConfig(testCase.principals, oidcSessionTestSecret),
+				oidcOnlySessionAuth(testCase.principals),
 				permissions,
 			)
 			if err != nil {
@@ -413,34 +414,25 @@ func assertOIDCSessionOutcome(t *testing.T, outcome oidcSessionOutcome) {
 	}
 }
 
-// TestOIDCSessionAuthConfigCarriesBothCredentialHalves pins the composition
-// itself. A session secret without a validator is exactly the defect (#314); a
-// validator without the secret refuses every cookie and takes the two routes
-// offline.
-func TestOIDCSessionAuthConfigCarriesBothCredentialHalves(t *testing.T) {
-	principals := &countingPrincipals{inner: activePrincipals{}}
-
-	config := oidcSessionAuthConfig(principals, oidcSessionTestSecret)
-
-	if config.SessionSecret != oidcSessionTestSecret {
-		t.Fatalf("SessionSecret = %q, want %q",
-			config.SessionSecret, oidcSessionTestSecret)
-	}
-	if config.PrincipalValidator != apimw.PrincipalValidator(principals) {
-		t.Fatal("the OIDC-only config did not take the session principal " +
-			"validator; main.go's production one is nil in this branch and " +
-			"would enforce nothing (#314)")
-	}
-	if config.Validator != nil {
-		t.Fatal("the OIDC-only config must not carry a token validator: a nil " +
-			"*FormGraph in that interface field reads as configured")
-	}
+// oidcOnlySessionAuth builds the credential set an OIDC-only deployment gives
+// every browser-facing route: apiGroupAuthConfig with no FormGraph and the
+// single-sign-on plane on.
+//
+// It is the SHARED composition, not a second one. oidcSessionAuthConfig used
+// to build these three routes' AuthConfig separately, one call before
+// apiGroupAuthConfig built the group's, from the same inputs. The two drifted:
+// the shared one carries Validator (the pool-backed personal-access-token
+// reader), and the private one never gained it, so a token every other
+// /api/v2 route accepted answered 401 here. Driving the tests through the
+// shared composition is what keeps that from returning.
+func oidcOnlySessionAuth(principals apimw.PrincipalValidator) apimw.AuthConfig {
+	return apiGroupAuthConfig(nil, nil, nil, principals, nil, oidcSessionTestSecret, true)
 }
 
 // TestOIDCOnlyRoutesUseTheSharedAuthComposition guards the call sites. The
-// helper is only worth anything if main.go still routes through it, and every
-// route test composes its own AuthConfig, so nothing else in the build reads
-// what production actually wires.
+// composition is only worth anything if main.go still routes through it, and
+// every route test composes its own AuthConfig, so nothing else in the build
+// reads what production actually wires.
 func TestOIDCOnlyRoutesUseTheSharedAuthComposition(t *testing.T) {
 	file := parseMainFile(t)
 
@@ -452,32 +444,33 @@ func TestOIDCOnlyRoutesUseTheSharedAuthComposition(t *testing.T) {
 		// OIDC-only deployment and the screen read a 404 (#413).
 		"NewCurrentNotificationAPIRoute",
 	} {
-		if !callPassesCallee(file, constructor, "oidcSessionAuthConfig") {
-			t.Fatalf("%s no longer builds its OIDC-only AuthConfig with "+
-				"oidcSessionAuthConfig — that branch can silently lose its "+
-				"PrincipalValidator again (#314)", constructor)
+		if !callPassesIdentifier(file, constructor, "apiGroupAuth") {
+			t.Fatalf("%s no longer takes the apiGroupAuth composition — a "+
+				"private AuthConfig there loses its PrincipalValidator (#314) "+
+				"or its token validator, silently and per deployment shape",
+				constructor)
 		}
 	}
 }
 
-// TestOIDCSessionAuthConfigAlwaysTakesAPoolBackedValidator closes the trap the
-// issue names. `oidcSessionAuthConfig(principalValidator, ...)` would read like
-// a fix and enforce nothing, because main.go assigns that variable only inside
-// the `authEnabled` block — it is nil in exactly this branch. Every call must
-// therefore build a validator from the pool instead.
-func TestOIDCSessionAuthConfigAlwaysTakesAPoolBackedValidator(t *testing.T) {
-	file := parseMainFile(t)
-
-	calls, poolBacked := countArgumentCalls(file, "oidcSessionAuthConfig", 0, "NewPrincipalValidator")
-	if calls == 0 {
-		t.Fatal("main.go no longer calls oidcSessionAuthConfig at all (#314)")
-	}
-	if calls != poolBacked {
-		t.Fatalf("%d of %d oidcSessionAuthConfig calls build their validator "+
-			"with authsvc.NewPrincipalValidator; the rest pass something that "+
-			"is nil in this branch and enforce nothing (#314)",
-			poolBacked, calls)
-	}
+// callPassesIdentifier reports whether any call to `outer` passes the bare
+// identifier `argument` among its arguments.
+func callPassesIdentifier(file *ast.File, outer, argument string) bool {
+	found := false
+	ast.Inspect(file, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok || calleeName(call.Fun) != outer {
+			return true
+		}
+		for _, candidate := range call.Args {
+			if identifier, ok := candidate.(*ast.Ident); ok && identifier.Name == argument {
+				found = true
+				return false
+			}
+		}
+		return true
+	})
+	return found
 }
 
 func parseMainFile(t *testing.T) *ast.File {

@@ -93,7 +93,7 @@ describe('PrivateAgentsList', () => {
       { projectId: 'proj-1' },
     );
 
-    expect(await screen.findByText('You have no agents.')).toBeInTheDocument();
+    expect(await screen.findByText('No agents yet')).toBeInTheDocument();
   });
 
   it('filters client-side by the search box', async () => {

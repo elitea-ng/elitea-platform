@@ -91,7 +91,9 @@ const AdminGatewayGovernance = lazyRouteComponent(
   () => import('./GatewayGovernance'),
   'AdminGatewayGovernance',
 );
+const AdminBudgets = lazyRouteComponent(() => import('./Budgets'), 'AdminBudgets');
 const AdminBranding = lazyRouteComponent(() => import('./Branding'), 'AdminBranding');
+const AdminEmail = lazyRouteComponent(() => import('./Email'), 'AdminEmail');
 
 /**
  * The root route renders `AdminLayout` — the nav plus an `<Outlet/>` — rather
@@ -187,6 +189,18 @@ const governanceRoute = createRoute({
 });
 
 /**
+ * Admin › Budgets (gap G4). The per-project and per-member LLM spend limits.
+ * The REST routes have existed since #246 and had no caller at all; this is the
+ * screen behind them, and the only writer of `gateway.project_budget`'s
+ * `budget_period` and `nats_fail_mode` columns.
+ */
+const budgetsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/budgets',
+  component: AdminBudgets,
+});
+
+/**
  * Admin › Branding (ADR-0024 WP4). The `branding` section of the platform
  * configuration edited as what it is — a brand pack — with a live preview,
  * asset uploads and font faces. The Configuration page keeps the section's
@@ -199,8 +213,20 @@ const brandingRoute = createRoute({
   component: AdminBranding,
 });
 
+/**
+ * Admin › E-mail (gap G7). The relay this deployment sends invitations and
+ * notices through. The Configuration page keeps the section's row and points
+ * here, and both render the same editor component so they cannot drift.
+ */
+const emailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/email',
+  component: AdminEmail,
+});
+
 const adminRouteTree = rootRoute.addChildren([
   brandingRoute,
+  emailRoute,
   indexRoute,
   usersRoute,
   auditTrailRoute,
@@ -213,6 +239,7 @@ const adminRouteTree = rootRoute.addChildren([
   serviceDescriptorsRoute,
   featuresRoute,
   governanceRoute,
+  budgetsRoute,
 ]);
 
 export function createAdminRouter(): AnyRouter {

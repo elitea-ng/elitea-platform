@@ -15,7 +15,6 @@ import Button from '@mui/material/Button';
 import CircularProgress from '@mui/material/CircularProgress';
 import Snackbar from '@mui/material/Snackbar';
 import Alert from '@mui/material/Alert';
-import Typography from '@mui/material/Typography';
 
 import { t } from '@/shared/i18n';
 import { getGetCurrentAuthorQueryKey, useGetCurrentAuthor } from '@/shared/api/generated/social/social';
@@ -105,11 +104,8 @@ const Personalization = memo(({ projectId }: PersonalizationProps) => {
 
   return (
     <Box sx={styles.container}>
-      <Box sx={styles.header}>
-        <Typography variant="labelMedium" color="text.secondary">
-          {t('settings.personalization', 'Personalization')}
-        </Typography>
-      </Box>
+      {/* No header row — `routes/_shell/settings/personalization.tsx`
+        * already renders `DrawerPageHeader`. See `Preferences.tsx`. */}
       <Box sx={styles.content}>
         <Formik<ProfileFormValues>
           enableReinitialize
@@ -179,20 +175,11 @@ const styles = {
     height: '100%',
     width: '100%',
   },
-  header: {
-    height: '3.75rem',
-    minHeight: '3.75rem',
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: '0 1.5rem',
-    borderBottom: '0.0625rem solid',
-    borderColor: 'border.table',
-  },
   content: {
     flex: 1,
     minHeight: 0,
     overflowY: 'auto',
+    backgroundColor: 'background.tabPanel',
   },
   saveBar: {
     display: 'flex',

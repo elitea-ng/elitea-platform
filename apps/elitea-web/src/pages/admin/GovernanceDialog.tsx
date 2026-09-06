@@ -24,7 +24,7 @@ import TextField from '@mui/material/TextField';
 
 import { t } from '@/shared/i18n';
 
-import { GOVERNANCE_TYPES, type GovernanceType } from './api/adminGovernanceApi';
+import { GOVERNANCE_TYPES, isGlobalGovernanceType, type GovernanceType } from './api/adminGovernanceApi';
 import { ScopeFields, TypeFields, typeHelp, typeLabel } from './GovernanceDialogFields';
 import type { GovernanceDraft } from './useGatewayGovernancePage';
 
@@ -92,7 +92,12 @@ export function GovernanceDialog({
           ))}
         </TextField>
 
-        <ScopeFields draft={draft} onChange={onChange} />
+        {/*
+          A global type carries no scope. Showing the fields would invite the
+          operator to author exactly the entry the server refuses, and the
+          refusal would name a field they can no longer see on the next edit.
+        */}
+        {isGlobalGovernanceType(draft.type) ? null : <ScopeFields draft={draft} onChange={onChange} />}
         <TypeFields draft={draft} onChange={onChange} />
 
         <FormControlLabel

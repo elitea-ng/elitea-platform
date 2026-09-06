@@ -19,6 +19,13 @@ export interface Bucket {
    * retention editing (see `pages/artifacts/CreateBucket.tsx`).
    */
   readonly retentionDays: number | null;
+  /**
+   * Total size of the bucket's objects, in bytes (`Bucket.SizeBytes`, the same
+   * handler). The buckets panel's footer sums it across the project — the
+   * baseline's `transformStorageResponse` does exactly this, and without the
+   * field the footer could only ever print `0B`.
+   */
+  readonly sizeBytes: number;
 }
 
 /**
@@ -32,4 +39,6 @@ export interface BucketWire {
   readonly created_at: string;
   /** Absent on responses predating the retention column; normalised to `null`. */
   readonly retention_days?: number | null;
+  /** Absent on responses predating the size column; normalised to `0`. */
+  readonly size_bytes?: number;
 }

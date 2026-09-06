@@ -30,7 +30,7 @@ import type { ReactNode } from 'react';
 import { contextManagementApi } from '@/entities/conversation';
 
 import { toContextBudgetStats } from '../lib/contextStatus';
-import { ContextBudgetPanel } from './ContextBudgetPanel';
+import { ContextBudgetCollapsed, ContextBudgetPanel } from './ContextBudgetPanel';
 
 /** @public */
 export interface ContextBudgetProps {
@@ -38,9 +38,17 @@ export interface ContextBudgetProps {
   readonly conversationId?: string | number | undefined;
   /** The project the conversation belongs to. Supplied by the page, which already resolves it. */
   readonly projectId?: string | number | undefined;
+  /**
+   * Render the minimal collapsed form (a percentage over a 2.25rem status
+   * line) instead of the full card — the rail is 3.25rem wide there and the
+   * card does not fit. Baseline: `ContextBudgetInfo.jsx`'s `if (collapsed)
+   * return <ContextBudgetCollapsed/>` branch, driven by
+   * `Participants.jsx:120`'s `collapsed && !isSmallWindow`.
+   */
+  readonly collapsed?: boolean;
 }
 
-export function ContextBudget({ conversationId, projectId }: ContextBudgetProps): ReactNode {
+export function ContextBudget({ conversationId, projectId, collapsed = false }: ContextBudgetProps): ReactNode {
   const enabled = conversationId !== undefined && conversationId !== '' && projectId !== undefined && projectId !== '';
   const { data, isPending, isError } = contextManagementApi.useGetStatus(
     { projectId: projectId ?? '', conversationId: conversationId ?? '' },
@@ -52,5 +60,6 @@ export function ContextBudget({ conversationId, projectId }: ContextBudgetProps)
   const stats = toContextBudgetStats(data);
   if (!stats) return null;
 
+  if (collapsed) return <ContextBudgetCollapsed stats={stats} />;
   return <ContextBudgetPanel stats={stats} />;
 }

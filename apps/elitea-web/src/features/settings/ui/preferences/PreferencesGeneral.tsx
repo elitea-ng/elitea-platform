@@ -33,6 +33,7 @@ export function PreferencesGeneral() {
             <InfoLabelWithTooltip
               label={t('settings.theme', 'Theme')}
               tooltip={t('settings.themeTooltip', 'Choose between light and dark theme')}
+              sx={styles.label}
             />
             <Box sx={styles.toggle}>
               <ThemeModeToggle />
@@ -44,18 +45,31 @@ export function PreferencesGeneral() {
   );
 }
 
+/*
+ * The 0.75rem indents are the baseline's (`preference/PreferenceGeneral.jsx`
+ * `label` / `themeToggleContainer`) and are what puts the label and the
+ * toggle 12px inside the accordion body — the same inset every other
+ * settings control on this page sits at. Without them both sat flush against
+ * the accordion's left edge.
+ */
 const styles = {
   content: {
     display: 'flex',
     flexDirection: 'column',
-    gap: '1rem',
+    gap: '1.25rem',
+    paddingRight: '1rem',
+    marginTop: '0.6rem',
   },
   row: {
     display: 'flex',
     flexDirection: 'column',
-    gap: '0.5rem',
+  },
+  label: {
+    paddingLeft: '0.75rem',
   },
   toggle: {
     display: 'flex',
+    marginTop: '0.5rem',
+    paddingLeft: '0.75rem',
   },
 };

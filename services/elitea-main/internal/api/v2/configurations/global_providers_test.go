@@ -27,6 +27,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 )
 
@@ -157,6 +158,10 @@ func TestOnlyAProviderCredentialTypeMayBePublished(t *testing.T) {
 func TestTheCataloguedProviderTypesAreAdmitted(t *testing.T) {
 	for _, configType := range []string{
 		"open_ai", "azure_open_ai", "ai_dial", "ollama", "amazon_bedrock", "vertex_ai",
+		// The three the gateway added on its own. They were refused while the
+		// catalogue did not describe them; the catalogue describes them now
+		// (#G3), so refusing them here would be a control with no reason.
+		"anthropic", "open_ai_azure", "vllm",
 	} {
 		recorder := httptest.NewRecorder()
 		request := providerRequest(http.MethodPost, "/",
@@ -169,22 +174,24 @@ func TestTheCataloguedProviderTypesAreAdmitted(t *testing.T) {
 	}
 }
 
-// TestAGatewayTypeTheCatalogueDoesNotDescribeIsRefused.
+// TestATypeTheCatalogueDoesNotDescribeIsRefused.
 //
-// THE BUG THIS PREVENTS. `CurrentProviderCredentialType` admits nine types; the
-// pinned catalogue describes six. For the other three the catalogue lookup
-// misses TWICE, and both misses are silent:
+// THE BUG THIS PREVENTS. For a type the catalogue does not describe the
+// lookup misses TWICE, and both misses used to be silent:
 //
 //   - `sectionFor` returns "", so the row is stored with `section = ”` and the
 //     gateway's `WHERE section = 'ai_credentials'` never sees it;
-//   - `sealConfigurationSecrets` keeps the data verbatim, so the api_key is
+//   - `sealConfigurationSecrets` kept the data verbatim, so the api_key was
 //     written into the row IN PLAINTEXT — in the public project's schema, the
 //     one schema every tenant on the platform can read.
 //
 // The result would be an inert credential with a leaked key, and every signal
-// on the admin screen still reading healthy.
-func TestAGatewayTypeTheCatalogueDoesNotDescribeIsRefused(t *testing.T) {
-	for _, configType := range []string{"open_ai_azure", "anthropic", "vllm"} {
+// on the admin screen still reading healthy. `open_ai_azure`, `anthropic` and
+// `vllm` were exactly that until the catalogue described them (#G3), so the
+// case is measured with a type NO catalogue describes instead. Naming those
+// three here again would measure nothing.
+func TestATypeTheCatalogueDoesNotDescribeIsRefused(t *testing.T) {
+	for _, configType := range []string{"some_future_provider", "not_a_registered_type"} {
 		recorder := httptest.NewRecorder()
 		request := providerRequest(http.MethodPost, "/",
 			`{"elitea_title":"x","type":"`+configType+`"}`)
@@ -200,6 +207,25 @@ func TestAGatewayTypeTheCatalogueDoesNotDescribeIsRefused(t *testing.T) {
 		if !strings.Contains(recorder.Body.String(), "open_ai") {
 			t.Errorf("type %q: the refusal does not name what IS admitted: %s",
 				configType, recorder.Body.String())
+		}
+	}
+}
+
+// TestEveryGatewayDispatchableTypeIsPublishable is the other half of the same
+// invariant, and it is the one that failed before this change: the admin
+// surface could not publish a credential of a type the data plane serves, so
+// three providers had no platform-wide control at all.
+func TestEveryGatewayDispatchableTypeIsPublishable(t *testing.T) {
+	handler := providerHandler()
+	for _, configType := range []string{
+		"open_ai", "azure_open_ai", "open_ai_azure", "ai_dial", "anthropic",
+		"ollama", "amazon_bedrock", "vertex_ai", "vllm",
+	} {
+		if !configurationapp.CurrentProviderCredentialType(configType) {
+			t.Fatalf("type %q left the dispatchable set; this list is stale", configType)
+		}
+		if !handler.admitsGlobalProviderType(configType) {
+			t.Errorf("the gateway dispatches to %q and this surface cannot publish it", configType)
 		}
 	}
 }

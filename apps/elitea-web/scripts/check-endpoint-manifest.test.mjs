@@ -355,8 +355,13 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
  * landed (ADR-0024 WP9): exportBrandingPackage, importBrandingPackage,
  * listBrandingPackageVersions and restoreBrandingPackageVersion — the
  * Branding page's download/import/rollback actions.
+ *
+ * 176 -> 178, MANIFEST_ENTRY_COUNT unchanged, when per-project and per-user
+ * budgets became clearable (gap G4): clearProjectBudget and clearMemberBudget,
+ * the DELETE twins of the two PUT routes that already existed. Described for
+ * the generated client the admin Budgets page calls.
  */
-const GENERATED_OPERATION_COUNT = 176;
+const GENERATED_OPERATION_COUNT = 178;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -368,8 +373,16 @@ const GENERATED_OPERATION_COUNT = 176;
  * .Predictor gate nothing ever assigned, so it 404s everywhere. The manifest
  * entry describes a sender that exists and is gated off, which is why it is
  * counted rather than withheld.
+ *
+ * 191 -> 199. The admin Budgets page and Settings > Usage (gap G4) call
+ * eight budget routes the app never called before: listProjectBudgets,
+ * getProjectBudgetAdmin, setProjectBudget, clearProjectBudget,
+ * listMemberBudgetsAdmin, setMemberBudget, clearMemberBudget and
+ * getProjectUsage. All eight are described in v2.yaml, so the generated
+ * count moved by the two DELETE ops only (176 -> 178 above); the other six
+ * already existed in the contract with no caller.
  */
-const MANIFEST_ENTRY_COUNT = 191;
+const MANIFEST_ENTRY_COUNT = 199;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

@@ -234,6 +234,75 @@ function SnapshotAlerts({ gateway }: { readonly gateway: GatewayStatusBody }) {
   );
 }
 
+/**
+ * The MERGED egress allowlist, tagged by source.
+ *
+ * This is the one control on the governance page whose effect an operator
+ * cannot read off the row list. The gateway enforces the UNION of the authored
+ * rows and the GATEWAY_EGRESS_ALLOWLIST the chart sets, so a row list alone
+ * never answers "is this host permitted?" — and it never answers the question
+ * that actually blocks a self-hosted endpoint, which is whether a private
+ * address is reachable at all.
+ */
+function EgressSummary({ gateway }: { readonly gateway: GatewayStatusBody }) {
+  const egress = gateway.egress;
+  if (egress === undefined) return null;
+
+  const env = egress.env ?? [];
+  const db = egress.db ?? [];
+  const effective = egress.effective ?? [];
+  const dropped = egress.dropped ?? [];
+
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }} data-testid="llm-proxy-egress">
+      <Typography variant="bodySmall" sx={{ fontWeight: 600 }}>
+        {t('pages.admin.llmProxy.status.egressTitle', 'Egress allowlist in force')}
+      </Typography>
+
+      {egress.configured === true ? (
+        <Typography variant="bodySmall" color="text.secondary" data-testid="llm-proxy-egress-effective">
+          {t('pages.admin.llmProxy.status.egressEffective', 'Permitted destinations')}
+          {': '}
+          {effective.join(', ')}
+        </Typography>
+      ) : (
+        <Alert severity="info" data-testid="llm-proxy-egress-unrestricted">
+          {t(
+            'pages.admin.llmProxy.status.egressUnrestricted',
+            'No entry is configured anywhere, so a credential may name any public host. Private addresses stay unreachable. Adding the first entry turns the restriction on for every credential.',
+          )}
+        </Alert>
+      )}
+
+      <Typography variant="bodySmall" color="text.secondary" data-testid="llm-proxy-egress-sources">
+        {t('pages.admin.llmProxy.status.egressFromChart', 'From the chart')}
+        {`: ${env.length > 0 ? env.join(', ') : '—'} · `}
+        {t('pages.admin.llmProxy.status.egressFromGovernance', 'From governance')}
+        {`: ${db.length > 0 ? db.join(', ') : '—'}`}
+      </Typography>
+
+      {egress.private_network === true ? null : (
+        <Alert severity="info" data-testid="llm-proxy-egress-private-closed">
+          {t(
+            'pages.admin.llmProxy.status.egressPrivateClosed',
+            'No entry names a private address or block, so a self-hosted endpoint on a private network is not reachable. Add the host AND its block, for example 192.168.29.60:8000 and 192.168.29.0/24. A host name alone does not unlock it, because the gateway never resolves a name to decide.',
+          )}
+        </Alert>
+      )}
+
+      {dropped.length > 0 ? (
+        <Alert severity="error" data-testid="llm-proxy-egress-dropped">
+          {t(
+            'pages.admin.llmProxy.status.egressDropped',
+            'The gateway could not parse these authored entries, so they permit nothing: {{entries}}.',
+            { entries: dropped.join(', ') },
+          )}
+        </Alert>
+      ) : null}
+    </Box>
+  );
+}
+
 /** The counts and diagnostics of a gateway that answered. */
 function LoadedSnapshot({ gateway }: { readonly gateway: GatewayStatusBody }) {
   const definitions = gateway.definitions;
@@ -254,6 +323,8 @@ function LoadedSnapshot({ gateway }: { readonly gateway: GatewayStatusBody }) {
           },
         )}
       </Typography>
+
+      <EgressSummary gateway={gateway} />
 
       <DiagnosticTable
         rows={definitions?.rejected ?? []}

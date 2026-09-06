@@ -25,7 +25,8 @@ export interface CreateCredentialProps {
   readonly prefillName?: string;
   readonly prefillId?: string;
   readonly section?: string;
-  readonly onCreated: () => void;
+  /** See `useCredentialFormController.ts`'s `onSaved` doc comment. */
+  readonly onCreated: (savedId?: string) => void;
   readonly onCancelled: () => void;
   readonly onTypeChosen?: (type: string) => void;
 }

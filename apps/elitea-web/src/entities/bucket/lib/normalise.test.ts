@@ -13,7 +13,16 @@ describe('normaliseBucket', () => {
       isPinned: true,
       createdAt: '2026-01-01T00:00:00Z',
       retentionDays: null,
+      sizeBytes: 0,
     });
+  });
+
+  it('carries size_bytes through, and folds an absent one to 0', () => {
+    // The buckets panel footer sums this across the project; an absent field
+    // has to read as "nothing stored", not `undefined`, or the footer prints
+    // "NaN".
+    expect(normaliseBucket({ ...wire, size_bytes: 26_956 }).sizeBytes).toBe(26_956);
+    expect(normaliseBucket(wire).sizeBytes).toBe(0);
   });
 
   it('carries retention_days through, and folds an absent one to null', () => {

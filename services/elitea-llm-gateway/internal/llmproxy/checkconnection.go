@@ -11,6 +11,10 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/maximhq/bifrost/core/schemas"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/account"
 )
 
 // checkconnection.go implements POST /llm/v1/check_connection (#319): a real,
@@ -42,10 +46,27 @@ type EgressPolicy interface {
 	// operator's GATEWAY_EGRESS_ALLOWLIST — the identical decision
 	// GetKeysForProvider applies to every persisted credential (issue #13).
 	EgressAllows(apiBase string) bool
-	// EgressAllowlistConfigured reports whether an allowlist is armed at
-	// all, matching GetConfigForProvider's private-network carve-out for the
-	// self-hosted provider classes.
-	EgressAllowlistConfigured() bool
+	// EgressPrivateNetworkAllowed reports whether the merged allowlist
+	// EXPLICITLY names a private host or CIDR. It is the SAME question, read
+	// from the SAME gate, that account.GetConfigForProvider asks before it
+	// sets NetworkConfig.AllowPrivateNetwork for the self-hosted provider
+	// classes.
+	//
+	// It used to be "is an allowlist armed at all"
+	// (account.EgressAllowlistConfigured). The egress-governance change made
+	// those two different questions: a name-only entry arms the allowlist and
+	// grants NO private reachability, because a name cannot declare where it
+	// resolves (egresslib, "Why a NAME allowlist"). The probe then reported
+	// success for a destination every chat turn refused in the dialer, and it
+	// wrote status_ok for it. One predicate, one gate instance, both
+	// directions: the probe must never pass a destination the request path
+	// refuses, and it must never refuse one the request path dials.
+	//
+	// The gate instance matters as much as the predicate. The account merges
+	// the environment floor with the authored `egress_allowlist` governance
+	// rows, so a decision taken from the environment alone would drift from
+	// the dialer the moment an admin authors a row.
+	EgressPrivateNetworkAllowed() bool
 }
 
 // checkConnectionProbeTimeout bounds the single provider round trip a check
@@ -169,11 +190,61 @@ type checkConnectionProvider struct {
 	// than a single string.
 	dialTargets func(req checkConnectionRequest) ([]string, error)
 	probe       func(ctx context.Context, client *http.Client, req checkConnectionRequest) error
-	// selfHosted marks provider classes whose api_base legitimately targets a
-	// private network (mirrors GetConfigForProvider's vLLM/Ollama carve-out).
-	// Private destinations are still refused unless the operator has ALSO
-	// armed GATEWAY_EGRESS_ALLOWLIST (checked at call time, not here).
-	selfHosted bool
+}
+
+// checkConnectionAllowsPrivateNetwork reports whether this credential may
+// probe a private address, and it answers the question the SAME way the
+// request path answers it.
+//
+// THE DEFECT THIS REPLACES. The decision used to be a static per-TYPE flag on
+// checkConnectionProvider, set for `ollama` alone. The request path does not
+// decide by type: account.ProviderForCredential reads the api_base as well,
+// because the platform's `open_ai` credential is also the generic
+// OpenAI-compatible credential — with a non-OpenAI origin it is dispatched
+// through bifrost's vLLM provider, and GetConfigForProvider then carves out
+// the private network for it. So an `open_ai` credential naming a private
+// vLLM host served completions and FAILED its own Test connection with
+// `no permitted address`. The button said the credential was broken while the
+// credential worked.
+//
+// One predicate, read from the one table (providerConfigTypes, through
+// ProviderForCredential), is the whole fix: a second copy keyed on the type
+// alone is what drifted.
+//
+// A private destination is still refused unless the operator's merged
+// allowlist EXPLICITLY names a private host or CIDR — that half of the gate is
+// applied by probeAllowsPrivateNetwork, and every target has already passed
+// EgressAllows before this is consulted.
+func checkConnectionAllowsPrivateNetwork(req checkConnectionRequest) bool {
+	provider, ok := account.ProviderForCredential(req.Type, req.APIBase)
+	if !ok {
+		return false
+	}
+	// The self-hosted provider classes, and only them — the identical switch
+	// account.GetConfigForProvider applies to AllowPrivateNetwork.
+	return provider == schemas.VLLM || provider == schemas.Ollama
+}
+
+// probeAllowsPrivateNetwork is the WHOLE private-network decision for a probe,
+// and it is the request path's decision, not a second one.
+//
+// account.GetConfigForProvider builds NetworkConfig.AllowPrivateNetwork from
+// two facts: the credential resolves to a self-hosted provider class, AND the
+// merged egress allowlist explicitly names a private destination. This reads
+// the same two facts, the second one from the same gate instance through
+// EgressPolicy, so a probe cannot pass a destination the dialer refuses.
+//
+// Both callers (CheckConnection and ListProviderModels) go through here. Two
+// copies of one predicate is exactly how the earlier per-type flag drifted.
+//
+// A nil policy answers false: a handler composed without WithEgressPolicy
+// refuses the request before this is reached, and this must not be the one
+// place that would have opened the private network for it.
+func (h *Handler) probeAllowsPrivateNetwork(req checkConnectionRequest) bool {
+	if h == nil || h.egressPolicy == nil {
+		return false
+	}
+	return checkConnectionAllowsPrivateNetwork(req) && h.egressPolicy.EgressPrivateNetworkAllowed()
 }
 
 // checkConnectionFieldError is a pre-dial refusal: the payload itself cannot
@@ -203,13 +274,19 @@ func checkConnectionAPIBaseTargets(req checkConnectionRequest) ([]string, error)
 	return []string{req.APIBase}, nil
 }
 
-// checkConnectionProviders now covers every ai_credentials type
-// account/credentials.go's providerConfigTypes can build a bifrost key for —
-// the same six legacy's LiteLLM check covered. amazon_bedrock and vertex_ai
-// were the last two holdouts (they need AWS SigV4 and a Google
-// service-account token exchange rather than a bearer/api-key header); they
-// live in checkconnection_cloud.go and reuse the credential shapes
+// checkConnectionProviders holds the probe for each credential type this
+// gateway can actually test. It started as the six legacy's LiteLLM check
+// covered; amazon_bedrock and vertex_ai (AWS SigV4 and a Google
+// service-account token exchange rather than a bearer/api-key header) live in
+// checkconnection_cloud.go and reuse the credential shapes
 // account/credentials.go already stores for them.
+//
+// It does NOT cover every type providerConfigTypes can build a key for.
+// `anthropic` has no entry: no read-only probe is written for it yet, and
+// elitea-main's catalogue advertises has_test_connection = false for it, so the
+// screen offers no button rather than a button that answers "unsupported".
+// Adding one here means adding the type to elitea-main's
+// checkableConnectionTypes and flipping that flag in the same change.
 var checkConnectionProviders = map[string]checkConnectionProvider{
 	// OpenAI's own credential type: GET /models is OpenAI's documented,
 	// canonical way to validate a key (no billed completion).
@@ -220,9 +297,22 @@ var checkConnectionProviders = map[string]checkConnectionProvider{
 	// way.
 	"azure_open_ai": {dialTargets: checkConnectionAPIBaseTargets, probe: probeAzureDeployments},
 	"ai_dial":       {dialTargets: checkConnectionAPIBaseTargets, probe: probeAzureDeployments},
-	// Ollama is self-hosted: its api_base routinely names a private address,
-	// exactly like account.go's vLLM/Ollama carve-out.
-	"ollama": {dialTargets: checkConnectionAPIBaseTargets, probe: probeOllamaTags, selfHosted: true},
+	// open_ai_azure is the third name providerConfigTypes maps to schemas.Azure
+	// — it is an ALIAS of azure_open_ai, kept because the legacy integration
+	// path wrote rows under it. The same credential shape must get the same
+	// probe, or the alias tests as broken while it serves completions.
+	"open_ai_azure": {dialTargets: checkConnectionAPIBaseTargets, probe: probeAzureDeployments},
+	// Ollama is self-hosted: its api_base routinely names a private address.
+	// The carve-out is no longer declared here — checkConnectionAllowsPrivateNetwork
+	// derives it from the provider this credential resolves to, exactly as the
+	// request path does.
+	"ollama": {dialTargets: checkConnectionAPIBaseTargets, probe: probeOllamaTags},
+	// vLLM serves the OpenAI-compatible surface, so it is probed with GET
+	// {api_base}/models — with the customary api_base of
+	// http://host:8000/v1 that is /v1/models. It is NOT probed with Ollama's
+	// /api/tags: vLLM does not serve that path and answers 404, which reads to
+	// an operator as a rejected credential.
+	"vllm": {dialTargets: checkConnectionAPIBaseTargets, probe: probeOpenAICompatibleModels},
 	// amazon_bedrock: SigV4-signed GET bedrock.{region}.amazonaws.com/foundation-models.
 	"amazon_bedrock": {dialTargets: checkConnectionBedrockTargets, probe: probeBedrockFoundationModels},
 	// vertex_ai: service-account token exchange, then GET
@@ -303,7 +393,7 @@ func (h *Handler) CheckConnection(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	allowPrivate := provider.selfHosted && h.egressPolicy.EgressAllowlistConfigured()
+	allowPrivate := h.probeAllowsPrivateNetwork(req)
 	client := newCheckConnectionProbeClient(allowPrivate)
 
 	ctx, cancel := context.WithTimeout(r.Context(), checkConnectionProbeTimeout)
@@ -455,9 +545,9 @@ func checkConnectionProbeDo(client *http.Client, httpReq *http.Request) error {
 // is exactly the check-then-dial DNS-rebinding race account/egress.go's own
 // doc comment warns about; dialing the validated IP directly closes it.
 //
-// allowPrivate is true only for a self-hosted credential class (currently
-// just Ollama) AND only when the operator has armed
-// GATEWAY_EGRESS_ALLOWLIST — mirroring GetConfigForProvider's
+// allowPrivate comes from probeAllowsPrivateNetwork ONLY. It is true for a
+// self-hosted credential class AND only when the merged allowlist explicitly
+// names a private host or CIDR — mirroring GetConfigForProvider's
 // NetworkConfig.AllowPrivateNetwork exactly.
 func newCheckConnectionProbeClient(allowPrivate bool) *http.Client {
 	dialer := &net.Dialer{Timeout: 5 * time.Second}

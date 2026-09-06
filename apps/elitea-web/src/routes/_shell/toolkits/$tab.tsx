@@ -22,6 +22,7 @@ export const Route = createFileRoute('/_shell/toolkits/$tab')({
     'newToolkitId',
     'return_url',
     'source_application_id',
+    'view',
   ),
   pendingComponent: RoutePending,
   errorComponent: RouteError,

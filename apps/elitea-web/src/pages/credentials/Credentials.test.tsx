@@ -31,6 +31,6 @@ describe('Credentials (ROUTE-022 target)', () => {
       </QueryClientProvider>,
     );
     expect(screen.getByText('Credentials')).toBeInTheDocument();
-    expect(await screen.findByText('You have no credentials.')).toBeInTheDocument();
+    expect(await screen.findByText('No credentials yet')).toBeInTheDocument();
   });
 });

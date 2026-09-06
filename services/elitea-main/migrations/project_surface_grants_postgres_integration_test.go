@@ -178,13 +178,13 @@ func TestAViewerReadsTheThreeSurfacesAndWritesNone(t *testing.T) {
 // all six at once.
 func TestACallerWithoutTheseGrantsReachesNoneOfTheThreeSurfaces(t *testing.T) {
 	pool := newMigratedPool(t)
-	seedRoleMembership(t, pool, 4963, "editor", 1)
+	roleID := seedRoleMembership(t, pool, 4963, "editor", 1)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	if _, err := pool.Exec(ctx, `
 INSERT INTO public.auth_core__project_role_permission (project_id, role_id, permission)
-VALUES (1, 4963, 'models.something.else')`); err != nil {
+VALUES (1, $1, 'models.something.else')`, roleID); err != nil {
 		t.Fatalf("seed the per-project grant: %v", err)
 	}
 

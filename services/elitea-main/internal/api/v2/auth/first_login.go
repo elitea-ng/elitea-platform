@@ -70,18 +70,23 @@ func InitialGlobalAdminsFromEnv() []string {
 // one silent failure here, when a guard read `LIKE 'oidc:%'` and SAML wrote
 // `saml:`.
 //
-// The comparison itself is delegated to identity.IsInitialGlobalAdmin so that
-// "who is an initial admin" has ONE definition. Only the spelling of the
+// The comparison itself is delegated to identity.MatchesInitialGlobalAdmin so
+// that "who is an initial admin" has ONE definition. Only the spelling of the
 // reference is this function's business.
 //
-// The email claim is NOT a candidate. See identity.IsInitialGlobalAdmin.
-func matchesInitialGlobalAdmin(admins []string, providerRef string) bool {
-	if identity.IsInitialGlobalAdmin(admins, providerRef) {
+// AN `email:` ENTRY IS THE THIRD SPELLING, and it is not a reference at all. It
+// matches `verifiedEmail`, which the caller fills in only when the identity
+// provider STATED that the address is verified. The namespace prefix strip
+// below therefore cannot reach it: identity.MatchesInitialGlobalAdmin compares
+// an `email:` entry against the address and against nothing else, so a subject
+// spelled `email:someone@corp.com` collects no grant.
+func matchesInitialGlobalAdmin(admins []string, providerRef, verifiedEmail string) bool {
+	if identity.MatchesInitialGlobalAdmin(admins, providerRef, verifiedEmail) {
 		return true
 	}
 	for _, prefix := range []string{OIDCProviderRefPrefix, SAMLProviderRefPrefix} {
 		if bare, found := strings.CutPrefix(providerRef, prefix); found {
-			return identity.IsInitialGlobalAdmin(admins, bare)
+			return identity.MatchesInitialGlobalAdmin(admins, bare, verifiedEmail)
 		}
 	}
 	return false
@@ -102,11 +107,16 @@ func matchesInitialGlobalAdmin(admins []string, providerRef string) bool {
 //
 // Both effects are idempotent, so every subsequent login runs them as two
 // cheap reads that change nothing.
+//
+// `verifiedEmail` carries the address ONLY when the identity provider stated
+// that it is verified. Pass "" when there is no such statement. See
+// identity.MatchesInitialGlobalAdmin.
 func applyFirstLoginGrants(
 	ctx context.Context,
 	tx pgx.Tx,
 	userID int,
 	providerRef string,
+	verifiedEmail string,
 	policy FirstLoginPolicy,
 ) error {
 	if userID <= 0 || userID > math.MaxInt32 {
@@ -114,7 +124,7 @@ func applyFirstLoginGrants(
 	}
 	queries := sqlcgen.New(tx)
 
-	if matchesInitialGlobalAdmin(policy.InitialGlobalAdmins, providerRef) {
+	if matchesInitialGlobalAdmin(policy.InitialGlobalAdmins, providerRef, verifiedEmail) {
 		if err := identityrepo.ApplyInitialAdministrationRole(
 			ctx, queries, int32(userID),
 			identity.InitialAdministrationMode, identity.InitialAdministrationRole,

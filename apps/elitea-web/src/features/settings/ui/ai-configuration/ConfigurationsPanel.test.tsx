@@ -12,9 +12,11 @@
 import CssBaseline from '@mui/material/CssBaseline';
 import { ThemeProvider } from '@mui/material/styles';
 import {
+  Outlet,
   RouterProvider,
   createMemoryHistory,
   createRootRoute,
+  createRoute,
   createRouter,
 } from '@tanstack/react-router';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -261,5 +263,190 @@ describe('ConfigurationsPanel connection health', () => {
     expect(screen.getByText(/In Progress/)).toBeInTheDocument();
     // Re-deriving admission needs nothing from the client.
     expect(revalidateBody).toBe('');
+  });
+});
+
+/**
+ * DEFECT this pins (gap 6). A card on Settings -> AI Configuration is the ONLY
+ * way to open a stored configuration, and every one of them routed to
+ * `/settings/create-configuration` — the type chooser for a NEW configuration.
+ * The id went into a `state.routeStack[].pagePath` breadcrumb nothing reads, so
+ * clicking `local-vllm` opened an empty "New Configuration" form and the stored
+ * row could not be edited at all.
+ *
+ * The assertion is about the DESTINATION, so the router here carries the real
+ * edit route (ROUTE-065) rather than a lone root route: a `navigate` to a path
+ * this tree does not declare would not be a passing test, it would be a route
+ * that never resolves.
+ */
+describe('ConfigurationsPanel card navigation', () => {
+  /** Renders the panel at `/`, with the real edit route mounted beside it. */
+  function renderPanelWithRoutes(configs: Record<string, unknown>[] = [LLM_CONFIG]): void {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    const theme = buildEliteaTheme(DEFAULT_BRAND_PACK);
+    const rootRoute = createRootRoute({
+      component: () => (
+        <QueryClientProvider client={queryClient}>
+          <ThemeProvider theme={theme} defaultMode={DEFAULT_COLOR_SCHEME}>
+            <CssBaseline />
+            <Outlet />
+          </ThemeProvider>
+        </QueryClientProvider>
+      ),
+    });
+    const indexRoute = createRoute({
+      getParentRoute: () => rootRoute,
+      path: '/',
+      component: () => (
+        <ConfigurationsPanel
+          configurationsBySection={{ llm: configs }}
+          projectId={PROJECT_ID}
+          isLoading={false}
+        />
+      ),
+    });
+    const editRoute = createRoute({
+      getParentRoute: () => rootRoute,
+      path: '/settings/edit-configuration/$credential_uid',
+      component: function EditConfigurationStub() {
+        const { credential_uid: credentialUid } = editRoute.useParams();
+        return <div data-testid="edit-configuration-route">{credentialUid}</div>;
+      },
+    });
+    const router = createRouter({
+      routeTree: rootRoute.addChildren([indexRoute, editRoute]),
+      history: createMemoryHistory({ initialEntries: ['/'] }),
+    });
+    render(<RouterProvider router={router} />);
+  }
+
+  it('opens the clicked configuration in the edit route, carrying its id', async () => {
+    setConfig();
+    configureGeneratedClient({ baseUrl: BASE });
+    mockEditPermission();
+    server.use(
+      http.get(`${BASE}/configurations/models/${PROJECT_ID}`, () =>
+        HttpResponse.json({ items: [], total: 0, default_model_name: '', default_model_project_id: '' }),
+      ),
+    );
+
+    renderPanelWithRoutes();
+
+    // `getConfigurationDisplayName` reads `label` first, so this is the card's
+    // own title row.
+    const card = await screen.findByText('openai');
+    // The card opens nothing until the permission answer lands: before that it
+    // renders "No edit permissions" and the click is a no-op by design.
+    await waitFor(() => expect(screen.queryByText('No edit permissions')).not.toBeInTheDocument());
+    await userEvent.click(card);
+
+    // The id, not a breadcrumb string: this is what the edit screen loads the
+    // stored row by.
+    expect(await screen.findByTestId('edit-configuration-route')).toHaveTextContent('1');
+  });
+});
+
+/**
+ * DEFECT this pins (J19b, `credentials.lifecycle.spec.ts:179`). A row saved
+ * into a non-LLM section (e.g. "AI Credentials") landed in a COLLAPSED
+ * accordion on return from `/settings/create-configuration`, because only
+ * the LLMs section ever passed `defaultExpanded: true`. `revealConfigurationId`
+ * (the route's `?reveal=` search param) is what fixes it: the section whose
+ * `configurations` include that id opens too, everything else keeps its
+ * production default.
+ */
+describe('ConfigurationsPanel reveal (?reveal=) opens the saved row\'s section', () => {
+  const AI_CREDENTIAL_CONFIG = {
+    id: 42,
+    project_id: PROJECT_ID,
+    elitea_title: 'GitHub token',
+    label: 'GitHub token',
+    type: 'custom',
+    section: 'ai_credentials',
+    shared: false,
+    data: {},
+  };
+  // A second non-LLM, non-matching section — proves `revealConfigurationId`
+  // opens ONLY the section holding it, not every non-LLM section at once.
+  const EMBEDDING_CONFIG = {
+    id: 7,
+    project_id: PROJECT_ID,
+    elitea_title: 'Embed model',
+    label: 'embed',
+    type: 'openai',
+    section: 'embedding',
+    shared: false,
+    data: { name: 'text-embed' },
+  };
+
+  function mockModels(): void {
+    server.use(
+      http.get(`${BASE}/configurations/models/${PROJECT_ID}`, () =>
+        HttpResponse.json({ items: [], total: 0, default_model_name: '', default_model_project_id: '' }),
+      ),
+    );
+  }
+
+  it('reveal id inside AI Credentials expands that section; LLMs stays expanded too', async () => {
+    setConfig();
+    configureGeneratedClient({ baseUrl: BASE });
+    mockEditPermission();
+    mockModels();
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const theme = buildEliteaTheme(DEFAULT_BRAND_PACK);
+    const rootRoute = createRootRoute({
+      component: () => (
+        <QueryClientProvider client={queryClient}>
+          <ThemeProvider theme={theme} defaultMode={DEFAULT_COLOR_SCHEME}>
+            <CssBaseline />
+            <ConfigurationsPanel
+              configurationsBySection={{ llm: [LLM_CONFIG], embedding: [EMBEDDING_CONFIG], ai_credentials: [AI_CREDENTIAL_CONFIG] }}
+              projectId={PROJECT_ID}
+              isLoading={false}
+              revealConfigurationId="42"
+            />
+          </ThemeProvider>
+        </QueryClientProvider>
+      ),
+    });
+    const router = createRouter({ routeTree: rootRoute, history: createMemoryHistory({ initialEntries: ['/'] }) });
+    render(<RouterProvider router={router} />);
+
+    expect(await screen.findByTestId('ai-providers-section-ai-credentials')).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByTestId('ai-providers-section-llms')).toHaveAttribute('aria-expanded', 'true');
+    // A section with no reveal match keeps its own (collapsed) default.
+    expect(screen.getByTestId('ai-providers-section-embedding-models')).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('no reveal id: AI Credentials stays collapsed, LLMs is still expanded', async () => {
+    setConfig();
+    configureGeneratedClient({ baseUrl: BASE });
+    mockEditPermission();
+    mockModels();
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const theme = buildEliteaTheme(DEFAULT_BRAND_PACK);
+    const rootRoute = createRootRoute({
+      component: () => (
+        <QueryClientProvider client={queryClient}>
+          <ThemeProvider theme={theme} defaultMode={DEFAULT_COLOR_SCHEME}>
+            <CssBaseline />
+            <ConfigurationsPanel
+              configurationsBySection={{ llm: [LLM_CONFIG], ai_credentials: [AI_CREDENTIAL_CONFIG] }}
+              projectId={PROJECT_ID}
+              isLoading={false}
+            />
+          </ThemeProvider>
+        </QueryClientProvider>
+      ),
+    });
+    const router = createRouter({ routeTree: rootRoute, history: createMemoryHistory({ initialEntries: ['/'] }) });
+    render(<RouterProvider router={router} />);
+
+    expect(await screen.findByTestId('ai-providers-section-llms')).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByTestId('ai-providers-section-ai-credentials')).toHaveAttribute('aria-expanded', 'false');
   });
 });

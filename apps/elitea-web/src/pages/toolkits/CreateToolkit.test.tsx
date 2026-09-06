@@ -70,6 +70,26 @@ describe('CreateToolkit', () => {
     expect(await screen.findByText('New Application')).toBeInTheDocument();
   });
 
+  /**
+   * [visual-parity regression] The baseline renders this page inside
+   * `StyledTabs` WITHOUT `hideBackButton`, so its tab bar always opens with a
+   * `BackButton` left of the title. This port rendered the title alone, so the
+   * screen had no back affordance at all — a missing element, not a style
+   * difference, and this assertion fails against the pre-fix component.
+   */
+  it('renders a back button left of the title in the sub-header', async () => {
+    server.use(http.get('/api/v2/elitea_core/toolkits/prompt_lib/:projectId', () => HttpResponse.json({})));
+    const createToolkit = vi.fn();
+
+    renderToolkitsRoute(<CreateToolkit deps={{ createToolkit }} />, '/toolkits/create', { projectId: 'proj-1' });
+
+    const title = await screen.findByText('New Toolkit');
+    const back = screen.getByRole('button', { name: 'Back' });
+    expect(back).toBeInTheDocument();
+    // Left of the title, in the same bar.
+    expect(back.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it('does not render the save/cancel tab bar before a type is picked', async () => {
     server.use(http.get('/api/v2/elitea_core/toolkits/prompt_lib/:projectId', () => HttpResponse.json({ github: { metadata: { label: 'GitHub' } } })));
     const createToolkit = vi.fn();

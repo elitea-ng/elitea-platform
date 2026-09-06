@@ -9,7 +9,6 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,6 +20,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/contextsettings"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/publicproject"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
@@ -974,10 +974,10 @@ func (h *Handler) UpdateEntitySettings(w http.ResponseWriter, r *http.Request) {
 		if pool != nil {
 			entityName, agentProjectID := h.getParticipantEntityInfo(r.Context(), pool, projectID, conversationID, participantID)
 			if entityName == "application" {
-				publicProjectID := os.Getenv("PUBLIC_PROJECT_ID")
-				if publicProjectID == "" {
-					publicProjectID = "1"
-				}
+				// `PUBLIC_PROJECT_ID` was one of four names for one project.
+				// internal/publicproject resolves them all, and cmd refuses to
+				// start when two of them disagree.
+				publicProjectID := publicproject.IDString()
 				if agentProjectID != publicProjectID {
 					// Non-published agent: reject if llm_settings differs from version baseline
 					versionID := body["version_id"]

@@ -5,19 +5,29 @@
 #   build        rebuild the stack's images from source (`up` reuses existing
 #                tags, so a code change needs this first)
 #   up           bring the stack up and wait for healthy
-#   seed         schema + OIDC users + RBAC — delegates to the E2E seeder
-#   seed-runtime authorize the agent worker's certificate identity (#281)
-#   seed-llm     credential the gateway serves completions with, plus the chat
-#                model and the embedding model. Defaults to the offline mock
-#                (#283) unless OPENAI_API_KEY/ANTHROPIC_API_KEY is set.
-#                seed-llm OWNS the embedding model name (#468).
+#   seed         E2E/DEV CONVENIENCE, not required for a working stack: schema
+#                + OIDC users + RBAC fixtures — delegates to the E2E seeder
+#   seed-runtime E2E/DEV CONVENIENCE, not required for a working stack: `up`
+#                already authorizes the agent worker's certificate identity
+#                through the runtime-session-init service (#281) before the
+#                worker starts. This exists as a manual fallback for a
+#                database restored from a backup that predates that row, or a
+#                stack brought up with `--no-deps`
+#   seed-llm     LOCAL-MODEL CONVENIENCE, not required for a working stack:
+#                writes a credential the gateway serves completions with, plus
+#                the chat model and the embedding model. Defaults to the
+#                offline mock (#283) unless OPENAI_API_KEY/ANTHROPIC_API_KEY
+#                is set. seed-llm OWNS the embedding model name (#468).
 #                It writes every row THROUGH THE PRODUCT API
 #                (deploy/scripts/seed-llm-api.py), so it needs elitea-main up
 #                and ELITEA_CONFIGURATIONS_ENABLED on, not just postgres. Two
 #                database calls survive; both are named in
 #                SEED_LLM_SQL_EXCEPTIONS and the subcommand checks its own
-#                command trace against that list before it exits
-#   seed-index   vector store + an indexable toolkit, so the index-start route
+#                command trace against that list before it exits.
+#                An operator normally does this from the admin UI instead
+#                (Configurations → add an LLM provider), once logged in
+#   seed-index   LOCAL-MODEL CONVENIENCE, not required for a working stack:
+#                vector store + an indexable toolkit, so the index-start route
 #                and its SSE stream can be driven (#93). It creates the
 #                embedding model row only when no row exists yet, so it can
 #                never overwrite the name seed-llm wrote (#468)
@@ -33,7 +43,32 @@
 #                (#422, #534)
 #   down         tear down (add -v yourself to drop volumes)
 #
-# Typical first run:
+# ── Operator quick start (no seeders) ───────────────────────────────────────
+# Schema bootstrap, the agentstate database, the vector extension, the
+# artifact bucket, RBAC roles, a per-user PAT and a personal project are all
+# automatic — the `db-init`, `elitea-migrate`, `elitea-agentstate-migrate`,
+# `rustfs-bucket-init` and `runtime-session-init` compose services, plus
+# first-login provisioning in cmd/elitea-main, do them. None of the seed*
+# subcommands above are required to reach a working, logged-in stack:
+#
+#   deploy/scripts/standalone-stack.sh certs
+#   deploy/scripts/standalone-stack.sh build
+#   deploy/scripts/standalone-stack.sh up
+#   # log in through the browser at http://localhost:${STANDALONE_PORT:-8084}/app/
+#   #   (oidc-mock accepts any username; ELITEA_INITIAL_GLOBAL_ADMINS on the
+#   #   elitea-main service, or E2E_ADMIN_EMAIL-shaped identities via `seed`,
+#   #   decides who becomes a global administrator on first login)
+#   # configure an LLM provider from the admin UI (Configurations), which
+#   #   sets GATEWAY_EGRESS_ALLOWLIST as the bootstrap floor for reaching a
+#   #   private model host — see deploy/README.md's compose section
+#
+# The seed* subcommands below remain useful for local development and CI: a
+# scripted admin account and RBAC fixture set (`seed`), a credential typed
+# from the shell instead of the UI (`seed-llm`), an indexable toolkit
+# (`seed-index`), and a manual fallback for the workload-session row
+# (`seed-runtime`).
+#
+# Typical E2E/dev run (all seeders, none required for the operator path above):
 #   deploy/scripts/standalone-stack.sh certs
 #   deploy/scripts/standalone-stack.sh up
 #   deploy/scripts/standalone-stack.sh seed
@@ -137,6 +172,84 @@ WORKER_JOIN_TIMEOUT="${STANDALONE_WORKER_JOIN_TIMEOUT:-90}"
 # `data` for this row: two writers put the outcome back in the hands of the
 # order, and an index run then starts, becomes durable, and dies in the worker
 # with a 404.
+
+# stack_is_settled reports whether every container of this project is in its
+# final good state: each long-running service running (and healthy where it has
+# a healthcheck), each one-shot job exited 0.
+#
+# It exists because `compose up -d --wait` returns 1 on a stack that is
+# COMPLETELY healthy. `--wait` waits for every container to become healthy OR to
+# exit, and it counts an exit — any exit, including 0 — as a failure. This stack
+# has NINE one-shot jobs (db-init, elitea-migrate, elitea-agentstate-migrate,
+# rustfs-bucket-init, runtime-material, runtime-bootstrap, runtime-session-init,
+# worker-spool-init, mcp-mock-trust), so a perfect `up` ends with:
+#
+#   Container elitea-standalone-elitea-agentstate-migrate-1  Healthy
+#   container elitea-standalone-elitea-agentstate-migrate-1 exited (0)
+#   Error: ... exit status 1
+#
+# Reproduced on Docker Compose v2.40.1 with a two-service project — one long
+# runner with a healthcheck, one `echo done` — which is the whole shape.
+#
+# The post-check reads `compose ps --all --format json`. Measured output on that
+# version is ONE JSON OBJECT PER LINE, not an array:
+#
+#   {"Name":"psprobe-longrunner-1","Service":"longrunner","State":"running",
+#    "Health":"healthy","ExitCode":0,"Status":"Up 8 seconds"}
+#   {"Name":"psprobe-oneshot-1","Service":"oneshot","State":"exited",
+#    "Health":"","ExitCode":0,"Status":"Exited (0) 8 seconds ago"}
+#
+# Other builds emit a JSON array, so the reader accepts both. `--all` is
+# required: without it `ps` hides every exited container, and a one-shot that
+# failed would then be INVISIBLE — the check would pass by finding nothing,
+# which is the failure mode it exists to prevent.
+#
+# ExitCode is 0 on a running container too, so it is read only in the exited
+# branch. A container whose health is `starting` or `unhealthy` is NOT settled:
+# this must never turn a real failure green.
+stack_is_settled() {
+  $COMPOSE_BIN $COMPOSE_F ps --all --format json 2>/dev/null | python3 -c '
+import json, re, sys
+
+raw = sys.stdin.read().strip()
+if not raw:
+    print("compose ps returned no containers", file=sys.stderr)
+    raise SystemExit(1)
+
+try:
+    parsed = json.loads(raw)
+    containers = parsed if isinstance(parsed, list) else [parsed]
+except json.JSONDecodeError:
+    containers = [json.loads(line) for line in raw.splitlines() if line.strip()]
+
+exited = re.compile(r"Exited \((\d+)\)")
+unsettled = []
+for container in containers:
+    name = container.get("Name") or container.get("Service") or "?"
+    state = (container.get("State") or "").lower()
+    health = (container.get("Health") or "").lower()
+    status = container.get("Status") or ""
+    if state == "running":
+        if health in ("", "healthy"):
+            continue
+        unsettled.append("%s: running but %s" % (name, health or "health unknown"))
+        continue
+    if state == "exited":
+        code = container.get("ExitCode")
+        if code is None:
+            match = exited.search(status)
+            code = int(match.group(1)) if match else None
+        if code == 0:
+            continue
+        unsettled.append("%s: exited (%s)" % (name, code if code is not None else status))
+        continue
+    unsettled.append("%s: %s" % (name, state or status or "unknown state"))
+
+for line in unsettled:
+    print(line, file=sys.stderr)
+raise SystemExit(1 if unsettled else 0)
+'
+}
 
 # reject_retired_embedding_var stops a run that still sets the retired variable.
 # A silent no-op would hide the reason the value stopped taking effect.
@@ -595,7 +708,7 @@ EOF
           echo "   ! the gateway does NOT allow egress to '${EGRESS_NEEDED}' (allowlist: '${EGRESS_HAVE:-<unset>}')."
           echo "     Every turn will reach the model and come back 500 EGRESS_HOST_NOT_ALLOWED."
           echo "     Restart the gateway with it allowed:"
-          echo "       GATEWAY_EGRESS_ALLOWLIST=\"${EGRESS_HAVE:-llm-mock:8090},${EGRESS_NEEDED}\" \\"
+          echo "       GATEWAY_EGRESS_ALLOWLIST=\"${EGRESS_HAVE:-llm-mock:8090},${EGRESS_NEEDED},10.0.0.0/8,172.16.0.0/12,192.168.0.0/16\" \\"
           echo "         $0 up          # or: compose up -d --force-recreate elitea-llm-gateway" ;;
       esac
     fi
@@ -658,8 +771,34 @@ case "${1:-}" in
       exit 1
     fi
     echo "→ Bringing up the full standalone stack (${COMPOSE_BIN})…"
-    $COMPOSE_BIN $COMPOSE_F up -d --wait
-    echo "→ Stack ready at http://localhost:${PORT}/app/"
+    # `--wait` returns 1 on a stack that is COMPLETELY healthy, because it reads
+    # a one-shot job's exit as a failure even when the code is 0. This stack has
+    # nine of them, so `up` reported failure on every good run and every caller
+    # — an operator, a CI step, a `&&` chain — read a working stack as broken.
+    # See stack_is_settled for the measured behaviour and the ps output shape.
+    #
+    # The exit status is not simply discarded. It is re-derived from the
+    # container states, so a REAL failure — a service stuck `starting`, an
+    # unhealthy container, a migration that exited non-zero — still exits 1.
+    up_status=0
+    $COMPOSE_BIN $COMPOSE_F up -d --wait || up_status=$?
+    if [ "$up_status" -ne 0 ]; then
+      if stack_is_settled; then
+        echo "→ compose --wait exited ${up_status} because a one-shot job finished;"
+        echo "   every service is healthy and every job exited 0."
+      else
+        echo "ERROR: the stack did not come up. The containers above are not settled." >&2
+        $COMPOSE_BIN $COMPOSE_F ps --all >&2 || true
+        exit "$up_status"
+      fi
+    fi
+    echo "→ Stack ready."
+    echo "     web app       http://localhost:${PORT}/app/"
+    echo "     admin console http://localhost:${PORT}/admin/app/"
+    echo "     API           http://localhost:${PORT}/api/v2"
+    echo "     OIDC provider http://localhost:9400"
+    echo "     gateway       https://localhost:${STANDALONE_GATEWAY_PORT:-8085} (mTLS)"
+    echo "   Next: $0 seed && $0 seed-runtime && $0 seed-llm && $0 check"
     ;;
 
   build)
@@ -705,11 +844,19 @@ case "${1:-}" in
   seed-runtime)
     # Authorize the agent worker's certificate identity.
     #
+    # NORMALLY UNNECESSARY: `up` already runs this same authorization through
+    # the `runtime-session-init` compose service (deploy/runtime/
+    # provision-runtime-session.sh), ordered before the worker starts. This
+    # subcommand is a manual fallback for a database restored from a backup
+    # that predates that row, or a worker brought up with `--no-deps`, not a
+    # required step of a fresh install.
+    #
     # Nothing in the repository inserts into elitea_runtime.workload_sessions —
     # by design. WorkloadSessionsRepository "exposes no process-local
     # registration or fallback allowlist"; sessions are provisioned by the
     # deployment control plane before a worker connects, so a worker can never
-    # mint its own authority. In this stack the control plane is this command.
+    # mint its own authority. In this stack the control plane is this command
+    # (or, ordinarily, `runtime-session-init`).
     #
     # The tuple must match exactly what workloadauth presents: the identity
     # derived from the client certificate (one SPIFFE URI SAN — see
@@ -719,6 +866,9 @@ case "${1:-}" in
     #
     # Keep these three values in sync with the worker's runtime.json (#282) and
     # with RUNTIME_WORKER_SPIFFE_ID in gen-runtime-certs.sh.
+    echo "→ seed-runtime is normally unnecessary: 'up' already authorizes the"
+    echo "  worker through the runtime-session-init service. Re-running this"
+    echo "  now (harmless — the upsert is idempotent and re-stamps expires_at)…"
     WORKER_IDENTITY="${RUNTIME_WORKER_SPIFFE_ID:-spiffe://elitea.standalone/ns/default/sa/agent-worker}"
     WORKER_SESSION_ID="${RUNTIME_WORKER_SESSION_ID:-standalone-agent-worker-1}"
     WORKER_PRODUCER_ID="${RUNTIME_WORKER_PRODUCER_ID:-standalone-agent-worker-1}"

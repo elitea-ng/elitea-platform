@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	appmailer "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/mailer"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/emailsettings"
 	"net/http"
 	"os"
 	"strings"
@@ -71,6 +72,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/scimdirectory"
 	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
 	"github.com/jackc/pgx/v5/pgxpool"
 	goredis "github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/otel"
@@ -132,6 +134,13 @@ type RouterConfig struct {
 	// notices, the Branding page's test message. Nil means none is sent and
 	// every invite reports invitation_delivered: false.
 	Mailer *appmailer.Composer
+	// EmailSettings resolves the mail transport per send: the admin E-mail
+	// page's rows laid over the environment defaults (gap G7). main.go builds
+	// one and shares it with the Mailer above, so the page that says a relay
+	// is configured and the composer that dials it cannot disagree. Nil builds
+	// one here over Pool with an EMPTY environment layer — the shape every
+	// test uses, where there is no process environment to inherit.
+	EmailSettings *emailsettings.Resolver
 	// BrandingPackages exports and imports the branding package (ADR-0024
 	// decision 9). Nil means the package routes answer 503; the router does
 	// not build one because the previews it renders belong to main.go's
@@ -1148,6 +1157,29 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		r.Use(apimw.Audit(auditRecorder))
 
 		r.Route("/api/v2", func(r chi.Router) {
+			// THE GROUP'S OWN "no such route" ANSWER (F3).
+			//
+			// Auth runs ABOVE this subrouter, so a path nobody registered is
+			// already authenticated by the time chi looks for it. That
+			// ordering is the contract: an unknown path answers 404 to a
+			// caller with a credential and 401 only to one without. A retired
+			// path that answers 401 to a logged-in browser is read by the SPA
+			// as an expired session, and it opens a fresh OIDC round-trip on
+			// every visit to the page that still calls it.
+			//
+			// What was missing is the BODY. chi's default fallback writes
+			// `404 page not found` as text/plain, so the one answer a client
+			// cannot parse is the answer it gets for a route that moved. These
+			// two make the group's misses typed, like every other error it
+			// returns, and chi propagates them into the subrouters mounted
+			// below that declare none of their own.
+			r.NotFound(func(w http.ResponseWriter, r *http.Request) {
+				apierr.WriteStatus(w, http.StatusNotFound, "not found")
+			})
+			r.MethodNotAllowed(func(w http.ResponseWriter, r *http.Request) {
+				apierr.WriteStatus(w, http.StatusMethodNotAllowed, "method not allowed")
+			})
+
 			mountRuntimeRoutes(r, cfg.RuntimeRoutes)
 
 			// The PRE-BUILT MCP server catalogue (shared migration 0094) and
@@ -1174,12 +1206,32 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			// database holds the credential.
 			identityProviderStore := identityproviders.NewStore(cfg.Pool)
 
+			// Outbound e-mail settings (gap G7). The SAME vault handler again,
+			// for the reason stated above: the SMTP password is sealed into the
+			// hidden bucket, and a second handler on a second pool is how the
+			// page that seals it and the resolver that reads it come to
+			// disagree about which vault holds it.
+			emailResolver := cfg.EmailSettings
+			if emailResolver == nil {
+				emailResolver = emailsettings.NewResolver(
+					emailsettings.NewStore(cfg.Pool, prebuiltMCPVault), emailsettings.Settings{}, "")
+			}
+
 			coreHandler := v2core.NewHandler(
 				cfg.Pool,
 				v2core.WithPermissionResolver(permissionResolver),
 				v2core.WithObjectStore(cfg.ObjectStore),
 				v2core.WithInviteMailer(inviteMailer),
 				v2core.WithPrebuiltMCPCatalogue(prebuiltMCPStore, prebuiltMCPVault),
+				// `cost_budgets_enabled`, from the one fact this process holds
+				// about whether LLM cost is tracked at all: a gateway address
+				// was configured. cfg.GatewayStatus is built from
+				// LLM_GATEWAY_URL and is left nil when that is empty
+				// (cmd/elitea-main/main.go), so the nil check IS the
+				// "is the gateway composed" question — and it is a nil
+				// INTERFACE check that holds, because that field is documented
+				// never to receive a boxed nil pointer.
+				v2core.WithCostBudgets(cfg.GatewayStatus != nil),
 			)
 
 			// === Auth endpoints ===
@@ -1222,6 +1274,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				admin.WithBranding(brandingResolver),
 				admin.WithBrandingAssets(brandingAssets),
 				admin.WithMailer(adminMailer),
+				admin.WithEmailSettings(emailResolver.Store(), emailResolver),
 				admin.WithBrandingPackages(brandingPackages),
 				// The same store the SCIM tree writes through. One store, so
 				// the screen and a group push can never disagree about which
@@ -1489,6 +1542,29 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				r.With(requireBranding).Put("/branding/administration", adminHandler.BrandingSave)
 				r.With(requireBranding).Post("/branding/assets/{kind}", adminHandler.BrandingAssetUpload)
 				r.With(requireBranding).Post("/branding/test_email/administration", adminHandler.BrandingTestEmail)
+				// OUTBOUND E-MAIL — the real surface behind the Configuration
+				// page's "E-mail" section, which stays unavailable because its
+				// rows are plaintext and the SMTP password is a credential
+				// (config_schemas.go).
+				//
+				// The permission is the SAME `runtime.plugins` that section
+				// already required, so an operator who could edit it can
+				// configure the relay, and no new permission string arrives
+				// without a grant (router_permission_grant_gate_test.go).
+				//
+				// The mode segment is static `administration`: a mail relay is
+				// a deployment fact with no project-scoped view, so another
+				// mode 404s rather than being answered under a scope that does
+				// not apply.
+				//
+				// The test route is a SECOND test-mail route beside the
+				// branding one above, deliberately: they differ in permission,
+				// not in behaviour, and an operator who may configure the relay
+				// must be able to verify it without also holding the grant that
+				// lets them re-brand the product.
+				r.With(requireRuntimePlugins).Get("/email/administration", adminHandler.EmailSettingsRead)
+				r.With(requireRuntimePlugins).Put("/email/administration", adminHandler.EmailSettingsSave)
+				r.With(requireRuntimePlugins).Post("/email/test/administration", adminHandler.EmailTestSend)
 				// The branding package (ADR-0024 decision 9): export, import
 				// with a dry run, and the kept versions for rollback.
 				r.With(requireBranding).Get("/branding/package/administration", adminHandler.BrandingPackageExport)
@@ -1605,14 +1681,22 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// same permission resolved in administration mode
 				// (legacy/plugins/admin/api/v2/users.py maps BOTH modes to the
 				// same body, and its `recommended_roles` names `administration`).
+				//
+				// THEY TAKE THE `Administration…` HANDLERS, not the `{mode}`
+				// ones. A static segment binds no URL parameter, so the shared
+				// handler's `chi.URLParam(r, "mode")` was empty on every one of
+				// these requests and the dialog's submit answered
+				// `404 {"error":"unknown mode"}`. The GET above never showed it,
+				// because Handler.Users reads no mode. See the header of
+				// internal/api/v2/eliteacore/users_write.go.
 				r.With(apimw.RequireCentralPermissions(
 					permissionResolver, platformauth.PermissionModeAdministration,
 					"configuration.users.users.create",
-				)).Post("/users/administration/{projectID}", coreHandler.UsersCreate)
+				)).Post("/users/administration/{projectID}", coreHandler.AdministrationUsersCreate)
 				r.With(apimw.RequireCentralPermissions(
 					permissionResolver, platformauth.PermissionModeAdministration,
 					"configuration.users.users.edit",
-				)).Put("/users/administration/{projectID}", coreHandler.UsersUpdate)
+				)).Put("/users/administration/{projectID}", coreHandler.AdministrationUsersUpdate)
 				// The project ROLE listing, gated the same way and for the same
 				// reason as the member listing above: `coreHandler.Roles` reads
 				// auth_core__project_role for the named project, pylon declares
@@ -1632,6 +1716,45 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					Get("/roles/{mode}/{projectID}", coreHandler.Roles)
 				r.With(central("configuration.roles.roles.view")).
 					Get("/roles/administration/{projectID}", coreHandler.Roles)
+
+				// Role DEFINITIONS — create, rename, delete (gap G9).
+				//
+				// The two GETs above LIST roles. Nothing could add one, rename
+				// one, or take one away, while pylon's
+				// legacy/plugins/admin/api/v2/roles.py is full CRUD. A
+				// deployment that wanted a `security_reviewer` role had to
+				// INSERT it into auth_core__role by hand.
+				//
+				// THE SECOND SEGMENT IS NOT A PROJECT ID HERE. These three take
+				// `{scope}/{mode}` — the shape /admin/permissions already uses,
+				// where the first segment picks the matrix (administration,
+				// public, support) and the second the target mode. That is the
+				// pair the admin Roles page's four tabs are keyed on, and the
+				// role columns those tabs render come from exactly that pair.
+				//
+				// chi keeps the two shapes apart: `{mode}` and `{scope}` are
+				// separate param nodes, and the static `administration` node
+				// the GET above registers carries no POST/PUT/DELETE, so those
+				// fall through to `{scope}`.
+				// TestAdminRoleWriteRoutesResolve pins that resolution, because
+				// it is a property of chi's trie rather than of this file.
+				//
+				// Gated on the three permissions roles.py declares, resolved in
+				// ADMINISTRATION mode like every other admin-panel gate above.
+				// They are distinct from `configuration.roles.permissions.*`:
+				// moving a checkbox in the matrix and deleting the role that
+				// checkbox belongs to are different privileges, and pylon
+				// separates them too.
+				//
+				// migrations/shared/0111 grants them. No migration did before,
+				// so all three would have answered 403 to every caller on a
+				// clean database.
+				r.With(central(admin.RolesCreatePermission)).
+					Post("/roles/{scope}/{mode}", adminHandler.AdminRoleCreate)
+				r.With(central(admin.RolesEditPermission)).
+					Put("/roles/{scope}/{mode}", adminHandler.AdminRoleRename)
+				r.With(central(admin.RolesDeletePermission)).
+					Delete("/roles/{scope}/{mode}", adminHandler.AdminRoleDelete)
 
 				// App requests / moderation (unit A14). Four routes, of which
 				// three did not exist and the fourth answered from a constant:
@@ -2985,6 +3108,14 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					Get("/project_budget/administration/{projectID}/budget", budgetsHandler.GetProjectBudgetAdmin)
 				r.With(requireBudgetsEdit).
 					Put("/project_budget/administration/{projectID}/budget", budgetsHandler.PutProjectBudget)
+				// Clearing a budget is the same authority as setting one, so it
+				// takes the SAME permission rather than a new string. A separate
+				// `…delete` permission would need its own grant migration to
+				// reach anybody and would be 403-for-everyone until it did
+				// (#386), while the operator who may set a ceiling to any value
+				// can already remove it in every way that matters.
+				r.With(requireBudgetsEdit).
+					Delete("/project_budget/administration/{projectID}/budget", budgetsHandler.DeleteProjectBudget)
 				r.With(requireBudgetsView).
 					Get("/project_budgets/administration", budgetsHandler.ListProjectBudgets)
 				r.With(requireProjectBudgetRead).
@@ -2993,6 +3124,8 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					Get("/user_budget/administration/{projectID}/user_budget/{userID}", budgetsHandler.GetUserBudgetAdmin)
 				r.With(requireBudgetsEdit).
 					Put("/user_budget/administration/{projectID}/user_budget/{userID}", budgetsHandler.PutUserBudget)
+				r.With(requireBudgetsEdit).
+					Delete("/user_budget/administration/{projectID}/user_budget/{userID}", budgetsHandler.DeleteUserBudget)
 				r.With(requireProjectBudgetRead).
 					Get("/user_budgets/prompt_lib/{projectID}", budgetsHandler.ListUserBudgets)
 				r.With(requireBudgetsView).

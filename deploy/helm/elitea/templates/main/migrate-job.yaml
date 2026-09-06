@@ -7,6 +7,13 @@
   pointing at a database nobody chose.
 */ -}}
 {{- $secrets := .Values.main.secrets | default dict }}
+{{- /*
+  The same env map the ConfigMap renders, so the migrate Job and the Deployment
+  cannot disagree about which project is public. See elitea.aiProjectId.
+*/ -}}
+{{- $env := .Values.main.env | default dict }}
+{{- $aiProjectId := include "elitea.aiProjectId" . }}
+{{- if and $aiProjectId (not (get $env "ELITEA_AI_PROJECT_ID")) }}{{- $env = merge (deepCopy $env) (dict "ELITEA_AI_PROJECT_ID" $aiProjectId) }}{{- end }}
 {{- $pg := .Values.postgresql | default dict }}
 {{- if and $pg.existingSecret (not (hasKey $secrets "DATABASE_URL")) }}
 {{- $secrets = merge (deepCopy $secrets) (dict "DATABASE_URL" (dict "secretName" $pg.existingSecret "key" (required "postgresql.key is required when postgresql.existingSecret is set" $pg.key))) }}
@@ -105,7 +112,7 @@ spec:
           # — exist. envFrom-ing that ConfigMap here would leave the pod stuck
           # in CreateContainerConfigError on every fresh `helm install`.
           env:
-            {{- range $key, $value := .Values.main.env }}
+            {{- range $key, $value := $env }}
             {{- if not (hasKey $secrets $key) }}
             - name: {{ $key }}
               value: {{ $value | quote }}

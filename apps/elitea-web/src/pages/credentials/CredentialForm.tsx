@@ -54,7 +54,8 @@ export type { CredentialFormContext, CredentialFormMode, CredentialFormPrefill }
 export interface CredentialFormProps {
   readonly context: CredentialFormContext;
   readonly mode: CredentialFormMode;
-  readonly onSaved: () => void;
+  /** See `useCredentialFormController.ts`'s `onSaved` doc comment. */
+  readonly onSaved: (savedId?: string) => void;
   readonly onDiscarded: () => void;
   readonly prefill?: CredentialFormPrefill;
   readonly onTypeChosen?: (type: string) => void;
@@ -124,6 +125,7 @@ export function CredentialForm(props: CredentialFormProps): ReactNode {
             value={c.data[fieldKey]}
             error={c.fieldErrors[fieldKey]}
             required={c.schemaRequiredFields.includes(fieldKey)}
+            projectId={context.projectId}
             onChange={c.setField}
           />
         );
@@ -137,6 +139,7 @@ export function CredentialForm(props: CredentialFormProps): ReactNode {
           schemaRequiredFields={c.schemaRequiredFields}
           data={c.data}
           fieldErrors={c.fieldErrors}
+          projectId={context.projectId}
           onChange={c.setField}
         />
       ))}

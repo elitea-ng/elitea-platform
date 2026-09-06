@@ -20,8 +20,8 @@ const ROWS: readonly ApplicationListRow[] = [
 ];
 
 describe('ApplicationListPanel', () => {
-  it('shows a loading message while loading', () => {
-    const { getByText } = renderWithTheme(
+  it('shows card skeletons while loading', () => {
+    const { container } = renderWithTheme(
       <ApplicationListPanel
         {...BASE_PROPS}
         rows={[]}
@@ -29,7 +29,9 @@ describe('ApplicationListPanel', () => {
         isError={false}
       />,
     );
-    expect(getByText('Loading…')).toBeInTheDocument();
+    // The grid shows card-shaped skeletons while the first page loads — the
+    // "Loading…" text line it used to render belonged to the plain <List>.
+    expect(container.querySelectorAll('[data-testid="entity-card-skeleton"]').length).toBeGreaterThan(0);
   });
 
   it('shows an alert with the error message on error', () => {
@@ -68,7 +70,9 @@ describe('ApplicationListPanel', () => {
       />,
     );
     expect(getByText('My Agent')).toBeInTheDocument();
-    expect(getByText('Another agent')).toBeInTheDocument();
+    // The card face shows the NAME only (the description rides in its tooltip),
+    // which is what `components/Card.jsx` renders.
+    expect(getByText('Other Agent')).toBeInTheDocument();
 
     getByText('My Agent').click();
     expect(onSelect).toHaveBeenCalledWith('1');

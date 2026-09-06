@@ -354,7 +354,52 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// white-labeling is net-new, so the legacy catalogue has no string for
 	// it. A new file for 0082's reason — 0060 returns early on any configured
 	// deployment, and migrations are checksum-immutable.
-	require.EqualValues(t, 110, Head(shared))
+	// 111: shared/0111_default_project_roles_and_bootstrap_account.sql, two
+	// repairs to rows the BOOTSTRAP schema hand-writes and nothing else does.
+	// "Default Project" (id 1) got none of the four project roles every
+	// provisioned project gets, so nobody could be made a member of the
+	// shared/AI project and it appeared in no switcher. And the pre-seeded
+	// `dev@elitea.ai` account held `administration|admin` while holding no
+	// identity-provider link: it cannot sign in, but the OIDC path adopts an
+	// existing account BY E-MAIL, so anyone who obtained that address became a
+	// global administrator on first login. The revoke is fenced on the account
+	// still being the untouched seed, so an adopted one keeps its roles. It
+	// grants no permission string, so no grant ledger moves.
+	//
+	//
+	// 112: shared/0112_governance_config_egress_allowlist.sql, which widens
+	// 0093's `governance_config_type_known` CHECK with `egress_allowlist` — the
+	// LLM gateway's egress policy, which until now had one authoring surface:
+	// the GATEWAY_EGRESS_ALLOWLIST environment variable in the chart. An
+	// on-premise model endpoint therefore needed a chart edit and a pod restart.
+	// A new file for 0093's reason: migrations are checksum-immutable, so the
+	// value set is widened by REPLACING the constraint rather than by editing
+	// the file that added it.
+	//
+	// It was written as 0111 and renumbered when 0111 was taken by the
+	// default-project repair above; both authors were correct against a main
+	// whose head was 0110. LoadManifest sorts by version and Head() reads the
+	// last entry.
+	//
+	// 113: shared/0113_role_definition_permissions.sql, the three
+	// administration-mode grants behind role create, rename and delete (gap
+	// G9): `configuration.roles.roles.create`, `.edit` and `.delete` to
+	// super_admin, admin and system.
+	//
+	// Recovered rather than chosen, unlike 106, 108 and 110: all three strings
+	// are the `permissions` lists of legacy/plugins/admin/api/v2/roles.py, and
+	// all three are already in testdata/postgres/legacy-rbac-matrix.json's
+	// catalogue. 0068 and 0085 granted the fourth string of that group,
+	// `.view`, and left the three writes to no migration at all — which is the
+	// exact shape router_permission_grant_gate_test.go was written for. The
+	// routes that need them ship in the same change, so the gate never sees a
+	// window in which they are ungranted.
+	//
+	// A new file for 0110's reason: 0060 returns early on any configured
+	// deployment, and migrations are checksum-immutable.
+	//
+	// Written as 0111 and renumbered at merge: 0111 and 0112 were taken above.
+	require.EqualValues(t, 113, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

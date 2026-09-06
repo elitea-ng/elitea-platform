@@ -10,6 +10,7 @@ require (
 	cloud.google.com/go/storage v1.66.0
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.14.1
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.8.0
+	github.com/EliteaAI/elitea-platform/libs/go/egresslib v0.0.0-00010101000000-000000000000
 	github.com/EliteaAI/elitea-platform/libs/go/observability v0.0.0
 	github.com/EliteaAI/elitea-platform/libs/proto/gen/go v0.0.0
 	github.com/alicebob/miniredis/v2 v2.38.0
@@ -129,3 +130,5 @@ require (
 	google.golang.org/genproto/googleapis/api v0.0.0-20260819154853-08b0e4226688 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260819154853-08b0e4226688 // indirect
 )
+
+replace github.com/EliteaAI/elitea-platform/libs/go/egresslib => ../../libs/go/egresslib

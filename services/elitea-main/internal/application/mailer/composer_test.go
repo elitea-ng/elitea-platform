@@ -44,7 +44,7 @@ func TestSendInvitation_IsBrandedAndEscaped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	if !composer.Configured() {
+	if !composer.Configured(context.Background()) {
 		t.Fatal("a real transport must report configured")
 	}
 	err = composer.SendInvitation(context.Background(), Invitation{
@@ -133,12 +133,12 @@ func TestSend_Refusals(t *testing.T) {
 	if err := suppressed.SendTest(context.Background(), "a@b.example"); !errors.Is(err, ErrSuppressed) || len(sink.sent) != 0 {
 		t.Fatalf("shadow mode must refuse without sending: %v, sent %d", err, len(sink.sent))
 	}
-	if suppressed.Configured() {
+	if suppressed.Configured(context.Background()) {
 		t.Fatal("a suppressed composer must not report configured")
 	}
 
 	null, _ := New(Config{})
-	if null.Configured() {
+	if null.Configured(context.Background()) {
 		t.Fatal("the null transport must not report configured")
 	}
 	if err := null.SendTest(context.Background(), "a@b.example"); !errors.Is(err, transport.ErrNotConfigured) {

@@ -174,6 +174,17 @@ services:
       OIDC_CLIENT_ID: "elitea-dev-client"
       OIDC_CLIENT_SECRET: "elitea-dev-secret"
       OIDC_REDIRECT_URI: "http://localhost:8080/forward-auth/auth_oidc/callback"
+      # First-login administrator grant (v2auth.InitialGlobalAdminsFromEnv,
+      # cmd/elitea-main/main.go). This stack has no authentication
+      # configuration document, so its `initial_global_admins` list is always
+      # empty and this environment variable is the ONLY way to name one — with
+      # it unset, nobody who logs in ever becomes a global administrator.
+      # Comma-separated entries, each `oidc:<sub>` or `saml:<nameid>` (the
+      # provider-prefixed form the federated login planes store; see
+      # matchesInitialGlobalAdmin in internal/api/v2/auth/first_login.go for
+      # why the prefix matters). Empty by default so a fresh clone stays
+      # unprivileged until an operator opts in.
+      ELITEA_INITIAL_GLOBAL_ADMINS: "${ELITEA_INITIAL_GLOBAL_ADMINS-}"
       # Tracing ingest (issue #250): both elitea-main's own OTLP span export
       # (libs/go/observability) and internal/api/v2/tracing's otlp proxy
       # target point at the collector below.

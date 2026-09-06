@@ -41,3 +41,19 @@ apps/elitea-web/src/entries/maintenance/assets/chat-welcome.png
 # adversarial ones (e2e/mutant.png, e2e/snapshots/evil.png, src/assets/sneaky.png,
 # dist/bundle.png) — only the baseline matched.
 apps/elitea-web/e2e/snapshots/visual/*-snapshots/*.png
+
+# Entity list-page empty-state illustrations (three pairs, one per family).
+#
+# Product art, not a build artifact: `src/shared/ui/EntityCardList/
+# EntityEmptyState.tsx` imports all six and paints one pair per list page, the
+# light/dark pick made in CSS. The baseline `apps/elitea-ui` ships the same
+# three pairs as PNGs under `src/assets/images/` at 1446px and ~1.1MB each, so
+# the repository rule here is "reviewed raster assets", not "SVG only" — the
+# onboarding entries above are the same class. These are re-encoded to 720px
+# WebP (~100KB each, ~600KB for all six) because the app never paints them
+# wider than 240px.
+#
+# Same `[[ == ]]` caveat as the entry above: `*` crosses `/`, so this pattern
+# also admits a .webp nested deeper under empty-states/. The directory is flat
+# and holds only these six files.
+apps/elitea-web/src/assets/empty-states/*.webp

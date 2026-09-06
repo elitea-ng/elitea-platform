@@ -171,6 +171,10 @@ export function Skills(): ReactNode {
           onExport={(skill) => {
             void handleExport(skill);
           }}
+          onCreate={() => {
+            void navigate({ to: '/skills/create' });
+          }}
+          railVisible={false}
         />
         )}
       </Box>

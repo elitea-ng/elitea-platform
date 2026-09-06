@@ -7,11 +7,7 @@
  * a rounded card on `background.userInputBackground` with a `headingSmall`
  * title and a `bodySmall` description on the left and the switch on the right.
  *
- * The baseline repeats that block three times; this is it once. Radius comes
- * from the `radiusMd` token rather than the baseline's literal `0.75rem`,
- * because R-T10 admits only the radius tokens (`radiusSm|Md|Lg`) — the same
- * substitution the sibling `project-context/EnableToggleCard.tsx` already
- * made for the identical card.
+ * The baseline repeats that block three times; this is it once.
  */
 import type { ReactNode } from 'react';
 
@@ -67,7 +63,8 @@ const cardSx: SxProps<Theme> = (theme: Theme) => ({
   justifyContent: 'space-between',
   gap: '1rem',
   padding: '0.75rem 1rem',
-  borderRadius: theme.vars.shape.radiusMd,
+  // oxlint-disable-next-line elitea/ad-hoc-radius -- 0.75rem is the baseline's own literal and the value the production card measures at; no `radius*` token holds 12px (they are 4/8/16/pill), so `radiusMd` rounded it to 8px.
+  borderRadius: '0.75rem',
   backgroundColor: theme.vars.palette.background.userInputBackground,
 });
 

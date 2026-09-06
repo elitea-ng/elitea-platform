@@ -6,10 +6,14 @@
  * `ApplicationThinkView` (full streaming-liveness parity is out of scope,
  * see `ApplicationAnswer.tsx`'s module doc).
  */
-import type { ReactNode } from 'react';
-import { useMemo } from 'react';
+import type { ReactNode, SyntheticEvent } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 
 import Box from '@mui/material/Box';
+import type { Theme } from '@mui/material/styles';
+
+import { t } from '@/shared/i18n';
+import { BasicAccordion } from '@/shared/ui/BasicAccordion';
 
 import { ActionView } from '../ActionView';
 import type { ActionViewProps } from '../ActionView';
@@ -64,12 +68,115 @@ export function swarmChildContent(action: SubAgentGroupable): string {
   return draft.toolOutputs !== undefined ? convertJsonToString(draft.toolOutputs) : '';
 }
 
+/**
+ * `calculateDuration` (`apps/elitea-ui/src/[fsd]/features/chat/lib/helpers/
+ * chat.helpers.js:26-46`), ported verbatim including its "1 sec" / "secs" /
+ * "less than a second" wording.
+ */
+function calculateDuration(startMs: number, endMs: number): string {
+  const durationMs = endMs - startMs;
+  const seconds = Math.floor((durationMs / 1000) % 60);
+  const minutes = Math.floor((durationMs / (1000 * 60)) % 60);
+  const hours = Math.floor(durationMs / (1000 * 60 * 60));
+  if (hours) return t('features.chatMessages.durationHours', '{{hours}} h {{minutes}} min and {{seconds}} sec', { hours, minutes, seconds });
+  if (minutes) return t('features.chatMessages.durationMinutes', '{{minutes}} min and {{seconds}} sec', { minutes, seconds });
+  if (seconds > 1) return t('features.chatMessages.durationSeconds', '{{seconds}} secs', { seconds });
+  if (seconds > 0) return t('features.chatMessages.durationOneSecond', '1 sec');
+  return t('features.chatMessages.durationSubSecond', 'less than a second');
+}
+
+/**
+ * Wall-clock span of the whole turn: earliest start → latest end across ALL
+ * actions, not the positional first/last (baseline `ApplicationThinkView.jsx`'s
+ * own `thoughtDuration` memo and its #4993 note about interleaved fan-out).
+ */
+function thoughtDuration(actions: readonly SubAgentGroupable[]): string {
+  let minStart = Infinity;
+  let maxEnd = -Infinity;
+  for (const action of actions) {
+    const draft = asDraft(action);
+    const start = new Date(draft.created_at ?? draft.timestamp).getTime();
+    if (!Number.isNaN(start)) minStart = Math.min(minStart, start);
+    const end = new Date(draft.timestamp ?? draft.ended_at ?? draft.created_at).getTime();
+    if (!Number.isNaN(end)) maxEnd = Math.max(maxEnd, end);
+  }
+  if (minStart === Infinity || maxEnd === -Infinity) return calculateDuration(0, 0);
+  return calculateDuration(minStart, maxEnd);
+}
+
+/**
+ * The accordion shell, measured off the live production row: a single
+ * `border.table` hairline UNDER the summary, 8px of padding below it, and a
+ * pill-shaped 24px-tall summary whose chevron leads on the left with the
+ * label 8px after it. Nothing is shown expanded at rest — the reference
+ * transcript shows one collapsed `> Thought for 1 sec` line, where this
+ * component used to dump every raw reasoning step inline under a
+ * `Thinking step` heading.
+ */
+const thinkingSlotSx = {
+  accordion: (theme: Theme) => ({
+    background: 'transparent',
+    width: '100%',
+    borderBottom: `0.0625rem solid ${theme.vars.palette.border.table}`,
+    paddingBottom: '0.5rem',
+    '&.Mui-expanded': { margin: 0 },
+    '& .MuiAccordion-heading': { display: 'inline-block' },
+  }),
+  summary: {
+    width: 'auto',
+    minHeight: '1.5rem',
+    borderRadius: '1rem',
+    padding: '0 0.5rem',
+  },
+  details: {
+    paddingTop: '0.75rem',
+    paddingBottom: '1rem',
+    paddingLeft: '2rem',
+    paddingRight: '0.75rem',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '1rem',
+    width: '100%',
+    boxSizing: 'border-box',
+  },
+} as const;
+
 /** @public Props for `ApplicationAnswerThinking`. */
 export interface ApplicationAnswerThinkingProps {
   readonly actions: readonly SubAgentGroupable[];
+  /** Keeps the panel open while the turn is still running (baseline: `expanded={isStreaming || expanded}`). */
+  readonly isStreaming?: boolean;
 }
 
-export function ApplicationAnswerThinking({ actions }: ApplicationAnswerThinkingProps): ReactNode {
+export function ApplicationAnswerThinking({ actions, isStreaming = false }: ApplicationAnswerThinkingProps): ReactNode {
+  /*
+   * THE PANEL'S OWN OPEN STATE, which it did not have.
+   *
+   * It used to spread `expanded` onto the accordion only while streaming
+   * (`{...(isStreaming ? { expanded: true } : {})}`) and pass no `onChange`.
+   * MUI decides controlled-vs-uncontrolled ONCE, on the first render, from
+   * `expanded !== undefined` (`@mui/utils`'s `useControlled`, whose
+   * `isControlled` is a `useRef`). This component mounts with its first
+   * action, which arrives WHILE the turn streams — so it mounted controlled,
+   * for the whole life of that message. When the turn settled `expanded` went
+   * back to `undefined`: the panel closed, and because a controlled
+   * `Accordion` toggles only through `onChange`, which was never passed,
+   * clicking the summary did nothing at all. Every tool call and every
+   * reasoning step of a turn the user WATCHED was then unreachable until the
+   * page was reloaded, when the same component mounted uncontrolled and
+   * behaved. That is the defect the toolkit journey caught as a permanently
+   * hidden `chat-tool-action` row.
+   *
+   * The state is local and always defined, so the accordion is controlled for
+   * its whole lifetime and the transition never happens. The value is the
+   * baseline's own (`ApplicationThinkView.jsx`: `expanded={isStreaming ||
+   * expanded}`): forced open while the turn runs, the reader's choice after.
+   */
+  const [openedByReader, setOpenedByReader] = useState(false);
+  const handleToggle = useCallback((_event: SyntheticEvent, value: boolean) => {
+    setOpenedByReader(value);
+  }, []);
+
   const blocks = useMemo(
     () =>
       partitionActionsIntoBlocks(actions, {
@@ -84,11 +191,27 @@ export function ApplicationAnswerThinking({ actions }: ApplicationAnswerThinking
   if (!actions.length) return null;
 
   return (
-    <Box sx={{ mb: 0.5 }}>
-      {coordActions.map((action, index) => (
-        <ActionView key={actionKey(action, index)} action={toActionViewAction(action)} />
-      ))}
-      <SubAgentAccordion blocks={blocks} />
-    </Box>
+    <BasicAccordion
+      data-testid="chat-answer-thought-accordion"
+      uppercase={false}
+      showMode="left"
+      defaultExpanded={false}
+      expanded={isStreaming || openedByReader}
+      onChange={handleToggle}
+      slotSx={{ root: { width: '100%' }, ...thinkingSlotSx }}
+      items={[
+        {
+          title: t('features.chatMessages.thoughtFor', 'Thought for {{duration}}', { duration: thoughtDuration(actions) }),
+          content: (
+            <Box sx={{ width: '100%' }}>
+              {coordActions.map((action, index) => (
+                <ActionView key={actionKey(action, index)} action={toActionViewAction(action)} />
+              ))}
+              <SubAgentAccordion blocks={blocks} />
+            </Box>
+          ),
+        },
+      ]}
+    />
   );
 }

@@ -72,11 +72,14 @@ export function RailTagsPanelView({ tags, selectedTags, onToggleTag, onClearTags
   );
 
   return (
-    <Box data-testid="entity-rail-tags">
+    <Box
+      data-testid="entity-rail-tags"
+      sx={panelSxFor(isLoading, isError, sorted.length)}
+    >
       <Box sx={headerRowSx}>
         <Typography
           component="div"
-          variant="subtitle1"
+          variant="subtitle"
           sx={titleSx}
         >
           {heading}
@@ -108,9 +111,18 @@ export function RailTagsPanelView({ tags, selectedTags, onToggleTag, onClearTags
               sx={skeletonChipSx}
             />
           ))}
-        {isError && !isLoading && <Typography variant="body2">{t('shared.ui.entityRail.tags.loadError', 'Failed to load.')}</Typography>}
+        {/*
+          `bodyMedium`, not MUI's stock `body2`: same 14px/400 face, but the
+          pack's own 24px leading instead of MUI's `lineHeight: 1.43`. 1.43
+          against a 14px base is a 20.02px line box — the only fractional line
+          in this rail, and one of the two 14px/400 bands issue #819's
+          `pipelines-list-empty` diff is made of (the other is the empty
+          state's description; see `EntityEmptyState`). Every other label in
+          this file already reads from the pack (`subtitle` above).
+        */}
+        {isError && !isLoading && <Typography variant="bodyMedium">{t('shared.ui.entityRail.tags.loadError', 'Failed to load.')}</Typography>}
         {!isLoading && !isError && sorted.length === 0 && (
-          <Typography variant="body2">{t('shared.ui.entityRail.tags.empty', 'No tags to display.')}</Typography>
+          <Typography variant="bodyMedium">{t('shared.ui.entityRail.tags.empty', 'No tags to display.')}</Typography>
         )}
         {!isLoading &&
           !isError &&
@@ -150,6 +162,36 @@ export function RailTagsPanel({ projectId, ...viewProps }: RailTagsPanelProps): 
   );
 }
 
+/**
+ * `RightInfoPanel.jsx` gives its column `height: 100dvh` and passes
+ * `Categories` `{flex: 1, minHeight: 0}` — the tag list is what ABSORBS the
+ * rail's free height, which is what leaves the author card sitting on the
+ * bottom edge of the viewport in production when the tag list is long.
+ */
+const panelSx: SxProps<Theme> = { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' };
+
+/**
+ * The same panel when it has NO chips to hold.
+ *
+ * DEFECT this repairs. `flex: 1` was unconditional, so a project with no tags
+ * still handed the whole rail to a panel holding one line of text
+ * ("No tags to display."), and the author card was pushed onto the bottom edge
+ * of the viewport with ~600px of dead space above it — on every list page of
+ * a fresh deployment, which is every list page a new client first opens.
+ * Absorbing the slack is what production does with a FULL tag list; an empty
+ * one has nothing to absorb it with, and the card belongs under the panel.
+ *
+ * The loading state keeps `panelSx`: it renders ten skeleton chips, so it has
+ * a list to hold, and shrinking there would move the card twice.
+ */
+const compactPanelSx: SxProps<Theme> = { flex: '0 0 auto', minHeight: 0, display: 'flex', flexDirection: 'column' };
+
+/** The panel absorbs the rail's free height only when it has a list to hold. */
+function panelSxFor(isLoading: boolean, isError: boolean, chipCount: number): SxProps<Theme> {
+  if (isLoading) return panelSx;
+  return !isError && chipCount > 0 ? panelSx : compactPanelSx;
+}
+
 const headerRowSx: SxProps<Theme> = (theme: Theme) => ({
   display: 'flex',
   flexDirection: 'row',
@@ -163,6 +205,7 @@ const titleSx: SxProps<Theme> = (theme: Theme) => ({ marginBottom: theme.spacing
 const chipsContainerSx: SxProps<Theme> = (theme: Theme) => ({
   marginBottom: theme.spacing(3),
   minHeight: '5.5em',
+  flex: 1,
   display: 'flex',
   flexWrap: 'wrap',
   gap: theme.spacing(1),

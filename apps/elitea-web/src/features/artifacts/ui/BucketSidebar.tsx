@@ -1,36 +1,23 @@
 import type { ReactNode } from 'react';
 import { useMemo, useState } from 'react';
 
-import AddOutlinedIcon from '@mui/icons-material/AddOutlined';
-import DeleteOutlinedIcon from '@mui/icons-material/DeleteOutlined';
-import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
-import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
-import PushPinIcon from '@mui/icons-material/PushPin';
-import PushPinOutlinedIcon from '@mui/icons-material/PushPinOutlined';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import Dialog from '@mui/material/Dialog';
 import DialogActions from '@mui/material/DialogActions';
 import DialogContent from '@mui/material/DialogContent';
 import DialogTitle from '@mui/material/DialogTitle';
-import Divider from '@mui/material/Divider';
-import IconButton from '@mui/material/IconButton';
-import List from '@mui/material/List';
-import ListItem from '@mui/material/ListItem';
-import ListItemButton from '@mui/material/ListItemButton';
-import ListItemIcon from '@mui/material/ListItemIcon';
-import ListItemText from '@mui/material/ListItemText';
-import MenuItem from '@mui/material/MenuItem';
-import Select from '@mui/material/Select';
-import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
 import { filterBucketsByQuery, type Bucket } from '@/entities/bucket';
 import { t } from '@/shared/i18n';
-import { SimpleSearchBar } from '@/shared/ui/SimpleSearchBar';
 
-import type { ArtifactStorageConfiguration } from '../model/types';
+import type { ArtifactStorageConfiguration, ArtifactTreeItem } from '../model/types';
+import { BucketFooter } from './BucketFooter';
+import { BucketList } from './BucketList';
+import { BucketPanelHeader } from './BucketPanelHeader';
+import { BucketStorageSelector } from './BucketStorageSelector';
 
 interface BucketSidebarProps {
   readonly buckets: readonly Bucket[];
@@ -38,6 +25,14 @@ interface BucketSidebarProps {
   readonly storageConfigurations: readonly ArtifactStorageConfiguration[];
   readonly selectedStorage?: string;
   readonly loading: boolean;
+  readonly collapsed: boolean;
+  /** File tree of the selected bucket, rendered under its row. */
+  readonly tree: readonly ArtifactTreeItem[];
+  readonly expandedPaths: readonly string[];
+  readonly selectedKey?: string;
+  /** Formatted total size across the project's buckets, for the footer. */
+  readonly totalSize: string;
+  readonly onToggleCollapsed: () => void;
   readonly onStorageChange: (id: string) => void;
   readonly onSelect: (bucket: Bucket) => void;
   readonly onCreate: () => void;
@@ -45,130 +40,82 @@ interface BucketSidebarProps {
   readonly onEdit: (bucket: Bucket) => void;
   readonly onPin: (bucket: Bucket) => Promise<unknown>;
   readonly onDelete: (bucket: Bucket) => Promise<unknown>;
+  readonly onSelectFile: (item: ArtifactTreeItem) => void;
+  readonly onSelectFolder: (key: string) => void;
 }
 
+/**
+ * The BUCKETS panel: an uppercase title with the create + search actions, the
+ * collapse chevron, the storage selector, the bucket list (with the selected
+ * bucket's file tree under it) and the count/size footer.
+ *
+ * Ported from `apps/elitea-ui/src/pages/Artifacts/Components/BucketsPanel.jsx`
+ * and its children. Two structural pieces this had been missing entirely: the
+ * FOOTER, and the file tree — without them the panel was a search box over a
+ * flat list, and the whole lower half of the column was empty.
+ *
+ * The search field is behind its own button, as in the baseline: it is not a
+ * permanent row, so the bucket list starts directly under the storage selector.
+ */
 export function BucketSidebar(props: BucketSidebarProps): ReactNode {
   const [query, setQuery] = useState('');
+  const [searchOpen, setSearchOpen] = useState(false);
   const [deleting, setDeleting] = useState<Bucket>();
   const visibleBuckets = useMemo(() => filterBucketsByQuery(props.buckets, query), [props.buckets, query]);
 
   return (
-    <Box sx={sidebarSx}>
-      <Box sx={headerSx}>
-        <Typography variant="headingSmall">{t('artifacts.buckets.title', 'Buckets')}</Typography>
-        <Tooltip title={t('artifacts.buckets.create', 'Create bucket')}>
-          <IconButton
-            aria-label={t('artifacts.buckets.create', 'Create bucket')}
-            onClick={props.onCreate}
-          >
-            <AddOutlinedIcon />
-          </IconButton>
-        </Tooltip>
-      </Box>
-      {props.storageConfigurations.length > 0 && (
-        <Select
-          fullWidth
-          size="small"
-          aria-label={t('artifacts.buckets.storageAria', 'Storage integration')}
-          value={props.selectedStorage ?? props.storageConfigurations[0]?.id ?? ''}
-          onChange={(event) => props.onStorageChange(event.target.value)}
-        >
-          {props.storageConfigurations.map((configuration) => (
-            <MenuItem
-              key={configuration.id}
-              value={configuration.id}
-            >
-              {configuration.title}
-              {configuration.shared ? t('artifacts.buckets.sharedSuffix', ' (shared)') : ''}
-            </MenuItem>
-          ))}
-        </Select>
-      )}
-      <SimpleSearchBar
-        value={query}
-        debounceMs={0}
-        onChange={setQuery}
-        placeholder={t('artifacts.buckets.search', 'Search buckets')}
+    <Box sx={sidebarSx(props.collapsed)}>
+      <BucketPanelHeader
+        collapsed={props.collapsed}
+        searchOpen={searchOpen}
+        query={query}
+        onQueryChange={setQuery}
+        onSearchOpen={() => setSearchOpen(true)}
+        onSearchClose={() => {
+          setQuery('');
+          setSearchOpen(false);
+        }}
+        onCreate={props.onCreate}
+        onToggleCollapsed={props.onToggleCollapsed}
       />
-      <Divider />
-      {props.loading ? (
-        <Typography sx={{ p: 2 }}>{t('artifacts.buckets.loading', 'Loading buckets…')}</Typography>
-      ) : visibleBuckets.length === 0 ? (
-        // Rendered OUTSIDE the <List>. MUI's List emits a <ul>, and a <p> as its
-        // direct child is an axe `list` violation (impact: serious) — caught by
-        // J20's checkA11y the first time the E2E suite was able to run. An empty
-        // list element is also meaningless to a screen reader, so there is no
-        // reason to emit one when there is nothing to list.
-        <Typography sx={{ p: 2 }}>{t('artifacts.buckets.empty', 'No buckets found.')}</Typography>
-      ) : (
-        <List
-          dense
-          sx={{ overflowY: 'auto' }}
-        >
-          {visibleBuckets.map((bucket) => (
-            // <ListItem disablePadding> wrapper: see ApplicationListPanel for
-            // why `component="li"` on the button is not the fix.
-            // `secondaryAction`, not children of the ListItemButton: the
-            // button carries role="button", so nesting the pin/delete
-            // IconButtons inside it is axe's `nested-interactive` (impact:
-            // serious) — "Element has focusable descendants". It only became
-            // observable once the bucket list could load at all (#138), and
-            // `secondaryAction` is MUI's own answer: the actions render as
-            // SIBLINGS of the row button, and MUI reserves the trailing
-            // padding for them.
-            <ListItem
-              key={bucket.id}
-              disablePadding
-              secondaryAction={
-                <>
-                  <Tooltip title={bucket.isPinned
-                    ? t('artifacts.buckets.unpin', 'Unpin bucket')
-                    : t('artifacts.buckets.pin', 'Pin bucket')}
-                  >
-                    <IconButton
-                      size="small"
-                      aria-label={bucket.isPinned ? `Unpin ${bucket.name}` : `Pin ${bucket.name}`}
-                      onClick={() => void props.onPin(bucket).catch(() => undefined)}
-                    >
-                      {bucket.isPinned ? <PushPinIcon fontSize="small" /> : <PushPinOutlinedIcon fontSize="small" />}
-                    </IconButton>
-                  </Tooltip>
-                  <Tooltip title={t('artifacts.buckets.edit', 'Edit bucket')}>
-                    <IconButton
-                      size="small"
-                      aria-label={`Edit ${bucket.name}`}
-                      onClick={() => props.onEdit(bucket)}
-                    >
-                      <EditOutlinedIcon fontSize="small" />
-                    </IconButton>
-                  </Tooltip>
-                  <Tooltip title={t('artifacts.buckets.delete', 'Delete bucket')}>
-                    <IconButton
-                      size="small"
-                      aria-label={`Delete ${bucket.name}`}
-                      onClick={() => setDeleting(bucket)}
-                    >
-                      <DeleteOutlinedIcon fontSize="small" />
-                    </IconButton>
-                  </Tooltip>
-                </>
-              }
-            >
-              <ListItemButton
-                selected={bucket.name === props.selectedBucket}
-                onClick={() => props.onSelect(bucket)}
-              >
-                <ListItemIcon sx={{ minWidth: '2rem' }}>
-                  <FolderOutlinedIcon fontSize="small" />
-                </ListItemIcon>
-                <ListItemText
-                  primary={bucket.name}
-                  slotProps={{ primary: { noWrap: true } }}
-                />
-              </ListItemButton>
-            </ListItem>
-          ))}
-        </List>
+      {!props.collapsed && (
+        <BucketStorageSelector
+          configurations={props.storageConfigurations}
+          {...(props.selectedStorage === undefined ? {} : { selected: props.selectedStorage })}
+          onChange={props.onStorageChange}
+        />
+      )}
+      <Box sx={listSx(props.collapsed)}>
+        {props.loading ? (
+          <Typography variant="bodyMedium">{t('artifacts.buckets.loading', 'Loading buckets…')}</Typography>
+        ) : visibleBuckets.length === 0 ? (
+          <Typography
+            variant="bodyMedium"
+            sx={emptySx}
+          >
+            {t('artifacts.buckets.empty', 'No buckets found.')}
+          </Typography>
+        ) : (
+          <BucketList
+            buckets={visibleBuckets}
+            {...(props.selectedBucket === undefined ? {} : { selectedBucket: props.selectedBucket })}
+            tree={props.tree}
+            expandedPaths={props.expandedPaths}
+            {...(props.selectedKey === undefined ? {} : { selectedKey: props.selectedKey })}
+            onSelect={props.onSelect}
+            onEdit={props.onEdit}
+            onPin={(bucket) => void props.onPin(bucket).catch(() => undefined)}
+            onDelete={setDeleting}
+            onSelectFile={props.onSelectFile}
+            onSelectFolder={props.onSelectFolder}
+          />
+        )}
+      </Box>
+      {!props.collapsed && (
+        <BucketFooter
+          bucketCount={props.buckets.length}
+          totalSize={props.totalSize}
+        />
       )}
       <Dialog
         open={deleting !== undefined}
@@ -200,15 +147,25 @@ export function BucketSidebar(props: BucketSidebarProps): ReactNode {
   );
 }
 
-const sidebarSx: SxProps<Theme> = (theme) => ({
-  width: '19rem',
-  minWidth: '16rem',
+const sidebarSx = (collapsed: boolean): SxProps<Theme> => (theme) => ({
+  height: '100%',
+  width: '100%',
   display: 'flex',
   flexDirection: 'column',
-  gap: theme.spacing(1.5),
-  padding: theme.spacing(2),
-  borderRight: `0.0625rem solid ${theme.vars.palette.border.lines}`,
-  backgroundColor: theme.vars.palette.background.default,
+  alignItems: collapsed ? 'center' : 'stretch',
   overflow: 'hidden',
+  background: theme.vars.palette.background.eliteaDefault,
 });
-const headerSx: SxProps<Theme> = { display: 'flex', alignItems: 'center', justifyContent: 'space-between' };
+const listSx = (collapsed: boolean): SxProps<Theme> => (theme) => ({
+  display: collapsed ? 'none' : 'flex',
+  flexDirection: 'column',
+  flex: 1,
+  minHeight: 0,
+  overflowY: 'auto',
+  overflowX: 'hidden',
+  padding: theme.spacing(2),
+});
+const emptySx: SxProps<Theme> = (theme) => ({
+  textAlign: 'center',
+  color: theme.vars.palette.text.button.disabled,
+});

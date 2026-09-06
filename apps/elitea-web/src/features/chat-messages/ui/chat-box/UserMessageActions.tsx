@@ -26,7 +26,10 @@ export function UserMessageActions({
   readonly onDelete?: (() => void) | undefined;
 }): ReactNode {
   return (
-    <Box className="actionButtons" sx={{ display: 'flex', gap: 0.5, mt: 0.5, visibility: 'hidden' }}>
+    // baseline `RelativeButtonsContainer`: right-aligned inside the card,
+    // 0.5rem gap, 8px above, and always visible (see the sibling
+    // `ApplicationAnswerActions` note).
+    <Box className="actionButtons" sx={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'flex-start', gap: 1, mt: 1, paddingLeft: '2rem' }}>
       {onCopy && (
         // eslint-disable-next-line i18next/no-literal-string — tooltip label
         <Tooltip title="Copy to clipboard" placement="top">
