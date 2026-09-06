@@ -6,9 +6,9 @@ rust-version = "1.95"
 publish = false
 
 [dependencies]
-adk-anthropic = "=2.1.0"
-adk-runner = { version = "=2.1.0", default-features = false, features = ["context-compaction"] }
-adk-rust = { version = "=2.1.0", default-features = false, features = ["agents", "runner", "sessions", "models", "anthropic", "graph", "tools", "mcp-http"] }
+adk-anthropic = "=2.2.0"
+adk-runner = { version = "=2.2.0", default-features = false, features = ["context-compaction"] }
+adk-rust = { version = "=2.2.0", default-features = false, features = ["agents", "runner", "sessions", "models", "anthropic", "graph", "tools", "mcp-http"] }
 async-stream = "=0.3.6"
 async-trait = "=0.1.92"
 base64 = "=0.23.1"
@@ -16,11 +16,11 @@ bytes = "=1.12.1"
 chrono = { version = "=0.4.45", default-features = false, features = ["clock", "serde"] }
 http = "=1.5.0"
 http-body-util = "=0.1.5"
-hmac = "=0.12.1"
+hmac = "=0.13.0"
 hyper = { version = "=1.11.1", default-features = false, features = ["client", "http1", "http2"] }
 hyper-rustls = { version = "=0.27.9", default-features = false, features = ["http1", "http2", "native-tokio", "ring"] }
 hyper-util = { version = "=0.1.20", default-features = false, features = ["client-legacy", "http1", "http2", "tokio"] }
-md-5 = "=0.10.6"
+md-5 = "=0.11.0"
 minijinja = { version = "=2.24.0", default-features = false, features = ["builtins", "fuel", "serde"] }
 opentelemetry = { version = "=0.32.0", default-features = false, features = ["trace"] }
 opentelemetry-otlp = { version = "=0.32.0", default-features = false, features = ["http-proto", "reqwest-client", "reqwest-rustls", "trace"] }
