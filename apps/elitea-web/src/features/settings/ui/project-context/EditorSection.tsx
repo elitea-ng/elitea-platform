@@ -29,7 +29,19 @@ export interface EditorSectionProps {
   onModeChange: (e: React.SyntheticEvent, newValue: 'edit' | 'preview') => void;
   onFocus: () => void;
   onBlur: (e: React.FocusEvent) => void;
-  onAIGenerated: (generatedContent: string) => void;
+  /**
+   * The "Generate with AI" affordance, as ONE prop rather than two.
+   *
+   * `onApply` was `onAIGenerated`; `openOnMount` is new, and it is how the
+   * empty state's "Build with AI" button reaches the dialog (the reference
+   * does it with router state, `onNavigate('create', { openAi: true })`).
+   * They are grouped because adding a thirteenth flat prop here breaks §3.5's
+   * 12-prop component budget, and because the two only ever travel together.
+   */
+  generate: {
+    onApply: (generatedContent: string) => void;
+    openOnMount?: boolean;
+  };
   onImportClick: () => void;
 }
 
@@ -44,7 +56,7 @@ export const EditorSection = memo(function EditorSection({
   onModeChange,
   onFocus,
   onBlur,
-  onAIGenerated,
+  generate,
   onImportClick,
 }: EditorSectionProps) {
   const s = projectContextStyles.editor();
@@ -74,7 +86,8 @@ export const EditorSection = memo(function EditorSection({
             <GenerateProjectContextButton
               projectId={projectId}
               existingContent={content}
-              onApply={onAIGenerated}
+              onApply={generate.onApply}
+              openAiOnMount={generate.openOnMount ?? false}
             />
             <BaseBtn
               variant="secondary"

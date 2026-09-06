@@ -6,7 +6,7 @@
  * `features/agents/ui/generate-agent-modal/GenerateAgentButton.tsx`.
  */
 import type { ReactNode } from 'react';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import type { SxProps, Theme } from '@mui/material/styles';
 
@@ -27,6 +27,16 @@ export interface GenerateProjectContextButtonProps {
   existingContent: string;
   /** Called with the generated content on approve. */
   onApply: (content: string) => void;
+  /**
+   * Open the dialog as soon as this becomes true, without a click.
+   *
+   * The empty state's "Build with AI" is the reference's
+   * `onNavigate('create', { openAi: true })` (`ProjectContextEmptyState.jsx`),
+   * which routes to the editor with `state.openAi` set and the editor opens
+   * the generate dialog off that. This app has no separate editor route, so
+   * the same intent travels as a prop instead of as router state.
+   */
+  openAiOnMount?: boolean;
 }
 
 /**
@@ -56,12 +66,25 @@ export function GenerateProjectContextButton({
   projectId,
   existingContent,
   onApply,
+  openAiOnMount = false,
 }: GenerateProjectContextButtonProps): ReactNode {
   const hasEditPermission = useHasEditPermission(projectId);
   const [isOpen, setIsOpen] = useState(false);
 
   const handleOpen = useCallback(() => setIsOpen(true), []);
   const handleClose = useCallback(() => setIsOpen(false), []);
+
+  /*
+   * Opens ONCE per rising edge, and only while the caller may edit — the two
+   * early returns below unmount this component entirely for a viewer without
+   * the permission or a deployment without the draft endpoint, so a request
+   * to auto-open simply never arrives there. Closing the dialog must not
+   * re-open it, which is why this depends on the request flag and not on
+   * `isOpen`.
+   */
+  useEffect(() => {
+    if (openAiOnMount) setIsOpen(true);
+  }, [openAiOnMount]);
 
   // The draft endpoint is not mounted. See `shared/config/backendCapabilities`.
   if (!hasBackendCapability('aiGeneration')) return null;

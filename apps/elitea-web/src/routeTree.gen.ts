@@ -54,6 +54,7 @@ import { Route as ShellSettingsNotificationsRouteImport } from './routes/_shell/
 import { Route as ShellSettingsPersonalizationRouteImport } from './routes/_shell/settings/personalization'
 import { Route as ShellSettingsPreferencesRouteImport } from './routes/_shell/settings/preferences'
 import { Route as ShellSettingsProfileRouteImport } from './routes/_shell/settings/profile'
+import { Route as ShellSettingsProjectGeneralRouteImport } from './routes/_shell/settings/project-general'
 import { Route as ShellSettingsProjectParamsRouteImport } from './routes/_shell/settings/project-params'
 import { Route as ShellSettingsPromptsRouteImport } from './routes/_shell/settings/prompts'
 import { Route as ShellSettingsSecretsRouteImport } from './routes/_shell/settings/secrets'
@@ -326,6 +327,12 @@ const ShellSettingsProfileRoute = ShellSettingsProfileRouteImport.update({
   path: '/profile',
   getParentRoute: () => ShellSettingsRouteRoute,
 } as any)
+const ShellSettingsProjectGeneralRoute =
+  ShellSettingsProjectGeneralRouteImport.update({
+    id: '/project-general',
+    path: '/project-general',
+    getParentRoute: () => ShellSettingsRouteRoute,
+  } as any)
 const ShellSettingsProjectParamsRoute =
   ShellSettingsProjectParamsRouteImport.update({
     id: '/project-params',
@@ -567,6 +574,7 @@ export interface FileRoutesByFullPath {
   '/settings/personalization': typeof ShellSettingsPersonalizationRoute
   '/settings/preferences': typeof ShellSettingsPreferencesRoute
   '/settings/profile': typeof ShellSettingsProfileRoute
+  '/settings/project-general': typeof ShellSettingsProjectGeneralRoute
   '/settings/project-params': typeof ShellSettingsProjectParamsRoute
   '/settings/prompts': typeof ShellSettingsPromptsRoute
   '/settings/secrets': typeof ShellSettingsSecretsRoute
@@ -649,6 +657,7 @@ export interface FileRoutesByTo {
   '/settings/personalization': typeof ShellSettingsPersonalizationRoute
   '/settings/preferences': typeof ShellSettingsPreferencesRoute
   '/settings/profile': typeof ShellSettingsProfileRoute
+  '/settings/project-general': typeof ShellSettingsProjectGeneralRoute
   '/settings/project-params': typeof ShellSettingsProjectParamsRoute
   '/settings/prompts': typeof ShellSettingsPromptsRoute
   '/settings/secrets': typeof ShellSettingsSecretsRoute
@@ -734,6 +743,7 @@ export interface FileRoutesById {
   '/_shell/settings/personalization': typeof ShellSettingsPersonalizationRoute
   '/_shell/settings/preferences': typeof ShellSettingsPreferencesRoute
   '/_shell/settings/profile': typeof ShellSettingsProfileRoute
+  '/_shell/settings/project-general': typeof ShellSettingsProjectGeneralRoute
   '/_shell/settings/project-params': typeof ShellSettingsProjectParamsRoute
   '/_shell/settings/prompts': typeof ShellSettingsPromptsRoute
   '/_shell/settings/secrets': typeof ShellSettingsSecretsRoute
@@ -819,6 +829,7 @@ export interface FileRouteTypes {
     | '/settings/personalization'
     | '/settings/preferences'
     | '/settings/profile'
+    | '/settings/project-general'
     | '/settings/project-params'
     | '/settings/prompts'
     | '/settings/secrets'
@@ -901,6 +912,7 @@ export interface FileRouteTypes {
     | '/settings/personalization'
     | '/settings/preferences'
     | '/settings/profile'
+    | '/settings/project-general'
     | '/settings/project-params'
     | '/settings/prompts'
     | '/settings/secrets'
@@ -985,6 +997,7 @@ export interface FileRouteTypes {
     | '/_shell/settings/personalization'
     | '/_shell/settings/preferences'
     | '/_shell/settings/profile'
+    | '/_shell/settings/project-general'
     | '/_shell/settings/project-params'
     | '/_shell/settings/prompts'
     | '/_shell/settings/secrets'
@@ -1356,6 +1369,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ShellSettingsProfileRouteImport
       parentRoute: typeof ShellSettingsRouteRoute
     }
+    '/_shell/settings/project-general': {
+      id: '/_shell/settings/project-general'
+      path: '/project-general'
+      fullPath: '/settings/project-general'
+      preLoaderRoute: typeof ShellSettingsProjectGeneralRouteImport
+      parentRoute: typeof ShellSettingsRouteRoute
+    }
     '/_shell/settings/project-params': {
       id: '/_shell/settings/project-params'
       path: '/project-params'
@@ -1646,6 +1666,7 @@ interface ShellSettingsRouteRouteChildren {
   ShellSettingsPersonalizationRoute: typeof ShellSettingsPersonalizationRoute
   ShellSettingsPreferencesRoute: typeof ShellSettingsPreferencesRoute
   ShellSettingsProfileRoute: typeof ShellSettingsProfileRoute
+  ShellSettingsProjectGeneralRoute: typeof ShellSettingsProjectGeneralRoute
   ShellSettingsProjectParamsRoute: typeof ShellSettingsProjectParamsRoute
   ShellSettingsPromptsRoute: typeof ShellSettingsPromptsRoute
   ShellSettingsSecretsRoute: typeof ShellSettingsSecretsRoute
@@ -1670,6 +1691,7 @@ const ShellSettingsRouteRouteChildren: ShellSettingsRouteRouteChildren = {
   ShellSettingsPersonalizationRoute: ShellSettingsPersonalizationRoute,
   ShellSettingsPreferencesRoute: ShellSettingsPreferencesRoute,
   ShellSettingsProfileRoute: ShellSettingsProfileRoute,
+  ShellSettingsProjectGeneralRoute: ShellSettingsProjectGeneralRoute,
   ShellSettingsProjectParamsRoute: ShellSettingsProjectParamsRoute,
   ShellSettingsPromptsRoute: ShellSettingsPromptsRoute,
   ShellSettingsSecretsRoute: ShellSettingsSecretsRoute,
