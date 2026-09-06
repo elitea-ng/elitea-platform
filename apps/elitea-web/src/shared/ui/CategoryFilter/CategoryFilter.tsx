@@ -66,6 +66,10 @@ export function CategoryFilter({
   );
 
   const searchLabel = searchPlaceholder ?? t('shared.ui.categoryFilter.search', 'Search');
+  // Baseline `CategoryFilter.jsx`'s `styles.searchContainer(allCategories.length > 1)`:
+  // the search box owns the whole gap down to the divider when there is no chip
+  // row to sit between them.
+  const showCategories = allCategories.length > 1;
 
   return (
     <Box sx={containerSx}>
@@ -79,8 +83,11 @@ export function CategoryFilter({
         </Typography>
       )}
 
-      <Box sx={controlsContainerSx}>
-        <Box sx={searchContainerSx}>
+      <Box
+        data-category-filter-controls=""
+        sx={controlsContainerSx}
+      >
+        <Box sx={showCategories ? searchContainerWithChipsSx : searchContainerSx}>
           <TextField
             placeholder={searchPlaceholder}
             value={searchQuery}
@@ -94,7 +101,7 @@ export function CategoryFilter({
                 sx: searchInputSx,
                 startAdornment: (
                   <SearchIcon
-                    fontSize="small"
+                    sx={searchIconSx}
                     aria-hidden
                   />
                 ),
@@ -103,7 +110,7 @@ export function CategoryFilter({
           />
         </Box>
 
-        {allCategories.length > 1 && (
+        {showCategories && (
           <Box sx={combineSx(categoryFilterContainerSx, categoryListSx)}>
             <Box sx={categoryChipsWrapperSx}>
               {allCategories.map((category) => {
@@ -116,6 +123,7 @@ export function CategoryFilter({
                     aria-pressed={selected}
                     onClick={handleCategoryClick(category)}
                     sx={selected ? selectedCategoryChipSx : categoryChipSx}
+                    slotProps={{ label: { sx: chipLabelSx } }}
                   />
                 );
               })}
@@ -152,7 +160,15 @@ const controlsContainerSx: SxProps<Theme> = {
   alignItems: 'center',
 };
 
+/** No chip row below: the search box carries the full 2rem gap to the divider. */
 const searchContainerSx: SxProps<Theme> = (theme: Theme) => ({
+  width: '23.75rem',
+  maxWidth: '100%',
+  marginBottom: theme.spacing(4),
+  position: 'relative',
+});
+
+const searchContainerWithChipsSx: SxProps<Theme> = (theme: Theme) => ({
   width: '23.75rem',
   maxWidth: '100%',
   marginBottom: theme.spacing(2),
@@ -163,6 +179,13 @@ const searchFieldSx: SxProps<Theme> = {
   width: '100%',
 };
 
+/** Baseline `searchIconContainer`: a 1rem glyph, not MUI's 1.25rem `fontSize="small"`. */
+const searchIconSx: SxProps<Theme> = (theme: Theme) => ({
+  width: '1rem',
+  height: '1rem',
+  color: theme.vars.palette.text.secondary,
+});
+
 /**
  * Styles the `OutlinedInput` slot directly (`TextField`'s `slotProps.input`
  * targets that component as a real prop, not a `.MuiOutlinedInput-*` class
@@ -171,9 +194,29 @@ const searchFieldSx: SxProps<Theme> = {
  * `TextField`'s input surface from a component file.
  */
 const searchInputSx: SxProps<Theme> = (theme: Theme) => ({
+  ...theme.typography.bodyMedium,
+  height: '2.25rem',
+  color: theme.vars.palette.text.secondary,
   backgroundColor: theme.vars.palette.background.userInputBackground,
-  borderRadius: theme.vars.shape.radiusLg,
-  gap: theme.spacing(1),
+  // Baseline `borderRadius: '1.75rem'` on a 2.25rem-tall field is a pill —
+  // `radiusPill` is the token that says so (R-T10 bans the literal).
+  borderRadius: theme.vars.shape.radiusPill,
+  border: `0.0625rem solid ${theme.vars.palette.border.lines}`,
+  paddingLeft: theme.spacing(1.5),
+  paddingRight: theme.spacing(1.5),
+  gap: theme.spacing(1.5),
+  transition: 'border 0.3s ease, background-color 0.3s ease',
+  '&:hover': { borderColor: theme.vars.palette.border.hover },
+  '&.Mui-focused': {
+    borderColor: theme.vars.palette.border.flowNode,
+    backgroundColor: theme.vars.palette.background.userInputBackgroundActive,
+  },
+  '& input': {
+    padding: 0,
+    height: 'auto',
+    '&::placeholder': { color: theme.vars.palette.text.disabled, opacity: 1 },
+  },
+  '& fieldset': { border: 'none' },
 });
 
 const categoryFilterContainerSx: SxProps<Theme> = (theme: Theme) => ({
@@ -193,18 +236,39 @@ const categoryChipsWrapperSx: SxProps<Theme> = (theme: Theme) => ({
   width: '100%',
 });
 
-const categoryChipSx: SxProps<Theme> = (theme: Theme) => ({
+/**
+ * Baseline `categoryChip`/`selectedCategoryChip`: a 2rem pill with its own
+ * padding and `labelSmall` type. The one deliberate substitution is the
+ * radius — the baseline's `0.625rem` literal is banned by R-T10, and
+ * `radiusMd` (0.5rem) is the nearest token.
+ */
+const baseCategoryChipSx = (theme: Theme) => ({
+  ...theme.typography.labelSmall,
+  height: '2rem',
+  padding: theme.spacing(1, 2),
   borderRadius: theme.vars.shape.radiusMd,
   border: 'none',
+  transition: 'all 0.2s ease-in-out',
+  '&:hover': { backgroundColor: theme.vars.palette.background.button.secondary.hover },
+});
+
+const chipLabelSx: SxProps<Theme> = {
+  padding: 0,
+  textTransform: 'capitalize',
+};
+
+const categoryChipSx: SxProps<Theme> = (theme: Theme) => ({
+  ...baseCategoryChipSx(theme),
   backgroundColor: theme.vars.palette.background.tag.default,
   color: theme.vars.palette.text.tag.default,
+  boxShadow: theme.vars.palette.boxShadow.tag,
 });
 
 const selectedCategoryChipSx: SxProps<Theme> = (theme: Theme) => ({
-  borderRadius: theme.vars.shape.radiusMd,
-  border: 'none',
+  ...baseCategoryChipSx(theme),
   backgroundColor: theme.vars.palette.background.tag.selected,
   color: theme.vars.palette.text.tag.selected,
+  boxShadow: 'none',
 });
 
 const itemsContainerSx: SxProps<Theme> = (theme: Theme) => ({

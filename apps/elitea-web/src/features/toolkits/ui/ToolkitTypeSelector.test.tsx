@@ -125,6 +125,68 @@ describe('ToolkitTypeSelector', () => {
     await waitFor(() => expect(screen.getByText('No toolkits found')).toBeInTheDocument());
   });
 
+  /**
+   * [visual-parity regression] The baseline groups the catalogue by
+   * `metadata.categories[0]` and renders a category-chip row plus one
+   * uppercase section heading per category (`Category.GroupedCategory`). This
+   * port rendered ONE un-grouped section and no chips at all, so neither
+   * existed on screen. Against the pre-fix component every assertion below
+   * fails: `getAllByTestId('category-filter-tab')` finds nothing and there is
+   * no `Code Repositories`/`Testing` heading.
+   */
+  it('groups the catalogue by category, with a chip per category and a section heading per group', async () => {
+    server.use(
+      http.get('/api/v2/elitea_core/toolkits/prompt_lib/:projectId', () =>
+        HttpResponse.json({
+          github: { metadata: { label: 'GitHub', categories: ['code repositories'] } },
+          testrail: { metadata: { label: 'TestRail', categories: ['testing'] } },
+        }),
+      ),
+    );
+    renderSelector();
+
+    await screen.findByText('GitHub');
+    // Word-wise Title Case, exactly as the baseline's `getCategoryForToolkit` produces.
+    expect(screen.getByRole('button', { name: 'Code Repositories' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Testing' })).toBeInTheDocument();
+    // The section headings are separate elements from the chips.
+    expect(screen.getAllByText('Code Repositories')).toHaveLength(2);
+    expect(screen.getAllByText('Testing')).toHaveLength(2);
+  });
+
+  it('narrows the catalogue to the picked category when a chip is clicked', async () => {
+    server.use(
+      http.get('/api/v2/elitea_core/toolkits/prompt_lib/:projectId', () =>
+        HttpResponse.json({
+          github: { metadata: { label: 'GitHub', categories: ['code repositories'] } },
+          testrail: { metadata: { label: 'TestRail', categories: ['testing'] } },
+        }),
+      ),
+    );
+    const user = userEvent.setup();
+    renderSelector();
+
+    await screen.findByText('GitHub');
+    await user.click(screen.getByRole('button', { name: 'Testing' }));
+
+    await waitFor(() => expect(screen.queryByText('GitHub')).not.toBeInTheDocument());
+    expect(screen.getByText('TestRail')).toBeInTheDocument();
+  });
+
+  /**
+   * [visual-parity regression] Every tile in the reference carries a leading
+   * brand glyph (`useToolkitSearch.js`'s `getToolIcon`). This port passed
+   * items with no `icon` at all, so `CategoryItemCard` rendered its icon slot
+   * not at all — label-only tiles.
+   */
+  it('renders a leading icon inside each type tile', async () => {
+    server.use(http.get('/api/v2/elitea_core/toolkits/prompt_lib/:projectId', () => HttpResponse.json({ github: { metadata: { label: 'GitHub' } } })));
+    renderSelector();
+
+    const tile = (await screen.findByText('GitHub')).closest('button');
+    expect(tile?.querySelector('svg')).not.toBeNull();
+  });
+
   it('uses application copy when isApplication is true', async () => {
     server.use(http.get('/api/v2/elitea_core/toolkits/prompt_lib/:projectId', () => HttpResponse.json({ github: { metadata: { label: 'GitHub', application: true } } })));
     renderSelector({ isApplication: true });

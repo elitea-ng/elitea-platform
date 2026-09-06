@@ -3459,5 +3459,7 @@
   "pages.admin.roles.rename.title": "Rename role",
   "pages.admin.roles.saved.roleCreated": "Role created. Grant its permissions below, then use Apply to Projects to push a standard role to existing projects.",
   "pages.admin.roles.saved.roleDeleted": "Role deleted.",
-  "pages.admin.roles.saved.roleRenamed": "Role renamed."
+  "pages.admin.roles.saved.roleRenamed": "Role renamed.",
+  "credentials.typeSelector.title": "Choose the credentials type",
+  "pages.toolkits.createToolkit.back": "Back"
 }
