@@ -446,3 +446,42 @@ func TestResourceScopedCallRunsTheNamedVersion(t *testing.T) {
 		t.Fatalf("version = %d, want the version named in the URL %d", resolvedVersionID, versionID)
 	}
 }
+
+// Pipelines use the same application execution bridge, but their persisted
+// discriminator makes the worker compile a graph instead of an agent loop.
+// Keep a separate acceptance case so agent-only fixtures cannot make the
+// external pipeline claim appear covered.
+func TestResourceScopedPipelineCallRunsTheNamedPipelineVersion(t *testing.T) {
+	pool := newMCPPool(t)
+	seedUser(t, pool, callerUserID)
+	versionID := seedPipeline(t, pool, homeSchema, "Release Pipeline", "runs the release graph")
+
+	const responseMessageID = "7f1d1d3a-0d0a-4a0e-9a0e-1c2d3e4f5a6f"
+	start := &fakeStart{outcome: agentexecutionapp.CurrentApplicationStartOutcome{
+		ExecutionID: "exec-pipeline-1", ResponseMessageID: responseMessageID,
+	}}
+	start.onStart = func(request agentexecutionapp.CurrentApplicationStartRequest) {
+		projectAnswer(t, pool, homeSchema, request.ConversationUUID, responseMessageID, completedMeta, "pipeline done")
+	}
+
+	target := fmt.Sprintf("/app/%s/mcp/pipeline/%d", homeProject, versionID)
+	result := callTool(t, pool, start, target, "Release_Pipeline", "prepare the release")
+
+	if got := resultText(t, result); got != "pipeline done" {
+		t.Fatalf("text = %q, want the pipeline result", got)
+	}
+	if len(start.requests) != 1 {
+		t.Fatalf("start called %d times, want once", len(start.requests))
+	}
+	var resolvedVersionID int64
+	if err := pool.QueryRow(context.Background(), fmt.Sprintf(`
+		SELECT (mapping.entity_settings ->> 'version_id')::bigint
+		FROM %[1]q.chat_participant_mapping AS mapping
+		WHERE mapping.participant_id = $1`, homeSchema),
+		start.requests[0].TargetParticipantID).Scan(&resolvedVersionID); err != nil {
+		t.Fatalf("read pipeline participant mapping: %v", err)
+	}
+	if resolvedVersionID != versionID {
+		t.Fatalf("version = %d, want the pipeline version named in the URL %d", resolvedVersionID, versionID)
+	}
+}

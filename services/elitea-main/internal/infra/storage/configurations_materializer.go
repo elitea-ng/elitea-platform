@@ -108,6 +108,17 @@ func (m *CurrentConfigurationsMaterializer) MaterializeContent(
 			maxBytes,
 		)
 	}
+	if authorization.CapabilityID == executiondomain.ToolkitExecuteReadCapability {
+		projectID, ok := positiveCurrentMaterializationID(authorization.ResourceProjectID)
+		if !ok {
+			return nil, ErrContentRejected
+		}
+		if _, ok := positiveCurrentMaterializationID(authorization.ActorID); !ok ||
+			authorization.SemanticRole != executiondomain.ToolkitExecuteReadRequestRole {
+			return nil, ErrContentRejected
+		}
+		return m.materializeToolkitExecuteRead(ctx, projectID, source, maxBytes)
+	}
 	if authorization.CapabilityID != executiondomain.IndexIngestCapability {
 		// The shared content listener also serves validation inputs. Those bytes
 		// have no frozen configured-toolkit references and remain byte-for-byte
@@ -143,6 +154,36 @@ func (m *CurrentConfigurationsMaterializer) MaterializeContent(
 	default:
 		return nil, ErrContentRejected
 	}
+}
+
+func (m *CurrentConfigurationsMaterializer) materializeToolkitExecuteRead(
+	ctx context.Context,
+	projectID int32,
+	source []byte,
+	maxBytes int64,
+) ([]byte, error) {
+	var request runtimev1.ToolkitExecuteReadInputV1
+	if err := proto.Unmarshal(source, &request); err != nil {
+		return nil, ErrContentRejected
+	}
+	canonical, err := proto.MarshalOptions{Deterministic: true}.Marshal(&request)
+	if err != nil || !bytes.Equal(canonical, source) {
+		clearContentBytes(canonical)
+		return nil, ErrContentRejected
+	}
+	clearContentBytes(canonical)
+
+	toolkit, err := m.materializeToolkit(ctx, projectID, request.GetToolkit(), maxBytes)
+	if err != nil {
+		return nil, err
+	}
+	request.Toolkit = toolkit
+	result, err := proto.MarshalOptions{Deterministic: true}.Marshal(&request)
+	if err != nil || len(result) == 0 || int64(len(result)) > maxBytes {
+		clearContentBytes(result)
+		return nil, ErrContentRejected
+	}
+	return result, nil
 }
 
 func (m *CurrentConfigurationsMaterializer) materializeAgentExecution(

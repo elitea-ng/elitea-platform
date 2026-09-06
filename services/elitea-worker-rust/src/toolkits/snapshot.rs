@@ -77,6 +77,19 @@ pub(crate) struct AdmittedToolSnapshot<'a> {
 }
 
 impl<'a> FrozenToolSnapshot<'a> {
+    /// Validate one exact toolkit frozen for direct external-MCP execution.
+    /// Nested applications are a separate external capability and cannot be
+    /// smuggled through the direct toolkit command.
+    pub(crate) fn from_toolkit(toolkit: &'a Value) -> Result<Self, FrozenToolSnapshotError> {
+        let reference = parse_reference(toolkit)?;
+        if reference.kind() == FrozenToolKind::Application {
+            return Err(invalid_input());
+        }
+        Ok(Self {
+            references: vec![reference],
+        })
+    }
+
     /// Select and validate the authoritative tool list for this request kind.
     ///
     /// Application turns use `application.version_details.tools`; ad-hoc turns

@@ -141,23 +141,33 @@ func TestProjectContext(t *testing.T) {
 	assertContentTypeJSON(t, w)
 
 	body := decodeObj(t, w)
-	if _, ok := body["content"]; !ok {
-		t.Error("response must contain 'content' key")
-	}
-	if body["content"] != "" {
-		t.Errorf("content should be empty string, got %q", body["content"])
+	if body["id"] != nil || body["content"] != "" || body["enabled"] != true ||
+		body["activation_description"] != nil || body["updated_at"] != nil {
+		t.Fatalf("default project context = %#v", body)
 	}
 }
 
 func TestUpdateProjectContext(t *testing.T) {
 	h := newHandler()
 	w := httptest.NewRecorder()
-	h.UpdateProjectContext(w, httptest.NewRequest(http.MethodPut, "/", nil))
+	h.UpdateProjectContext(w, httptest.NewRequest(http.MethodPut, "/", strings.NewReader(`{}`)))
 
 	assertStatus(t, w, http.StatusOK)
 	body := decodeObj(t, w)
-	if ok, _ := body["ok"].(bool); !ok {
-		t.Error("ok should be true")
+	if body["id"] != nil || body["content"] != "" || body["enabled"] != true ||
+		body["activation_description"] != nil || body["updated_at"] != nil {
+		t.Fatalf("default updated project context = %#v", body)
+	}
+}
+
+func TestDeleteProjectContextWithoutStoreIsNotFound(t *testing.T) {
+	h := newHandler()
+	w := httptest.NewRecorder()
+	h.DeleteProjectContext(w, httptest.NewRequest(http.MethodDelete, "/", nil))
+
+	assertStatus(t, w, http.StatusNotFound)
+	if body := decodeObj(t, w); body["error"] != "Project context not found" {
+		t.Fatalf("delete response = %#v", body)
 	}
 }
 
@@ -507,10 +517,10 @@ func TestMCPOAuthProxy(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.MCPOAuthProxy(w, httptest.NewRequest(http.MethodPost, "/", nil))
 
-	assertStatus(t, w, http.StatusOK)
+	assertStatus(t, w, http.StatusBadRequest)
 	body := decodeObj(t, w)
-	if ok, _ := body["ok"].(bool); !ok {
-		t.Error("ok should be true")
+	if body["error"] != "invalid_request" {
+		t.Fatalf("unexpected error: %#v", body)
 	}
 }
 
@@ -519,10 +529,10 @@ func TestMCPDCRProxy(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.MCPDCRProxy(w, httptest.NewRequest(http.MethodPost, "/", nil))
 
-	assertStatus(t, w, http.StatusOK)
+	assertStatus(t, w, http.StatusBadRequest)
 	body := decodeObj(t, w)
-	if ok, _ := body["ok"].(bool); !ok {
-		t.Error("ok should be true")
+	if body["error"] != "invalid_request" {
+		t.Fatalf("unexpected error: %#v", body)
 	}
 }
 
@@ -551,7 +561,8 @@ func TestMCPOAuthProxyAllowsCustomHTTPSHost(t *testing.T) {
 	body := `{
 		"token_endpoint":"https://identity.custom.example/oauth/token",
 		"client_id":"client&id",
-		"code":"code=value"
+		"code":"code=value",
+		"redirect_uri":"https://elitea.example/mcp-auth-callback"
 	}`
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
 	w := httptest.NewRecorder()
@@ -576,6 +587,12 @@ func TestMCPDCRProxyAllowsCustomHTTPSHost(t *testing.T) {
 		if requestBody["client_name"] != "Elitea" {
 			t.Fatalf("unexpected DCR body: %#v", requestBody)
 		}
+		if got := requestBody["token_endpoint_auth_method"]; got != "none" {
+			t.Fatalf("token_endpoint_auth_method = %#v, want none", got)
+		}
+		if got := requestBody["application_type"]; got != "web" {
+			t.Fatalf("application_type = %#v, want web", got)
+		}
 		return &http.Response{
 			StatusCode: http.StatusCreated,
 			Header:     make(http.Header),
@@ -586,13 +603,14 @@ func TestMCPDCRProxyAllowsCustomHTTPSHost(t *testing.T) {
 
 	body := `{
 		"registration_endpoint":"https://mcp.custom.example/register",
-		"client_name":"Elitea"
+		"client_name":"Elitea",
+		"redirect_uris":["https://elitea.example/mcp-auth-callback"]
 	}`
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
 	w := httptest.NewRecorder()
 	eliteacore.NewHandler(nil, eliteacore.WithHTTPClient(client)).MCPDCRProxy(w, req)
 
-	assertStatus(t, w, http.StatusCreated)
+	assertStatus(t, w, http.StatusOK)
 	response := decodeObj(t, w)
 	if response["client_id"] != "registered" {
 		t.Fatalf("unexpected DCR response: %#v", response)
@@ -621,6 +639,7 @@ func TestMCPProxiesRejectUnsafeEndpointURLs(t *testing.T) {
 		"http://mcp.internal.example/token",
 		"https:///missing-host",
 		"https://user:password@mcp.example/token",
+		"https://mcp.example/trusted/%2e%2e/token",
 	}
 
 	for _, test := range tests {
@@ -663,7 +682,11 @@ func TestMCPProxyRejectsCrossOriginRedirect(t *testing.T) {
 		return response, nil
 	})}
 
-	body := `{"token_endpoint":"https://identity.custom.example/oauth/token"}`
+	body := `{
+		"token_endpoint":"https://identity.custom.example/oauth/token",
+		"code":"authorization-code",
+		"redirect_uri":"https://elitea.example/mcp-auth-callback"
+	}`
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
 	w := httptest.NewRecorder()
 	eliteacore.NewHandler(nil, eliteacore.WithHTTPClient(client)).MCPOAuthProxy(w, req)

@@ -17,14 +17,19 @@ package mcp
 // only by an exact category path and never enters the external project listing.
 // A project with no tagged agents and no flagged toolkits therefore still gets
 // an empty external list, which is a true statement about the project's rows.
+// When the optional social folder projection exists, both sources also exclude
+// entities in a no_access folder for the authenticated actor.
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 )
 
 // Tool is one MCP tool descriptor. The JSON tags are the protocol's, including
@@ -66,9 +71,8 @@ type Tool struct {
 	applicationVersionID int64
 	// toolkitID and toolkitToolName pin an external toolkit call to the exact
 	// opted-in row and selected SDK operation that produced this descriptor.
-	// They are populated now even though durable toolkit execution remains
-	// capability-closed, so that later execution cannot reverse a lossy MCP
-	// name back into an arbitrary row.
+	// The durable executor consumes both fields and re-reads the row before
+	// admission, so it never reverses a lossy MCP name into an arbitrary row.
 	toolkitID       int64
 	toolkitToolName string
 	// internalApplicationOperation is populated only for the fixed
@@ -86,14 +90,24 @@ type Tool struct {
 	// internalNotificationOperation is populated only for the fixed
 	// notifications category. It is never serialized.
 	internalNotificationOperation internalNotificationOperation
+	// internalProjectContextOperation is populated only for the fixed
+	// project-context builder category. It is never serialized.
+	internalProjectContextOperation internalProjectContextOperation
+	// internalSecretOperation is populated only for the fixed secrets category.
+	// It is never serialized.
+	internalSecretOperation internalSecretOperation
 	// permission is re-checked for each internal API invocation.
 	permission string
 }
 
 // runnableAgent reports whether this descriptor names an agent this service can
-// execute. A toolkit tool answers false — see ToolkitExecutionUnavailableReason.
+// execute. Toolkit descriptors have their own exact-target predicate below.
 func (t Tool) runnableAgent() bool {
 	return t.applicationID > 0 && t.applicationVersionID > 0
+}
+
+func (t Tool) runnableToolkit() bool {
+	return t.toolkitID > 0 && t.toolkitToolName != ""
 }
 
 // toolSource is the seam the HTTP layer depends on, so the protocol handling in
@@ -134,13 +148,7 @@ type postgresToolSource struct {
 }
 
 func (p postgresToolSource) tools(ctx context.Context, schema string, s scope) ([]Tool, error) {
-	switch s.kind {
-	case scopeResource:
-		if s.resourceType == "toolkit" {
-			return p.toolkitTools(ctx, schema, &s.resourceID)
-		}
-		return p.agentToolForVersion(ctx, schema, s.resourceID)
-	case scopeCategory:
+	if s.kind == scopeCategory {
 		if s.category == internalApplicationsCategory {
 			return internalApplicationTools(), nil
 		}
@@ -156,23 +164,95 @@ func (p postgresToolSource) tools(ctx context.Context, schema string, s scope) (
 		if s.category == internalNotificationsCategory {
 			return internalNotificationTools(), nil
 		}
-		if s.category == "applications" {
-			return p.agentTools(ctx, schema)
+		if s.category == internalProjectContextCategory {
+			return internalProjectContextTools(), nil
 		}
-		return p.toolkitTools(ctx, schema, nil)
+		if s.category == internalSecretsCategory {
+			return internalSecretTools(), nil
+		}
+	}
+
+	access, err := p.externalAccess(ctx, schema)
+	if err != nil {
+		return nil, err
+	}
+	switch s.kind {
+	case scopeResource:
+		if s.resourceType == "toolkit" {
+			return p.toolkitTools(ctx, schema, access, &s.resourceID)
+		}
+		return p.agentToolForVersion(ctx, schema, access, s.resourceID)
+	case scopeCategory:
+		if s.category == "applications" {
+			return p.agentTools(ctx, schema, access)
+		}
+		return p.toolkitTools(ctx, schema, access, nil)
 	default:
 		// pylon lists toolkits first, then agents. Order is not protocol-
 		// significant, but a stable one makes the listing diffable between the
 		// two stacks during parity checks.
-		toolkitTools, err := p.toolkitTools(ctx, schema, nil)
+		toolkitTools, err := p.toolkitTools(ctx, schema, access, nil)
 		if err != nil {
 			return nil, err
 		}
-		agentTools, err := p.agentTools(ctx, schema)
+		agentTools, err := p.agentTools(ctx, schema, access)
 		if err != nil {
 			return nil, err
 		}
 		return dedupeByName(append(toolkitTools, agentTools...)), nil
+	}
+}
+
+type externalCatalogAccess struct {
+	actorID            int64
+	folderRestrictions bool
+}
+
+var errExternalCatalogIdentity = errors.New("MCP external catalog requires an owning user")
+var errPartialFolderAccessProjection = errors.New("MCP folder access projection is incomplete")
+
+// externalAccess resolves the actor and detects the optional social folder
+// projection once per tools/list or tools/call lookup. A partial projection
+// fails closed because it cannot produce a reliable authorization answer.
+func (p postgresToolSource) externalAccess(
+	ctx context.Context,
+	schema string,
+) (externalCatalogAccess, error) {
+	if p.handler == nil || p.handler.pool == nil {
+		return externalCatalogAccess{}, errNoPool
+	}
+	user, ok := auth.UserFromContext(ctx)
+	if !ok {
+		return externalCatalogAccess{}, errExternalCatalogIdentity
+	}
+	actorID, ok := user.OwningUserID()
+	if !ok {
+		return externalCatalogAccess{}, errExternalCatalogIdentity
+	}
+
+	var state int32
+	err := p.handler.pool.QueryRow(ctx, `
+		SELECT CASE
+			WHEN to_regclass($1) IS NOT NULL
+			 AND to_regclass($2) IS NOT NULL
+			 AND to_regclass($3) IS NOT NULL THEN 1
+			WHEN to_regclass($3) IS NULL THEN 0
+			ELSE -1
+		END::integer`,
+		schema+".entity_folders",
+		schema+".social_folder_items",
+		schema+".folder_access_overrides",
+	).Scan(&state)
+	if err != nil {
+		return externalCatalogAccess{}, err
+	}
+	switch state {
+	case 0:
+		return externalCatalogAccess{actorID: actorID}, nil
+	case 1:
+		return externalCatalogAccess{actorID: actorID, folderRestrictions: true}, nil
+	default:
+		return externalCatalogAccess{}, errPartialFolderAccessProjection
 	}
 }
 
@@ -186,7 +266,11 @@ func (p postgresToolSource) tools(ctx context.Context, schema string, s scope) (
 // DISTINCT ON the application: an agent with several tagged versions is one
 // tool, not one per version. pylon reaches the same place by listing
 // applications rather than versions.
-func (p postgresToolSource) agentTools(ctx context.Context, schema string) ([]Tool, error) {
+func (p postgresToolSource) agentTools(
+	ctx context.Context,
+	schema string,
+	access externalCatalogAccess,
+) ([]Tool, error) {
 	if p.handler.pool == nil {
 		return nil, errNoPool
 	}
@@ -195,15 +279,31 @@ func (p postgresToolSource) agentTools(ctx context.Context, schema string) ([]To
 	// tagged version — rather than whichever one the plan happened to emit
 	// first. Neither changes the listing: `Name` and `Description` come from
 	// `application`, which DISTINCT ON already collapsed to one row per id.
-	rows, err := p.handler.pool.Query(ctx, fmt.Sprintf(`
+	query := fmt.Sprintf(`
 		SELECT DISTINCT ON (application.id)
 		       application.id, version.id, application.name, COALESCE(application.description, '')
 		FROM %[1]s.applications AS application
 		JOIN %[1]s.application_versions AS version ON version.application_id = application.id
 		JOIN %[1]s.application_version_tag_association AS association ON association.version_id = version.id
 		JOIN %[1]s.tags AS tag ON tag.id = association.tag_id
-		WHERE tag.name = 'mcp'
-		ORDER BY application.id, version.id DESC`, schema))
+		WHERE tag.name = 'mcp'`, schema)
+	args := []any{}
+	if access.folderRestrictions {
+		args = append(args, access.actorID)
+		query += fmt.Sprintf(`
+		  AND NOT EXISTS (
+		      SELECT 1
+		      FROM %[1]s.social_folder_items AS item
+		      JOIN %[1]s.folder_access_overrides AS access
+		        ON access.folder_id = item.folder_id
+		      WHERE item.entity IN ('agent', 'pipeline')
+		        AND item.entity_id = application.id
+		        AND access.user_id = $1
+		        AND access.access_level = 'no_access'
+		  )`, schema)
+	}
+	query += " ORDER BY application.id, version.id DESC"
+	rows, err := p.handler.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -240,17 +340,38 @@ func (p postgresToolSource) agentTools(ctx context.Context, schema string) ([]To
 // selecting it. The tenant boundary still holds — the version is looked up in
 // this project's schema only, so a version id from another project is not
 // found.
-func (p postgresToolSource) agentToolForVersion(ctx context.Context, schema string, versionID int64) ([]Tool, error) {
+func (p postgresToolSource) agentToolForVersion(
+	ctx context.Context,
+	schema string,
+	access externalCatalogAccess,
+	versionID int64,
+) ([]Tool, error) {
 	if p.handler.pool == nil {
 		return nil, errNoPool
 	}
 	var applicationID int64
 	var name, description string
-	err := p.handler.pool.QueryRow(ctx, fmt.Sprintf(`
+	query := fmt.Sprintf(`
 		SELECT application.id, application.name, COALESCE(application.description, '')
 		FROM %[1]s.application_versions AS version
 		JOIN %[1]s.applications AS application ON application.id = version.application_id
-		WHERE version.id = $1`, schema), versionID).Scan(&applicationID, &name, &description)
+		WHERE version.id = $1`, schema)
+	args := []any{versionID}
+	if access.folderRestrictions {
+		args = append(args, access.actorID)
+		query += fmt.Sprintf(`
+		  AND NOT EXISTS (
+		      SELECT 1
+		      FROM %[1]s.social_folder_items AS item
+		      JOIN %[1]s.folder_access_overrides AS access
+		        ON access.folder_id = item.folder_id
+		      WHERE item.entity IN ('agent', 'pipeline')
+		        AND item.entity_id = application.id
+		        AND access.user_id = $2
+		        AND access.access_level = 'no_access'
+		  )`, schema)
+	}
+	err := p.handler.pool.QueryRow(ctx, query, args...).Scan(&applicationID, &name, &description)
 	if err != nil {
 		if isNoRows(err) {
 			// An id that names nothing in this project is an empty listing, not
@@ -286,7 +407,12 @@ func (p postgresToolSource) agentToolForVersion(ctx context.Context, schema stri
 // the intermediate object is missing is NULL rather than false — fine — but on
 // a row where someone stored the string "yes" it raises, which would fail the
 // whole listing because of one malformed toolkit.
-func (p postgresToolSource) toolkitTools(ctx context.Context, schema string, toolkitID *int64) ([]Tool, error) {
+func (p postgresToolSource) toolkitTools(
+	ctx context.Context,
+	schema string,
+	access externalCatalogAccess,
+	toolkitID *int64,
+) ([]Tool, error) {
 	if p.handler.pool == nil {
 		return nil, errNoPool
 	}
@@ -298,6 +424,20 @@ func (p postgresToolSource) toolkitTools(ctx context.Context, schema string, too
 	if toolkitID != nil {
 		query += " AND id = $1"
 		args = append(args, *toolkitID)
+	}
+	if access.folderRestrictions {
+		args = append(args, access.actorID)
+		query += fmt.Sprintf(`
+		  AND NOT EXISTS (
+		      SELECT 1
+		      FROM %[1]s.social_folder_items AS item
+		      JOIN %[1]s.folder_access_overrides AS access
+		        ON access.folder_id = item.folder_id
+		      WHERE item.entity IN ('toolkit', 'mcp')
+		        AND item.entity_id = elitea_tools.id
+		        AND access.user_id = $%[2]d
+		        AND access.access_level = 'no_access'
+		  )`, schema, len(args))
 	}
 	query += " ORDER BY id"
 

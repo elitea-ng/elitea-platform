@@ -168,9 +168,23 @@ func validateCommand(command *runtimev1.WorkerCommandV1, config commandValidatio
 		return validateIndexIngestCommand(command, config)
 	case executiondomain.AgentApplicationCapability, executiondomain.AgentAdhocCapability:
 		return validateAgentExecutionCommand(command, config)
+	case executiondomain.ToolkitExecuteReadCapability:
+		return validateToolkitExecuteReadCommand(command, config)
 	default:
 		return ErrCommandIncompatible
 	}
+}
+
+func validateToolkitExecuteReadCommand(command *runtimev1.WorkerCommandV1, config commandValidationConfig) error {
+	toolkit := command.GetToolkitExecuteRead()
+	if command.GetCommandType() != runtimev1.WorkerCommandTypeV1_WORKER_COMMAND_TYPE_V1_TOOLKIT_EXECUTE_READ ||
+		toolkit == nil || command.GetRootExecutionId() != command.GetExecutionId() ||
+		command.GetParentExecutionId() != "" || command.GetParentCallId() != "" ||
+		toolkit.GetRequestEntryId() == "" || len(toolkit.GetRequestEntryId()) > config.MaxStringBytes ||
+		strings.ContainsAny(toolkit.GetRequestEntryId(), "\x00\r\n") {
+		return ErrMalformedWorkerCommand
+	}
+	return nil
 }
 
 func validateAgentExecutionCommand(command *runtimev1.WorkerCommandV1, config commandValidationConfig) error {

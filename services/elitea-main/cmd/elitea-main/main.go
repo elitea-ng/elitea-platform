@@ -55,6 +55,7 @@ import (
 	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
 	notificationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/notifications"
 	socialapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/social"
+	toolkitexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/authcomposition"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
@@ -809,6 +810,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// one-key-source defect on the model catalogue the resolver reads, which is
 	// a worse failure than the one it would fix.
 	var toolkitSettingsValidator v2toolkits.ToolkitSettingsValidator
+	var delegatedAuthToolkitSettings *toolkitexecutionapp.CurrentDelegatedAuthToolkitSettings
 	var currentConfigurationRead http.Handler
 	var currentConfigurationAvailable http.Handler
 	var currentConfigurationTypes http.Handler
@@ -857,6 +859,13 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		// Assigned through the concrete value, never a typed nil: the handler's
 		// only fallback is a nil-interface check.
 		toolkitSettingsValidator = toolkitSettingsResolver
+		delegatedAuthToolkitSettings, err = runtimecomposition.NewCurrentDelegatedAuthToolkitSettings(
+			pool,
+			toolkitSettingsResolver,
+		)
+		if err != nil {
+			return fmt.Errorf("compose delegated authorization toolkit settings: %w", err)
+		}
 		// The SAME graph the Inventory facade claims a source toolkit's
 		// credentials with. One composition, so what a source's own index runs
 		// read is what the provider receives; a second would be a second answer
@@ -1310,6 +1319,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// and for the same typed-nil reason. `tools/call` runs an agent through the
 	// SAME use case; left nil it keeps answering the refusal it always has.
 	var mcpAgentStart v2mcp.AgentStartUseCase
+	var mcpToolkitExecute v2mcp.ToolkitExecuteReadUseCase
 	var currentAgentCancel http.Handler
 	var currentIndexCancel http.Handler
 	var currentIndexMeta http.Handler
@@ -1462,6 +1472,9 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			if err != nil {
 				return fmt.Errorf("compose current agent-start route: %w", err)
 			}
+		}
+		if publicRoutes.ToolkitExecuteRead != nil {
+			mcpToolkitExecute = publicRoutes.ToolkitExecuteRead
 		}
 		if publicRoutes.AgentCancel != nil {
 			currentAgentCancel, err = agentexecutionapi.NewCurrentAgentCancelRoute(
@@ -1765,15 +1778,16 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	}
 
 	r := api.NewRouter(api.RouterConfig{
-		AdminUI:                    adminUICfg,
-		Pool:                       pool,
-		Branding:                   brandingResolver,
-		Mailer:                     mailComposer,
-		BrandingPackages:           brandingPackages,
-		ToolkitArgumentSchemas:     toolkitArgumentSchemas,
-		ToolkitSettingsDefinitions: toolkitSettingsDefinitions,
-		ToolkitSettingsValidator:   toolkitSettingsValidator,
-		ToolkitRegistry:            toolkitArgumentSchemas,
+		AdminUI:                      adminUICfg,
+		Pool:                         pool,
+		Branding:                     brandingResolver,
+		Mailer:                       mailComposer,
+		BrandingPackages:             brandingPackages,
+		ToolkitArgumentSchemas:       toolkitArgumentSchemas,
+		ToolkitSettingsDefinitions:   toolkitSettingsDefinitions,
+		ToolkitSettingsValidator:     toolkitSettingsValidator,
+		DelegatedAuthToolkitSettings: delegatedAuthToolkitSettings,
+		ToolkitRegistry:              toolkitArgumentSchemas,
 		HealthDeps: health.Deps{
 			DB:    &poolChecker{pool: pool},
 			Redis: authReadiness,
@@ -1812,6 +1826,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		// apart on tracing, budgets and cancellation.
 		SupportAssistantStart:      supportAssistantStart,
 		MCPAgentStart:              mcpAgentStart,
+		MCPToolkitExecute:          mcpToolkitExecute,
 		CurrentAgentCancel:         currentAgentCancel,
 		CurrentIndexCancel:         currentIndexCancel,
 		CurrentIndexMeta:           currentIndexMeta,

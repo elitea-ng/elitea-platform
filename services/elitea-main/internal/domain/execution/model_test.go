@@ -35,6 +35,7 @@ func TestSupportedCapabilityIncludesLanguageNeutralAgentSemantics(t *testing.T) 
 		IndexIngestCapability,
 		AgentApplicationCapability,
 		AgentAdhocCapability,
+		ToolkitExecuteReadCapability,
 	} {
 		if !SupportedCapability(capabilityID) {
 			t.Fatalf("capability %q is not supported", capabilityID)
@@ -136,7 +137,33 @@ func TestInputBundleUsesMediaSpecificContentBounds(t *testing.T) {
 	if maxInputEntryContentBytes(AgentExecutionInputMediaType) != MaxAgentExecutionInputBytes {
 		t.Fatal("agent input bound does not match the public worker contract")
 	}
+	if maxInputEntryContentBytes(ToolkitExecuteReadInputMediaType) != MaxToolkitExecuteReadInputBytes {
+		t.Fatal("direct toolkit input bound does not match the public worker contract")
+	}
 	if maxInputEntryContentBytes("application/octet-stream") != 0 {
 		t.Fatal("unknown input media type was accepted")
+	}
+}
+
+func TestToolkitExecuteReadBindingRequiresOneImmutableProtobufEntry(t *testing.T) {
+	content := []byte("toolkit-read-input")
+	bundle := InputBundle{
+		ID: "bundle", Version: "version", MediaType: InputBundleManifestMediaType,
+		Digest: runtimedomain.SHA256([]byte("manifest")), Manifest: []byte("manifest"),
+		Entries: []InputEntry{{
+			ID: "read-request", Version: "entry-version", SemanticRole: ToolkitExecuteReadRequestRole,
+			ContentID: "content", MediaType: ToolkitExecuteReadInputMediaType,
+			Classification: "tenant-confidential", RequiredGrantAudience: "elitea.runtime.input.read.v1",
+			ContentDigest: runtimedomain.SHA256(content), ContentLength: int64(len(content)), Content: content,
+		}},
+	}
+	binding := ToolkitExecuteReadBinding{RequestEntryID: "read-request"}
+	if err := binding.Validate(bundle); err != nil {
+		t.Fatalf("binding.Validate() error = %v", err)
+	}
+	invalid := binding
+	invalid.RequestEntryID = "another-entry"
+	if err := invalid.Validate(bundle); err == nil {
+		t.Fatal("direct toolkit binding accepted a mismatched entry")
 	}
 }

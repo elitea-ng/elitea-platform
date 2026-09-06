@@ -3,6 +3,7 @@ package output
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -43,6 +44,10 @@ type AgentExecutionIngestor interface {
 	IngestAgent(ctx context.Context, frame outputapp.AgentExecutionFrame) (outputapp.ProjectionOutcome, error)
 }
 
+type ToolkitExecuteReadIngestor interface {
+	IngestToolkitExecuteRead(ctx context.Context, frame outputapp.ToolkitExecuteReadFrame) (outputapp.ProjectionOutcome, error)
+}
+
 type NodeEventIngestor interface {
 	IngestNodeEvent(ctx context.Context, frame outputapp.NodeEventFrame) (outputapp.ProjectionOutcome, error)
 }
@@ -63,11 +68,12 @@ type Server struct {
 	failures   RuntimeFailureIngestor
 	indexes    IndexIngestIngestor
 	agents     AgentExecutionIngestor
+	toolkits   ToolkitExecuteReadIngestor
 	nodeEvents NodeEventIngestor
 }
 
 func NewServer(config ServerConfig, authorizer WorkloadAuthorizer, ingestor ValidationIngestor, failures RuntimeFailureIngestor) (*Server, error) {
-	return newServer(config, authorizer, ingestor, failures, nil, nil, nil)
+	return newServer(config, authorizer, ingestor, failures, nil, nil, nil, nil)
 }
 
 // NewServerWithIndexIngest adds the typed index.ingest.v1 terminal-output
@@ -77,7 +83,7 @@ func NewServerWithIndexIngest(config ServerConfig, authorizer WorkloadAuthorizer
 	if indexes == nil {
 		return nil, errors.New("index ingest output ingestor is required")
 	}
-	return newServer(config, authorizer, ingestor, failures, indexes, nil, nil)
+	return newServer(config, authorizer, ingestor, failures, indexes, nil, nil, nil)
 }
 
 // NewServerWithIndexIngestAndNodeEvents adds current-NodeEvent progress to the
@@ -86,7 +92,7 @@ func NewServerWithIndexIngestAndNodeEvents(config ServerConfig, authorizer Workl
 	if indexes == nil || nodeEvents == nil {
 		return nil, errors.New("index ingest and node event output ingestors are required")
 	}
-	return newServer(config, authorizer, ingestor, failures, indexes, nil, nodeEvents)
+	return newServer(config, authorizer, ingestor, failures, indexes, nil, nil, nodeEvents)
 }
 
 // NewServerWithAgentAndNodeEvents composes agent execution independently of
@@ -96,7 +102,26 @@ func NewServerWithAgentAndNodeEvents(config ServerConfig, authorizer WorkloadAut
 	if agents == nil || nodeEvents == nil {
 		return nil, errors.New("agent and node event output ingestors are required")
 	}
-	return newServer(config, authorizer, ingestor, failures, nil, agents, nodeEvents)
+	return newServer(config, authorizer, ingestor, failures, nil, agents, nil, nodeEvents)
+}
+
+// NewServerWithAgentToolkitAndNodeEvents composes agent execution and direct
+// read-tool output when indexing is disabled. Toolkit execution shares the
+// authenticated listener, but it keeps its own typed result projector and has
+// no node-event stream of its own.
+func NewServerWithAgentToolkitAndNodeEvents(
+	config ServerConfig,
+	authorizer WorkloadAuthorizer,
+	ingestor ValidationIngestor,
+	failures RuntimeFailureIngestor,
+	agents AgentExecutionIngestor,
+	toolkits ToolkitExecuteReadIngestor,
+	nodeEvents NodeEventIngestor,
+) (*Server, error) {
+	if agents == nil || toolkits == nil || nodeEvents == nil {
+		return nil, errors.New("agent, direct toolkit and node event output ingestors are required")
+	}
+	return newServer(config, authorizer, ingestor, failures, nil, agents, toolkits, nodeEvents)
 }
 
 // NewServerWithIndexAgentAndNodeEvents composes the two progress-capable
@@ -105,17 +130,35 @@ func NewServerWithIndexAgentAndNodeEvents(config ServerConfig, authorizer Worklo
 	if indexes == nil || agents == nil || nodeEvents == nil {
 		return nil, errors.New("index, agent and node event output ingestors are required")
 	}
-	return newServer(config, authorizer, ingestor, failures, indexes, agents, nodeEvents)
+	return newServer(config, authorizer, ingestor, failures, indexes, agents, nil, nodeEvents)
 }
 
-func newServer(config ServerConfig, authorizer WorkloadAuthorizer, ingestor ValidationIngestor, failures RuntimeFailureIngestor, indexes IndexIngestIngestor, agents AgentExecutionIngestor, nodeEvents NodeEventIngestor) (*Server, error) {
+// NewServerWithIndexAgentToolkitAndNodeEvents composes direct read-tool output
+// without granting it agent trace or indexing semantics.
+func NewServerWithIndexAgentToolkitAndNodeEvents(
+	config ServerConfig,
+	authorizer WorkloadAuthorizer,
+	ingestor ValidationIngestor,
+	failures RuntimeFailureIngestor,
+	indexes IndexIngestIngestor,
+	agents AgentExecutionIngestor,
+	toolkits ToolkitExecuteReadIngestor,
+	nodeEvents NodeEventIngestor,
+) (*Server, error) {
+	if indexes == nil || agents == nil || toolkits == nil || nodeEvents == nil {
+		return nil, errors.New("index, agent, direct toolkit and node event output ingestors are required")
+	}
+	return newServer(config, authorizer, ingestor, failures, indexes, agents, toolkits, nodeEvents)
+}
+
+func newServer(config ServerConfig, authorizer WorkloadAuthorizer, ingestor ValidationIngestor, failures RuntimeFailureIngestor, indexes IndexIngestIngestor, agents AgentExecutionIngestor, toolkits ToolkitExecuteReadIngestor, nodeEvents NodeEventIngestor) (*Server, error) {
 	if authorizer == nil || ingestor == nil || failures == nil {
 		return nil, errors.New("output authorizer, validation ingestor and runtime failure ingestor are required")
 	}
 	if config.OutputSchemaRevision == "" || config.MaxFrameBytes <= 0 || config.CreditFrames == 0 || config.CreditBytes == 0 {
 		return nil, errors.New("output schema and limits are required")
 	}
-	return &Server{config: config, authorizer: authorizer, ingestor: ingestor, failures: failures, indexes: indexes, agents: agents, nodeEvents: nodeEvents}, nil
+	return &Server{config: config, authorizer: authorizer, ingestor: ingestor, failures: failures, indexes: indexes, agents: agents, toolkits: toolkits, nodeEvents: nodeEvents}, nil
 }
 
 func (s *Server) Publish(stream grpc.BidiStreamingServer[runtimev1.ExecutionOutputFrameV1, runtimev1.ExecutionOutputAckV1]) error {
@@ -249,6 +292,15 @@ func (s *Server) ingestMessage(ctx context.Context, message *runtimev1.Execution
 			return outputapp.ProjectionOutcome{}, err
 		}
 		return s.agents.IngestAgent(ctx, frame)
+	case runtimev1.ExecutionOutputEventTypeV1_EXECUTION_OUTPUT_EVENT_TYPE_V1_TOOLKIT_EXECUTE_READ_RESULT:
+		if s.toolkits == nil {
+			return outputapp.ProjectionOutcome{}, outputapp.ErrInvalidToolkitExecuteReadOutput
+		}
+		frame, err := s.toolkitExecuteReadFrame(message, workloadIdentity)
+		if err != nil {
+			return outputapp.ProjectionOutcome{}, err
+		}
+		return s.toolkits.IngestToolkitExecuteRead(ctx, frame)
 	case runtimev1.ExecutionOutputEventTypeV1_EXECUTION_OUTPUT_EVENT_TYPE_V1_NODE_EVENT:
 		if s.nodeEvents == nil {
 			return outputapp.ProjectionOutcome{}, outputapp.ErrInvalidNodeEventOutput
@@ -421,6 +473,58 @@ func (s *Server) agentExecutionFrame(message *runtimev1.ExecutionOutputFrameV1, 
 	}
 	if err := frame.Validate(); err != nil {
 		return outputapp.AgentExecutionFrame{}, err
+	}
+	return frame, nil
+}
+
+func (s *Server) toolkitExecuteReadFrame(
+	message *runtimev1.ExecutionOutputFrameV1,
+	workloadIdentity string,
+) (outputapp.ToolkitExecuteReadFrame, error) {
+	if message == nil || message.GetOutputSchemaRevision() != s.config.OutputSchemaRevision ||
+		hasUnknown(message.ProtoReflect()) || !validStreamIdentity(message) ||
+		message.GetOccurredAtUnixMillis() <= 0 {
+		return outputapp.ToolkitExecuteReadFrame{}, outputapp.ErrInvalidToolkitExecuteReadOutput
+	}
+	encodedFrame, err := proto.MarshalOptions{Deterministic: true}.Marshal(message)
+	if err != nil || len(encodedFrame) > s.config.MaxFrameBytes ||
+		message.GetEventType() != runtimev1.ExecutionOutputEventTypeV1_EXECUTION_OUTPUT_EVENT_TYPE_V1_TOOLKIT_EXECUTE_READ_RESULT ||
+		!message.GetTerminal() || message.GetToolkitExecuteRead() == nil {
+		return outputapp.ToolkitExecuteReadFrame{}, outputapp.ErrInvalidToolkitExecuteReadOutput
+	}
+	identity := message.GetIdentity()
+	fence, err := fenceDomain(identity, message.GetFence(), workloadIdentity)
+	if err != nil {
+		return outputapp.ToolkitExecuteReadFrame{}, err
+	}
+	payload := message.GetToolkitExecuteRead()
+	encodedResult, err := proto.MarshalOptions{Deterministic: true}.Marshal(payload)
+	if err != nil || !matchesDigest(message.GetPayloadDigest(), encodedResult) {
+		return outputapp.ToolkitExecuteReadFrame{}, outputapp.ErrInvalidToolkitExecuteReadOutput
+	}
+	result, err := toolkitExecuteReadResultDomain(payload)
+	if err != nil {
+		return outputapp.ToolkitExecuteReadFrame{}, err
+	}
+	settlement, encodedSettlement, err := s.settlementProposalDomain(
+		message, fence, encodedResult, executionapp.SettlementSucceeded,
+	)
+	if err != nil {
+		return outputapp.ToolkitExecuteReadFrame{}, outputapp.ErrInvalidToolkitExecuteReadOutput
+	}
+	frame := outputapp.ToolkitExecuteReadFrame{
+		StreamID: message.GetStreamId(), TenantID: identity.GetTenantId(),
+		ResourceProjectID:   identity.GetResourceProjectId(),
+		ProjectionProjectID: identity.GetProjectionProjectId(),
+		WorkloadSessionID:   fence.WorkloadSessionID, ProducerID: fence.ProducerID,
+		EventID: message.GetEventId(), LogicalOutputID: message.GetLogicalOutputId(),
+		Sequence: message.GetSequence(), ClaimHandoffWatermark: message.GetClaimHandoffWatermark(),
+		OccurredAt: time.UnixMilli(message.GetOccurredAtUnixMillis()).UTC(), Fence: fence,
+		PayloadDigest: runtimedomain.SHA256(encodedResult), EncodedResult: encodedResult,
+		Settlement: settlement, EncodedSettlement: encodedSettlement, Result: result,
+	}
+	if err := frame.Validate(); err != nil {
+		return outputapp.ToolkitExecuteReadFrame{}, err
 	}
 	return frame, nil
 }
@@ -725,6 +829,35 @@ func agentExecutionResultDomain(result *runtimev1.AgentExecutionResultV1) (outpu
 	}
 	if err := mapped.Validate(); err != nil {
 		return outputapp.AgentExecutionResult{}, err
+	}
+	return mapped, nil
+}
+
+func toolkitExecuteReadResultDomain(
+	result *runtimev1.ToolkitExecuteReadResultV1,
+) (outputapp.ToolkitExecuteReadResult, error) {
+	if result == nil || !json.Valid(result.GetResultJson()) {
+		return outputapp.ToolkitExecuteReadResult{}, outputapp.ErrInvalidToolkitExecuteReadOutput
+	}
+	bundleDigest, err := digestDomain(result.GetInputBundleDigest())
+	if err != nil {
+		return outputapp.ToolkitExecuteReadResult{}, outputapp.ErrInvalidToolkitExecuteReadOutput
+	}
+	requestDigest, err := digestDomain(result.GetRequestContentDigest())
+	if err != nil {
+		return outputapp.ToolkitExecuteReadResult{}, outputapp.ErrInvalidToolkitExecuteReadOutput
+	}
+	mapped := outputapp.ToolkitExecuteReadResult{
+		InputBundleID: result.GetInputBundleId(), InputBundleDigest: bundleDigest,
+		RequestEntryID:          result.GetRequestEntryId(),
+		RequestImmutableVersion: result.GetRequestEntryVersion(),
+		RequestContentDigest:    requestDigest,
+		ResultJSON:              append(json.RawMessage(nil), result.GetResultJson()...),
+		ToolkitType:             result.GetToolkitType(), ToolkitName: result.GetToolkitName(),
+		ToolName: result.GetToolName(),
+	}
+	if err := mapped.Validate(); err != nil {
+		return outputapp.ToolkitExecuteReadResult{}, err
 	}
 	return mapped, nil
 }

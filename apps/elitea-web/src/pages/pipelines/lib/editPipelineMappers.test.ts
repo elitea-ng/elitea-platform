@@ -14,10 +14,22 @@ import {
 describe('toVersionSummaries', () => {
   it('maps snake_case fields to the camelCase VersionSummary shape', () => {
     const wire: readonly ApplicationVersionSummary[] = [
-      { id: '1', name: 'base', status: 'draft', agent_type: 'pipeline', created_at: '2026-01-01T00:00:00Z' },
+      {
+        id: '1',
+        name: 'base',
+        status: 'draft',
+        agent_type: 'pipeline',
+        created_at: '2026-01-01T00:00:00Z',
+      },
     ];
     expect(toVersionSummaries(wire)).toEqual([
-      { id: '1', name: 'base', status: 'draft', agentType: 'pipeline', createdAt: '2026-01-01T00:00:00Z' },
+      {
+        id: '1',
+        name: 'base',
+        status: 'draft',
+        agentType: 'pipeline',
+        createdAt: '2026-01-01T00:00:00Z',
+      },
     ]);
   });
 
@@ -40,21 +52,30 @@ describe('pipelineDetailDisplayName', () => {
 
 describe('toFormValues', () => {
   it('seeds name/description from the detail and conversation_starters from the version', () => {
-    const detail = { name: 'My Pipeline', description: 'A helpful pipeline' } as ApplicationDetail;
-    const version = { conversation_starters: ['Hi', null, undefined, 'Bye'] } as unknown as ApplicationVersionDetail;
+    const detail = {
+      name: 'My Pipeline',
+      description: 'A helpful pipeline',
+    } as ApplicationDetail;
+    const version = {
+      conversation_starters: ['Hi', null, undefined, 'Bye'],
+      tags: [{ name: 'mcp' }, { name: null }],
+    } as unknown as ApplicationVersionDetail;
     expect(toFormValues(detail, version)).toEqual({
       name: 'My Pipeline',
       description: 'A helpful pipeline',
-      version_details: { conversation_starters: ['Hi', 'Bye'] },
+      version_details: { conversation_starters: ['Hi', 'Bye'], tags: ['mcp'] },
     });
   });
 
   it('defaults conversation_starters to [] when there is no version yet', () => {
-    const detail = { name: 'My Pipeline', description: 'A helpful pipeline' } as ApplicationDetail;
+    const detail = {
+      name: 'My Pipeline',
+      description: 'A helpful pipeline',
+    } as ApplicationDetail;
     expect(toFormValues(detail, undefined)).toEqual({
       name: 'My Pipeline',
       description: 'A helpful pipeline',
-      version_details: { conversation_starters: [] },
+      version_details: { conversation_starters: [], tags: [] },
     });
   });
 });
@@ -87,10 +108,20 @@ describe('toVersionDraft', () => {
   // `instructions` always came from the STORED version, so a graph edit could
   // not reach the wire even in principle.
   it('prefers the live graph draft for instructions and carries its pipelineSettings', () => {
-    const version = { name: 'base', instructions: 'stale yaml', meta: {} } as unknown as ApplicationVersionDetail;
+    const version = {
+      name: 'base',
+      instructions: 'stale yaml',
+      meta: {},
+    } as unknown as ApplicationVersionDetail;
     const graph = {
       instructions: 'entry_point: Agent 1\n',
-      admission: { document: {}, parseFailed: false, issues: [], hasGraph: true, isAdmissible: true },
+      admission: {
+        document: {},
+        parseFailed: false,
+        issues: [],
+        hasGraph: true,
+        isAdmissible: true,
+      },
       pipelineSettings: {
         nodes: [{ id: 'Agent 1' }],
         edges: [],
@@ -106,7 +137,11 @@ describe('toVersionDraft', () => {
   });
 
   it('keeps the stored instructions and leaves pipelineSettings undefined when no graph draft is supplied', () => {
-    const version = { name: 'base', instructions: 'stale yaml', meta: {} } as unknown as ApplicationVersionDetail;
+    const version = {
+      name: 'base',
+      instructions: 'stale yaml',
+      meta: {},
+    } as unknown as ApplicationVersionDetail;
 
     const draft = toVersionDraft(version, [], undefined);
 
@@ -124,7 +159,10 @@ describe('toVersionDraft', () => {
    * user saved any unrelated edit, and stopped answering with a 422.
    */
   it('falls back to an EMPTY meta.internal_tools (never internal_mcp) when the existing meta lacks the key', () => {
-    const version = { name: 'base', meta: {} } as unknown as ApplicationVersionDetail;
+    const version = {
+      name: 'base',
+      meta: {},
+    } as unknown as ApplicationVersionDetail;
     const draft = toVersionDraft(version, []);
     expect(draft.meta).toEqual({ step_limit: 25, internal_tools: [] });
   });
@@ -157,8 +195,20 @@ describe('toVersionDraft', () => {
     expect(draft.tools).toEqual([]);
   });
 
+  it('uses the live form tags so MCP exposure edits reach the save request', () => {
+    const version = {
+      name: 'base',
+      tags: [{ name: 'stored' }],
+    } as unknown as ApplicationVersionDetail;
+
+    expect(toVersionDraft(version, [], undefined, undefined, ['stored', 'mcp']).tags).toEqual(['stored', 'mcp']);
+  });
+
   it('always sets agentType to "pipeline", regardless of the wire agent_type', () => {
-    const version = { name: 'base', agent_type: 'classic' } as unknown as ApplicationVersionDetail;
+    const version = {
+      name: 'base',
+      agent_type: 'classic',
+    } as unknown as ApplicationVersionDetail;
     expect(toVersionDraft(version, []).agentType).toBe('pipeline');
   });
 
@@ -170,7 +220,12 @@ describe('toVersionDraft', () => {
   it('reads the stored llm_settings back, with model_project_id as a number', () => {
     const version = {
       name: 'base',
-      llm_settings: { model_name: 'qwen3.5', model_project_id: '17', max_tokens: -1, temperature: 0.6 },
+      llm_settings: {
+        model_name: 'qwen3.5',
+        model_project_id: '17',
+        max_tokens: -1,
+        temperature: 0.6,
+      },
     } as unknown as ApplicationVersionDetail;
 
     expect(toVersionDraft(version, []).llmSettings).toEqual({
@@ -187,7 +242,11 @@ describe('toVersionDraft', () => {
   it('prefers the picked llm_settings over the stored one', () => {
     const version = {
       name: 'base',
-      llm_settings: { model_name: 'gpt-4o', model_project_id: 3, max_tokens: 4096 },
+      llm_settings: {
+        model_name: 'gpt-4o',
+        model_project_id: 3,
+        max_tokens: 4096,
+      },
     } as unknown as ApplicationVersionDetail;
 
     const draft = toVersionDraft(version, [], undefined, {
@@ -195,14 +254,21 @@ describe('toVersionDraft', () => {
       model_project_id: 17,
       max_tokens: -1,
     });
-    expect(draft.llmSettings).toEqual({ model_name: 'qwen3.5', model_project_id: 17, max_tokens: -1 });
+    expect(draft.llmSettings).toEqual({
+      model_name: 'qwen3.5',
+      model_project_id: 17,
+      max_tokens: -1,
+    });
   });
 
   // `{}` is what every version written before the picker existed stores;
   // `toVersionWriteRequest` then omits the key and the pipeline keeps running
   // on the project's catalogue default.
   it('leaves llmSettings undefined for a version that names no model', () => {
-    const version = { name: 'base', llm_settings: {} } as unknown as ApplicationVersionDetail;
+    const version = {
+      name: 'base',
+      llm_settings: {},
+    } as unknown as ApplicationVersionDetail;
     expect(toVersionDraft(version, []).llmSettings).toBeUndefined();
   });
 });
@@ -214,7 +280,13 @@ describe('toVersionOptions', () => {
   // to the first option's label.
   it('narrows the wire id to a number', () => {
     const wire: readonly ApplicationVersionSummary[] = [
-      { id: '7', name: 'v1', status: 'draft', agent_type: 'pipeline', created_at: '2026-02-01T00:00:00Z' },
+      {
+        id: '7',
+        name: 'v1',
+        status: 'draft',
+        agent_type: 'pipeline',
+        created_at: '2026-02-01T00:00:00Z',
+      },
     ];
     const [option] = toVersionOptions(wire);
     expect(option?.id).toBe(7);
@@ -226,7 +298,14 @@ describe('toVersionOptions', () => {
 
   it("carries the server's default-version flag through", () => {
     const wire = [
-      { id: '7', name: 'v1', status: 'draft', agent_type: 'pipeline', created_at: '2026-02-01T00:00:00Z', is_default: true },
+      {
+        id: '7',
+        name: 'v1',
+        status: 'draft',
+        agent_type: 'pipeline',
+        created_at: '2026-02-01T00:00:00Z',
+        is_default: true,
+      },
     ] as unknown as readonly ApplicationVersionSummary[];
     expect(toVersionOptions(wire)[0]?.is_default).toBe(true);
   });
@@ -251,10 +330,16 @@ describe('toNewPipelineVersionBody', () => {
    * new version: same rows, wrong executor, and nothing on screen to say so.
    */
   it('pins agent_type to pipeline even when the stored version names something else', () => {
-    const odd = { ...storedVersion, agent_type: 'openai' } as unknown as ApplicationVersionDetail;
+    const odd = {
+      ...storedVersion,
+      agent_type: 'openai',
+    } as unknown as ApplicationVersionDetail;
     expect(toNewPipelineVersionBody(odd, [], undefined).agent_type).toBe('pipeline');
 
-    const blank = { ...storedVersion, agent_type: undefined } as ApplicationVersionDetail;
+    const blank = {
+      ...storedVersion,
+      agent_type: undefined,
+    } as ApplicationVersionDetail;
     expect(toNewPipelineVersionBody(blank, [], undefined).agent_type).toBe('pipeline');
   });
 
@@ -268,21 +353,31 @@ describe('toNewPipelineVersionBody', () => {
    */
   it('carries meta.step_limit and meta.internal_tools onto the new version', () => {
     const body = toNewPipelineVersionBody(storedVersion, [], undefined);
-    expect(body.meta).toEqual({ step_limit: 40, internal_tools: ['internal_mcp'] });
+    expect(body.meta).toEqual({
+      step_limit: 40,
+      internal_tools: ['internal_mcp'],
+    });
   });
 
   it('defaults step_limit to 25 and internal_tools to [] for a version with no meta', () => {
-    const bare = { ...storedVersion, meta: undefined } as unknown as ApplicationVersionDetail;
-    expect(toNewPipelineVersionBody(bare, [], undefined).meta).toEqual({ step_limit: 25, internal_tools: [] });
+    const bare = {
+      ...storedVersion,
+      meta: undefined,
+    } as unknown as ApplicationVersionDetail;
+    expect(toNewPipelineVersionBody(bare, [], undefined).meta).toEqual({
+      step_limit: 25,
+      internal_tools: [],
+    });
   });
 
   // Same edit-wins-over-stored rule the ordinary Save applies: the live
   // starters come off the form, not off the server's last-saved copy.
   it('clones the LIVE conversation starters, not the stored ones', () => {
-    const withStored = { ...storedVersion, conversation_starters: ['old'] } as unknown as ApplicationVersionDetail;
-    expect(toNewPipelineVersionBody(withStored, ['typed but unsaved'], undefined).conversation_starters).toEqual([
-      'typed but unsaved',
-    ]);
+    const withStored = {
+      ...storedVersion,
+      conversation_starters: ['old'],
+    } as unknown as ApplicationVersionDetail;
+    expect(toNewPipelineVersionBody(withStored, ['typed but unsaved'], undefined).conversation_starters).toEqual(['typed but unsaved']);
   });
 
   it('prefers the picked model over the stored blob, and forwards the stored one verbatim with no pick', () => {
@@ -291,9 +386,13 @@ describe('toNewPipelineVersionBody', () => {
       llm_settings: { model_name: 'gpt-4o', model_project_id: 3 },
     } as unknown as ApplicationVersionDetail;
 
-    expect(toNewPipelineVersionBody(withModel, [], { model_name: 'qwen3.5', model_project_id: 17, max_tokens: -1 }).llm_settings).toEqual(
-      { model_name: 'qwen3.5', model_project_id: 17, max_tokens: -1 },
-    );
+    expect(
+      toNewPipelineVersionBody(withModel, [], {
+        model_name: 'qwen3.5',
+        model_project_id: 17,
+        max_tokens: -1,
+      }).llm_settings,
+    ).toEqual({ model_name: 'qwen3.5', model_project_id: 17, max_tokens: -1 });
     expect(toNewPipelineVersionBody(withModel, [], undefined).llm_settings).toEqual({
       model_name: 'gpt-4o',
       model_project_id: 3,
@@ -346,7 +445,11 @@ describe('toNewPipelineVersionBody', () => {
     const withMetaVariables = {
       ...storedVersion,
       variables: [],
-      meta: { step_limit: 40, internal_tools: [], variables: [{ name: 'deleted_secret', value: 'hunter2' }] },
+      meta: {
+        step_limit: 40,
+        internal_tools: [],
+        variables: [{ name: 'deleted_secret', value: 'hunter2' }],
+      },
     } as unknown as ApplicationVersionDetail;
 
     const body = toNewPipelineVersionBody(withMetaVariables, [], undefined);

@@ -18,10 +18,11 @@ import (
 )
 
 const (
-	payloadTypeConfigurationValidation = "CONFIGURATION_VALIDATION"
-	payloadTypeRuntimeFailure          = "RUNTIME_FAILURE"
-	payloadTypeIndexIngestResult       = "INDEX_INGEST_RESULT"
-	payloadTypeAgentExecutionResult    = "AGENT_EXECUTION_RESULT"
+	payloadTypeConfigurationValidation  = "CONFIGURATION_VALIDATION"
+	payloadTypeRuntimeFailure           = "RUNTIME_FAILURE"
+	payloadTypeIndexIngestResult        = "INDEX_INGEST_RESULT"
+	payloadTypeAgentExecutionResult     = "AGENT_EXECUTION_RESULT"
+	payloadTypeToolkitExecuteReadResult = "TOOLKIT_EXECUTE_READ_RESULT"
 )
 
 type OutputInboxRepository struct {
@@ -140,6 +141,8 @@ SELECT j.tenant_id,
 	               THEN 'agent-execution:' || j.execution_id
 	           WHEN 'agent.execute.adhoc.v1'
 	               THEN 'agent-execution:' || j.execution_id
+	           WHEN 'toolkit.execute.read.v1'
+	               THEN 'toolkit-execute-read:' || j.execution_id
        END AS logical_output_id
 FROM elitea_runtime.execution_jobs AS j
 WHERE j.execution_id = $1
@@ -168,6 +171,20 @@ WHERE j.execution_id = $1
                 AND i.generation = j.generation
                 AND i.capability_id = j.capability_id
                 AND i.input_bundle_id = j.input_bundle_id
+	          )
+	      )
+	      OR
+	      (
+	          j.capability_id = 'toolkit.execute.read.v1'
+	          AND EXISTS (
+	              SELECT 1
+	              FROM elitea_runtime.toolkit_execute_read_jobs AS t
+	              JOIN elitea_runtime.input_bundles AS b
+	                ON b.input_bundle_id = t.input_bundle_id
+	              WHERE t.execution_id = j.execution_id
+	                AND t.generation = j.generation
+	                AND t.capability_id = j.capability_id
+	                AND t.input_bundle_id = j.input_bundle_id
 	          )
 	      )
 	      OR
@@ -246,7 +263,7 @@ func (r outputRecord) validate() error {
 	if r.EventID == "" || r.LogicalOutputID == "" || r.ExecutionID == "" || r.Generation == 0 || r.TenantID == "" || r.ResourceProjectID <= 0 || r.ProjectionProjectID <= 0 || r.CommandID == "" || r.WorkloadIdentity == "" || r.WorkloadSessionID == "" || r.ProducerID == "" || r.ClaimAttempt == 0 || r.LeaseEpoch == 0 || r.FenceToken.IsZero() || r.StreamID == "" || r.Sequence == 0 || r.PayloadDigest.IsZero() || len(r.PayloadBytes) == 0 || r.SettlementProposalID == "" || r.SettlementOutcome == "" || len(r.SettlementBytes) == 0 || r.SettlementDigest.IsZero() || r.SettlementKey == "" || r.OccurredAt.IsZero() {
 		return outputapp.ErrInvalidValidationOutput
 	}
-	if r.PayloadType != payloadTypeConfigurationValidation && r.PayloadType != payloadTypeRuntimeFailure && r.PayloadType != payloadTypeIndexIngestResult && r.PayloadType != payloadTypeAgentExecutionResult {
+	if r.PayloadType != payloadTypeConfigurationValidation && r.PayloadType != payloadTypeRuntimeFailure && r.PayloadType != payloadTypeIndexIngestResult && r.PayloadType != payloadTypeAgentExecutionResult && r.PayloadType != payloadTypeToolkitExecuteReadResult {
 		return outputapp.ErrInvalidValidationOutput
 	}
 	// Keep the durable payload type and terminal disposition coupled even when
@@ -264,6 +281,10 @@ func (r outputRecord) validate() error {
 			return outputapp.ErrInvalidValidationOutput
 		}
 	case payloadTypeAgentExecutionResult:
+		if r.SettlementOutcome != executionapp.SettlementSucceeded {
+			return outputapp.ErrInvalidValidationOutput
+		}
+	case payloadTypeToolkitExecuteReadResult:
 		if r.SettlementOutcome != executionapp.SettlementSucceeded {
 			return outputapp.ErrInvalidValidationOutput
 		}

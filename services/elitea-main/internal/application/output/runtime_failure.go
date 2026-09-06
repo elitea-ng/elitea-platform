@@ -116,6 +116,10 @@ func (e ExpectedRuntimeFailure) Validate() error {
 		if e.LogicalOutputID != "agent-execution:"+e.ExecutionID {
 			return ErrInvalidValidationOutput
 		}
+	case executiondomain.ToolkitExecuteReadCapability:
+		if e.LogicalOutputID != "toolkit-execute-read:"+e.ExecutionID {
+			return ErrInvalidValidationOutput
+		}
 	default:
 		return ErrInvalidValidationOutput
 	}

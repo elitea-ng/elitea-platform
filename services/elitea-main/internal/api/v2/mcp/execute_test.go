@@ -27,7 +27,9 @@ import (
 	agentexecutionapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/agentexecution"
 
 	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	toolkitexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 )
 
 /* ── harness ───────────────────────────────────────────────────────────── */
@@ -54,6 +56,22 @@ type recordingStart struct {
 	calls   int
 	outcome agentexecutionapp.CurrentApplicationStartOutcome
 	err     error
+}
+
+type recordingToolkitExecute struct {
+	request toolkitexecutionapp.ExecuteCurrentReadToolRequest
+	outcome toolkitexecutionapp.CurrentReadToolExecutionOutcome
+	err     error
+	calls   int
+}
+
+func (s *recordingToolkitExecute) Execute(
+	_ context.Context,
+	request toolkitexecutionapp.ExecuteCurrentReadToolRequest,
+) (toolkitexecutionapp.CurrentReadToolExecutionOutcome, error) {
+	s.calls++
+	s.request = request
+	return s.outcome, s.err
 }
 
 func (s *recordingStart) StartCurrentApplication(
@@ -91,9 +109,9 @@ func allowRuns() *fakePermissions {
 // permissive resolver, and wraps the router so the request carries an
 // authenticated user — the MCP endpoint's own middleware does that in
 // production.
-func newRunnableRouter(t *testing.T, source toolSource, start AgentStartUseCase) chi.Router {
+func newRunnableRouter(t *testing.T, source toolSource, start AgentStartUseCase, options ...Option) chi.Router {
 	t.Helper()
-	handler := NewHandler(nil, nil, start, allowRuns())
+	handler := NewHandler(nil, nil, start, allowRuns(), options...)
 	handler.source = source
 	router := chi.NewRouter()
 	router.Use(func(next http.Handler) http.Handler {
@@ -250,6 +268,155 @@ func TestCallOfAToolkitToolWithRuntimeRefusesOnlyTheToolkitHalf(t *testing.T) {
 	}
 	if start.calls != 0 {
 		t.Fatalf("start use case called %d times for a toolkit tool, want 0", start.calls)
+	}
+}
+
+func TestCallOfAToolkitToolRunsTheExactCatalogTarget(t *testing.T) {
+	executor := &recordingToolkitExecute{outcome: toolkitexecutionapp.CurrentReadToolExecutionOutcome{
+		ExecutionID: "execution-73",
+		Completion: toolkitexecutionapp.Completion{
+			State: executiondomain.JobSucceeded, ResultJSON: []byte(`{"issue":"EL-42"}`),
+			ToolkitType: "github", ToolkitName: "repo", ToolName: "get_issue",
+		},
+	}}
+	tool := Tool{
+		Name: "repo_get_issue", toolkitID: 73, toolkitToolName: "get_issue",
+	}
+	router := newRunnableRouter(
+		t, staticSource(tool), nil, WithToolkitExecuteRead(executor),
+	)
+	result := resultOf(t, post(t, router, "/app/17/mcp",
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"repo_get_issue","arguments":{"issue":"EL-42"}}}`))
+
+	if result["isError"] == true || textOf(t, result) != `{"issue":"EL-42"}` {
+		t.Fatalf("result = %#v", result)
+	}
+	request := executor.request
+	if executor.calls != 1 || request.ProjectID != 17 || request.ActorID != 7 ||
+		request.ToolkitID != 73 || request.ToolName != "get_issue" ||
+		request.Arguments["issue"] != "EL-42" || request.Identity.TenantID != "17" ||
+		request.Identity.ResourceProjectID != "17" || request.Identity.ProjectionProjectID != "17" ||
+		request.Identity.ActorID != "7" || request.IdempotencyKey == "" {
+		t.Fatalf("request = %#v calls = %d", request, executor.calls)
+	}
+}
+
+func TestCurrentReadToolAdmissionErrorCodesAreStableAndRedacted(t *testing.T) {
+	tests := []struct {
+		err  error
+		code string
+	}{
+		{toolkitexecutionapp.ErrInvalidCurrentReadTool, "invalid_request"},
+		{toolkitexecutionapp.ErrCurrentReadToolkitNotVisible, "toolkit_not_visible"},
+		{toolkitexecutionapp.ErrCurrentReadToolNotSelected, "tool_not_selected"},
+		{toolkitexecutionapp.ErrCurrentReadToolRestricted, "policy_restricted"},
+		{toolkitexecutionapp.ErrInvalidAuthoritativeToolkitReadInput, "invalid_frozen_input"},
+		{toolkitexecutionapp.ErrInvalidToolkitExecuteReadAdmission, "invalid_durable_admission"},
+		{errors.New("provider body with a secret"), "dependency_failure"},
+	}
+	for _, test := range tests {
+		if got := currentReadToolAdmissionErrorCode(test.err); got != test.code {
+			t.Fatalf("error code = %q, want %q", got, test.code)
+		}
+	}
+}
+
+func TestAgentStartErrorCodesAreStableAndRedacted(t *testing.T) {
+	tests := []struct {
+		err  error
+		code string
+	}{
+		{agentexecutionapp.ErrInvalidCurrentAgentStart, "invalid_request"},
+		{agentexecutionapp.ErrInvalidAgentAdmission, "invalid_request"},
+		{agentexecutionapp.ErrUnsupportedCurrentAgentStart, "unsupported_configuration"},
+		{errors.New("provider body with a secret"), "dependency_failure"},
+	}
+	for _, test := range tests {
+		if got := currentAgentStartErrorCode(test.err); got != test.code {
+			t.Fatalf("error code = %q, want %q", got, test.code)
+		}
+	}
+}
+
+func TestCallOfAToolkitToolPreservesStringResultAndSafeAdmissionFailure(t *testing.T) {
+	executor := &recordingToolkitExecute{outcome: toolkitexecutionapp.CurrentReadToolExecutionOutcome{
+		ExecutionID: "execution-73",
+		Completion: toolkitexecutionapp.Completion{
+			State: executiondomain.JobSucceeded, ResultJSON: []byte(`"plain text"`),
+			ToolkitType: "github", ToolkitName: "repo", ToolName: "get_issue",
+		},
+	}}
+	tool := Tool{Name: "repo_get_issue", toolkitID: 73, toolkitToolName: "get_issue"}
+	router := newRunnableRouter(t, staticSource(tool), nil, WithToolkitExecuteRead(executor))
+	result := resultOf(t, post(t, router, "/app/17/mcp",
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"repo_get_issue","arguments":{}}}`))
+	if textOf(t, result) != "plain text" {
+		t.Fatalf("result = %#v", result)
+	}
+
+	executor.err = toolkitexecutionapp.ErrCurrentReadToolNotSelected
+	executor.outcome = toolkitexecutionapp.CurrentReadToolExecutionOutcome{}
+	result = resultOf(t, post(t, router, "/app/17/mcp",
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"repo_get_issue","arguments":{}}}`))
+	if result["isError"] != true || !strings.Contains(textOf(t, result), "no longer exposed") {
+		t.Fatalf("stale selection result = %#v", result)
+	}
+}
+
+func TestCallOfAToolkitToolNeverReturnsAnEmptySuccess(t *testing.T) {
+	executor := &recordingToolkitExecute{outcome: toolkitexecutionapp.CurrentReadToolExecutionOutcome{
+		ExecutionID: "execution-73",
+		Completion: toolkitexecutionapp.Completion{
+			State: executiondomain.JobSucceeded, ResultJSON: []byte(`"   "`),
+			ToolkitType: "github", ToolkitName: "repo", ToolName: "get_issue",
+		},
+	}}
+	tool := Tool{Name: "repo_get_issue", toolkitID: 73, toolkitToolName: "get_issue"}
+	router := newRunnableRouter(t, staticSource(tool), nil, WithToolkitExecuteRead(executor))
+	result := resultOf(t, post(t, router, "/app/17/mcp",
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"repo_get_issue","arguments":{}}}`))
+
+	if result["isError"] != true || !strings.Contains(textOf(t, result), "without producing any content") {
+		t.Fatalf("empty result = %#v", result)
+	}
+}
+
+func TestCallOfAToolkitToolReportsClientCancellationWithoutClaimingTimeout(t *testing.T) {
+	executor := &recordingToolkitExecute{
+		outcome: toolkitexecutionapp.CurrentReadToolExecutionOutcome{ExecutionID: "execution-73"},
+		err:     context.Canceled,
+	}
+	tool := Tool{Name: "repo_get_issue", toolkitID: 73, toolkitToolName: "get_issue"}
+	router := newRunnableRouter(t, staticSource(tool), nil, WithToolkitExecuteRead(executor))
+	result := resultOf(t, post(t, router, "/app/17/mcp",
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"repo_get_issue","arguments":{}}}`))
+	text := textOf(t, result)
+
+	if result["isError"] != true || !strings.Contains(text, "request ended") ||
+		!strings.Contains(text, "execution-73") || strings.Contains(text, "90s") {
+		t.Fatalf("cancellation result = %#v", result)
+	}
+}
+
+func TestCallOfAToolkitToolFailsClosedBeforeExecutionWithoutPermission(t *testing.T) {
+	executor := &recordingToolkitExecute{}
+	handler := NewHandler(
+		nil, nil, nil, &fakePermissions{userID: 7}, WithToolkitExecuteRead(executor),
+	)
+	handler.source = staticSource(Tool{
+		Name: "repo_get_issue", toolkitID: 73, toolkitToolName: "get_issue",
+	})
+	router := chi.NewRouter()
+	router.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, r.WithContext(auth.ContextWithUser(r.Context(), auth.User{ID: "7", UserID: "7"})))
+		})
+	})
+	router.Post("/app/{projectID}/mcp", handler.Endpoint)
+	result := resultOf(t, post(t, router, "/app/17/mcp",
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"repo_get_issue","arguments":{}}}`))
+	if result["isError"] != true || !strings.Contains(textOf(t, result), runPermission) || executor.calls != 0 {
+		t.Fatalf("result=%#v calls=%d", result, executor.calls)
 	}
 }
 

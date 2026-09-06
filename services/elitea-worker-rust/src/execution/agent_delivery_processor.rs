@@ -146,6 +146,60 @@ where
         }
     }
 
+    pub(super) async fn process_verified_delivery(
+        &self,
+        delivery: RedisCommandDelivery,
+        verified: VerifiedAgentCommand,
+    ) {
+        let command = verified.command();
+        let span = tracing::info_span!(
+            parent: None,
+            "agent.delivery",
+            execution_kind = ?verified.kind(),
+            execution_id = %command.execution_id,
+            root_execution_id = %command.root_execution_id,
+            generation = command.generation,
+            command_id = %command.command_id,
+            tenant_id = %command.tenant_id,
+            resource_project_id = %command.resource_project_id,
+            projection_project_id = %command.projection_project_id,
+            capability_id = %command.capability_id,
+            parent_execution_id = %command.parent_execution_id,
+            parent_call_id = %command.parent_call_id,
+            redis_stream = %delivery.stream(),
+            redis_entry_id = %delivery.entry_id(),
+            trace_context_present = !command.traceparent.is_empty(),
+            remote_parent = tracing::field::Empty,
+            outcome = tracing::field::Empty,
+            result_code = tracing::field::Empty,
+            error_code = tracing::field::Empty,
+            retryable = tracing::field::Empty,
+        );
+        let remote_parent =
+            attach_command_trace_parent(&span, &command.traceparent, &command.tracestate);
+        span.record("remote_parent", remote_parent);
+        Box::pin(
+            async move {
+                tracing::info!(event = "agent_delivery_started");
+                match Box::pin(self.process_owned(delivery, verified)).await {
+                    Ok(outcome) => outcome.record(),
+                    Err(error) => {
+                        tracing::Span::current().record("outcome", "failed_no_ack");
+                        tracing::Span::current().record("error_code", error.code());
+                        tracing::Span::current().record("retryable", error.retryable());
+                        tracing::warn!(
+                            event = "agent_delivery_failed",
+                            error_code = error.code(),
+                            retryable = error.retryable(),
+                        );
+                    }
+                }
+            }
+            .instrument(span),
+        )
+        .await;
+    }
+
     async fn process_output_recovery(
         &self,
         recovery: super::agent_delivery::OutputRecoveryAgentDelivery,
@@ -398,53 +452,7 @@ where
                 return;
             }
         };
-        let command = verified.command();
-        let span = tracing::info_span!(
-            parent: None,
-            "agent.delivery",
-            execution_kind = ?verified.kind(),
-            execution_id = %command.execution_id,
-            root_execution_id = %command.root_execution_id,
-            generation = command.generation,
-            command_id = %command.command_id,
-            tenant_id = %command.tenant_id,
-            resource_project_id = %command.resource_project_id,
-            projection_project_id = %command.projection_project_id,
-            capability_id = %command.capability_id,
-            parent_execution_id = %command.parent_execution_id,
-            parent_call_id = %command.parent_call_id,
-            redis_stream = %delivery.stream(),
-            redis_entry_id = %delivery.entry_id(),
-            trace_context_present = !command.traceparent.is_empty(),
-            remote_parent = tracing::field::Empty,
-            outcome = tracing::field::Empty,
-            result_code = tracing::field::Empty,
-            error_code = tracing::field::Empty,
-            retryable = tracing::field::Empty,
-        );
-        let remote_parent =
-            attach_command_trace_parent(&span, &command.traceparent, &command.tracestate);
-        span.record("remote_parent", remote_parent);
-        Box::pin(
-            async move {
-                tracing::info!(event = "agent_delivery_started");
-                match Box::pin(self.process_owned(delivery, verified)).await {
-                    Ok(outcome) => outcome.record(),
-                    Err(error) => {
-                        tracing::Span::current().record("outcome", "failed_no_ack");
-                        tracing::Span::current().record("error_code", error.code());
-                        tracing::Span::current().record("retryable", error.retryable());
-                        tracing::warn!(
-                            event = "agent_delivery_failed",
-                            error_code = error.code(),
-                            retryable = error.retryable(),
-                        );
-                    }
-                }
-            }
-            .instrument(span),
-        )
-        .await;
+        self.process_verified_delivery(delivery, verified).await;
     }
 }
 

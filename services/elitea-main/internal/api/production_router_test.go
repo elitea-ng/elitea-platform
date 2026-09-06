@@ -186,7 +186,7 @@ func TestProductionRouterMountsOnlyCurrentPromptContextGETs(t *testing.T) {
 		t.Fatal(err)
 	}
 	// mountReviewedProductionRoutes registers only the chat-config GET for
-	// CurrentPromptContextReads. The current project-context GET/PUT is owned
+	// CurrentPromptContextReads. The current project-context GET/PUT/DELETE is owned
 	// unconditionally by newProductionRouter's broad coreHandler.ProjectContext
 	// registration at the same literal path
 	// (promptcontextreadsapi.CurrentProjectContextPath) even when
@@ -1675,6 +1675,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"DELETE /api/v2/elitea_core/messages/prompt_lib/{projectID}/{conversationID}",
 		"DELETE /api/v2/elitea_core/participant/prompt_lib/{projectID}/{conversationID}/{participantID}",
 		"DELETE /api/v2/elitea_core/pin/prompt_lib/{projectID}/{entityType}/{entityID}",
+		"DELETE /api/v2/elitea_core/project_context/prompt_lib/{projectID}/project-context",
 		"DELETE /api/v2/elitea_core/project_icon/prompt_lib/{projectID}/{name}",
 		"DELETE /api/v2/elitea_core/register_descriptor/{projectID}",
 		"DELETE /api/v2/elitea_core/select_conversation/prompt_lib/{projectID}",

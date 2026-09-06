@@ -16,6 +16,7 @@ import (
 	indexscheduleapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexschedule"
 	outputapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/output"
 	schedulingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/scheduling"
+	toolkitexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
@@ -227,6 +228,16 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		LimitsRevision:    limitsRevision,
 		MaxOutstanding:    config.MaxOutstanding,
 	}
+	toolkitDispatchPolicy := repos.ToolkitExecuteReadDispatchPolicy{
+		StreamName:        config.AgentExecutionCommandStream,
+		CapabilityVersion: agentCapabilityVersion,
+		ResourceClass:     agentResourceClass,
+		IsolationClass:    agentIsolationClass,
+		Priority:          1,
+		DeadlineTTL:       agentDeadlineTTL,
+		LimitsRevision:    limitsRevision,
+		MaxOutstanding:    config.MaxOutstanding,
+	}
 	jobs, err := repos.NewExecutionJobsRepository(dependencies.AdmissionPool, dispatchPolicy)
 	if err != nil {
 		return nil, fmt.Errorf("construct runtime execution jobs: %w", err)
@@ -406,6 +417,9 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	var agentCancel *agentexecutionapp.CurrentAgentCancellationService
 	var agentPublisher publisherRunner
 	var agentMaterializer *storage.CurrentConfigurationsMaterializer
+	var toolkitJobs *repos.ToolkitExecuteReadJobsRepository
+	var toolkitExecute *toolkitexecutionapp.CurrentReadToolExecutionService
+	var toolkitPublisher publisherRunner
 	// Both are built inside the agent-execution block below but consumed with
 	// the private content listener further down, where the claim authorizer
 	// they have to be combined with is constructed.
@@ -431,6 +445,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 				EnvelopeSchemaRevision:       envelopeSchemaRevision,
 				ApplicationCapabilityVersion: agentCapabilityVersion,
 				AdhocCapabilityVersion:       agentCapabilityVersion,
+				ToolkitReadCapabilityVersion: agentCapabilityVersion,
 				Limits:                       agentLimits,
 			},
 			signer,
@@ -561,15 +576,97 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if err != nil {
 			return nil, err
 		}
+
+		toolkitRows, toolkitErr := repos.NewCurrentToolkitsRepository(dependencies.AdmissionPool)
+		if toolkitErr != nil {
+			return nil, fmt.Errorf("construct current direct toolkit repository: %w", toolkitErr)
+		}
+		toolkitSettings, toolkitNames, _, toolkitErr := newCurrentToolkitSettingsGraph(
+			dependencies.AdmissionPool,
+			dependencies.CurrentConfigurations,
+		)
+		if toolkitErr != nil {
+			return nil, fmt.Errorf("construct current direct toolkit settings graph: %w", toolkitErr)
+		}
+		toolkitReader, toolkitErr := NewCurrentToolkitReaderAdapter(toolkitRows, toolkitNames)
+		if toolkitErr != nil {
+			return nil, fmt.Errorf("construct current direct toolkit reader: %w", toolkitErr)
+		}
+		toolkitFreezer, toolkitErr := toolkitexecutionapp.NewCurrentReadToolFreezer(
+			toolkitReader,
+			toolkitSettings,
+			agentGuardrails,
+		)
+		if toolkitErr != nil {
+			return nil, fmt.Errorf("construct current direct toolkit freezer: %w", toolkitErr)
+		}
+		toolkitInputs, toolkitErr := toolkitexecutionapp.NewInputBundleFactory(
+			toolkitexecutionapp.InputProfile{
+				Classification:        inputClassification,
+				RequiredGrantAudience: inputGrantAudience,
+			},
+			currentRuntimeID,
+		)
+		if toolkitErr != nil {
+			return nil, fmt.Errorf("construct direct toolkit input bundle factory: %w", toolkitErr)
+		}
+		toolkitJobs, toolkitErr = repos.NewToolkitExecuteReadJobsRepository(
+			dependencies.AdmissionPool,
+			toolkitDispatchPolicy,
+		)
+		if toolkitErr != nil {
+			return nil, fmt.Errorf("construct direct toolkit execution jobs: %w", toolkitErr)
+		}
+		toolkitAdmissions, toolkitErr := toolkitexecutionapp.NewAdmissionService(
+			toolkitJobs,
+			toolkitInputs,
+			nil,
+			currentRuntimeID,
+		)
+		if toolkitErr != nil {
+			return nil, fmt.Errorf("construct direct toolkit admission: %w", toolkitErr)
+		}
+		toolkitResults, toolkitErr := toolkitexecutionapp.NewResultWaiter(toolkitJobs, 100*time.Millisecond)
+		if toolkitErr != nil {
+			return nil, fmt.Errorf("construct direct toolkit result waiter: %w", toolkitErr)
+		}
+		toolkitExecute, toolkitErr = toolkitexecutionapp.NewCurrentReadToolExecutionService(
+			toolkitFreezer,
+			toolkitAdmissions,
+			toolkitResults,
+		)
+		if toolkitErr != nil {
+			return nil, fmt.Errorf("construct direct toolkit execution service: %w", toolkitErr)
+		}
+		toolkitDispatcher, toolkitErr := toolkitexecutionapp.NewDispatcher(toolkitJobs, agentProducer)
+		if toolkitErr != nil {
+			return nil, fmt.Errorf("construct direct toolkit dispatcher: %w", toolkitErr)
+		}
+		toolkitPublisher, toolkitErr = toolkitexecutionapp.NewOutboxPublisher(
+			toolkitJobs,
+			toolkitDispatcher,
+			executionapp.OutboxPublisherConfig{
+				PollInterval:      250 * time.Millisecond,
+				VisibilityTimeout: 30 * time.Second,
+				BatchSize:         64,
+				MaxConcurrent:     8,
+				ReportFailure: func(err error) {
+					dependencies.Logger.Error("direct toolkit outbox publisher cycle failed", "err", err)
+				},
+			},
+		)
+		if toolkitErr != nil {
+			return nil, fmt.Errorf("construct direct toolkit publisher: %w", toolkitErr)
+		}
 	}
 	publisherRoot, err := newConfiguredPublisherSet(config.IndexIngestDispatchEnabled, publisher, indexPublisher)
 	if err != nil {
 		return nil, err
 	}
 	if config.AgentExecutionDispatchEnabled {
-		publisherRoot, err = newPublisherSet(publisherRoot, agentPublisher)
+		publisherRoot, err = newPublisherSet(publisherRoot, agentPublisher, toolkitPublisher)
 		if err != nil {
-			return nil, fmt.Errorf("compose agent execution publisher: %w", err)
+			return nil, fmt.Errorf("compose agent and direct toolkit publishers: %w", err)
 		}
 	}
 	var nodeEvents *repos.NodeEventsRepository
@@ -719,6 +816,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	if config.AgentExecutionDispatchEnabled {
 		capabilityVersions[executiondomain.AgentApplicationCapability] = agentCapabilityVersion
 		capabilityVersions[executiondomain.AgentAdhocCapability] = agentCapabilityVersion
+		capabilityVersions[executiondomain.ToolkitExecuteReadCapability] = agentCapabilityVersion
 	}
 	verifier, err := control.NewProductionCommandVerifier(control.ProductionVerifierConfig{
 		EnvelopeSchemaRevision: envelopeSchemaRevision,
@@ -811,6 +909,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	var outputServer *output.Server
 	var outputServerErr error
 	var agentOutput *outputapp.AgentExecutionService
+	var toolkitOutput *outputapp.ToolkitExecuteReadService
 	if config.AgentExecutionDispatchEnabled {
 		agentResults, err := repos.NewAgentExecutionResultsRepository(dependencies.OutputPool)
 		if err != nil {
@@ -823,6 +922,20 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		)
 		if err != nil {
 			return nil, err
+		}
+		toolkitResultRepository, toolkitOutputErr := repos.NewToolkitExecuteReadResultsRepository(
+			dependencies.OutputPool,
+		)
+		if toolkitOutputErr != nil {
+			return nil, fmt.Errorf("construct direct toolkit result repository: %w", toolkitOutputErr)
+		}
+		toolkitOutput, toolkitOutputErr = outputapp.NewToolkitExecuteReadService(
+			toolkitJobs,
+			outputClaims,
+			toolkitResultRepository,
+		)
+		if toolkitOutputErr != nil {
+			return nil, fmt.Errorf("construct direct toolkit output service: %w", toolkitOutputErr)
 		}
 	}
 	var nodeEventOutput *outputapp.NodeEventService
@@ -862,13 +975,14 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			return nil, err
 		}
 		if config.AgentExecutionDispatchEnabled {
-			outputServer, outputServerErr = output.NewServerWithIndexAgentAndNodeEvents(
+			outputServer, outputServerErr = output.NewServerWithIndexAgentToolkitAndNodeEvents(
 				outputServerConfig,
 				outputPeerAuthorizer,
 				validationOutput,
 				runtimeFailures,
 				indexOutput,
 				agentOutputIngestor,
+				toolkitOutput,
 				nodeEventOutputIngestor,
 			)
 		} else {
@@ -882,12 +996,13 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			)
 		}
 	} else if config.AgentExecutionDispatchEnabled {
-		outputServer, outputServerErr = output.NewServerWithAgentAndNodeEvents(
+		outputServer, outputServerErr = output.NewServerWithAgentToolkitAndNodeEvents(
 			outputServerConfig,
 			outputPeerAuthorizer,
 			validationOutput,
 			runtimeFailures,
 			agentOutputIngestor,
+			toolkitOutput,
 			nodeEventOutputIngestor,
 		)
 	} else {
@@ -1357,6 +1472,9 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	}
 	if agentCancel != nil {
 		publicRoutes.AgentCancel = agentCancel
+	}
+	if toolkitExecute != nil {
+		publicRoutes.ToolkitExecuteRead = toolkitExecute
 	}
 
 	closeRedis = false

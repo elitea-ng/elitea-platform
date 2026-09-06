@@ -37,10 +37,13 @@ const VERSION: ApplicationVersionDetail = {
   agent_type: 'pipeline',
   instructions: 'Be helpful.',
   conversation_starters: ['Hi there'],
+  tags: [{ name: 'stored' }],
 };
 
 function wrapper({ children }: { children: ReactNode }) {
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
   return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
 }
 
@@ -62,7 +65,10 @@ describe('useEditPipelineForm', () => {
     expect(result.current.form.getValues()).toEqual({
       name: 'My Pipeline',
       description: 'A helpful pipeline',
-      version_details: { conversation_starters: ['Hi there'] },
+      version_details: {
+        conversation_starters: ['Hi there'],
+        tags: ['stored'],
+      },
     });
   });
 
@@ -71,12 +77,17 @@ describe('useEditPipelineForm', () => {
     expect(result.current.form.getValues()).toEqual({
       name: '',
       description: '',
-      version_details: { conversation_starters: [] },
+      version_details: { conversation_starters: [], tags: [] },
     });
   });
 
   it('handleSave is a no-op (does not call the save endpoint) when activeVersion is undefined', () => {
-    const saveSpy = vi.fn(() => ({ id: '1', application_id: '42', name: 'base', status: 'draft' }));
+    const saveSpy = vi.fn(() => ({
+      id: '1',
+      application_id: '42',
+      name: 'base',
+      status: 'draft',
+    }));
     server.use(getUpdateApplicationVersionMockHandler(saveSpy));
     const { result } = renderHook(() => useEditPipelineForm(DETAIL, undefined, '9', 42), { wrapper });
 
@@ -103,6 +114,25 @@ describe('useEditPipelineForm', () => {
     });
 
     await waitFor(() => expect(sentAgentType).toBe('pipeline'));
+  });
+
+  it('handleSave sends the live version tags, including MCP exposure', async () => {
+    let sentTags: unknown;
+    server.use(
+      getUpdateApplicationVersionMockHandler(async (info) => {
+        const body = (await info.request.json()) as { tags?: unknown };
+        sentTags = body.tags;
+        return { id: '1', application_id: '42', name: 'base', status: 'draft' };
+      }),
+    );
+    const { result } = renderHook(() => useEditPipelineForm(DETAIL, VERSION, '9', 42), { wrapper });
+
+    act(() => {
+      result.current.form.setValue('version_details.tags', ['stored', 'mcp']);
+      result.current.handleSave();
+    });
+
+    await waitFor(() => expect(sentTags).toEqual([{ name: 'stored' }, { name: 'mcp' }]));
   });
 
   // #135: handleSave used to submit `toVersionDraft(activeVersion,
@@ -134,7 +164,9 @@ describe('useEditPipelineForm', () => {
     });
 
     await waitFor(() => expect(body['instructions']).toBe(liveYaml));
-    const settings = body['pipeline_settings'] as { nodes: readonly { id: string }[] };
+    const settings = body['pipeline_settings'] as {
+      nodes: readonly { id: string }[];
+    };
     expect(settings.nodes.map((node) => node.id)).toContain('Printer_1');
   });
 
@@ -159,7 +191,12 @@ describe('useEditPipelineForm', () => {
   });
 
   it('isSaving reflects the in-flight save state', () => {
-    const saveSpy = vi.fn(() => ({ id: '1', application_id: '42', name: 'base', status: 'draft' }));
+    const saveSpy = vi.fn(() => ({
+      id: '1',
+      application_id: '42',
+      name: 'base',
+      status: 'draft',
+    }));
     server.use(getUpdateApplicationVersionMockHandler(saveSpy));
     const { result } = renderHook(() => useEditPipelineForm(DETAIL, VERSION, '9', 42), { wrapper });
 
@@ -206,8 +243,15 @@ describe('useEditPipelineForm', () => {
    */
   it('handleSave refuses to store a graph the runtime would refuse, and says so', async () => {
     // `Agent 1` — a space is not a legal graph id (`yaml.rs:362`).
-    usePipelineYamlStore.setState({ yamlCode: 'entry_point: Agent 1\nnodes:\n  - id: Agent 1\n    type: llm\n' });
-    const saveSpy = vi.fn(() => ({ id: '1', application_id: '42', name: 'base', status: 'draft' }));
+    usePipelineYamlStore.setState({
+      yamlCode: 'entry_point: Agent 1\nnodes:\n  - id: Agent 1\n    type: llm\n',
+    });
+    const saveSpy = vi.fn(() => ({
+      id: '1',
+      application_id: '42',
+      name: 'base',
+      status: 'draft',
+    }));
     server.use(getUpdateApplicationVersionMockHandler(saveSpy));
     const { result } = renderHook(() => useEditPipelineForm(DETAIL, VERSION, '9', 42), { wrapper });
 
@@ -220,9 +264,16 @@ describe('useEditPipelineForm', () => {
   });
 
   it('handleSave clears the admission refusal once the graph is fixed', async () => {
-    usePipelineYamlStore.setState({ yamlCode: 'entry_point: Agent 1\nnodes:\n  - id: Agent 1\n    type: llm\n' });
+    usePipelineYamlStore.setState({
+      yamlCode: 'entry_point: Agent 1\nnodes:\n  - id: Agent 1\n    type: llm\n',
+    });
     server.use(
-      getUpdateApplicationVersionMockHandler({ id: '1', application_id: '42', name: 'base', status: 'draft' }),
+      getUpdateApplicationVersionMockHandler({
+        id: '1',
+        application_id: '42',
+        name: 'base',
+        status: 'draft',
+      }),
     );
     const { result } = renderHook(() => useEditPipelineForm(DETAIL, VERSION, '9', 42), { wrapper });
 

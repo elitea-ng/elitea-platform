@@ -705,5 +705,6 @@ fn supported_media_type(value: &str) -> bool {
         "application/json"
             | "application/json; charset=utf-8"
             | "application/vnd.elitea.agent-execution-input.v1+protobuf"
+            | "application/vnd.elitea.toolkit-execute-read-input.v1+protobuf"
     )
 }

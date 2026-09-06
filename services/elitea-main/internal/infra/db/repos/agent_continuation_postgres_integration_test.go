@@ -1957,6 +1957,10 @@ func insertPostgresCurrentAdhocTurn(
 func seedCurrentAgentContinuationSchema(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 	if _, err := pool.Exec(t.Context(), `
+CREATE TABLE p_1.applications (
+    id SERIAL PRIMARY KEY, name VARCHAR(128) NOT NULL,
+    description VARCHAR(2304), owner_id INTEGER NOT NULL
+);
 ALTER TABLE p_1.application_versions
     ADD COLUMN application_id INTEGER NOT NULL,
     ADD COLUMN name VARCHAR(128) NOT NULL,
@@ -2009,6 +2013,8 @@ CREATE TABLE p_1.entity_skill_mapping (
 -- of them (#287) so a pylon-free deployment has them at all, and this seed's
 -- callers run that migration first. Re-creating them here would be a duplicate
 -- relation.
+INSERT INTO p_1.applications (id, name, description, owner_id) VALUES
+    (31, 'Parent Agent', 'Parent agent fixture', 11);
 INSERT INTO p_1.application_versions (
     id, application_id, name, status, author_id, uuid, llm_settings, instructions,
     conversation_starters, welcome_message, agent_type, meta, pipeline_settings

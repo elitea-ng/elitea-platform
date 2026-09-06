@@ -358,7 +358,11 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// 111: shared/0111_mcp_prebuilt_parameter_schema.sql adds the bounded
 	// operator-owned config_schema used to publish parameterized prebuilt MCP
 	// toolkit forms. Existing rows receive an empty properties object.
-	require.EqualValues(t, 111, Head(shared))
+	//
+	// 112: shared/0112_toolkit_execute_read.sql admits the read-only toolkit
+	// capability and binds its request and projected result to one execution
+	// generation. The tables retain the exact input entry and output event.
+	require.EqualValues(t, 112, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

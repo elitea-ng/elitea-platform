@@ -9,6 +9,8 @@ pub(crate) enum Schema {
     WorkerCommand,
     InputBundleReference,
     AgentExecutionCommand,
+    ToolkitExecuteReadCommand,
+    ToolkitExecuteReadInput,
     NodeEvent,
 }
 
@@ -147,7 +149,7 @@ const fn field_rule(schema: Schema, field: u32) -> Option<FieldRule> {
         Schema::WorkerCommand => match field {
             1..=3 | 5 | 8..=14 | 16..=20 | 23..=25 => Some(length()),
             4 | 6..=7 | 21..=22 => Some(varint()),
-            32..=35 => Some(FieldRule {
+            32..=36 => Some(FieldRule {
                 wire_type: 2,
                 oneof: Some(1),
             }),
@@ -160,6 +162,14 @@ const fn field_rule(schema: Schema, field: u32) -> Option<FieldRule> {
         },
         Schema::AgentExecutionCommand => match field {
             1..=4 => Some(length()),
+            _ => None,
+        },
+        Schema::ToolkitExecuteReadCommand => match field {
+            1 => Some(length()),
+            _ => None,
+        },
+        Schema::ToolkitExecuteReadInput => match field {
+            1..=7 => Some(length()),
             _ => None,
         },
         Schema::NodeEvent => match field {

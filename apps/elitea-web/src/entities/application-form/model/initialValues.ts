@@ -43,7 +43,10 @@ export interface ApplicationVersionDraft {
    */
   readonly welcomeMessage?: string;
   readonly conversationStarters: readonly string[];
-  readonly variables: readonly { readonly name: string; readonly value: string }[];
+  readonly variables: readonly {
+    readonly name: string;
+    readonly value: string;
+  }[];
   /**
    * `internal_tools` seeds EMPTY because the platform refuses an agent turn
    * whose version meta names anything other than `ask_user`. The gate is in
@@ -67,7 +70,10 @@ export interface ApplicationVersionDraft {
    * `normalizeCurrentAgentRuntimeProfile`) — the value is inert on the wire,
    * but the Advanced-settings control still reads and writes it.
    */
-  readonly meta: { readonly step_limit: number; readonly internal_tools: readonly string[] };
+  readonly meta: {
+    readonly step_limit: number;
+    readonly internal_tools: readonly string[];
+  };
   /**
    * The model this version runs on — see `shared/api/agentLlmSettings.ts`
    * for the closed key list and why two plausible-looking keys are missing.
@@ -86,15 +92,11 @@ export interface ApplicationVersionDraft {
    * `useApplicationInitialValues.jsx` (`useCreateApplicationInitialValues`)
    * seeds `tags: []`, `tools: []` and (for pipelines)
    * `pipeline_settings: { nodes: [], edges: [] }` on the draft. The generated
-   * `ApplicationCreateRequest`'s embedded version entry carries none of the
-   * three, and `VersionWriteRequest` (`shared/api/generated/model/
-   * versionWriteRequest.zod.ts`) carries only `pipeline_settings` — added to
-   * `api/openapi/v2.yaml` for #135, where a pipeline's saved flow graph was
-   * dropped on the wire. `tags`/`tools` are still typed here (rather than
-   * silently dropped) so a future caller sees the gap at the type level
-   * instead of rediscovering it by reading network traffic; `tools` are
-   * attached post-create via toolkit-association endpoints instead (see the
-   * Part 3 `useLibraryToolkits` note in the promotion report).
+   * `VersionWriteRequest` (`shared/api/generated/model/
+   * versionWriteRequest.zod.ts`) carries both tags and `pipeline_settings`.
+   * Tools stay typed here because they are attached after create through
+   * toolkit-association endpoints instead (see the Part 3
+   * `useLibraryToolkits` note in the promotion report).
    */
   readonly tags: readonly string[];
   readonly tools: readonly unknown[];

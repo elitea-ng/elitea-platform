@@ -7,7 +7,7 @@
 
 #![allow(dead_code)] // Production activation waits for the durable resume ledger.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -218,17 +218,26 @@ pub(crate) async fn sensitive_tools_for_kind(
     toolsets: &[Arc<dyn Toolset>],
     policy: &ToolAdmissionPolicy,
 ) -> Result<SensitiveToolCatalog, NativeAgentAssemblyError> {
-    let references = snapshot
-        .iter()
-        .filter(|reference| reference.kind() == kind)
-        .collect::<Vec<_>>();
-    if references.len() != toolsets.len() {
-        return Err(invalid_configuration());
+    let mut toolsets_by_name = BTreeMap::new();
+    for toolset in toolsets {
+        if toolsets_by_name.insert(toolset.name(), toolset).is_some() {
+            return Err(invalid_configuration());
+        }
     }
+    let mut reference_names = BTreeSet::new();
     let context: Arc<dyn ReadonlyContext> =
         Arc::new(SimpleToolContext::new("elitea_sensitive_policy"));
     let mut catalog = SensitiveToolCatalog::default();
-    for (reference, toolset) in references.into_iter().zip(toolsets) {
+    for reference in snapshot.iter().filter(|reference| reference.kind() == kind) {
+        if !reference_names.insert(reference.toolkit_name()) {
+            return Err(invalid_configuration());
+        }
+        let Some(toolset) = toolsets_by_name.remove(reference.toolkit_name()) else {
+            // Configured toolkit families can be intentionally unavailable in this
+            // runtime. Their materializer omits them before this catalogue is built.
+            // Do not shift the next materialized toolset onto the omitted identity.
+            continue;
+        };
         let tools = tokio::time::timeout(
             TOOL_ENUMERATION_TIMEOUT,
             toolset.tools(Arc::clone(&context)),
@@ -254,6 +263,9 @@ pub(crate) async fn sensitive_tools_for_kind(
                 },
             )?;
         }
+    }
+    if !toolsets_by_name.is_empty() {
+        return Err(invalid_configuration());
     }
     Ok(catalog)
 }
@@ -292,8 +304,12 @@ mod tests {
     use adk_rust::{Tool, Toolset};
     use serde_json::{Map, Value, json};
 
-    use super::{SensitiveToolCatalog, SensitiveToolEntry, policy_for_guardrails};
-    use crate::toolkits::{SensitiveToolPolicy, ToolAdmissionPolicy, bind_toolsets};
+    use super::{
+        SensitiveToolCatalog, SensitiveToolEntry, policy_for_guardrails, sensitive_tools_for_kind,
+    };
+    use crate::toolkits::{
+        FrozenToolKind, FrozenToolSnapshot, SensitiveToolPolicy, ToolAdmissionPolicy, bind_toolsets,
+    };
 
     fn policy(security: Value) -> Arc<ToolAdmissionPolicy> {
         let runtime = Map::from_iter([("toolkit_security".to_owned(), security)]);
@@ -394,5 +410,44 @@ mod tests {
             Some("audit intelligence")
         );
         assert!(catalog.policy_for("lookup").is_none());
+    }
+
+    #[tokio::test]
+    async fn omitted_unsupported_toolkit_does_not_shift_sensitive_identity() {
+        let policy = policy(json!({
+            "sensitive_tools": {
+                "artifact": ["lookup"],
+                "github": ["lookup"]
+            }
+        }));
+        let version = json!({
+            "tools": [
+                {"id": 1, "type": "artifact", "toolkit_name": "attachments", "settings": {}},
+                {"id": 2, "type": "github", "toolkit_name": "repository", "settings": {}}
+            ]
+        });
+        let snapshot =
+            FrozenToolSnapshot::from_version_details(version.as_object().expect("version object"))
+                .expect("frozen tools")
+                .apply_policy(policy.as_ref());
+        let tool: Arc<dyn Tool> = Arc::new(FunctionTool::new(
+            "lookup",
+            "Read one exact source",
+            |_context, _arguments| async { Ok(json!({})) },
+        ));
+        let toolsets =
+            vec![Arc::new(BasicToolset::new("repository", vec![tool])) as Arc<dyn Toolset>];
+
+        let catalog = sensitive_tools_for_kind(
+            &snapshot,
+            FrozenToolKind::Configured,
+            &toolsets,
+            policy.as_ref(),
+        )
+        .await
+        .expect("omitted unsupported toolkit");
+
+        assert!(catalog.policy_for_scoped("attachments", "lookup").is_none());
+        assert!(catalog.policy_for_scoped("repository", "lookup").is_some());
     }
 }

@@ -116,6 +116,9 @@ export { AgentToolsPanel } from './ui/AgentToolsPanel';
  */
 export { AgentTagEditor } from './ui/AgentTagEditor';
 
+/** Explicit UI for the application-version `mcp` tag, shared by agent and pipeline edit pages. */
+export { ApplicationMcpAccessToggle } from './ui/ApplicationMcpAccessToggle';
+
 /**
  * Sub-unit A1a's ("Application data layer + version-lifecycle hooks")
  * contribution — the application/version data layer + tool change-diffing +

@@ -16,10 +16,14 @@ use adk_rust::{ToolContext, Toolset};
 use serde_json::Value;
 
 use super::delegated_auth::delegated_authorization_requirement;
+use super::policy::{ToolAdmissionDecision, ToolAdmissionPolicy};
 use super::tool_binding::{ToolBindingError, freeze_toolsets};
 
 const MAX_DIRECT_ARGUMENT_BYTES: usize = 256 * 1_024;
-const MAX_DIRECT_RESULT_BYTES: usize = 1024 * 1_024;
+// A direct result is carried inline in one 64 KiB terminal output frame. Keep
+// enough headroom for the frame identities, digests and settlement proposal;
+// larger toolkit responses need the artifact-backed output path instead.
+const MAX_DIRECT_RESULT_BYTES: usize = 48 * 1_024;
 const MAX_DIRECT_JSON_DEPTH: usize = 64;
 const MAX_DIRECT_JSON_NODES: usize = 65_536;
 const MAX_DIRECT_IDENTITY_BYTES: usize = 1_024;
@@ -31,6 +35,8 @@ pub(crate) enum DirectToolkitExecutionErrorCode {
     InvalidConfiguration,
     ResourceExhausted,
     ToolNotSelected,
+    ToolBlocked,
+    SensitiveToolUnavailable,
     EffectfulToolUnavailable,
     AuthorizationRequired,
     DependencyUnavailable,
@@ -83,6 +89,12 @@ impl fmt::Display for DirectToolkitExecutionError {
             DirectToolkitExecutionErrorCode::ToolNotSelected => {
                 "the requested toolkit operation is not selected"
             }
+            DirectToolkitExecutionErrorCode::ToolBlocked => {
+                "the requested toolkit operation is blocked by policy"
+            }
+            DirectToolkitExecutionErrorCode::SensitiveToolUnavailable => {
+                "sensitive toolkit execution is not available on this path"
+            }
             DirectToolkitExecutionErrorCode::EffectfulToolUnavailable => {
                 "effectful toolkit execution is not available on this path"
             }
@@ -107,6 +119,7 @@ impl std::error::Error for DirectToolkitExecutionError {}
 /// retained beside the external MCP descriptor. The MCP-visible name is never
 /// reversed to find a runtime target.
 pub(crate) struct DirectToolkitInvocation {
+    toolkit_type: String,
     toolset_name: String,
     tool_name: String,
     execution_id: String,
@@ -116,13 +129,20 @@ pub(crate) struct DirectToolkitInvocation {
 
 impl DirectToolkitInvocation {
     pub(crate) fn new(
+        toolkit_type: String,
         toolset_name: String,
         tool_name: String,
         execution_id: String,
         call_id: String,
         arguments: Value,
     ) -> Result<Self, DirectToolkitExecutionError> {
-        for identity in [&toolset_name, &tool_name, &execution_id, &call_id] {
+        for identity in [
+            &toolkit_type,
+            &toolset_name,
+            &tool_name,
+            &execution_id,
+            &call_id,
+        ] {
             if !valid_identity(identity) {
                 return Err(failure(
                     DirectToolkitExecutionErrorCode::InvalidInput,
@@ -138,6 +158,7 @@ impl DirectToolkitInvocation {
         }
         validate_json(&arguments, MAX_DIRECT_ARGUMENT_BYTES)?;
         Ok(Self {
+            toolkit_type,
             toolset_name,
             tool_name,
             execution_id,
@@ -156,6 +177,7 @@ impl DirectToolkitInvocation {
 pub(crate) async fn execute_read_only_toolsets(
     toolsets: Vec<Arc<dyn Toolset>>,
     invocation: DirectToolkitInvocation,
+    policy: &ToolAdmissionPolicy,
 ) -> Result<Value, DirectToolkitExecutionError> {
     if toolsets.len() != 1 {
         return Err(failure(
@@ -192,6 +214,24 @@ pub(crate) async fn execute_read_only_toolsets(
     if matching.next().is_some() {
         return Err(failure(
             DirectToolkitExecutionErrorCode::InvalidConfiguration,
+            false,
+        ));
+    }
+    if policy.tool_decision(&invocation.toolkit_type, &invocation.tool_name)
+        != ToolAdmissionDecision::Allowed
+    {
+        return Err(failure(DirectToolkitExecutionErrorCode::ToolBlocked, false));
+    }
+    if policy
+        .sensitive_tool(
+            &invocation.toolkit_type,
+            &invocation.toolset_name,
+            &invocation.tool_name,
+        )
+        .is_some()
+    {
+        return Err(failure(
+            DirectToolkitExecutionErrorCode::SensitiveToolUnavailable,
             false,
         ));
     }

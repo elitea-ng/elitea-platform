@@ -34,21 +34,23 @@ const (
 	WorkerCommandTypeV1_WORKER_COMMAND_TYPE_V1_INDEX_INGEST              WorkerCommandTypeV1 = 7
 	WorkerCommandTypeV1_WORKER_COMMAND_TYPE_V1_AGENT_EXECUTE_APPLICATION WorkerCommandTypeV1 = 8
 	WorkerCommandTypeV1_WORKER_COMMAND_TYPE_V1_AGENT_EXECUTE_ADHOC       WorkerCommandTypeV1 = 9
+	WorkerCommandTypeV1_WORKER_COMMAND_TYPE_V1_TOOLKIT_EXECUTE_READ      WorkerCommandTypeV1 = 10
 )
 
 // Enum value maps for WorkerCommandTypeV1.
 var (
 	WorkerCommandTypeV1_name = map[int32]string{
-		0: "WORKER_COMMAND_TYPE_V1_UNSPECIFIED",
-		1: "WORKER_COMMAND_TYPE_V1_START",
-		2: "WORKER_COMMAND_TYPE_V1_RESUME",
-		3: "WORKER_COMMAND_TYPE_V1_RETRY",
-		4: "WORKER_COMMAND_TYPE_V1_RECONCILE",
-		5: "WORKER_COMMAND_TYPE_V1_CONFIGURATION_VALIDATE",
-		6: "WORKER_COMMAND_TYPE_V1_TOOLKIT_AVAILABLE_TOOLS",
-		7: "WORKER_COMMAND_TYPE_V1_INDEX_INGEST",
-		8: "WORKER_COMMAND_TYPE_V1_AGENT_EXECUTE_APPLICATION",
-		9: "WORKER_COMMAND_TYPE_V1_AGENT_EXECUTE_ADHOC",
+		0:  "WORKER_COMMAND_TYPE_V1_UNSPECIFIED",
+		1:  "WORKER_COMMAND_TYPE_V1_START",
+		2:  "WORKER_COMMAND_TYPE_V1_RESUME",
+		3:  "WORKER_COMMAND_TYPE_V1_RETRY",
+		4:  "WORKER_COMMAND_TYPE_V1_RECONCILE",
+		5:  "WORKER_COMMAND_TYPE_V1_CONFIGURATION_VALIDATE",
+		6:  "WORKER_COMMAND_TYPE_V1_TOOLKIT_AVAILABLE_TOOLS",
+		7:  "WORKER_COMMAND_TYPE_V1_INDEX_INGEST",
+		8:  "WORKER_COMMAND_TYPE_V1_AGENT_EXECUTE_APPLICATION",
+		9:  "WORKER_COMMAND_TYPE_V1_AGENT_EXECUTE_ADHOC",
+		10: "WORKER_COMMAND_TYPE_V1_TOOLKIT_EXECUTE_READ",
 	}
 	WorkerCommandTypeV1_value = map[string]int32{
 		"WORKER_COMMAND_TYPE_V1_UNSPECIFIED":               0,
@@ -61,6 +63,7 @@ var (
 		"WORKER_COMMAND_TYPE_V1_INDEX_INGEST":              7,
 		"WORKER_COMMAND_TYPE_V1_AGENT_EXECUTE_APPLICATION": 8,
 		"WORKER_COMMAND_TYPE_V1_AGENT_EXECUTE_ADHOC":       9,
+		"WORKER_COMMAND_TYPE_V1_TOOLKIT_EXECUTE_READ":      10,
 	}
 )
 
@@ -129,6 +132,7 @@ type WorkerCommandV1 struct {
 	//	*WorkerCommandV1_ToolkitAvailableTools
 	//	*WorkerCommandV1_IndexIngest
 	//	*WorkerCommandV1_AgentExecution
+	//	*WorkerCommandV1_ToolkitExecuteRead
 	CapabilityCommand isWorkerCommandV1_CapabilityCommand `protobuf_oneof:"capability_command"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
@@ -375,6 +379,15 @@ func (x *WorkerCommandV1) GetAgentExecution() *AgentExecutionCommandV1 {
 	return nil
 }
 
+func (x *WorkerCommandV1) GetToolkitExecuteRead() *ToolkitExecuteReadCommandV1 {
+	if x != nil {
+		if x, ok := x.CapabilityCommand.(*WorkerCommandV1_ToolkitExecuteRead); ok {
+			return x.ToolkitExecuteRead
+		}
+	}
+	return nil
+}
+
 type isWorkerCommandV1_CapabilityCommand interface {
 	isWorkerCommandV1_CapabilityCommand()
 }
@@ -395,6 +408,10 @@ type WorkerCommandV1_AgentExecution struct {
 	AgentExecution *AgentExecutionCommandV1 `protobuf:"bytes,35,opt,name=agent_execution,json=agentExecution,proto3,oneof"`
 }
 
+type WorkerCommandV1_ToolkitExecuteRead struct {
+	ToolkitExecuteRead *ToolkitExecuteReadCommandV1 `protobuf:"bytes,36,opt,name=toolkit_execute_read,json=toolkitExecuteRead,proto3,oneof"`
+}
+
 func (*WorkerCommandV1_ConfigurationValidation) isWorkerCommandV1_CapabilityCommand() {}
 
 func (*WorkerCommandV1_ToolkitAvailableTools) isWorkerCommandV1_CapabilityCommand() {}
@@ -403,11 +420,13 @@ func (*WorkerCommandV1_IndexIngest) isWorkerCommandV1_CapabilityCommand() {}
 
 func (*WorkerCommandV1_AgentExecution) isWorkerCommandV1_CapabilityCommand() {}
 
+func (*WorkerCommandV1_ToolkitExecuteRead) isWorkerCommandV1_CapabilityCommand() {}
+
 var File_elitea_runtime_v1_command_proto protoreflect.FileDescriptor
 
 const file_elitea_runtime_v1_command_proto_rawDesc = "" +
 	"\n" +
-	"\x1felitea/runtime/v1/command.proto\x12\x11elitea.runtime.v1\x1a\x1delitea/runtime/v1/agent.proto\x1a elitea/runtime/v1/indexing.proto\x1a\x1delitea/runtime/v1/input.proto\x1a\x1felitea/runtime/v1/toolkit.proto\x1a\"elitea/runtime/v1/validation.proto\"\xe1\v\n" +
+	"\x1felitea/runtime/v1/command.proto\x12\x11elitea.runtime.v1\x1a\x1delitea/runtime/v1/agent.proto\x1a elitea/runtime/v1/indexing.proto\x1a\x1delitea/runtime/v1/input.proto\x1a\x1felitea/runtime/v1/toolkit.proto\x1a\"elitea/runtime/v1/validation.proto\"\xc5\f\n" +
 	"\x0fWorkerCommandV1\x12+\n" +
 	"\x11protocol_revision\x18\x01 \x01(\tR\x10protocolRevision\x12\x1d\n" +
 	"\n" +
@@ -442,8 +461,9 @@ const file_elitea_runtime_v1_command_proto_rawDesc = "" +
 	"\x18configuration_validation\x18  \x01(\v23.elitea.runtime.v1.ConfigurationValidationCommandV1H\x00R\x17configurationValidation\x12k\n" +
 	"\x17toolkit_available_tools\x18! \x01(\v21.elitea.runtime.v1.ToolkitAvailableToolsCommandV1H\x00R\x15toolkitAvailableTools\x12L\n" +
 	"\findex_ingest\x18\" \x01(\v2'.elitea.runtime.v1.IndexIngestCommandV1H\x00R\vindexIngest\x12U\n" +
-	"\x0fagent_execution\x18# \x01(\v2*.elitea.runtime.v1.AgentExecutionCommandV1H\x00R\x0eagentExecutionB\x14\n" +
-	"\x12capability_commandJ\x04\b\x0f\x10\x10J\x04\b\x1a\x10 J\x04\b$\x10@R\x11grant_template_id*\xc0\x03\n" +
+	"\x0fagent_execution\x18# \x01(\v2*.elitea.runtime.v1.AgentExecutionCommandV1H\x00R\x0eagentExecution\x12b\n" +
+	"\x14toolkit_execute_read\x18$ \x01(\v2..elitea.runtime.v1.ToolkitExecuteReadCommandV1H\x00R\x12toolkitExecuteReadB\x14\n" +
+	"\x12capability_commandJ\x04\b\x0f\x10\x10J\x04\b\x1a\x10 J\x04\b%\x10@R\x11grant_template_id*\xf1\x03\n" +
 	"\x13WorkerCommandTypeV1\x12&\n" +
 	"\"WORKER_COMMAND_TYPE_V1_UNSPECIFIED\x10\x00\x12 \n" +
 	"\x1cWORKER_COMMAND_TYPE_V1_START\x10\x01\x12!\n" +
@@ -454,7 +474,9 @@ const file_elitea_runtime_v1_command_proto_rawDesc = "" +
 	".WORKER_COMMAND_TYPE_V1_TOOLKIT_AVAILABLE_TOOLS\x10\x06\x12'\n" +
 	"#WORKER_COMMAND_TYPE_V1_INDEX_INGEST\x10\a\x124\n" +
 	"0WORKER_COMMAND_TYPE_V1_AGENT_EXECUTE_APPLICATION\x10\b\x12.\n" +
-	"*WORKER_COMMAND_TYPE_V1_AGENT_EXECUTE_ADHOC\x10\tBSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
+	"*WORKER_COMMAND_TYPE_V1_AGENT_EXECUTE_ADHOC\x10\t\x12/\n" +
+	"+WORKER_COMMAND_TYPE_V1_TOOLKIT_EXECUTE_READ\x10\n" +
+	"BSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
 
 var (
 	file_elitea_runtime_v1_command_proto_rawDescOnce sync.Once
@@ -478,6 +500,7 @@ var file_elitea_runtime_v1_command_proto_goTypes = []any{
 	(*ToolkitAvailableToolsCommandV1)(nil),   // 4: elitea.runtime.v1.ToolkitAvailableToolsCommandV1
 	(*IndexIngestCommandV1)(nil),             // 5: elitea.runtime.v1.IndexIngestCommandV1
 	(*AgentExecutionCommandV1)(nil),          // 6: elitea.runtime.v1.AgentExecutionCommandV1
+	(*ToolkitExecuteReadCommandV1)(nil),      // 7: elitea.runtime.v1.ToolkitExecuteReadCommandV1
 }
 var file_elitea_runtime_v1_command_proto_depIdxs = []int32{
 	0, // 0: elitea.runtime.v1.WorkerCommandV1.command_type:type_name -> elitea.runtime.v1.WorkerCommandTypeV1
@@ -486,11 +509,12 @@ var file_elitea_runtime_v1_command_proto_depIdxs = []int32{
 	4, // 3: elitea.runtime.v1.WorkerCommandV1.toolkit_available_tools:type_name -> elitea.runtime.v1.ToolkitAvailableToolsCommandV1
 	5, // 4: elitea.runtime.v1.WorkerCommandV1.index_ingest:type_name -> elitea.runtime.v1.IndexIngestCommandV1
 	6, // 5: elitea.runtime.v1.WorkerCommandV1.agent_execution:type_name -> elitea.runtime.v1.AgentExecutionCommandV1
-	6, // [6:6] is the sub-list for method output_type
-	6, // [6:6] is the sub-list for method input_type
-	6, // [6:6] is the sub-list for extension type_name
-	6, // [6:6] is the sub-list for extension extendee
-	0, // [0:6] is the sub-list for field type_name
+	7, // 6: elitea.runtime.v1.WorkerCommandV1.toolkit_execute_read:type_name -> elitea.runtime.v1.ToolkitExecuteReadCommandV1
+	7, // [7:7] is the sub-list for method output_type
+	7, // [7:7] is the sub-list for method input_type
+	7, // [7:7] is the sub-list for extension type_name
+	7, // [7:7] is the sub-list for extension extendee
+	0, // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_elitea_runtime_v1_command_proto_init() }
@@ -508,6 +532,7 @@ func file_elitea_runtime_v1_command_proto_init() {
 		(*WorkerCommandV1_ToolkitAvailableTools)(nil),
 		(*WorkerCommandV1_IndexIngest)(nil),
 		(*WorkerCommandV1_AgentExecution)(nil),
+		(*WorkerCommandV1_ToolkitExecuteRead)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{

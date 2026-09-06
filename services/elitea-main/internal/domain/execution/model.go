@@ -15,12 +15,15 @@ const (
 	IndexIngestCapability             = "index.ingest.v1"
 	AgentApplicationCapability        = "agent.execute.application.v1"
 	AgentAdhocCapability              = "agent.execute.adhoc.v1"
+	ToolkitExecuteReadCapability      = "toolkit.execute.read.v1"
 	SettingsJSONMediaType             = "application/json"
 	AgentExecutionInputMediaType      = "application/vnd.elitea.agent-execution-input.v1+protobuf"
+	ToolkitExecuteReadInputMediaType  = "application/vnd.elitea.toolkit-execute-read-input.v1+protobuf"
 	InputBundleManifestMediaType      = "application/x-protobuf"
 	MaxInputBundleEntries             = 16
 	MaxInputEntryContentBytes         = 256 * 1024
 	MaxAgentExecutionInputBytes       = 1024 * 1024
+	MaxToolkitExecuteReadInputBytes   = 1024 * 1024
 
 	IndexToolkitConfigurationRole = "index.toolkit_configuration"
 	IndexToolParametersRole       = "index.tool_parameters"
@@ -29,6 +32,7 @@ const (
 	IndexMCPTokensRole            = "index.mcp_tokens"
 	IndexEmbeddingBindingRole     = "index.embedding_binding"
 	AgentExecutionRequestRole     = "agent.execution_request"
+	ToolkitExecuteReadRequestRole = "toolkit.execute_read_request"
 	MaxIndexMetaIDBytes           = 256
 	MaxIndexMetaCorrelationBytes  = 512
 )
@@ -100,6 +104,8 @@ func maxInputEntryContentBytes(mediaType string) int64 {
 		return MaxInputEntryContentBytes
 	case AgentExecutionInputMediaType:
 		return MaxAgentExecutionInputBytes
+	case ToolkitExecuteReadInputMediaType:
+		return MaxToolkitExecuteReadInputBytes
 	default:
 		return 0
 	}
@@ -174,11 +180,31 @@ func SupportedCapability(capabilityID string) bool {
 	case ConfigurationValidationCapability,
 		IndexIngestCapability,
 		AgentApplicationCapability,
-		AgentAdhocCapability:
+		AgentAdhocCapability,
+		ToolkitExecuteReadCapability:
 		return true
 	default:
 		return false
 	}
+}
+
+// ToolkitExecuteReadBinding binds one direct read request to one immutable
+// protobuf input. The toolkit snapshot, arguments and policy stay off Redis.
+type ToolkitExecuteReadBinding struct {
+	RequestEntryID string
+}
+
+func (b ToolkitExecuteReadBinding) Validate(bundle InputBundle) error {
+	if b.RequestEntryID == "" || len(bundle.Entries) != 1 {
+		return ErrInvalidInputBundle
+	}
+	entry := bundle.Entries[0]
+	if entry.ID != b.RequestEntryID ||
+		entry.SemanticRole != ToolkitExecuteReadRequestRole ||
+		entry.MediaType != ToolkitExecuteReadInputMediaType {
+		return ErrInvalidInputBundle
+	}
+	return nil
 }
 
 func NodeEventCapability(capabilityID string) bool {

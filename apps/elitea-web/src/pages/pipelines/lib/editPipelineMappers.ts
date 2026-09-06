@@ -20,8 +20,17 @@ import type {
 export const EMPTY_FORM_VALUES: ApplicationCreationInput = {
   name: '',
   description: '',
-  version_details: { conversation_starters: [] },
+  version_details: { conversation_starters: [], tags: [] },
 };
+
+function storedVersionTagNames(version: ApplicationVersionDetail | undefined): string[] {
+  return (version?.tags ?? []).map((tag) => tag.name).filter((name): name is string => typeof name === 'string');
+}
+
+function draftTagNames(version: ApplicationVersionDetail, tags: readonly string[] | undefined): readonly string[] {
+  if (tags !== undefined) return tags;
+  return storedVersionTagNames(version);
+}
 
 /** Generated `ApplicationVersionSummary[]` (snake_case) -> `entities/version`'s `VersionSummary[]` (camelCase) — needed only to satisfy `useIsVersionNotFound`'s parameter type. */
 export function toVersionSummaries(versions: readonly ApplicationVersionSummary[]): VersionSummary[] {
@@ -45,17 +54,13 @@ export function pipelineDetailDisplayName(detail: ApplicationDetail): string {
   return detail.name.trim() !== '' ? detail.name : 'Untitled';
 }
 
-export function toFormValues(
-  detail: ApplicationDetail,
-  version: ApplicationVersionDetail | undefined,
-): ApplicationCreationInput {
+export function toFormValues(detail: ApplicationDetail, version: ApplicationVersionDetail | undefined): ApplicationCreationInput {
   return {
     name: detail.name,
     description: detail.description,
     version_details: {
-      conversation_starters: (version?.conversation_starters ?? []).filter(
-        (entry): entry is string => typeof entry === 'string',
-      ),
+      conversation_starters: (version?.conversation_starters ?? []).filter((entry): entry is string => typeof entry === 'string'),
+      tags: storedVersionTagNames(version),
     },
   };
 }
@@ -85,6 +90,7 @@ export function toVersionDraft(
   conversationStarters: readonly string[],
   graph?: PipelineGraphDraft,
   llmSettings?: AgentLlmSettings,
+  tags?: readonly string[],
 ): ApplicationVersionDraft {
   const metaRecord: Record<string, unknown> = version.meta ?? {};
   const stepLimit = typeof metaRecord['step_limit'] === 'number' ? metaRecord['step_limit'] : 25;
@@ -126,7 +132,11 @@ export function toVersionDraft(
       name: variable.name ?? '',
       value: variable.value ?? '',
     })),
-    meta: { ...storedMeta, step_limit: stepLimit, internal_tools: internalTools },
+    meta: {
+      ...storedMeta,
+      step_limit: stepLimit,
+      internal_tools: internalTools,
+    },
     // Same edit-wins-over-stored rule the agents twin applies in
     // `toVersionWriteBody`: this page's model picker holds the live choice, and
     // a save that re-read the stored blob would drop it. Falls back to the
@@ -134,9 +144,7 @@ export function toVersionDraft(
     // all — `toVersionWriteRequest` then omits the key, so a pipeline that
     // runs on the project's catalogue default keeps running on it.
     llmSettings: llmSettings ?? toAgentLlmSettings(version.llm_settings),
-    tags: (version.tags ?? [])
-      .map((tag) => tag.name)
-      .filter((name): name is string => typeof name === 'string'),
+    tags: draftTagNames(version, tags),
     tools: version.tools ?? [],
     pipelineSettings: graph?.pipelineSettings,
   };
@@ -203,9 +211,7 @@ function buildDefinedVersionChatFields(
   };
 }
 
-export function toChatPipelineVersionDetails(
-  version: ApplicationVersionDetail | undefined,
-): ConfigurationTabProps['versionDetails'] {
+export function toChatPipelineVersionDetails(version: ApplicationVersionDetail | undefined): ConfigurationTabProps['versionDetails'] {
   if (!version) return undefined;
 
   const metaRecord: Record<string, unknown> = version.meta ?? {};
@@ -364,6 +370,10 @@ export function toNewPipelineVersionBody(
       name: variable.name ?? '',
       value: variable.value ?? '',
     })),
-    meta: { ...storedMeta, step_limit: stepLimit, internal_tools: internalTools },
+    meta: {
+      ...storedMeta,
+      step_limit: stepLimit,
+      internal_tools: internalTools,
+    },
   };
 }

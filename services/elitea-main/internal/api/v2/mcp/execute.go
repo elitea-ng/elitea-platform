@@ -72,6 +72,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"math"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -80,6 +83,8 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
+	toolkitexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
 )
 
 // mcpConversationSource marks the conversations this file creates.
@@ -130,17 +135,122 @@ const (
 )
 
 // ToolkitExecutionUnavailableReason is what a `tools/call` naming a TOOLKIT
-// tool gets back once the agent half works.
-//
-// The toolkit half is a genuinely different capability and is deliberately not
-// attempted here: running a toolkit tool means dispatching into the SDK toolkit
-// object the Python worker holds (pylon's `do_runtool`), and this service has
-// no such dispatch — the runtime plane it does have carries AGENT executions.
-// Splitting the sentence in two is what stops the agent half's arrival from
-// making the toolkit half's refusal read as stale.
+// tool gets when this deployment did not compose the separately gated durable
+// direct-read runtime.
 const ToolkitExecutionUnavailableReason = "this MCP server can list this project's toolkit tools but cannot run " +
-	"them: executing a toolkit tool requires the Python worker's toolkit dispatch, which is not reachable from " +
-	"this service. Agent tools in this project CAN be run. Nothing was executed and nothing was changed."
+	"them on this deployment because the durable direct-tool runtime is disabled. Agent tools in this project " +
+	"may still be available. Nothing was executed and nothing was changed."
+
+// runToolkitTool admits one exact catalog-selected operation and waits for its
+// fenced terminal result. Unlike an agent tool it creates no conversation: a
+// direct operation already has a durable execution record and one typed result.
+func (h *Handler) runToolkitTool(
+	ctx context.Context,
+	projectID int64,
+	actorUserID int64,
+	tool Tool,
+	arguments map[string]any,
+) map[string]any {
+	if projectID <= 0 || projectID > math.MaxInt32 || actorUserID <= 0 || actorUserID > math.MaxInt32 ||
+		tool.toolkitID <= 0 || tool.toolkitID > math.MaxInt32 || !tool.runnableToolkit() {
+		return errorResult("the toolkit invocation identity is invalid, so nothing was executed")
+	}
+
+	deadline, cancel := context.WithTimeout(ctx, mcpRunDeadline)
+	defer cancel()
+	project := strconv.FormatInt(projectID, 10)
+	actor := strconv.FormatInt(actorUserID, 10)
+	outcome, err := h.toolkitExecute.Execute(deadline, toolkitexecutionapp.ExecuteCurrentReadToolRequest{
+		Identity: executionapp.AdmissionIdentity{
+			TenantID: project, ResourceProjectID: project,
+			ProjectionProjectID: project, ActorID: actor,
+		},
+		IdempotencyKey: uuid.NewString(),
+		ProjectID:      int32(projectID),
+		ActorID:        int32(actorUserID),
+		ToolkitID:      int32(tool.toolkitID),
+		ToolName:       tool.toolkitToolName,
+		Arguments:      arguments,
+	})
+	if err != nil {
+		if outcome.ExecutionID != "" {
+			switch {
+			case errors.Is(err, context.DeadlineExceeded):
+				return errorResult(fmt.Sprintf(
+					"the toolkit operation '%s' did not finish within %s. It remains a durable execution %s; "+
+						"no partial result is reported here.",
+					tool.Name, mcpRunDeadline, outcome.ExecutionID,
+				))
+			case errors.Is(err, context.Canceled):
+				return errorResult(fmt.Sprintf(
+					"the request ended while toolkit operation '%s' was running as durable execution %s; "+
+						"no partial result is reported here.",
+					tool.Name, outcome.ExecutionID,
+				))
+			case errors.Is(err, toolkitexecutionapp.ErrToolkitExecuteReadResultMismatch):
+				return errorResult(fmt.Sprintf(
+					"the result for toolkit operation '%s' was rejected because it did not match execution %s.",
+					tool.Name, outcome.ExecutionID,
+				))
+			default:
+				return errorResult(fmt.Sprintf(
+					"the toolkit operation '%s' failed as execution %s; no result is reported here.",
+					tool.Name, outcome.ExecutionID,
+				))
+			}
+		}
+		slog.Default().WarnContext(ctx, "external MCP toolkit operation was not admitted",
+			"event", "mcp.toolkit.admission_failed",
+			"project_id", projectID,
+			"toolkit_id", tool.toolkitID,
+			"tool_name", tool.toolkitToolName,
+			"admission_stage", toolkitexecutionapp.CurrentReadToolAdmissionStageOf(err),
+			"error_code", currentReadToolAdmissionErrorCode(err),
+		)
+		switch {
+		case errors.Is(err, toolkitexecutionapp.ErrCurrentReadToolkitNotVisible),
+			errors.Is(err, toolkitexecutionapp.ErrCurrentReadToolNotSelected):
+			return errorResult("the toolkit operation is no longer exposed by this project; nothing was executed")
+		case errors.Is(err, toolkitexecutionapp.ErrCurrentReadToolRestricted):
+			return errorResult("the toolkit operation is restricted by current policy; nothing was executed")
+		default:
+			return errorResult("the toolkit operation could not be admitted; nothing was executed")
+		}
+	}
+	return toolkitResult(tool.Name, outcome.Completion.ResultJSON)
+}
+
+func currentReadToolAdmissionErrorCode(err error) string {
+	switch {
+	case errors.Is(err, toolkitexecutionapp.ErrInvalidCurrentReadTool):
+		return "invalid_request"
+	case errors.Is(err, toolkitexecutionapp.ErrCurrentReadToolkitNotVisible):
+		return "toolkit_not_visible"
+	case errors.Is(err, toolkitexecutionapp.ErrCurrentReadToolNotSelected):
+		return "tool_not_selected"
+	case errors.Is(err, toolkitexecutionapp.ErrCurrentReadToolRestricted):
+		return "policy_restricted"
+	case errors.Is(err, toolkitexecutionapp.ErrInvalidAuthoritativeToolkitReadInput):
+		return "invalid_frozen_input"
+	case errors.Is(err, toolkitexecutionapp.ErrInvalidToolkitExecuteReadAdmission):
+		return "invalid_durable_admission"
+	default:
+		return "dependency_failure"
+	}
+}
+
+func toolkitResult(toolName string, result json.RawMessage) map[string]any {
+	var text string
+	if err := json.Unmarshal(result, &text); err != nil {
+		text = string(result)
+	}
+	if strings.TrimSpace(text) == "" {
+		return errorResult("the toolkit operation '" + toolName + "' finished without producing any content")
+	}
+	return map[string]any{
+		"content": []map[string]any{{"type": "text", "text": text}},
+	}
+}
 
 // runAgentTool admits one turn and waits for it, bounded.
 //
@@ -183,6 +293,14 @@ func (h *Handler) runAgentTool(
 		// refusals. Best effort: a failure to clean up is not worth turning
 		// into a second, more confusing error.
 		h.discardRunConversation(ctx, schema, conversationUUID)
+		slog.Default().ErrorContext(ctx, "external MCP agent operation was not admitted",
+			"event", "mcp.agent.admission_failed",
+			"project_id", projectID,
+			"application_id", tool.applicationID,
+			"application_version_id", tool.applicationVersionID,
+			"error_code", currentAgentStartErrorCode(err),
+			"err", err,
+		)
 		if errors.Is(err, agentexecutionapp.ErrInvalidCurrentAgentStart) ||
 			errors.Is(err, agentexecutionapp.ErrUnsupportedCurrentAgentStart) {
 			// The agent exists and is listed, but this deployment's runtime
@@ -196,6 +314,18 @@ func (h *Handler) runAgentTool(
 	}
 
 	return h.awaitRunResult(ctx, schema, outcome, tool)
+}
+
+func currentAgentStartErrorCode(err error) string {
+	switch {
+	case errors.Is(err, agentexecutionapp.ErrInvalidCurrentAgentStart),
+		errors.Is(err, agentexecutionapp.ErrInvalidAgentAdmission):
+		return "invalid_request"
+	case errors.Is(err, agentexecutionapp.ErrUnsupportedCurrentAgentStart):
+		return "unsupported_configuration"
+	default:
+		return "dependency_failure"
+	}
 }
 
 // awaitRunResult waits for the admitted turn to settle.

@@ -3546,31 +3546,48 @@ components:
 
     ProjectContext:
       type: object
-      required: [content, enabled]
+      required: [id, content, enabled, activation_description, updated_at]
       properties:
+        id:
+          type: integer
+          format: int32
+          nullable: true
         content:
           type: string
-          nullable: true
+          maxLength: 2500
         enabled:
           type: boolean
+        activation_description:
+          type: string
+          maxLength: 300
+          nullable: true
+        updated_at:
+          type: string
+          format: date-time
           nullable: true
       description: >
-        NOTE(W2): internal/api/v2/eliteacore/handler.go:110-134 — keys always
-        present; "" / false when no configuration row exists, null possible
-        when the stored jsonb lacks the key (:130-133). Update echoes the
-        typed request back (:164), so nulls never appear after a write —
-        EXCEPT the test-only nil-pool branch of updateProjectContext
-        (:143-146), which returns {"ok": true} instead; unreachable in
-        production (main.go exits when the pool cannot be built, and
-        router.go:236 always passes cfg.Pool).
+        The current project-context builder response. An absent configuration
+        returns id/activation_description/updated_at as null, empty content,
+        and enabled=true.
 
     ProjectContextUpdateRequest:
       type: object
       properties:
-        content: { type: string }
-        enabled: { type: boolean }
+        content:
+          type: string
+          maxLength: 2500
+          default: ''
+        enabled:
+          type: boolean
+          default: true
+        activation_description:
+          type: string
+          maxLength: 300
+          nullable: true
       description: >
-        NOTE(W2): typed decode, internal/api/v2/eliteacore/handler.go:137-141.
+        Content and enabled use replacement defaults on every PUT. Omitting
+        activation_description preserves its current non-empty value; null or
+        a blank string removes it.
 
     # ---- Artifacts ---------------------------------------------------------------
     # docs/plans/storage-migration-plan.md S7. Replaces the retired
@@ -9865,9 +9882,10 @@ paths:
 
     get:
       operationId: getProjectContext
-      summary: Retrieve the shared context blob for a project
+      summary: Retrieve project context builder state
       description: |
-        NOTE(W2): internal/api/v2/eliteacore/handler.go:110-134.
+        Returns the current project-context configuration, or the exact enabled
+        default when the project has not created one.
       tags: [applications]
       responses:
         '200':
@@ -9878,13 +9896,15 @@ paths:
                 $ref: '#/components/schemas/ProjectContext'
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
+        '500': { $ref: '#/components/responses/500' }
 
     put:
       operationId: updateProjectContext
-      summary: Replace the shared context blob for a project
+      summary: Create or replace project context builder state
       description: |
-        NOTE(W2): internal/api/v2/eliteacore/handler.go:136-165 — typed
-        decode {content, enabled}; the same pair is echoed back.
+        Creates the project-context configuration if missing. Content and
+        enabled are replacement values; activation_description remains
+        backward-compatible with clients that omit it.
       tags: [applications]
       requestBody:
         required: true
@@ -9902,6 +9922,20 @@ paths:
         '400': { $ref: '#/components/responses/400' }
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
+        '500': { $ref: '#/components/responses/500' }
+
+    delete:
+      operationId: deleteProjectContext
+      summary: Delete project context builder state
+      description: Deletes the project's stored project-context configuration.
+      tags: [applications]
+      responses:
+        '204':
+          description: Project context deleted
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '500': { $ref: '#/components/responses/500' }
 
   # ==========================================================================
   # ARTIFACTS — buckets, objects, transfer grants

@@ -21,6 +21,7 @@ enum WorkerCommandTypeV1 {
   WORKER_COMMAND_TYPE_V1_INDEX_INGEST = 7;
   WORKER_COMMAND_TYPE_V1_AGENT_EXECUTE_APPLICATION = 8;
   WORKER_COMMAND_TYPE_V1_AGENT_EXECUTE_ADHOC = 9;
+  WORKER_COMMAND_TYPE_V1_TOOLKIT_EXECUTE_READ = 10;
 }
 
 // WorkerCommandV1 is the immutable, reference-only command body allowed on a
@@ -60,9 +61,10 @@ message WorkerCommandV1 {
     ToolkitAvailableToolsCommandV1 toolkit_available_tools = 33;
     IndexIngestCommandV1 index_ingest = 34;
     AgentExecutionCommandV1 agent_execution = 35;
+    ToolkitExecuteReadCommandV1 toolkit_execute_read = 36;
   }
 
   reserved 15, 26 to 31;
   reserved "grant_template_id";
-  reserved 36 to 63;
+  reserved 37 to 63;
 }

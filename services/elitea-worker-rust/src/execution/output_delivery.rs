@@ -19,7 +19,7 @@ use tonic::transport::Channel;
 use crate::agents::result::AgentResultBinding;
 use crate::agents::{AgentExecutionKind, AgentResultArtifact, AgentTerminalState};
 use crate::protocol::ProtocolError;
-use crate::protocol::command::VerifiedAgentCommand;
+use crate::protocol::command::{VerifiedAgentCommand, VerifiedToolkitExecuteReadCommand};
 use crate::protocol::control::{
     AcceptedTerminalClaimRecovery, AgentControlClient, AgentControlError,
     AgentExecutionOutputCursor, AgentProgressCommit, ClaimBoundAgentTerminal,
@@ -199,11 +199,11 @@ impl AgentOutputPreflightOutcome {
     }
 }
 
-struct AgentOutputSpoolPolicy {
-    root: PathBuf,
-    master_key: Arc<SpoolMasterKey>,
-    spool_limits: SpoolLimits,
-    output_config: OutputGrpcConfig,
+pub(super) struct AgentOutputSpoolPolicy {
+    pub(super) root: PathBuf,
+    pub(super) master_key: Arc<SpoolMasterKey>,
+    pub(super) spool_limits: SpoolLimits,
+    pub(super) output_config: OutputGrpcConfig,
 }
 
 /// Empty, validated output state plus its inseparable execution-bound reopen
@@ -218,9 +218,16 @@ pub(crate) struct PreparedAgentOutput {
 }
 
 impl PreparedAgentOutput {
+    pub(super) const fn new(
+        prepared: PreparedOutputSpool,
+        factory: AgentOutputSpoolFactory,
+    ) -> Self {
+        Self { prepared, factory }
+    }
+
     /// Persist one fresh terminal before any output endpoint is contacted and
     /// seal the exact bytes into the only allowed reconnect capability.
-    async fn persist_terminal(
+    pub(super) async fn persist_terminal(
         self,
         frame: &ExecutionOutputFrameV1,
     ) -> Result<(PreparedOutputSpool, AgentOutputSpoolReopener), OutputGrpcError> {
@@ -249,17 +256,24 @@ impl PreparedAgentOutput {
 
 /// Unique execution-bound factory. It carries no frame proof until a durable
 /// terminal is sealed into an [`AgentOutputSpoolReopener`].
-struct AgentOutputSpoolFactory {
+pub(super) struct AgentOutputSpoolFactory {
     policy: Arc<AgentOutputSpoolPolicy>,
     binding: Arc<crate::spool::ExecutionSpoolIdentity>,
 }
 
 impl AgentOutputSpoolFactory {
-    async fn reopen(&self) -> Result<PreparedOutputSpool, AgentOutputPreflightError> {
+    pub(super) fn new(
+        policy: Arc<AgentOutputSpoolPolicy>,
+        binding: Arc<crate::spool::ExecutionSpoolIdentity>,
+    ) -> Self {
+        Self { policy, binding }
+    }
+
+    pub(super) async fn reopen(&self) -> Result<PreparedOutputSpool, AgentOutputPreflightError> {
         open_prepared_spool(Arc::clone(&self.policy), Arc::clone(&self.binding)).await
     }
 
-    fn seal_terminal(self, expected_terminal: Vec<u8>) -> AgentOutputSpoolReopener {
+    pub(super) fn seal_terminal(self, expected_terminal: Vec<u8>) -> AgentOutputSpoolReopener {
         AgentOutputSpoolReopener {
             factory: self,
             expected_terminal,
@@ -1484,7 +1498,7 @@ impl AgentOutputSpoolReopener {
     /// Atomically replace the exact admitted terminal and advance the sealed
     /// reconnect proof only after the filesystem CAS succeeds.
     #[allow(dead_code)] // Called by the disabled terminal-recovery coordinator.
-    async fn replace_expected_terminal(
+    pub(super) async fn replace_expected_terminal(
         &mut self,
         expected: &ExecutionOutputFrameV1,
         replacement: &ExecutionOutputFrameV1,
@@ -1535,6 +1549,10 @@ impl AgentTerminalRecoveryConfig {
         Ok(Self {
             max_output_sessions,
         })
+    }
+
+    pub(super) const fn max_output_sessions(self) -> usize {
+        self.max_output_sessions
     }
 }
 
@@ -1756,11 +1774,35 @@ pub(crate) trait AgentTerminalReplay: Send + Sync {
 }
 
 #[async_trait]
+pub(crate) trait ToolkitTerminalReplay: Send + Sync {
+    async fn replay_toolkit_terminal(
+        &self,
+        spool: PreparedOutputSpool,
+        verified: &VerifiedToolkitExecuteReadCommand,
+        expected: &ExecutionOutputFrameV1,
+    ) -> Result<DurablyAckedTerminal, OutputGrpcError>;
+}
+
+#[async_trait]
 impl AgentTerminalReplay for Channel {
     async fn replay_terminal(
         &self,
         spool: PreparedOutputSpool,
         verified: &VerifiedAgentCommand,
+        expected: &ExecutionOutputFrameV1,
+    ) -> Result<DurablyAckedTerminal, OutputGrpcError> {
+        spool
+            .replay_terminal(self.clone(), verified, expected)
+            .await
+    }
+}
+
+#[async_trait]
+impl ToolkitTerminalReplay for Channel {
+    async fn replay_toolkit_terminal(
+        &self,
+        spool: PreparedOutputSpool,
+        verified: &VerifiedToolkitExecuteReadCommand,
         expected: &ExecutionOutputFrameV1,
     ) -> Result<DurablyAckedTerminal, OutputGrpcError> {
         spool
@@ -2260,6 +2302,7 @@ fn preflight_as_output_error(error: AgentOutputPreflightError) -> OutputGrpcErro
 /// The root key is process-owned and shared only for HKDF derivation. Each
 /// returned preflight value owns the execution-specific cipher and directory
 /// lock; the root key itself is never copied into a command or error.
+#[derive(Clone)]
 pub struct AgentOutputPreflight {
     policy: Arc<AgentOutputSpoolPolicy>,
 }
@@ -2280,6 +2323,10 @@ impl AgentOutputPreflight {
                 output_config,
             }),
         }
+    }
+
+    pub(super) fn shared_policy(&self) -> Arc<AgentOutputSpoolPolicy> {
+        Arc::clone(&self.policy)
     }
 
     /// Inspect one fresh delivery without contacting any runtime endpoint.

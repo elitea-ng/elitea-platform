@@ -66,13 +66,15 @@ var mcpEntityTypes = map[string]string{
 // available_by_mcp". The internal applications category is a separate fixed
 // builder surface and does not change those external opt-in rules.
 var mcpCategories = map[string]string{
-	"applications":             "agents in this project whose version carries the `mcp` tag",
-	"elitea_core/applications": "fixed internal application-builder operations",
-	"elitea_core/skills":       "fixed internal skill-builder operations",
-	"elitea_core/toolkits":     "fixed internal toolkit-builder operations",
-	"configurations":           "fixed internal configuration-builder operations",
-	"notifications":            "fixed internal notification operations",
-	"toolkits":                 "toolkits in this project flagged meta.mcp_options.available_by_mcp",
+	"applications":                "agents in this project whose version carries the `mcp` tag",
+	"elitea_core/applications":    "fixed internal application-builder operations",
+	"elitea_core/project_context": "fixed internal project-context builder operations",
+	"elitea_core/skills":          "fixed internal skill-builder operations",
+	"elitea_core/toolkits":        "fixed internal toolkit-builder operations",
+	"configurations":              "fixed internal configuration-builder operations",
+	"notifications":               "fixed internal notification operations",
+	"secrets":                     "fixed internal project-secret operations without plaintext reads",
+	"toolkits":                    "toolkits in this project flagged meta.mcp_options.available_by_mcp",
 }
 
 // parseScope classifies the path tail after `/mcp`.

@@ -200,6 +200,11 @@ type RouterConfig struct {
 	// (ELITEA_CONFIGURATIONS_ENABLED), so a default Helm install still takes the
 	// nil path; see cmd/elitea-main/main.go.
 	ToolkitSettingsValidator v2toolkits.ToolkitSettingsValidator
+	// DelegatedAuthToolkitSettings resolves one actor-visible toolkit through
+	// the same claim-mode configuration and vault graph as worker execution.
+	// Nil keeps caller-supplied and DCR OAuth clients available, but stored
+	// credential fallback fails closed instead of reading raw tenant JSON.
+	DelegatedAuthToolkitSettings v2core.DelegatedAuthToolkitSettingsResolver
 	// ToolkitRegistry enumerates built-in toolkit types and their tools for
 	// `GET /admin/plugin_config_suggestions/administration/{key}`, which is what
 	// populates the guardrail fields' pickers on the admin Configuration page.
@@ -311,7 +316,10 @@ type RouterConfig struct {
 	// and the support assistant drive, for the same reason. Left nil (which is
 	// what `runtime.enabled` off produces), `tools/call` answers the unchanged
 	// v2mcp.ToolExecutionUnavailableReason and `tools/list` is unaffected.
-	MCPAgentStart              v2mcp.AgentStartUseCase
+	MCPAgentStart v2mcp.AgentStartUseCase
+	// MCPToolkitExecute is the durable direct read-tool seam. Nil keeps toolkit
+	// discovery available and makes calls fail closed with an honest MCP result.
+	MCPToolkitExecute          v2mcp.ToolkitExecuteReadUseCase
 	CurrentAgentCancel         http.Handler
 	CurrentIndexCancel         http.Handler
 	CurrentIndexMeta           http.Handler
@@ -697,8 +705,11 @@ func mountMCPServerRoutes(
 	pool *pgxpool.Pool,
 	authenticate func(http.Handler) http.Handler,
 	agentStart v2mcp.AgentStartUseCase,
+	toolkitExecute v2mcp.ToolkitExecuteReadUseCase,
 	toolkitHandler *v2toolkits.Handler,
 	configurationsHandler *v2configs.Handler,
+	coreHandler *v2core.Handler,
+	secretsHandler *v2secrets.Handler,
 	notificationStore notificationapp.Store,
 	toolkitArgumentSchemas v2mcp.ToolkitArgumentSchemaSource,
 ) {
@@ -709,8 +720,11 @@ func mountMCPServerRoutes(
 		legacyrbac.NewPostgresResolver(pool),
 		v2mcp.WithInternalToolkitHandler(toolkitHandler),
 		v2mcp.WithInternalConfigurationHandler(configurationsHandler),
+		v2mcp.WithInternalProjectContextHandler(coreHandler),
+		v2mcp.WithInternalSecretHandler(secretsHandler),
 		v2mcp.WithInternalNotificationStore(notificationStore),
 		v2mcp.WithToolkitArgumentSchemas(toolkitArgumentSchemas),
+		v2mcp.WithToolkitExecuteRead(toolkitExecute),
 	)
 	r.Group(func(r chi.Router) {
 		r.Use(authenticate)
@@ -1131,12 +1145,28 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// admin/runtime paths must all read the same durable catalogue.
 	prebuiltMCPStore := mcpregistry.NewPrebuiltStore(cfg.Pool)
 	toolkitHandler := newToolkitHandler(cfg, prebuiltMCPStore)
+	// The platform MCP vault and eliteacore handler are constructed here rather
+	// than inside /api/v2 because both REST and the root-mounted internal MCP
+	// server consume them. One instance keeps project-context validation and
+	// prebuilt-MCP catalogue behavior identical on both transports.
+	prebuiltMCPVault := v2secrets.NewHandler(
+		cfg.Pool,
+		v2secrets.WithPermissionResolver(permissionResolver),
+	)
+	coreHandler := v2core.NewHandler(
+		cfg.Pool,
+		v2core.WithPermissionResolver(permissionResolver),
+		v2core.WithObjectStore(cfg.ObjectStore),
+		v2core.WithInviteMailer(inviteMailer),
+		v2core.WithPrebuiltMCPCatalogue(prebuiltMCPStore, prebuiltMCPVault),
+		v2core.WithDelegatedAuthToolkitSettingsResolver(cfg.DelegatedAuthToolkitSettings),
+	)
 
 	// The MCP server (issue 252). Outside the /api/v2 group for the reasons in
 	// mountMCPServerRoutes.
 	mountMCPServerRoutes(
-		r, cfg.Pool, authenticate, cfg.MCPAgentStart,
-		toolkitHandler, configurationsHandler, cfg.CurrentNotificationStore,
+		r, cfg.Pool, authenticate, cfg.MCPAgentStart, cfg.MCPToolkitExecute,
+		toolkitHandler, configurationsHandler, coreHandler, prebuiltMCPVault, cfg.CurrentNotificationStore,
 		cfg.ToolkitArgumentSchemas,
 	)
 
@@ -1217,8 +1247,6 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			// v2secrets.NewHandler is used as the vault here for the same reason
 			// projectprovisioning uses it: it is the one type in this service
 			// that can open and write a centry vault.
-			prebuiltMCPVault := v2secrets.NewHandler(cfg.Pool)
-
 			// The TYPED identity provider definitions (shared migration 0095) —
 			// the real surface behind the Configuration page's "Authentication"
 			// section. It shares the vault above rather than opening a second
@@ -1226,14 +1254,6 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			// is how a write path and a read path come to disagree about which
 			// database holds the credential.
 			identityProviderStore := identityproviders.NewStore(cfg.Pool)
-
-			coreHandler := v2core.NewHandler(
-				cfg.Pool,
-				v2core.WithPermissionResolver(permissionResolver),
-				v2core.WithObjectStore(cfg.ObjectStore),
-				v2core.WithInviteMailer(inviteMailer),
-				v2core.WithPrebuiltMCPCatalogue(prebuiltMCPStore, prebuiltMCPVault),
-			)
 
 			// === Auth endpoints ===
 			//
@@ -1887,10 +1907,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			// the package because the mode is a PATH SEGMENT: one chi route
 			// serves both modes, so route-level middleware here could not
 			// gate one and not the other.
-			r.Mount("/secrets", v2secrets.NewHandler(
-				cfg.Pool,
-				v2secrets.WithPermissionResolver(permissionResolver),
-			).Routes())
+			r.Mount("/secrets", prebuiltMCPVault.Routes())
 
 			// === Notifications ===
 			//
@@ -2770,7 +2787,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				r.With(requireProjectContextEdit).
 					Delete("/project_icon/prompt_lib/{projectID}/{name}", coreHandler.DeleteProjectIcon)
 				// Registered unconditionally: this is the ONLY registration
-				// source for project-context GET/PUT in the router every real
+				// source for project-context GET/PUT/DELETE in the router every real
 				// deployment reaches (CURRENT_PARITY_EVIDENCE.md,
 				// internal/api/v2/promptcontextreads — "the compatibility
 				// router mounts the chat-config path only... the production
@@ -2791,6 +2808,8 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					Get(strings.TrimPrefix(v2promptcontextreads.CurrentProjectContextPath, "/api/v2/elitea_core"), coreHandler.ProjectContext)
 				r.With(requireProjectContextEdit).
 					Put(strings.TrimPrefix(v2promptcontextreads.CurrentProjectContextPath, "/api/v2/elitea_core"), coreHandler.UpdateProjectContext)
+				r.With(requireProjectContextEdit).
+					Delete(strings.TrimPrefix(v2promptcontextreads.CurrentProjectContextPath, "/api/v2/elitea_core"), coreHandler.DeleteProjectContext)
 
 				// Platform settings — left ungated on purpose, and the reason is
 				// recorded here because a project in the path makes the route
@@ -3364,7 +3383,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// repositories are also composed; otherwise merely adding an unrelated
 	// compatibility repository can silently remove agent execution or SSE.
 	// The broad prototype compatibility handler above already owns the current
-	// project-context GET. Keep that single live registration while adding the
+	// project-context GET/PUT/DELETE. Keep that single live registration while adding the
 	// reviewed routes it does not provide, including chat config and agent SSE.
 	mountReviewedProductionRoutes(r, cfg)
 

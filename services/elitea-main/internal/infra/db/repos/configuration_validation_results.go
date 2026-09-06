@@ -260,7 +260,8 @@ func (r *RuntimeFailureResultsRepository) ProjectRuntimeFailure(ctx context.Cont
 	case executiondomain.ConfigurationValidationCapability,
 		executiondomain.IndexIngestCapability,
 		executiondomain.AgentApplicationCapability,
-		executiondomain.AgentAdhocCapability:
+		executiondomain.AgentAdhocCapability,
+		executiondomain.ToolkitExecuteReadCapability:
 	default:
 		return outputapp.ProjectionOutcome{}, outputapp.ErrInvalidValidationOutput
 	}
@@ -617,7 +618,8 @@ func canonicalCancellationOutput(source outputRecord) (outputRecord, []byte, err
 		return outputRecord{}, nil, outputapp.ErrInvalidValidationOutput
 	}
 	switch source.PayloadType {
-	case payloadTypeConfigurationValidation, payloadTypeIndexIngestResult:
+	case payloadTypeConfigurationValidation, payloadTypeIndexIngestResult,
+		payloadTypeAgentExecutionResult, payloadTypeToolkitExecuteReadResult:
 		if source.SettlementOutcome != executionapp.SettlementSucceeded {
 			return outputRecord{}, nil, outputapp.ErrInvalidValidationOutput
 		}

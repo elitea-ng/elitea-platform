@@ -471,6 +471,14 @@ func expectedInputRoles(command *runtimev1.WorkerCommandV1) (map[string]string, 
 		return map[string]string{
 			agent.GetRequestEntryId(): executiondomain.AgentExecutionRequestRole,
 		}, nil
+	case executiondomain.ToolkitExecuteReadCapability:
+		toolkit := command.GetToolkitExecuteRead()
+		if toolkit == nil || toolkit.GetRequestEntryId() == "" {
+			return nil, errors.New("direct toolkit input binding is required")
+		}
+		return map[string]string{
+			toolkit.GetRequestEntryId(): executiondomain.ToolkitExecuteReadRequestRole,
+		}, nil
 	default:
 		return nil, errors.New("unsupported command capability")
 	}
@@ -483,6 +491,9 @@ func inputContentContract(role string, configuredMax uint64) (string, uint64, er
 	case executiondomain.AgentExecutionRequestRole:
 		mediaType = executiondomain.AgentExecutionInputMediaType
 		roleMax = executiondomain.MaxAgentExecutionInputBytes
+	case executiondomain.ToolkitExecuteReadRequestRole:
+		mediaType = executiondomain.ToolkitExecuteReadInputMediaType
+		roleMax = executiondomain.MaxToolkitExecuteReadInputBytes
 	default:
 		mediaType = executiondomain.SettingsJSONMediaType
 		roleMax = executiondomain.MaxInputEntryContentBytes

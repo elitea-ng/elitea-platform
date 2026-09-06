@@ -270,6 +270,55 @@ func TestCurrentConfigurationsMaterializerRedeemsAdhocAgentToolsAtClaimTime(t *t
 	}
 }
 
+func TestCurrentConfigurationsMaterializerRedeemsDirectToolkitAtClaimTime(t *testing.T) {
+	unsecreter := &currentMaterializationUnsecreterStub{values: map[int32]map[string]string{
+		7: {"GITHUB_TOKEN": "plain-token"},
+	}}
+	materializer := newCurrentConfigurationsMaterializerForTest(t, unsecreter)
+	request := &runtimev1.ToolkitExecuteReadInputV1{
+		SchemaRevision:    "elitea.runtime.toolkit-execute-read-input.v1",
+		ToolkitType:       "github",
+		ToolkitName:       "Source Control",
+		ToolName:          "get_issue",
+		Toolkit:           []byte(`{"id":19,"type":"github","toolkit_name":"Source Control","settings":{"token":"{{secret.GITHUB_TOKEN}}","selected_tools":["get_issue"]}}`),
+		Arguments:         []byte(`{"issue":7}`),
+		ToolkitGuardrails: []byte(`{"blocked_tools":{},"sensitive_tools":{}}`),
+	}
+	source, err := proto.MarshalOptions{Deterministic: true}.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := materializer.MaterializeContent(context.Background(), ContentAuthorization{
+		ResourceProjectID: "7",
+		ActorID:           "11",
+		CapabilityID:      executiondomain.ToolkitExecuteReadCapability,
+		SemanticRole:      executiondomain.ToolkitExecuteReadRequestRole,
+	}, source, executiondomain.MaxToolkitExecuteReadInputBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var materialized runtimev1.ToolkitExecuteReadInputV1
+	if err := proto.Unmarshal(result, &materialized); err != nil {
+		t.Fatal(err)
+	}
+	toolkit, err := decodeCurrentMaterializationObject(materialized.GetToolkit())
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings, ok := toolkit["settings"].(map[string]any)
+	if !ok {
+		t.Fatalf("settings = %#v", toolkit["settings"])
+	}
+	if settings["token"] != "plain-token" {
+		t.Fatalf("materialized token = %#v", settings["token"])
+	}
+	if string(materialized.GetArguments()) != string(request.GetArguments()) ||
+		string(materialized.GetToolkitGuardrails()) != string(request.GetToolkitGuardrails()) {
+		t.Fatal("claim materialization changed invocation arguments or guardrails")
+	}
+}
+
 func TestCurrentAgentMaterializerUsesOnlyResolvedPrebuiltMCPAuthority(t *testing.T) {
 	unsecreter := &currentMaterializationUnsecreterStub{values: map[int32]map[string]string{
 		7: {"CALLER_SECRET": "must-not-be-redeemed"},

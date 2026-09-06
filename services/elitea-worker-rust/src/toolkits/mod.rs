@@ -8,6 +8,8 @@
 
 mod delegated_auth;
 mod direct_execution;
+mod direct_request;
+mod direct_runtime;
 mod families;
 mod invocation;
 mod materialize;
@@ -24,6 +26,8 @@ pub(crate) use delegated_auth::{
     delegated_authorization_declined_result, delegated_authorization_requirement,
     encode_delegated_authorization_requirement,
 };
+pub(crate) use direct_request::{DirectToolkitRequest, DirectToolkitRequestErrorCode};
+pub(crate) use direct_runtime::{DirectToolkitRuntime, DirectToolkitRuntimeErrorCode};
 pub(crate) use materialize::{
     ToolsetMaterializationError, ToolsetMaterializationErrorCode,
     materialize_configured_toolsets_with_tokens_and_authorization,

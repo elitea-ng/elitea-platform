@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -10,9 +11,11 @@ use super::delegated_authorization_error_fixture;
 use super::direct_execution::{
     DirectToolkitExecutionErrorCode, DirectToolkitInvocation, execute_read_only_toolsets,
 };
+use super::policy::ToolAdmissionPolicy;
 
 fn invocation(toolset: &str, tool: &str, arguments: Value) -> DirectToolkitInvocation {
     DirectToolkitInvocation::new(
+        "github".to_owned(),
         toolset.to_owned(),
         tool.to_owned(),
         "execution-1".to_owned(),
@@ -20,6 +23,10 @@ fn invocation(toolset: &str, tool: &str, arguments: Value) -> DirectToolkitInvoc
         arguments,
     )
     .expect("direct toolkit invocation")
+}
+
+fn allow_all() -> ToolAdmissionPolicy {
+    ToolAdmissionPolicy::new(&[], &BTreeMap::new()).expect("empty admission policy")
 }
 
 fn toolset(name: &str, tools: Vec<Arc<dyn Tool>>) -> Vec<Arc<dyn Toolset>> {
@@ -32,6 +39,7 @@ async fn invokes_one_exact_read_only_tool_without_a_model_turn() {
     let result = execute_read_only_toolsets(
         toolset("repo", vec![tool.clone()]),
         invocation("repo", "get_issue", json!({"issue": 7})),
+        &allow_all(),
     )
     .await
     .expect("read-only direct execution");
@@ -50,6 +58,7 @@ async fn refuses_effectful_tools_before_the_provider_is_called() {
     let error = execute_read_only_toolsets(
         toolset("repo", vec![tool.clone()]),
         invocation("repo", "create_issue", json!({"title": "safe"})),
+        &allow_all(),
     )
     .await
     .expect_err("effectful direct execution must stay closed");
@@ -68,6 +77,7 @@ async fn refuses_missing_and_ambiguous_original_tool_names() {
     let missing = execute_read_only_toolsets(
         toolset("repo", vec![Arc::clone(&first)]),
         invocation("repo", "list_issues", json!({})),
+        &allow_all(),
     )
     .await
     .expect_err("unselected tool must fail");
@@ -80,6 +90,7 @@ async fn refuses_missing_and_ambiguous_original_tool_names() {
     let ambiguous = execute_read_only_toolsets(
         toolset("repo", vec![first, second]),
         invocation("repo", "get_issue", json!({})),
+        &allow_all(),
     )
     .await
     .expect_err("ambiguous original name must fail");
@@ -95,6 +106,7 @@ async fn preserves_delegated_authorization_as_a_typed_outcome() {
     let error = execute_read_only_toolsets(
         toolset("documents", vec![tool]),
         invocation("documents", "read_document", json!({"path": "/shared"})),
+        &allow_all(),
     )
     .await
     .expect_err("authorization challenge");
@@ -113,6 +125,7 @@ async fn refuses_unprojected_scopes_before_dispatch_and_bounds_results() {
     let scope_error = execute_read_only_toolsets(
         toolset("repo", vec![scoped.clone()]),
         invocation("repo", "get_issue", json!({})),
+        &allow_all(),
     )
     .await
     .expect_err("out-of-loop scopes must be projected explicitly");
@@ -126,6 +139,7 @@ async fn refuses_unprojected_scopes_before_dispatch_and_bounds_results() {
     let result_error = execute_read_only_toolsets(
         toolset("repo", vec![oversized.clone()]),
         invocation("repo", "get_issue", json!({})),
+        &allow_all(),
     )
     .await
     .expect_err("over-limit provider result must fail");
@@ -139,6 +153,7 @@ async fn refuses_unprojected_scopes_before_dispatch_and_bounds_results() {
 #[test]
 fn validates_argument_shape_size_and_depth_before_materialization() {
     let invalid = DirectToolkitInvocation::new(
+        "github".to_owned(),
         "repo".to_owned(),
         "get_issue".to_owned(),
         "execution-1".to_owned(),
@@ -153,6 +168,7 @@ fn validates_argument_shape_size_and_depth_before_materialization() {
     );
 
     let oversized = DirectToolkitInvocation::new(
+        "github".to_owned(),
         "repo".to_owned(),
         "get_issue".to_owned(),
         "execution-1".to_owned(),
@@ -171,6 +187,7 @@ fn validates_argument_shape_size_and_depth_before_materialization() {
         too_deep = json!({"nested": too_deep});
     }
     let deep = DirectToolkitInvocation::new(
+        "github".to_owned(),
         "repo".to_owned(),
         "get_issue".to_owned(),
         "execution-1".to_owned(),
@@ -183,6 +200,46 @@ fn validates_argument_shape_size_and_depth_before_materialization() {
         deep.code(),
         DirectToolkitExecutionErrorCode::ResourceExhausted
     );
+}
+
+#[tokio::test]
+async fn refuses_blocked_and_sensitive_tools_before_provider_dispatch() {
+    let tool = Arc::new(FixtureTool::read_only("get_issue"));
+    let mut blocked = BTreeMap::new();
+    blocked.insert("github".to_owned(), vec!["get_issue".to_owned()]);
+    let blocked_policy = ToolAdmissionPolicy::new(&[], &blocked).expect("blocked policy");
+    let blocked_error = execute_read_only_toolsets(
+        toolset("repo", vec![tool.clone()]),
+        invocation("repo", "get_issue", json!({})),
+        &blocked_policy,
+    )
+    .await
+    .expect_err("blocked direct tool must fail");
+    assert_eq!(
+        blocked_error.code(),
+        DirectToolkitExecutionErrorCode::ToolBlocked
+    );
+
+    let runtime = json!({
+        "toolkit_security": {
+            "sensitive_tools": {"repo": ["get_issue"]}
+        }
+    });
+    let sensitive_policy =
+        ToolAdmissionPolicy::from_runtime_config(runtime.as_object().expect("runtime object"))
+            .expect("sensitive policy");
+    let sensitive_error = execute_read_only_toolsets(
+        toolset("repo", vec![tool.clone()]),
+        invocation("repo", "get_issue", json!({})),
+        &sensitive_policy,
+    )
+    .await
+    .expect_err("sensitive direct tool must fail");
+    assert_eq!(
+        sensitive_error.code(),
+        DirectToolkitExecutionErrorCode::SensitiveToolUnavailable
+    );
+    assert_eq!(tool.calls.load(Ordering::SeqCst), 0);
 }
 
 struct FixtureTool {
@@ -257,7 +314,7 @@ impl Tool for FixtureTool {
             .expect("arguments")
             .push(arguments.clone());
         if self.oversized_result {
-            return Ok(json!({"body": "x".repeat(1024 * 1_024)}));
+            return Ok(json!({"body": "x".repeat(48 * 1_024)}));
         }
         Ok(json!({
             "call_id": context.function_call_id(),

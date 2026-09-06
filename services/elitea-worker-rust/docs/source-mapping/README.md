@@ -57,8 +57,13 @@ Detailed ledgers:
 - `prebuilt-mcp.md` maps fixed catalogue-backed HTTP MCP execution.
 - `internal-elitea-mcp.md` separates internal builder categories from external
   Elitea-as-MCP publishing. It maps the Main-owned applications, skills,
-  toolkit, and configuration operations plus their deliberately closed live
-  discovery and typed-model gates.
+  toolkit, configuration, notification, project-context, and project-secret
+  operations plus their deliberately closed live discovery, plaintext-secret,
+  and typed-model gates.
+- `external-elitea-mcp.md` maps opt-in project capabilities for external MCP
+  clients and the durable direct execution path.
+- `delegated-oauth-dcr.md` maps the shared UI, Main, and Rust ownership for
+  delegated OAuth, DCR, token refresh, and durable authorization resume.
 - `indexing.md` maps indexing behavior and its later Rust capability.
 
 Maintained Rust runtime ownership registry:
@@ -237,9 +242,10 @@ Maintained Rust runtime ownership registry:
   OneNote XHTML. The client keeps all requests and provider pagination on the
   exact Graph v1.0 origin, preserves SharePoint site/library path resolution,
   and exposes schema-complete guarded tools for native same-call authorization.
-  Empty selection, ACS/app-only auth, file parsing/download, OneNote attachment
-  interpretation, writes, rich discovery/DCR/refresh metadata and production
-  egress remain closed;
+  Empty selection, ACS/app-only auth, file parsing/download, indexing, OneNote
+  attachment interpretation, writes, rich discovery/DCR/refresh metadata and
+  production egress remain closed. A mixed saved selection exposes only its
+  selected supported reads;
 - `src/transport/model_facade.rs`: provider-neutral model ownership over
   `openai_compatible_facade.rs` and `anthropic_facade.rs`, including frozen
   `model_project_id` authority;

@@ -24,6 +24,8 @@
   "agents.applicationInformation.triggerLabel": "Trigger:",
   "agents.applicationInformation.versionIdLabel": "Version ID:",
   "agents.applicationInformation.webhookTypeLabel": "Webhook type:",
+  "agents.applicationMcpAccess.description": "Expose this {{entityType}} version as a tool through the project MCP endpoint.",
+  "agents.applicationMcpAccess.label": "Enable MCP access",
   "agents.baseCardBody.hideTools": "Hide tools",
   "agents.baseCardBody.showTools": "Show tools",
   "agents.configurationTab.loadError": "Failed to load data! Please try refreshing the page.",

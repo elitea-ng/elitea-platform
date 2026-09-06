@@ -198,35 +198,33 @@ func (h *Handler) listTools(r *http.Request, schema string, s scope, message rpc
 }
 
 // ToolExecutionUnavailableReason is what a `tools/call` gets back on a
-// deployment with NO AGENT RUNTIME — `runtime.enabled` off, so the composition
-// root has no `AgentStart` use case to hand this package and `h.start` is nil.
+// deployment with NO EXECUTION RUNTIME — `runtime.enabled` off, so the
+// composition root has neither execution use case to hand this package.
 //
 // Exported so the acceptance tests pin the stated reason, not just the shape.
 //
-// IT IS UNCHANGED, byte for byte, from before agent execution was wired, and
-// that is deliberate rather than incidental: on a runtime-less deployment
-// nothing about what this server can do has changed, so the sentence its
-// clients already have must not change either. Both execution paths pylon has
-// are still out of reach there:
+// On a runtime-less deployment both execution paths pylon has are out of
+// reach:
 //
 //   - an AGENT tool runs `do_predict`, the pylon prediction entry point. The
 //     transport that reached it from Go was removed in issue 126 and its
-//     replacement — the Redis command stream and the Python worker — is not
+//     replacement — the Redis command stream and a worker — is not
 //     running at all on such a deployment.
 //   - a TOOLKIT tool runs `do_runtool`, which dispatches into the SDK toolkit
-//     the worker holds. Same transport, same state.
+//     the worker holds. The native replacement uses the same durable transport
+//     with a separately gated direct-read capability.
 //
-// With the runtime ENABLED the two halves separate: an agent tool runs (see
-// execute.go), and a toolkit tool gets ToolkitExecutionUnavailableReason, which
-// refuses only the half that is genuinely still missing.
+// With the runtime enabled, either seam may be composed independently. A
+// missing toolkit seam gets ToolkitExecutionUnavailableReason; a missing agent
+// seam gets this result.
 //
 // It is returned as a CallToolResult with `isError: true` rather than a
 // JSON-RPC error because that is what the specification reserves for a tool
 // that ran and failed, and it is what puts the sentence in front of the model
 // driving the client instead of only in the client's console.
-const ToolExecutionUnavailableReason = "this MCP server can list this project's tools but cannot run them yet: " +
-	"executing an agent tool requires the agent runtime and executing a toolkit tool requires the Python worker's " +
-	"toolkit dispatch, and neither is reachable from this service. Nothing was executed and nothing was changed."
+const ToolExecutionUnavailableReason = "this MCP server can list this project's tools but cannot run them on this " +
+	"deployment because neither the durable agent runtime nor the durable direct-tool runtime is enabled. " +
+	"Nothing was executed and nothing was changed."
 
 func (h *Handler) callTool(r *http.Request, schema string, s scope, message rpcMessage) rpcResponse {
 	var params struct {
@@ -287,17 +285,37 @@ func (h *Handler) callTool(r *http.Request, schema string, s scope, message rpcM
 	if target.internalNotificationOperation != "" {
 		return newResult(message.ID, h.callInternalNotificationTool(r, projectID, target, params.Arguments))
 	}
+	if target.internalProjectContextOperation != "" {
+		return newResult(message.ID, h.callInternalProjectContextTool(r, projectID, target, params.Arguments))
+	}
+	if target.internalSecretOperation != "" {
+		return newResult(message.ID, h.callInternalSecretTool(r, projectID, target, params.Arguments))
+	}
 
-	// NO RUNTIME. The composition root had no AgentStart use case to give this
-	// handler, which is what `runtime.enabled` being off looks like from here.
-	// The answer is the sentence this endpoint has always given, unchanged —
-	// see ToolExecutionUnavailableReason.
-	if h.start == nil {
+	// Preserve the original whole-runtime refusal when neither execution seam
+	// is composed. This is the exact runtime.enabled=false deployment shape.
+	if h.start == nil && h.toolkitExecute == nil {
 		return newResult(message.ID, errorResult(ToolExecutionUnavailableReason))
 	}
-	// A TOOLKIT tool. The half this change does not attempt.
+	if target.runnableToolkit() {
+		if h.toolkitExecute == nil {
+			return newResult(message.ID, errorResult(ToolkitExecutionUnavailableReason))
+		}
+		actorUserID, refusal := h.authorizePermission(
+			r, projectID, runPermission, "running a toolkit operation",
+		)
+		if refusal != nil {
+			return newResult(message.ID, refusal)
+		}
+		return newResult(message.ID, h.runToolkitTool(
+			r.Context(), projectID, actorUserID, target, params.Arguments,
+		))
+	}
 	if !target.runnableAgent() {
 		return newResult(message.ID, errorResult(ToolkitExecutionUnavailableReason))
+	}
+	if h.start == nil {
+		return newResult(message.ID, errorResult(ToolExecutionUnavailableReason))
 	}
 
 	task, _ := params.Arguments["task"].(string)
@@ -393,6 +411,38 @@ func (h *Handler) callInternalNotificationTool(
 	return h.callInternalTool(r, projectID, target, arguments, "notification", func(actorID int64) (internalApplicationExecution, error) {
 		return h.internalNotifications.Execute(
 			r.Context(), projectID, actorID, target.internalNotificationOperation, arguments,
+		)
+	})
+}
+
+func (h *Handler) callInternalProjectContextTool(
+	r *http.Request,
+	projectID int64,
+	target Tool,
+	arguments map[string]any,
+) map[string]any {
+	if h.internalProjectContext == nil {
+		return errorResult("this deployment cannot execute internal project context tools; nothing was executed")
+	}
+	return h.callInternalTool(r, projectID, target, arguments, "project context", func(actorID int64) (internalApplicationExecution, error) {
+		return h.internalProjectContext.Execute(
+			r.Context(), projectID, actorID, target.internalProjectContextOperation, arguments,
+		)
+	})
+}
+
+func (h *Handler) callInternalSecretTool(
+	r *http.Request,
+	projectID int64,
+	target Tool,
+	arguments map[string]any,
+) map[string]any {
+	if h.internalSecrets == nil {
+		return errorResult("this deployment cannot execute internal secret tools; nothing was executed")
+	}
+	return h.callInternalTool(r, projectID, target, arguments, "secret", func(actorID int64) (internalApplicationExecution, error) {
+		return h.internalSecrets.Execute(
+			r.Context(), projectID, actorID, target.internalSecretOperation, arguments,
 		)
 	})
 }

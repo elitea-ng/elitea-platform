@@ -3,11 +3,7 @@ import { useCallback, useMemo, useState } from 'react';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useForm } from 'react-hook-form';
 
-import {
-  applicationCreationSchema,
-  useSaveApplicationVersion,
-  type ApplicationCreationInput,
-} from '@/entities/application-form';
+import { applicationCreationSchema, useSaveApplicationVersion, type ApplicationCreationInput } from '@/entities/application-form';
 import { usePipelineGraphDraft } from '@/features/pipelines';
 import type { ApplicationDetail, ApplicationVersionDetail } from '@/shared/api/generated/model';
 
@@ -120,7 +116,8 @@ export function useEditPipelineForm(
       // stored blob when it is `undefined`, so a version nobody re-pointed
       // keeps whatever model it already named — including none at all, which
       // is what leaves the catalogue-default fallback in charge.
-      const saved = await save(toVersionDraft(activeVersion, conversationStarters, graph, llmSettings.value));
+      const tags = values.version_details?.tags ?? [];
+      const saved = await save(toVersionDraft(activeVersion, conversationStarters, graph, llmSettings.value, tags));
       /*
        * #133 — the page now arms the app-wide unsaved-changes guard off
        * `formState.isDirty`, so a successful save must clear that dirtiness

@@ -8,17 +8,12 @@ import { useNavigate, useParams, useSearch } from '@tanstack/react-router';
 import { FormProvider } from 'react-hook-form';
 
 import { ConfigurationTab, resetPipelineDraft, usePipelineVersionSync } from '@/features/pipelines';
-import type { AgentLlmSettings } from '@/shared/api/agentLlmSettings';
 import { t } from '@/shared/i18n';
-import { AgentModelSettings } from '@/widgets/agent-model-settings';
 import { disarmUnsavedChangesNavBlocker, useUnsavedChangesNavBlocker } from '@/widgets/app-shell';
 
 import { pipelineDetailDisplayName, toVersionSummaries } from './lib/editPipelineMappers';
 import { isPublicPipelinesProject } from './lib/isPublicPipelinesProject';
-import {
-  buildPipelineConfigurationTabSlots,
-  PipelineConfigurationTabBoundary,
-} from './lib/pipelineConfigurationTabGaps';
+import { buildPipelineConfigurationTabSlots, PipelineConfigurationTabBoundary } from './lib/pipelineConfigurationTabGaps';
 import { useRefetchPipelineAfterSave } from './lib/useRefetchPipelineAfterSave';
 import { usePipelineChatAdapter } from './lib/usePipelineChatAdapter';
 import { usePipelineChatSlotContext } from './lib/usePipelineChatSlotContext';
@@ -31,6 +26,7 @@ import { useIsVersionNotFound } from './lib/useIsVersionNotFound';
 import { useSelectedProjectId } from './lib/useSelectedProjectId';
 import { EditPipelineActions } from './ui/EditPipelineActions';
 import { EditPipelineAlerts } from './ui/EditPipelineAlerts';
+import { EditPipelineConfigurationForm } from './ui/EditPipelineConfigurationForm';
 import { EditPipelineNotFound } from './ui/EditPipelineNotFound';
 import { EditPipelineSaveBar } from './ui/EditPipelineSaveBar';
 import { EditPipelineVersionBar } from './ui/EditPipelineVersionBar';
@@ -69,7 +65,11 @@ function editorIsLoading(isFetching: boolean, detail: unknown): boolean {
   return isFetching && detail === undefined;
 }
 
-const pageSx: SxProps<Theme> = { height: '100%', display: 'flex', flexDirection: 'column' };
+const pageSx: SxProps<Theme> = {
+  height: '100%',
+  display: 'flex',
+  flexDirection: 'column',
+};
 const tabBarSx: SxProps<Theme> = {
   flexShrink: 0,
   display: 'flex',
@@ -80,7 +80,12 @@ const tabBarSx: SxProps<Theme> = {
   padding: '0 1.5rem',
   minHeight: '3rem',
 };
-const contentSx: SxProps<Theme> = { flex: 1, minHeight: 0, overflowY: 'auto', padding: '1.5rem' };
+const contentSx: SxProps<Theme> = {
+  flex: 1,
+  minHeight: 0,
+  overflowY: 'auto',
+  padding: '1.5rem',
+};
 
 interface EditPipelineParams {
   readonly tab?: string;
@@ -148,9 +153,10 @@ function parseApplicationId(agentId: string | undefined): number | undefined {
  *  - The flow GRAPH now round-trips (#135): `usePipelineVersionSync` seeds
  *    the editor stores from this version's `instructions` YAML + saved
  *    `pipeline_settings`, and `useEditPipelineForm` reads the live graph back
- *    out through `usePipelineGraphDraft` on save. `tags`/`tools` still have
- *    no field on this endpoint — see `entities/application-form/model/
- *    mutations.ts`'s own doc comment for what remains of that gap.
+ *    out through `usePipelineGraphDraft` on save. Version tags round-trip
+ *    through that endpoint, including the `mcp` exposure tag controlled in
+ *    the configuration panel below. Toolkit associations
+ *    still use their dedicated relation endpoints.
  *
  * **Read-only (public-viewer) gating, save-failure feedback, and the
  * detail-404 page** (adversarial-review fixes, reproduced verbatim from
@@ -202,7 +208,11 @@ export function EditPipeline(): ReactNode {
   // -> `EditorPanel` render from. Without this the standalone editor page always
   // started from an empty document — a stored pipeline's graph was never shown,
   // so a save could only ever have written an empty graph back.
-  usePipelineVersionSync({ isCreateMode: false, versionDetails: activeVersion, versionId: activeVersion?.id });
+  usePipelineVersionSync({
+    isCreateMode: false,
+    versionDetails: activeVersion,
+    versionId: activeVersion?.id,
+  });
 
   const { form, handleSave, isSaving, saveError, llmSettings, isDirty, admissionRefused } = useEditPipelineForm(
     detail,
@@ -281,33 +291,43 @@ export function EditPipeline(): ReactNode {
     resetPipelineDraft();
     llmSettingsReset();
     disarmUnsavedChangesNavBlocker();
-    void navigate({ to: '/pipelines/$tab', params: { tab: params.tab ?? 'latest' } });
+    void navigate({
+      to: '/pipelines/$tab',
+      params: { tab: params.tab ?? 'latest' },
+    });
   }, [llmSettingsReset, navigate, params.tab]);
 
-  const setLlmSettings = llmSettings.setValue;
-  const handleModelSettingsChange = useCallback((next: AgentLlmSettings) => setLlmSettings(next), [setLlmSettings]);
   // Everything the test-chat slot needs to name the pipeline it talks to.
-  const chatSlotContext = usePipelineChatSlotContext({ projectId, applicationId: params.agentId, detail, activeVersion, user: chatUser });
+  const chatSlotContext = usePipelineChatSlotContext({
+    projectId,
+    applicationId: params.agentId,
+    detail,
+    activeVersion,
+    user: chatUser,
+  });
 
   /*
    * The model picker rides in `ConfigurationTab`'s configuration-form slot —
    * the left panel, where the baseline puts model settings — rather than
    * above the editor, because that slot IS the configuration form and the
    * rest of it is still a disclosed gap (`./lib/pipelineConfigurationTabGaps
-   * .tsx`). It is the only version-level field this page can edit today.
+   * .tsx`). The MCP control beside it edits the version tag list through the
+   * same owning form.
    */
   const configurationTabSlots = useMemo(
     () =>
       buildPipelineConfigurationTabSlots(
-        <AgentModelSettings
+        <EditPipelineConfigurationForm
+          control={form.control}
+          setValue={form.setValue}
           projectId={projectId}
-          value={llmSettings.value}
-          onChange={handleModelSettingsChange}
+          modelSettings={llmSettings.value}
+          onModelSettingsChange={llmSettings.setValue}
           disabled={isReadOnlyView || isFetching}
         />,
         chatSlotContext,
       ),
-    [projectId, llmSettings.value, handleModelSettingsChange, isReadOnlyView, isFetching, chatSlotContext],
+    [form.control, form.setValue, projectId, llmSettings.value, llmSettings.setValue, isReadOnlyView, isFetching, chatSlotContext],
   );
 
   // Both dead ends render from `./ui/EditPipelineNotFound.tsx` — same copy,
@@ -344,12 +364,7 @@ export function EditPipeline(): ReactNode {
               {/* The Chat action — the only way to actually TALK to this
                   pipeline; see `./ui/ChatWithPipelineButton.tsx` for the
                   participant mapping and why it is writer-only. */}
-              <EditPipelineActions
-                applicationId={params.agentId}
-                detail={detail}
-                activeVersion={activeVersion}
-                projectId={projectId}
-              />
+              <EditPipelineActions applicationId={params.agentId} detail={detail} activeVersion={activeVersion} projectId={projectId} />
               <EditPipelineSaveBar
                 onSave={handleSave}
                 canSave={form.formState.isValid && !isSaving}
@@ -360,11 +375,7 @@ export function EditPipeline(): ReactNode {
           )}
         </Box>
         <Box sx={contentSx}>
-          <EditPipelineAlerts
-            isError={isError}
-            admissionRefused={admissionRefused}
-            saveError={saveError}
-          />
+          <EditPipelineAlerts isError={isError} admissionRefused={admissionRefused} saveError={saveError} />
           <PipelineConfigurationTabBoundary>
             <ConfigurationTab
               isFetching={isEditorLoading}

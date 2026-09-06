@@ -3,15 +3,17 @@ use ring::digest;
 
 use crate::agents::result::{BoundAgentExecutionResult, validate_agent_execution_result};
 
-use super::command::VerifiedAgentCommand;
+use super::command::{
+    VerifiedAgentCommand, VerifiedExecutionCommand, VerifiedToolkitExecuteReadCommand,
+};
 use super::node_event::encode_current_node_event_json;
 use super::{
     ProtocolError,
     elitea::runtime::v1::{
         AgentExecutionResultV1, DigestAlgorithmV1, DigestV1, ExecutionFenceV1, ExecutionIdentityV1,
         ExecutionOutcomeV1, ExecutionOutputEventTypeV1, ExecutionOutputFrameV1, NodeEventV1,
-        RuntimeErrorCodeV1, RuntimeErrorV1, SettlementProposalV1, execution_output_frame_v1,
-        worker_command_v1,
+        RuntimeErrorCodeV1, RuntimeErrorV1, SettlementProposalV1, ToolkitExecuteReadResultV1,
+        execution_output_frame_v1, worker_command_v1,
     },
 };
 
@@ -19,6 +21,8 @@ pub const OUTPUT_SCHEMA_REVISION: &str = "elitea.runtime.execution-output.v1";
 pub const MAX_OUTPUT_FRAME_BYTES: usize = 64 * 1024;
 
 const MAX_SAFE_STRING_BYTES: usize = 256;
+const MAX_TOOLKIT_IDENTITY_BYTES: usize = 1024;
+const MAX_TOOLKIT_EXECUTE_READ_RESULT_BYTES: usize = 48 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeFailureKind {
@@ -35,6 +39,11 @@ pub enum RuntimeFailureKind {
 
 pub enum AgentTerminalOutput {
     Result(Box<BoundAgentExecutionResult>),
+    Failure(RuntimeFailureKind),
+}
+
+pub(crate) enum ToolkitExecuteReadTerminalOutput {
+    Result(Box<ToolkitExecuteReadResultV1>),
     Failure(RuntimeFailureKind),
 }
 
@@ -65,6 +74,52 @@ pub(crate) fn validate_restored_agent_output_frame(
     Ok(kind)
 }
 
+/// Revalidate one terminal direct-tool frame against its authenticated
+/// reference-only command. Direct executions never publish progress frames.
+pub(crate) fn validate_restored_toolkit_execute_read_output_frame(
+    verified: &VerifiedToolkitExecuteReadCommand,
+    frame: &ExecutionOutputFrameV1,
+) -> Result<(), ProtocolError> {
+    validate_restored_frame_identity(verified, frame)?;
+    let (payload_bytes, requested_outcome) = match frame.payload.as_ref() {
+        Some(execution_output_frame_v1::Payload::ToolkitExecuteRead(result)) => {
+            validate_toolkit_execute_read_result(verified, result)?;
+            if !frame.terminal
+                || frame.event_type != ExecutionOutputEventTypeV1::ToolkitExecuteReadResult as i32
+                || frame.logical_output_id
+                    != format!("toolkit-execute-read:{}", verified.command().execution_id)
+            {
+                return Err(malformed_restored_output());
+            }
+            (result.encode_to_vec(), ExecutionOutcomeV1::Succeeded)
+        }
+        Some(execution_output_frame_v1::Payload::RuntimeError(error)) => {
+            let failure = canonical_runtime_failure(error).ok_or(malformed_restored_output())?;
+            if !frame.terminal
+                || frame.event_type != ExecutionOutputEventTypeV1::RuntimeError as i32
+                || frame.logical_output_id
+                    != format!("toolkit-execute-read:{}", verified.command().execution_id)
+            {
+                return Err(malformed_restored_output());
+            }
+            (
+                error.encode_to_vec(),
+                if failure == RuntimeFailureKind::Cancelled {
+                    ExecutionOutcomeV1::Cancelled
+                } else {
+                    ExecutionOutcomeV1::Failed
+                },
+            )
+        }
+        _ => return Err(malformed_restored_output()),
+    };
+    let payload_digest = sha256(&payload_bytes);
+    if frame.payload_digest.as_ref() != Some(&payload_digest) {
+        return Err(malformed_restored_output());
+    }
+    validate_restored_settlement(verified, frame, payload_digest, Some(requested_outcome))
+}
+
 /// Return the registered failure carried by an already validated terminal.
 ///
 /// Callers use this only after [`validate_restored_agent_output_frame`] has
@@ -85,7 +140,7 @@ pub(crate) fn restored_terminal_failure_kind(
 }
 
 fn validate_restored_frame_identity(
-    verified: &VerifiedAgentCommand,
+    verified: &impl VerifiedExecutionCommand,
     frame: &ExecutionOutputFrameV1,
 ) -> Result<(), ProtocolError> {
     let command = verified.command();
@@ -182,14 +237,15 @@ fn validate_restored_agent_payload(
         Some(
             execution_output_frame_v1::Payload::ConfigurationValidation(_)
             | execution_output_frame_v1::Payload::ToolkitAvailableTools(_)
-            | execution_output_frame_v1::Payload::IndexIngest(_),
+            | execution_output_frame_v1::Payload::IndexIngest(_)
+            | execution_output_frame_v1::Payload::ToolkitExecuteRead(_),
         )
         | None => Err(malformed_restored_output()),
     }
 }
 
 fn validate_restored_settlement(
-    verified: &VerifiedAgentCommand,
+    verified: &impl VerifiedExecutionCommand,
     frame: &ExecutionOutputFrameV1,
     payload_digest: DigestV1,
     requested_outcome: Option<ExecutionOutcomeV1>,
@@ -372,6 +428,91 @@ pub fn build_agent_terminal_output_frame(
     Ok(frame)
 }
 
+/// Bind one direct read result or registered safe failure to the exact claim.
+/// The returned terminal is small enough for the v1 inline output frame.
+pub(crate) fn build_toolkit_execute_read_terminal_output_frame(
+    verified: &VerifiedToolkitExecuteReadCommand,
+    fence: &ExecutionFenceV1,
+    outcome: ToolkitExecuteReadTerminalOutput,
+    sequence: u64,
+    occurred_at_unix_millis: i64,
+    claim_handoff_watermark: u64,
+) -> Result<ExecutionOutputFrameV1, ProtocolError> {
+    if sequence == 0 || occurred_at_unix_millis <= 0 || claim_handoff_watermark >= sequence {
+        return Err(ProtocolError::InvalidInput(
+            "the direct toolkit terminal identity is malformed",
+        ));
+    }
+    validate_fence(fence)?;
+    let (event_type, payload, payload_bytes, requested_outcome) = match outcome {
+        ToolkitExecuteReadTerminalOutput::Result(result) => {
+            validate_toolkit_execute_read_result(verified, &result)?;
+            let bytes = result.encode_to_vec();
+            (
+                ExecutionOutputEventTypeV1::ToolkitExecuteReadResult,
+                execution_output_frame_v1::Payload::ToolkitExecuteRead(*result),
+                bytes,
+                ExecutionOutcomeV1::Succeeded,
+            )
+        }
+        ToolkitExecuteReadTerminalOutput::Failure(kind) => {
+            let error = runtime_error(kind);
+            let bytes = error.encode_to_vec();
+            (
+                ExecutionOutputEventTypeV1::RuntimeError,
+                execution_output_frame_v1::Payload::RuntimeError(error),
+                bytes,
+                if kind == RuntimeFailureKind::Cancelled {
+                    ExecutionOutcomeV1::Cancelled
+                } else {
+                    ExecutionOutcomeV1::Failed
+                },
+            )
+        }
+    };
+    let payload_digest = sha256(&payload_bytes);
+    let command = verified.command();
+    let logical_output_id = format!("toolkit-execute-read:{}", command.execution_id);
+    let event_id = format!("{}:{sequence}", command.command_id);
+    let frame = ExecutionOutputFrameV1 {
+        output_schema_revision: OUTPUT_SCHEMA_REVISION.to_owned(),
+        stream_id: format!("{}:{}", command.execution_id, command.generation),
+        identity: Some(ExecutionIdentityV1 {
+            tenant_id: command.tenant_id.clone(),
+            resource_project_id: command.resource_project_id.clone(),
+            projection_project_id: command.projection_project_id.clone(),
+            command_id: command.command_id.clone(),
+            execution_id: command.execution_id.clone(),
+            generation: command.generation,
+        }),
+        fence: Some(fence.clone()),
+        logical_output_id: logical_output_id.clone(),
+        event_id: event_id.clone(),
+        sequence,
+        claim_handoff_watermark,
+        event_type: event_type as i32,
+        occurred_at_unix_millis,
+        payload_digest: Some(payload_digest.clone()),
+        terminal: true,
+        settlement_proposal: Some(SettlementProposalV1 {
+            proposal_id: format!("{}:settlement", command.command_id),
+            requested_outcome: requested_outcome as i32,
+            terminal_logical_output_id: logical_output_id,
+            terminal_event_id: event_id,
+            terminal_sequence: sequence,
+            terminal_payload_digest: Some(payload_digest),
+            prepare_idempotency_key: format!("{}:prepare-settlement", command.command_id),
+        }),
+        payload: Some(payload),
+    };
+    if frame.encoded_len() > MAX_OUTPUT_FRAME_BYTES {
+        return Err(ProtocolError::ResourceExhausted(
+            "the direct toolkit terminal exceeds the approved output limit",
+        ));
+    }
+    Ok(frame)
+}
+
 fn runtime_error(kind: RuntimeFailureKind) -> RuntimeErrorV1 {
     let (code, safe_message, retryable) = match kind {
         RuntimeFailureKind::UnsupportedCapability => (
@@ -469,6 +610,59 @@ fn validate_result_command_binding(
         ));
     }
     Ok(())
+}
+
+fn validate_toolkit_execute_read_result(
+    verified: &VerifiedToolkitExecuteReadCommand,
+    result: &ToolkitExecuteReadResultV1,
+) -> Result<(), ProtocolError> {
+    let command = verified.command();
+    let input = command
+        .input_bundle_ref
+        .as_ref()
+        .ok_or_else(malformed_restored_output)?;
+    let Some(worker_command_v1::CapabilityCommand::ToolkitExecuteRead(toolkit)) =
+        command.capability_command.as_ref()
+    else {
+        return Err(malformed_restored_output());
+    };
+    let identities = [
+        result.request_entry_id.as_str(),
+        result.request_entry_version.as_str(),
+        result.toolkit_type.as_str(),
+        result.toolkit_name.as_str(),
+        result.tool_name.as_str(),
+    ];
+    if result.input_bundle_id != input.input_bundle_id
+        || result.input_bundle_digest != input.digest
+        || result.request_entry_id != toolkit.request_entry_id
+        || identities.iter().any(|value| {
+            value.is_empty()
+                || value.len() > MAX_TOOLKIT_IDENTITY_BYTES
+                || value
+                    .bytes()
+                    .any(|byte| matches!(byte, b'\0' | b'\r' | b'\n'))
+        })
+        || !valid_sha256(result.request_content_digest.as_ref())
+        || result.result_json.is_empty()
+        || result.result_json.len() > MAX_TOOLKIT_EXECUTE_READ_RESULT_BYTES
+    {
+        return Err(malformed_restored_output());
+    }
+    let value: serde_json::Value =
+        serde_json::from_slice(&result.result_json).map_err(|_| malformed_restored_output())?;
+    if serde_json::to_vec(&value).ok().as_deref() != Some(result.result_json.as_slice()) {
+        return Err(malformed_restored_output());
+    }
+    Ok(())
+}
+
+fn valid_sha256(value: Option<&DigestV1>) -> bool {
+    value.is_some_and(|digest| {
+        digest.algorithm == DigestAlgorithmV1::Sha256 as i32
+            && digest.value.len() == 32
+            && digest.value.iter().any(|byte| *byte != 0)
+    })
 }
 
 fn sha256(payload: &[u8]) -> DigestV1 {

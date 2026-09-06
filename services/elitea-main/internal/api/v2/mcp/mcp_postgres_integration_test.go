@@ -193,6 +193,18 @@ func seedAgent(t *testing.T, pool *pgxpool.Pool, schema, name, description strin
 	return versionID
 }
 
+// seedPipeline uses the same application/version storage as an agent but pins
+// the discriminator that makes the runtime compile the version as a pipeline.
+func seedPipeline(t *testing.T, pool *pgxpool.Pool, schema, name, description string, tags ...string) int64 {
+	t.Helper()
+	versionID := seedAgent(t, pool, schema, name, description, tags...)
+	if _, err := pool.Exec(context.Background(), fmt.Sprintf(`
+		UPDATE %q.application_versions SET agent_type = 'pipeline' WHERE id = $1`, schema), versionID); err != nil {
+		t.Fatalf("seed pipeline discriminator: %v", err)
+	}
+	return versionID
+}
+
 func seedToolkit(t *testing.T, pool *pgxpool.Pool, schema, name, toolkitType string, meta string, selectedTools ...string) int64 {
 	t.Helper()
 	selected, err := json.Marshal(selectedTools)
@@ -262,6 +274,23 @@ func TestToolsListServesOnlyAgentsTaggedMCP(t *testing.T) {
 	}
 }
 
+func TestToolsListServesTaggedPipelinesThroughProjectAndResourceScopes(t *testing.T) {
+	pool := newMCPPool(t)
+	router := newRouter(mcp.NewHandler(pool, apimw.NewDBPersonalProjectResolver(pool), nil, nil), callerUserID)
+	versionID := seedPipeline(t, pool, homeSchema, "Release Pipeline", "builds release notes", "mcp")
+
+	projectTools := listToolNames(t, router, "/app/"+homeProject+"/mcp")
+	if !contains(projectTools, "Release_Pipeline") {
+		t.Fatalf("tagged pipeline missing from project MCP tools: %v", projectTools)
+	}
+	resourceTools := listToolNames(t, router, fmt.Sprintf(
+		"/app/%s/mcp/pipeline/%d", homeProject, versionID,
+	))
+	if len(resourceTools) != 1 || resourceTools[0] != "Release_Pipeline" {
+		t.Fatalf("pipeline resource scope served %v, want Release_Pipeline", resourceTools)
+	}
+}
+
 // Renaming the row must rename the tool. This is what separates "reads the
 // database" from "returns a plausible constant".
 func TestToolNamesFollowTheRowValues(t *testing.T) {
@@ -298,6 +327,142 @@ func TestToolsListServesOnlyToolkitsFlaggedAvailableByMCP(t *testing.T) {
 	}
 	if contains(names, "Private_get_issue") {
 		t.Fatalf("unflagged toolkit leaked into %v", names)
+	}
+}
+
+func TestToolsListAndResourceScopesHideNoAccessFolderEntities(t *testing.T) {
+	pool := newMCPPool(t)
+	router := newRouter(
+		mcp.NewHandler(pool, apimw.NewDBPersonalProjectResolver(pool), nil, nil),
+		callerUserID,
+	)
+
+	versionID := seedAgent(t, pool, homeSchema, "Restricted Agent", "hidden", "mcp")
+	toolkitID := seedToolkit(
+		t, pool, homeSchema, "Restricted Toolkit", "github", availableByMCP, "get_issue",
+	)
+	var applicationID int64
+	if err := pool.QueryRow(context.Background(), `
+		SELECT application_id FROM p_1.application_versions WHERE id = $1`,
+		versionID,
+	).Scan(&applicationID); err != nil {
+		t.Fatalf("resolve seeded application: %v", err)
+	}
+
+	if _, err := pool.Exec(context.Background(), `
+CREATE TABLE p_1.entity_folders (
+    id INTEGER PRIMARY KEY,
+    entity_type VARCHAR(32) NOT NULL
+);
+CREATE TABLE p_1.social_folder_items (
+    id INTEGER PRIMARY KEY,
+    folder_id INTEGER NOT NULL,
+    entity VARCHAR(32) NOT NULL,
+    entity_id INTEGER NOT NULL
+);
+CREATE TABLE p_1.folder_access_overrides (
+    id INTEGER PRIMARY KEY,
+    folder_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    access_level VARCHAR(16) NOT NULL
+);`); err != nil {
+		t.Fatalf("create folder restriction tables: %v", err)
+	}
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO p_1.entity_folders (id, entity_type)
+		VALUES (101, 'agent'), (102, 'toolkit')`); err != nil {
+		t.Fatalf("seed restricted folders: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO p_1.social_folder_items (id, folder_id, entity, entity_id)
+		VALUES (201, 101, 'agent', $1), (202, 102, 'toolkit', $2)`,
+		applicationID, toolkitID,
+	); err != nil {
+		t.Fatalf("seed restricted folder items: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO p_1.folder_access_overrides (id, folder_id, user_id, access_level)
+		VALUES (301, 101, $1, 'no_access'), (302, 102, $1, 'no_access')`,
+		callerUserID,
+	); err != nil {
+		t.Fatalf("seed folder access overrides: %v", err)
+	}
+
+	all := listToolNames(t, router, "/app/"+homeProject+"/mcp")
+	for _, hidden := range []string{"Restricted_Agent", "Restricted_Toolkit_get_issue"} {
+		if contains(all, hidden) {
+			t.Fatalf("no_access folder entity %q leaked into %v", hidden, all)
+		}
+	}
+	if names := listToolNames(t, router, fmt.Sprintf(
+		"/app/%s/mcp/agent/%d", homeProject, versionID,
+	)); len(names) != 0 {
+		t.Fatalf("restricted agent resource scope served %v", names)
+	}
+	if names := listToolNames(t, router, fmt.Sprintf(
+		"/app/%s/mcp/toolkit/%d", homeProject, toolkitID,
+	)); len(names) != 0 {
+		t.Fatalf("restricted toolkit resource scope served %v", names)
+	}
+
+	// Remove only the actor's restrictions. The same rows must become visible,
+	// which proves the catalogue does not treat folder membership as private.
+	if _, err := pool.Exec(context.Background(), `
+		DELETE FROM p_1.folder_access_overrides WHERE user_id = $1`, callerUserID,
+	); err != nil {
+		t.Fatalf("remove folder restrictions: %v", err)
+	}
+	all = listToolNames(t, router, "/app/"+homeProject+"/mcp")
+	for _, visible := range []string{"Restricted_Agent", "Restricted_Toolkit_get_issue"} {
+		if !contains(all, visible) {
+			t.Fatalf("unrestricted folder entity %q missing from %v", visible, all)
+		}
+	}
+}
+
+func TestToolsListAcceptsLegacyFoldersWithoutAccessOverrides(t *testing.T) {
+	pool := newMCPPool(t)
+	router := newRouter(
+		mcp.NewHandler(pool, apimw.NewDBPersonalProjectResolver(pool), nil, nil),
+		callerUserID,
+	)
+	seedToolkit(t, pool, homeSchema, "Legacy Folder", "github", availableByMCP, "get_issue")
+	if _, err := pool.Exec(context.Background(), `
+		CREATE TABLE p_1.entity_folders (
+			id INTEGER PRIMARY KEY,
+			entity_type VARCHAR(32) NOT NULL
+		)`); err != nil {
+		t.Fatalf("seed legacy folder projection: %v", err)
+	}
+	names := listToolNames(t, router, "/app/"+homeProject+"/mcp")
+	if !contains(names, "Legacy_Folder_get_issue") {
+		t.Fatalf("legacy folder projection hid project-visible toolkit: %v", names)
+	}
+}
+
+func TestToolsListFailsClosedWhenOverridesLackFolderDependencies(t *testing.T) {
+	pool := newMCPPool(t)
+	router := newRouter(
+		mcp.NewHandler(pool, apimw.NewDBPersonalProjectResolver(pool), nil, nil),
+		callerUserID,
+	)
+	seedToolkit(t, pool, homeSchema, "Must Not Leak", "github", availableByMCP, "get_issue")
+	if _, err := pool.Exec(context.Background(), `
+		CREATE TABLE p_1.folder_access_overrides (
+			id INTEGER PRIMARY KEY,
+			folder_id INTEGER NOT NULL,
+			user_id INTEGER NOT NULL,
+			access_level VARCHAR(16) NOT NULL
+		)`); err != nil {
+		t.Fatalf("seed broken folder access projection: %v", err)
+	}
+
+	recorder := do(t, router, http.MethodPost, "/app/"+homeProject+"/mcp",
+		`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
+	body := decode(t, recorder)
+	if _, present := body["error"]; !present {
+		t.Fatalf("broken folder access projection returned a catalogue: %v", body)
 	}
 }
 

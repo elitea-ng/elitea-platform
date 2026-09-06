@@ -15,7 +15,7 @@ use tonic::metadata::MetadataValue;
 use tonic::transport::Channel;
 use tonic::{Request, Streaming};
 
-use crate::protocol::command::VerifiedAgentCommand;
+use crate::protocol::command::{VerifiedAgentCommand, VerifiedExecutionCommand};
 use crate::protocol::elitea::runtime::v1::{
     DigestAlgorithmV1, ExecutionFenceV1, ExecutionIdentityV1, ExecutionOutcomeV1,
     ExecutionOutputAckV1, ExecutionOutputFrameV1, RuntimeErrorCodeV1, SettlementProposalV1,
@@ -463,7 +463,7 @@ impl PreparedOutputSpool {
     pub(crate) async fn replay_terminal(
         self,
         channel: Channel,
-        verified: &VerifiedAgentCommand,
+        verified: &impl VerifiedExecutionCommand,
         expected: &ExecutionOutputFrameV1,
     ) -> Result<DurablyAckedTerminal, OutputGrpcError> {
         self.require_single_expected(expected)?;
@@ -1069,7 +1069,7 @@ struct PendingTerminalSettlement {
 
 impl PendingTerminalSettlement {
     fn new(
-        verified: &VerifiedAgentCommand,
+        verified: &impl VerifiedExecutionCommand,
         frame: &ExecutionOutputFrameV1,
     ) -> Result<Self, OutputGrpcError> {
         validate_terminal_settlement_binding(frame)?;
@@ -1686,7 +1686,7 @@ fn validate_terminal_settlement_binding(
 
 fn terminal_identity_matches_command(
     identity: &ExecutionIdentityV1,
-    verified: &VerifiedAgentCommand,
+    verified: &impl VerifiedExecutionCommand,
 ) -> bool {
     let command = verified.command();
     identity.tenant_id == command.tenant_id

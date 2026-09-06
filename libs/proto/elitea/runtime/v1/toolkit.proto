@@ -42,3 +42,40 @@ message ToolkitAvailableToolsResultV1 {
   ToolkitAvailableToolsArtifactReferenceV1 result_artifact = 7;
   reserved 8 to 15;
 }
+
+// ToolkitExecuteReadCommandV1 binds the reference-only Redis command to one
+// immutable direct-call request in the input data plane.
+message ToolkitExecuteReadCommandV1 {
+  string request_entry_id = 1;
+  reserved 2 to 15;
+}
+
+// ToolkitExecuteReadInputV1 is assembled by Main after a fresh project-scoped
+// toolkit lookup. Toolkit settings contain only frozen references here;
+// claim-time materialization is the first boundary allowed to redeem secrets.
+message ToolkitExecuteReadInputV1 {
+  string schema_revision = 1;
+  bytes toolkit = 2;
+  string toolkit_type = 3;
+  string toolkit_name = 4;
+  string tool_name = 5;
+  bytes arguments = 6;
+  bytes toolkit_guardrails = 7;
+  reserved 8 to 15;
+}
+
+// ToolkitExecuteReadResultV1 is intentionally inline and bounded below one
+// output frame. Larger read responses use the artifact-backed result path in a
+// later capability revision rather than weakening the 64 KiB frame contract.
+message ToolkitExecuteReadResultV1 {
+  string input_bundle_id = 1;
+  DigestV1 input_bundle_digest = 2;
+  string request_entry_id = 3;
+  string request_entry_version = 4;
+  DigestV1 request_content_digest = 5;
+  bytes result_json = 6;
+  string toolkit_type = 7;
+  string toolkit_name = 8;
+  string tool_name = 9;
+  reserved 10 to 15;
+}

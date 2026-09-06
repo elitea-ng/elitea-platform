@@ -259,6 +259,258 @@ func (x *ToolkitAvailableToolsResultV1) GetResultArtifact() *ToolkitAvailableToo
 	return nil
 }
 
+// ToolkitExecuteReadCommandV1 binds the reference-only Redis command to one
+// immutable direct-call request in the input data plane.
+type ToolkitExecuteReadCommandV1 struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	RequestEntryId string                 `protobuf:"bytes,1,opt,name=request_entry_id,json=requestEntryId,proto3" json:"request_entry_id,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *ToolkitExecuteReadCommandV1) Reset() {
+	*x = ToolkitExecuteReadCommandV1{}
+	mi := &file_elitea_runtime_v1_toolkit_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ToolkitExecuteReadCommandV1) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ToolkitExecuteReadCommandV1) ProtoMessage() {}
+
+func (x *ToolkitExecuteReadCommandV1) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_runtime_v1_toolkit_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ToolkitExecuteReadCommandV1.ProtoReflect.Descriptor instead.
+func (*ToolkitExecuteReadCommandV1) Descriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_toolkit_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *ToolkitExecuteReadCommandV1) GetRequestEntryId() string {
+	if x != nil {
+		return x.RequestEntryId
+	}
+	return ""
+}
+
+// ToolkitExecuteReadInputV1 is assembled by Main after a fresh project-scoped
+// toolkit lookup. Toolkit settings contain only frozen references here;
+// claim-time materialization is the first boundary allowed to redeem secrets.
+type ToolkitExecuteReadInputV1 struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	SchemaRevision    string                 `protobuf:"bytes,1,opt,name=schema_revision,json=schemaRevision,proto3" json:"schema_revision,omitempty"`
+	Toolkit           []byte                 `protobuf:"bytes,2,opt,name=toolkit,proto3" json:"toolkit,omitempty"`
+	ToolkitType       string                 `protobuf:"bytes,3,opt,name=toolkit_type,json=toolkitType,proto3" json:"toolkit_type,omitempty"`
+	ToolkitName       string                 `protobuf:"bytes,4,opt,name=toolkit_name,json=toolkitName,proto3" json:"toolkit_name,omitempty"`
+	ToolName          string                 `protobuf:"bytes,5,opt,name=tool_name,json=toolName,proto3" json:"tool_name,omitempty"`
+	Arguments         []byte                 `protobuf:"bytes,6,opt,name=arguments,proto3" json:"arguments,omitempty"`
+	ToolkitGuardrails []byte                 `protobuf:"bytes,7,opt,name=toolkit_guardrails,json=toolkitGuardrails,proto3" json:"toolkit_guardrails,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *ToolkitExecuteReadInputV1) Reset() {
+	*x = ToolkitExecuteReadInputV1{}
+	mi := &file_elitea_runtime_v1_toolkit_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ToolkitExecuteReadInputV1) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ToolkitExecuteReadInputV1) ProtoMessage() {}
+
+func (x *ToolkitExecuteReadInputV1) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_runtime_v1_toolkit_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ToolkitExecuteReadInputV1.ProtoReflect.Descriptor instead.
+func (*ToolkitExecuteReadInputV1) Descriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_toolkit_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *ToolkitExecuteReadInputV1) GetSchemaRevision() string {
+	if x != nil {
+		return x.SchemaRevision
+	}
+	return ""
+}
+
+func (x *ToolkitExecuteReadInputV1) GetToolkit() []byte {
+	if x != nil {
+		return x.Toolkit
+	}
+	return nil
+}
+
+func (x *ToolkitExecuteReadInputV1) GetToolkitType() string {
+	if x != nil {
+		return x.ToolkitType
+	}
+	return ""
+}
+
+func (x *ToolkitExecuteReadInputV1) GetToolkitName() string {
+	if x != nil {
+		return x.ToolkitName
+	}
+	return ""
+}
+
+func (x *ToolkitExecuteReadInputV1) GetToolName() string {
+	if x != nil {
+		return x.ToolName
+	}
+	return ""
+}
+
+func (x *ToolkitExecuteReadInputV1) GetArguments() []byte {
+	if x != nil {
+		return x.Arguments
+	}
+	return nil
+}
+
+func (x *ToolkitExecuteReadInputV1) GetToolkitGuardrails() []byte {
+	if x != nil {
+		return x.ToolkitGuardrails
+	}
+	return nil
+}
+
+// ToolkitExecuteReadResultV1 is intentionally inline and bounded below one
+// output frame. Larger read responses use the artifact-backed result path in a
+// later capability revision rather than weakening the 64 KiB frame contract.
+type ToolkitExecuteReadResultV1 struct {
+	state                protoimpl.MessageState `protogen:"open.v1"`
+	InputBundleId        string                 `protobuf:"bytes,1,opt,name=input_bundle_id,json=inputBundleId,proto3" json:"input_bundle_id,omitempty"`
+	InputBundleDigest    *DigestV1              `protobuf:"bytes,2,opt,name=input_bundle_digest,json=inputBundleDigest,proto3" json:"input_bundle_digest,omitempty"`
+	RequestEntryId       string                 `protobuf:"bytes,3,opt,name=request_entry_id,json=requestEntryId,proto3" json:"request_entry_id,omitempty"`
+	RequestEntryVersion  string                 `protobuf:"bytes,4,opt,name=request_entry_version,json=requestEntryVersion,proto3" json:"request_entry_version,omitempty"`
+	RequestContentDigest *DigestV1              `protobuf:"bytes,5,opt,name=request_content_digest,json=requestContentDigest,proto3" json:"request_content_digest,omitempty"`
+	ResultJson           []byte                 `protobuf:"bytes,6,opt,name=result_json,json=resultJson,proto3" json:"result_json,omitempty"`
+	ToolkitType          string                 `protobuf:"bytes,7,opt,name=toolkit_type,json=toolkitType,proto3" json:"toolkit_type,omitempty"`
+	ToolkitName          string                 `protobuf:"bytes,8,opt,name=toolkit_name,json=toolkitName,proto3" json:"toolkit_name,omitempty"`
+	ToolName             string                 `protobuf:"bytes,9,opt,name=tool_name,json=toolName,proto3" json:"tool_name,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
+}
+
+func (x *ToolkitExecuteReadResultV1) Reset() {
+	*x = ToolkitExecuteReadResultV1{}
+	mi := &file_elitea_runtime_v1_toolkit_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ToolkitExecuteReadResultV1) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ToolkitExecuteReadResultV1) ProtoMessage() {}
+
+func (x *ToolkitExecuteReadResultV1) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_runtime_v1_toolkit_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ToolkitExecuteReadResultV1.ProtoReflect.Descriptor instead.
+func (*ToolkitExecuteReadResultV1) Descriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_toolkit_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *ToolkitExecuteReadResultV1) GetInputBundleId() string {
+	if x != nil {
+		return x.InputBundleId
+	}
+	return ""
+}
+
+func (x *ToolkitExecuteReadResultV1) GetInputBundleDigest() *DigestV1 {
+	if x != nil {
+		return x.InputBundleDigest
+	}
+	return nil
+}
+
+func (x *ToolkitExecuteReadResultV1) GetRequestEntryId() string {
+	if x != nil {
+		return x.RequestEntryId
+	}
+	return ""
+}
+
+func (x *ToolkitExecuteReadResultV1) GetRequestEntryVersion() string {
+	if x != nil {
+		return x.RequestEntryVersion
+	}
+	return ""
+}
+
+func (x *ToolkitExecuteReadResultV1) GetRequestContentDigest() *DigestV1 {
+	if x != nil {
+		return x.RequestContentDigest
+	}
+	return nil
+}
+
+func (x *ToolkitExecuteReadResultV1) GetResultJson() []byte {
+	if x != nil {
+		return x.ResultJson
+	}
+	return nil
+}
+
+func (x *ToolkitExecuteReadResultV1) GetToolkitType() string {
+	if x != nil {
+		return x.ToolkitType
+	}
+	return ""
+}
+
+func (x *ToolkitExecuteReadResultV1) GetToolkitName() string {
+	if x != nil {
+		return x.ToolkitName
+	}
+	return ""
+}
+
+func (x *ToolkitExecuteReadResultV1) GetToolName() string {
+	if x != nil {
+		return x.ToolName
+	}
+	return ""
+}
+
 var File_elitea_runtime_v1_toolkit_proto protoreflect.FileDescriptor
 
 const file_elitea_runtime_v1_toolkit_proto_rawDesc = "" +
@@ -284,7 +536,29 @@ const file_elitea_runtime_v1_toolkit_proto_rawDesc = "" +
 	"\x11settings_entry_id\x18\x04 \x01(\tR\x0fsettingsEntryId\x124\n" +
 	"\x16settings_entry_version\x18\x05 \x01(\tR\x14settingsEntryVersion\x12S\n" +
 	"\x17settings_content_digest\x18\x06 \x01(\v2\x1b.elitea.runtime.v1.DigestV1R\x15settingsContentDigest\x12d\n" +
-	"\x0fresult_artifact\x18\a \x01(\v2;.elitea.runtime.v1.ToolkitAvailableToolsArtifactReferenceV1R\x0eresultArtifactJ\x04\b\b\x10\x10BSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
+	"\x0fresult_artifact\x18\a \x01(\v2;.elitea.runtime.v1.ToolkitAvailableToolsArtifactReferenceV1R\x0eresultArtifactJ\x04\b\b\x10\x10\"M\n" +
+	"\x1bToolkitExecuteReadCommandV1\x12(\n" +
+	"\x10request_entry_id\x18\x01 \x01(\tR\x0erequestEntryIdJ\x04\b\x02\x10\x10\"\x94\x02\n" +
+	"\x19ToolkitExecuteReadInputV1\x12'\n" +
+	"\x0fschema_revision\x18\x01 \x01(\tR\x0eschemaRevision\x12\x18\n" +
+	"\atoolkit\x18\x02 \x01(\fR\atoolkit\x12!\n" +
+	"\ftoolkit_type\x18\x03 \x01(\tR\vtoolkitType\x12!\n" +
+	"\ftoolkit_name\x18\x04 \x01(\tR\vtoolkitName\x12\x1b\n" +
+	"\ttool_name\x18\x05 \x01(\tR\btoolName\x12\x1c\n" +
+	"\targuments\x18\x06 \x01(\fR\targuments\x12-\n" +
+	"\x12toolkit_guardrails\x18\a \x01(\fR\x11toolkitGuardrailsJ\x04\b\b\x10\x10\"\xcc\x03\n" +
+	"\x1aToolkitExecuteReadResultV1\x12&\n" +
+	"\x0finput_bundle_id\x18\x01 \x01(\tR\rinputBundleId\x12K\n" +
+	"\x13input_bundle_digest\x18\x02 \x01(\v2\x1b.elitea.runtime.v1.DigestV1R\x11inputBundleDigest\x12(\n" +
+	"\x10request_entry_id\x18\x03 \x01(\tR\x0erequestEntryId\x122\n" +
+	"\x15request_entry_version\x18\x04 \x01(\tR\x13requestEntryVersion\x12Q\n" +
+	"\x16request_content_digest\x18\x05 \x01(\v2\x1b.elitea.runtime.v1.DigestV1R\x14requestContentDigest\x12\x1f\n" +
+	"\vresult_json\x18\x06 \x01(\fR\n" +
+	"resultJson\x12!\n" +
+	"\ftoolkit_type\x18\a \x01(\tR\vtoolkitType\x12!\n" +
+	"\ftoolkit_name\x18\b \x01(\tR\vtoolkitName\x12\x1b\n" +
+	"\ttool_name\x18\t \x01(\tR\btoolNameJ\x04\b\n" +
+	"\x10\x10BSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
 
 var (
 	file_elitea_runtime_v1_toolkit_proto_rawDescOnce sync.Once
@@ -298,23 +572,28 @@ func file_elitea_runtime_v1_toolkit_proto_rawDescGZIP() []byte {
 	return file_elitea_runtime_v1_toolkit_proto_rawDescData
 }
 
-var file_elitea_runtime_v1_toolkit_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_elitea_runtime_v1_toolkit_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_elitea_runtime_v1_toolkit_proto_goTypes = []any{
 	(*ToolkitAvailableToolsCommandV1)(nil),           // 0: elitea.runtime.v1.ToolkitAvailableToolsCommandV1
 	(*ToolkitAvailableToolsArtifactReferenceV1)(nil), // 1: elitea.runtime.v1.ToolkitAvailableToolsArtifactReferenceV1
 	(*ToolkitAvailableToolsResultV1)(nil),            // 2: elitea.runtime.v1.ToolkitAvailableToolsResultV1
-	(*DigestV1)(nil),                                 // 3: elitea.runtime.v1.DigestV1
+	(*ToolkitExecuteReadCommandV1)(nil),              // 3: elitea.runtime.v1.ToolkitExecuteReadCommandV1
+	(*ToolkitExecuteReadInputV1)(nil),                // 4: elitea.runtime.v1.ToolkitExecuteReadInputV1
+	(*ToolkitExecuteReadResultV1)(nil),               // 5: elitea.runtime.v1.ToolkitExecuteReadResultV1
+	(*DigestV1)(nil),                                 // 6: elitea.runtime.v1.DigestV1
 }
 var file_elitea_runtime_v1_toolkit_proto_depIdxs = []int32{
-	3, // 0: elitea.runtime.v1.ToolkitAvailableToolsArtifactReferenceV1.digest:type_name -> elitea.runtime.v1.DigestV1
-	3, // 1: elitea.runtime.v1.ToolkitAvailableToolsResultV1.input_bundle_digest:type_name -> elitea.runtime.v1.DigestV1
-	3, // 2: elitea.runtime.v1.ToolkitAvailableToolsResultV1.settings_content_digest:type_name -> elitea.runtime.v1.DigestV1
+	6, // 0: elitea.runtime.v1.ToolkitAvailableToolsArtifactReferenceV1.digest:type_name -> elitea.runtime.v1.DigestV1
+	6, // 1: elitea.runtime.v1.ToolkitAvailableToolsResultV1.input_bundle_digest:type_name -> elitea.runtime.v1.DigestV1
+	6, // 2: elitea.runtime.v1.ToolkitAvailableToolsResultV1.settings_content_digest:type_name -> elitea.runtime.v1.DigestV1
 	1, // 3: elitea.runtime.v1.ToolkitAvailableToolsResultV1.result_artifact:type_name -> elitea.runtime.v1.ToolkitAvailableToolsArtifactReferenceV1
-	4, // [4:4] is the sub-list for method output_type
-	4, // [4:4] is the sub-list for method input_type
-	4, // [4:4] is the sub-list for extension type_name
-	4, // [4:4] is the sub-list for extension extendee
-	0, // [0:4] is the sub-list for field type_name
+	6, // 4: elitea.runtime.v1.ToolkitExecuteReadResultV1.input_bundle_digest:type_name -> elitea.runtime.v1.DigestV1
+	6, // 5: elitea.runtime.v1.ToolkitExecuteReadResultV1.request_content_digest:type_name -> elitea.runtime.v1.DigestV1
+	6, // [6:6] is the sub-list for method output_type
+	6, // [6:6] is the sub-list for method input_type
+	6, // [6:6] is the sub-list for extension type_name
+	6, // [6:6] is the sub-list for extension extendee
+	0, // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_elitea_runtime_v1_toolkit_proto_init() }
@@ -329,7 +608,7 @@ func file_elitea_runtime_v1_toolkit_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_elitea_runtime_v1_toolkit_proto_rawDesc), len(file_elitea_runtime_v1_toolkit_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   3,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

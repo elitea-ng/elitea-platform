@@ -1,7 +1,7 @@
 # Rust worker source parity
 
 - Status: capability-disabled production agent runtime with isolated end-to-end proof
-- Last verified: 2026-09-03
+- Last verified: 2026-09-04
 - Production capability registration: disabled
 
 The previous Rust worker implementation was never committed and no recoverable
@@ -35,6 +35,9 @@ Detailed ledgers:
 - [`docs/source-mapping/agent-runtime.md`](docs/source-mapping/agent-runtime.md)
 - [`docs/source-mapping/pipeline-nodes.md`](docs/source-mapping/pipeline-nodes.md)
 - [`docs/source-mapping/configuration-toolsets.md`](docs/source-mapping/configuration-toolsets.md)
+- [`docs/source-mapping/internal-elitea-mcp.md`](docs/source-mapping/internal-elitea-mcp.md)
+- [`docs/source-mapping/external-elitea-mcp.md`](docs/source-mapping/external-elitea-mcp.md)
+- [`docs/source-mapping/delegated-oauth-dcr.md`](docs/source-mapping/delegated-oauth-dcr.md)
 - [`docs/source-mapping/indexing.md`](docs/source-mapping/indexing.md)
 - [`docs/adk-rust-2.0.0-audit.md`](docs/adk-rust-2.0.0-audit.md)
 
@@ -109,6 +112,18 @@ headers and schema-aware bounded response search, and the explicitly
 selected eight-read delegated SharePoint Graph core now use this exact-resource
 flow; their remaining OAuth/content capabilities are listed in the toolset
 ledger.
+
+Current OAuth/DCR proxy checkpoint: Main now implements the browser token and
+RFC 7591 registration proxies used by the replatform UI. The token proxy
+supports authorization-code and refresh grants, PKCE, JSON and form responses,
+and the current `used_dcr` isolation rule. It resolves omitted credentials and
+scope through one actor-visible toolkit and the existing claim-mode
+configuration resolver. Stored SharePoint and OpenAPI nested settings are
+supported. Main sends a stored secret only to a toolkit-bound endpoint. This
+restriction closes the current platform's caller-selected endpoint exposure.
+The UI keeps popup, discovery, token storage, refresh, and logout ownership.
+Rust keeps durable authorization interrupts and claim-scoped token use. Live
+remote-MCP and delegated-toolkit provider proofs remain gates.
 
 Current provider-tool binding checkpoint: current SDK
 `runtime/tools/tool_binding.py` and `runtime/tools/llm.py` retain toolkit
@@ -202,6 +217,66 @@ UI default-model assignment remain separate parity gaps. The generic OpenAPI
 additional-header editor is also absent from the replatform UI. These gaps do
 not invalidate the completed configured-tool runtime proof.
 
+Current external Elitea-as-MCP toolkit checkpoint: Main's project-wide and
+resource-scoped MCP catalogues continue to publish only `elitea_tools` rows
+with `meta.mcp_options.available_by_mcp=true` and only their selected
+operations. The descriptor privately pins the exact row and source operation.
+Both catalogue scopes apply the current actor-specific `no_access` folder
+overlay when the optional social access projection exists. A missing override
+table keeps project RBAC behavior. Broken override dependencies fail closed.
+On `tools/call`, Main authorizes the caller with the current chat-run
+permission, re-reads the current row through the generated tenant repository,
+rechecks actor folder access, opt-in, selection and guardrail policy, and
+freezes one immutable claim. A signed `toolkit.execute.read.v1` command travels through the existing
+Redis claim/fence lifecycle; Rust redeems configuration only after claim,
+requires the exact materialized tool to declare itself read-only with no
+missing user scope, executes it once, and publishes one typed bounded terminal
+result.
+Main validates the generation plus toolkit type/name/operation before returning
+an MCP result. Thus a catalogue/call race, stale selection, mismatched result,
+or missing runtime seam fails closed with a non-empty redacted error. The
+dynamic-schema catalogue read remains the bounded current-SQLAlchemy
+translation because a tenant schema identifier cannot be a sqlc value; all new
+durable execution SQL and the exact current-row re-read use generated sqlc
+repositories. A local external client proved list, one OpenAPI call, durable
+settlement, exact result return, and hot opt-out without a restart. Agent and
+pipeline UI controls now use the existing `mcp` version tag. Effectful or
+sensitive toolkit operations, live OAuth/DCR, broader external clients, load,
+and Kubernetes proof remain gates.
+
+Current saved-pipeline external-MCP checkpoint: execution
+`b13c0d177a1da5f35b6c689e88ed8661` invokes `Full Name Resolver` through the
+saved `Resolve Name` pipeline. The compiler normalizes its legacy `Agent 1`
+identifier in memory. Public hierarchy labels use application names. The two
+leaf agents persist separate authorization pauses, and the graph binds both
+interrupt IDs. Main returns the pause; the outer job settles and releases its
+claim. Live authorization resume and final completion remain gates. The
+[pipeline ledger](docs/source-mapping/pipeline-nodes.md) records the evidence.
+
+Current internal Elitea MCP project-context checkpoint: Main publishes the
+current platform's exact GET, PUT, and DELETE builder operations under
+`elitea_core/project_context`, with their exact view/edit permissions and tool
+names. Internal MCP and REST/UI reuse one handler. The URL project is
+authoritative; PUT forwards only content, enabled, and activation description.
+The five-field response, enabled-by-default absence semantics, Unicode bounds,
+activation-description preserve/remove behavior, deterministic system
+configuration identity, and DELETE lifecycle are covered by contract tests and
+an isolated PostgreSQL proof. This slice builds stored project context; runtime
+progressive-disclosure delivery and model-backed draft generation remain
+separate gates. Rust continues to consume this Main-owned surface through its
+existing configured HTTP MCP client.
+
+Current internal Elitea MCP secrets checkpoint: Main publishes the current
+platform's exact list, create, and update MCP opt-ins under `secrets`, with
+their exact permissions and generated tool names. Plaintext read, delete,
+hide, administration-vault, and bulk operations remain absent. Internal MCP,
+REST/UI, and prebuilt-MCP credential materialization reuse one encrypted-vault
+handler; the URL project and authenticated actor are authoritative, update is
+value rotation rather than rename, and tool results never contain supplied
+secret values. Contract, fuzz, composition, and isolated PostgreSQL lifecycle
+tests cover the path. Main's existing lack of default-secret metadata and
+conditional default-name suppression remains a shared REST/MCP parity gate.
+
 Current output-continuation checkpoint: OpenAI-compatible model `Auto` preserves
 the UI's `max_tokens=-1` sentinel through Main and omits the provider wire limit;
 native Anthropic resolves its required limit from the frozen configuration.
@@ -240,7 +315,7 @@ This checkpoint supersedes older broad table wording below that lists
 parallel/nested authorization or pipeline-Agent authorization as a generic
 open gate. The remaining authorization gates are independent partial sibling
 resume, mixed-guardrail aggregation,
-platform OAuth/DCR, runtime-discovered post-token model-loop challenges,
+live platform OAuth/DCR proof, runtime-discovered post-token model-loop challenges,
 remaining SharePoint content/app-only operations,
 remaining OpenAPI remote-specification, binary/artifact and production
 activation capabilities.
@@ -303,7 +378,7 @@ reducer ownership, item checkpoints, aggregate interrupts, bounds, and gates.
 | SDK `tools/zephyr_squad/{__init__,api_wrapper,zephyr_squad_cloud_client}.py`; Main current toolkit snapshot/freezer/materializer; Python worker shared SDK adapter | Fifteen Jira-backed Zephyr Squad step, BDD, cycle, folder and execution operations, inline credential materialization, empty/subset selection and `read`/`write`/`delete` grouping | `src/toolkits/families/zephyr_squad/{config,client,tools}.rs` | Eight focused inline-config/JWT-golden/exact-route/body/error/argument/model-metadata/policy tests plus future credentialed application/ad-hoc component proof | Capability-disabled complete family: all 5 reads, 8 writes and 2 deletes are present; fixed-origin JWT requests and provider results are bounded, descriptions are selection-oriented, and live materialization, exact-interrupt HITL plus cancellation-safe effect reconciliation remain gates |
 | SDK `configurations/report_portal.py` and `tools/report_portal/{__init__,api_wrapper,report_portal_client}.py`; Main configuration/toolkit catalog, freezer/materializer; Python worker shared SDK adapter | Nine project, launch, item, log, user, dashboard and raw/readable report reads, empty/subset selection, live connection-check contract and application/ad-hoc parity | `src/toolkits/families/report_portal/{config,client,tools}.rs` | Thirteen focused configuration/wire/export/text/result/bound/model-metadata/policy tests plus future credentialed application/ad-hoc component proof | Capability-disabled complete read family: all nine operations are present; raw HTML is bounded UTF-8, small raw PDF has a bounded base64 fallback, readable analysis uses deterministic HTML text, and the provider page index defaults to zero. Authorized materialization, egress policy, provider check composition, durable large-export artifact streaming and live proof remain gates |
 | `projects/centry/pylon_indexer/plugins/indexer_worker/**` | Current application/ad-hoc invocation, callback, checkpoint, child dispatch, and indexing behavior | `src/agents/`, `src/compat/`, then `src/indexing/` | Differential fixtures plus cross-process tests | Not started |
-| `adk-rust = 2.2.0` published crates | Native agent, graph, toolset, session, checkpoint, MCP, and HITL primitives | Capability owners under `src/agents`, `src/toolkits`, `src/state` and `src/transport` | Native direct-agent/graph/session/checkpoint/model/tool/MCP/HITL component and contract corpus | Adopted selectively. Direct HTTP MCP graph nodes use RMCP challenge classification plus ADK dynamic interrupts and the existing durable session/checkpoint owner. Materializer-known root and pipeline-LLM calls use native original-call confirmation. Fixed and declared-parameter catalogue-backed HTTP MCP use Main claim-time resolution and bounded sensitive headers. Nested same-family authorization cards now aggregate under one paused terminal; independent partial resume, mixed-guardrail aggregation, platform OAuth/DCR, runtime-discovered configured families, MCP catalog/sync, stdio clients and Elitea-as-MCP-server exposure remain explicit gates |
+| `adk-rust = 2.2.0` published crates | Native agent, graph, toolset, session, checkpoint, MCP, and HITL primitives | Capability owners under `src/agents`, `src/toolkits`, `src/state` and `src/transport` | Native direct-agent/graph/session/checkpoint/model/tool/MCP/HITL component and contract corpus | Adopted selectively. Direct HTTP MCP graph nodes use RMCP challenge classification plus ADK dynamic interrupts and the existing durable session/checkpoint owner. Materializer-known root and pipeline-LLM calls use native original-call confirmation. Fixed and declared-parameter catalogue-backed HTTP MCP use Main claim-time resolution and bounded sensitive headers. External Elitea-as-MCP read-only toolkit calls use the separate durable direct-tool capability. Nested same-family authorization cards now aggregate under one paused terminal; independent partial resume, mixed-guardrail aggregation, platform OAuth/DCR, runtime-discovered configured families, MCP catalog/sync, stdio clients, effectful external toolkit calls and external agent/pipeline controls remain explicit gates |
 | This reconstruction | Fail-closed diagnostic with no production registration | `src/capabilities.rs`, `src/lib.rs` | Deterministic JSON and rejection tests | Implemented; transport availability does not enable agent execution |
 
 The tracked mapping will be expanded to source symbols and proving test files as

@@ -47,3 +47,49 @@ class ToolkitAvailableToolsResultV1(_message.Message):
     settings_content_digest: _common_pb2.DigestV1
     result_artifact: ToolkitAvailableToolsArtifactReferenceV1
     def __init__(self, toolkit_type: _Optional[str] = ..., input_bundle_id: _Optional[str] = ..., input_bundle_digest: _Optional[_Union[_common_pb2.DigestV1, _Mapping]] = ..., settings_entry_id: _Optional[str] = ..., settings_entry_version: _Optional[str] = ..., settings_content_digest: _Optional[_Union[_common_pb2.DigestV1, _Mapping]] = ..., result_artifact: _Optional[_Union[ToolkitAvailableToolsArtifactReferenceV1, _Mapping]] = ...) -> None: ...
+
+class ToolkitExecuteReadCommandV1(_message.Message):
+    __slots__ = ("request_entry_id",)
+    REQUEST_ENTRY_ID_FIELD_NUMBER: _ClassVar[int]
+    request_entry_id: str
+    def __init__(self, request_entry_id: _Optional[str] = ...) -> None: ...
+
+class ToolkitExecuteReadInputV1(_message.Message):
+    __slots__ = ("schema_revision", "toolkit", "toolkit_type", "toolkit_name", "tool_name", "arguments", "toolkit_guardrails")
+    SCHEMA_REVISION_FIELD_NUMBER: _ClassVar[int]
+    TOOLKIT_FIELD_NUMBER: _ClassVar[int]
+    TOOLKIT_TYPE_FIELD_NUMBER: _ClassVar[int]
+    TOOLKIT_NAME_FIELD_NUMBER: _ClassVar[int]
+    TOOL_NAME_FIELD_NUMBER: _ClassVar[int]
+    ARGUMENTS_FIELD_NUMBER: _ClassVar[int]
+    TOOLKIT_GUARDRAILS_FIELD_NUMBER: _ClassVar[int]
+    schema_revision: str
+    toolkit: bytes
+    toolkit_type: str
+    toolkit_name: str
+    tool_name: str
+    arguments: bytes
+    toolkit_guardrails: bytes
+    def __init__(self, schema_revision: _Optional[str] = ..., toolkit: _Optional[bytes] = ..., toolkit_type: _Optional[str] = ..., toolkit_name: _Optional[str] = ..., tool_name: _Optional[str] = ..., arguments: _Optional[bytes] = ..., toolkit_guardrails: _Optional[bytes] = ...) -> None: ...
+
+class ToolkitExecuteReadResultV1(_message.Message):
+    __slots__ = ("input_bundle_id", "input_bundle_digest", "request_entry_id", "request_entry_version", "request_content_digest", "result_json", "toolkit_type", "toolkit_name", "tool_name")
+    INPUT_BUNDLE_ID_FIELD_NUMBER: _ClassVar[int]
+    INPUT_BUNDLE_DIGEST_FIELD_NUMBER: _ClassVar[int]
+    REQUEST_ENTRY_ID_FIELD_NUMBER: _ClassVar[int]
+    REQUEST_ENTRY_VERSION_FIELD_NUMBER: _ClassVar[int]
+    REQUEST_CONTENT_DIGEST_FIELD_NUMBER: _ClassVar[int]
+    RESULT_JSON_FIELD_NUMBER: _ClassVar[int]
+    TOOLKIT_TYPE_FIELD_NUMBER: _ClassVar[int]
+    TOOLKIT_NAME_FIELD_NUMBER: _ClassVar[int]
+    TOOL_NAME_FIELD_NUMBER: _ClassVar[int]
+    input_bundle_id: str
+    input_bundle_digest: _common_pb2.DigestV1
+    request_entry_id: str
+    request_entry_version: str
+    request_content_digest: _common_pb2.DigestV1
+    result_json: bytes
+    toolkit_type: str
+    toolkit_name: str
+    tool_name: str
+    def __init__(self, input_bundle_id: _Optional[str] = ..., input_bundle_digest: _Optional[_Union[_common_pb2.DigestV1, _Mapping]] = ..., request_entry_id: _Optional[str] = ..., request_entry_version: _Optional[str] = ..., request_content_digest: _Optional[_Union[_common_pb2.DigestV1, _Mapping]] = ..., result_json: _Optional[bytes] = ..., toolkit_type: _Optional[str] = ..., toolkit_name: _Optional[str] = ..., tool_name: _Optional[str] = ...) -> None: ...

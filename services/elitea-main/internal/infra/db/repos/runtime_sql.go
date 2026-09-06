@@ -41,6 +41,18 @@ type pgxExecutor struct {
 	queryer pgxQueryer
 }
 
+type sqlcQueryProvider interface {
+	SQLCQueries() *sqlcgen.Queries
+}
+
+func runtimeSQLCQueries(executor sqlExecutor) (*sqlcgen.Queries, error) {
+	provider, ok := executor.(sqlcQueryProvider)
+	if !ok || provider.SQLCQueries() == nil {
+		return nil, errors.New("sqlc query provider is required")
+	}
+	return provider.SQLCQueries(), nil
+}
+
 var _ currentAgentTerminalWriter = pgxExecutor{}
 
 func (e pgxExecutor) Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error) {
@@ -53,6 +65,10 @@ func (e pgxExecutor) QueryRow(ctx context.Context, sql string, args ...any) sqlR
 
 func (e pgxExecutor) Query(ctx context.Context, sql string, args ...any) (sqlRows, error) {
 	return e.queryer.Query(ctx, sql, args...)
+}
+
+func (e pgxExecutor) SQLCQueries() *sqlcgen.Queries {
+	return sqlcgen.New(e.queryer)
 }
 
 func (e pgxExecutor) InsertCurrentIndexTerminalNotification(
@@ -230,6 +246,10 @@ type sharedStore interface {
 
 type postgresSharedStore struct {
 	pool *pgxpool.Pool
+}
+
+func (s *postgresSharedStore) SQLCQueries() *sqlcgen.Queries {
+	return sqlcgen.New(s.pool)
 }
 
 func newPostgresSharedStore(pool *pgxpool.Pool) (*postgresSharedStore, error) {

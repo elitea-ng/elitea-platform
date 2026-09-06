@@ -7,8 +7,8 @@ use super::{
     ProtocolError,
     elitea::runtime::v1::{
         AgentExecutionCommandV1, DigestAlgorithmV1, DigestV1, ExecutionInputBundleReferenceV1,
-        SignatureProfileV1, SignedWorkerCommandEnvelopeV1, WorkerCommandTypeV1, WorkerCommandV1,
-        worker_command_v1,
+        SignatureProfileV1, SignedWorkerCommandEnvelopeV1, ToolkitExecuteReadCommandV1,
+        WorkerCommandTypeV1, WorkerCommandV1, worker_command_v1,
     },
 };
 use crate::agents::AgentExecutionKind;
@@ -19,6 +19,8 @@ pub const LIMITS_REVISION: &str = "elitea.runtime.limits.conformance.v1";
 pub const AGENT_EXECUTION_CAPABILITY_VERSION: &str = "1";
 pub const AGENT_EXECUTE_APPLICATION_CAPABILITY_ID: &str = "agent.execute.application.v1";
 pub const AGENT_EXECUTE_ADHOC_CAPABILITY_ID: &str = "agent.execute.adhoc.v1";
+pub const TOOLKIT_EXECUTE_READ_CAPABILITY_ID: &str = "toolkit.execute.read.v1";
+pub const TOOLKIT_EXECUTE_READ_CAPABILITY_VERSION: &str = "1";
 
 const MAX_SIGNED_ENVELOPE_BYTES: usize = 48 * 1024;
 const MAX_WORKER_COMMAND_BYTES: usize = 32 * 1024;
@@ -31,18 +33,35 @@ const ED25519_DOMAIN: &[u8] = b"elitea.runtime.worker-command.ed25519.v1\0";
 const CONFORMANCE_HMAC_KEY_ID: &str = "elitea-runtime-v1-conformance-hmac";
 const CONFORMANCE_HMAC_KEY: &[u8] = b"ELITEA_RUNTIME_V1_TEST_ONLY_NOT_A_SECRET";
 
-/// An authenticated, strictly decoded reference-only agent command.
-pub struct VerifiedAgentCommand {
+/// Authenticated command material shared by capability-specific wrappers.
+///
+/// This type stays private so a command is useful only after its selected
+/// capability has passed strict semantic validation.
+struct VerifiedWorkerCommand {
     exact_signed_envelope: Box<[u8]>,
     signed: SignedWorkerCommandEnvelopeV1,
     command: WorkerCommandV1,
+}
+
+/// The sealed common view needed by claim, settlement and Redis retirement.
+/// Capability code receives a concrete wrapper and cannot reinterpret one
+/// authenticated command as another capability after verification.
+pub(crate) trait VerifiedExecutionCommand {
+    fn exact_signed_envelope(&self) -> &[u8];
+    fn signed(&self) -> &SignedWorkerCommandEnvelopeV1;
+    fn command(&self) -> &WorkerCommandV1;
+}
+
+/// An authenticated, strictly decoded reference-only agent command.
+pub struct VerifiedAgentCommand {
+    common: VerifiedWorkerCommand,
     kind: AgentExecutionKind,
 }
 
 impl VerifiedAgentCommand {
     #[must_use]
     pub const fn signed(&self) -> &SignedWorkerCommandEnvelopeV1 {
-        &self.signed
+        &self.common.signed
     }
 
     /// Return the exact authenticated outer-envelope bytes received from the
@@ -50,17 +69,84 @@ impl VerifiedAgentCommand {
     /// must not substitute a protobuf reserialization for the signed delivery.
     #[must_use]
     pub(crate) fn exact_signed_envelope(&self) -> &[u8] {
-        &self.exact_signed_envelope
+        &self.common.exact_signed_envelope
     }
 
     #[must_use]
     pub const fn command(&self) -> &WorkerCommandV1 {
-        &self.command
+        &self.common.command
     }
 
     #[must_use]
     pub const fn kind(&self) -> AgentExecutionKind {
         self.kind
+    }
+}
+
+impl VerifiedExecutionCommand for VerifiedAgentCommand {
+    fn exact_signed_envelope(&self) -> &[u8] {
+        self.exact_signed_envelope()
+    }
+
+    fn signed(&self) -> &SignedWorkerCommandEnvelopeV1 {
+        self.signed()
+    }
+
+    fn command(&self) -> &WorkerCommandV1 {
+        self.command()
+    }
+}
+
+/// An authenticated, strictly decoded direct read-only toolkit command.
+pub struct VerifiedToolkitExecuteReadCommand {
+    common: VerifiedWorkerCommand,
+}
+
+/// Exhaustive authenticated command kind accepted by this worker binary.
+/// The envelope is authenticated once before capability-specific decoding.
+pub(crate) enum VerifiedExecutionCommandKind {
+    Agent(VerifiedAgentCommand),
+    ToolkitExecuteRead(VerifiedToolkitExecuteReadCommand),
+}
+
+impl VerifiedToolkitExecuteReadCommand {
+    #[must_use]
+    pub const fn signed(&self) -> &SignedWorkerCommandEnvelopeV1 {
+        &self.common.signed
+    }
+
+    #[must_use]
+    pub(crate) fn exact_signed_envelope(&self) -> &[u8] {
+        &self.common.exact_signed_envelope
+    }
+
+    #[must_use]
+    pub const fn command(&self) -> &WorkerCommandV1 {
+        &self.common.command
+    }
+
+    #[must_use]
+    pub fn request_entry_id(&self) -> &str {
+        let Some(worker_command_v1::CapabilityCommand::ToolkitExecuteRead(command)) =
+            self.common.command.capability_command.as_ref()
+        else {
+            unreachable!("verified toolkit command lost its capability wrapper")
+        };
+        &command.request_entry_id
+    }
+}
+
+impl VerifiedExecutionCommand for VerifiedToolkitExecuteReadCommand {
+    fn exact_signed_envelope(&self) -> &[u8] {
+        self.exact_signed_envelope()
+    }
+
+    fn signed(&self) -> &SignedWorkerCommandEnvelopeV1 {
+        self.signed()
+    }
+
+    fn command(&self) -> &WorkerCommandV1 {
+        self.command()
     }
 }
 
@@ -154,6 +240,64 @@ pub fn parse_and_verify_agent_command(
     raw: &[u8],
     authenticator: Option<&dyn SignedCommandAuthenticator>,
 ) -> Result<VerifiedAgentCommand, ProtocolError> {
+    let common = parse_and_verify_worker_command(raw, authenticator)?;
+    scan_agent_worker_command(&common.signed.worker_command_bytes)?;
+    let kind = validate_agent_command(&common.command)?;
+    Ok(VerifiedAgentCommand { common, kind })
+}
+
+/// Verify exact signed bytes before decoding a direct read-only toolkit
+/// command. Authentication always precedes protobuf command decoding.
+///
+/// # Errors
+///
+/// Returns a bounded [`ProtocolError`] for wire, version, digest, signature,
+/// capability, or semantic validation failures.
+pub fn parse_and_verify_toolkit_execute_read_command(
+    raw: &[u8],
+    authenticator: Option<&dyn SignedCommandAuthenticator>,
+) -> Result<VerifiedToolkitExecuteReadCommand, ProtocolError> {
+    let common = parse_and_verify_worker_command(raw, authenticator)?;
+    scan_toolkit_execute_read_worker_command(&common.signed.worker_command_bytes)?;
+    validate_toolkit_execute_read_command(&common.command)?;
+    Ok(VerifiedToolkitExecuteReadCommand { common })
+}
+
+/// Authenticate one delivery once and select its exact capability wrapper.
+///
+/// This is the production intake entrypoint. Capability-specific parsers stay
+/// available for focused protocol consumers and conformance tests.
+pub(crate) fn parse_and_verify_execution_command(
+    raw: &[u8],
+    authenticator: Option<&dyn SignedCommandAuthenticator>,
+) -> Result<VerifiedExecutionCommandKind, ProtocolError> {
+    let common = parse_and_verify_worker_command(raw, authenticator)?;
+    match common.command.capability_command.as_ref() {
+        Some(worker_command_v1::CapabilityCommand::AgentExecution(_)) => {
+            scan_agent_worker_command(&common.signed.worker_command_bytes)?;
+            let kind = validate_agent_command(&common.command)?;
+            Ok(VerifiedExecutionCommandKind::Agent(VerifiedAgentCommand {
+                common,
+                kind,
+            }))
+        }
+        Some(worker_command_v1::CapabilityCommand::ToolkitExecuteRead(_)) => {
+            scan_toolkit_execute_read_worker_command(&common.signed.worker_command_bytes)?;
+            validate_toolkit_execute_read_command(&common.command)?;
+            Ok(VerifiedExecutionCommandKind::ToolkitExecuteRead(
+                VerifiedToolkitExecuteReadCommand { common },
+            ))
+        }
+        _ => Err(ProtocolError::UnsupportedCapability(
+            "the worker command capability is not supported",
+        )),
+    }
+}
+
+fn parse_and_verify_worker_command(
+    raw: &[u8],
+    authenticator: Option<&dyn SignedCommandAuthenticator>,
+) -> Result<VerifiedWorkerCommand, ProtocolError> {
     if raw.is_empty() || raw.len() > MAX_SIGNED_ENVELOPE_BYTES {
         return Err(ProtocolError::ResourceExhausted(
             "the signed command envelope exceeds the conformance limit",
@@ -201,15 +345,12 @@ pub fn parse_and_verify_agent_command(
         ))?
         .authenticate(&signed)?;
 
-    scan_agent_worker_command(&signed.worker_command_bytes)?;
     let command = WorkerCommandV1::decode(signed.worker_command_bytes.as_slice())
         .map_err(|_| ProtocolError::InvalidInput("the worker command is malformed"))?;
-    let kind = validate_agent_command(&command)?;
-    Ok(VerifiedAgentCommand {
+    Ok(VerifiedWorkerCommand {
         exact_signed_envelope: raw.into(),
         signed,
         command,
-        kind,
     })
 }
 
@@ -230,6 +371,18 @@ fn scan_agent_worker_command(raw: &[u8]) -> Result<(), ProtocolError> {
         let agent_command = fields.length_field(35, "the agent execution command is missing")?;
         scan_message(agent_command, Schema::AgentExecutionCommand)?;
     }
+    Ok(())
+}
+
+fn scan_toolkit_execute_read_worker_command(raw: &[u8]) -> Result<(), ProtocolError> {
+    let fields = scan_message(raw, Schema::WorkerCommand)?;
+    let input_reference = fields.length_field(16, "the input bundle reference is missing")?;
+    let input_fields = scan_message(input_reference, Schema::InputBundleReference)?;
+    let input_digest = input_fields.length_field(3, "the input bundle digest is missing")?;
+    scan_message(input_digest, Schema::Digest)?;
+    let toolkit_command =
+        fields.length_field(36, "the direct toolkit execution command is missing")?;
+    scan_message(toolkit_command, Schema::ToolkitExecuteReadCommand)?;
     Ok(())
 }
 
@@ -255,6 +408,49 @@ fn validate_agent_command(command: &WorkerCommandV1) -> Result<AgentExecutionKin
     validate_command_strings(command, input, agent)?;
     validate_command_invariants(command, input, agent)?;
     Ok(kind)
+}
+
+fn validate_toolkit_execute_read_command(command: &WorkerCommandV1) -> Result<(), ProtocolError> {
+    if command.protocol_revision != PROTOCOL_REVISION || command.limits_revision != LIMITS_REVISION
+    {
+        return Err(ProtocolError::IncompatibleVersion(
+            "the requested contract version is not compatible",
+        ));
+    }
+    let toolkit = select_toolkit_execute_read_entrypoint(command)?;
+    if command.capability_version != TOOLKIT_EXECUTE_READ_CAPABILITY_VERSION {
+        return Err(ProtocolError::UnsupportedCapability(
+            "the worker command capability version is not supported",
+        ));
+    }
+    let input = command
+        .input_bundle_ref
+        .as_ref()
+        .ok_or(ProtocolError::InvalidInput(
+            "the worker command is missing a required reference or identity",
+        ))?;
+    validate_common_command_strings(command, input, &[toolkit.request_entry_id.as_str()])?;
+    validate_common_command_invariants(
+        command,
+        input,
+        "the direct toolkit root identity is malformed",
+    )
+}
+
+fn select_toolkit_execute_read_entrypoint(
+    command: &WorkerCommandV1,
+) -> Result<&ToolkitExecuteReadCommandV1, ProtocolError> {
+    match &command.capability_command {
+        Some(worker_command_v1::CapabilityCommand::ToolkitExecuteRead(toolkit))
+            if command.capability_id == TOOLKIT_EXECUTE_READ_CAPABILITY_ID
+                && command.command_type == WorkerCommandTypeV1::ToolkitExecuteRead as i32 =>
+        {
+            Ok(toolkit)
+        }
+        _ => Err(ProtocolError::UnsupportedCapability(
+            "the worker command capability is not supported",
+        )),
+    }
 }
 
 fn select_agent_entrypoint(
@@ -284,6 +480,23 @@ fn validate_command_strings(
     input: &ExecutionInputBundleReferenceV1,
     agent: &AgentExecutionCommandV1,
 ) -> Result<(), ProtocolError> {
+    validate_common_command_strings(
+        command,
+        input,
+        &[
+            agent.request_entry_id.as_str(),
+            agent.client_stream_id.as_str(),
+            agent.client_message_id.as_str(),
+            agent.sio_event.as_str(),
+        ],
+    )
+}
+
+fn validate_common_command_strings(
+    command: &WorkerCommandV1,
+    input: &ExecutionInputBundleReferenceV1,
+    capability_required: &[&str],
+) -> Result<(), ProtocolError> {
     let required = [
         command.command_id.as_str(),
         command.idempotency_key.as_str(),
@@ -298,25 +511,29 @@ fn validate_command_strings(
         input.media_type.as_str(),
         command.resource_class.as_str(),
         command.isolation_class.as_str(),
-        agent.request_entry_id.as_str(),
-        agent.client_stream_id.as_str(),
-        agent.client_message_id.as_str(),
-        agent.sio_event.as_str(),
     ];
     if required.iter().any(|value| value.is_empty()) {
         return Err(ProtocolError::InvalidInput(
             "the worker command is missing a required reference or identity",
         ));
     }
-    let bounded = required.into_iter().chain([
-        command.capability_id.as_str(),
-        command.capability_version.as_str(),
-        command.protocol_revision.as_str(),
-        command.limits_revision.as_str(),
-        command.parent_execution_id.as_str(),
-        command.parent_call_id.as_str(),
-        command.traceparent.as_str(),
-    ]);
+    if capability_required.iter().any(|value| value.is_empty()) {
+        return Err(ProtocolError::InvalidInput(
+            "the worker command is missing a required reference or identity",
+        ));
+    }
+    let bounded = required
+        .into_iter()
+        .chain(capability_required.iter().copied())
+        .chain([
+            command.capability_id.as_str(),
+            command.capability_version.as_str(),
+            command.protocol_revision.as_str(),
+            command.limits_revision.as_str(),
+            command.parent_execution_id.as_str(),
+            command.parent_call_id.as_str(),
+            command.traceparent.as_str(),
+        ]);
     if bounded
         .into_iter()
         .any(|value| value.len() > MAX_SAFE_STRING_BYTES)
@@ -343,23 +560,10 @@ fn validate_command_invariants(
     input: &ExecutionInputBundleReferenceV1,
     agent: &AgentExecutionCommandV1,
 ) -> Result<(), ProtocolError> {
-    if command.generation == 0
-        || command.dispatch_ordinal == 0
-        || command.priority == 0
-        || command.deadline_unix_millis < 1
-    {
-        return Err(ProtocolError::InvalidInput(
-            "the worker command scheduling identity is malformed",
-        ));
-    }
-    if input.media_type != INPUT_BUNDLE_MEDIA_TYPE {
-        return Err(ProtocolError::InvalidInput(
-            "the input bundle reference has the wrong media type",
-        ));
-    }
-    require_sha256(
-        input.digest.as_ref(),
-        "the input bundle digest is malformed",
+    validate_common_command_invariants(
+        command,
+        input,
+        "the agent-execution root identity is malformed",
     )?;
     if [
         agent.client_stream_id.as_str(),
@@ -383,13 +587,37 @@ fn validate_command_invariants(
             "the agent-execution event route is malformed",
         ));
     }
+    Ok(())
+}
+
+fn validate_common_command_invariants(
+    command: &WorkerCommandV1,
+    input: &ExecutionInputBundleReferenceV1,
+    root_error: &'static str,
+) -> Result<(), ProtocolError> {
+    if command.generation == 0
+        || command.dispatch_ordinal == 0
+        || command.priority == 0
+        || command.deadline_unix_millis < 1
+    {
+        return Err(ProtocolError::InvalidInput(
+            "the worker command scheduling identity is malformed",
+        ));
+    }
+    if input.media_type != INPUT_BUNDLE_MEDIA_TYPE {
+        return Err(ProtocolError::InvalidInput(
+            "the input bundle reference has the wrong media type",
+        ));
+    }
+    require_sha256(
+        input.digest.as_ref(),
+        "the input bundle digest is malformed",
+    )?;
     if command.root_execution_id != command.execution_id
         || !command.parent_execution_id.is_empty()
         || !command.parent_call_id.is_empty()
     {
-        return Err(ProtocolError::InvalidInput(
-            "the agent-execution root identity is malformed",
-        ));
+        return Err(ProtocolError::InvalidInput(root_error));
     }
     if input.byte_length == 0 || input.byte_length > MAX_INPUT_MANIFEST_BYTES {
         return Err(ProtocolError::ResourceExhausted(

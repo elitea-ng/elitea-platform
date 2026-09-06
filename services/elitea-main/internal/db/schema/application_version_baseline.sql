@@ -5,6 +5,13 @@
 -- p_<project_id> schema and is owned by the current tenant-schema lifecycle.
 -- Keep this projection aligned with the deployed PostgreSQL shape.
 
+CREATE TABLE applications (
+    id serial PRIMARY KEY,
+    name varchar(128) NOT NULL,
+    description varchar(2304),
+    owner_id integer NOT NULL
+);
+
 CREATE TABLE application_versions (
     id serial PRIMARY KEY,
     application_id integer NOT NULL,

@@ -1,12 +1,12 @@
 # Internal Elitea MCP source mapping
 
 Status: the applications and skills categories, five Main-owned toolkit
-builder operations, five Main-owned configuration operations, and three
-Main-owned notification operations are implemented. External Elitea-as-MCP
-listing uses the current opt-ins and built-in SDK argument schemas; toolkit
-execution remains capability-closed. Live per-instance toolkit discovery,
-typed model configuration operations, the wider internal builder family, and
-external Elitea-as-MCP execution remain partial.
+builder operations, five Main-owned configuration operations, three
+Main-owned notification operations, and the complete three-operation project
+context builder category, plus the three-operation project-secret category are
+implemented. Live per-instance toolkit discovery, typed model configuration
+operations, model-backed draft generation, discovery, chat, analytics, and
+artifacts remain gated by their owning Main capabilities.
 
 This ledger keeps three MCP products separate:
 
@@ -22,39 +22,16 @@ This ledger keeps three MCP products separate:
    identity, transport, and execution rules.
 
 Implementing one layer does not complete either of the other two.
+The external surface has its own
+[`external-elitea-mcp.md`](external-elitea-mcp.md) ledger.
 
-## External Elitea-as-MCP catalogue
-
-The project-wide external endpoint publishes only two current-platform opt-ins:
-application versions tagged `mcp`, and toolkit rows whose
-`meta.mcp_options.available_by_mcp` is true. Application tools retain the
-current one-string `task` schema. Each selected built-in toolkit operation now
-uses its exact argument schema from Main's digest-pinned SDK snapshot, the same
-source used by the toolkit editor. The schema is loaded once per toolkit row,
-not once per selected operation.
-
-The row query is a translation of the current SQLAlchemy application-version,
-tag-association, and `elitea_tools` model reads. It stays behind the MCP
-catalogue boundary because the tenant schema name is selected at runtime and a
-PostgreSQL identifier cannot be expressed as a sqlc value parameter. Fixed
-schema reads elsewhere continue to use sqlc repositories.
-
-The descriptor also retains the exact toolkit row ID and original selected
-operation name as private, non-JSON fields. This does not activate execution;
-it prevents the later durable executor from trying to reverse the sanitized
-MCP name into a row. Dynamic `mcp`, `mcp_config`, and `openapi` operations have
-no built-in schema by design and receive an explicit open-object fallback until
-their already-discovered instance schemas are projected into this catalogue.
-Snapshot failures abort listing with the existing redacted protocol error
-instead of silently weakening every built-in tool schema.
-
-Project-wide toolkit-name collisions fail closed. If two opted-in toolkit
-targets collapse to the same sanitized MCP name, Main advertises neither one;
-the current Python dispatcher already refuses to choose either target. This
-removes its misleading "list the first, reject the call" behavior. A
-resource-scoped `/mcp/toolkit/{id}` endpoint remains usable because the URL
-pins one exact toolkit row. Duplicate copies of the same selected operation
-collapse to one descriptor.
+Current-platform evidence was rechecked on 2026-09-04 against
+`elitea_core` revision `6a036d777ca909fac377ceaec05719f0fa611b6d` and
+`social` main revision `083df4b44ac251719ef68eac3080884471177969`.
+The optional folder-access table and index contract is from social revision
+`a1ca98e6248291cf40a5696dea12217c8ee24f62`. That revision is not yet on the
+checked social main branch, so Main preserves the older no-override behavior
+when the table is absent.
 
 ## Applications category
 
@@ -262,11 +239,148 @@ MCP adds strict bounds before the handler: maximum 1,000 rows, 32 search terms,
 does not forward unknown fields or publish bulk update, single delete, or bulk
 delete.
 
+## Project context builder category
+
+The project-context builder category is available at
+`/app/{projectID}/mcp/elitea_core/project_context`. Main publishes exactly the
+three current operations marked `mcp_tool=True`.
+
+| Current platform evidence | Permission | Main tool |
+| --- | --- | --- |
+| `elitea_core/api/v2/project_context.py::PromptLibAPI.get` | `models.project_context.view` | `get_prompt_lib_project-context` |
+| `elitea_core/api/v2/project_context.py::PromptLibAPI.put` | `models.project_context.edit` | `put_prompt_lib_project-context` |
+| `elitea_core/api/v2/project_context.py::PromptLibAPI.delete` | `models.project_context.edit` | `delete_prompt_lib_project-context` |
+
+Main reuses one `eliteacore.Handler` for REST/UI and Internal MCP. GET returns
+the current five-field detail envelope; an absent row is
+`{id:null, content:"", enabled:true, activation_description:null,
+updated_at:null}`. PUT creates the deterministic `project_context_<projectID>`
+configuration when absent. Content and enabled take their current replacement
+defaults on every PUT. An omitted activation description preserves an existing
+non-empty value, while explicit null or normalized blank removes it. Content
+and activation descriptions are bounded to 2,500 and 300 Unicode characters.
+DELETE returns 404 for an absent row and 204 after deletion.
+
+The URL project is authoritative and the fixed schema does not expose row,
+author, source, section, or status controls. Main stores the current RPC-create
+identity: `Project Context`, `project_context`, `project_settings`, system
+source, and valid status. Tenant schema identifiers remain validated dynamic
+SQL because PostgreSQL cannot parameterize identifiers; all values are bound.
+
+This category is the CRUD builder used by an Elitea agent to inspect and edit
+project context. It is not the runtime progressive-disclosure reader that
+decides when full context enters model instructions, and it does not publish
+`generate_project_context_draft`. Draft generation is a separate model-backed
+use case and remains closed until Main owns its model, service-prompt, failure,
+and validation contract.
+
+## Secrets category
+
+The project-secret category is available at
+`/app/{projectID}/mcp/secrets`. Main publishes exactly the three current
+operations marked `mcp_tool=True`.
+
+| Current platform evidence | Permission | Main tool |
+| --- | --- | --- |
+| `secrets/api/v2/secrets.py::ProjectAPI.get` | `configuration.secrets.secret.list` | `get_secrets_secrets` |
+| `secrets/api/v2/secrets.py::ProjectAPI.post` | `configuration.secrets.secret.create` | `post_secrets_secrets` |
+| `secrets/api/v2/secret.py::ProjectAPI.put` | `configuration.secrets.secret.edit` | `put_secrets_secret` |
+
+The current source paths above are relative to `pylon_main/plugins`. The
+catalogue intentionally excludes plaintext `Get Secret`, deletion, hiding,
+bulk replacement, and every administration-vault operation. List returns only
+secret names, `{{secret.NAME}}` placeholders, and the existing `is_default`
+flag. Create and update return the same safe metadata and never the supplied
+value.
+
+The executor reuses the exact `secrets.Handler` instance used by REST/UI and by
+prebuilt-MCP credential materialization. Vault encryption, malformed-master-key
+failure, absent-versus-unreadable handling, duplicate checks, and
+collision-safe writes therefore remain one implementation path. The endpoint
+project and authenticated actor are server-owned. Secret names are bounded to
+128 ASCII letters, digits, or underscores before handler invocation, matching
+the placeholder resolver and Main vault writer.
+
+Update is value rotation, not rename. Although the current OpenAPI description
+says “name and/or value”, current pylon overwrites the body `name` with the
+path `secret` before validation. The fixed MCP schema consequently exposes the
+existing `secret` name and replacement `value`, but no misleading rename
+field. Unknown arguments never cross into the handler.
+
+Main does not currently read pylon's `elitea_core.default_secret_keys` or
+`ignore_default_secret_api` plugin configuration. Its existing REST response
+therefore reports `is_default:false` and does not implement conditional
+default-name suppression. The checked current deployment configuration defines
+the default-key list but does not enable `ignore_default_secret_api`, so this
+does not broaden its active list result. Importing those two settings into
+Main remains an explicit REST-and-MCP parity gate; the MCP layer does not
+invent a second configuration source.
+
+## Closed internal categories
+
+Main refuses an internal category until each published operation has a shared,
+policy-complete implementation. It does not reinterpret a category as the
+project's external agent or toolkit catalogue.
+
+### Discovery
+
+The current platform opts two operations into `elitea_core/discovery`.
+
+| Current platform evidence | Permission | Current MCP name |
+| --- | --- | --- |
+| `elitea_core/api/v2/tags.py::PromptLibAPI.get` | `models.promptlib_shared.tags.list` | `get_elitea_core_tags` |
+| `elitea_core/api/v2/search_options.py::PromptLibAPI.get` | `models.promptlib_shared.search` | `get_elitea_core_search_options` |
+
+This category remains closed. Main's tag handler returns every stored tag row.
+The current operation returns only tags used by applications, pipelines, or
+skills. It also adds relation counts and applies entity visibility rules.
+
+Main's Search Options handler returns only tag names and an empty collection
+list. The current operation accepts selected application, pipeline, toolkit,
+credential, and skill entities. It returns each selected entity's search
+options and merges shared tag and collection results. Publishing either Main
+answer under the current MCP name would return plausible but incorrect data.
+
+### Chat
+
+The current platform opts 13 operations into `elitea_core/chat`. They cover
+conversation list and creation, participant read and removal, folder list,
+folder creation and update, conversation read and update, participant
+configuration, participant addition, message send, and durable continuation.
+
+This category remains closed as one security boundary. Main's present REST
+handlers do not yet preserve the current actor-visibility contract. The list
+and folder queries can read all project conversations. Folder creation stores
+owner `1` instead of the authenticated actor. Conversation creation drops
+participants, privacy, source, metadata, instructions, and the required user
+and dummy participants. Conversation update preserves only name and folder.
+
+Message send and continuation also cross the durable runtime boundary. The
+current MCP operations can wait for bounded results and return message groups.
+Main currently admits execution and exposes a separate event stream. An
+internal MCP executor must define bounded wait, cancellation, HITL,
+authorization resume, and terminal result projection before it publishes
+these operations.
+
+Fix the shared REST and repository behavior first. Then reuse those exact
+handlers or use cases from Internal MCP. Do not add an MCP-only ownership rule
+or a second execution path.
+
+### Analytics and artifacts
+
+The analytics category remains closed until Main's persisted execution and
+usage projections match the current aggregate and detail operations. Empty or
+synthetic aggregates are not valid MCP results.
+
+The artifacts category remains closed until artifact grants, object authority,
+credential handling, and storage-provider behavior are complete. Internal MCP
+must not bypass those gates through Main's compatibility routes.
+
 ## Main ownership
 
 Main owns listing, execution, authorization, project clamping, and mutation.
 The fixed catalogues are in
-`internal/api/v2/mcp/internal_{applications,skills,toolkits,configurations,notifications}_catalog.go`.
+`internal/api/v2/mcp/internal_{applications,skills,toolkits,configurations,notifications,project_context,secrets}_catalog.go`.
 Application and skill executors reuse Main business repositories. The toolkit
 executor deliberately reuses the fully composed REST handler so every toolkit
 mutation crosses the same policy and secret boundaries. Application version
@@ -312,8 +426,8 @@ Core-to-Indexer-to-SDK execution split.
 
 ## Verification
 
-Main unit tests pin all five catalogues, wire schemas, permissions, project clamps,
-runtime-independent dispatch, business-error shapes, and redacted
+Main unit tests pin all seven catalogues, wire schemas, permissions, project
+clamps, runtime-independent dispatch, business-error shapes, and redacted
 infrastructure failures. Validation tests cover application and skill inputs.
 
 PostgreSQL integration tests prove atomic backup and instruction patching,
@@ -351,42 +465,41 @@ proof covers global per-user listing across project metadata, search and event
 filters, `only_total`, cross-user detail refusal, persisted mark-seen, and an
 idempotent second mark that does not change the row timestamp.
 
+Project-context tests pin the three-operation catalogue, current names and
+permissions, private discriminator omission, project clamping, authenticated
+actor propagation, update-field allowlisting, null and size validation,
+normalization, default response shape, and redacted failures. Its isolated
+PostgreSQL lifecycle proves absent defaults, deterministic creation metadata,
+activation preservation and removal, replacement defaults, read-after-write,
+DELETE, repeated-delete 404, and post-delete defaults. OpenAPI route
+conformance includes all three REST methods and the five-field response shape.
+
+Secret tests pin the three-operation catalogue, omission of plaintext and
+destructive operations, exact permissions, project clamping, authenticated
+actor propagation, path-authoritative update identity, request-field
+allowlisting, name/schema invariants, nil-executor behavior, and redacted
+infrastructure failures. Its isolated PostgreSQL lifecycle proof covers empty
+list, create, safe metadata response, list without values, rotation without
+rename, direct vault verification, and encrypted-at-rest bytes containing
+neither supplied plaintext value. Router composition tests pin one handler for
+REST, Internal MCP, and prebuilt-MCP materialization.
+
 Prebuilt materialization tests prove that runtime placeholders cannot become
 stored toolkit parameters, internal PATs are restricted to the configured Main
 origin, and external origins receive no delegated platform credential. The
 existing Rust configured-MCP tests remain the worker-side protocol proof.
 
-### External direct-tool execution boundary
-
-The current platform resolves an opted-in toolkit row in
-`elitea_core/utils/mcp_service.py::__get_toolkit_by_name`, then
-`methods/runtool.py` schedules the exact saved toolkit ID, operation name, and
-arguments. The SDK's `runtime/clients/client.py::test_toolkit_tool` builds that
-one toolkit and invokes the selected operation directly. It does not ask an LLM
-to plan the call.
-
-Rust now has the matching direct execution kernel in
-`src/toolkits/direct_execution.rs`. It accepts exactly one already-materialized
-toolset and an original toolkit/operation identity retained by Main, enumerates
-the toolset once with the shared bound, and invokes the exact operation with an
-out-of-loop ADK context. It rejects a missing or duplicated target, bounded
-argument violations, over-limit results, tools requiring unprojected ADK user
-scopes, and every operation whose runtime `Tool::is_read_only()` is false.
-Delegated authorization remains a typed redacted outcome instead of becoming a
-generic provider failure.
-
-This kernel is intentionally not a production capability yet. The next slice
-must carry one immutable toolkit snapshot through a reference-only command,
-claim-scoped materialization, durable terminal result, and Main's synchronous
-MCP `tools/call` waiter. Effectful operations remain closed until a durable
-effect identity/receipt makes redelivery safe; reusing `agent.execute.adhoc.v1`
-would be incorrect because it would add a model turn and change the current
-direct-call semantics.
-
 ## Remaining gates
 
 Other internal categories must be mapped operation by operation. No generic
 OpenAPI self-dispatch is allowed.
+
+The discovery category remains closed until Main implements relation-aware tag
+listing and entity-specific Search Options. Protocol tests pin that refusal.
+
+The chat category remains closed until shared Main REST handlers enforce actor
+visibility and preserve conversation, folder, participant, and runtime
+semantics. Do not publish a metadata-only approximation under current names.
 
 The sixth toolkit operation, live available-tool discovery, remains an explicit
 Main parity gate. It must use the exact saved instance and current actor's
@@ -397,6 +510,13 @@ Skill draft generation remains gated because Main does not yet own its model
 operation. Multi-version skills, rich tag metadata, extended list filters, and
 actor attribution also remain Main parity gates.
 
+Project-context AI draft generation and runtime progressive-disclosure loading
+remain separate gates. Completing builder CRUD does not claim either behavior.
+
+Default-secret metadata and conditional default-name suppression remain a
+shared Main secrets parity gate. The current MCP category cannot fix them in
+isolation because REST and MCP deliberately share the same vault handler.
+
 The three typed configuration operations and the Python list `ids` filter
 remain explicit Main parity gates. They must reuse the production typed model
 catalogue/default services rather than the reduced compatibility handlers.
@@ -405,10 +525,12 @@ The extended application-list filters and version-copy skill option remain
 explicit parity gates. Main must own their durable data and validation before
 the internal MCP schema can publish them.
 
-External toolkit execution through Elitea-as-MCP remains separate from this
-internal category. External agent execution exists behind the runtime gate;
-external toolkit execution and agent or pipeline exposure controls still need
-their own end-to-end proof.
+External Elitea-as-MCP stays separate from this internal category. Its
+catalogue, direct read-only toolkit runtime, live proof, and remaining gates are
+recorded in [`external-elitea-mcp.md`](external-elitea-mcp.md).
 
-OAuth and DCR callback ownership remains in Main and the UI. Rust consumes only
-claim-scoped tokens and sanitized authorization metadata.
+Main and the UI own OAuth and DCR callback behavior. Rust consumes only
+claim-scoped tokens and safe authorization metadata.
+
+The implemented proxy and its remaining live gates are mapped in
+[`delegated-oauth-dcr.md`](delegated-oauth-dcr.md).

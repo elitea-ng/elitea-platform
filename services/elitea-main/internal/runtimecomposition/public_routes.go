@@ -12,6 +12,7 @@ import (
 	indexingapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indexing"
 	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
 	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
+	toolkitexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
 )
 
 type PublicRoutes struct {
@@ -27,6 +28,10 @@ type PublicRoutes struct {
 	// AgentCancel preserves the current DELETE contract while atomically
 	// cancelling the exact durable execution and its current chat projection.
 	AgentCancel agentexecutionapi.CurrentAgentCanceller
+	// ToolkitExecuteRead runs one explicitly MCP-exposed, selected, non-sensitive
+	// toolkit operation through the durable Rust worker path. It is nil whenever
+	// the agent/runtime plane is disabled.
+	ToolkitExecuteRead *toolkitexecutionapp.CurrentReadToolExecutionService
 	// IndexCancel preserves the current UI DELETE contract while selecting only
 	// Go-owned execution IDs at the compatibility edge.
 	IndexCancel indexingapi.CurrentIndexCanceller

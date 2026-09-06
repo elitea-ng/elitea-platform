@@ -246,15 +246,18 @@ site-prefix, document-library, recursive traversal, extension-filter and
 provider-next-link behavior without downloading content.
 
 This subset rejects an empty selection because the SDK interprets empty as the
-complete catalog; silently returning only eight tools would change saved-agent
-behavior. `rest_wrapper.py` and `authorization_helper.py` remain the separate
-ACS/app-only authority gap. `read_document`, sharing-link parsing, OneNote
-image/attachment interpretation, artifact upload and all effects remain closed
-until the artifact boundary and effect receipts exist. A real Graph 401 is
-converted to the common delegated-auth signal and direct Toolkit nodes can
-checkpoint it; a model-owned loop still requires a runtime-discovered
-confirmation adapter when a previously accepted token expires. Proactive
-missing-token model calls already use the native original-call confirmation.
+complete catalog. A mixed saved selection exposes only supported reads that the
+user selected. It reports the count of omitted operations without exposing
+their arguments or configuration. A selection with no supported read still
+fails closed. `rest_wrapper.py` and `authorization_helper.py` remain the
+separate ACS/app-only authority gap. `read_document`, sharing-link parsing,
+OneNote image or attachment interpretation, artifact upload, indexing, and all
+effects remain closed until the artifact boundary and effect receipts exist. A
+real Graph 401 is converted to the common delegated-auth signal and direct
+Toolkit nodes can checkpoint it. A model-owned loop still requires a
+runtime-discovered confirmation adapter when a previously accepted token
+expires. Proactive missing-token model calls already use the native
+original-call confirmation.
 `src/toolkits/sharepoint_tests.rs` owns configuration/token precedence,
 guarded schema, fixed-origin/sensitive-header, pagination, library-path,
 metadata-only traversal, reactive-401 and materializer-catalog proof. This
@@ -2003,8 +2006,8 @@ cluster topology.
 | Python source | Behavior | Rust target | Status / deviation |
 | --- | --- | --- | --- |
 | SDK `runtime/tools/ask_user.py` plus `runtime/toolkits/tools.py` internal-tool selection | Runtime-built clarification tool with 1-4 normalized questions and a structured UI answer | `src/agents/internal_tools.rs`, direct/nested agent session replay and pipeline LLM graph replay | Implemented capability-disabled through native ADK confirmation. Object/string answers replace the original call result; they are not new user turns. Main application/ad-hoc projection and `answer` admission are included. Nested-parallel saved-child calls have distinct hierarchical cards, atomic complete-set admission, frozen child-scope validation, and exact-answer replay coverage |
-| SDK `runtime/toolkits/mcp.py` | Remote MCP discovery and invocation | `src/toolkits/mcp.rs`, `src/agents/{ordinary,pipeline}.rs` | Partial capability-disabled HTTP implementation with exact selected-tool discovery/invocation, bounded RMCP protected-resource and authorization-server discovery, exact delegated authorization resume, and native direct/pipeline composition. Fixed and declared-parameter catalogue-backed HTTP definitions are supported through Main claim-time resolution. Stdio, descriptor sync, remaining OAuth transport variants, and Elitea-as-MCP-server remain gated |
-| SDK `runtime/toolkits/mcp_config.py` | Saved HTTP/stdio MCP definitions | Main prebuilt catalogue, dynamic toolkit schema and claim materializer; Rust MCP module; external MCP runner client | Partial capability-disabled for fixed and declared-parameter HTTP definitions with project-vault secret sealing. Main also injects runtime-only project identity and a current-user PAT for trusted same-origin internal MCP endpoints. The Main-owned applications, skills, and truthful toolkit builder operations are mapped in `internal-elitea-mcp.md`; live per-instance toolkit discovery remains closed there. Stdio is intentionally externalized |
+| SDK `runtime/toolkits/mcp.py` | Remote MCP discovery and invocation | `src/toolkits/mcp.rs`, `src/agents/{ordinary,pipeline}.rs` | Partial capability-disabled HTTP implementation with exact selected-tool discovery/invocation, bounded RMCP protected-resource and authorization-server discovery, exact delegated authorization resume, and native direct/pipeline composition. Fixed and declared-parameter catalogue-backed HTTP definitions are supported through Main claim-time resolution. External Elitea-as-MCP can execute opted-in selected read-only toolkit operations through the separately gated durable direct-tool path. Stdio, descriptor sync, remaining OAuth transport variants, effectful external calls and external agent/pipeline controls remain gated |
+| SDK `runtime/toolkits/mcp_config.py` | Saved HTTP/stdio MCP definitions | Main prebuilt catalogue, dynamic toolkit schema and claim materializer; Rust MCP module; external MCP runner client | Partial capability-disabled for fixed and declared-parameter HTTP definitions with project-vault secret sealing. Main also injects runtime-only project identity and a current-user PAT for trusted same-origin internal MCP endpoints. The Main-owned application, skill, toolkit, configuration, notification, project-context, and secret operations are mapped in `internal-elitea-mcp.md`. Discovery, chat, analytics, artifacts, and live per-instance toolkit discovery remain closed there. Stdio is intentionally externalized |
 | SDK `runtime/toolkits/application.py` | Nested applications | `src/agents/application_tools.rs`, `src/agents/graph/application.rs` | Partial capability-disabled direct-agent and saved-pipeline nesting with exact version, hierarchy, cycle/tier bounds and durable nested HITL; private immutable Main child resolution, child variables and further recursive pipeline nodes remain gated |
 | SDK `runtime/toolkits/artifact.py` | 16 artifact tools and indexing coupling | `src/toolkits/artifact.rs` | Planned; artifact service boundary required |
 | SDK `tools/memory` and `runtime/toolkits/vectorstore.py` | Four memory and four vectorstore tools | `src/toolkits/{memory,vectorstore}.rs` | Planned |

@@ -56,22 +56,15 @@ func (u *CurrentVaultUnsecreter) Unsecret(
 		return nil, err
 	}
 
-	projectVault, err := u.vaults.LoadProjectVault(ctx, int64(configurationProjectID))
-	if err != nil || projectVault == nil {
-		return nil, currentUnsecretDependencyError(ctx, err)
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
 	if data == nil {
 		return nil, nil
 	}
 
 	walker := currentUnsecretWalker{
-		ctx:          ctx,
-		vaults:       u.vaults,
-		projectVault: projectVault,
-		resolved:     make(map[string]currentSecretResolution),
+		ctx:       ctx,
+		vaults:    u.vaults,
+		projectID: int64(configurationProjectID),
+		resolved:  make(map[string]currentSecretResolution),
 	}
 	value, err := walker.clone(data, 0)
 	if err != nil {
@@ -96,15 +89,17 @@ type currentSecretResolution struct {
 }
 
 type currentUnsecretWalker struct {
-	ctx          context.Context
-	vaults       SecretVaultLoader
-	projectVault SecretVault
-	adminVault   SecretVault
-	adminLoaded  bool
-	resolved     map[string]currentSecretResolution
-	nodes        int
-	references   int
-	outputBytes  int
+	ctx           context.Context
+	vaults        SecretVaultLoader
+	projectID     int64
+	projectVault  SecretVault
+	projectLoaded bool
+	adminVault    SecretVault
+	adminLoaded   bool
+	resolved      map[string]currentSecretResolution
+	nodes         int
+	references    int
+	outputBytes   int
 }
 
 func (w *currentUnsecretWalker) clone(value any, depth int) (any, error) {
@@ -254,7 +249,11 @@ func (w *currentUnsecretWalker) resolve(name string) (currentSecretResolution, e
 		return resolution, nil
 	}
 
-	secret, err := w.projectVault.Lookup(name)
+	projectVault, err := w.loadProjectVault()
+	if err != nil {
+		return currentSecretResolution{}, err
+	}
+	secret, err := projectVault.Lookup(name)
 	if err == nil {
 		return w.cacheSecret(name, secret)
 	}
@@ -282,6 +281,25 @@ func (w *currentUnsecretWalker) resolve(name string) (currentSecretResolution, e
 	resolution := currentSecretResolution{}
 	w.resolved[name] = resolution
 	return resolution, nil
+}
+
+func (w *currentUnsecretWalker) loadProjectVault() (SecretVault, error) {
+	if w.projectLoaded {
+		return w.projectVault, nil
+	}
+	if err := w.ctx.Err(); err != nil {
+		return nil, err
+	}
+	vault, err := w.vaults.LoadProjectVault(w.ctx, w.projectID)
+	if err != nil || vault == nil {
+		return nil, currentUnsecretDependencyError(w.ctx, err)
+	}
+	if err := w.ctx.Err(); err != nil {
+		return nil, err
+	}
+	w.projectVault = vault
+	w.projectLoaded = true
+	return vault, nil
 }
 
 func (w *currentUnsecretWalker) cacheSecret(
