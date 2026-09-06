@@ -29,11 +29,13 @@ import (
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api"
 	v2analytics "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/analytics"
+	v2applicationskills "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/applicationskills"
 	v2auth "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/auth"
 	v2convs "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
 	v2deepwiki "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
 	v2events "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/events"
 	v2folders "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/folders"
+	v2indextypes "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indextypes"
 	v2skills "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/skills"
 	v2social "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/social"
 	v2tags "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/tags"
@@ -126,6 +128,16 @@ func buildFullSurfaceConfig() api.RouterConfig {
 		// router. Its ServeHTTP answers 503 for a zero value rather than
 		// panicking, so even a served request would be harmless here.
 		DeepWiki: &v2deepwiki.Route{},
+
+		// The index-types and attached-skills reads (#394, #395). Both are
+		// MANDATORY here, not optional stubs: each is the ONLY handler for a
+		// path the spec declares (getDocumentLoaders, listApplicationSkills).
+		// The prototype mounts in router.go used to cover those two operations
+		// for this walk, and deleting them left the spec describing two routes
+		// the full surface did not register. Same zero-value scheme as above —
+		// each ServeHTTP answers 404 for a zero value rather than panicking.
+		CurrentIndexTypes:        &v2indextypes.CurrentIndexTypesRoute{},
+		CurrentApplicationSkills: &v2applicationskills.CurrentApplicationSkillsRoute{},
 	}
 }
 
