@@ -42,8 +42,12 @@ type Terminal struct {
 }
 
 // poll is the wire envelope. `custom_events` is deliberately absent: it is
-// read-once progress text, and a facade observing a response it is also
-// forwarding has no business appearing to consume it.
+// read-once — progress, and since issue #701 the answer's own fragments —
+// and a facade observing a response it is also forwarding has no business
+// appearing to consume it. The tee below records the answer from the
+// TERMINAL body for the same reason: the fragments belong to the browser
+// that is draining them, and a transcript built from them would be a second
+// reading of the same answer.
 type poll struct {
 	InvocationID string `json:"invocation_id"`
 	Status       string `json:"status"`

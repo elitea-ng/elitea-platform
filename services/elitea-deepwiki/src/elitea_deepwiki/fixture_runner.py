@@ -7,10 +7,11 @@ without the analysis engine's dependency closure, a git host or a model.
 The browser journeys run against it.
 
 It is :class:`LegacyToolRunner` with its tools injected, plus paced progress
-events so a client sees a run in flight and can stop it. Everything
-downstream of the tool call is the real code — the Go host's merge, egress
-check, composition and upload, this package's publish. What is canned is
-only what the engine would have computed.
+events so a client sees a run in flight and can stop it, and the answer
+streamed down the token channel so a client sees it being written (issue
+#701). Everything downstream of the tool call is the real code — the Go
+host's merge, egress check, composition and upload, this package's publish.
+What is canned is only what the engine would have computed.
 
 The canned wiki is deterministic and derived from the request, so a test can
 predict the keys that land: ``{owner}--{repo}--{branch}/…``. One page carries
@@ -65,6 +66,37 @@ RESEARCH_TODOS: tuple[dict[str, Any], ...] = (
     {"id": 2, "title": "Read the relevant pages", "description": "", "status": "in_progress"},
     {"id": 3, "title": "Write the report", "description": "", "status": "pending"},
 )
+
+
+#: Which key of each tool's canned result holds the ANSWER, and therefore what
+#: the fixture streams down the token channel (issue #701). ``generate_wiki``
+#: is absent on purpose: it produces a wiki, not an answer, and its result
+#: string ("Wiki generated: 3 pages") is a status line no reader waits on.
+#: The Go host's fixture (run/fixture.go, StreamedAnswerKey) carries the SAME
+#: table — the E2E stack runs that one, the standalone stack runs this one,
+#: and the streaming journey must pass on both.
+STREAMED_ANSWER_KEY: dict[str, str] = {"ask": "answer", "deep_research": "report"}
+
+#: How many fragments one fixture answer is cut into.
+#:
+#: More than one, because a single fragment cannot tell a reader that reads
+#: the whole answer at once from one that streams. Small, because every
+#: fragment is paced like a progress step and the browser journeys wait for
+#: the run to finish.
+STREAM_FRAGMENTS = 3
+
+
+def answer_fragments(answer: str, count: int = STREAM_FRAGMENTS) -> tuple[str, ...]:
+    """Cut one answer into ``count`` fragments that JOIN BACK to it exactly.
+
+    Joined with no separator, in order — the rule the token channel states —
+    so a test can assert the concatenation against the answer the tool
+    returns rather than against a copy of it.
+    """
+    if not answer:
+        return ()
+    size = max(1, -(-len(answer) // count))  # ceiling division
+    return tuple(answer[start:start + size] for start in range(0, len(answer), size))
 
 
 def todo_update_event(todos: tuple[dict[str, Any], ...] = RESEARCH_TODOS) -> str:
@@ -224,5 +256,27 @@ class FixtureToolRunner(LegacyToolRunner):
             # invocation raises here instead of finishing and uploading.
             await context.checkpoint()
             await context.thinking(step)
+            if self._step_seconds > 0:
+                await asyncio.sleep(self._step_seconds)
+
+    async def _streamed(self, tool_name: str, result: Any, context: Any) -> None:
+        """Stream the answer this run is about to return, in fragments.
+
+        AFTER the tool rather than before it, so what is streamed is the
+        answer itself and not a second copy that could drift from it. The
+        real engine streams while it writes; a fixture has nothing to write
+        with, and the property that matters to every consumer downstream —
+        fragments arrive in order, join to the answer, and stop when the
+        invocation completes — is the same either way.
+        """
+        key = STREAMED_ANSWER_KEY.get(tool_name)
+        if key is None or not isinstance(result, dict):
+            return
+        answer = result.get(key)
+        if not isinstance(answer, str):
+            return
+        for fragment in answer_fragments(answer):
+            await context.checkpoint()
+            await context.token(fragment)
             if self._step_seconds > 0:
                 await asyncio.sleep(self._step_seconds)

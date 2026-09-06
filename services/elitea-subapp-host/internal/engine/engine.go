@@ -6,11 +6,18 @@
 // merge, composition and upload; the sidecar runs one tool at a time:
 //
 //	POST /engine/invoke                 {invocation_id, tool, arguments}
-//	  → NDJSON: {"thinking": "…"}* then {"result": {…}} | {"error": {…}}
+//	  → NDJSON: {"thinking": "…"} and {"token": "…"} interleaved, then
+//	    {"result": {…}} | {"error": {…}}
 //	POST /engine/invocations/{id}/stop  requests a cooperative stop
 //
-// Progress lines become the invocation's thinking events as they arrive;
-// the host's own stop checkpoint is watched while the stream is open, and a
+// Progress lines become the invocation's thinking events as they arrive and
+// token lines become its answer events, IN THE ORDER THEY ARRIVE: they share
+// one event list, so a poll shows the answer growing between the steps that
+// produced it. Two keys rather than one because the two are different things
+// and a reader must not have to guess which (issue #701; the envelope is
+// conformance/provider/fixtures/deepwiki/stream/token_events.json).
+//
+// The host's own stop checkpoint is watched while the stream is open, and a
 // stop is forwarded to the sidecar — which terminates the engine's worker
 // subprocess — before this side gives up on the stream.
 //
@@ -39,6 +46,7 @@ import (
 // line is one NDJSON line of the sidecar's stream.
 type line struct {
 	Thinking *string        `json:"thinking,omitempty"`
+	Token    *string        `json:"token,omitempty"`
 	Result   map[string]any `json:"result,omitempty"`
 	Error    *lineError     `json:"error,omitempty"`
 }
@@ -145,6 +153,13 @@ func (c *Client) Invoke(ctx context.Context, tool string, arguments map[string]a
 		switch {
 		case next.Thinking != nil:
 			if err := tc.Thinking(ctx, *next.Thinking); err != nil {
+				return nil, err
+			}
+		case next.Token != nil:
+			// Before the error and result cases for the same reason
+			// Thinking is: a line is exactly one of these, and the order
+			// only records which key is read first.
+			if err := tc.Token(ctx, *next.Token); err != nil {
 				return nil, err
 			}
 		case next.Error != nil:

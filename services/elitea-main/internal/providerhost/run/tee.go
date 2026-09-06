@@ -4,9 +4,15 @@ package run
 //
 // A FACADE SEES AN ANSWER EXACTLY ONCE: when the browser drains it. Every
 // provider route here is a proxy, so there is no other moment — the invoke
-// returns an id, the events are read-once progress, and the result arrives on
+// returns an id, the events are read-once, and the result arrives on
 // whichever poll the run happened to finish before. A facade that wants to
 // record what a provider produced has to read it in flight or not at all.
+//
+// THE ANSWER'S OWN FRAGMENTS ARE NOT THAT MOMENT. Since issue #701 the
+// events carry the answer as it is written, and a transcript assembled from
+// them would depend on the browser having polled often enough to see every
+// one. The terminal body carries the whole answer either way, so that is
+// what is recorded.
 //
 // THE READ IS A COPY, NOT A CONSUMPTION. providerhost/proxy buffers the
 // response in its ModifyResponse hook and puts the bytes back in front of the

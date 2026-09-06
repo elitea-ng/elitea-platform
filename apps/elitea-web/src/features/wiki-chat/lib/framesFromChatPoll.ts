@@ -23,20 +23,28 @@
  * EVENTS ARE READ-ONCE. `custom_events` arrives only on the poll that drained
  * it. Every event must become a frame HERE or it is gone.
  *
- * NO FRAME HERE CARRIES A TOKEN FRAGMENT, and that is a property of the SPI
- * rather than an omission. The provider has one event channel —
- * `thinking(message: str)` in `elitea_deepwiki/invocations.py` — and the frozen
- * envelope (`conformance/fixtures/spi/custom_events.json`) is
- * `{"custom_events": [{"data": {"message": str}}]}`: progress text, never a
- * partial answer. The `chunk` / `AIMessageChunk` / `agent_llm_chunk` frames the
- * reducer handles came from the socket.io transport ADR-0022 removed.
+ * TWO CHANNELS SHARE THE EVENT LIST. The poll envelope is frozen
+ * (`conformance/provider/fixtures/deepwiki/spi/custom_events.json`) as
+ * `{"custom_events": [{"data": {"message": str}}]}`, so the answer's tokens
+ * travel inside the same `message` string as a STRUCTURED EVENT —
+ * `{"event":"llm_chunk","data":{"text":"…"}}` — the way `todo_update` and
+ * `tool_start` already do. This file separates them again: an `llm_chunk`
+ * becomes an `agent_llm_chunk` frame carrying the fragment in `content`, and
+ * everything else becomes a thinking step. See
+ * `conformance/provider/fixtures/deepwiki/stream/token_events.json`, which the
+ * engine, the host and this adapter all answer to (issue #701).
  *
- * So the reducer's streaming support is CORRECT AND INERT: it is what a token
- * channel would feed, and nothing feeds it today. Issue #701 tracks giving the
- * SPI one — a second event kind inside this same envelope is enough, and this
- * file is the only place the browser would change. DWIKI-012 stays
- * `in-progress` until then, because a criterion nothing can satisfy is not
- * satisfied by the half of it that is ready.
+ * ORDER IS THE POINT of doing it here rather than one layer down. Progress and
+ * tokens arrive interleaved in one list, and the frames must keep that order:
+ * an answer that arrives around a tool call is only readable if the two are
+ * not sorted apart.
+ *
+ * A TOKEN MUST NOT REACH THE REDUCER AS A THINKING FRAME. The reducer reads a
+ * structured event out of `response_metadata.message`, and its `default:`
+ * branch SHOWS an event it has no reading for as one more card. So an
+ * `llm_chunk` left on the thinking path does not fail: it renders the answer,
+ * fragment by fragment, as a list of thinking cards, and nothing anywhere
+ * reports a problem.
  */
 import {
   drainEventMessages,
@@ -44,7 +52,11 @@ import {
   terminalOutcome,
   type InvocationPoll,
 } from '@/entities/provider-run';
+import { field, structuredEvent } from '../model/frames/shared';
 import { ChatFrameType, type ChatFrame } from '../model/types';
+
+/** The structured event name that carries one fragment of the answer. */
+const TOKEN_EVENT = 'llm_chunk';
 
 // The envelope is the run entity's (ADR-0023 d4); the chat names stay for
 // this adapter's callers and tests.
@@ -64,6 +76,17 @@ export function framesFromChatPoll(
   const frames: ChatFrame[] = [];
 
   for (const message of drainEventMessages(poll)) {
+    const fragment = tokenFragment(message);
+    if (fragment !== null) {
+      frames.push({
+        type: ChatFrameType.AgentLlmChunk,
+        // In `content`, because that is where the reducer's accumulator
+        // reads a fragment from. The metadata carries the stream id only.
+        content: fragment,
+        response_metadata: { ...metadataBase },
+      });
+      continue;
+    }
     frames.push({
       type: ChatFrameType.AgentThinkingStep,
       response_metadata: { ...metadataBase, message },
@@ -74,6 +97,22 @@ export function framesFromChatPoll(
   if (terminal) frames.push(terminal);
 
   return frames;
+}
+
+/**
+ * The answer fragment one event carries, or null when it carries none.
+ *
+ * A NON-STRING `text` IS NOT A FRAGMENT, and an empty one is not either. Both
+ * come back as null and take the thinking path, so the event is still shown as
+ * a step rather than swallowed: an `llm_chunk` whose payload this build cannot
+ * read is something happening that the reader should see, and appending
+ * `undefined` to a live answer would be worse than showing the envelope.
+ */
+function tokenFragment(message: unknown): string | null {
+  const event = structuredEvent(message);
+  if (event === null || event.event !== TOKEN_EVENT) return null;
+  const text = field(event.data, 'text');
+  return typeof text === 'string' && text !== '' ? text : null;
 }
 
 function terminalFrame(

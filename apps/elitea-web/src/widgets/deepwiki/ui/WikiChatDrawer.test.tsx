@@ -207,6 +207,41 @@ describe('the drawer', () => {
     expect(await screen.findByText('Reading files')).toBeVisible();
   });
 
+  it('renders the answer as it streams in, before the run finishes', async () => {
+    // The ANSWER TOKEN channel (issue #701), through the whole composition:
+    // the provider's `llm_chunk` events, the adapter, the reducer's
+    // accumulator, and the preview the messages list renders. Every one of
+    // those was in place before this test except the middle two, and the
+    // screen showed a spinner for the whole run.
+    const user = userEvent.setup();
+    const fragment = (text: string) => ({
+      data: { message: JSON.stringify({ event: 'llm_chunk', data: { text } }) },
+    });
+    // ONE poll, still running: the first poll is immediate, and a second one
+    // would need the 2s interval to elapse. What it must show is a partial
+    // answer WITHOUT a finished one.
+    servePolls([
+      {
+        status: 'InProgress',
+        custom_events: [fragment('The router is in '), fragment('api/router.go')],
+      },
+    ]);
+
+    open();
+    await user.type(screen.getByLabelText('Question'), 'Where is the router?');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    const streaming = await screen.findByTestId('wiki-chat-streaming');
+    // The fragments joined, in order, with no separator.
+    expect(streaming).toHaveTextContent('The router is in api/router.go');
+    // Not an answer: the turn has not settled, and a finished answer here
+    // would be the preview being mistaken for one.
+    expect(screen.queryByTestId('wiki-chat-answer')).toBeNull();
+    // And not a thinking card either — that is the degraded reading this
+    // channel exists to avoid.
+    expect(screen.queryByText('The router is in ')).toBeNull();
+  });
+
   it('reports a failed invocation instead of spinning', async () => {
     const user = userEvent.setup();
     server.use(

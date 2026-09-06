@@ -232,6 +232,11 @@ class AskEngine:
         self.final_answer = ""
         self.error = None
         step_count = 0
+        # The fragments of the final answer, in arrival order, and the
+        # tool calls already announced. See the two streamed branches
+        # below (issue #701).
+        answer_fragments = []
+        announced_tool_calls = set()
 
         yield {
             "event_type": "ask_start",
@@ -300,6 +305,21 @@ class AskEngine:
                     if isinstance(message, AIMessage):
                         if hasattr(message, "tool_calls") and message.tool_calls:
                             for tool_call in message.tool_calls:
+                                # STREAMED (issue #701): with `streaming` on a
+                                # tool call can reach this loop more than once,
+                                # as the chunks of its arguments arrive, and one
+                                # call would become a run of identical cards in
+                                # the thinking log. A repeat of an id already
+                                # announced is dropped. A call with NO id is
+                                # never suppressed, because there is nothing to
+                                # tell two of them apart by, and with streaming
+                                # off every id is announced once — so this is
+                                # inert on the path it replaces.
+                                announced = tool_call.get("id")
+                                if announced:
+                                    if announced in announced_tool_calls:
+                                        continue
+                                    announced_tool_calls.add(announced)
                                 step_count += 1
                                 tool_call_id = tool_call.get("id", f"call_{step_count}")
                                 tool_name = tool_call.get("name", "unknown")
@@ -318,7 +338,32 @@ class AskEngine:
 
                         # Final content (no tool calls = final answer)
                         if message.content and not message.tool_calls:
-                            self.final_answer = message.content
+                            # STREAMED (issue #701). With `streaming` on, the
+                            # answer reaches this branch one fragment at a
+                            # time, so the assignment this replaces would keep
+                            # the LAST fragment and throw the answer away. The
+                            # fragments are joined instead, and each is
+                            # published as its own event so that a reader can
+                            # watch the answer being written. With streaming
+                            # off there is exactly one fragment and the join
+                            # is the assignment it replaces.
+                            if isinstance(message.content, str):
+                                answer_fragments.append(message.content)
+                                self.final_answer = "".join(answer_fragments)
+                                yield {
+                                    "event_type": "llm_chunk",
+                                    "data": {
+                                        "text": message.content,
+                                        "timestamp": datetime.now().isoformat(),
+                                    },
+                                }
+                            else:
+                                # NOT TEXT — an Anthropic content-block list,
+                                # say. Assigned whole, exactly as before: a
+                                # stringified block list is not an answer, and
+                                # joining the fragments of one would compound
+                                # that rather than fix it.
+                                self.final_answer = message.content
 
                     elif isinstance(message, ToolMessage):
                         step_count += 1

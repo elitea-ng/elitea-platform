@@ -22,9 +22,10 @@ import (
 // repairs.
 
 // Steps is what each fixture tool emits before it answers, in order, down
-// the one channel the SPI has (`thinking`). Most entries are progress text
-// and the UI's thinking log renders them verbatim; deep_research's second
-// entry is a STRUCTURED EVENT instead — see ResearchTodos.
+// the PROGRESS channel (`thinking`). Most entries are progress text and the
+// UI's thinking log renders them verbatim; deep_research's second entry is
+// a STRUCTURED EVENT instead — see ResearchTodos. The answer itself goes
+// down the token channel afterwards — see StreamedAnswerKey.
 var Steps = map[string][]string{
 	"generate_wiki": {"Cloning the repository", "Indexing 12 files", "Planning the wiki structure", "Writing 3 pages", "Assembling the manifest"},
 	"ask":           {"Searching the wiki index", "Composing the answer"},
@@ -61,6 +62,49 @@ var ResearchTodos = []map[string]any{
 func TodoUpdateEvent(todos []map[string]any) string {
 	event, _ := json.Marshal(map[string]any{"event": "todo_update", "data": map[string]any{"items": todos}})
 	return string(event)
+}
+
+// StreamedAnswerKey names, per tool, which key of the canned result holds
+// the ANSWER — and therefore what the fixture streams down the token
+// channel (issue #701). generate_wiki is absent on purpose: it produces a
+// wiki, not an answer, and its result string ("Wiki generated: 3 pages") is
+// a status line no reader waits on.
+//
+// The Python fixture runner (fixture_runner.py, STREAMED_ANSWER_KEY) carries
+// the same table. The E2E stack runs this one and the standalone stack runs
+// that one, and the streaming journey must pass on both.
+var StreamedAnswerKey = map[string]string{"ask": "answer", "deep_research": "report"}
+
+// StreamFragments is how many fragments one fixture answer is cut into.
+//
+// More than one, because a single fragment cannot tell a reader that shows
+// the whole answer at once from one that streams. Small, because every
+// fragment is paced like a progress step and the browser journeys wait for
+// the run to finish.
+const StreamFragments = 3
+
+// AnswerFragments cuts one answer into StreamFragments pieces that JOIN BACK
+// to it exactly — in order, with no separator, which is the rule the token
+// channel states. A test can therefore assert the concatenation against the
+// answer the tool returns rather than against a copy of it.
+func AnswerFragments(answer string) []string {
+	if answer == "" {
+		return nil
+	}
+	// Runes, not bytes: a fragment that cut a multi-byte character in half
+	// would arrive as a replacement character in the browser and the join
+	// would no longer equal the answer.
+	runes := []rune(answer)
+	size := (len(runes) + StreamFragments - 1) / StreamFragments
+	fragments := make([]string, 0, StreamFragments)
+	for start := 0; start < len(runes); start += size {
+		end := start + size
+		if end > len(runes) {
+			end = len(runes)
+		}
+		fragments = append(fragments, string(runes[start:end]))
+	}
+	return fragments
 }
 
 // BrokenMermaidPage is the page the quick-fix journey repairs.
@@ -104,7 +148,31 @@ func FixtureTools(step time.Duration) map[string]Tool {
 					}
 				}
 			}
-			return tool(arguments), nil
+			result := tool(arguments)
+			// The answer is streamed AFTER it is computed, so what the
+			// tokens carry is the answer itself rather than a second copy
+			// that could drift from it. The real engine streams while it
+			// writes; what every consumer downstream depends on — the
+			// fragments arrive in order, join to the answer, and stop when
+			// the invocation completes — is the same either way.
+			if key, streamed := StreamedAnswerKey[name]; streamed {
+				for _, fragment := range AnswerFragments(str(result[key])) {
+					if err := tc.Checkpoint(); err != nil {
+						return nil, err
+					}
+					if err := tc.Token(ctx, fragment); err != nil {
+						return nil, err
+					}
+					if step > 0 {
+						select {
+						case <-time.After(step):
+						case <-ctx.Done():
+							return nil, ctx.Err()
+						}
+					}
+				}
+			}
+			return result, nil
 		}
 	}
 	return map[string]Tool{

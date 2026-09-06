@@ -4,9 +4,13 @@
  * DWIKI-016, a wiki page attached to the question as context;
  * DWIKI-017, the conversation surviving a reload and a different browser.
  *
- * The SPI has no token channel (#701): the answer arrives whole with the
- * completed invocation, so this asserts the round trip, the sources and the
- * research plan, not streaming.
+ * DWIKI-012c, the answer arriving as it is written (#701).
+ *
+ * The SPI has TWO event channels now — progress, and the answer's own
+ * fragments — so DWIKI-012c can assert what DWIKI-012's acceptance always
+ * asked for and no transport could deliver. Both fixture runners stream the
+ * answer they are about to return, paced like their progress steps, so the
+ * journey watches a partial answer without a model.
  *
  * WHERE THESE RUN. `PROVIDER_BACKED_JOURNEYS` names this file, which puts it
  * in the `deepwiki-stack` project — but it does NOT take it out of the
@@ -120,6 +124,56 @@ test.describe('DeepWiki chat', () => {
       timeout: 60_000,
     });
     await expect(drawer.getByTestId('wiki-chat-answer').last()).toContainText(`Question: ${question}`);
+    await expect(drawer.getByTestId('wiki-chat-error')).toHaveCount(0);
+  });
+
+  test('DWIKI-012c: the answer appears as it is written, and the preview gives way to it', async ({
+    page,
+  }) => {
+    // WHAT ONLY THIS CAN SEE. The reducer's accumulator and the preview it
+    // feeds were both built and both tested before the transport could carry
+    // a single token (#701): the browser was ready for frames nothing sent.
+    // Only a run through the real provider can tell "streaming works" from
+    // "streaming is implemented on one side".
+    //
+    // THIS JOURNEY OWNS ITS CONVERSATION, for DWIKI-017's reason: left to
+    // itself the drawer ADOPTS the user's most recent stored conversation,
+    // and CI runs with `E2E_REUSE_STACK=1`, so an earlier run's answers
+    // would already be on screen. The counted assertions below — no answer
+    // yet while the preview is up, exactly one when it lands — are the two
+    // that adoption breaks, and it breaks them into a failure that reads
+    // like broken streaming.
+    await seedConversationKey(page, `dwiki-012c-${String(Date.now())}`);
+    await openDeepWiki(page, `/app/deepwiki/${SEEDED.readOnly.toolkitId}`);
+    await page.getByRole('button', { name: 'Ask about this repository' }).click();
+    const drawer = page.getByTestId('wiki-chat-drawer');
+    await expect(drawer).toBeVisible();
+
+    const question = 'Which bucket holds the pages?';
+    await drawer.getByPlaceholder('Ask about this repository').fill(question);
+    await drawer.getByRole('button', { name: 'Send' }).click();
+
+    // The preview, WHILE the run is still going. Both fixture runners cut the
+    // answer into three fragments and pace them like a progress step, so it
+    // is on screen for seconds, not for a frame.
+    const streaming = drawer.getByTestId('wiki-chat-streaming');
+    await expect(streaming).toBeVisible({ timeout: 60_000 });
+    // It carries the ANSWER's text. A preview showing a progress line would
+    // be the degraded reading — a token relayed as a thinking event — and it
+    // would still be visible here.
+    await expect(streaming).toContainText('Fixture answer');
+    // And the turn has not settled: an answer already on screen would mean
+    // the preview was read after the fact and proves nothing about streaming.
+    await expect(drawer.getByTestId('wiki-chat-answer')).toHaveCount(0);
+
+    // Then the answer lands, and the preview goes: the finished answer
+    // replaces it, and leaving it would show the same text twice.
+    await expect(drawer.getByTestId('wiki-chat-answer').last()).toContainText(
+      `Fixture answer to: ${question}`,
+      { timeout: 60_000 },
+    );
+    await expect(drawer.getByTestId('wiki-chat-streaming')).toHaveCount(0);
+    await expect(drawer.getByTestId('wiki-chat-answer')).toHaveCount(1);
     await expect(drawer.getByTestId('wiki-chat-error')).toHaveCount(0);
   });
 
