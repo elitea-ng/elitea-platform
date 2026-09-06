@@ -152,6 +152,52 @@ func TestEmailSettingsRead(t *testing.T) {
 		}
 	})
 
+	t.Run("a fresh install with no sealed password reports password_set false", func(t *testing.T) {
+		// The FRESH-INSTALL shape: the operator has typed a relay that needs
+		// no authentication, so the global vault holds nothing and was never
+		// created. `emailsettings.Store` now reads that absence as "no
+		// password" rather than as a read failure, so the resolution reaching
+		// this handler is complete, and the page must report it plainly: a
+		// relay that is configured, and a password that is not set.
+		resolution := configuredResolution()
+		resolution.Stored.Username = ""
+		resolution.Effective.Username = ""
+		resolution.PasswordSet = false
+		resolution.PasswordSource = emailsettings.SourceUnset
+
+		rec := callEmail(
+			emailHandler(&fakeEmailStore{ready: true}, resolution),
+			http.MethodGet, "/admin/email/administration", "",
+		)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
+		}
+		var got struct {
+			Settings       emailsettings.Settings `json:"settings"`
+			PasswordSet    bool                   `json:"password_set"`
+			PasswordSource string                 `json:"password_source"`
+			Configured     bool                   `json:"configured"`
+			Reason         string                 `json:"reason"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if got.PasswordSet {
+			t.Error("password_set is true on a deployment that has sealed nothing")
+		}
+		if got.PasswordSource != emailsettings.SourceUnset {
+			t.Errorf("password_source = %q, want %q", got.PasswordSource, emailsettings.SourceUnset)
+		}
+		// The absent credential must not read as an unusable deployment: the
+		// stored host is still the host the next message uses.
+		if !got.Configured || got.Reason != "" {
+			t.Errorf("configured=%v reason=%q", got.Configured, got.Reason)
+		}
+		if got.Settings.Host != "smtp.acme.example" {
+			t.Errorf("the stored layer was discarded: %+v", got.Settings)
+		}
+	})
+
 	t.Run("503 without a store or a resolver", func(t *testing.T) {
 		for name, handler := range map[string]*admin.Handler{
 			"nothing wired": admin.NewHandler(nil),

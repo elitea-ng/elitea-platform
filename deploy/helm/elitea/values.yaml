@@ -1300,9 +1300,16 @@ main:
       commandStream: ""
       consumerGroup: ""
       streamMaxEntries: 1024
-      # An https ORIGIN, with no path, query or fragment. elitea-main calls
-      # itself on it for the next-input-suggestion policy. Cleartext fails that
-      # one call and degrades a suggestion; it does not break the send path.
+      # OPTIONAL. The origin elitea-main calls for the next-input-suggestion
+      # policy. Empty is the normal value: the call is a SELF call and this
+      # process serves cleartext, so the origin is derived from its own listener
+      # (http://127.0.0.1:<port of ELITEA_HTTP_ADDRESS>).
+      #
+      # Set it only where another server answers that path — centry-hybrid aims
+      # it at the edge, which routes the path to legacy Centry. It must then be
+      # an https ORIGIN, with no path, query or fragment, on an address that
+      # TERMINATES TLS. An https origin on elitea-main's own cleartext port is
+      # refused at boot.
       currentMainBaseUrl: ""
 
     # Index start, index cancel and index metadata. NEEDS

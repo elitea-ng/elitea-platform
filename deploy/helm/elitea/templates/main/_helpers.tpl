@@ -794,11 +794,17 @@ question is what this release may consume WITHOUT anybody doing anything —
 {{- if not $agent.streamMaxEntries -}}
 {{- fail "runtime.agentExecutionDispatch.enabled=true needs runtime.agentExecutionDispatch.streamMaxEntries." -}}
 {{- end -}}
-{{- if not $agent.currentMainBaseUrl -}}
-{{- fail "runtime.agentExecutionDispatch.enabled=true needs runtime.agentExecutionDispatch.currentMainBaseUrl." -}}
-{{- end -}}
-{{- if not (hasPrefix "https://" ($agent.currentMainBaseUrl | toString)) -}}
-{{- fail (printf "runtime.agentExecutionDispatch.currentMainBaseUrl must be an https origin with no path, query or fragment. internal/runtimecomposition/config.go validates it as one. Got %q." ($agent.currentMainBaseUrl | toString)) -}}
+{{/*
+  currentMainBaseUrl is OPTIONAL. Empty means "call my own listener": elitea-main
+  derives http://127.0.0.1:<port> from ELITEA_HTTP_ADDRESS, because the
+  next-input-suggestion policy call is a self call and this process serves
+  cleartext. Set it only where another server answers that path, and then it must
+  be an origin that TERMINATES TLS. An https origin aimed at elitea-main's own
+  cleartext port is what internal/runtimecomposition/config.go now refuses at
+  boot, after it made every chat turn log a failed policy call.
+*/}}
+{{- if and $agent.currentMainBaseUrl (not (hasPrefix "https://" ($agent.currentMainBaseUrl | toString))) -}}
+{{- fail (printf "runtime.agentExecutionDispatch.currentMainBaseUrl must be an https origin with no path, query or fragment, or empty to call elitea-main's own listener. internal/runtimecomposition/config.go validates it. Got %q." ($agent.currentMainBaseUrl | toString)) -}}
 {{- end -}}
 {{- if eq ($agent.commandStream | toString) ($runtime.commandStream | toString) -}}
 {{- fail "runtime.agentExecutionDispatch.commandStream must differ from runtime.commandStream. config.go: \"runtime agent execution cannot share the configuration-validation stream\"." -}}
@@ -891,7 +897,9 @@ ELITEA_RUNTIME_AGENT_EXECUTION_DISPATCH_ENABLED: "true"
 ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM: {{ $agent.commandStream | quote }}
 ELITEA_RUNTIME_AGENT_EXECUTION_CONSUMER_GROUP: {{ $agent.consumerGroup | quote }}
 ELITEA_RUNTIME_AGENT_EXECUTION_STREAM_MAX_ENTRIES: {{ $agent.streamMaxEntries | toString | quote }}
+{{- if $agent.currentMainBaseUrl }}
 ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL: {{ $agent.currentMainBaseUrl | quote }}
+{{- end }}
 {{- end }}
 {{- if $ingest.enabled }}
 ELITEA_RUNTIME_INDEX_INGEST_DISPATCH_ENABLED: "true"
