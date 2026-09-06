@@ -734,6 +734,11 @@ case "${1:-}" in
     # one trust root for both mTLS hops out of elitea-main.
     DEEPWIKI_CERT_SANS="DNS:elitea-deepwiki,DNS:localhost,IP:127.0.0.1" \
       "${REPO_ROOT}/deploy/scripts/gen-deepwiki-certs.sh"
+    # The second provider's server cert, off the same CA and beside the same
+    # client cert. Its own script, because a deployment may run one provider
+    # and not the other.
+    INVENTORY_CERT_SANS="DNS:elitea-inventory,DNS:localhost,IP:127.0.0.1" \
+      "${REPO_ROOT}/deploy/scripts/gen-inventory-certs.sh"
     exec "${REPO_ROOT}/deploy/scripts/gen-runtime-certs.sh"
     ;;
 
@@ -752,6 +757,10 @@ case "${1:-}" in
     fi
     if [ ! -f "${REPO_ROOT}/deploy/certs/deepwiki-server.crt" ]; then
       echo "ERROR: DeepWiki provider material missing. Run: $0 certs" >&2
+      exit 1
+    fi
+    if [ ! -f "${REPO_ROOT}/deploy/certs/inventory-server.crt" ]; then
+      echo "ERROR: Inventory provider material missing. Run: $0 certs" >&2
       exit 1
     fi
     # oidc-mock's published port must equal its container port (the issuer is

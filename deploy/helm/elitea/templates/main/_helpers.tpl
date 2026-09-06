@@ -206,6 +206,7 @@ because it passes a manifest the binary then rejects.
 
 {{- include "elitea-main.validateLLMGateway" . -}}
 {{- include "elitea-main.validateDeepWiki" . -}}
+{{- include "elitea-main.validateInventory" . -}}
 {{- include "elitea-main.validateSelfLLMOrigins" . -}}
 {{- include "elitea-main.validateRuntime" . -}}
 {{- include "elitea-main.validateConnectionBudget" . -}}
@@ -535,6 +536,85 @@ reads, which looks configured and does nothing.
 {{- range $name, $value := $material -}}
 {{- if $value -}}
 {{- fail (printf "env.%s is set but env.ELITEA_DEEPWIKI_ENABLED is off, so no facade is composed and the material is never read. Turn it on, or clear env.%s." $name $name) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+elitea-main.validateInventory — the same all-or-nothing shape as the DeepWiki
+facade above (ADR-0023 H4c).
+
+internal/providerhost/facade's ConfigFromEnv refuses an enabled facade that is
+missing the base URL, any of the three certificate paths or the identity
+secret, and cmd/elitea-main turns that into a fatal boot error. So a
+half-configured values file is a CrashLoopBackOff, not a disabled feature.
+
+TWO THINGS ARE DELIBERATELY NOT REQUIRED HERE, and both are differences from
+DeepWiki rather than omissions:
+
+  * ELITEA_INVENTORY_CALLBACK_BASE_URL. An empty one DISABLES source expansion
+    and mounts the facade anyway — the eight tools that only read a graph still
+    work, and the three that name a source get the provider's own refusal.
+    cmd/elitea-main logs which of the two it built. Requiring it here would
+    refuse an install the code supports.
+  * ELITEA_INVENTORY_GIT_ALLOWLIST. It is fail-closed on the facade side alone;
+    the provider has no allowlist to keep in step with, because Inventory has
+    no request-supplied clone URL. An unset one refuses every source, at the
+    point a user asks for an ingestion — a warning below rather than a refusal,
+    so a graph-read-only deployment is still expressible.
+
+The reverse direction is checked, and it is the one that would otherwise be
+silent: material configured with the flag off is a mounted Secret nothing
+reads, which looks configured and does nothing.
+*/}}
+{{- define "elitea-main.validateInventory" -}}
+{{- $env := .Values.main.env | default dict -}}
+{{- $clientMaterial := .Values.main.fileConfig.inventoryClientMaterial | default dict -}}
+{{- $mountPath := $clientMaterial.mountPath | default "" | toString -}}
+{{- $enabled := get $env "ELITEA_INVENTORY_ENABLED" | toString -}}
+{{- $on := has (lower $enabled) (list "1" "true" "yes" "on") -}}
+{{- $material := dict
+  "ELITEA_INVENTORY_CLIENT_CERT_FILE" (get $env "ELITEA_INVENTORY_CLIENT_CERT_FILE" | toString)
+  "ELITEA_INVENTORY_CLIENT_KEY_FILE" (get $env "ELITEA_INVENTORY_CLIENT_KEY_FILE" | toString)
+  "ELITEA_INVENTORY_CA_FILE" (get $env "ELITEA_INVENTORY_CA_FILE" | toString) -}}
+{{- if and $enabled (not $on) (not (has (lower $enabled) (list "0" "false" "no" "off"))) -}}
+{{- fail (printf "env.ELITEA_INVENTORY_ENABLED is %q, which is neither true nor false. facade.ConfigFromEnv refuses an unrecognised spelling rather than reading it as off, so a typo here is a boot failure and never a quietly disabled feature." $enabled) -}}
+{{- end -}}
+{{- if $on -}}
+{{- $url := get $env "ELITEA_INVENTORY_BASE_URL" | toString -}}
+{{- if not (hasPrefix "https://" $url) -}}
+{{- fail (printf "env.ELITEA_INVENTORY_BASE_URL must be an https URL, and it is %q. The provider refuses non-mTLS traffic, so a plain-http origin is a facade that fails on every call; proxy.New catches it at startup." $url) -}}
+{{- end -}}
+{{- if not (get $env "ELITEA_INVENTORY_IDENTITY_SECRET") -}}
+{{- if not (hasKey (.Values.main.secrets | default dict) "ELITEA_INVENTORY_IDENTITY_SECRET") -}}
+{{- fail "env.ELITEA_INVENTORY_ENABLED is on, so ELITEA_INVENTORY_IDENTITY_SECRET must be supplied — as a secrets: entry (the default) or in env. It signs the identity headers the provider verifies; without it ConfigFromEnv refuses at boot. It must hold the SAME value as inventory.secrets.ELITEA_INVENTORY_IDENTITY_SECRET." -}}
+{{- end -}}
+{{- end -}}
+{{- range $name, $value := $material -}}
+{{- if not $value -}}
+{{- fail (printf "env.ELITEA_INVENTORY_ENABLED is on, so env.%s must be set too. The provider terminates mTLS with CERT_REQUIRED, so all three of the client certificate, its key and the CA bundle are mandatory; ConfigFromEnv names every missing one at once and cmd/elitea-main exits at boot." $name) -}}
+{{- end -}}
+{{- if not (hasPrefix "/" $value) -}}
+{{- fail (printf "env.%s must be an absolute file path, not certificate text. Got %q — it is passed to tls.LoadX509KeyPair / os.ReadFile." $name $value) -}}
+{{- end -}}
+{{- if and $clientMaterial.enabled (not (hasPrefix $mountPath $value)) -}}
+{{- fail (printf "env.%s is %q, which fileConfig.inventoryClientMaterial does not serve: its mountPath is %q. A path outside the mounted directory is a file that does not exist in the container." $name $value $mountPath) -}}
+{{- end -}}
+{{- end -}}
+{{- if not $clientMaterial.enabled -}}
+{{- fail "env.ELITEA_INVENTORY_ENABLED is on, so fileConfig.inventoryClientMaterial.enabled must be true — otherwise the three paths above name files no volume serves. Set fileConfig.inventoryClientMaterial.secretName to the Secret the inventory chart's facade-client Certificate issues (inventory.mtls.clientSecretName, default elitea-main-inventory-client-tls), which must exist in THIS namespace." -}}
+{{- end -}}
+{{- if and $clientMaterial.secretName $clientMaterial.volume -}}
+{{- fail "fileConfig.inventoryClientMaterial.secretName and .volume are mutually exclusive: one Deployment volume cannot have two sources." -}}
+{{- end -}}
+{{- else -}}
+{{- if $clientMaterial.enabled -}}
+{{- fail "fileConfig.inventoryClientMaterial.enabled is true but env.ELITEA_INVENTORY_ENABLED is off, so the material is mounted and never read. That is the state that looks configured and does nothing. Turn the facade on, or disable the material." -}}
+{{- end -}}
+{{- range $name, $value := $material -}}
+{{- if $value -}}
+{{- fail (printf "env.%s is set but env.ELITEA_INVENTORY_ENABLED is off, so no facade is composed and the material is never read. Turn it on, or clear env.%s." $name $name) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

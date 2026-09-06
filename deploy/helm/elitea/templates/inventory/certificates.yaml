@@ -1,0 +1,70 @@
+{{- if .Values.inventory.enabled }}
+{{- if .Values.inventory.mtls.enabled }}
+# mTLS material for the elitea-main -> inventory hop (ADR-0022 decision 5,
+# ADR-0023 H4c). Issued by cert-manager from an internal (private-CA) issuer,
+# in the same shape as the DeepWiki and llmGateway hops and from the same kind
+# of issuer. Two certs:
+#   - the provider SERVER cert (presented by elitea-inventory-svc)
+#   - the facade CLIENT cert (presented by elitea-main's reverse proxy)
+# Both trust the same CA bundle so each verifies the other. The CA issuer is
+# NOT created here — it is a cluster-shared prerequisite referenced by name.
+#
+# SEPARATE certificates from DeepWiki's, deliberately: a deployment may run one
+# provider and not the other, and each hop's material must be revocable on its
+# own. What they share is the ISSUER, so both hops out of elitea-main verify
+# against one trust root.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "elitea-inventory.fullname" . }}-server
+  labels:
+    {{- include "elitea-inventory.labels" . | nindent 4 }}
+spec:
+  secretName: {{ .Values.inventory.mtls.serverSecretName }}
+  duration: {{ .Values.inventory.mtls.duration }}
+  renewBefore: {{ .Values.inventory.mtls.renewBefore }}
+  isCA: false
+  usages:
+    - server auth
+  dnsNames:
+    # The SAN elitea-main verifies (ELITEA_INVENTORY_SERVER_NAME, or the base
+    # URL's host when that is unset). MUST match the internal service DNS name,
+    # or the handshake fails with an error that reads like a trust problem
+    # rather than a naming one.
+    - {{ .Values.inventory.service.name }}
+    - {{ .Values.inventory.service.name }}.{{ .Release.Namespace }}.svc
+    - {{ .Values.inventory.service.name }}.{{ .Release.Namespace }}.svc.cluster.local
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: {{ .Values.inventory.mtls.issuerRef.name }}
+    kind: {{ .Values.inventory.mtls.issuerRef.kind }}
+    group: cert-manager.io
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "elitea-inventory.fullname" . }}-facade-client
+  labels:
+    {{- include "elitea-inventory.labels" . | nindent 4 }}
+spec:
+  # The Secret elitea-main mounts as ELITEA_INVENTORY_CLIENT_CERT_FILE /
+  # _CLIENT_KEY_FILE / _CA_FILE. Rendered here rather than in the main subtree
+  # so both certificates share one issuer and rotate together.
+  secretName: {{ .Values.inventory.mtls.clientSecretName }}
+  duration: {{ .Values.inventory.mtls.duration }}
+  renewBefore: {{ .Values.inventory.mtls.renewBefore }}
+  isCA: false
+  usages:
+    - client auth
+  commonName: elitea-main
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: {{ .Values.inventory.mtls.issuerRef.name }}
+    kind: {{ .Values.inventory.mtls.issuerRef.kind }}
+    group: cert-manager.io
+{{- end }}
+{{- end }}

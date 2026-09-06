@@ -197,6 +197,15 @@ jobs:
       - name: The DeepWiki component renders, and its guards refuse
         run: bash deploy/helm/tests/render-deepwiki.sh
 
+      # The SECOND provider, and its own suite rather than a case added to
+      # DeepWiki's: what has to be asserted is mostly what is DIFFERENT — no
+      # migration Job, no provider-side allowlist, and a facade that mounts
+      # with no callback origin. A shared suite would have to branch on the
+      # provider for half its assertions, and the branches nobody reads are
+      # where a guard stops meaning anything.
+      - name: The Inventory component renders, and its guards refuse
+        run: bash deploy/helm/tests/render-inventory.sh
+
       - name: The agent worker renders for both implementations
         run: |
           python3 -c 'import yaml' 2>/dev/null \

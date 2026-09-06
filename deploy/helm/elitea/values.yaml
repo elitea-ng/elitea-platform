@@ -618,6 +618,19 @@ main:
       mountPath: /run/elitea-deepwiki
       defaultMode: 0444
       volume: {}
+    # The Inventory hop's client material (ADR-0023 H4c). Same shape, same
+    # 0444 reasoning, and a SEPARATE mount from DeepWiki's: a deployment may
+    # run one provider and not the other, and each hop's material must be
+    # revocable on its own.
+    #
+    # secretName is normally inventory.mtls.clientSecretName — the Secret the
+    # inventory subtree's facade-client Certificate issues.
+    inventoryClientMaterial:
+      enabled: false
+      secretName: ""
+      mountPath: /run/elitea-inventory
+      defaultMode: 0444
+      volume: {}
     brandPack:
       enabled: false
       configMapName: ""
@@ -1077,6 +1090,29 @@ main:
     # disagree would mean an invocation that starts and then fails.
     ELITEA_DEEPWIKI_GIT_ALLOWLIST: ""
 
+    # --- Inventory facade (ADR-0023 H4c) -----------------------------------
+    #
+    # Off by default, like DeepWiki's and for the same reason: a deployment
+    # that does not run the elitea-inventory provider must not register the
+    # three /api/v2/inventory routes at all. Turning this on WITHOUT the three
+    # mTLS files below is a startup failure, not a degraded mount — the
+    # provider terminates mTLS with CERT_REQUIRED and would refuse every
+    # request, so a facade that came up anyway would be three routes answering
+    # 503 while the flag says the feature is on.
+    ELITEA_INVENTORY_ENABLED: ""
+    # The provider's origin. Must be https: it serves nothing over plain HTTP.
+    ELITEA_INVENTORY_BASE_URL: ""
+    # Client certificate material for the hop, mounted from a Secret by
+    # fileConfig.inventoryClientMaterial above. These are PATHS, not key
+    # material, so they belong in env and not in `secrets:` below.
+    ELITEA_INVENTORY_CLIENT_CERT_FILE: ""
+    ELITEA_INVENTORY_CLIENT_KEY_FILE: ""
+    ELITEA_INVENTORY_CA_FILE: ""
+    # Overrides the SNI/verification name when the Service DNS name differs
+    # from the certificate's subject. Empty means "use the base URL's host".
+    ELITEA_INVENTORY_SERVER_NAME: ""
+    ELITEA_INVENTORY_TIMEOUT_SECONDS: ""
+
     # --- The Inventory facade's source expansion (ADR-0023 H4c I2) ---
     #
     # ONE ALLOWLIST VARIABLE PER APP, not one shared with DeepWiki. The two
@@ -1180,6 +1216,14 @@ main:
     # headers, and the provider then has only the mTLS hop to go on.
     ELITEA_DEEPWIKI_IDENTITY_SECRET:
       secretName: elitea-deepwiki-secrets
+      key: identity-secret
+      optional: true
+    # The Inventory identity secret. The same rule and its own value: it signs
+    # the headers the Inventory provider verifies and must hold the SAME value
+    # on both sides. A shared secret between the two providers would let one
+    # provider's compromised key sign for the other.
+    ELITEA_INVENTORY_IDENTITY_SECRET:
+      secretName: elitea-inventory-secrets
       key: identity-secret
       optional: true
     # Outbound e-mail relay password (ADR-0024 WP7). Optional: a deployment
@@ -2553,6 +2597,167 @@ deepwiki:
       # No CPU limit, deliberately, as elsewhere in this chart: throttling an
       # indexing pass makes a generation slow rather than making it fail, and
       # the memory limit is what actually bounds the blast radius.
+      memory: 4Gi
+
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: ["ALL"]
+
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# The Inventory provider service (ADR-0023 H4c) — the knowledge-graph builder
+# and retriever. Enable it beside main.env.ELITEA_INVENTORY_ENABLED with its
+# base URL, callback origin and the three client-certificate paths; the chart
+# refuses a half-configured install rather than rendering one that boots and
+# then fails.
+#
+# It has NO database of its own, unlike DeepWiki: there is no storage package,
+# no migrations and no migrate Job. A graph's home is the platform artifact
+# bucket, reached with the callback bearer the facade mints per invocation.
+inventory:
+  enabled: false
+  replicaCount: 1
+
+  # The provider pod is up to TWO containers (ADR-0023 H2): the Go
+  # sub-application host, which serves the SPI, composes and uploads, and — for
+  # runner=legacy — the Python engine sidecar, which runs the knowledge-graph
+  # engine for it over a Unix socket the two share. `image` is the host;
+  # `engine.image` is the Python image, which must be the `-engine` variant for
+  # the legacy runner to run anything.
+  image:
+    repository: ghcr.io/elitea-ng/elitea-subapp-host
+    # Empty means the chart-wide image.tag.
+    tag: ""
+    pullPolicy: IfNotPresent
+  imagePullSecrets: []
+  engine:
+    image:
+      repository: ghcr.io/elitea-ng/elitea-inventory
+      # Empty means the chart-wide image.tag with `-engine` appended — the
+      # image that carries the engine's dependency closure. The guard in
+      # _helpers.tpl refuses a runner=legacy install whose engine tag lacks
+      # that suffix: the plain image carries the engine SOURCE and its FIXTURE
+      # runner only, and every engine tool would fail at invocation time.
+      tag: ""
+      pullPolicy: IfNotPresent
+    # What the SIDECAR runs: legacy (the engine) or fixture (a canned
+    # knowledge graph, for a stack that proves the hop without the engine).
+    runner: legacy
+    socketDir: /run/inventory
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        memory: 4Gi
+
+  service:
+    # Named explicitly, not release-derived: the server certificate's SANs name
+    # this Service and elitea-main verifies exactly that name.
+    name: elitea-inventory-svc
+    port: 8443
+    annotations: {}
+
+  env:
+    ELITEA_SUBAPP: inventory
+    # The HOST's runner. `legacy` reaches the engine sidecar over the socket
+    # below and renders that sidecar; `fixture` serves the host's OWN canned
+    # knowledge graph in one container, which is what a stack that only needs
+    # deterministic results wants; `unavailable` refuses every tool and says
+    # so. The guard refuses `legacy` with no socket and a socket with no
+    # `legacy`, because either is a service that looks healthy and serves
+    # nothing.
+    ELITEA_INVENTORY_RUNNER: "legacy"
+    ELITEA_INVENTORY_ENGINE_SOCKET: /run/inventory/engine.sock
+    ELITEA_INVENTORY_SCRATCH_PATH: /var/scratch/inventory
+    # The origin elitea-main proxies to. Must agree with
+    # main.env.ELITEA_INVENTORY_BASE_URL.
+    ELITEA_INVENTORY_SERVICE_LOCATION_URL: https://elitea-inventory-svc:8443
+
+  # NO git allowlist here, and that is a difference from DeepWiki rather than
+  # an omission. DeepWiki CLONES from a URL in the request, so the destination
+  # is the provider's to allow or refuse as well as the facade's. Inventory
+  # reads its source through the ELITEA SDK's toolkit, whose destination is the
+  # toolkit's stored configuration — expanded by the facade, from a toolkit the
+  # caller can already see. There is no request-supplied clone URL for a
+  # provider-side allowlist to check, and one that always passed would look
+  # like an egress control while being none. main.env.
+  # ELITEA_INVENTORY_GIT_ALLOWLIST is the real one, checked before the vault is
+  # opened.
+
+  # Sensitive values from Kubernetes Secrets.
+  secrets:
+    # The HMAC key that verifies the identity headers elitea-main signs. It
+    # must hold the SAME value as main's ELITEA_INVENTORY_IDENTITY_SECRET —
+    # this side verifies what that side signs, and a mismatch fails every
+    # request with a signature error.
+    ELITEA_INVENTORY_IDENTITY_SECRET:
+      secretName: elitea-inventory-secrets
+      key: identity-secret
+      optional: true
+
+  # Ephemeral source-read and graph-build space. Nothing durable lives here:
+  # the graph is uploaded to the artifact bucket, and a replica that dies
+  # mid-ingestion loses only work that is being redone anyway. Size it for the
+  # largest repository set this deployment expects to ingest.
+  scratch:
+    mountPath: /var/scratch/inventory
+    sizeLimit: 8Gi
+
+  # mTLS for the elitea-main -> inventory hop. cert-manager issues a server
+  # cert (this Deployment mounts it) and a facade client cert (elitea-main
+  # mounts it) from the SAME internal CA issuer the DeepWiki hop uses — one
+  # trust root out of elitea-main, two certificates that rotate on their own.
+  mtls:
+    enabled: true
+    serverSecretName: elitea-inventory-server-tls
+    clientSecretName: elitea-main-inventory-client-tls
+    duration: 2160h    # 90d
+    renewBefore: 360h  # 15d
+    issuerRef:
+      # A cluster-shared internal (private-CA) issuer — NOT created by this
+      # chart. The same issuer the llmGateway and DeepWiki hops use.
+      name: elitea-internal-ca
+      kind: ClusterIssuer
+    mountPath: /etc/inventory/tls
+
+  # probes: with mtls.enabled (the default) these paths are NOT used — the
+  # listener requires a verified client certificate, which a kubelet probe
+  # cannot present, so the Deployment probes the socket instead.
+  probes:
+    liveness:
+      path: /health
+      periodSeconds: 10
+      failureThreshold: 3
+    readiness:
+      path: /ready
+      periodSeconds: 5
+      failureThreshold: 2
+
+  serviceAccount:
+    create: true
+    name: ""
+    annotations: {}
+
+  terminationGracePeriodSeconds: 60
+
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      # No CPU limit, deliberately, as elsewhere in this chart: throttling an
+      # ingestion pass makes it slow rather than making it fail, and the memory
+      # limit is what actually bounds the blast radius.
       memory: 4Gi
 
   podSecurityContext:

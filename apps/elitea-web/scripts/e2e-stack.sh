@@ -56,9 +56,14 @@ case "$CMD" in
   up)
     # The facade → provider hop is mTLS with no plaintext fallback on either
     # side; the script is idempotent and keeps fresh material.
-    echo "→ Generating the DeepWiki mTLS material…"
+    echo "→ Generating the provider mTLS material…"
     DEEPWIKI_CERT_SANS="DNS:elitea-deepwiki,DNS:localhost,IP:127.0.0.1" \
       bash "${REPO_ROOT}/deploy/scripts/gen-deepwiki-certs.sh"
+    # The second provider's server cert, off the same CA and the same client
+    # certificate. Issued after DeepWiki's, so a CA this run created is already
+    # in place and neither hop is signed by a root the other does not trust.
+    INVENTORY_CERT_SANS="DNS:elitea-inventory,DNS:localhost,IP:127.0.0.1" \
+      bash "${REPO_ROOT}/deploy/scripts/gen-inventory-certs.sh"
     echo "→ Bringing up E2E stack (${COMPOSE_BIN})…"
     # --wait: wait for every healthcheck to report healthy before returning.
     # elitea-main runs migrations on startup; postgres is its dependency.
