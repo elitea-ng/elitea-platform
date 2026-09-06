@@ -87,7 +87,7 @@ export const SoundNotificationControls = memo(
               valueLabelFormat={formatPercentLabel}
               size="small"
               aria-label={t('settings.volume', 'Volume')}
-              sx={styles.slider}
+              slotProps={END_ALIGNED_MARK_LABELS}
             />
           </Box>
         )}
@@ -144,10 +144,28 @@ const styles = {
   sliderLabel: {
     color: 'text.secondary',
   },
-  slider: {
-    // oxlint-disable-next-line elitea/no-mui-internal-selector -- ported verbatim from the baseline's own sx; MUI exposes no per-mark slotProps to express this.
-    '& .MuiSlider-markLabel[data-index="0"]': { transform: 'translateX(0)' },
-    // oxlint-disable-next-line elitea/no-mui-internal-selector -- see above.
-    '& .MuiSlider-markLabel[data-index="2"]': { transform: 'translateX(-100%)' },
+};
+
+/**
+ * Pulls the first and last mark labels inside the rail so they do not overhang
+ * the column, as the baseline does.
+ *
+ * The rule is written on the `markLabel` SLOT and qualified by the slot's own
+ * `data-index` attribute. The baseline reaches down from the slider root into
+ * the label's internal class, which R-T6 bans outside
+ * `shared/brand/mui-overrides/`. `Slider` exposes `markLabel` as a documented
+ * slot, and it renders every label with `data-index`, so the slot's own `sx`
+ * can select the two end labels without naming an internal class.
+ *
+ * Specificity is unchanged in effect: the emitted rule is one generated class
+ * plus one attribute, and the default `translateX(-50%)` it must beat is the
+ * same generated class alone.
+ */
+const END_ALIGNED_MARK_LABELS = {
+  markLabel: {
+    sx: {
+      '&[data-index="0"]': { transform: 'translateX(0)' },
+      '&[data-index="2"]': { transform: 'translateX(-100%)' },
+    },
   },
 };

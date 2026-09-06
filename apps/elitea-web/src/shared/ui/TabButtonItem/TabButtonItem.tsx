@@ -19,6 +19,12 @@ export interface TabGroupButtonItem {
 export interface TabButtonItemProps {
   item: TabGroupButtonItem;
   disableTooltip?: boolean;
+  /**
+   * Styles for the button itself. A group that needs every button to share a
+   * size passes it here, so the caller never has to reach from the group into
+   * the button's internal DOM (R-T6, `elitea/no-mui-internal-selector`).
+   */
+  sx?: SxProps<Theme>;
 }
 
 /**
@@ -44,7 +50,7 @@ export interface TabButtonItemProps {
  *    text alone, which gives no accessible name to a screen reader or
  *    keyboard user (a `Tooltip` only adds `aria-describedby` while open).
  */
-export function TabButtonItem({ item, disableTooltip }: TabButtonItemProps): ReactNode {
+export function TabButtonItem({ item, disableTooltip, sx }: TabButtonItemProps): ReactNode {
   const tooltipTitle = item.tooltip ?? item.label ?? item.value;
 
   const button = (
@@ -52,6 +58,7 @@ export function TabButtonItem({ item, disableTooltip }: TabButtonItemProps): Rea
       value={item.value}
       disabled={item.disabled}
       aria-label={item.label ? undefined : tooltipTitle}
+      sx={sx}
     >
       {item.icon}
       {item.label && (

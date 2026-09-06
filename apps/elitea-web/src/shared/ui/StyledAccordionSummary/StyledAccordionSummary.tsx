@@ -60,12 +60,17 @@ export function StyledAccordionSummary({
         (theme: Theme) => ({
           flexDirection: isLeft ? 'row-reverse' : 'row',
           minHeight: '2.5rem',
-          // Repeated behind `&.Mui-expanded` for the same specificity reason
-          // as the content margin below: MUI ships
-          // `.MuiAccordionSummary-root.Mui-expanded { min-height: 64px }`.
-          // The baseline reaches the same result from the PARENT accordion
-          // (`& .MuiButtonBase-root.MuiAccordionSummary-root`, three classes),
-          // which R-T6 does not allow here.
+          /* Repeated behind `&.Mui-expanded` for the same specificity reason
+           * as the content margin below: MUI ships a two-class rule on the
+           * summary root that raises an expanded header to 64px. The baseline
+           * reaches the same result from the PARENT accordion with a
+           * three-class descendant selector into the summary's own classes,
+           * which R-T6 does not allow here.
+           *
+           * The comment is a BLOCK comment on purpose. Theme-gate check 4
+           * greps the file as text and strips block comments only, so prose
+           * that has to describe an internal selector lives in this form —
+           * the same convention `StyledAccordion` and `FolderAccordion` use. */
           '&.Mui-expanded': { minHeight: '2.5rem' },
           padding: isLeft ? theme.spacing(1) : `0 ${theme.spacing(1.5)}`,
         }),
@@ -73,16 +78,17 @@ export function StyledAccordionSummary({
       )}
       expandIcon={expandIcon}
       slotProps={{
-        // The margin is written TWICE, the second time behind `&.Mui-expanded`,
-        // for the same specificity reason spelled out on `expandIconWrapper`
-        // below. MUI ships `.MuiAccordionSummary-content.Mui-expanded {
-        // margin: 20px 0 }` — specificity (0,2,0) — and a plain value in this
-        // callback lands in one generated class, (0,1,0). So the single-rule
-        // form here only ever applied while COLLAPSED: every expanded
-        // accordion in the app took MUI's 20px block margins (a 72px-tall
-        // header instead of 40px) and lost the 12px inline start that lines
-        // the title up with the body below it. Measured against the
-        // production UI, which renders `margin: 0 0 0 12px` in both states.
+        /* The margin is written TWICE, the second time behind
+         * `&.Mui-expanded`, for the same specificity reason spelled out on
+         * `expandIconWrapper` below. MUI ships a two-class rule for this
+         * slot's expanded state — specificity (0,2,0) — and a plain value in
+         * this callback lands in one generated class, (0,1,0). So the
+         * single-rule form here only ever applied while COLLAPSED: every
+         * expanded accordion in the app took MUI's 20px block margins (a
+         * 72px-tall header instead of 40px) and lost the 12px inline start
+         * that lines the title up with the body below it. Measured against
+         * the production UI, which renders `margin: 0 0 0 12px` in both
+         * states. */
         content: {
           sx: (theme: Theme) => ({
             margin: 0,
