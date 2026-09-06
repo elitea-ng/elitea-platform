@@ -150,6 +150,29 @@ const (
 		"platform vault instead of stored in a settings row. Form users stay in the deployment's mounted user file " +
 		"and are not editable here."
 
+	// emailElsewhereUnavailable — the E-mail section is a pointer to a real
+	// surface, in the same way `auth` and `mcp_servers` are (gap G7).
+	//
+	// Outbound mail used to have no section at all: the transport was read from
+	// the environment at boot (SMTP_HOST and seven siblings), so an operator
+	// with no access to the deployment's environment could not turn e-mail on,
+	// and every invitation answered `invitation_delivered: false`. The values
+	// now live in `centry.platform_config`'s `email` section and the resolver
+	// reads them per send.
+	//
+	// The plugin-config VALUE endpoints still cannot serve them, and that will
+	// not change: the SMTP password is a credential, and
+	// `rejectCredentialField` refuses a credential into a plaintext row every
+	// holder of `runtime.plugins` can read. The document also has invariants a
+	// flat value list cannot express — a user name without a password is a
+	// session the relay refuses at AUTH. So the section says where the real
+	// editor is, and declares no fields of its own.
+	emailElsewhereUnavailable = "outbound e-mail is configured on the E-mail editor, which stores the relay " +
+		"settings and seals the SMTP password in the platform vault. The plugin-config value endpoints cannot " +
+		"serve this section: the password is a credential, and it is sealed rather than stored in a settings row. " +
+		"The environment variables (SMTP_HOST and its siblings) remain the bootstrap defaults, and the editor " +
+		"shows which layer decides each field."
+
 	// publishValidationRulesUnavailable is a FIELD-level reason, not a section
 	// one. The rest of `agent_publishing` is enforced for real; this one field
 	// alone has nothing behind it. `runPublishValidation` in
@@ -255,6 +278,7 @@ func configSections() []map[string]any {
 		serviceDescriptorsSection(),
 		maintenanceSection(),
 		analyticsSection(),
+		emailSection(),
 	}
 }
 
@@ -1006,6 +1030,33 @@ func authSection() map[string]any {
 		// equivalents, and it collects more of them than these five could
 		// express.
 		"fields": []map[string]any{},
+	}
+}
+
+// emailSection is outbound e-mail (gap G7). It POINTS at its editor.
+//
+// `managed_surface` names the dedicated surface that really holds this
+// section's data, so the client renders the right editor WITHOUT a hardcoded
+// list of section ids — see mcpServersSection() for why that distinction is
+// the server's to make.
+//
+// No fields, for the reason authSection() declares none. The eight values this
+// section is about include a `format: password`, and a schema that declared it
+// would describe a control the plugin-config write path is required to refuse
+// (rejectCredentialField). Declaring the other seven and hiding the eighth
+// would be worse: the form would save a host and a user name, report success,
+// and send nothing, because the relay would refuse the session at AUTH.
+func emailSection() map[string]any {
+	return map[string]any{
+		"id":                  "email",
+		"managed_surface":     "email",
+		"unavailable_reason":  emailElsewhereUnavailable,
+		"title":               "E-mail",
+		"description":         "Configure the SMTP relay this deployment sends invitations and notices through.",
+		"order":               9,
+		"icon":                "mail_outline",
+		"required_permission": "runtime.plugins",
+		"fields":              []map[string]any{},
 	}
 }
 

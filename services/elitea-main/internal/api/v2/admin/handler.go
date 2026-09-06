@@ -40,6 +40,13 @@ type Handler struct {
 	// either is.
 	identityProviders     IdentityProviderStore
 	identityProviderVault IdentityProviderSecretStore
+	// Outbound e-mail SETTINGS — the store the E-mail page writes and the
+	// resolver that merges it over the environment defaults (email.go, gap
+	// G7). Both nil unless WithEmailSettings is applied, and those routes
+	// answer 503 while either is. Distinct from `mailer` above: that one
+	// SENDS, these two say what it sends through.
+	emailSettings EmailSettingsStore
+	emailResolver EmailSettingsResolver
 	// The authored SCIM group bindings (scim_group_bindings.go). Nil unless
 	// WithSCIMGroupBindings is applied, and those routes answer 503 while it
 	// is — never an empty list, which would read as "no group is bound".

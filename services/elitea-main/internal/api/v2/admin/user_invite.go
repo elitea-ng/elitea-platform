@@ -49,10 +49,15 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 )
 
-// inviteDeliveryUnavailable is the reason carried in every response body. It is
-// a statement about the deployment, not about this request.
-const inviteDeliveryUnavailable = "no invitation was delivered: outbound e-mail is not configured on this " +
-	"deployment (SMTP_HOST is unset). The platform user record exists, so the address can be granted roles " +
+// inviteRecordExists is the half of an undelivered-invite explanation that is
+// about the RECORD rather than about the relay.
+//
+// It is a separate constant because the relay half is no longer one sentence:
+// since gap G7 the mail configuration is resolvable at runtime, so the reason
+// names the field that is missing and where to set it
+// (`emailsettings.Resolution.Reason`, assembled in email.go). This part stays
+// constant, because it is true of every one of those cases.
+const inviteRecordExists = "The platform user record exists, so the address can be granted roles " +
 	"now and is resolved by email on first login."
 
 // UserInvite serves `POST /admin/user_invite/administration`.
@@ -132,8 +137,8 @@ func (h *Handler) UserInvite(w http.ResponseWriter, r *http.Request) {
 // what happened in the two response fields. A relay failure is reported, not
 // swallowed and not fatal: the record exists and the operator can resend.
 func (h *Handler) deliverInvitation(r *http.Request, invitation appmailer.Invitation) (bool, string) {
-	if h.mailer == nil || !h.mailer.Configured() {
-		return false, inviteDeliveryUnavailable
+	if h.mailer == nil || !h.mailer.Configured(r.Context()) {
+		return false, h.inviteDeliveryUnavailableReason(r)
 	}
 	if err := h.mailer.SendInvitation(r.Context(), invitation); err != nil {
 		return false, "the invitation could not be sent: " + err.Error()

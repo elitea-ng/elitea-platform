@@ -44,6 +44,11 @@ const (
 	// decision 1). Its keys are declared in branding.go beside the resolver
 	// that reads them.
 	SectionBranding = "branding"
+	// The `email` section is NOT declared here. It is `emailsettings.Section`,
+	// declared beside the resolver that reads it and the store that writes it
+	// (gap G7) — the same placement SectionBranding's keys use, and for the
+	// same reason: a section whose reader and writer are one package has no
+	// second consumer for this file to serve.
 )
 
 // Field keys, for the same reason.

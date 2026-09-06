@@ -8,7 +8,7 @@ import (
 	v2branding "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/branding"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/brandpackage"
 	appmailer "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/mailer"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/mailer"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/emailsettings"
 	"log/slog"
 	"net/http"
 	"os"
@@ -307,28 +307,38 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		Pool:     pool,
 	})
 
-	// Outbound e-mail (ADR-0024 WP7): a real SMTP transport only when the
-	// environment names a relay; otherwise the composer holds the null
-	// transport and every invite reports that nothing was delivered.
+	// Outbound e-mail (ADR-0024 WP7, gap G7). The environment is the BOOTSTRAP
+	// DEFAULT; the admin E-mail page's rows lay over it, and the resolver
+	// merges the two on every send. So a deployment that ships SMTP_HOST in
+	// its chart keeps working with no rows at all, and an operator who has
+	// never touched the chart can still turn e-mail on.
+	//
+	// There is no transport built here any more, and that absence is the
+	// change: a transport built at boot is a transport that needs a restart to
+	// correct, which is why every invitation on a mis-set deployment reported
+	// `invitation_delivered: false` until a redeploy.
 	mailSettings, err := mailerConfigFromEnv(os.LookupEnv)
 	if err != nil {
 		return fmt.Errorf("load outbound e-mail settings: %w", err)
 	}
-	var mailTransport mailer.Transport
-	if mailSettings.Enabled {
-		smtpTransport, err := mailer.New(mailSettings.Transport)
-		if err != nil {
-			return fmt.Errorf("configure outbound e-mail: %w", err)
-		}
-		mailTransport = smtpTransport
-		logger.Info("outbound e-mail enabled", "host", mailSettings.Transport.Host, "port", mailSettings.Transport.Port,
-			"tls", string(mailSettings.Transport.TLS), "suppressed", mailSettings.Suppressed)
-	}
+	// ONE store and ONE resolver, shared by the composer that sends and the
+	// admin surface that writes (wired through api.Config.EmailSettings).
+	// Building two would let the page that reports a relay configured and the
+	// composer that dials it disagree.
+	emailResolver := emailsettings.NewResolver(
+		emailsettings.NewStore(pool, v2secrets.NewHandler(pool)),
+		mailSettings.Settings,
+		mailSettings.Password,
+	)
+	logger.Info("outbound e-mail settings loaded",
+		"environment_complete", mailSettings.Complete(),
+		"environment_host", mailSettings.Settings.Host,
+		"suppressed", mailSettings.Suppressed)
 	mailComposer, err := appmailer.New(appmailer.Config{
-		Transport:     mailTransport,
 		Brand:         brandingResolver,
-		PublicBaseURL: mailSettings.PublicBaseURL,
+		PublicBaseURL: mailSettings.Settings.PublicBaseURL,
 		Suppressed:    mailSettings.Suppressed,
+		Resolver:      emailResolver,
 	})
 	if err != nil {
 		return fmt.Errorf("compose outbound e-mail: %w", err)
@@ -1717,7 +1727,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			return html, err
 		},
 		App: previewer,
-	}, mailSettings.PublicBaseURL)
+	}, mailSettings.Settings.PublicBaseURL)
 
 	var adminUICfg *adminui.Config
 	if dir := os.Getenv("ADMIN_UI_STATIC_DIR"); dir != "" {
@@ -1808,6 +1818,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		Pool:                       pool,
 		Branding:                   brandingResolver,
 		Mailer:                     mailComposer,
+		EmailSettings:              emailResolver,
 		BrandingPackages:           brandingPackages,
 		ToolkitArgumentSchemas:     toolkitArgumentSchemas,
 		ToolkitSettingsDefinitions: toolkitSettingsDefinitions,

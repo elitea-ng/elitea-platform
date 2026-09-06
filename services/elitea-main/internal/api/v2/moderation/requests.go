@@ -414,7 +414,7 @@ func (h *Handler) AdministrationRequestUpdate(w http.ResponseWriter, r *http.Req
 // mailDecision sends the same pre-rendered sentence the notification row
 // carries to the requester's address, when a mailer is wired.
 func (h *Handler) mailDecision(ctx context.Context, row *requestRow) {
-	if h.mailer == nil || !h.mailer.Configured() || row == nil {
+	if h.mailer == nil || row == nil || !h.mailer.Configured(ctx) {
 		return
 	}
 	email := row.UserEmail

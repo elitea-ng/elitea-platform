@@ -800,7 +800,10 @@ services:
       #   volumes: [./brand-pack.json:/etc/elitea/brand-pack.json:ro]
       #   BRAND_PACK_PATH: /etc/elitea/brand-pack.json
       BRAND_PACK_PATH: "${BRAND_PACK_PATH:-}"
-      # Outbound e-mail (ADR-0024 WP7). Unset = no e-mail. Point SMTP_HOST at a
+      # Outbound e-mail (ADR-0024 WP7; gap G7). These are the BOOTSTRAP
+      # DEFAULTS: the relay is administered at Admin > E-mail, and the two
+      # layers merge field by field on every send. Unset = configure it in
+      # the console instead. Point SMTP_HOST at a
       # relay (a local MailHog/Mailpit on 1025 with SMTP_TLS=none works) and
       # set EMAIL_FROM and PUBLIC_BASE_URL to see branded invitations.
       SMTP_HOST: "${SMTP_HOST:-}"

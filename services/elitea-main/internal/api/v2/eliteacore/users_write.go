@@ -269,7 +269,7 @@ func (h *Handler) UsersCreate(w http.ResponseWriter, r *http.Request) {
 // (ADR-0024 WP7). The membership is already written; a relay failure is
 // logged and reported as not delivered, never as a failed invite.
 func (h *Handler) deliverProjectInvitation(r *http.Request, projectID int, email string) bool {
-	if h.mailer == nil || !h.mailer.Configured() {
+	if h.mailer == nil || !h.mailer.Configured(r.Context()) {
 		return false
 	}
 	projectName := ""

@@ -726,6 +726,16 @@
       "notes": "The brand-pack editor (ADR-0024 WP4): the grouped form with every field at inherit, the two-scheme preview built from the product default, the derived swatch strips and the Layers panel. The E2E stack mounts no file pack and the branding journey restores the database layer after itself, so the reference is the all-inherit state on purpose.",
       "surface": "admin",
       "baseline": null
+    },
+    {
+      "file": null,
+      "route": "/admin/app/email",
+      "targetComponent": "src/pages/admin/Email.tsx",
+      "theme": "dark",
+      "wiringStatus": "wired",
+      "notes": "The outbound e-mail settings: the eight-control form, the per-field source tag (database / environment / unset), the write-only password with its \"no password stored\" placeholder, and the test-message box. This stack configures no relay, so the reference is the \"not configured\" state with the server's own reason — the honest finished screen, not scaffolding.",
+      "surface": "admin",
+      "baseline": "e2e/snapshots/visual/admin.visual.spec.ts-snapshots/admin-email-visual-linux.png"
     }
   ],
   "gaps": [],

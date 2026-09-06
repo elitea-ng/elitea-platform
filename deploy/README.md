@@ -148,6 +148,52 @@ the parameters out of the Application, renders the chart from them, and reads
 DATABASE_URL back out of the manifest, so an Application that stops supplying
 its values fails there.
 
+## Outbound e-mail — the SMTP variables are bootstrap defaults (gap G7)
+
+`SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_TLS`,
+`EMAIL_FROM`, `EMAIL_REPLY_TO` and `PUBLIC_BASE_URL` are the DEFAULT layer.
+They are not the whole configuration any more.
+
+The relay is administered at **Admin → E-mail** (`/admin/app/email`, also the
+Configuration page's "E-mail" section). That page writes the `email` section of
+`centry.platform_config` and seals the SMTP password in the platform vault's
+hidden bucket. `internal/emailsettings` merges the two layers FIELD BY FIELD on
+every send, with the database winning.
+
+Three consequences for an operator:
+
+1. **A change in the console needs no restart.** The merge runs per message, so
+   a corrected relay host reaches the next invitation. Nothing in this chart has
+   to be re-synced.
+2. **A chart may ship some of these and leave the rest to the console.** A
+   deployment that sets `EMAIL_FROM` and `PUBLIC_BASE_URL` and lets an
+   administrator name the relay is a normal install. The pod no longer refuses
+   to start on a partial set — completeness is decided on the merged document at
+   send time, and an incomplete merge reports `invitation_delivered: false` with
+   the field to fix. A value that is WRONG still refuses to start.
+3. **The password belongs in the vault or in the Secret, never in a chart
+   parameter.** A Helm parameter renders into a ConfigMap. `SMTP_PASSWORD` is in
+   the `secrets:` block for that reason, and the console's own password goes to
+   the vault, not to a `platform_config` row.
+
+`ELITEA_EMAIL_SUPPRESS: "true"` still renders every message and sends none — the
+setting for a shadow or staging deployment. It outranks the console: a
+suppressed deployment reports nothing as delivered however the relay is
+configured.
+
+Check what a running deployment resolved. The route is gated on
+`runtime.plugins` in administration mode, so send an administrator session
+cookie or a personal access token with it:
+
+```bash
+curl -s -H "Authorization: Bearer $ADMIN_PAT" \
+  https://elitea.example.com/api/v2/admin/email/administration | jq
+# .settings  — what the console stored
+# .effective — the merged document the next message uses
+# .sources   — per field: "database" | "environment" | "unset"
+# .configured / .reason — whether a message can be sent, and if not, which field to set
+```
+
 ## Distribution — the charts are published to GHCR as OCI artifacts
 
 Every chart in the table above is packaged and pushed on each release by the

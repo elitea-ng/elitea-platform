@@ -831,16 +831,27 @@ main:
     # above. Discovered unwired while verifying S17's env-drift gate.
     BRAND_PACK_PATH: ""
 
-    # --- Outbound e-mail (ADR-0024 WP7) -----------------------------------------
-    # Unset SMTP_HOST = the platform sends no e-mail and every invite reports
-    # invitation_delivered: false, as before. Once SMTP_HOST is set, EMAIL_FROM
-    # and a public origin (PUBLIC_BASE_URL, or DEPLOYMENT_URL above) are
-    # REQUIRED and the pod refuses to start without them: a half-configured
-    # mailer would report deliveries it never made. SMTP_PASSWORD is a Secret
-    # (secrets: block below). SMTP_TLS: starttls (default, port 587) |
-    # implicit (port 465) | none (in-cluster relay only). ELITEA_EMAIL_SUPPRESS
-    # "true" renders but never sends — the setting for a shadow or staging
-    # deployment that must produce no user-visible side effect.
+    # --- Outbound e-mail (ADR-0024 WP7; gap G7) ---------------------------------
+    # These are the BOOTSTRAP DEFAULTS, not the whole configuration. Since gap
+    # G7 the relay is administered at Admin > E-mail, which stores the settings
+    # in centry.platform_config and seals the password in the platform vault.
+    # The two layers merge FIELD BY FIELD on every send, with the admin page
+    # winning, so a value set here is the default an administrator may override
+    # and a value set there needs no redeploy.
+    #
+    # Leaving all of them empty is now a supported install: an administrator
+    # configures the relay from the console. Leaving SOME of them set is also
+    # supported — the pod no longer refuses to start on a partial set, because
+    # completeness is decided on the merged document at send time and an
+    # incomplete merge reports invitation_delivered: false with the field to
+    # fix. A value that is WRONG (a port that is not a number, an address that
+    # is not an address) still refuses to start.
+    #
+    # SMTP_PASSWORD is a Secret (secrets: block below). SMTP_TLS: starttls
+    # (default, port 587) | tls, also spelled implicit (port 465) | none
+    # (in-cluster relay only). ELITEA_EMAIL_SUPPRESS "true" renders but never
+    # sends — the setting for a shadow or staging deployment that must produce
+    # no user-visible side effect. Suppression outranks the admin page.
     SMTP_HOST: ""
     SMTP_PORT: ""
     SMTP_USERNAME: ""

@@ -92,6 +92,7 @@ const AdminGatewayGovernance = lazyRouteComponent(
   'AdminGatewayGovernance',
 );
 const AdminBranding = lazyRouteComponent(() => import('./Branding'), 'AdminBranding');
+const AdminEmail = lazyRouteComponent(() => import('./Email'), 'AdminEmail');
 
 /**
  * The root route renders `AdminLayout` — the nav plus an `<Outlet/>` — rather
@@ -199,8 +200,20 @@ const brandingRoute = createRoute({
   component: AdminBranding,
 });
 
+/**
+ * Admin › E-mail (gap G7). The relay this deployment sends invitations and
+ * notices through. The Configuration page keeps the section's row and points
+ * here, and both render the same editor component so they cannot drift.
+ */
+const emailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/email',
+  component: AdminEmail,
+});
+
 const adminRouteTree = rootRoute.addChildren([
   brandingRoute,
+  emailRoute,
   indexRoute,
   usersRoute,
   auditTrailRoute,
