@@ -166,8 +166,15 @@ describe('RailAuthorCardView', () => {
         isLoading={false}
       />,
     );
-    expect(screen.getByTestId('entity-rail-author-total')).toHaveTextContent('Agents: 7');
-    expect(screen.getByTestId('entity-rail-author-published')).toHaveTextContent('Published: 3');
+    // ONE line, `Agents:7Published:3` in the DOM — `AuthorStatistics.jsx`
+    // separates label from value with a 0.25rem margin, not a text node, and
+    // puts both pairs inside a single <Typography>. The port used to emit a
+    // block row per statistic, which stacked them.
+    expect(screen.getByTestId('entity-rail-author-total')).toHaveTextContent('Agents:7');
+    expect(screen.getByTestId('entity-rail-author-published')).toHaveTextContent('Published:3');
+    expect(
+      screen.getByTestId('entity-rail-author-total').parentElement,
+    ).toBe(screen.getByTestId('entity-rail-author-published').parentElement);
   });
 
   it('renders no published row for pipelines', () => {
@@ -178,7 +185,7 @@ describe('RailAuthorCardView', () => {
         isLoading={false}
       />,
     );
-    expect(screen.getByTestId('entity-rail-author-total')).toHaveTextContent('Pipelines: 5');
+    expect(screen.getByTestId('entity-rail-author-total')).toHaveTextContent('Pipelines:5');
     expect(screen.queryByTestId('entity-rail-author-published')).toBeNull();
   });
 
@@ -191,7 +198,7 @@ describe('RailAuthorCardView', () => {
         isLoading={false}
       />,
     );
-    expect(screen.getByTestId('entity-rail-author-indexes')).toHaveTextContent('Indexes: 4');
+    expect(screen.getByTestId('entity-rail-author-indexes')).toHaveTextContent('Indexes:4');
   });
 
   it('renders a skeleton while loading and nothing at all for a nameless author', () => {

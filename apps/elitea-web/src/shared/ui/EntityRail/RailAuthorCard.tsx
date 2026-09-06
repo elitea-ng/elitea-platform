@@ -89,22 +89,38 @@ const STAT_LABELS: Readonly<Record<RailStatKind, () => string>> = {
   toolkits: () => t('shared.ui.entityRail.author.toolkits', 'Toolkits'),
 };
 
-interface StatRowProps {
+interface StatPairProps {
   readonly label: string;
   readonly value: number;
   /** Stable, translation-independent hook for tests — the visible label is localised copy. */
   readonly testId: string;
+  /** `AuthorStatistics.jsx` separates the second pair from the first with `margin-left: 0.5rem`. */
+  readonly gapBefore?: boolean;
 }
 
-function StatRow({ label, value, testId }: StatRowProps): ReactNode {
+/**
+ * `AuthorStatistics.jsx:16-50` renders the entity total and "Published" as
+ * label/value SPAN pairs inside ONE `<Typography variant="bodySmall">` — a
+ * single line reading `Agents: 4  Published: 0`, with each VALUE (not the
+ * label) painted `text.secondary`. The port emitted a separate block row per
+ * statistic, which stacked them vertically and made the card two lines
+ * taller than production's.
+ */
+function StatPair({ label, value, testId, gapBefore = false }: StatPairProps): ReactNode {
   return (
-    <Typography
-      variant="bodySmall"
-      component="div"
+    <Box
+      component="span"
       data-testid={testId}
+      sx={gapBefore ? statLabelGapSx : undefined}
     >
-      {`${label}: ${String(value)}`}
-    </Typography>
+      {`${label}:`}
+      <Box
+        component="span"
+        sx={statValueSx}
+      >
+        {value}
+      </Box>
+    </Box>
   );
 }
 
@@ -142,27 +158,40 @@ export function RailAuthorCardView({ name, avatar, statistic, indexesTotal, isLo
           >
             {name}
           </Typography>
-          {statistic !== undefined && (
-            <StatRow
-              label={STAT_LABELS[statistic.kind]()}
-              value={statistic.value}
-              testId="entity-rail-author-total"
-            />
-          )}
-          {statistic?.published !== undefined && (
-            <StatRow
-              label={t('shared.ui.entityRail.author.published', 'Published')}
-              value={statistic.published}
-              testId="entity-rail-author-published"
-            />
-          )}
-          {indexesTotal !== undefined && (
-            <StatRow
-              label={t('shared.ui.entityRail.author.indexes', 'Indexes')}
-              value={indexesTotal}
-              testId="entity-rail-author-indexes"
-            />
-          )}
+          <Box sx={statsBlockSx}>
+            {statistic !== undefined && (
+              <Typography
+                variant="bodySmall"
+                component="div"
+              >
+                <StatPair
+                  label={STAT_LABELS[statistic.kind]()}
+                  value={statistic.value}
+                  testId="entity-rail-author-total"
+                />
+                {statistic.published !== undefined && (
+                  <StatPair
+                    label={t('shared.ui.entityRail.author.published', 'Published')}
+                    value={statistic.published}
+                    testId="entity-rail-author-published"
+                    gapBefore
+                  />
+                )}
+              </Typography>
+            )}
+            {indexesTotal !== undefined && (
+              <Typography
+                variant="bodySmall"
+                component="div"
+              >
+                <StatPair
+                  label={t('shared.ui.entityRail.author.indexes', 'Indexes')}
+                  value={indexesTotal}
+                  testId="entity-rail-author-indexes"
+                />
+              </Typography>
+            )}
+          </Box>
         </Box>
       </Box>
     </Box>
@@ -201,13 +230,26 @@ export function RailAuthorCard({ authorId, pathname, statKind, indexesTotal }: R
 }
 
 const cardSx: SxProps<Theme> = (theme: Theme) => ({
-  border: `1px solid ${theme.vars.palette.border.table}`,
+  border: `0.0625rem solid ${theme.vars.palette.border.table}`,
   borderRadius: theme.vars.shape.radiusMd,
   background: theme.vars.palette.background.tabPanel,
   paddingBlock: theme.spacing(2),
   paddingInline: theme.spacing(1.5),
   maxHeight: '50vh',
+  // `AuthorInformation.jsx`'s `mainContainer` — a fixed 19.5rem card with a
+  // 1rem gutter under it, not a full-bleed rail child.
+  width: '19.5rem',
+  marginBottom: theme.spacing(2),
+  flexShrink: 0,
+  boxSizing: 'border-box',
 });
+
+/** `AuthorStatistics.jsx`'s `statisticsBlock`. */
+const statsBlockSx: SxProps<Theme> = { minHeight: '1.5rem', display: 'flex', flexDirection: 'column', justifyContent: 'center' };
+
+const statValueSx: SxProps<Theme> = (theme: Theme) => ({ color: theme.vars.palette.text.secondary, marginLeft: '0.25rem' });
+
+const statLabelGapSx: SxProps<Theme> = { marginLeft: '0.5rem' };
 
 const rowSx: SxProps<Theme> = { display: 'flex', flexDirection: 'row' };
 
@@ -221,7 +263,7 @@ const infoSx: SxProps<Theme> = (theme: Theme) => ({
   minWidth: 0,
 });
 
-const nameSx: SxProps<Theme> = (theme: Theme) => ({ color: theme.vars.palette.text.secondary });
+const nameSx: SxProps<Theme> = (theme: Theme) => ({ color: theme.vars.palette.text.secondary, height: '1.5rem', display: 'flex', alignItems: 'center' });
 
 const skeletonSx: SxProps<Theme> = (theme: Theme) => ({
   marginTop: theme.spacing(1),

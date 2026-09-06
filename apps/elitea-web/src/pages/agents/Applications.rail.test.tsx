@@ -107,8 +107,8 @@ describe('Applications right-hand rail', () => {
     renderAgentsRoute(<Applications />, '/agents/all', { projectId: '9', user: { id: '5', personal_project_id: '9' } });
 
     expect(await screen.findByTestId('entity-rail-author')).toBeInTheDocument();
-    expect(screen.getByTestId('entity-rail-author-total')).toHaveTextContent('Agents: 7');
-    expect(screen.getByTestId('entity-rail-author-published')).toHaveTextContent('Published: 3');
+    expect(screen.getByTestId('entity-rail-author-total')).toHaveTextContent('Agents:7');
+    expect(screen.getByTestId('entity-rail-author-published')).toHaveTextContent('Published:3');
     expect(screen.queryByText('Trending Authors')).toBeNull();
   });
 

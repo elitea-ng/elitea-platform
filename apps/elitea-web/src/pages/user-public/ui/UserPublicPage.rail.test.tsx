@@ -86,7 +86,7 @@ describe('UserPublicPage right-hand rail', () => {
     renderPage({ tab: 'pipelines' });
 
     expect(await screen.findByTestId('entity-rail-author')).toBeInTheDocument();
-    expect(screen.getByTestId('entity-rail-author-total')).toHaveTextContent('Pipelines: 4');
+    expect(screen.getByTestId('entity-rail-author-total')).toHaveTextContent('Pipelines:4');
     // `/pipelines` declares no publishedKey — no Published row, even though
     // the author detail carries `public_applications`.
     expect(screen.queryByTestId('entity-rail-author-published')).toBeNull();
@@ -95,8 +95,8 @@ describe('UserPublicPage right-hand rail', () => {
   it('switches the statistic to Agents on the agents tab', async () => {
     renderPage({ tab: 'agents' });
 
-    expect(await screen.findByTestId('entity-rail-author-total')).toHaveTextContent('Agents: 9');
-    expect(screen.getByTestId('entity-rail-author-published')).toHaveTextContent('Published: 2');
+    expect(await screen.findByTestId('entity-rail-author-total')).toHaveTextContent('Agents:9');
+    expect(screen.getByTestId('entity-rail-author-published')).toHaveTextContent('Published:2');
   });
 
   it('shows the author card, not trending authors, while an author is in URL scope', async () => {

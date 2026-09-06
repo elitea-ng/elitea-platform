@@ -44,7 +44,12 @@ export function SidebarHeader({ collapsed, onToggleCollapsed }: SidebarHeaderPro
         alignItems: 'center',
         justifyContent: collapsed ? 'center' : 'space-between',
         padding: '0 1rem',
-        minHeight: '3.5rem',
+        width: '100%',
+        boxSizing: 'border-box',
+        // `NAV_BAR_HEIGHT_IN_PX` (`common/constants.js:55`) is 60px, and
+        // production measures the rail's first divider at exactly y=60. The
+        // port's 3.5rem (56px) sat the logo row 4px short of it.
+        minHeight: '3.75rem',
       }}
     >
       <IconButton
@@ -53,9 +58,21 @@ export function SidebarHeader({ collapsed, onToggleCollapsed }: SidebarHeaderPro
         color="inherit"
         aria-label={t('widgets.sidebar.toggle', 'Toggle sidebar')}
         onClick={onToggleCollapsed}
-        sx={{ position: 'relative', width: '2.75rem', height: '2.75rem' }}
+        // `styles.homeButton`: a 2.75rem square with NO horizontal padding,
+        // pulled 0.5rem left while expanded so the mark's optical edge lines
+        // up with the nav rows' 1rem inset below it.
+        sx={{
+          position: 'relative',
+          width: '2.75rem',
+          height: '2.75rem',
+          paddingInline: 0,
+          marginLeft: collapsed ? 0 : '-0.5rem',
+        }}
       >
-        <BrandLogoMark style={{ width: '2.25rem', height: '2.25rem' }} />
+        {/* `styles.eliteaIcon` is `fontSize: 1.75rem`, not 2.25rem — the port
+            oversized the orb by 8px, which is what pushed the connection dot
+            past the button's top-right corner. */}
+        <BrandLogoMark style={{ width: '1.75rem', height: '1.75rem' }} />
         <SidebarConnectionDot />
       </IconButton>
       {/*
