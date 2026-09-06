@@ -305,8 +305,30 @@ export function CodeMirrorEditor({
   // inside, and an ancestor `<div aria-label>` with no ARIA role does not
   // contribute to that element's accessible name. `EditorView.contentAttributes`
   // sets the attribute on `.cm-content` itself, which is where it is read.
-  const ariaLabelExtension = useMemo<Extension[]>(
-    () => (ariaLabel !== undefined ? [EditorView.contentAttributes.of({ 'aria-label': ariaLabel })] : []),
+  //
+  // `tabindex` puts the document in the tab order, which is what makes the
+  // scrolling region keyboard-reachable. CM6 builds
+  // `.cm-editor > .cm-scroller > .cm-content`, sets `scrollDOM.tabIndex = -1`
+  // itself, and marks `.cm-content` with `contenteditable` and nothing else —
+  // so the element that SCROLLS has no tabbable descendant. That is what
+  // `scrollable-region-focusable` (WCAG 2.1.1, ACT 0ssw9k) reports: axe counts
+  // the natively focusable elements plus anything carrying a `tabindex`, and a
+  // bare `div[contenteditable]` is neither (`axe-core`, `isNativelyFocusable`).
+  // It stayed invisible while every checked editor was too short to scroll;
+  // the pipeline starter template made the create screen's Instructions editor
+  // overflow and six journeys failed on it. The attribute states what a
+  // browser already does for an editable document, and ADDS the missing tab
+  // stop for a `readOnly` one (`SettingsPreview`, `CodePreviewContent`,
+  // `ArtifactPreviewContent`), where a keyboard user could not reach a
+  // scrolled document at all. One tab stop, on the content and not on the
+  // scroller, so the caret lands in the document and the arrows scroll it.
+  const contentAttributeExtension = useMemo<Extension[]>(
+    () => [
+      EditorView.contentAttributes.of({
+        tabindex: '0',
+        ...(ariaLabel !== undefined ? { 'aria-label': ariaLabel } : {}),
+      }),
+    ],
     [ariaLabel],
   );
 
@@ -357,7 +379,7 @@ export function CodeMirrorEditor({
         }),
         syntaxHighlighting(highlightStyle),
         EditorView.lineWrapping,
-        ...ariaLabelExtension,
+        ...contentAttributeExtension,
         ...syntaxErrorListener,
         ...historyDepthListener,
         ...consumerExtensions,
