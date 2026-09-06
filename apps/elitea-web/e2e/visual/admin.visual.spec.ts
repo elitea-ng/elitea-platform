@@ -334,22 +334,6 @@ const ADMIN_ROUTES: readonly AdminVisualRoute[] = [
     landmark: (page) => page.getByRole('textbox', { name: 'SMTP host' }),
   },
   {
-    // @covers /admin/app/email
-    name: 'admin-email',
-    path: '/admin/app/email',
-    // The SMTP host input. The page renders its form only once the settings
-    // query resolved (`AdminEmailEditor` returns a bare `LinearProgress` while
-    // `state.isLoading` or the draft has not been seeded), so no field here can
-    // be mistaken for a loading state.
-    //
-    // NOT the "not configured" Alert: this stack configures no relay, so that
-    // Alert is the honest reference — but it is also the sentence the server
-    // gives, and the point of a landmark is to prove the QUERY resolved. The
-    // Alert renders from `state.data`, so it would do; the input is the
-    // smaller locator and matches what the Branding entry above uses.
-    landmark: (page) => page.getByRole('textbox', { name: 'SMTP host' }),
-  },
-  {
     // @covers /admin/app/service-descriptors
     name: 'admin-service-descriptors',
     path: '/admin/app/service-descriptors',
