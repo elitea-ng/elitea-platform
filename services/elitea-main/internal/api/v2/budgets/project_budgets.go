@@ -13,10 +13,14 @@ package budgets
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // budgetState is the assembled read model both the project and the member
@@ -39,10 +43,23 @@ type budgetState struct {
 	ResetsAt       string       `json:"resets_at"`
 }
 
-// projectBudgetState is a project's budget plus the period it accrues over.
+// projectBudgetState is a project's budget plus the two policy columns that
+// exist only at project scope: the period it accrues over and the NATS-failure
+// policy the gateway applies to it.
+//
+// Both are now read from the STORED row rather than reported as literals.
+// `budget_period` used to be the constant "monthly" whatever the column held,
+// and `nats_fail_mode` was not reported at all, so neither column had a reader
+// and neither had a writer — an operator could not see or change either.
+//
+// NatsFailMode is a pointer because NULL is a real and distinct state: it means
+// "inherit the platform baseline" (LLM_BUDGET_NATS_FAIL_MODE, resolved by
+// services/elitea-llm-gateway/internal/failmode.ResolveFailMode), which is not
+// the same as any of the three named modes.
 type projectBudgetState struct {
-	ProjectID    int64  `json:"project_id"`
-	BudgetPeriod string `json:"budget_period"`
+	ProjectID    int64   `json:"project_id"`
+	BudgetPeriod string  `json:"budget_period"`
+	NatsFailMode *string `json:"nats_fail_mode"`
 	budgetState
 }
 
@@ -256,6 +273,22 @@ func (h *Handler) GetProjectBudgetAdmin(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, state)
 }
 
+// projectPolicySelect reads the two project-only policy columns.
+//
+// It is a SECOND round trip rather than two more columns on budgetStateSelect,
+// and deliberately so: that select is shared verbatim with the per-member read,
+// and gateway.user_budget has neither column. Widening the shared select would
+// need a second, divergent copy of it — the exact duplication its doc comment
+// exists to prevent — to save one indexed point-read on an admin-rate endpoint.
+//
+// A project with no row returns pgx.ErrNoRows, which is not an error here: it
+// is the default state, and it resolves to the same answer the CREATE TABLE
+// default would give.
+const projectPolicySelect = `
+SELECT budget_period, nats_fail_mode
+FROM gateway.project_budget
+WHERE project_id = $1`
+
 func (h *Handler) projectBudget(ctx context.Context, projectID int64) (projectBudgetState, error) {
 	period := periodFor(h.clock())
 	state, err := h.readBudgetState(
@@ -264,10 +297,32 @@ func (h *Handler) projectBudget(ctx context.Context, projectID int64) (projectBu
 	if err != nil {
 		return projectBudgetState{}, err
 	}
-	// budget_period is reported, not settable: the gateway derives the period
-	// from the calendar month unconditionally (billingPeriodStart), so a stored
-	// 'weekly' would be a value nothing honours.
-	return projectBudgetState{ProjectID: projectID, BudgetPeriod: "monthly", budgetState: state}, nil
+
+	// The AUTHORED period and fail mode, read back rather than asserted. A
+	// project nobody has configured has no row at all, and that is the default
+	// state — defaultBudgetPeriod with an inherited fail mode — not a failure.
+	resolved := projectBudgetState{
+		ProjectID:    projectID,
+		BudgetPeriod: defaultBudgetPeriod,
+		budgetState:  state,
+	}
+	var (
+		storedPeriod   *string
+		storedFailMode *string
+	)
+	switch err := h.pool.QueryRow(ctx, projectPolicySelect, projectID).
+		Scan(&storedPeriod, &storedFailMode); {
+	case err == nil:
+		if storedPeriod != nil && *storedPeriod != "" {
+			resolved.BudgetPeriod = *storedPeriod
+		}
+		resolved.NatsFailMode = storedFailMode
+	case errors.Is(err, pgx.ErrNoRows):
+		// No authored row: the defaults above stand.
+	default:
+		return projectBudgetState{}, fmt.Errorf("budgets: read project budget policy: %w", err)
+	}
+	return resolved, nil
 }
 
 /* ── PUT the project's budget ──────────────────────────────────────────── */
@@ -282,6 +337,16 @@ type budgetWrite struct {
 	Enabled      *bool        `json:"enabled"`
 	Currency     *string      `json:"currency"`
 	SoftAlertPct *int         `json:"soft_alert_pct"`
+
+	// The two project-only policy fields. BudgetPeriod is *string because an
+	// absent field means "leave the stored period alone"; NatsFailMode is
+	// json.RawMessage because it has THREE inputs, not two — absent leaves the
+	// stored mode alone, an explicit null clears it back to the platform
+	// baseline, and a string sets it. A *string cannot tell the first two
+	// apart, and collapsing them would make every limit edit silently reset a
+	// fail mode the operator chose earlier.
+	BudgetPeriod *string         `json:"budget_period"`
+	NatsFailMode json.RawMessage `json:"nats_fail_mode"`
 }
 
 // parsedBudgetWrite is a validated payload, with the defaults the reference
@@ -290,6 +355,73 @@ type parsedBudgetWrite struct {
 	monthlyLimit *string
 	enabled      bool
 	softAlertPct *int
+
+	// budgetPeriod is nil when the field was absent, which the upsert reads as
+	// "keep what is stored".
+	budgetPeriod *string
+	// natsFailModeSet says the field was PRESENT. natsFailMode is then the
+	// value, or nil for an explicit null (inherit the platform baseline).
+	natsFailModeSet bool
+	natsFailMode    *string
+}
+
+// projectPolicyRequested reports whether the payload carried either of the two
+// project-only policy fields. The per-member PUT refuses such a payload rather
+// than accepting and dropping it: gateway.user_budget has neither column, and
+// the gateway reads the fail mode from the OWNING PROJECT's row
+// (services/elitea-llm-gateway/internal/failmode/store.go). A 200 over a
+// silently discarded field is the shape this repo has shipped before (#128).
+func (p parsedBudgetWrite) projectPolicyRequested() bool {
+	return p.budgetPeriod != nil || p.natsFailModeSet
+}
+
+// defaultBudgetPeriod is gateway.project_budget.budget_period's column default
+// and the only period anything enforces.
+const defaultBudgetPeriod = "monthly"
+
+// budgetPeriods is the set the write path accepts.
+//
+// It holds ONE value, and that is a statement about enforcement rather than an
+// oversight. The gateway derives the billing window from the calendar month
+// unconditionally (llmproxy/budget_gate.go billingPeriodStart/End), and the
+// accumulator's unique key is (scope, scope_id, period_start), so a stored
+// 'weekly' would be a period nothing computes and nothing bills against — a
+// setting on a screen that changes nothing, which is the defect class this
+// change exists to remove rather than to add another instance of.
+//
+// The column carries no CHECK constraint (shared migration 0067 declares only
+// `VARCHAR(16) NOT NULL DEFAULT 'monthly'`), so this set is the only thing
+// standing between the API and an unenforceable value. The day the gateway
+// grows a second window, this set and the gateway's period helper change
+// together, and the spec enum below with them.
+var budgetPeriods = map[string]struct{}{
+	defaultBudgetPeriod: {},
+}
+
+// natsFailModes is shared migration 0067's CHECK constraint on
+// gateway.project_budget.nats_fail_mode, restated so a bad value is a 400 from
+// this handler rather than a 23514 from PostgreSQL surfaced as a 500.
+//
+// It is also failmode.ModeTieredHybrid / ModeFailOpen / ModeFailClosed in
+// services/elitea-llm-gateway/internal/failmode/fsm.go, which is what
+// ResolveFailMode matches a per-project override against. A value outside the
+// set is not merely refused by the column: it would be ignored by the resolver,
+// so the project would silently fall back to the platform baseline.
+var natsFailModes = map[string]struct{}{
+	"tiered_hybrid": {},
+	"fail_open":     {},
+	"fail_closed":   {},
+}
+
+// sortedKeys renders a value set for an error message, in a stable order so the
+// same rejection reads the same way twice.
+func sortedKeys(set map[string]struct{}) string {
+	keys := make([]string, 0, len(set))
+	for key := range set {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, ", ")
 }
 
 // decodeBudgetWrite validates a budget payload, answering the request itself on
@@ -337,6 +469,36 @@ func decodeBudgetWrite(w http.ResponseWriter, r *http.Request) (parsedBudgetWrit
 		}
 		parsed.softAlertPct = body.SoftAlertPct
 	}
+	if body.BudgetPeriod != nil {
+		period := strings.ToLower(strings.TrimSpace(*body.BudgetPeriod))
+		if _, ok := budgetPeriods[period]; !ok {
+			writeError(w, http.StatusBadRequest,
+				"budget_period must be one of: "+sortedKeys(budgetPeriods))
+			return parsedBudgetWrite{}, false
+		}
+		parsed.budgetPeriod = &period
+	}
+	if body.NatsFailMode != nil {
+		parsed.natsFailModeSet = true
+		// `null` clears the override back to the platform baseline. It is
+		// decoded here rather than being caught by a *string, because a
+		// *string cannot separate `null` from an absent key and the two mean
+		// different things on this field.
+		if string(body.NatsFailMode) != "null" {
+			var mode string
+			if err := json.Unmarshal(body.NatsFailMode, &mode); err != nil {
+				writeError(w, http.StatusBadRequest, "nats_fail_mode must be a string or null")
+				return parsedBudgetWrite{}, false
+			}
+			mode = strings.ToLower(strings.TrimSpace(mode))
+			if _, ok := natsFailModes[mode]; !ok {
+				writeError(w, http.StatusBadRequest,
+					"nats_fail_mode must be null or one of: "+sortedKeys(natsFailModes))
+				return parsedBudgetWrite{}, false
+			}
+			parsed.natsFailMode = &mode
+		}
+	}
 	return parsed, true
 }
 
@@ -354,16 +516,48 @@ func decodeBudgetWrite(w http.ResponseWriter, r *http.Request) (parsedBudgetWrit
 // in SQL, in the same statement, is what stops them from drifting — a second
 // statement that set is_unlimited separately could be interrupted between the
 // two and leave a project with a limit nothing enforces.
+// `budget_period` and `nats_fail_mode` are supplied by the caller now rather
+// than hard-coded and omitted. Before this, the INSERT wrote the literal
+// 'monthly' and never mentioned nats_fail_mode at all, so the only column the
+// gateway consults for its per-project failure policy had NO writer anywhere in
+// the platform — the value was reachable by direct SQL and by nothing else.
+//
+// Both follow the soft_alert_pct precedent on the UPDATE branch: an absent
+// field COALESCEs to the EXISTING value. A PUT that changes only the limit must
+// not silently move a policy the operator chose earlier. `nats_fail_mode`
+// additionally has to honour an EXPLICIT null — "inherit the platform
+// baseline" — which COALESCE alone cannot express, so $7 carries "the field was
+// present" and the CASE reads it.
 const projectBudgetUpsert = `
 INSERT INTO gateway.project_budget AS existing
-    (project_id, hard_limit_usd, enabled, is_unlimited, soft_alert_pct, budget_period, updated_at)
-VALUES ($1, $2::numeric, $3, ($2::numeric IS NULL OR NOT $3), $4::smallint, 'monthly', now())
+    (project_id, hard_limit_usd, enabled, is_unlimited, soft_alert_pct,
+     budget_period, nats_fail_mode, updated_at)
+VALUES ($1, $2::numeric, $3, ($2::numeric IS NULL OR NOT $3), $4::smallint,
+        COALESCE($5::varchar, '` + defaultBudgetPeriod + `'), $6::varchar, now())
 ON CONFLICT (project_id) DO UPDATE SET
     hard_limit_usd = EXCLUDED.hard_limit_usd,
     enabled        = EXCLUDED.enabled,
     is_unlimited   = EXCLUDED.is_unlimited,
     soft_alert_pct = COALESCE($4::smallint, existing.soft_alert_pct),
+    budget_period  = COALESCE($5::varchar, existing.budget_period),
+    nats_fail_mode = CASE WHEN $7::boolean THEN $6::varchar ELSE existing.nats_fail_mode END,
     updated_at     = now()`
+
+// projectBudgetDelete clears a project back to the platform default by removing
+// the authored row. Every read in this package LEFT JOINs from a one-row anchor,
+// so an absent row is already the "unlimited, inherit everything" state — which
+// is why clearing is a DELETE rather than an UPDATE that writes NULLs into a row
+// that then still claims to have been authored.
+//
+// It does NOT touch gateway.llm_budget_accumulators. That table's
+// budget_rule_id carries ON DELETE CASCADE onto this row, but nothing in the
+// platform has ever written budget_rule_id — it is NULL on every accumulator
+// the scheduler's write-back consumer produces — so the cascade reaches nothing
+// and the period's spend survives a clear. TestClearingAProjectBudgetKeepsTheSpend
+// pins that, because the day something starts populating budget_rule_id, this
+// statement would begin deleting billing history as a side effect of an
+// operator clearing a limit.
+const projectBudgetDelete = `DELETE FROM gateway.project_budget WHERE project_id = $1`
 
 // PutProjectBudget serves project_budget.py's administration-mode PUT.
 //
@@ -385,8 +579,47 @@ func (h *Handler) PutProjectBudget(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	if _, err := h.pool.Exec(ctx, projectBudgetUpsert,
 		projectID, parsed.monthlyLimit, parsed.enabled, parsed.softAlertPct,
+		parsed.budgetPeriod, parsed.natsFailMode, parsed.natsFailModeSet,
 	); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to save project budget")
+		return
+	}
+
+	state, err := h.projectBudget(ctx, projectID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to read project budget")
+		return
+	}
+	writeJSON(w, http.StatusOK, state)
+}
+
+// DeleteProjectBudget clears a project's authored budget back to the platform
+// default.
+//
+// Without it a budget could be created but never removed. `enabled: false` was
+// the nearest thing available and it is not the same state: it stores
+// "deliberately exempt", which is an authored decision that keeps the operator's
+// old ceiling on the screen, while a cleared project has no authored row and
+// inherits the platform's soft-alert threshold and fail mode as they change.
+//
+// It answers with the RESULTING state, like the PUT above, and for the same
+// reason: after a clear the effective figures are the inherited ones, and a 204
+// would leave the caller to guess them or issue a second read.
+//
+// Deleting a project that has no budget is a success, not a 404. The endpoint
+// states an intent — "this project has no authored budget" — and that is
+// already true; answering 404 would make a retry after a lost response look
+// like a failure.
+func (h *Handler) DeleteProjectBudget(w http.ResponseWriter, r *http.Request) {
+	projectID, ok := pathID(r, "projectID")
+	if !ok {
+		writeError(w, http.StatusBadRequest, "project id must be a positive integer")
+		return
+	}
+
+	ctx := r.Context()
+	if _, err := h.pool.Exec(ctx, projectBudgetDelete, projectID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to clear project budget")
 		return
 	}
 

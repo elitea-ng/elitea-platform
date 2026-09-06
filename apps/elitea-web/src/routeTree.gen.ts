@@ -57,6 +57,7 @@ import { Route as ShellSettingsProjectParamsRouteImport } from './routes/_shell/
 import { Route as ShellSettingsPromptsRouteImport } from './routes/_shell/settings/prompts'
 import { Route as ShellSettingsSecretsRouteImport } from './routes/_shell/settings/secrets'
 import { Route as ShellSettingsTokensRouteImport } from './routes/_shell/settings/tokens'
+import { Route as ShellSettingsUsageRouteImport } from './routes/_shell/settings/usage'
 import { Route as ShellSettingsUsersRouteImport } from './routes/_shell/settings/users'
 import { Route as ShellSkillsIndexRouteImport } from './routes/_shell/skills/index'
 import { Route as ShellSkillsTabRouteImport } from './routes/_shell/skills/$tab'
@@ -340,6 +341,11 @@ const ShellSettingsTokensRoute = ShellSettingsTokensRouteImport.update({
   path: '/tokens',
   getParentRoute: () => ShellSettingsRouteRoute,
 } as any)
+const ShellSettingsUsageRoute = ShellSettingsUsageRouteImport.update({
+  id: '/usage',
+  path: '/usage',
+  getParentRoute: () => ShellSettingsRouteRoute,
+} as any)
 const ShellSettingsUsersRoute = ShellSettingsUsersRouteImport.update({
   id: '/users',
   path: '/users',
@@ -558,6 +564,7 @@ export interface FileRoutesByFullPath {
   '/settings/prompts': typeof ShellSettingsPromptsRoute
   '/settings/secrets': typeof ShellSettingsSecretsRoute
   '/settings/tokens': typeof ShellSettingsTokensRoute
+  '/settings/usage': typeof ShellSettingsUsageRoute
   '/settings/users': typeof ShellSettingsUsersRoute
   '/skills/$tab': typeof ShellSkillsTabRouteWithChildren
   '/skills/create': typeof ShellSkillsCreateRoute
@@ -638,6 +645,7 @@ export interface FileRoutesByTo {
   '/settings/prompts': typeof ShellSettingsPromptsRoute
   '/settings/secrets': typeof ShellSettingsSecretsRoute
   '/settings/tokens': typeof ShellSettingsTokensRoute
+  '/settings/usage': typeof ShellSettingsUsageRoute
   '/settings/users': typeof ShellSettingsUsersRoute
   '/skills/$tab': typeof ShellSkillsTabRouteWithChildren
   '/skills/create': typeof ShellSkillsCreateRoute
@@ -721,6 +729,7 @@ export interface FileRoutesById {
   '/_shell/settings/prompts': typeof ShellSettingsPromptsRoute
   '/_shell/settings/secrets': typeof ShellSettingsSecretsRoute
   '/_shell/settings/tokens': typeof ShellSettingsTokensRoute
+  '/_shell/settings/usage': typeof ShellSettingsUsageRoute
   '/_shell/settings/users': typeof ShellSettingsUsersRoute
   '/_shell/skills/$tab': typeof ShellSkillsTabRouteWithChildren
   '/_shell/skills/create': typeof ShellSkillsCreateRoute
@@ -804,6 +813,7 @@ export interface FileRouteTypes {
     | '/settings/prompts'
     | '/settings/secrets'
     | '/settings/tokens'
+    | '/settings/usage'
     | '/settings/users'
     | '/skills/$tab'
     | '/skills/create'
@@ -884,6 +894,7 @@ export interface FileRouteTypes {
     | '/settings/prompts'
     | '/settings/secrets'
     | '/settings/tokens'
+    | '/settings/usage'
     | '/settings/users'
     | '/skills/$tab'
     | '/skills/create'
@@ -966,6 +977,7 @@ export interface FileRouteTypes {
     | '/_shell/settings/prompts'
     | '/_shell/settings/secrets'
     | '/_shell/settings/tokens'
+    | '/_shell/settings/usage'
     | '/_shell/settings/users'
     | '/_shell/skills/$tab'
     | '/_shell/skills/create'
@@ -1353,6 +1365,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ShellSettingsTokensRouteImport
       parentRoute: typeof ShellSettingsRouteRoute
     }
+    '/_shell/settings/usage': {
+      id: '/_shell/settings/usage'
+      path: '/usage'
+      fullPath: '/settings/usage'
+      preLoaderRoute: typeof ShellSettingsUsageRouteImport
+      parentRoute: typeof ShellSettingsRouteRoute
+    }
     '/_shell/settings/users': {
       id: '/_shell/settings/users'
       path: '/users'
@@ -1611,6 +1630,7 @@ interface ShellSettingsRouteRouteChildren {
   ShellSettingsPromptsRoute: typeof ShellSettingsPromptsRoute
   ShellSettingsSecretsRoute: typeof ShellSettingsSecretsRoute
   ShellSettingsTokensRoute: typeof ShellSettingsTokensRoute
+  ShellSettingsUsageRoute: typeof ShellSettingsUsageRoute
   ShellSettingsUsersRoute: typeof ShellSettingsUsersRoute
   ShellSettingsIndexRoute: typeof ShellSettingsIndexRoute
   ShellSettingsEditConfigurationCredential_uidRoute: typeof ShellSettingsEditConfigurationCredential_uidRoute
@@ -1633,6 +1653,7 @@ const ShellSettingsRouteRouteChildren: ShellSettingsRouteRouteChildren = {
   ShellSettingsPromptsRoute: ShellSettingsPromptsRoute,
   ShellSettingsSecretsRoute: ShellSettingsSecretsRoute,
   ShellSettingsTokensRoute: ShellSettingsTokensRoute,
+  ShellSettingsUsageRoute: ShellSettingsUsageRoute,
   ShellSettingsUsersRoute: ShellSettingsUsersRoute,
   ShellSettingsIndexRoute: ShellSettingsIndexRoute,
   ShellSettingsEditConfigurationCredential_uidRoute:

@@ -719,6 +719,16 @@
     },
     {
       "file": null,
+      "route": "/admin/app/budgets",
+      "targetComponent": "src/pages/admin/Budgets.tsx",
+      "theme": "dark",
+      "wiringStatus": "wired",
+      "notes": "Per-project LLM budgets (gap G4): the All/Team/Personal tabs, the search bar and the DataGrid of limit, spend and utilisation. Two states are worth a baseline and neither is the happy path — a project whose authored ceiling is NOT enforced carries a warning chip beside the number, and the G12 banner appears above the table when the seeded gateway reports it holds no NATS counter. The E2E stack runs the gateway without one, so that banner is the DEFAULT state here rather than an edge case.",
+      "surface": "admin",
+      "baseline": null
+    },
+    {
+      "file": null,
       "route": "/admin/app/branding",
       "targetComponent": "src/pages/admin/Branding.tsx",
       "theme": "dark",
@@ -760,7 +770,7 @@
     }
   },
   "coverage": {
-    "shots": 79,
+    "shots": 81,
     "routes": 39,
     "bothSchemes": true,
     "listAndGridModes": true,

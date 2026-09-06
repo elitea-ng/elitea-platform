@@ -40,24 +40,26 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
-import { BudgetState } from "./budgetState.zod";
+import { BudgetWrite } from "./budgetWrite.zod";
 
-export const ProjectBudget = zod
-  .object({
-    project_id: zod.int(),
+export const ProjectBudgetWrite = BudgetWrite.and(
+  zod.object({
     budget_period: zod
       .enum(["monthly"])
+      .optional()
       .describe(
-        "The STORED period, read back from the row rather than reported\nas a constant. `monthly` is the only accepted value: the gateway\nderives the billing window from the calendar month\nunconditionally, so any other value would be one nothing\ncomputes and nothing bills against.\n",
+        "Omitted leaves the stored period untouched. `monthly` is the\nonly accepted value — see the response schema for why.\n",
       ),
     nats_fail_mode: zod
       .enum(["tiered_hybrid", "fail_open", "fail_closed"])
-      .nullable()
+      .nullish()
       .describe(
-        "The per-project NATS-failure policy the gateway applies when the\nbudget counter is unreachable.\n\nNULL means this project authors none and inherits the platform\nbaseline (`LLM_BUDGET_NATS_FAIL_MODE`). That is a distinct state\nfrom any of the three modes, so it is reported as null rather\nthan resolved to the baseline here — a client that showed the\ninherited value as if it were authored would make a later change\nto the baseline look like a change nobody made.\n",
+        "The per-project NATS-failure policy override.\n\nThis field has THREE inputs, not two. Omitted leaves the stored\nmode untouched, so an edit that changes only the limit does not\nsilently reset a policy chosen earlier. An explicit `null`\nclears the override back to the platform baseline. A named mode\nsets it.\n",
       ),
-  })
-  .and(BudgetState);
+  }),
+).describe(
+  "The project budget PUT payload: the shared fields plus the two policy\ncolumns that exist only at project scope.\n\nNeither extra field is accepted by the member PUT, which answers 400\nrather than storing it: `gateway.user_budget` has neither column, and\nthe gateway reads a project's fail mode from the OWNING project's row on\nthe member path too. A member accrues over the same calendar window for\nthe same reason.\n",
+);
 
-export type ProjectBudget = zod.input<typeof ProjectBudget>;
-export type ProjectBudgetOutput = zod.output<typeof ProjectBudget>;
+export type ProjectBudgetWrite = zod.input<typeof ProjectBudgetWrite>;
+export type ProjectBudgetWriteOutput = zod.output<typeof ProjectBudgetWrite>;

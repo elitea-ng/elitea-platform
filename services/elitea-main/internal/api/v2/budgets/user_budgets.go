@@ -200,12 +200,68 @@ func (h *Handler) PutUserBudget(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// The two project-only policy fields are REFUSED here, not ignored.
+	//
+	// gateway.user_budget has neither column (shared migration 0067), and the
+	// gateway reads a project's fail mode from the OWNING PROJECT's row on the
+	// member path too (failmode/store.go: "taken from the OWNING PROJECT's
+	// row. A member cap sits inside it"). A member accrues over the same
+	// calendar window as the project for the same reason. So there is nothing
+	// here for either field to mean, and accepting one would answer 200 to a
+	// request whose whole content was discarded.
+	if parsed.projectPolicyRequested() {
+		writeError(w, http.StatusBadRequest,
+			"budget_period and nats_fail_mode are project-scoped; set them on the project budget")
+		return
+	}
 
 	ctx := r.Context()
 	if _, err := h.pool.Exec(ctx, userBudgetUpsert,
 		projectID, userID, parsed.monthlyLimit, parsed.enabled, parsed.softAlertPct,
 	); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to save member budget")
+		return
+	}
+
+	state, err := h.userBudget(ctx, projectID, userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to read member budget")
+		return
+	}
+	writeJSON(w, http.StatusOK, state)
+}
+
+// userBudgetDelete clears one member's authored cap. See projectBudgetDelete
+// for why clearing is a DELETE: the per-member read LEFT JOINs from the same
+// one-row anchor, so an absent row already IS "this member has no cap of their
+// own and is bounded by the project ceiling alone".
+const userBudgetDelete = `DELETE FROM gateway.user_budget WHERE project_id = $1 AND user_id = $2`
+
+// DeleteUserBudget clears one member's budget back to the project default.
+//
+// It matters more here than at project scope, because a member cap is ENFORCED
+// since #321: the gateway refuses an over-cap member with 402
+// `member_budget_exceeded`. Before this route the only way to lift a cap set by
+// mistake was `enabled: false`, which stores a different fact — "this member is
+// deliberately exempt" — and leaves the wrong number visible beside it.
+//
+// Deleting a member who has no cap is a success, for the reason
+// DeleteProjectBudget gives.
+func (h *Handler) DeleteUserBudget(w http.ResponseWriter, r *http.Request) {
+	projectID, ok := pathID(r, "projectID")
+	if !ok {
+		writeError(w, http.StatusBadRequest, "project id must be a positive integer")
+		return
+	}
+	userID, ok := pathID(r, "userID")
+	if !ok {
+		writeError(w, http.StatusBadRequest, "user id must be a positive integer")
+		return
+	}
+
+	ctx := r.Context()
+	if _, err := h.pool.Exec(ctx, userBudgetDelete, projectID, userID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to clear member budget")
 		return
 	}
 
