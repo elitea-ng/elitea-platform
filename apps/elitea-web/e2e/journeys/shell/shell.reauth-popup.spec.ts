@@ -40,6 +40,26 @@ test('a page load must not restart the re-auth flight in the open popup', async 
   context,
 }) => {
   /*
+   * THE BUDGET, which the default 30s never covered.
+   *
+   * This test waits, in order, for a route load, a client redirect (15s), a
+   * composer (15s), a popup (15s), that popup reaching the provider (15s),
+   * and then sleeps a mandatory 3s over a second document load. That is more
+   * than 30s of allowance for six steps sharing one 30s test. It passed only
+   * while every step was fast, and on webkit under four parallel workers the
+   * FIRST navigation alone spent the whole budget — run 34016199152 reports
+   * this test flaky, failing attempt 1 at the `goto` below and passing on
+   * retry, while chromium passed outright. Nothing in the re-auth flow was
+   * reached on the attempt that failed, so nothing about it was under test.
+   *
+   * The timeout is raised to fit the steps the test actually performs. It is
+   * not a fix for a slow product: each individual wait keeps its own tight
+   * bound, so a real regression still fails at the step that regressed
+   * instead of expiring the whole test somewhere earlier.
+   */
+  test.setTimeout(120_000);
+
+  /*
    * Every distinct `auth_state` that ever reaches a popup of this tab.
    *
    * Counting states rather than reading the current URL is what makes the
@@ -61,7 +81,16 @@ test('a page load must not restart the re-auth flight in the open popup', async 
     });
   });
 
-  await page.goto(BASE_URL + '/app/');
+  /*
+   * `domcontentloaded`, not the default `load`. The two assertions under this
+   * line are the readiness this test needs, and they are stronger than the
+   * `load` event: the app has to redirect to `/chat` and mount a composer.
+   * `load` additionally waits for every subresource of the SPA document,
+   * which on webkit is where the lost budget went — and satisfying it proves
+   * nothing this test goes on to use. `auth.setup.ts` and `visual/lib/
+   * settle.ts` open the same route the same way.
+   */
+  await page.goto(BASE_URL + '/app/', { waitUntil: 'domcontentloaded' });
   await page.waitForURL('**/chat**', { timeout: 15_000 });
   await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 15_000 });
 
