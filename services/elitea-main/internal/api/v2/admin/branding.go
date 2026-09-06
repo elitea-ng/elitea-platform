@@ -195,8 +195,13 @@ func referencedAssetPaths(stored map[string]any) map[string]bool {
 }
 
 // Mailer is the seam to outbound e-mail (internal/application/mailer).
+//
+// Configured takes a context because the mail configuration is resolved from
+// the database over the environment on every call (gap G7), so a relay an
+// administrator has just saved is configured on the next request rather than
+// after the next restart.
 type Mailer interface {
-	Configured() bool
+	Configured(ctx context.Context) bool
 	SendInvitation(ctx context.Context, invitation appmailer.Invitation) error
 	SendTest(ctx context.Context, to string) error
 }
@@ -218,32 +223,18 @@ type brandingTestEmailBody struct {
 
 // BrandingTestEmail serves `POST /admin/branding/test_email/administration`:
 // one branded test message to the address in the body, so an administrator
-// can see the e-mail brand without inviting anyone. 503 when no SMTP is
+// can see the e-mail brand without inviting anyone. 503 when no relay is
 // configured (or on a shadow deployment), 400 for a bad address, 502 when
 // the relay refused — the reason is in the body, since the operator is the
 // one who can act on it.
+//
+// The body is `email.go`'s `sendTestEmail`, shared with the E-mail page's own
+// test route. The two routes exist for their two PERMISSIONS, not for two
+// behaviours, and the message must be identical either way: this button
+// verifies the RESOLVED configuration (gap G7), so pressing it after a save
+// tells the operator whether the settings they just typed work.
 func (h *Handler) BrandingTestEmail(w http.ResponseWriter, r *http.Request) {
-	if h.mailer == nil || !h.mailer.Configured() {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
-			"error": "outbound e-mail is not configured on this deployment (SMTP_HOST is unset or sending is suppressed)",
-		})
-		return
-	}
-	var body brandingTestEmailBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request body"})
-		return
-	}
-	to := strings.TrimSpace(body.To)
-	if reason := validateEmailAddress("to", to); reason != "" || to == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "\"to\" must be a plain e-mail address"})
-		return
-	}
-	if err := h.mailer.SendTest(r.Context(), to); err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "the mail relay refused the message: " + err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"sent": true, "to": to})
+	h.sendTestEmail(w, r)
 }
 
 // brandingResponse is the wire shape of both routes.

@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	appmailer "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/mailer"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/emailsettings"
 	"net/http"
 	"os"
 	"strings"
@@ -133,6 +134,13 @@ type RouterConfig struct {
 	// notices, the Branding page's test message. Nil means none is sent and
 	// every invite reports invitation_delivered: false.
 	Mailer *appmailer.Composer
+	// EmailSettings resolves the mail transport per send: the admin E-mail
+	// page's rows laid over the environment defaults (gap G7). main.go builds
+	// one and shares it with the Mailer above, so the page that says a relay
+	// is configured and the composer that dials it cannot disagree. Nil builds
+	// one here over Pool with an EMPTY environment layer — the shape every
+	// test uses, where there is no process environment to inherit.
+	EmailSettings *emailsettings.Resolver
 	// BrandingPackages exports and imports the branding package (ADR-0024
 	// decision 9). Nil means the package routes answer 503; the router does
 	// not build one because the previews it renders belong to main.go's
@@ -1198,6 +1206,17 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			// database holds the credential.
 			identityProviderStore := identityproviders.NewStore(cfg.Pool)
 
+			// Outbound e-mail settings (gap G7). The SAME vault handler again,
+			// for the reason stated above: the SMTP password is sealed into the
+			// hidden bucket, and a second handler on a second pool is how the
+			// page that seals it and the resolver that reads it come to
+			// disagree about which vault holds it.
+			emailResolver := cfg.EmailSettings
+			if emailResolver == nil {
+				emailResolver = emailsettings.NewResolver(
+					emailsettings.NewStore(cfg.Pool, prebuiltMCPVault), emailsettings.Settings{}, "")
+			}
+
 			coreHandler := v2core.NewHandler(
 				cfg.Pool,
 				v2core.WithPermissionResolver(permissionResolver),
@@ -1246,6 +1265,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				admin.WithBranding(brandingResolver),
 				admin.WithBrandingAssets(brandingAssets),
 				admin.WithMailer(adminMailer),
+				admin.WithEmailSettings(emailResolver.Store(), emailResolver),
 				admin.WithBrandingPackages(brandingPackages),
 				// The same store the SCIM tree writes through. One store, so
 				// the screen and a group push can never disagree about which
@@ -1513,6 +1533,29 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				r.With(requireBranding).Put("/branding/administration", adminHandler.BrandingSave)
 				r.With(requireBranding).Post("/branding/assets/{kind}", adminHandler.BrandingAssetUpload)
 				r.With(requireBranding).Post("/branding/test_email/administration", adminHandler.BrandingTestEmail)
+				// OUTBOUND E-MAIL — the real surface behind the Configuration
+				// page's "E-mail" section, which stays unavailable because its
+				// rows are plaintext and the SMTP password is a credential
+				// (config_schemas.go).
+				//
+				// The permission is the SAME `runtime.plugins` that section
+				// already required, so an operator who could edit it can
+				// configure the relay, and no new permission string arrives
+				// without a grant (router_permission_grant_gate_test.go).
+				//
+				// The mode segment is static `administration`: a mail relay is
+				// a deployment fact with no project-scoped view, so another
+				// mode 404s rather than being answered under a scope that does
+				// not apply.
+				//
+				// The test route is a SECOND test-mail route beside the
+				// branding one above, deliberately: they differ in permission,
+				// not in behaviour, and an operator who may configure the relay
+				// must be able to verify it without also holding the grant that
+				// lets them re-brand the product.
+				r.With(requireRuntimePlugins).Get("/email/administration", adminHandler.EmailSettingsRead)
+				r.With(requireRuntimePlugins).Put("/email/administration", adminHandler.EmailSettingsSave)
+				r.With(requireRuntimePlugins).Post("/email/test/administration", adminHandler.EmailTestSend)
 				// The branding package (ADR-0024 decision 9): export, import
 				// with a dry run, and the kept versions for rollback.
 				r.With(requireBranding).Get("/branding/package/administration", adminHandler.BrandingPackageExport)

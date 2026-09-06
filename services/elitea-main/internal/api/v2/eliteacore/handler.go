@@ -58,8 +58,12 @@ type Handler struct {
 }
 
 // InviteMailer is the seam to internal/application/mailer.
+//
+// Configured takes a context because outbound e-mail is configured at runtime
+// (gap G7): the answer comes from `centry.platform_config` laid over the
+// environment, so it is a read rather than a boot-time fact.
 type InviteMailer interface {
-	Configured() bool
+	Configured(ctx context.Context) bool
 	SendInvitation(ctx context.Context, invitation appmailer.Invitation) error
 }
 

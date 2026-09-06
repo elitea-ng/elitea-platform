@@ -131,10 +131,12 @@ import Typography from '@mui/material/Typography';
 import { t } from '@/shared/i18n';
 import { DrawerPage } from '@/shared/ui/settings/DrawerPage';
 
+import { AdminEmailEditor } from './AdminEmailEditor';
 import { AdminIdentityProvidersEditor } from './AdminIdentityProvidersEditor';
 import { AdminLlmProxyEditor } from './AdminLlmProxyEditor';
 import { AdminMcpServersEditor } from './AdminMcpServersEditor';
 import { BrandingSectionCard } from './BrandingSectionCard';
+import { EMAIL_MANAGED_SURFACE } from './api/adminEmailApi';
 import { IDENTITY_PROVIDERS_MANAGED_SURFACE } from './api/adminIdentityProvidersApi';
 import { LLM_PROXY_MANAGED_SURFACE } from './api/adminLlmProxyApi';
 import { MCP_SERVERS_MANAGED_SURFACE } from './api/adminMcpServersApi';
@@ -159,6 +161,7 @@ const MANAGED_SECTION_EDITORS: Readonly<Record<string, ComponentType>> = {
   [MCP_SERVERS_MANAGED_SURFACE]: AdminMcpServersEditor,
   [IDENTITY_PROVIDERS_MANAGED_SURFACE]: AdminIdentityProvidersEditor,
   [LLM_PROXY_MANAGED_SURFACE]: AdminLlmProxyEditor,
+  [EMAIL_MANAGED_SURFACE]: AdminEmailEditor,
 };
 
 /** The dedicated editor for a section, when this build has one. */

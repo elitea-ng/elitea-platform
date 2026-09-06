@@ -65,6 +65,7 @@ const ITEMS = [
     path: '/admin/app/configuration',
   },
   { id: 'branding', label: 'Branding', heading: 'Branding', path: '/admin/app/branding' },
+  { id: 'email', label: 'E-mail', heading: 'E-mail', path: '/admin/app/email' },
   { id: 'features', label: 'Features', heading: 'Features', path: '/admin/app/features' },
   {
     id: 'service-descriptors',

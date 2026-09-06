@@ -22,7 +22,7 @@ type fakeMailer struct {
 	invited    []appmailer.Invitation
 }
 
-func (f *fakeMailer) Configured() bool { return f.configured }
+func (f *fakeMailer) Configured(context.Context) bool { return f.configured }
 func (f *fakeMailer) SendTest(_ context.Context, to string) error {
 	if f.fail != nil {
 		return f.fail

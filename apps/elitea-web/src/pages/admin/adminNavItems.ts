@@ -60,6 +60,7 @@ import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import PaletteOutlinedIcon from '@mui/icons-material/PaletteOutlined';
 import HistoryOutlinedIcon from '@mui/icons-material/HistoryOutlined';
 import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
+import MailOutlineIcon from '@mui/icons-material/MailOutlined';
 // The reference imports `@mui/icons-material/PeopleOutline`, which MUI 9 no
 // longer ships under that name; `PeopleOutlineOutlined` is the same glyph.
 import PeopleOutlineIcon from '@mui/icons-material/PeopleOutlineOutlined';
@@ -211,6 +212,22 @@ function navGroups(): readonly AdminNavGroup[] {
           // decision 5); `configuration` is the prefix `ExpandPermissions`
           // expands into it, as for `governance` below.
           anyPermission: ['configuration', 'configuration.branding'],
+        },
+        {
+          id: 'email',
+          path: '/email',
+          label: t('pages.admin.nav.email', 'E-mail'),
+          icon: MailOutlineIcon,
+          // `runtime.plugins` is what every /admin/email route is gated on
+          // server-side (`internal/api/router.go`) — the permission the
+          // Configuration page it replaces already required, so no new grant
+          // is needed. `configuration` is the prefix `ExpandPermissions`
+          // expands into it, as for `branding` above.
+          //
+          // Both names are ones this platform's administration mode issues.
+          // See this module's header on why a gate whose permission no seed
+          // grants is a nav item that disappears for good.
+          anyPermission: ['configuration', 'runtime.plugins'],
         },
         {
           id: 'features',
