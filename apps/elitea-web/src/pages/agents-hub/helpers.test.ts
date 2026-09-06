@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { OTHER_CATEGORY, TRENDING_CATEGORY, MY_LIKED_CATEGORY } from './constants';
-import { buildAllCategories, calculateNewLikesCount, filterApplicationsByQuery, getCategoryForApplication } from './helpers';
+import { buildAgentShareLink, buildAllCategories, calculateNewLikesCount, filterApplicationsByQuery, getCategoryForApplication } from './helpers';
 import type { ApplicationData } from './types';
 
 function makeApp(overrides: Partial<ApplicationData> = {}): ApplicationData {
@@ -80,5 +80,48 @@ describe('calculateNewLikesCount', () => {
 
   it('optimistically decrements (clamped at 0) when unliked and the server count is not yet known', () => {
     expect(calculateNewLikesCount(0, false, 0)).toBe(0);
+  });
+});
+
+describe('buildAgentShareLink', () => {
+  it('builds the baseline link shape, absolute and readable', () => {
+    expect(
+      buildAgentShareLink({ origin: 'https://elitea.example', catalogHref: '/app/elitea-catalog', agentId: '42' }),
+    ).toBe('https://elitea.example/app/elitea-catalog?tab=agents&agentId=42');
+  });
+
+  /*
+   * The router's own href would be `/app/elitea-catalog?agentId=%2242%22` if
+   * the search went through its stringifier. A person pastes this link into a
+   * message, so it carries the plain id — and it may carry only ONE query
+   * string, so whatever the router put on the href is dropped first.
+   */
+  it('replaces a query the router already put on the href', () => {
+    expect(
+      buildAgentShareLink({
+        origin: 'https://elitea.example',
+        catalogHref: '/app/elitea-catalog?tab=skills',
+        agentId: '42',
+      }),
+    ).toBe('https://elitea.example/app/elitea-catalog?tab=agents&agentId=42');
+  });
+
+  it('keeps the basepath the router resolved', () => {
+    expect(
+      buildAgentShareLink({ origin: 'https://elitea.example', catalogHref: '/elitea-catalog', agentId: 7 }),
+    ).toBe('https://elitea.example/elitea-catalog?tab=agents&agentId=7');
+  });
+
+  it('reports no link for an agent with no id', () => {
+    const common = { origin: 'https://elitea.example', catalogHref: '/app/elitea-catalog' };
+    expect(buildAgentShareLink({ ...common, agentId: undefined })).toBe('');
+    expect(buildAgentShareLink({ ...common, agentId: null })).toBe('');
+    expect(buildAgentShareLink({ ...common, agentId: '' })).toBe('');
+  });
+
+  it('escapes an id that would otherwise break the query', () => {
+    expect(
+      buildAgentShareLink({ origin: 'https://elitea.example', catalogHref: '/app/elitea-catalog', agentId: 'a&b=c' }),
+    ).toBe('https://elitea.example/app/elitea-catalog?tab=agents&agentId=a%26b%3Dc');
   });
 });
