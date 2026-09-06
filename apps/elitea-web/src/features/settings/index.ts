@@ -51,7 +51,7 @@ import { SettingsFormProvider } from './ui/ai-personality/SettingsFormProvider';
 import { MemoryFormContent } from './ui/memory/MemoryFormContent';
 
 import ConfigurationsPanel from './ui/ai-configuration/ConfigurationsPanel';
-import ModelCapabilitiesSection from './ui/ai-configuration/ModelCapabilitiesSection';
+import ModelCapabilitiesPanel from './ui/ai-configuration/ModelCapabilitiesPanel';
 import OpenAITemplate from './ui/ai-configuration/OpenAITemplate';
 import ProjectAIConfiguration from './ui/ai-configuration/ProjectAIConfiguration';
 import { RequestModelConnection } from './ui/ai-configuration/RequestModelConnection';
@@ -115,10 +115,11 @@ export const environmentFeature = { ENVIRONMENT_FIELD_DEFAULTS, ENVIRONMENT_FIEL
 /**
  * AI-configuration tab (`pages/settings/AIConfiguration.tsx`).
  *
- * `ModelCapabilitiesSection` + `useModelConfigurationLayer` are the baseline's
+ * `ModelCapabilitiesPanel` + `useModelConfigurationLayer` are the baseline's
  * `Configuration/ModelConfiguration.jsx` level, which the port had skipped
  * (issue #80): the chips component existed with no importer, and the helpers
- * it needs had no caller.
+ * it needs had no caller. The panel carries the model picker WITH the chips,
+ * so the page cannot mount one without the other.
  *
  * `RequestModelConnection` is the user-facing half of the moderation flow: a
  * member who cannot create a configuration asks an operator for a provider or
@@ -128,7 +129,7 @@ export const environmentFeature = { ENVIRONMENT_FIELD_DEFAULTS, ENVIRONMENT_FIEL
  */
 export const aiConfigurationFeature = {
   ConfigurationsPanel,
-  ModelCapabilitiesSection,
+  ModelCapabilitiesPanel,
   OpenAITemplate,
   ProjectAIConfiguration,
   RequestModelConnection,

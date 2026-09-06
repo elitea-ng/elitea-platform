@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import Box from '@mui/material/Box';
 import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
-import type { Theme } from '@mui/material/styles';
+import type { SxProps, Theme } from '@mui/material/styles';
 
 import { BaseModal } from '../BaseModal';
 import { t } from '@/shared/i18n';
@@ -41,6 +41,22 @@ export interface DeleteEntityModalProps {
   alarm?: boolean;
   /** Disables Confirm while a confirm action is in flight (forwarded to `BaseModal`'s `actions.confirming`). */
   confirming?: boolean;
+  /**
+   * The reason the last confirm was REFUSED, shown inside the dialog.
+   *
+   * #147. A destructive action can be refused by the server after the user
+   * confirms it — `DELETE /version/prompt_lib/...` answers 400 "Unpublish
+   * first. Cannot delete a published version." Before this slot existed a
+   * refused delete left the dialog open with no message, so the only
+   * feedback was that nothing happened. The caller keeps the dialog open on
+   * a refusal (closing it would read as "deleted") and passes the server's
+   * own message here.
+   *
+   * `role="alert"`, so a screen reader announces it without the user
+   * hunting for the change. This app has no toast infrastructure, which is
+   * why the message belongs in the dialog rather than beside it.
+   */
+  errorMessage?: string;
   copy?: DeleteEntityModalCopyOptions;
   content?: DeleteEntityModalContentOptions;
   'data-testid'?: string;
@@ -78,6 +94,13 @@ export function isConfirmDisabled(
 ): boolean {
   return shouldRequestInputName && Boolean(name) && name !== inputName;
 }
+
+/** The refusal message's own style — see the `errorMessage` prop doc. */
+const errorSx: SxProps<Theme> = (theme: Theme) => ({
+  display: 'block',
+  marginTop: theme.spacing(1.5),
+  color: theme.vars.palette.error.main,
+});
 
 interface ConfirmationBodyProps {
   name: string | undefined;
@@ -179,6 +202,7 @@ export function DeleteEntityModal({
   shouldRequestInputName = false,
   alarm = true,
   confirming = false,
+  errorMessage,
   copy,
   content,
   'data-testid': dataTestId,
@@ -203,16 +227,32 @@ export function DeleteEntityModal({
     onConfirm();
   };
 
-  const body = content?.custom ?? (
-    <ConfirmationBody
-      name={name}
-      textContent={resolvedCopy.textContent}
-      inline={content?.inline}
-      extra={content?.extra}
-      shouldRequestInputName={shouldRequestInputName}
-      inputName={inputName}
-      onInputNameChange={setInputName}
-    />
+  const body = (
+    <>
+      {content?.custom ?? (
+        <ConfirmationBody
+          name={name}
+          textContent={resolvedCopy.textContent}
+          inline={content?.inline}
+          extra={content?.extra}
+          shouldRequestInputName={shouldRequestInputName}
+          inputName={inputName}
+          onInputNameChange={setInputName}
+        />
+      )}
+      {/* Outside the body override on purpose: the refusal is about the
+          ACTION, so a caller that replaces the whole body with `content.custom`
+          must still be able to report one. */}
+      {errorMessage !== undefined && errorMessage !== '' && (
+        <Typography
+          role="alert"
+          variant="bodySmall"
+          sx={errorSx}
+        >
+          {errorMessage}
+        </Typography>
+      )}
+    </>
   );
 
   return (

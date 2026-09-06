@@ -92,3 +92,13 @@ export const setDefaultItemSx: SxProps<Theme> = (theme: Theme) => ({
 });
 
 export const setDefaultIconSx: SxProps<Theme> = { width: '1rem', height: '1rem', flexShrink: 0 };
+
+/** #147 — the delete item. The same icon+label row as `setDefaultItemSx`, without a second separator: the two items are one command block at the foot of the menu, and a rule between them would read as two unrelated groups. */
+export const deleteItemSx: SxProps<Theme> = (theme: Theme) => ({
+  ...menuItemBaseSx,
+  justifyContent: 'flex-start',
+  gap: '0.5rem',
+  color: theme.vars.palette.text.secondary,
+});
+
+export const deleteIconSx: SxProps<Theme> = { width: '1rem', height: '1rem', flexShrink: 0 };

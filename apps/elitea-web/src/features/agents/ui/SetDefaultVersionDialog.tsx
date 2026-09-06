@@ -27,7 +27,7 @@ import { BaseModal } from '@/shared/ui/BaseModal';
  * page. The server refuses a foreign or missing version with a 404
  * (`repos/applications.go:667-680`), and the version the user picked is
  * still on screen behind this dialog — closing it on failure would read as
- * "done". Same reasoning `DeleteVersionButton` records for keeping its own
+ * "done". Same reasoning `DeleteVersionDialog` records for keeping its own
  * confirm dialog open on a refusal; this app has no toast infrastructure.
  */
 export interface SetDefaultVersionDialogProps {

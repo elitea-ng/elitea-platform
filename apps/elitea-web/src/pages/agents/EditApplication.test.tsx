@@ -240,9 +240,10 @@ describe('EditApplication', () => {
     await user.click(await screen.findByTestId('version-selector-trigger', {}, { timeout: 5_000 }));
 
     const items = await screen.findAllByRole('menuitem');
-    // #147 put one COMMAND item ("Set as default") in the same menu; excluded
-    // by test id so this stays an assertion about the version rows.
-    const versionRows = items.filter((item) => item.dataset['testid'] !== 'agent-version-set-default');
+    // #147 put two COMMAND items ("Set as default", "Delete version") in the
+    // same menu; every command item carries a test id, so filtering on its
+    // absence keeps this an assertion about the version rows alone.
+    const versionRows = items.filter((item) => item.dataset['testid'] === undefined);
     expect(versionRows.map((item) => item.textContent)).toEqual([
       expect.stringContaining('base'),
       expect.stringContaining('v1'),
@@ -503,6 +504,11 @@ describe('EditApplication', () => {
     // slow-but-correct CI run. Scoped 15s budget below fixes it here too.
     expect(await screen.findByRole('button', { name: /export agent/i }, { timeout: 5_000 })).toBeVisible();
     expect(screen.getByRole('button', { name: /delete entity/i })).toBeVisible();
+    // #147 moved version-delete INTO the version menu, where the baseline
+    // puts it, so the menu has to be opened to see it. That the page still
+    // reaches it is the assertion; the item's own rules are covered by
+    // `features/agents/ui/AgentVersionControls.test.tsx`.
+    await userEvent.click(screen.getByTestId('version-selector-trigger'));
     expect(screen.getByTestId('agent-version-delete')).toBeVisible();
   }, 15_000);
 
@@ -514,6 +520,9 @@ describe('EditApplication', () => {
     await screen.findByText('My Agent');
     expect(screen.queryByRole('button', { name: /export agent/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /delete entity/i })).not.toBeInTheDocument();
+    // The version menu still opens for a read-only viewer — it lists the
+    // versions — and it must carry no delete item inside it (#147).
+    await userEvent.click(screen.getByTestId('version-selector-trigger'));
     expect(screen.queryByTestId('agent-version-delete')).not.toBeInTheDocument();
   });
 

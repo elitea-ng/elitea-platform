@@ -1,3 +1,5 @@
+import { EliteaApiError } from '@/shared/api/generated/mutator';
+
 /**
  * Renders a TanStack Query `error` (an `EliteaApiError`, per
  * `shared/api/generated/mutator.ts` — never the RTK-Query-shaped
@@ -52,4 +54,44 @@ export function applicationErrorMessage(error: unknown): string {
  */
 export function applicationErrorMessageOrFallback(error: unknown, fallback: string): string {
   return error instanceof Error || typeof error === 'string' ? applicationErrorMessage(error) || fallback : fallback;
+}
+
+/**
+ * The SERVER's own explanation, when it sent one.
+ *
+ * #147. `applicationErrorMessage` above returns `EliteaApiError.message`,
+ * which `mutator.ts`'s `describeFailure` builds as
+ * `eliteaFetch: 400 from <url>`. That string is a diagnostic, not an
+ * explanation, and putting it in front of a user is the same as saying
+ * nothing. The application endpoints answer a refusal with a flat
+ * `{"error": "message"}` body (the convention `applicationErrorMessage`'s own
+ * doc comment cites), and `HttpFailure.body` holds it parsed. The delete
+ * endpoint's refusal — "Unpublish first. Cannot delete a published
+ * version." — reaches the user only through this function.
+ *
+ * The same extraction `features/settings/api/ai-configuration/api.ts`'s
+ * `modelConfigurationErrorMessage` already does for the model routes.
+ * Rebuilt here rather than imported: `no-sideways-features`/R-L3 forbid
+ * reaching into another feature's internals.
+ *
+ * `applicationErrorMessage` keeps its contract unchanged; every existing
+ * caller still gets exactly what it got.
+ */
+export function applicationServerErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof EliteaApiError) {
+    /* `fallback`, never `error.message`: for an `EliteaApiError` that message
+       is always the `eliteaFetch: <status> from <url>` diagnostic. A refusal
+       the server did not explain is better reported in the app's own words. */
+    return error.failure.kind === 'http' ? (serverBodyMessage(error.failure.body) ?? fallback) : fallback;
+  }
+  return applicationErrorMessageOrFallback(error, fallback);
+}
+
+/** The flat `{"error": "…"}` (or `{"message": "…"}`) body the Go handlers answer a refusal with. `undefined` when the body says nothing readable. */
+function serverBodyMessage(body: unknown): string | undefined {
+  if (typeof body === 'string' && body !== '') return body;
+  if (typeof body !== 'object' || body === null) return undefined;
+  const record = body as Record<string, unknown>;
+  const detail = record['error'] ?? record['message'];
+  return typeof detail === 'string' && detail !== '' ? detail : undefined;
 }

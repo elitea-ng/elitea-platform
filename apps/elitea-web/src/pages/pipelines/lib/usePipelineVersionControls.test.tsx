@@ -348,9 +348,10 @@ describe('usePipelineVersionControls', () => {
   });
 
   /**
-   * `DeleteVersionButton` treats `onError` as its only failure channel and
-   * renders nothing itself, so a refused delete used to leave its confirm
-   * dialog sitting open with no message anywhere.
+   * A refused delete used to leave the confirm dialog sitting open with no
+   * message anywhere: the only failure channel was `onError`, and this page
+   * did not supply it. `DeleteVersionDialog` now names the refusal inside the
+   * dialog too (#147); this proves the banner still gets its copy.
    */
   it('routes a refused version delete into the version bar banner', async () => {
     renderPipelinesRoute(<Probe readGraphDraft={() => undefined} />, '/pipelines/my/42/1');

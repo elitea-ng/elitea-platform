@@ -53,6 +53,25 @@ const LLM_CONFIG = {
 const SECOND_CONFIG = { ...LLM_CONFIG, id: 2, elitea_title: 'Claude Opus', label: 'anthropic', type: 'anthropic', data: { name: 'opus' } };
 const THIRD_CONFIG = { ...LLM_CONFIG, id: 3, elitea_title: 'Ollama Local', label: 'ollama', type: 'ollama', data: { name: 'llama' } };
 
+/**
+ * THE MODEL CATALOGUE, which is what the default-model selects offer (#80).
+ *
+ * `name` and `elitea_title` differ on purpose, exactly as they do in
+ * production: the configuration row is titled `gpt-56-luna` while the model it
+ * points at is `global.openai.gpt-5.6-luna`. The select's own value is built
+ * from `default_model_name`, so options built from the CONFIGURATION titles
+ * could never match it — the defect this fixture exists to keep out.
+ */
+const CATALOGUE = {
+  items: [
+    { id: '1_gpt-4o', name: 'gpt-4o', display_name: 'OpenAI GPT-4o', project_id: PROJECT_ID, default: true, low_tier: false, high_tier: true },
+    { id: '1_opus', name: 'opus', display_name: 'Claude Opus', project_id: PROJECT_ID, default: false, low_tier: true, high_tier: false },
+  ],
+  total: 2,
+  default_model_name: 'gpt-4o',
+  default_model_project_id: PROJECT_ID,
+};
+
 function setConfig(): void {
   globals['elitea_ui_config'] = {
     vite_server_url: 'https://elitea.example',
@@ -109,9 +128,7 @@ describe('ConfigurationsPanel default-model saving', () => {
     configureGeneratedClient({ baseUrl: BASE });
     mockEditPermission();
     server.use(
-      http.get(`${BASE}/configurations/models/${PROJECT_ID}`, () =>
-        HttpResponse.json({ items: [], total: 0, default_model_name: '', default_model_project_id: '' }),
-      ),
+      http.get(`${BASE}/configurations/models/${PROJECT_ID}`, () => HttpResponse.json(CATALOGUE)),
       http.post(`${BASE}/configurations/models/${PROJECT_ID}`, () =>
         HttpResponse.json({ error: 'insufficient permissions' }, { status: 403 }),
       ),
@@ -125,7 +142,7 @@ describe('ConfigurationsPanel default-model saving', () => {
     const combobox = (await screen.findAllByRole('combobox'))[0] as HTMLElement;
     await waitFor(() => expect(combobox).not.toHaveAttribute('aria-disabled', 'true'));
     await userEvent.click(combobox);
-    await userEvent.click(await screen.findByRole('option', { name: 'OpenAI GPT-4o' }));
+    await userEvent.click(await screen.findByRole('option', { name: 'Claude Opus' }));
 
     expect(await screen.findByText('insufficient permissions')).toBeInTheDocument();
   });
@@ -134,13 +151,13 @@ describe('ConfigurationsPanel default-model saving', () => {
     setConfig();
     configureGeneratedClient({ baseUrl: BASE });
     mockEditPermission();
+    let posted: Record<string, unknown> = {};
     server.use(
-      http.get(`${BASE}/configurations/models/${PROJECT_ID}`, () =>
-        HttpResponse.json({ items: [], total: 0, default_model_name: '', default_model_project_id: '' }),
-      ),
-      http.post(`${BASE}/configurations/models/${PROJECT_ID}`, () =>
-        HttpResponse.json({ items: [], total: 0 }),
-      ),
+      http.get(`${BASE}/configurations/models/${PROJECT_ID}`, () => HttpResponse.json(CATALOGUE)),
+      http.post(`${BASE}/configurations/models/${PROJECT_ID}`, async ({ request }) => {
+        posted = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({ items: [], total: 0 });
+      }),
     );
 
     renderPanel();
@@ -151,9 +168,77 @@ describe('ConfigurationsPanel default-model saving', () => {
     const combobox = (await screen.findAllByRole('combobox'))[0] as HTMLElement;
     await waitFor(() => expect(combobox).not.toHaveAttribute('aria-disabled', 'true'));
     await userEvent.click(combobox);
-    await userEvent.click(await screen.findByRole('option', { name: 'OpenAI GPT-4o' }));
+    await userEvent.click(await screen.findByRole('option', { name: 'Claude Opus' }));
 
+    // THE MODEL NAME, not the configuration title (#80). The endpoint stores
+    // `name` as the project's default model, and the options used to carry
+    // `elitea_title`, so this POST used to save a title no model answers to.
+    await waitFor(() => expect(posted['name']).toBe('opus'));
+    expect(posted['target_project_id']).toBe(PROJECT_ID);
+    expect(posted['section']).toBe('llm');
     await waitFor(() => expect(screen.queryByText('insufficient permissions')).not.toBeInTheDocument());
+  });
+
+  /**
+   * The select could not show the model that WAS the default. Its value is
+   * `${default_model_name}<<>>${default_model_project_id}` — a model name —
+   * and the options were built from the configuration rows' `elitea_title`.
+   * Nothing ever matched, so every Default select rendered blank.
+   */
+  it('shows the model the server reports as the default', async () => {
+    setConfig();
+    configureGeneratedClient({ baseUrl: BASE });
+    mockEditPermission();
+    server.use(http.get(`${BASE}/configurations/models/${PROJECT_ID}`, () => HttpResponse.json(CATALOGUE)));
+
+    renderPanel();
+
+    const combobox = (await screen.findAllByRole('combobox'))[0] as HTMLElement;
+    await waitFor(() => expect(combobox).toHaveTextContent('OpenAI GPT-4o'));
+  });
+
+  /**
+   * The catalogue is bigger than the configuration list. Production project 1
+   * holds nine LLM models and six configuration rows, so three models could
+   * not be picked as a default at all. `renderPanel()` passes ONE
+   * configuration row against a two-model catalogue; both models must be
+   * offered.
+   */
+  it('offers every model in the catalogue, not only the ones with a configuration row', async () => {
+    setConfig();
+    configureGeneratedClient({ baseUrl: BASE });
+    mockEditPermission();
+    server.use(http.get(`${BASE}/configurations/models/${PROJECT_ID}`, () => HttpResponse.json(CATALOGUE)));
+
+    renderPanel();
+
+    const combobox = (await screen.findAllByRole('combobox'))[0] as HTMLElement;
+    await waitFor(() => expect(combobox).not.toHaveAttribute('aria-disabled', 'true'));
+    await userEvent.click(combobox);
+
+    expect(await screen.findByRole('option', { name: 'OpenAI GPT-4o' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Claude Opus' })).toBeInTheDocument();
+    // …and the configuration TITLE is not what the list is labelled with.
+    expect(screen.queryByRole('option', { name: 'Ollama Local' })).not.toBeInTheDocument();
+  });
+
+  /**
+   * The tier lists read `low_tier`/`high_tier` from the CATALOGUE row, which
+   * is where the server puts them.
+   */
+  it('filters the tier selects by the catalogue tier flags', async () => {
+    setConfig();
+    configureGeneratedClient({ baseUrl: BASE });
+    mockEditPermission();
+    server.use(http.get(`${BASE}/configurations/models/${PROJECT_ID}`, () => HttpResponse.json(CATALOGUE)));
+
+    renderPanel();
+
+    const comboboxes = await screen.findAllByRole('combobox');
+    // High-tier is the second LLM select; only `gpt-4o` carries `high_tier`.
+    await userEvent.click(comboboxes[1] as HTMLElement);
+    expect(await screen.findByRole('option', { name: 'OpenAI GPT-4o' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'Claude Opus' })).not.toBeInTheDocument();
   });
 });
 

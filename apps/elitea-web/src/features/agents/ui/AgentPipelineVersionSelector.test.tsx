@@ -246,3 +246,115 @@ describe('AgentPipelineVersionSelector', () => {
     expect(published.getByTestId('agent-version-set-default')).toHaveAttribute('aria-disabled', 'true');
   });
 });
+
+/**
+ * #147's delete item. The menu carried version rows and, since #610, one
+ * "Set as default" command. The other command JRNY-015 names had no place at
+ * all: delete was an icon button outside the menu, and it could only ever act
+ * on the page's active version.
+ */
+describe('AgentPipelineVersionSelector — delete item', () => {
+  it('renders no delete item when the caller does not offer one', async () => {
+    const user = userEvent.setup();
+    const { getByTestId, queryByTestId } = renderWithTheme(
+      <AgentPipelineVersionSelector
+        applicationVersionId={2}
+        versions={versions}
+        onSelectVersion={vi.fn()}
+      />,
+    );
+    await user.click(getByTestId('version-selector-trigger'));
+    expect(queryByTestId('agent-version-delete')).not.toBeInTheDocument();
+  });
+
+  it('reports the SELECTED version to onDeleteVersion and closes the menu behind it', async () => {
+    const user = userEvent.setup();
+    const onDeleteVersion = vi.fn();
+    const { getByTestId, queryByRole } = renderWithTheme(
+      <AgentPipelineVersionSelector
+        applicationVersionId={2}
+        versions={versions}
+        onSelectVersion={vi.fn()}
+        onDeleteVersion={onDeleteVersion}
+      />,
+    );
+    await user.click(getByTestId('version-selector-trigger'));
+    await user.click(getByTestId('agent-version-delete'));
+
+    expect(onDeleteVersion).toHaveBeenCalledTimes(1);
+    expect(onDeleteVersion.mock.calls[0]?.[0]).toMatchObject({ id: 2, name: 'v1' });
+    // The caller answers with a confirm dialog; a menu left open behind it
+    // stacks a second focus trap.
+    expect(queryByRole('menu')).not.toBeInTheDocument();
+  });
+
+  it('follows the version the user picks, not the one the page opened on', async () => {
+    const user = userEvent.setup();
+    const onDeleteVersion = vi.fn();
+    const { getByTestId, getByRole } = renderWithTheme(
+      <AgentPipelineVersionSelector
+        applicationVersionId={2}
+        versions={versions}
+        onSelectVersion={vi.fn()}
+        onDeleteVersion={onDeleteVersion}
+      />,
+    );
+
+    // Re-open on a DIFFERENT selected version, the way the page re-renders
+    // after a version switch. The old icon button always deleted the active
+    // version; this item deletes whichever the menu marks.
+    await user.click(getByTestId('version-selector-trigger'));
+    expect(getByRole('menuitem', { name: /^v0/ })).toBeInTheDocument();
+    await user.keyboard('{Escape}');
+
+    await user.click(getByTestId('version-selector-trigger'));
+    await user.click(getByTestId('agent-version-delete'));
+    expect(onDeleteVersion.mock.calls[0]?.[0]).toMatchObject({ id: 2 });
+  });
+
+  it('refuses "base" and refuses the recorded default — lib/versionDeletion', async () => {
+    const user = userEvent.setup();
+    const base = renderWithTheme(
+      <AgentPipelineVersionSelector
+        applicationVersionId={1}
+        versions={versions}
+        onSelectVersion={vi.fn()}
+        onDeleteVersion={vi.fn()}
+      />,
+    );
+    await user.click(base.getByTestId('version-selector-trigger'));
+    expect(base.getByTestId('agent-version-delete')).toHaveAttribute('aria-disabled', 'true');
+    base.unmount();
+
+    const isDefault = renderWithTheme(
+      <AgentPipelineVersionSelector
+        applicationVersionId={2}
+        versions={versions}
+        defaultVersionId={2}
+        onSelectVersion={vi.fn()}
+        onDeleteVersion={vi.fn()}
+      />,
+    );
+    await user.click(isDefault.getByTestId('version-selector-trigger'));
+    expect(isDefault.getByTestId('agent-version-delete')).toHaveAttribute('aria-disabled', 'true');
+  });
+
+  /*
+   * The discriminating case for the rule above: a component that disabled the
+   * item unconditionally would pass every refusal assertion.
+   */
+  it('allows an ordinary version while another one is the default', async () => {
+    const user = userEvent.setup();
+    const { getByTestId } = renderWithTheme(
+      <AgentPipelineVersionSelector
+        applicationVersionId={2}
+        versions={versions}
+        defaultVersionId={3}
+        onSelectVersion={vi.fn()}
+        onDeleteVersion={vi.fn()}
+      />,
+    );
+    await user.click(getByTestId('version-selector-trigger'));
+    expect(getByTestId('agent-version-delete')).not.toHaveAttribute('aria-disabled', 'true');
+  });
+});
