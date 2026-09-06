@@ -128,7 +128,7 @@ adminTest('J37b: every one of the admin pages is reachable by CLICKING the nav',
     await page.waitForURL((url) => url.pathname === item.path, { timeout: 20_000 });
     // …the destination PAGE rendered — a link to a deleted route would satisfy
     // the URL assertion and render nothing at all…
-    await expect(page.getByRole('heading', { name: item.heading })).toBeVisible({
+    await expect(page.getByRole('heading', { name: item.heading, exact: true })).toBeVisible({
       timeout: 20_000,
     });
     // …and the nav says where you are.
