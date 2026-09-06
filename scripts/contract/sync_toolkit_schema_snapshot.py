@@ -10,6 +10,12 @@ only those consumed parts.
 
 Deployment-defined MCP servers are intentionally excluded from this immutable
 built-in snapshot. They remain actor/project-visible dynamic schemas in Main.
+
+The run emits TWO files from one registry read. The argument-schema snapshot
+carries the per-tool argument payload and the settings annotations. The
+catalogue snapshot carries each type's settings schema and its metadata: the
+label, categories and icon the create page groups the type under. They are
+separate files because the first is already 596 KB against a 1 MiB ceiling.
 """
 
 from __future__ import annotations
@@ -19,6 +25,7 @@ import hashlib
 import importlib
 import json
 import logging
+import re
 import subprocess
 import sys
 import tomllib
@@ -39,7 +46,16 @@ DEFAULT_SNAPSHOT = (
     / "runtimecomposition"
     / "current_toolkit_schema_snapshot.json"
 )
+DEFAULT_CATALOGUE = (
+    REPO_ROOT
+    / "services"
+    / "elitea-main"
+    / "internal"
+    / "runtimecomposition"
+    / "current_toolkit_catalogue_snapshot.json"
+)
 SCHEMA_VERSION = "elitea.current-toolkit-schema-snapshot.v1"
+CATALOGUE_SCHEMA_VERSION = "elitea.current-toolkit-catalogue-snapshot.v1"
 ANNOTATION_FIELDS = (
     "configuration_types",
     "configuration_model",
@@ -328,7 +344,224 @@ def project_toolkit_schemas(
     }
 
 
-def generate_document(sdk_root: Path, lock_path: Path) -> dict[str, Any]:
+_SAFE_IMPORT_CALL = re.compile(
+    r"^_safe_import_tool\(\s*'(?P<key>[a-z0-9_]+)'\s*,"
+    r"\s*'(?P<module>[A-Za-z0-9_.]+)'\s*,"
+    r"\s*(?:'[A-Za-z0-9_]+'|None)\s*,"
+    r"\s*'(?P<toolkit>[A-Za-z0-9_]+)'\s*\)",
+    re.MULTILINE,
+)
+
+
+def import_keys_by_type(sdk_root: Path, tools_module: Any) -> dict[str, str]:
+    """Map each toolkit TYPE to the registry import key that carries it.
+
+    Two reads are joined, because neither answers this alone. The registry
+    source names ``key -> ToolkitClass``; the imported registry names
+    ``ToolkitClass -> class``, and only the class can produce the config model
+    whose ``title`` is the platform type. A class whose model cannot be built
+    is left out rather than guessed at.
+    """
+
+    classes = getattr(tools_module, "AVAILABLE_TOOLKITS", None)
+    if not isinstance(classes, Mapping) or not classes:
+        raise ContractSyncError("SDK toolkit class registry is unavailable")
+    keys_by_class = import_keys_by_toolkit_class(sdk_root)
+    keys_by_type: dict[str, str] = {}
+    for class_name, toolkit_class in classes.items():
+        key = keys_by_class.get(class_name)
+        if key is None:
+            continue
+        schema_method = getattr(toolkit_class, "toolkit_config_schema", None)
+        if not callable(schema_method):
+            raise ContractSyncError(
+                f"SDK toolkit class {class_name!r} declares no config schema"
+            )
+        title = schema_method().model_json_schema().get("title")
+        if not isinstance(title, str) or not title:
+            raise ContractSyncError(
+                f"SDK toolkit class {class_name!r} produced an unnamed type"
+            )
+        if keys_by_type.setdefault(title, key) != key:
+            raise ContractSyncError(f"toolkit type {title!r} has two import keys")
+    if not keys_by_type:
+        raise ContractSyncError("SDK toolkit import registry produced no types")
+    return keys_by_type
+
+
+def import_keys_by_toolkit_class(sdk_root: Path) -> dict[str, str]:
+    """Read the SDK registry's import key for each toolkit class.
+
+    ``elitea_sdk.tools`` registers every optional toolkit through
+    ``_safe_import_tool(key, module, get_tools, ToolkitClass)`` and records a
+    failure under ``FAILED_IMPORTS[key]``. The key is therefore the only name a
+    deployed worker can report a missing toolkit under, and it is NOT the
+    platform type: ``k8s`` is the key of the type ``kubernetes``. Read the keys
+    from the registry source, so the projection cannot drift from the SDK.
+
+    A toolkit class that no call names is a runtime toolkit (artifact,
+    vectorstore, memory, mcp, sandbox, ...). The SDK imports those
+    unconditionally, so they have no key and cannot fail this way.
+    """
+
+    source = (sdk_root / "elitea_sdk" / "tools" / "__init__.py").read_text()
+    keys: dict[str, str] = {}
+    for match in _SAFE_IMPORT_CALL.finditer(source):
+        toolkit_class = match.group("toolkit")
+        key = match.group("key")
+        if keys.setdefault(toolkit_class, key) != key:
+            raise ContractSyncError(
+                f"SDK toolkit class {toolkit_class!r} has two import keys"
+            )
+    if not keys:
+        raise ContractSyncError("SDK toolkit import registry is empty")
+    return keys
+
+
+def _settings_projection(
+    schema: Mapping[str, Any],
+    clock_dates: frozenset[str],
+) -> dict[str, Any]:
+    """Project one toolkit's SETTINGS schema: the form the create page renders.
+
+    Three parts of the model schema are removed, and each removal has a reason.
+
+    ``metadata`` is projected separately, because Main serves it as a sibling
+    of the settings and pylon injects two fields into it that the SDK does not
+    declare.
+
+    ``properties.selected_tools.args_schemas`` is the per-tool argument
+    payload. It already has a home — the argument-schema snapshot beside this
+    one, which is 596 KB on its own — and ``ListTypeSchemas`` puts it back on
+    the served schema from there. Carrying it twice would double that cost for
+    no new information.
+
+    ``$defs`` holds the SDK's own configuration models. Main does not serve
+    those: it builds a narrower ``$defs`` from the pinned configuration
+    catalogue, keyed by configuration TYPE rather than by Pydantic model name,
+    and replaces each configuration property with a ``$ref`` into it (see
+    CurrentToolkitSettingsDefinitionCatalog). Every ``$ref`` in these schemas
+    comes from a property that carries ``configuration_types``, so dropping the
+    block leaves no dangling pointer.
+    """
+
+    projected: dict[str, Any] = {}
+    for key, value in schema.items():
+        if key in ("metadata", "$defs"):
+            continue
+        projected[key] = value
+    properties = projected.get("properties")
+    if properties is not None and not isinstance(properties, Mapping):
+        raise ContractSyncError("toolkit settings properties are invalid")
+    if isinstance(properties, Mapping):
+        copied = dict(properties)
+        selection = copied.get(TOOL_SELECTION_FIELD)
+        if isinstance(selection, Mapping):
+            copied[TOOL_SELECTION_FIELD] = {
+                field: item
+                for field, item in selection.items()
+                if field != ARGUMENT_SCHEMAS_FIELD
+            }
+        projected["properties"] = copied
+    stable = _without_clock_defaults(projected, clock_dates)
+    try:
+        _canonical(stable)
+    except (TypeError, ValueError) as exc:
+        raise ContractSyncError("toolkit settings schema is not canonical JSON") from exc
+    return stable
+
+
+def _metadata_projection(model: Any, schema: Mapping[str, Any]) -> dict[str, Any]:
+    """Project one toolkit's metadata, with the two fields pylon injects.
+
+    ``check_connection_supported`` and ``has_function_validators`` are computed
+    by the current ``indexer_worker`` before it emits the registry
+    (legacy/plugins/indexer_worker/methods/indexer_toolkits.py), not declared by
+    the SDK. Compute them the same way here, so the served metadata is the
+    metadata the reference deployment serves.
+
+    ``mcp_config`` declares no metadata at all. It still gets these two fields,
+    exactly as the reference does through ``setdefault``.
+    """
+
+    raw = schema.get("metadata")
+    if raw is not None and not isinstance(raw, Mapping):
+        raise ContractSyncError("toolkit metadata is not an object")
+    metadata: dict[str, Any] = dict(raw or {})
+    decorators = getattr(model, "__pydantic_decorators__", None)
+    validators = 0
+    for group in ("field_validators", "model_validators"):
+        declared = getattr(decorators, group, None)
+        if declared:
+            validators += len(declared)
+    metadata.setdefault("has_function_validators", bool(validators))
+    metadata["check_connection_supported"] = hasattr(model, "check_connection")
+    try:
+        _canonical(metadata)
+    except (TypeError, ValueError) as exc:
+        raise ContractSyncError("toolkit metadata is not canonical JSON") from exc
+    return metadata
+
+
+def project_toolkit_catalogue(
+    models: Iterable[Any],
+    revision: str,
+    import_keys: Mapping[str, str],
+    clock_dates: frozenset[str] = frozenset(),
+) -> dict[str, Any]:
+    """Project the settings schema and metadata of every built-in toolkit type.
+
+    This is the second projection of the same registry read, and it is a
+    SEPARATE file on purpose. The argument-schema snapshot is 596 KB against a
+    1 MiB ceiling that its own header asks nobody to raise casually; folding the
+    settings and metadata into it would spend that headroom on a payload with a
+    different lifetime and a different consumer.
+    """
+
+    entries: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for model in models:
+        schema_method = getattr(model, "model_json_schema", None)
+        if not callable(schema_method):
+            schema_method = getattr(model, "schema", None)
+        if not callable(schema_method):
+            raise ContractSyncError("toolkit registry contains an invalid model")
+        schema = schema_method()
+        if not isinstance(schema, Mapping):
+            raise ContractSyncError("toolkit model produced a non-object schema")
+        type_name = schema.get("title")
+        if not isinstance(type_name, str) or not type_name or type_name in seen:
+            raise ContractSyncError("toolkit schema has an invalid or duplicate type")
+        seen.add(type_name)
+        entries.append(
+            {
+                "type": type_name,
+                "import_key": import_keys.get(type_name),
+                "metadata": _metadata_projection(model, schema),
+                "settings": _settings_projection(schema, clock_dates),
+            }
+        )
+    if not entries:
+        raise ContractSyncError("toolkit registry is empty")
+    entries.sort(key=lambda entry: entry["type"])
+    return {
+        "schema_version": CATALOGUE_SCHEMA_VERSION,
+        "sdk_revision": revision,
+        "entries": entries,
+    }
+
+
+def generate_document(
+    sdk_root: Path,
+    lock_path: Path,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Return the argument-schema snapshot and the catalogue snapshot.
+
+    Both come from ONE registry read. The SDK import is the expensive part of
+    this script and the registry must be identical in the two files, so the
+    projections cannot be split into two commands that import it twice.
+    """
+
     lock = _require_sdk_identity(sdk_root, lock_path)
 
     sys.path.insert(0, str(sdk_root))
@@ -350,17 +583,28 @@ def generate_document(sdk_root: Path, lock_path: Path) -> dict[str, Any]:
             models = module.get_toolkits()
         finally:
             module.get_mcp_config_toolkit_schemas = dynamic_mcp_loader
-        failed_imports = getattr(importlib.import_module("elitea_sdk.tools"), "FAILED_IMPORTS", {})
+        tools_module = importlib.import_module("elitea_sdk.tools")
+        failed_imports = getattr(tools_module, "FAILED_IMPORTS", {})
         unexpected_failures = set(failed_imports) - {"inventory"}
         if unexpected_failures:
             raise ContractSyncError(
                 "SDK toolkit imports failed: " + ", ".join(sorted(unexpected_failures))
             )
+        import_keys = import_keys_by_type(sdk_root, tools_module)
         clock_dates.add(date.today().isoformat())
-        return project_toolkit_schemas(
-            models,
-            lock["source"]["revision"],
-            frozenset(clock_dates),
+        stable_clock_dates = frozenset(clock_dates)
+        return (
+            project_toolkit_schemas(
+                models,
+                lock["source"]["revision"],
+                stable_clock_dates,
+            ),
+            project_toolkit_catalogue(
+                models,
+                lock["source"]["revision"],
+                import_keys,
+                stable_clock_dates,
+            ),
         )
     finally:
         sys.path.pop(0)
@@ -371,25 +615,33 @@ def main() -> int:
     parser.add_argument("--sdk-root", type=Path, default=DEFAULT_SDK_ROOT)
     parser.add_argument("--lock", type=Path, default=DEFAULT_LOCK)
     parser.add_argument("--snapshot", type=Path, default=DEFAULT_SNAPSHOT)
+    parser.add_argument("--catalogue", type=Path, default=DEFAULT_CATALOGUE)
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
     try:
-        document = generate_document(args.sdk_root.resolve(), args.lock.resolve())
-        encoded = _canonical(document)
+        document, catalogue = generate_document(
+            args.sdk_root.resolve(), args.lock.resolve()
+        )
+        # Both files are written, and both are checked, by this one command.
+        # A second command for the catalogue would import the SDK a second
+        # time, and a caller that ran only one of them would leave the two
+        # projections describing different registries.
+        outputs = ((args.snapshot, document), (args.catalogue, catalogue))
         if args.check:
-            if not args.snapshot.is_file() or args.snapshot.read_bytes() != encoded:
-                raise ContractSyncError("current toolkit schema snapshot is stale")
+            for path, projected in outputs:
+                if not path.is_file() or path.read_bytes() != _canonical(projected):
+                    raise ContractSyncError(f"{path.name} is stale")
             print(
                 "current toolkit schema snapshot is current "
-                f"({len(document['entries'])} entries)"
+                f"({len(document['entries'])} entries) and "
+                "current toolkit catalogue snapshot is current "
+                f"({len(catalogue['entries'])} entries)"
             )
             return 0
-        args.snapshot.parent.mkdir(parents=True, exist_ok=True)
-        args.snapshot.write_bytes(encoded)
-        print(
-            f"updated {args.snapshot} "
-            f"({len(document['entries'])} entries)"
-        )
+        for path, projected in outputs:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(_canonical(projected))
+            print(f"updated {path} ({len(projected['entries'])} entries)")
         return 0
     except (ContractSyncError, OSError, TypeError, ValueError) as exc:
         print(f"current toolkit schema sync failed: {exc}", file=sys.stderr)

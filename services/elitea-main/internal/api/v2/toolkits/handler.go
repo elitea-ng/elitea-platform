@@ -90,6 +90,12 @@ type Handler struct {
 	argumentSchemas     ToolkitArgumentSchemaSource
 	settingsDefinitions ToolkitSettingsDefinitionSource
 	guardrails          GuardrailPolicySource
+	// catalogue serves the settings schema and metadata of every built-in SDK
+	// toolkit type. Nil restores the eight hand-written types below.
+	catalogue ToolkitCatalogueSource
+	// workerCapability decides whether a catalogued type is offered as
+	// creatable. Nil offers every catalogued type.
+	workerCapability ToolkitCapabilitySource
 	// settingsValidator resolves a credential reference before it is persisted.
 	// Nil restores the pre-#613 behaviour: every save accepted unresolved. See
 	// settings_validation.go.
@@ -197,11 +203,19 @@ func (h *Handler) ListTypes(w http.ResponseWriter, r *http.Request) {
 // revision the Python workers are admitted to run). That snapshot is the only
 // source in this repository that reflects the tools and arguments the workers
 // actually accept; the names below were hand-written and several of them — every
-// artifact tool except index_data, for instance — name no SDK tool at all. They
-// survive only as the fallback for the four types the SDK does not define:
-// database, custom, datasource and application (measured against revision
-// b5113a1, which has 52 types; sql is the SDK's database toolkit, and the other
-// three are elitea_core-native, not SDK toolkits).
+// artifact tool except index_data, for instance — name no SDK tool at all.
+//
+// The map is now an OVERRIDE, not the catalogue. Four of its keys — database,
+// custom, datasource and application — are the elitea_core-native types the SDK
+// does not define at all, and they exist nowhere else. The other four —
+// artifact, github, jira and openapi — also exist in the SDK catalogue, and the
+// entries here still win, because they carry client contract the SDK model does
+// not: openapi's ui_component and its "a URL is not fetched" description,
+// github's inline access_token. Replacing those four is a change to four
+// working create forms and belongs in its own change.
+//
+// Every OTHER type is served from the pinned SDK catalogue snapshot. See
+// type_catalogue.go.
 //
 // Note that the snapshot's own "properties" are NOT a replacement for the
 // settings schemas here: they are an annotation projection (configuration_model,
@@ -424,8 +438,13 @@ func writeToolkitInternalError(w http.ResponseWriter, r *http.Request, operation
 // to its settings JSON Schema, with each type's per-tool argument schemas at
 // properties.selected_tools.args_schemas — the exact path the web client indexes
 // into (apps/elitea-web/src/features/toolkits/ui/test-tools/
-// useGetSelectedToolSchema.ts and ui/form/ToolBase/). Settings come from
-// toolkitTypeSchemas; argument schemas come from the pinned SDK snapshot.
+// useGetSelectedToolSchema.ts and ui/form/ToolBase/).
+//
+// The catalogue is assembled by toolkitTypeCatalogue in type_catalogue.go from
+// four pinned sources: the SDK settings schemas and metadata, the per-tool
+// argument schemas, the configuration definitions, and the worker capability
+// projection. toolkitTypeSchemas below is the fifth, and it is an OVERRIDE for
+// the eight keys it names rather than the catalogue itself.
 //
 // Each type also carries a "$defs" block beside its properties, holding the
 // configuration definitions its settings reference. The web client keys its
@@ -445,36 +464,6 @@ func (h *Handler) ListTypeSchemas(w http.ResponseWriter, r *http.Request) {
 		h.guardrailPolicy(r.Context(), "list_type_schemas"), catalogue,
 	)
 	writeJSON(w, http.StatusOK, catalogue)
-}
-
-// toolkitTypeCatalogue merges the settings schemas with the snapshot's argument
-// schemas. It rebuilds every node it replaces rather than editing
-// toolkitTypeSchemas in place: that map is package-level state shared by every
-// request.
-func (h *Handler) toolkitTypeCatalogue() (map[string]map[string]any, error) {
-	catalogue := make(map[string]map[string]any, len(toolkitTypeSchemas))
-	for toolkitType, settingsSchema := range toolkitTypeSchemas {
-		typeSchema := settingsSchema
-
-		argsSchemas, found, err := h.toolkitArgumentSchemas(toolkitType)
-		if err != nil {
-			return nil, fmt.Errorf("toolkit type %q argument schemas: %w", toolkitType, err)
-		}
-		if found {
-			typeSchema = withArgumentSchemas(typeSchema, argsSchemas)
-		}
-
-		definitions, configurationProperties, found, err := h.toolkitSettingsDefinitions(toolkitType)
-		if err != nil {
-			return nil, fmt.Errorf("toolkit type %q settings definitions: %w", toolkitType, err)
-		}
-		if found && len(definitions) > 0 {
-			typeSchema = withSettingsDefinitions(typeSchema, definitions, configurationProperties)
-		}
-
-		catalogue[toolkitType] = typeSchema
-	}
-	return catalogue, nil
 }
 
 func (h *Handler) toolkitArgumentSchemas(toolkitType string) (map[string]map[string]any, bool, error) {
@@ -1273,9 +1262,29 @@ func (r *pgRepo) ForkToolkit(ctx context.Context, projectID string, body map[str
 		return Tool{}, err
 	}
 	sourceID, _ := body["source_id"].(string)
+	// author_id is copied from the source row, and it has to be.
+	//
+	// The column is INTEGER NOT NULL in the tenant table this stack creates
+	// (internal/infra/db/migrations/001_initial.sql), and this INSERT did not
+	// name it. Every fork therefore died with
+	//
+	//	null value in column "author_id" of relation "elitea_tools"
+	//	violates not-null constraint (SQLSTATE 23502)
+	//
+	// which the handler turned into a 500 with a fixed message, so the route
+	// had never worked and said nothing about why. Found by the repository
+	// lifecycle test in repository_integration_test.go.
+	//
+	// The SOURCE's author is copied rather than the caller's, because this
+	// method is given no principal: Handler.ForkToolkit passes the request
+	// body through unchanged, and the body carries no `_author_id` the way
+	// CreateToolkit's does. Copying the source author is the value that is
+	// certainly correct for the row; attributing a fork to the person who
+	// forked it needs the principal to reach this seam, which is a change to
+	// the handler's contract rather than to this statement.
 	q := fmt.Sprintf(`
-		INSERT INTO %s.elitea_tools (name, type, description, owner_id, settings, env_vars, meta)
-		SELECT name || ' (copy)', type, description, owner_id, settings, env_vars, meta
+		INSERT INTO %s.elitea_tools (name, type, description, owner_id, author_id, settings, env_vars, meta)
+		SELECT name || ' (copy)', type, description, owner_id, author_id, settings, env_vars, meta
 		FROM %s.elitea_tools WHERE id = $1
 		RETURNING id, name, type, COALESCE(description, '')`, s, s)
 	var t Tool

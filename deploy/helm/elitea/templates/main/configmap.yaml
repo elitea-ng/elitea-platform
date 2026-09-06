@@ -27,6 +27,21 @@
   disagree about whether the plane is on.
 */ -}}
 {{- $env = set (deepCopy $env) "ELITEA_CONFIGURATIONS_ENABLED" (include "elitea-main.configurationsEnabled" $) }}
+{{- /*
+  Which worker image this release runs, from the ONE place an operator states
+  it. elitea-main serves a toolkit type as creatable only when the running
+  worker can build it, and the two workers can build different sets: the Python
+  image imports 39 of the 52 SDK toolkits and the native worker materializes 22
+  families. Nothing else tells this process which one is deployed, and its own
+  default is python while this chart's default is rust — so an unstated value
+  would offer tiles a native-worker release cannot run.
+
+  An explicit env entry still wins, for the release that pins
+  worker.image.repository directly and so does not follow worker.implementation.
+*/ -}}
+{{- if not (get $env "ELITEA_WORKER_IMPLEMENTATION") }}
+{{- $env = merge (deepCopy $env) (dict "ELITEA_WORKER_IMPLEMENTATION" $.Values.worker.implementation) }}
+{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:

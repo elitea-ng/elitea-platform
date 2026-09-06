@@ -1743,6 +1743,34 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if err != nil {
 		return fmt.Errorf("compose current toolkit settings definitions: %w", err)
 	}
+	// The same endpoint serves every SDK toolkit type's settings schema and its
+	// metadata — the label, categories and icon the create page groups it by.
+	// This is a second pinned file rather than a larger first one: the argument
+	// schemas already measure 596 KB against a 1 MiB ceiling.
+	toolkitCatalogue, err := runtimecomposition.LoadPinnedCurrentToolkitCatalogueSnapshot()
+	if err != nil {
+		return fmt.Errorf("load pinned current toolkit catalogue snapshot: %w", err)
+	}
+	// Which of those types the deployment can actually run depends on the
+	// worker image it starts. The catalogue holds 52 types; the Python image
+	// imports 39 of them and the Rust worker materializes 22 families. A type
+	// the worker cannot run is served hidden, with the reason, so the operator
+	// can see why rather than hunting a tile that is simply absent.
+	workerImplementation, err := runtimecomposition.WorkerImplementationFromEnv(os.LookupEnv)
+	if err != nil {
+		return fmt.Errorf("read worker implementation: %w", err)
+	}
+	workerToolkitCapability, err := runtimecomposition.LoadPinnedWorkerToolkitCapability(
+		workerImplementation,
+	)
+	if err != nil {
+		return fmt.Errorf("load pinned worker toolkit capability: %w", err)
+	}
+	logger.Info(
+		"toolkit type catalogue composed",
+		"worker_implementation", workerImplementation,
+		"catalogued_types", toolkitCatalogue.EntryCount(),
+	)
 
 	// patSigner signs the personal access tokens /api/v2/auth/token returns.
 	//
@@ -1767,6 +1795,8 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		EmailSettings:              emailResolver,
 		BrandingPackages:           brandingPackages,
 		ToolkitArgumentSchemas:     toolkitArgumentSchemas,
+		ToolkitCatalogue:           toolkitCatalogue,
+		ToolkitWorkerCapability:    workerToolkitCapability,
 		ToolkitSettingsDefinitions: toolkitSettingsDefinitions,
 		ToolkitSettingsValidator:   toolkitSettingsValidator,
 		ToolkitRegistry:            toolkitArgumentSchemas,

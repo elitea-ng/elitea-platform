@@ -188,6 +188,15 @@ type RouterConfig struct {
 	// Unassigned, the endpoint serves settings schemas with no argument schemas
 	// and every tool form in the web client renders empty.
 	ToolkitArgumentSchemas v2toolkits.ToolkitArgumentSchemaSource
+	// ToolkitCatalogue supplies the same endpoint with the SETTINGS schema and
+	// the METADATA of every built-in SDK toolkit type. Unassigned, the endpoint
+	// serves only the eight hand-written types, and the create page's chooser
+	// offers seven tiles against the reference deployment's sixty.
+	ToolkitCatalogue v2toolkits.ToolkitCatalogueSource
+	// ToolkitWorkerCapability decides which of those types this deployment can
+	// run. Unassigned, every catalogued type is offered — the honest answer
+	// when nothing has said which worker image is deployed.
+	ToolkitWorkerCapability v2toolkits.ToolkitCapabilitySource
 	// ToolkitSettingsDefinitions supplies the same endpoint with the "$defs"
 	// block each type's settings properties reference. It is injected for the
 	// same reason as ToolkitArgumentSchemas: the implementation joins two
@@ -2191,6 +2200,17 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				toolkitOptions := []v2toolkits.Option{
 					v2toolkits.WithArgumentSchemas(cfg.ToolkitArgumentSchemas),
 					v2toolkits.WithSettingsDefinitions(cfg.ToolkitSettingsDefinitions),
+				}
+				// Guarded for the reason the settings validator below is: an
+				// Option that stored a typed nil would defeat the handler's own
+				// nil check, and the nil check is the whole fallback.
+				if cfg.ToolkitCatalogue != nil {
+					toolkitOptions = append(toolkitOptions,
+						v2toolkits.WithCatalogue(cfg.ToolkitCatalogue))
+				}
+				if cfg.ToolkitWorkerCapability != nil {
+					toolkitOptions = append(toolkitOptions,
+						v2toolkits.WithWorkerCapability(cfg.ToolkitWorkerCapability))
 				}
 				// Guarded rather than appended unconditionally: an Option that
 				// stored a nil interface would still leave h.settingsValidator
