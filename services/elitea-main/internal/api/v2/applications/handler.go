@@ -17,6 +17,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/secrets"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/ownership"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
@@ -135,7 +136,9 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 		"name":        app.Name,
 		"description": app.Description,
 		"icon":        app.Icon,
-		"owner_id":    app.CreatedBy,
+		// The owning PROJECT (#533). `applications.owner_id` holds the project,
+		// which is what the legacy route answers here as well.
+		"owner_id":    app.OwnerID,
 		"created_at":  app.CreatedAt,
 		"versions":    versions,
 		// `meta` carries the one key this service actually records on an
@@ -452,7 +455,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		Description: strVal(body, "description"),
 		Type:        strVal(body, "type"),
 		Icon:        strVal(body, "icon"),
-		OwnerID:     ownerID,
+		AuthorID:    ownership.UserID(ownerID),
 	}
 
 	// Pylon creates the first version alongside the application, and so does
@@ -519,7 +522,10 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		"description": app.Description,
 		"type":        app.Type,
 		"icon":        app.Icon,
-		"owner_id":    userID,
+		// The owning PROJECT, as Get and Update answer it (#533). The create
+		// response used to echo the caller, so one route said "user" and the
+		// next said "project" for one field of one entity.
+		"owner_id":    projectID,
 		"created_at":  app.CreatedAt,
 	}
 	if len(app.Versions) > 0 {

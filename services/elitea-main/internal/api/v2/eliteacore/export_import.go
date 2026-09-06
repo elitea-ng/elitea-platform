@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/ownership"
 )
 
 // The reads and the encoders that the export and the import paths share.
@@ -878,7 +879,7 @@ func importedTagFrom(raw any) (string, any) {
 // principal and a fully validated token principal, whose owner it returns, and
 // refuses a token principal that carries no owner. An import writes rows that
 // carry an author, so it needs the same principal a create needs.
-func importPrincipalUserID(ctx context.Context) (int, bool) {
+func importPrincipalUserID(ctx context.Context) (ownership.UserID, bool) {
 	user, ok := auth.UserFromContext(ctx)
 	if !ok {
 		return 0, false
@@ -892,7 +893,14 @@ func importPrincipalUserID(ctx context.Context) (int, bool) {
 	if !ok || ownerID <= 0 || ownerID > math.MaxInt32 {
 		return 0, false
 	}
-	return int(ownerID), true
+	// The type carries the meaning from here on: this is a USER id, and #533
+	// gave the two kinds of number their own types so that one cannot be passed
+	// where the other belongs. See internal/domain/ownership.
+	authorID, err := ownership.NewUserID(ownerID)
+	if err != nil {
+		return 0, false
+	}
+	return authorID, true
 }
 
 // The three functions below encode one request-body key for one jsonb column.

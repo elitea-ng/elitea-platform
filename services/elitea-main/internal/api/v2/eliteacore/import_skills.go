@@ -85,6 +85,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	v2skills "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/skills"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/ownership"
 )
 
 // importedSkill is one skill that the import or the fork created, addressed the
@@ -132,8 +133,15 @@ func (s importedSkill) versionID(name string) (int, bool) {
 // `ownerID` is the DESTINATION PROJECT and not a user: `p_<id>.skills.owner_id`
 // is the owning project, which issue #533 measured and
 // internal/infra/db/repos/skills_owner.go records. `authorID` is the caller.
+//
+// The two parameters carry different types for that reason. They were both
+// `int` and adjacent in this list, so a call that swapped them compiled, ran,
+// and wrote a user id into the project column. ownership.ProjectID and
+// ownership.UserID make that call a compile error.
 func (h *Handler) importSkill(
-	ctx context.Context, schema string, ownerID, authorID int, entry map[string]any,
+	ctx context.Context, schema string,
+	ownerID ownership.ProjectID, authorID ownership.UserID,
+	entry map[string]any,
 ) (importedSkill, error) {
 	name, _ := entry["name"].(string)
 	if name == "" {
@@ -194,7 +202,7 @@ func (h *Handler) importSkill(
 	err = h.pool.QueryRow(ctx, fmt.Sprintf(`
 		SELECT id FROM %s.skills
 		WHERE owner_id = $1 AND meta ->> 'import_uuid' = $2
-		ORDER BY id LIMIT 1`, schema), ownerID, importUUID).Scan(&skillID)
+		ORDER BY id LIMIT 1`, schema), ownerID.Int64(), importUUID).Scan(&skillID)
 	switch {
 	case err == nil:
 		// Reused. The name and the description are refreshed, because the file
@@ -213,7 +221,7 @@ func (h *Handler) importSkill(
 		if err := h.pool.QueryRow(ctx, fmt.Sprintf(`
 			INSERT INTO %s.skills (name, description, owner_id, author_id, meta)
 			VALUES ($1, $2, $3, $4, $5::jsonb) RETURNING id`, schema),
-			name, description, ownerID, authorID, metaJSON).Scan(&skillID); err != nil {
+			name, description, ownerID.Int64(), authorID.Int64(), metaJSON).Scan(&skillID); err != nil {
 			return importedSkill{}, err
 		}
 	default:

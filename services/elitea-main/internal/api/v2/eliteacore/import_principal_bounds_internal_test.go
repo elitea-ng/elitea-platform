@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/ownership"
 )
 
 // importPrincipalUserID narrows an int64 owner id to `int`. `int` is 32 bits on
@@ -21,7 +22,7 @@ func TestImportPrincipalUserIDRefusesAnIDTheAuthorColumnCannotHold(t *testing.T)
 	for _, testCase := range []struct {
 		name   string
 		userID string
-		wantID int
+		wantID ownership.UserID
 		wantOK bool
 	}{
 		{name: "an ordinary id", userID: "42", wantID: 42, wantOK: true},

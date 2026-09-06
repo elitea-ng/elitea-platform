@@ -1569,10 +1569,15 @@ func seedSkillRoundTripAgent(t *testing.T, pool *pgxpool.Pool) skillRoundTripSee
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
+	// `applications.owner_id` is the owning PROJECT, and this row lives in p_1
+	// (#533). The seed wrote the caller here, which is the shape the writers
+	// had before the meaning was settled; tenant/0131 now refuses it with a
+	// foreign key. The caller is the version author, which
+	// seedSkillRoundTripVersion writes.
 	var seed skillRoundTripSeed
 	if err := pool.QueryRow(ctx, `
 INSERT INTO p_1.applications (name, description, owner_id)
-VALUES ('skill round trip agent', 'seeded', $1) RETURNING id`, importLinkPrincipal).Scan(&seed.applicationID); err != nil {
+VALUES ('skill round trip agent', 'seeded', 1) RETURNING id`).Scan(&seed.applicationID); err != nil {
 		t.Fatalf("seed application: %v", err)
 	}
 	seed.earlierVersionID = seedSkillRoundTripVersion(t, ctx, pool, seed.applicationID, "earlier", "2 minutes")

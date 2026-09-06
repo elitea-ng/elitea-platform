@@ -1,6 +1,10 @@
 package tenantschema
 
-import "strconv"
+import (
+	"strconv"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/ownership"
+)
 
 // OwnerID returns the number a PROJECT-kind `owner_id` column must hold in the
 // tenant schema of projectID.
@@ -28,24 +32,38 @@ import "strconv"
 //
 // # owner_id is NOT the user, and author_id is NOT the project
 //
-// `owner_id` and `author_id` hold different kinds of number, and neither column
-// carries a foreign key in either schema. A user id stored in owner_id is
-// therefore accepted by the database and is invisible until a reader joins on
-// it. migrations/tenant/0128_owner_id_column_meanings.sql carries the full
-// table of meanings, one row per column, and records it on the columns
+// `owner_id` and `author_id` hold different kinds of number. Before #533 no
+// column carried a foreign key in either schema, so a user id stored in
+// owner_id was accepted by the database and stayed invisible until a reader
+// joined on it. migrations/tenant/0128_owner_id_column_meanings.sql carries the
+// full table of meanings, one row per column, and records it on the columns
 // themselves with COMMENT ON COLUMN.
+// migrations/tenant/0131_owner_id_meanings_and_guards.sql then repaired the
+// rows and gave the PROJECT-kind columns their constraint.
 //
-// Use OwnerID for owner_id. Use the authenticated principal for author_id.
-func OwnerID(projectID string) (int, error) {
+// # The type says which kind of number this is
+//
+// OwnerID returns an ownership.ProjectID, not an int. A user id and a project
+// id are both integers, so the compiler accepted either one in either place
+// until #533 gave each meaning its own type. Use OwnerID for owner_id. Use the
+// authenticated principal, as an ownership.UserID, for author_id.
+//
+// The database states the same rule on the PROJECT-kind columns:
+// migrations/tenant/0131 gives each one a FOREIGN KEY to centry.project(id).
+func OwnerID(projectID string) (ownership.ProjectID, error) {
 	if !Valid(projectID) {
 		return 0, ErrInvalidProjectID
 	}
 	// Valid already refuses everything that is not a run of digits starting
 	// with a non-zero one, so the only failure left is a number too large for
 	// int. Report it as the same refusal rather than as a substitute value.
-	owner, err := strconv.Atoi(projectID)
-	if err != nil || owner <= 0 {
+	owner, err := strconv.ParseInt(projectID, 10, 64)
+	if err != nil {
 		return 0, ErrInvalidProjectID
 	}
-	return owner, nil
+	typed, err := ownership.NewProjectID(owner)
+	if err != nil {
+		return 0, ErrInvalidProjectID
+	}
+	return typed, nil
 }
