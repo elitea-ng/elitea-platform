@@ -810,6 +810,38 @@ services:
       # service on the compose network, plain HTTP — the minted bearer is the
       # credential; mTLS is on the hop the other way.
       ELITEA_DEEPWIKI_CALLBACK_BASE_URL: "http://elitea-main:8080"
+
+      # ── The Inventory facade (ADR-0023 H4c) ────────────────────────────
+      # The SECOND provider, composed the same way and from its own
+      # variables. It is on here for the same reason DeepWiki is: this stack
+      # has production Form authentication, which the source expansion needs
+      # — the invoke path opens the vault for a source toolkit and mints a
+      # callback bearer that this service reads back.
+      #
+      # What is canned is the provider's ENGINE
+      # (ELITEA_INVENTORY_RUNNER=fixture on the engine sidecar below);
+      # everything on this side is the production path.
+      ELITEA_INVENTORY_ENABLED: "true"
+      ELITEA_INVENTORY_BASE_URL: "https://elitea-inventory:8080"
+      ELITEA_INVENTORY_SERVER_NAME: "elitea-inventory"
+      # The same client material and the same CA as the DeepWiki hop: one
+      # trust root out of elitea-main, issued by deploy/scripts/
+      # gen-inventory-certs.sh beside gen-deepwiki-certs.sh.
+      ELITEA_INVENTORY_CLIENT_CERT_FILE: /run/certs/client.crt
+      ELITEA_INVENTORY_CLIENT_KEY_FILE: /run/certs/client.key
+      ELITEA_INVENTORY_CA_FILE: /run/certs/ca.crt
+      # Must equal the provider's ELITEA_INVENTORY_IDENTITY_SECRET below.
+      ELITEA_INVENTORY_IDENTITY_SECRET: "standalone-inventory-identity"
+      # ONE ALLOWLIST PER PROVIDER, deliberately, not a value shared with
+      # DeepWiki: the two clone from different things for different reasons,
+      # and a deployment that wants one and not the other must be able to say
+      # so. Checked BEFORE the vault is opened.
+      ELITEA_INVENTORY_GIT_ALLOWLIST: "github.com,*.github.com"
+      # Where the provider calls back to store the graph it built. EMPTY
+      # would disable source expansion rather than fail the boot — the eight
+      # read-only tools would still work and the three that name a source
+      # would get the provider's own refusal.
+      ELITEA_INVENTORY_CALLBACK_BASE_URL: "http://elitea-main:8080"
       # The project whose configurations are treated as PUBLIC and merged into
       # every other project's option lookups.
       #
@@ -1000,6 +1032,8 @@ services:
         condition: service_healthy
       elitea-deepwiki:
         condition: service_healthy
+      elitea-inventory:
+        condition: service_healthy
       redis:
         condition: service_healthy
       elitea-migrate:
@@ -1106,6 +1140,86 @@ services:
       - deepwiki-engine-sock:/run/deepwiki
     healthcheck:
       test: ["CMD", "python3", "-c", "import socket; s=socket.socket(socket.AF_UNIX); s.settimeout(2); s.connect('/run/deepwiki/engine.sock'); s.close()"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
+  # ── The Inventory provider (ADR-0023 H4c) ─────────────────────────────────
+  # The SAME Go sub-application host binary the DeepWiki service above runs;
+  # ELITEA_SUBAPP selects the application. That is ADR-0023's claim made
+  # visible in one file: a second provider is a second SERVICE of the same
+  # image, with its own settings namespace, its own certificate and its own
+  # identity secret.
+  #
+  # RUNNER=legacy, reaching the engine sidecar below over a shared Unix socket
+  # — the same shape DeepWiki runs here, and the reason this stack proves the
+  # socket hop rather than only the Go half. The sidecar runs the PYTHON
+  # fixture engine, so no engine closure is needed. (The E2E stack takes the
+  # other arm: the Go host's own fixture runner and no sidecar at all. Two
+  # fixture runners, kept in step by hand — the trap DeepWiki records.)
+  elitea-inventory:
+    image: ghcr.io/elitea-ng/elitea-subapp-host:standalone
+    build:
+      context: ..
+      dockerfile: services/elitea-subapp-host/Containerfile
+    environment:
+      ELITEA_SUBAPP: inventory
+      ELITEA_INVENTORY_RUNNER: "legacy"
+      ELITEA_INVENTORY_ENGINE_SOCKET: /run/inventory/engine.sock
+      ELITEA_INVENTORY_FIXTURE_STEP_SECONDS: "${INVENTORY_FIXTURE_STEP_SECONDS:-1}"
+      ELITEA_INVENTORY_TLS_CERTFILE: /certs/inventory-server.crt
+      ELITEA_INVENTORY_TLS_KEYFILE: /certs/inventory-server.key
+      # Setting the CA turns mutual authentication ON (496 without a client cert).
+      ELITEA_INVENTORY_TLS_CA_FILE: /certs/ca.crt
+      # Must equal elitea-main's ELITEA_INVENTORY_IDENTITY_SECRET.
+      ELITEA_INVENTORY_IDENTITY_SECRET: "standalone-inventory-identity"
+      ELITEA_INVENTORY_SCRATCH_PATH: /tmp/inventory
+      ELITEA_INVENTORY_SERVICE_LOCATION_URL: "https://elitea-inventory:8080"
+    volumes:
+      - inventory-engine-sock:/run/inventory
+      - ./certs/inventory-server.crt:/certs/inventory-server.crt:ro
+      - ./certs/inventory-server.key:/certs/inventory-server.key:ro
+      - ./certs/ca.crt:/certs/ca.crt:ro
+    depends_on:
+      elitea-inventory-engine:
+        condition: service_healthy
+    healthcheck:
+      # A TCP accept is the liveness signal: the listener requires a verified
+      # client certificate, so an HTTP GET from inside would never be one.
+      test: ["CMD", "/elitea-subapp-host", "healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
+  # ── The Inventory ENGINE sidecar ──────────────────────────────────────────
+  # The Python process the Go host calls over a Unix socket: the copied
+  # knowledge-graph tool layer and, in production, its dependency closure (the
+  # `-engine` image). Here it serves the FIXTURE engine, so the hop is
+  # exercised end to end without that closure. No SPI, no TLS, no identity:
+  # the socket is reachable only through the shared volume.
+  elitea-inventory-engine:
+    image: ghcr.io/elitea-ng/elitea-inventory:standalone
+    build:
+      context: ..
+      dockerfile: services/elitea-inventory/Containerfile
+    # The image's ENTRYPOINT is `python -m elitea_inventory`, which IS the
+    # sidecar — unlike DeepWiki's, whose entrypoint is its SPI shell. Stated
+    # here anyway so a change to that entrypoint cannot silently start
+    # something else in this stack.
+    entrypoint: ["python", "-m", "elitea_inventory"]
+    environment:
+      ELITEA_INVENTORY_RUNNER: "fixture"
+      ELITEA_INVENTORY_FIXTURE_STEP_SECONDS: "${INVENTORY_FIXTURE_STEP_SECONDS:-1}"
+      ELITEA_INVENTORY_ENGINE_SOCKET: /run/inventory/engine.sock
+      ELITEA_INVENTORY_SCRATCH_PATH: /tmp/inventory
+    volumes:
+      - inventory-engine-sock:/run/inventory
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import socket; s=socket.socket(socket.AF_UNIX); s.settimeout(2); s.connect('/run/inventory/engine.sock'); s.close()"]
       interval: 5s
       timeout: 3s
       retries: 12
@@ -1376,6 +1490,10 @@ volumes:
   # The engine sidecar's Unix socket, shared between the Go host and the
   # Python engine (ADR-0023 H2). Nothing else mounts it.
   deepwiki-engine-sock:
+  # The same, for the second provider. A separate volume, not a shared one:
+  # each host must reach ITS engine, and one socket directory for two pairs
+  # would let a misconfigured host connect to the other provider's engine.
+  inventory-engine-sock:
   standalone_pg_data:
   standalone_rustfs_data:
   # Runtime material, split per consumer so no service holds a key it does not

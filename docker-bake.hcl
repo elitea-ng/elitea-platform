@@ -164,6 +164,47 @@ group "deepwiki" {
   targets = ["elitea-deepwiki", "elitea-deepwiki-engine"]
 }
 
+# The Inventory provider engine (ADR-0023 H4c). Context is the repository root
+# because the Containerfile COPYs services/elitea-inventory from there.
+#
+# EXTRAS is empty here, and that is the shipping default, for the same reason
+# DeepWiki's is: the knowledge-graph engine's closure is 126 packages (down
+# from 356 before stage I8, which removed torch, chromadb and every
+# transformer) and still adds minutes to a release on two architectures. The
+# default image carries the engine SOURCE and refuses every tool — the sidecar
+# defaults to the refusing runner and GET /engine/health names the active one,
+# so it cannot look like it has an engine.
+#
+# It DOES carry the fixture runner, which needs no closure: this is the image
+# the compose stacks run, and the one that lets a browser journey reach an
+# Inventory result with no engine.
+#
+# Deliberately NOT in `group "default"`, like DeepWiki's and the two workers.
+target "elitea-inventory" {
+  context    = "."
+  dockerfile = "services/elitea-inventory/Containerfile"
+  tags       = ["${REGISTRY}/elitea-inventory:${TAG}"]
+  cache-from = ["type=gha,scope=elitea-inventory"]
+  cache-to   = ["type=gha,mode=max,scope=elitea-inventory"]
+  platforms  = ["linux/amd64", "linux/arm64"]
+}
+
+# The same image WITH the knowledge-graph engine's closure. A separate target
+# rather than a build argument, for DeepWiki's reason: the two produce
+# different images with different sizes and different scan surfaces, and a
+# release must be able to ship one without waiting for the other.
+target "elitea-inventory-engine" {
+  inherits   = ["elitea-inventory"]
+  args       = { EXTRAS = "[engine]" }
+  tags       = ["${REGISTRY}/elitea-inventory:${TAG}-engine"]
+  cache-from = ["type=gha,scope=elitea-inventory-engine"]
+  cache-to   = ["type=gha,mode=max,scope=elitea-inventory-engine"]
+}
+
+group "inventory" {
+  targets = ["elitea-inventory", "elitea-inventory-engine"]
+}
+
 # Standalone module pinned to Go 1.26.4 (bifrost/core). The Containerfile pins
 # golang:1.26 internally, so the correct toolchain is used regardless of the
 # build runner. Context is the repository ROOT: the module replaces

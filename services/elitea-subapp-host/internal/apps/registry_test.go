@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps"
+	deepwikirun "github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps/deepwiki/run"
+	inventoryrun "github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps/inventory/run"
 	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi"
 )
 
@@ -164,14 +166,33 @@ func TestRunnersAreTheSharedOnesPlusTheApplicationsOwn(t *testing.T) {
 		t.Fatalf("inventory/legacy: %v %v", err, runner)
 	}
 
-	// `fixture` is still DeepWiki's alone, and neither other application serves
-	// it. A runner served by an application it was not written for is how a
-	// deployment gets DeepWiki's canned wiki results out of an Inventory host.
-	for _, name := range []string{"echo", "inventory"} {
-		app, _ := apps.Lookup(name)
-		if _, err := app.Runner("fixture", inventorySocket, 0); !errors.Is(err, spi.ErrConfig) {
-			t.Errorf("%s served DeepWiki's fixture runner: %v", name, err)
-		}
+	// Inventory has a fixture runner of its own now, and it is ITS OWN — not
+	// DeepWiki's under a shared name. The distinction is the whole assertion:
+	// both are called "fixture", both answer Name() the same way, and a
+	// registry that handed Inventory DeepWiki's factory would produce a host
+	// that answers `generate_wiki` on an `inventory` toolkit. The concrete
+	// type is what tells them apart, so that is what is compared.
+	inventoryFixture, err := inventoryApp.Runner("fixture", settings, 0)
+	if err != nil || inventoryFixture.Name() != "fixture" {
+		t.Fatalf("inventory/fixture: %v %v", err, inventoryFixture)
+	}
+	deepwikiFixture, err := deepwiki.Runner("fixture", settings, 0)
+	if err != nil {
+		t.Fatalf("deepwiki/fixture: %v", err)
+	}
+	if _, isInventorys := inventoryFixture.(*inventoryrun.Runner); !isInventorys {
+		t.Errorf("inventory/fixture is %T, not Inventory's own runner", inventoryFixture)
+	}
+	if _, isDeepWikis := deepwikiFixture.(*deepwikirun.Runner); !isDeepWikis {
+		t.Errorf("deepwiki/fixture is %T, not DeepWiki's own runner", deepwikiFixture)
+	}
+
+	// echo has neither. A runner served by an application it was not written
+	// for is how a deployment gets one provider's canned results out of
+	// another's host.
+	echoNoFixture, _ := apps.Lookup("echo")
+	if _, err := echoNoFixture.Runner("fixture", inventorySocket, 0); !errors.Is(err, spi.ErrConfig) {
+		t.Errorf("echo served a fixture runner it has none of: %v", err)
 	}
 	echoApp, _ := apps.Lookup("echo")
 	if _, err := echoApp.Runner("legacy", inventorySocket, 0); !errors.Is(err, spi.ErrConfig) {
