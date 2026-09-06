@@ -900,12 +900,17 @@ services:
       ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM: "commands.v1.agent.execute.agent.shared.1.0"
       ELITEA_RUNTIME_AGENT_EXECUTION_CONSUMER_GROUP: "elitea-agent-worker-v1"
       ELITEA_RUNTIME_AGENT_EXECUTION_STREAM_MAX_ENTRIES: "1024"
-      # Validated as an https origin, and used at request time for the
-      # next-input-suggestion policy call elitea-main makes back to itself
-      # (composition.go:483-492). elitea-main serves cleartext here, so that one
-      # call fails; it degrades a suggestion, not the send path. It becomes real
-      # when the stack terminates TLS in front of elitea-main.
-      ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL: "https://elitea-main:8080"
+      # ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL is DELIBERATELY unset.
+      #
+      # It names the origin elitea-main calls back for the next-input-suggestion
+      # policy. That is a self call, and elitea-main serves cleartext, so it is
+      # now derived from the listener: http://127.0.0.1:8080. This file used to
+      # set "https://elitea-main:8080", which aimed TLS at that same cleartext
+      # port, and every chat turn logged "server gave HTTP response to HTTPS
+      # client". config.go now refuses that value at boot.
+      #
+      # Set it only where something else answers the path — centry-hybrid points
+      # it at the edge, which routes the path to legacy Centry.
 
       # Index-ingest dispatch: the toolkit `index_data` path behind
       # POST /api/v2/elitea_core/test_toolkit_tool/prompt_lib/{projectID}

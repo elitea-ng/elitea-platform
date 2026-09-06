@@ -354,13 +354,32 @@ func (s *Store) Load(ctx context.Context) (Settings, bool, error) {
 	return settings, sealed, nil
 }
 
+// noPasswordStored reports whether a vault lookup failed because NOTHING was
+// ever stored, rather than because the vault would not open.
+//
+// Two absences answer that description, and the global vault produces the
+// second one on every FRESH install:
+//
+//   - ErrSecretNotFound — the vault exists and holds no entry of this name; and
+//   - ErrVaultAbsent — neither `centry.secrets_key` row nor `centry.secrets_data`
+//     row exists yet, because no feature has sealed anything on this deployment.
+//
+// The second was read as a FAILURE. A fresh install with an SMTP host typed on
+// Admin › E-mail and no password therefore logged "outbound e-mail settings
+// could not be read" on every send and every page read, and the resolver
+// discarded the stored rows for the environment defaults — a working relay
+// reported as unreadable because a credential nobody set was missing.
+//
+// A vault that will not OPEN stays an error. "The operator has not set a
+// password" and "this service cannot read its own vault" call for different
+// messages, and collapsing THOSE is how a broken vault gets reported as a
+// missing configuration.
+func noPasswordStored(err error) bool {
+	return errors.Is(err, secrets.ErrSecretNotFound) || errors.Is(err, secrets.ErrVaultAbsent)
+}
+
 // PasswordSealed reports whether the vault holds a password for this
 // deployment.
-//
-// A vault that will not OPEN is an error, never a false. "The operator has not
-// set a password" and "this service cannot read its own vault" call for
-// different messages, and collapsing them is how a broken vault gets reported
-// as a missing configuration.
 func (s *Store) PasswordSealed(ctx context.Context) (bool, error) {
 	if s == nil || s.vault == nil {
 		return false, errors.New("emailsettings: no vault")
@@ -369,7 +388,7 @@ func (s *Store) PasswordSealed(ctx context.Context) (bool, error) {
 	switch {
 	case err == nil:
 		return true, nil
-	case errors.Is(err, secrets.ErrSecretNotFound):
+	case noPasswordStored(err):
 		return false, nil
 	default:
 		return false, err
@@ -386,7 +405,7 @@ func (s *Store) Password(ctx context.Context) (string, error) {
 	switch {
 	case err == nil:
 		return value, nil
-	case errors.Is(err, secrets.ErrSecretNotFound):
+	case noPasswordStored(err):
 		return "", nil
 	default:
 		return "", err

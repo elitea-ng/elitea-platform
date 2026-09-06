@@ -317,10 +317,13 @@ main:
       commandStream: "commands.v1.agent.execute.agent.shared.1.0"
       consumerGroup: "elitea-agent-worker-v1"
       streamMaxEntries: 1024
-      # An https origin with no path. elitea-main calls itself on it for the
-      # next-input-suggestion policy. Point it at the address that terminates TLS
-      # in front of this Service.
-      currentMainBaseUrl: "https://elitea-main:8080"
+      # DELIBERATELY empty. elitea-main calls itself for the next-input-suggestion
+      # policy, and it serves cleartext, so the origin is derived from its own
+      # listener: http://127.0.0.1:<port>. This used to be
+      # "https://elitea-main:8080", which aimed TLS at that cleartext port and
+      # made every chat turn log a failed policy call. Set it only where another
+      # server answers the path.
+      currentMainBaseUrl: ""
 
     # Index start, index cancel and index metadata.
     #

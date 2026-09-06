@@ -269,11 +269,22 @@ over `ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL`. **No readable repository implements
 that path.** This monorepo does not. The pylon runtime and the plugin
 repositories do not.
 
-Both stacks make the call fail. The hybrid edge sends the path to legacy Centry,
-which registers no such rule. The standalone stack aims an `https` origin at a
-cleartext port. The turn is not affected. The policy is optional metadata, and
+Both stacks make the call fail, and now for the same reason: no server answers
+the path. The hybrid edge sends it to legacy Centry, which registers no such
+rule. The standalone stack calls elitea-main, which registers no such route, so
+the answer is 404. The turn is not affected. The policy is optional metadata, and
 the caller fails open by design. Each turn therefore carries
 `next_input_suggestion: null`.
+
+`ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL` is optional. Leave it unset and the call
+goes to this process's own listener, `http://127.0.0.1:<port of
+ELITEA_HTTP_ADDRESS>`. That is the standalone stack: the call is a self call, and
+elitea-main serves cleartext. The stack used to set `https://elitea-main:8080`,
+which aimed TLS at that same cleartext port, so every turn logged
+`http: server gave HTTP response to HTTPS client` — a deployment fault reported
+per turn, hiding the routing gap behind it. `internal/runtimecomposition/config.go`
+now refuses that value at boot. Set the variable only where another server
+answers the path, as centry-hybrid does with its edge.
 
 The cost is one bounded request of 3 s for each send, regeneration, continuation
 and ad-hoc turn. The failure is now visible. The client writes the cause to the
