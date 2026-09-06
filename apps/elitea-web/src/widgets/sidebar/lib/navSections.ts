@@ -65,7 +65,12 @@ export function navSections(): readonly NavSection[] {
     {
       items: [
         { value: 'skills', label: 'Skills', url: '/skills' },
-        { value: 'toolkits', label: 'Toolkits', url: '/toolkits' },
+        // The row reads "Toolkits & Indexes" in production, and it is one row
+        // for both things: `SidebarBody.jsx:137` in the old app gives it that
+        // label, that breadcrumb and that tooltip. This app shortened it to
+        // "Toolkits", which names half of what the row opens. The PAGE title
+        // is a separate surface and keeps its own string.
+        { value: 'toolkits', label: 'Toolkits & Indexes', url: '/toolkits' },
         { value: 'mcps', label: 'MCPs', url: '/mcps' },
         { value: 'credentials', label: 'Credentials', url: '/credentials' },
         { value: 'applications', label: 'Applications', url: '/apps' },

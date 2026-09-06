@@ -62,7 +62,29 @@ describe('the pipeline starter template', () => {
   it('declares every state variable its node reads and writes', () => {
     const document = starterDocument();
 
-    expect(document.state).toEqual({ input: 'str', messages: 'list' });
+    expect(document.state).toEqual({ input: { type: 'str' }, messages: { type: 'list' } });
     expect(document.nodes?.[0]?.output).toEqual(['messages']);
+  });
+
+  /*
+   * DEFECT this pins. The template wrote the scalar shorthand
+   * (`input: str`). Every client reader accepts it, so the document parsed,
+   * drew a canvas and saved — and then no pipeline created from it could run:
+   * `set_defaults()` (elitea_sdk/runtime/langchain/langraph_agent.py:1631)
+   * assigns into each state entry (`v['value'] = ...`), which a `str` refuses
+   * with `TypeError: 'str' object does not support item assignment`. The turn
+   * settled FAILED and said only "The runtime operation failed."
+   *
+   * Asserted entry by entry rather than on the whole object, so the rule is
+   * legible when the template is re-authored: a state entry is a MAPPING.
+   */
+  it('spells every state entry as a mapping, which is the only form the SDK can run', () => {
+    const state = starterDocument().state ?? {};
+
+    expect(Object.keys(state)).not.toHaveLength(0);
+    for (const [name, spec] of Object.entries(state)) {
+      expect(spec, `state.${name} must be a mapping, not a bare type name`).toBeTypeOf('object');
+      expect((spec as { type?: string }).type).toBeTypeOf('string');
+    }
   });
 });
