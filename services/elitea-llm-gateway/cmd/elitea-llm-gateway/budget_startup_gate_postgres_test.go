@@ -10,15 +10,26 @@ package main
 // (budgetTableProbeSQL) exists only because Postgres resolves relations at
 // parse time — a fact no in-process fake can demonstrate.
 //
-// It runs only when ELITEA_TEST_DATABASE_URL names a database:
+// It runs in a DATABASE OF ITS OWN, created and dropped by the test. The probe
+// asks a question about the whole database ("does this deployment enforce any
+// budget?"), so a shared database makes its negative cases meaningless: the
+// first run of this file against the standalone stack failed the moment
+// internal/failmode's own integration test seeded an enforcing project_budget
+// row in a parallel package. A private database is the only isolation that
+// matches the question the statement asks.
+//
+// It runs only when ELITEA_TEST_DATABASE_URL names a server:
 //
 //	ELITEA_TEST_DATABASE_URL='postgres://elitea:elitea@127.0.0.1:15433/elitea?sslmode=disable' \
 //	  GOWORK=off go test -run TestPostgres ./cmd/elitea-llm-gateway/
 
 import (
 	"context"
+	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -32,28 +43,100 @@ const budgetProbeDatabaseURLEnv = "ELITEA_TEST_DATABASE_URL"
 // fails the test.
 const budgetProbeMigration = "0067_gateway_budget_schema.sql"
 
+// openBudgetProbePool creates a private database, applies the shipped gateway
+// DDL to it, and returns a pool onto it. The database is dropped at the end of
+// the test.
 func openBudgetProbePool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	url := os.Getenv(budgetProbeDatabaseURLEnv)
-	if url == "" {
+	raw := os.Getenv(budgetProbeDatabaseURLEnv)
+	if raw == "" {
 		t.Skipf("set %s to run the budget-probe integration test", budgetProbeDatabaseURLEnv)
 	}
-	ctx := t.Context()
-	pool, err := pgxpool.New(ctx, url)
-	if err != nil {
-		t.Fatalf("connect: %v", err)
+	base, err := url.Parse(raw)
+	if err != nil || base.Scheme == "" {
+		t.Skipf("%s is not a URL DSN, so this test cannot create its own database: %v",
+			budgetProbeDatabaseURLEnv, err)
 	}
-	t.Cleanup(pool.Close)
 
+	// Read the migration BEFORE creating anything, so a missing file skips
+	// instead of leaving a database behind.
 	path := filepath.Join("..", "..", "..", "elitea-main", "migrations", "shared", budgetProbeMigration)
-	sql, rerr := os.ReadFile(path) //nolint:gosec // a fixed in-repo path
+	migration, rerr := os.ReadFile(path) //nolint:gosec // a fixed in-repo path
 	if rerr != nil {
 		t.Skipf("cannot read the shipped migration %s: %v", budgetProbeMigration, rerr)
 	}
-	if _, err := pool.Exec(ctx, string(sql)); err != nil {
+
+	ctx := t.Context()
+	admin, err := openSmallPool(ctx, raw)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer admin.Close()
+
+	// A name unique per run, so a leftover from an interrupted run and a
+	// parallel run cannot collide. Only letters, digits and underscores reach
+	// the identifier.
+	name := fmt.Sprintf("elitea_budget_probe_%d_%d", os.Getpid(), time.Now().UnixNano())
+	if _, err := admin.Exec(ctx, `CREATE DATABASE `+pgIdentifier(name)); err != nil {
+		t.Skipf("cannot create a private database for this test (%v). "+
+			"Point %s at a server where the user may CREATE DATABASE", err, budgetProbeDatabaseURLEnv)
+	}
+	target := *base
+	target.Path = "/" + name
+	pool, err := openSmallPool(ctx, target.String())
+	if err != nil {
+		t.Fatalf("connect to the private database: %v", err)
+	}
+
+	// ONE cleanup, in one order: close this pool, THEN drop the database.
+	// Two cleanups would rely on the LIFO order of t.Cleanup, and an open
+	// connection makes DROP DATABASE wait rather than fail — which reads as a
+	// hung test, not as a leak.
+	t.Cleanup(func() {
+		pool.Close()
+		// A fresh context: t.Context() is already cancelled by now, and the
+		// admin pool above is closed.
+		bg, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		cleaner, cerr := openSmallPool(bg, raw)
+		if cerr != nil {
+			t.Logf("cannot drop the test database %s: %v", name, cerr)
+			return
+		}
+		defer cleaner.Close()
+		if _, derr := cleaner.Exec(bg, `DROP DATABASE IF EXISTS `+pgIdentifier(name)+` WITH (FORCE)`); derr != nil {
+			t.Logf("cannot drop the test database %s: %v", name, derr)
+		}
+	})
+
+	if _, err := pool.Exec(ctx, string(migration)); err != nil {
 		t.Fatalf("apply %s: %v", budgetProbeMigration, err)
 	}
 	return pool
+}
+
+// openSmallPool dials with ONE connection.
+//
+// pgxpool's default maximum is one connection per CPU, and this file opens
+// three pools per test against a server that is usually the shared development
+// stack. The default exhausted max_connections and failed the second test with
+// "sorry, too many clients already" — a failure that says nothing about the
+// code under test.
+func openSmallPool(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
+	cfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, err
+	}
+	cfg.MaxConns = 1
+	cfg.MinConns = 0
+	return pgxpool.NewWithConfig(ctx, cfg)
+}
+
+// pgIdentifier quotes a generated identifier. The name is built from a pid and
+// a timestamp, so it carries no caller input; the quoting is here because an
+// identifier concatenated into DDL must never depend on that staying true.
+func pgIdentifier(name string) string {
+	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 }
 
 // TestPostgresBudgetProbeReadsTheShippedSchema executes every probe statement
@@ -68,28 +151,13 @@ func TestPostgresBudgetProbeReadsTheShippedSchema(t *testing.T) {
 	pool := openBudgetProbePool(t)
 	ctx := t.Context()
 
-	// A project id far outside the seeded range, unique per run, so a parallel
-	// run and a shared development database cannot interfere.
-	projectID := 900_000 + int(time.Now().UnixNano()%90_000)
-	userID := projectID
-	t.Cleanup(func() {
-		bg := context.Background()
-		_, _ = pool.Exec(bg, `DELETE FROM gateway.user_budget WHERE project_id = $1`, projectID)
-		_, _ = pool.Exec(bg, `DELETE FROM gateway.project_budget WHERE project_id = $1`, projectID)
-	})
+	const projectID = 901
+	const userID = 902
 
-	// The probe must parse and answer on the untouched database first.
-	base := probeAuthoredBudgetsWith(ctx, pool)
-	if base.err != nil {
-		t.Fatalf("the probe cannot read the shipped schema: %v", base.err)
-	}
-	if base.found {
-		// The probe asks a question about the WHOLE database, so a database
-		// that already holds a ceiling would answer "found" for every case
-		// below, negative ones included. Skip rather than pass on an answer
-		// that measures nothing.
-		t.Skip("this database already holds an enforcing budget row, so the negative half of the probe " +
-			"cannot be measured here; point ELITEA_TEST_DATABASE_URL at an isolated database")
+	// An empty database that HAS the tables. This is the fresh-install posture,
+	// and it must not refuse a startup.
+	if got := probeAuthoredBudgetsWith(ctx, pool); got.err != nil || got.found {
+		t.Fatalf("an empty database reported authored budgets (found=%v, err=%v)", got.found, got.err)
 	}
 
 	// An UNLIMITED row is not a ceiling.
@@ -141,5 +209,30 @@ func TestPostgresBudgetProbeReadsTheShippedSchema(t *testing.T) {
 	}
 	if got := probeAuthoredBudgetsWith(ctx, pool); got.err != nil || !got.found {
 		t.Fatalf("an enforcing user_budget row was not read as an authored ceiling (found=%v, err=%v)", got.found, got.err)
+	}
+}
+
+// TestPostgresBudgetProbeOnADatabaseWithNoGatewaySchema is the other half of
+// the two-statement design: a database that has never run shared migration 0067
+// must answer "no budgets" and NOT an error.
+//
+// A fresh install is exactly that database, and an error there would be read by
+// budgetStartupGate as "cannot tell", which is a log line nobody needs on every
+// first boot.
+func TestPostgresBudgetProbeOnADatabaseWithNoGatewaySchema(t *testing.T) {
+	pool := openBudgetProbePool(t)
+	ctx := t.Context()
+
+	if _, err := pool.Exec(ctx, `DROP SCHEMA gateway CASCADE`); err != nil {
+		t.Fatalf("drop the gateway schema: %v", err)
+	}
+	got := probeAuthoredBudgetsWith(ctx, pool)
+	if got.err != nil {
+		t.Fatalf("a database with no gateway schema made the probe fail: %v. "+
+			"The table-existence probe must run in its OWN statement, because Postgres resolves "+
+			"relations at parse time", got.err)
+	}
+	if got.found {
+		t.Fatal("a database with no gateway schema reported authored budgets")
 	}
 }
