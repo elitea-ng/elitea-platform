@@ -96,7 +96,28 @@ FROM python:3.12.14-slim AS runtime
 # openssl is the only one of the base image's HIGH/CRITICAL findings that
 # Debian trixie has a fixed version for). --only-upgrade, so this installs
 # nothing new.
-RUN apt-get update \
+#
+# THE `ADD` BELOW IS NOT A FILE THE IMAGE NEEDS. It is a cache stamp, and it is
+# the same one services/elitea-deepwiki/Containerfile carries. The upgrade is a
+# layer whose command string never changes, so a layer cache serves it on every
+# build and freezes the package versions of the day it was first built. That
+# defect was measured on the nginx image (apps/elitea-web/Containerfile).
+# BuildKit re-resolves a remote source on every build, so the Debian release
+# files invalidate the upgrade exactly when Debian publishes new packages. apt
+# never reads these copies.
+#
+# THE SUITE NAMES MUST MOVE WITH THE BASE. The RUN asserts the codename, so a
+# base bump to a new Debian release FAILS the build instead of leaving the
+# stamp to watch a suite this image does not install from.
+ADD https://deb.debian.org/debian/dists/trixie/InRelease /usr/share/debian-index-stamp/trixie
+ADD https://deb.debian.org/debian/dists/trixie-updates/InRelease /usr/share/debian-index-stamp/trixie-updates
+ADD https://deb.debian.org/debian-security/dists/trixie-security/InRelease /usr/share/debian-index-stamp/trixie-security
+RUN . /etc/os-release \
+    && if [ "${VERSION_CODENAME}" != "trixie" ]; then \
+         echo "base is Debian ${VERSION_CODENAME}, the cache stamp watches trixie — update the ADD lines above" >&2; \
+         exit 1; \
+       fi \
+    && apt-get update \
     && apt-get install --no-install-recommends --only-upgrade -y \
          openssl libssl3t64 openssl-provider-legacy \
     && rm -rf /var/lib/apt/lists/*

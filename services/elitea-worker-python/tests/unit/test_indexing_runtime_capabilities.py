@@ -238,14 +238,14 @@ def test_profile_admits_exact_langchain_ocr_wrapper_and_artifact() -> None:
 def test_profile_admits_shared_markdown_parser_and_verified_artifacts() -> None:
     profile = _profile()
 
-    assert "unstructured==0.16.23" in profile["python_requirements"]
+    assert "unstructured==0.18.18" in profile["python_requirements"]
     assert "unstructured-client==0.39.1" in profile["python_requirements"]
-    assert profile["verified_distributions"]["unstructured"] == "0.16.23"
+    assert profile["verified_distributions"]["unstructured"] == "0.18.18"
     assert profile["verified_distributions"]["unstructured-client"] == "0.39.1"
     assert "unstructured" in profile["required_imports"]
     assert profile["verified_wheels"]["unstructured"]["sha256"] == (
-        "edc87b84acdc52e7476d09b38fcc2428"
-        "42214750ba413096598a326af5550c28"
+        "d5189bdd5e2a1c5ed3cc289cfb4fb483"
+        "c6f2dd544b42744bdc5b81d3388ea527"
     )
     assert profile["verified_wheels"]["unstructured-client"]["sha256"] == (
         "b0a179bcbbeae1f155712fd646012d2b"

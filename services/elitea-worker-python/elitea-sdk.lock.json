@@ -23,7 +23,7 @@
   },
   "indexing_capability_profile": {
     "schema_revision": "elitea.indexing-runtime-capability-profile.v1",
-    "profile_sha256": "0640a7a755ff2d62a4a9ad811a068e3d08c5645274745323bbbf359635047394",
+    "profile_sha256": "7f705a08444ec992f1ee58b10a60b443b720114bd4a8e05791e2362ae13b356a",
     "python_requirements": [
       "anthropic==0.76.0",
       "aiofiles==25.1.0",
@@ -45,22 +45,22 @@
       "joblib==1.5.3",
       "langchain==1.2.6",
       "langchain-anthropic==1.3.1",
-      "langchain-classic==1.0.1",
+      "langchain-classic==1.0.7",
       "langchain-community==0.4.1",
       "langchain-openai==1.1.7",
       "langchain-postgres==0.0.16",
-      "langchain-text-splitters==1.1.0",
-      "langgraph-checkpoint==2.1.2",
+      "langchain-text-splitters==1.1.2",
+      "langgraph-checkpoint==3.0.0",
       "langgraph-prebuilt==1.0.7",
       "langdetect==1.0.9",
-      "lxml==5.2.2",
+      "lxml==6.1.0",
       "mammoth==1.9.0",
       "markdownify==1.1.0",
       "msrest==0.7.1",
       "numpy==1.26.4",
       "oauthlib==3.3.1",
       "openpyxl==3.1.5",
-      "nltk==3.10.0",
+      "nltk==3.10.3",
       "nest-asyncio==1.6.0",
       "pandas==2.2.3",
       "pdf2image==1.16.3",
@@ -71,7 +71,7 @@
       "psycopg-pool==3.3.1",
       "pytesseract==0.3.13",
       "pymupdf==1.24.9",
-      "pypdf==4.3.1",
+      "pypdf==6.14.2",
       "pypdfium2==5.8.0",
       "PyGithub==2.3.0",
       "python-iso639==2026.7.23",
@@ -98,7 +98,7 @@
       "tree-sitter==0.20.2",
       "tree-sitter-languages==1.10.2",
       "typing-extensions==4.15.0",
-      "unstructured==0.16.23",
+      "unstructured==0.18.18",
       "unstructured-client==0.39.1",
       "xlrd==1.2.0"
     ],
@@ -125,22 +125,22 @@
       "joblib": "1.5.3",
       "langchain": "1.2.6",
       "langchain-anthropic": "1.3.1",
-      "langchain-classic": "1.0.1",
+      "langchain-classic": "1.0.7",
       "langchain-community": "0.4.1",
-      "langchain-core": "1.2.7",
+      "langchain-core": "1.3.3",
       "langchain-openai": "1.1.7",
       "langchain-postgres": "0.0.16",
-      "langchain-text-splitters": "1.1.0",
+      "langchain-text-splitters": "1.1.2",
       "langgraph": "1.0.7",
-      "langgraph-checkpoint": "2.1.2",
+      "langgraph-checkpoint": "3.0.0",
       "langgraph-prebuilt": "1.0.7",
       "langdetect": "1.0.9",
-      "lxml": "5.2.2",
+      "lxml": "6.1.0",
       "mammoth": "1.9.0",
       "markdownify": "1.1.0",
       "msrest": "0.7.1",
       "nest-asyncio": "1.6.0",
-      "nltk": "3.10.0",
+      "nltk": "3.10.3",
       "numpy": "1.26.4",
       "oauthlib": "3.3.1",
       "openpyxl": "3.1.5",
@@ -154,7 +154,7 @@
       "psycopg-pool": "3.3.1",
       "pytesseract": "0.3.13",
       "pymupdf": "1.24.9",
-      "pypdf": "4.3.1",
+      "pypdf": "6.14.2",
       "pypdfium2": "5.8.0",
       "python-iso639": "2026.7.23",
       "python-magic": "0.4.27",
@@ -180,14 +180,14 @@
       "tree-sitter": "0.20.2",
       "tree-sitter-languages": "1.10.2",
       "typing-extensions": "4.15.0",
-      "unstructured": "0.16.23",
+      "unstructured": "0.18.18",
       "unstructured-client": "0.39.1",
       "xlrd": "1.2.0"
     },
     "artifact_verified_requirements": [
       "azure-core==1.38.0",
       "azure-devops==7.1.0b4",
-      "cryptography==48.0.1",
+      "cryptography==50.0.1",
       "FigmaPy==2018.1.0",
       "isodate==0.7.2",
       "joblib==1.5.3",
@@ -206,7 +206,7 @@
       "testrail-api==1.13.4",
       "threadpoolctl==3.6.0",
       "typing-extensions==4.15.0",
-      "unstructured==0.16.23",
+      "unstructured==0.18.18",
       "unstructured-client==0.39.1"
     ],
     "verified_wheels": {
@@ -231,18 +231,18 @@
       "cryptography": {
         "artifacts": [
           {
-            "filename": "cryptography-48.0.1-cp311-abi3-manylinux_2_34_aarch64.whl",
+            "filename": "cryptography-50.0.1-cp311-abi3-manylinux_2_34_aarch64.whl",
             "platform_machine": "aarch64",
-            "sha256": "66fd0771e7b9c6dcd44cf1120690d2338d16d72795cf40cae2786a39eba65429"
+            "sha256": "e2ca8fd1b6b4b82a1c4cb02841d0837e3c12336c2e24b520ab8ab3b969733d8f"
           },
           {
-            "filename": "cryptography-48.0.1-cp311-abi3-manylinux_2_34_x86_64.whl",
+            "filename": "cryptography-50.0.1-cp311-abi3-manylinux_2_34_x86_64.whl",
             "platform_machine": "x86_64",
-            "sha256": "0ee6ea481db1ab889cba043ec1eda17bb9c1ea79db6722f779c3667f9f70322f"
+            "sha256": "51afcfceb15597cf2635068e4ac9a56b2abde622edde17f37d85fd7b5306497a"
           }
         ],
         "origin": "PyPI",
-        "pin_basis": "worker signing, spool encryption and workload TLS security fix"
+        "pin_basis": "worker signing, spool encryption and workload TLS; raised to 50.0.1 for CVE-2026-69247 and CVE-2026-69249"
       },
       "isodate": {
         "filename": "isodate-0.7.2-py3-none-any.whl",
@@ -350,15 +350,15 @@
         "sha256": "f0fa19c6845758ab08074a0cfa8b7aecb71c999ca73d62883bc25cc018c4e548"
       },
       "unstructured": {
-        "filename": "unstructured-0.16.23-py3-none-any.whl",
+        "filename": "unstructured-0.18.18-py3-none-any.whl",
         "origin": "PyPI",
-        "pin_basis": "shared Markdown parser used by current-baseline indexing families",
-        "sha256": "edc87b84acdc52e7476d09b38fcc242842214750ba413096598a326af5550c28"
+        "pin_basis": "shared Markdown parser used by current-baseline indexing families; raised to 0.18.18 for CVE-2025-64712",
+        "sha256": "d5189bdd5e2a1c5ed3cc289cfb4fb483c6f2dd544b42744bdc5b81d3388ea527"
       },
       "unstructured-client": {
         "filename": "unstructured_client-0.39.1-py3-none-any.whl",
         "origin": "PyPI",
-        "pin_basis": "current Pylon-compatible closure for unstructured 0.16.23",
+        "pin_basis": "current Pylon-compatible closure for unstructured 0.18.18",
         "sha256": "b0a179bcbbeae1f155712fd646012d2b3d426778c06eb9a3f5971563ad6fa8fa"
       }
     },
@@ -480,22 +480,22 @@
   },
   "agent_current_capability_profile": {
     "schema_revision": "elitea.agent-current-runtime-capability-profile.v1",
-    "profile_sha256": "74ec719d10dcab8a3c3183ec83bfb5eea8961d242720cf25243f220291e7ae57",
+    "profile_sha256": "ea7c08df74e318569e21cda638e146380169cd5b73009bdbe8b018833e98daca",
     "python_requirements": [
       "elitea-sdk==0.9.8",
-      "langchain-core==1.2.7",
+      "langchain-core==1.3.3",
       "langgraph==1.0.7",
       "langchain-mcp-adapters==0.1.14",
-      "mcp==1.27.1",
-      "langgraph-checkpoint-postgres==2.0.21"
+      "mcp==1.28.1",
+      "langgraph-checkpoint-postgres==3.0.0"
     ],
     "verified_distributions": {
       "elitea-sdk": "0.9.8",
-      "langchain-core": "1.2.7",
+      "langchain-core": "1.3.3",
       "langchain-mcp-adapters": "0.1.14",
-      "mcp": "1.27.1",
+      "mcp": "1.28.1",
       "langgraph": "1.0.7",
-      "langgraph-checkpoint-postgres": "2.0.21"
+      "langgraph-checkpoint-postgres": "3.0.0"
     },
     "required_imports": [
       "elitea_sdk",
