@@ -244,7 +244,14 @@ fi
   # Named in a slice literal rather than in a call, so no pattern above sees
   # it. It is the switch the whole block hangs on.
   echo ELITEA_RUNTIME_ENABLED
-} | sort -u >"$WORK/required-names.txt"
+} | sort -u >"$WORK/required-names.all.txt"
+
+# A name config.go reads through lookup() but derives when absent is marked
+# `// helm-render-optional: NAME` beside its lookup; the chart may omit it.
+grep -oE 'helm-render-optional: ELITEA_RUNTIME_[A-Z0-9_]+' "$CONFIG_GO" |
+  sed -E 's/.*: //' | sort -u >"$WORK/optional-names.txt"
+comm -23 "$WORK/required-names.all.txt" "$WORK/optional-names.txt" \
+  >"$WORK/required-names.txt"
 
 required_count="$(wc -l <"$WORK/required-names.txt" | tr -d ' ')"
 if [ "$required_count" -lt 25 ]; then

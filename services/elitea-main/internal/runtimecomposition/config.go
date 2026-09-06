@@ -389,6 +389,10 @@ func currentMainBaseURL(lookup LookupEnv) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// helm-render-optional: ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL
+	// (deploy/helm/tests/render-capabilities.sh extracts every lookup() name
+	// as a chart requirement; this one is derived from the listener when
+	// absent, so the chart deliberately omits it unless the operator sets it.)
 	raw, _ := lookup("ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL")
 	if raw == "" {
 		return "http://127.0.0.1:" + listenPort, nil
