@@ -9,6 +9,7 @@ export function normaliseBucket(wire: BucketWire): Bucket {
     isPinned: wire.is_pinned,
     createdAt: wire.created_at,
     retentionDays: wire.retention_days ?? null,
+    sizeBytes: wire.size_bytes ?? 0,
   };
 }
 
