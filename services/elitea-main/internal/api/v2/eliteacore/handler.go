@@ -28,6 +28,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpregistry"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/publicproject"
 )
 
 func generateID() string {
@@ -247,6 +248,35 @@ func (h *Handler) PlatformSettings(w http.ResponseWriter, r *http.Request) {
 	// client that ignores this key still meets a 403 rather than an open
 	// endpoint behind a hidden button.
 	defaults["analytics_enabled"] = h.analyticsFlags(r.Context()).enabled
+
+	// The id of the PUBLIC project, published so a client stops guessing it.
+	//
+	// The same project was configured in three places that could not check each
+	// other: `ELITEA_AI_PROJECT_ID` here, the identically named variable in the
+	// LLM gateway, and `VITE_PUBLIC_PROJECT_ID` baked into the SPA image by
+	// apps/elitea-web/docker-entrypoint.sh. Nothing compared the SPA's copy with
+	// the server's, and one page did not even read the SPA's copy —
+	// `pages/settings/ServicePrompts.tsx` compared the selected project against
+	// the literal '1' and gated its query on the result, so on a deployment
+	// whose public project is not id 1 the Service Prompts cards rendered empty
+	// with no request made and no error shown.
+	//
+	// This endpoint is the right carrier: it is already ungated, already polled
+	// by the app shell, and per-project, so the answer costs no extra request.
+	// The SPA now prefers this value and keeps its build-time copy only as the
+	// fallback for a deployment too old to send this key.
+	//
+	// Added rather than overlaid, like every pair above and under the same
+	// contract permission (`additionalProperties: true`): a project's own
+	// `environment_settings` row must not be able to tell a client that some
+	// OTHER project is the public one.
+	//
+	// A NUMBER, not a string. `p_{id}` schema names, `model_project_id` in
+	// llm_settings and the `project_id` in every entity_meta are numeric, and
+	// the one client-side comparison that matters is against a project id the
+	// SPA already holds as a string — one conversion at the edge is safer than
+	// two representations on the wire.
+	defaults["public_project_id"] = publicproject.ID()
 
 	writeJSON(w, http.StatusOK, defaults)
 }
@@ -953,15 +983,16 @@ func (h *Handler) Publish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Hard-check: model must be from public/shared project (runs before validation)
-	publicProjID := os.Getenv("PUBLIC_PROJECT_ID")
-	if publicProjID == "" {
-		publicProjID = "1"
-	}
-	sharedProjID := os.Getenv("SHARED_PROJECT_ID")
-	if sharedProjID == "" {
-		sharedProjID = "4"
-	}
+	// Hard-check: the model must come from the public project (runs before
+	// validation).
+	//
+	// ONE project, resolved once. This used to accept `PUBLIC_PROJECT_ID`
+	// (default 1) OR `SHARED_PROJECT_ID` (default 4), which made the guard
+	// admit a second project no other surface knew about and that the
+	// reference does not have: legacy `_check_shared_llm` compares against a
+	// single `public_project_id`. Both names still resolve, as deprecated
+	// aliases of ELITEA_AI_PROJECT_ID — see internal/publicproject.
+	publicProjID := publicproject.IDString()
 	var llmSettingsStr *string
 	_ = h.pool.QueryRow(ctx, fmt.Sprintf(
 		`SELECT llm_settings::text FROM %s.application_versions WHERE id = $1`, s), versionID).Scan(&llmSettingsStr) // failure leaves nil, safe
@@ -970,7 +1001,7 @@ func (h *Handler) Publish(w http.ResponseWriter, r *http.Request) {
 		_ = json.Unmarshal([]byte(*llmSettingsStr), &llmSettings) // DB jsonb column; malformed means empty map
 		if modelProjID, ok := llmSettings["model_project_id"]; ok && modelProjID != nil {
 			mpid := fmt.Sprintf("%v", modelProjID)
-			if mpid != publicProjID && mpid != sharedProjID {
+			if mpid != publicProjID {
 				writeJSON(w, http.StatusBadRequest, map[string]any{"error": "llm_not_shared"})
 				return
 			}
@@ -1608,15 +1639,8 @@ func (h *Handler) runPublishValidation(ctx context.Context, s, versionID, versio
 		_ = json.Unmarshal([]byte(*llmStr), &llm) // DB jsonb column; malformed means empty map
 		if mpid, ok := llm["model_project_id"]; ok && mpid != nil {
 			mpidStr := fmt.Sprintf("%v", mpid)
-			pubPID := os.Getenv("PUBLIC_PROJECT_ID")
-			if pubPID == "" {
-				pubPID = "1"
-			}
-			shrPID := os.Getenv("SHARED_PROJECT_ID")
-			if shrPID == "" {
-				shrPID = "4"
-			}
-			if mpidStr != pubPID && mpidStr != shrPID {
+			// One project, for the reason Publish's hard-check above states.
+			if mpidStr != publicproject.IDString() {
 				criticalIssues = append(criticalIssues, map[string]any{
 					"field":  "llm_settings",
 					"issue":  "model is not shared and cannot be used in published agents",

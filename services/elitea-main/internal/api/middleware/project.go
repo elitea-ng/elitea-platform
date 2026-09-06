@@ -5,13 +5,13 @@ import (
 	"fmt"
 	"math"
 	"net/http"
-	"os"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/publicproject"
 )
 
 // projectUserNamePrefix mirrors pylon's projects.constants.PROJECT_USER_NAME_PREFIX.
@@ -19,7 +19,7 @@ import (
 const projectUserNamePrefix = ":system:project:"
 
 // defaultPublicProjectID mirrors pylon's elitea_config "ai_project_id" default (1).
-const defaultPublicProjectID = 1
+const defaultPublicProjectID = publicproject.Default
 
 // projectLookupTimeout bounds the personal-project DB lookup so a slow store
 // cannot stall the request. Mirrors the intent of pylon's rpc timeout(30) but
@@ -601,41 +601,26 @@ func PublicProjectID() int {
 	return publicProjectIDFromEnv()
 }
 
-// publicProjectEnvNames are the variables that name the shared project, in
-// precedence order.
+// publicProjectIDFromEnv resolves the shared project id.
 //
-// TWO NAMES, and that is a correction rather than a convenience. This service
-// read `AI_PROJECT_ID` and the LLM gateway reads `ELITEA_AI_PROJECT_ID` — whose
-// own config comment claimed it was "the same variable elitea-main reads",
-// which it was not. The two also disagreed on the default: 1 here, and OFF in
-// the gateway.
+// FOUR NAMES resolve to ONE project, and that is a correction rather than a
+// convenience. This service read `AI_PROJECT_ID`, the LLM gateway reads
+// `ELITEA_AI_PROJECT_ID`, and internal/api/v2/eliteacore read
+// `PUBLIC_PROJECT_ID` and `SHARED_PROJECT_ID` — four variables for one project,
+// with three different defaults and nothing checking that they agreed.
 //
 // That divergence is silent and total for anything published INTO the shared
 // project. The admin panel's platform-provider surface writes a credential into
-// `p_{this value}`; the gateway resolves shared credentials out of
-// `p_{its value}`. When the two differ, or when the gateway's is unset, the
-// credential is stored correctly, listed correctly, reported healthy, and
-// resolves for nobody.
+// `p_{one value}`; the gateway resolves shared credentials out of
+// `p_{another}`. When the two differ, the credential is stored correctly,
+// listed correctly, reported healthy, and resolves for nobody.
 //
-// The gateway's name is preferred, so a deployment that configures the gateway
-// — the service that can be switched OFF, and therefore the one an operator
-// must set deliberately — brings this service into line without a second
-// variable. `AI_PROJECT_ID` still works and still wins over the default, so no
-// existing deployment changes.
-//
-// The DEFAULT is unchanged at 1. Making it "off" here would be the safer-looking
-// choice and the wrong one: this value also drives the configurations list's
-// shared block and the project middleware's ProjectContext, both of which have
-// behaved as project 1 since before the gateway existed.
-var publicProjectEnvNames = []string{"ELITEA_AI_PROJECT_ID", "AI_PROJECT_ID"}
-
+// internal/publicproject holds the single resolution, and cmd/elitea-main
+// REFUSES TO START when two of the names disagree, so a running process has
+// already proved that every surface below reads one project. The DEFAULT is
+// unchanged at 1: this value also drives the configurations list's shared block
+// and the project middleware's ProjectContext, both of which have behaved as
+// project 1 since before the gateway existed.
 func publicProjectIDFromEnv() int {
-	for _, name := range publicProjectEnvNames {
-		if v := os.Getenv(name); v != "" {
-			if id, err := strconv.Atoi(v); err == nil && id > 0 {
-				return id
-			}
-		}
-	}
-	return defaultPublicProjectID
+	return publicproject.ID()
 }

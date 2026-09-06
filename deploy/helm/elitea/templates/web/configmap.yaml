@@ -1,4 +1,20 @@
 {{- if .Values.web.enabled }}
+{{- /*
+  The public project, from the ONE place an operator sets it.
+
+  "1" when nothing names a project, which is the value this chart shipped as the
+  `web.env` default and every reference deployment uses. Empty is NOT a safe
+  fallback here: the SPA compares the selected project against this string, so
+  "" makes every public-project check false — the route guard never matches,
+  `include_shared` inverts, and public agent listing goes dark with no error and
+  no failing probe.
+
+  The SPA prefers the id elitea-main publishes on `platform_settings` and uses
+  this only as the fallback, so a deployment that names its project in one place
+  can no longer disagree with itself.
+*/ -}}
+{{- $env := .Values.web.env | default dict }}
+{{- if not (get $env "VITE_PUBLIC_PROJECT_ID") }}{{- $env = merge (deepCopy $env) (dict "VITE_PUBLIC_PROJECT_ID" (include "elitea.aiProjectId" . | default "1")) }}{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -9,7 +25,7 @@ data:
   # Whole .Values.web.env map (same reasoning as the `main:` block). Note that
   # only the five keys docker-entrypoint.sh reads reach the browser; extra keys
   # set here are present in the container but never emitted into config.js.
-  {{- range $key, $value := .Values.web.env }}
+  {{- range $key, $value := $env }}
   {{ $key }}: {{ $value | quote }}
   {{- end }}
 {{- end }}

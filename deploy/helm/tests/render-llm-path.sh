@@ -130,6 +130,27 @@ configValue() {
     "select(.kind == \"ConfigMap\") | select(.metadata.name == \"$env_from\") | .data.$key // \"\"" "$file"
 }
 
+# projectIdCopies <rendered file> — EVERY copy of the public project id in a
+# render, whichever object carries it and whichever of its four names it is
+# under. Deliberately path-free and object-free: the defect this section exists
+# for is a copy that disagrees, so a reader that looked in two named places
+# would stop seeing the third the moment it moved.
+#
+# Two shapes carry it: a ConfigMap `KEY: "1"` line, and a container env pair
+# (`- name: KEY` followed by `value: "1"`). Empty values are kept, so "one side
+# set and the other dark" is visible rather than filtered away.
+projectIdCopies() {
+  sed -n -E 's/^[[:space:]]*(ELITEA_AI_PROJECT_ID|VITE_PUBLIC_PROJECT_ID):[[:space:]]*"?([^"]*)"?[[:space:]]*$/\2/p' "$1"
+  grep -A 1 -E '^[[:space:]]*- name: (ELITEA_AI_PROJECT_ID|VITE_PUBLIC_PROJECT_ID)$' "$1" |
+    sed -n -E 's/^[[:space:]]*value:[[:space:]]*"?([^"]*)"?[[:space:]]*$/\1/p'
+}
+
+# distinctProjectIds <rendered file> — the non-empty copies, deduplicated, on one
+# line. More than one word here is a deployment whose surfaces disagree.
+distinctProjectIds() {
+  projectIdCopies "$1" | grep -v '^$' | sort -u | tr '\n' ' ' | sed -E 's/ $//'
+}
+
 # deployEnv <key> <rendered file> — read one plain env entry off the Deployment's
 # first container. The gateway chart has no ConfigMap; it renders env inline.
 deployEnv() {
@@ -313,10 +334,11 @@ else
 fi
 
 echo
-echo "=== #458 — ELITEA_AI_PROJECT_ID must agree on both sides ================"
+echo "=== G5 — the public project id is ONE value ============================"
 
-# The compose stack. The two services must hold the SAME value, and the test
-# must fail when one holds it and the other does not.
+# The compose stack. It is not a chart, so no template can check it: the two
+# services must hold the SAME value, and the test must fail when one holds it
+# and the other does not.
 main_id="$(composeEnv elitea-main ELITEA_AI_PROJECT_ID)"
 gw_id="$(composeEnv elitea-llm-gateway ELITEA_AI_PROJECT_ID)"
 if [ -z "$main_id" ] || [ -z "$gw_id" ]; then
@@ -327,27 +349,87 @@ else
   pass "docker-compose.standalone-full.yml gives both services the same ELITEA_AI_PROJECT_ID (\"$main_id\")"
 fi
 
-# The two charts. They are separate releases, so no template can see the other;
-# the check therefore lives here, over both renders.
-gw_chart_id="$(deployEnv ELITEA_AI_PROJECT_ID "$WORK/gw-allowlist.yaml")"
-main_chart_id="$(configValue ELITEA_AI_PROJECT_ID "$WORK/main-default.yaml")"
-if [ "$gw_chart_id" = "$main_chart_id" ]; then
-  pass "the two charts ship the same default ELITEA_AI_PROJECT_ID (\"$main_chart_id\"), so neither is dark while the other is not"
+# The chart. The comparison this suite used to make over two renders now lives
+# in the chart itself (`elitea.aiProjectId` in templates/_helpers.tpl), because
+# the four copies are in ONE chart and a check that runs at `helm template` time
+# runs for every operator instead of only in this repository's CI. What is
+# asserted here is that the check is armed, and that the single value reaches
+# every copy.
+FULL_RENDER=(
+  --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS="https://elitea.example.com/llm/v1"
+  --set-string llmGateway.egressPosture=public-unrestricted
+)
+
+# One value, set once, reaches every copy in the render.
+helm template test-release "$MAIN" "${FULL_RENDER[@]}" \
+  --set-string platform.aiProjectId=7 >"$WORK/single-value.yaml"
+copies="$(projectIdCopies "$WORK/single-value.yaml" | grep -c .)"
+distinct="$(distinctProjectIds "$WORK/single-value.yaml")"
+if [ "$copies" -lt 3 ]; then
+  fail "the render carries only $copies copies of the public project id; this assertion would pass on a render that had lost them"
+elif [ "$distinct" = "7" ]; then
+  pass "platform.aiProjectId=7 reaches all $copies copies in the render, and they agree"
 else
-  fail "the charts disagree on the default ELITEA_AI_PROJECT_ID (elitea-main=\"$main_chart_id\", elitea-llm-gateway=\"$gw_chart_id\"). Set both or neither: with only one set, the picker offers shared models the gateway cannot resolve."
+  fail "platform.aiProjectId=7 rendered these distinct ids: $distinct"
 fi
 
-# The same rule, held for a real value rather than for the shipped empty pair —
-# otherwise the assertion above passes on "both empty" forever.
-helm template ${GATEWAY_RENDER_POSTURE} ${ONLY_MAIN} test-release "$MAIN" -f "$MAIN/values-standalone.yaml" >"$WORK/main-id.yaml"
-helm template ${ONLY_GATEWAY} test-release "$GATEWAY" "${GUARDS_OK[@]}" \
-  --set-string llmGateway.env.ELITEA_AI_PROJECT_ID="1" >"$WORK/gw-id.yaml"
-main_set="$(configValue ELITEA_AI_PROJECT_ID "$WORK/main-id.yaml")"
-gw_set="$(deployEnv ELITEA_AI_PROJECT_ID "$WORK/gw-id.yaml")"
-if [ -n "$main_set" ] && [ "$main_set" = "$gw_set" ]; then
-  pass "with a project named, both charts carry ELITEA_AI_PROJECT_ID=\"$main_set\" into the container"
+# The default render still leaves elitea-main's copy EMPTY. It must: with the
+# Configurations plane off, elitea-main refuses to start when the variable is
+# present at all, so a chart that invented a value here would stop every default
+# install.
+helm template test-release "$MAIN" "${FULL_RENDER[@]}" >"$WORK/no-value.yaml"
+main_default="$(configValue ELITEA_AI_PROJECT_ID "$WORK/no-value.yaml")"
+if [ -z "$main_default" ] || [ "$main_default" = "__NO_ENVFROM_LINK__" ]; then
+  pass "a default install still leaves ELITEA_AI_PROJECT_ID empty, so it boots with the Configurations plane off"
 else
-  fail "with a project named, the charts carry elitea-main=\"$main_set\" and elitea-llm-gateway=\"$gw_set\""
+  fail "a default install renders ELITEA_AI_PROJECT_ID=\"$main_default\"; elitea-main refuses to start on that with ELITEA_CONFIGURATIONS_ENABLED off"
+fi
+
+# ...and the SPA still gets "1", which is the value this chart shipped as the
+# web default and every reference deployment uses. Empty there is not a safe
+# fallback: it makes every public-project check in the SPA false, silently.
+web_default="$(distinctProjectIds "$WORK/no-value.yaml")"
+if [ "$web_default" = "1" ]; then
+  pass "a default install still renders VITE_PUBLIC_PROJECT_ID=\"1\" for the SPA"
+else
+  fail "a default install renders these public project ids: \"$web_default\", expected only \"1\""
+fi
+
+# The refusals. Each pair below is a deployment that installs cleanly, reports
+# every pod Ready, and then resolves no shared credential at all.
+refuses "elitea-main and the gateway naming different public projects" \
+  "name different public projects" "$MAIN" \
+  --set-string main.env.ELITEA_AI_PROJECT_ID=1 \
+  --set-string llmGateway.env.ELITEA_AI_PROJECT_ID=2
+
+refuses "the SPA naming a different public project from elitea-main" \
+  "name different public projects" "$MAIN" \
+  --set-string main.env.ELITEA_AI_PROJECT_ID=2 \
+  --set-string web.env.VITE_PUBLIC_PROJECT_ID=1
+
+refuses "platform.aiProjectId contradicting a component key" \
+  "name different public projects" "$MAIN" \
+  --set-string platform.aiProjectId=3 \
+  --set-string main.env.ELITEA_AI_PROJECT_ID=4
+
+refuses "a public project id that is not a project id" \
+  "must be a positive project id" "$MAIN" \
+  --set-string platform.aiProjectId=public
+
+# Backward compatibility. A values file that still sets both component keys, to
+# the same value, must keep rendering — every values file in this repository is
+# that shape, and breaking them to fix a naming problem would be the wrong
+# trade.
+helm template test-release "$MAIN" "${FULL_RENDER[@]}" \
+  --set-string main.env.ELITEA_AI_PROJECT_ID=1 \
+  --set-string llmGateway.env.ELITEA_AI_PROJECT_ID=1 \
+  --set-string web.env.VITE_PUBLIC_PROJECT_ID=1 >"$WORK/legacy-values.yaml" 2>"$WORK/legacy-err.txt"
+legacy_distinct="$(distinctProjectIds "$WORK/legacy-values.yaml")"
+if [ "$legacy_distinct" = "1" ]; then
+  pass "a values file that still sets all three keys to one value keeps rendering"
+else
+  fail "a values file that sets all three keys to \"1\" rendered these ids: \"$legacy_distinct\"
+$(cat "$WORK/legacy-err.txt")"
 fi
 
 echo

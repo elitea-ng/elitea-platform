@@ -312,6 +312,35 @@ agentStateMigrations:
       memory: 512Mi
 
 
+# Settings that belong to the DEPLOYMENT rather than to any one component.
+platform:
+  # The platform's PUBLIC ("shared") project — the project whose `shared = true`
+  # configurations every other project may use.
+  #
+  # SET IT HERE, ONCE. Three components need it and used to take it separately:
+  # `main.env.ELITEA_AI_PROJECT_ID`, `llmGateway.env.ELITEA_AI_PROJECT_ID` and
+  # `web.env.VITE_PUBLIC_PROJECT_ID`. Nothing checked that the three agreed, and
+  # a disagreement produces no error: elitea-main writes a shared credential
+  # into `p_<one id>`, the gateway resolves it out of `p_<another>`, and the SPA
+  # decides which project is public with a third copy. The credential is stored,
+  # listed and reported healthy, and resolves for nobody.
+  #
+  # This value fills every component key that is empty. A values file that still
+  # sets a component key keeps working while the values AGREE; two that disagree
+  # stop `helm template` — see `elitea.aiProjectId` in templates/_helpers.tpl.
+  #
+  # It must name a project that EXISTS: it becomes the PostgreSQL schema name
+  # `p_<id>`, so an id with no schema fails every shared-credential read.
+  #
+  # EMPTY by default, and empty is a real state rather than a missing one. With
+  # `ELITEA_CONFIGURATIONS_ENABLED` off, elitea-main REFUSES to start when
+  # `ELITEA_AI_PROJECT_ID` is present at all
+  # (cmd/elitea-main/configurations_config.go), so a default that invented "1"
+  # would stop a default install. The SPA still falls back to "1" when nothing
+  # names a project, which is what every reference deployment here uses.
+  aiProjectId: ""
+
+
 main:
   # The API. Everything else is optional next to it.
   enabled: true
@@ -671,12 +700,15 @@ main:
     # project's configurations and propagates the failure, so a missing id fails
     # every agent turn rather than yielding an empty public set.
     #
-    # Set the SAME value in this file's `llmGateway:` block, where the
-    # key has the same name. The gateway reads the public project to serve the
-    # shared models the operator publishes (issue #316). The two services must
-    # name one project, or the gateway serves a different model set from the one
-    # the UI offers. Empty on BOTH sides leaves shared models unreachable: the
-    # picker offers them and the request then finds no credential.
+    # SET `platform.aiProjectId` INSTEAD. It fills this key, the identically
+    # named key in the `llmGateway:` block, and the SPA's
+    # `VITE_PUBLIC_PROJECT_ID` — three copies of one project id that used to be
+    # set by hand and that nothing compared. A value here still works and still
+    # wins for this component; `helm template` refuses a render whose copies
+    # disagree (`elitea.aiProjectId` in templates/_helpers.tpl).
+    #
+    # Empty EVERYWHERE leaves shared models unreachable: the picker offers them
+    # and the request then finds no credential.
     ELITEA_AI_PROJECT_ID: ""
 
     # Whether a project may define its own LLM credentials.
@@ -1487,15 +1519,26 @@ web:
     VITE_BASE_URI: "/app/"
     VITE_SOCKET_SERVER: ""
     VITE_SOCKET_PATH: "/socket.io"
-    # REQUIRED, and empty is not a safe placeholder here. The SPA decides "is
-    # this the public project?" by string comparison against this value
+    # DERIVED from `platform.aiProjectId`, and "1" when nothing names a project.
+    # Empty here is not a safe placeholder: the SPA decides "is this the public
+    # project?" by string comparison against this value
     # (entities/project/model/selectors.ts, routes/-guards/publicProject.ts), so
     # "" makes every such check false: the public-project route guard never
     # matches, `include_shared` inverts, public agent listing goes dark — with
     # no error and no failing probe. "1" is what every other reference
-    # deployment uses (deploy/docker-compose.yml's elitea-ui). Override it if
-    # this deployment's public project has a different id.
-    VITE_PUBLIC_PROJECT_ID: "1"
+    # deployment uses (deploy/docker-compose.yml's elitea-ui).
+    #
+    # UNSET here rather than "1", so `platform.aiProjectId` can fill it. Stating
+    # "1" in the chart's own defaults would make every deployment whose public
+    # project is not 1 a disagreement the operator has to resolve by editing two
+    # places — which is the problem this key was one of three copies of.
+    # templates/web/configmap.yaml renders "1" when nothing names a project, so
+    # the rendered default is unchanged.
+    #
+    # The SPA now PREFERS the id elitea-main publishes on `platform_settings`
+    # and keeps this as the fallback for a deployment too old to send that key
+    # (shared/lib/hooks/usePublicProjectId.ts).
+    VITE_PUBLIC_PROJECT_ID: ""
 
   probes:
     # There is no /healthz in this image and no `location /` in spa.conf, so the
@@ -1959,10 +2002,11 @@ llmGateway:
     # credential. With ELITEA_ALLOW_PROJECT_OWN_LLMS=false — the mode where
     # projects are meant to use platform models ONLY — that left no usable model.
     #
-    # Set this to the SAME value as elitea-main's ELITEA_AI_PROJECT_ID, which is
-    # the identically named key in this file's `main:` block (issue
-    # #382 added it there). The two services must name the same project or the
-    # gateway will serve a different model set from the one the UI offers.
+    # SET `platform.aiProjectId` INSTEAD; it fills this key. A value here still
+    # works and still wins for this component, and `helm template` refuses a
+    # render whose copies disagree (`elitea.aiProjectId` in
+    # templates/_helpers.tpl). The two services must name the same project or
+    # the gateway will serve a different model set from the one the UI offers.
     #
     # Leaving THIS key empty while elitea-main names a project is the state that
     # keeps issue #316 inert on Kubernetes: the UI offers the shared models and

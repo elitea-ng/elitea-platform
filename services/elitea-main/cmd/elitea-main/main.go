@@ -152,6 +152,15 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		return err
 	}
 
+	// The ONE public project id. See resolvePublicProject for why an
+	// environment that names two of them stops the process here rather than
+	// producing a deployment whose surfaces silently disagree.
+	publicProjectID, err := resolvePublicProject(logger, os.LookupEnv)
+	if err != nil {
+		return err
+	}
+	logger.Info("public project resolved", "public_project_id", publicProjectID)
+
 	// The project vault's master key (#412).
 	//
 	// This runs BEFORE the database pool and before every handler, because the

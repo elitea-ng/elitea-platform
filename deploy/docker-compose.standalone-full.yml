@@ -1060,6 +1060,15 @@ services:
       # value, and the seeded working project IS 1 — so setting both to 1 renders
       # the PUBLIC view on every agents/pipelines/skills page and makes the
       # private list unreachable. 99 is an id no fixture creates.
+      #
+      # This is a DEMO-ONLY divergence, and it no longer covers the whole app.
+      # elitea-main publishes the real public project id on `platform_settings`
+      # (`public_project_id`), and a page that asks
+      # `shared/lib/hooks/usePublicProjectId` gets THAT — currently Settings >
+      # Environment and Settings > Service Prompts, which both belong to the
+      # public project and are correct to appear for project 1 here. The pages
+      # that still read this value are the ones the "99" trick is for. On a real
+      # deployment the two are the same number and nothing diverges.
       VITE_PUBLIC_PROJECT_ID: "${VITE_PUBLIC_PROJECT_ID:-99}"
     depends_on:
       elitea-main:

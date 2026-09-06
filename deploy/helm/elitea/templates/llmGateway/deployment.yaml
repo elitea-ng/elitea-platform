@@ -8,6 +8,16 @@
 {{- $env := .Values.llmGateway.env | default dict }}
 {{- if not (get $env "GATEWAY_NATS_URL") }}{{- $env = merge (deepCopy $env) (dict "GATEWAY_NATS_URL" (printf "nats://%s" (include "elitea.serviceAddr" (dict "svc" $.Values.nats "ctx" $)))) }}{{- end }}
 {{- /*
+  The public project, from the ONE place an operator sets it — the same value
+  elitea-main gets. Set on one side only, the picker offers shared models the
+  gateway cannot resolve; that is issue #316's inert state, and it was the
+  DEFAULT shape whenever an operator set the main key and forgot this one.
+  Empty stays empty: it keeps the old project-local behaviour, and an id naming
+  a schema that does not exist would fail every credential read.
+*/ -}}
+{{- $aiProjectId := include "elitea.aiProjectId" . }}
+{{- if and $aiProjectId (not (get $env "ELITEA_AI_PROJECT_ID")) }}{{- $env = merge (deepCopy $env) (dict "ELITEA_AI_PROJECT_ID" $aiProjectId) }}{{- end }}
+{{- /*
   The database secret, resolved once for every component that reads it.
   An explicit `secrets.DATABASE_URL` under this component wins and is taken
   WHOLE — `hasKey` rather than a field-wise merge, so an entry that names a

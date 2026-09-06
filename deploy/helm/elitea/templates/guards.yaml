@@ -132,3 +132,18 @@
 {{- fail (printf "worker.runtime.consumerId is %d characters. Each replica's consumer name is this value plus \"-\" plus the pod name, and a pod name can be 63 characters, so the worker's 256-byte identity bound is exceeded and it refuses its whole configuration at startup with no field named. Use at most 192 characters." (len $consumer)) }}
 {{- end }}
 {{- end }}
+
+{{- /*
+  The public project must be named ONCE.
+
+  elitea.aiProjectId reads all four places the id can be set and fails the
+  render when two of them disagree. It is called HERE as well as from the three
+  component templates, because a disagreement is a property of the VALUES FILE
+  and must be caught even for a render that disables the components — an
+  operator who templates only the gateway today installs the whole release
+  tomorrow with the same file.
+
+  The `_ :=` discards the value: this line is called for the refusal it can
+  raise, not for what it returns.
+*/ -}}
+{{- $_ := include "elitea.aiProjectId" . }}

@@ -2,11 +2,11 @@ package eliteacore
 
 import (
 	"net/http"
-	"os"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/publicproject"
 )
 
 // This file holds the only place in the package that turns a project id into a
@@ -42,11 +42,14 @@ func tenantSchema(w http.ResponseWriter, projectID string) (string, bool) {
 // publicProjectIDOrDefault returns the id of the PUBLIC project, the project
 // whose schema holds the published catalogue.
 //
-// PUBLIC_PROJECT_ID is set by the operator, not by a caller, but it still
-// reaches an identifier. A value that is not a project id gives the default
-// rather than a schema name built out of the environment.
+// The id is set by the operator, not by a caller, but it still reaches an
+// identifier. internal/publicproject resolves it from ELITEA_AI_PROJECT_ID and
+// its deprecated aliases and only ever answers a positive integer, so the
+// validity check below can no longer fail — it is kept because this value ends
+// up inside a schema name, and a guard on that path must not depend on a
+// promise made in another package.
 func publicProjectIDOrDefault() string {
-	id := os.Getenv("PUBLIC_PROJECT_ID")
+	id := publicproject.IDString()
 	if !tenantschema.Valid(id) {
 		return "1"
 	}
