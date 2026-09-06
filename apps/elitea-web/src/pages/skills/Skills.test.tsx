@@ -39,7 +39,7 @@ describe('Skills page', () => {
     const user = userEvent.setup();
     const { router } = renderSkillsRoute(<Skills />);
     expect(await screen.findByText('Reviewer')).toBeInTheDocument();
-    await user.click(screen.getByTestId('skill-list-row'));
+    await user.click(screen.getByTestId('entity-card'));
     await waitFor(() => expect(router.state.location.pathname).toBe('/skills/all/skill-1'));
   });
 

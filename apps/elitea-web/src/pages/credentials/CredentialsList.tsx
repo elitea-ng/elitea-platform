@@ -25,17 +25,14 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 
 import Box from '@mui/material/Box';
-import List from '@mui/material/List';
-import ListItem from '@mui/material/ListItem';
-import ListItemButton from '@mui/material/ListItemButton';
-import ListItemText from '@mui/material/ListItemText';
 import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
-import { credentialDisplayName, credentialScope, sortCredentialsPinnedFirst } from '@/entities/credential';
+import { credentialDisplayName, credentialScope, providerDisplayName, sortCredentialsPinnedFirst } from '@/entities/credential';
 import { EliteaApiError } from '@/shared/api/generated/mutator';
 import { t } from '@/shared/i18n';
 import { BaseBtn } from '@/shared/ui/BaseBtn';
+import { EntityCardList, EntityEmptyState, entityTypeIcon, type EntityListItem } from '@/shared/ui/EntityCardList';
 import { SimpleSearchBar } from '@/shared/ui/SimpleSearchBar';
 
 import { generateCredentialTagList, normalizeCredentialPage, useConfigurationsList, useCredentialValidation } from '@/features/credentials';
@@ -61,23 +58,25 @@ interface ListStatusProps {
   readonly isLoading: boolean;
   readonly isError: boolean;
   readonly error: unknown;
-  readonly rowCount: number;
-  readonly isSearching: boolean;
 }
 
 /**
- * The one line the list shows when it has no rows to show.
+ * The one line the list shows while it is loading, or when the request
+ * failed.
  *
  * A FAILED LIST IS NOT AN EMPTY LIST. Without the error branch a 403 or a 500
  * fell through to "You have no credentials.". The screen told the user their
  * project was empty when the request never returned a list at all. Observed on
  * a live deployment: the credentials screen read as empty while
  * GET /api/v2/configurations/configurations/1 answered 403 on every attempt.
+ * The genuinely-empty case is now the grid's own illustrated empty state
+ * (`EntityEmptyState`), which is why this component no longer has a
+ * zero-rows branch at all.
  *
  * Split out of `CredentialsList` so the page component stays inside the §3.5
  * complexity budget.
  */
-function ListStatus({ isLoading, isError, error, rowCount, isSearching }: ListStatusProps): ReactNode {
+function ListStatus({ isLoading, isError, error }: ListStatusProps): ReactNode {
   if (isLoading) {
     return <Typography variant="bodyMedium">{t('credentials.list.loading', 'Loading…')}</Typography>;
   }
@@ -94,12 +93,7 @@ function ListStatus({ isLoading, isError, error, rowCount, isSearching }: ListSt
       </Typography>
     );
   }
-  if (rowCount > 0) return null;
-  return (
-    <Typography variant="bodyMedium">
-      {isSearching ? t('credentials.list.nothingFound', 'Nothing found.') : t('credentials.list.empty', 'You have no credentials.')}
-    </Typography>
-  );
+  return null;
 }
 
 export function CredentialsList({ projectId, onSelectCredential, onCreateNew }: CredentialsListProps): ReactNode {
@@ -131,6 +125,27 @@ export function CredentialsList({ projectId, onSelectCredential, onCreateNew }: 
 
   const tagList = useMemo(() => generateCredentialTagList(allRows), [allRows]);
 
+  // The card's bottom row carries the credential's TYPE where an agent card
+  // carries its tags — the shape the production reference shows ("S3 api
+  // credentials" next to the owner avatar). `credentialScope`/the connection
+  // status stay on the row's tooltip rather than the card face, which the
+  // baseline's own `Card.jsx` has no slot for.
+  const cards = useMemo<EntityListItem[]>(
+    () =>
+      allRows.map((row) => ({
+        id: row.id,
+        name: credentialDisplayName(row),
+        description: `${credentialScope(row)} · ${getCredentialStatus(row.id)}`,
+        icon: entityTypeIcon('credential'),
+        tags: [{ id: row.type, name: providerDisplayName(row.type) }],
+        typeLabel: providerDisplayName(row.type),
+        onClick: () => {
+          onSelectCredential(row.id);
+        },
+      })),
+    [allRows, getCredentialStatus, onSelectCredential],
+  );
+
   useEffect(() => {
     if (allRows.length === 0) return;
     void batchValidateCredentials(
@@ -158,39 +173,35 @@ export function CredentialsList({ projectId, onSelectCredential, onCreateNew }: 
             variant="contained"
             color="primary"
             onClick={onCreateNew}
+            sx={createBtnSx}
           >
             {t('credentials.list.create', 'New credential')}
           </BaseBtn>
         </Box>
-        <ListStatus
-          isLoading={list.isLoading}
-          isError={list.isError}
-          error={list.error}
-          rowCount={allRows.length}
-          isSearching={query !== ''}
-        />
-        {allRows.length > 0 && (
-          <List>
-            {allRows.map((row) => (
-              // <ListItem disablePadding> wrapper: see ApplicationListPanel for
-              // why `component="li"` on the button is not the fix.
-              <ListItem
-                key={row.id}
-                disablePadding
-              >
-                <ListItemButton
-                  onClick={() => {
-                    onSelectCredential(row.id);
-                  }}
-                >
-                  <ListItemText
-                    primary={credentialDisplayName(row)}
-                    secondary={`${row.type} · ${credentialScope(row)} · ${getCredentialStatus(row.id)}`}
-                  />
-                </ListItemButton>
-              </ListItem>
-            ))}
-          </List>
+        {(list.isLoading || list.isError) && (
+          <ListStatus
+            isLoading={list.isLoading}
+            isError={list.isError}
+            error={list.error}
+          />
+        )}
+        {!list.isLoading && !list.isError && (
+          <EntityCardList
+            items={cards}
+            railVisible={false}
+            emptyState={
+              <EntityEmptyState
+                art="credentials"
+                title={query === '' ? t('credentials.list.empty', 'No credentials yet') : t('credentials.list.nothingFound', 'Nothing found.')}
+                description={t(
+                  'credentials.list.emptyDescription',
+                  'Create your first credential to get started. Credentials hold the provider keys your agents, toolkits and models authenticate with.',
+                )}
+                onCreateClick={onCreateNew}
+                createLabel={t('credentials.list.create', 'New credential')}
+              />
+            }
+          />
         )}
         {hasMore && (
           <BaseBtn
@@ -219,3 +230,5 @@ const containerSx: SxProps<Theme> = (theme: Theme) => ({ display: 'flex', gap: t
 const mainColumnSx: SxProps<Theme> = (theme: Theme) => ({ flex: 1, display: 'flex', flexDirection: 'column', gap: theme.spacing(2) });
 const sideColumnSx: SxProps<Theme> = { width: '18.75rem', flexShrink: 0 };
 const toolbarSx: SxProps<Theme> = (theme: Theme) => ({ display: 'flex', alignItems: 'center', gap: theme.spacing(2) });
+/** Without this the pill is a flex item that shrinks: the label wrapped onto two lines and clipped its own capsule. */
+const createBtnSx: SxProps<Theme> = { flexShrink: 0, whiteSpace: 'nowrap' };

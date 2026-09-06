@@ -18,7 +18,7 @@ import { RouteError, RoutePending } from '../../-ui/RouteStatus';
 import { pickParams } from '../../-search/params';
 
 export const Route = createFileRoute('/_shell/skills/$tab')({
-  validateSearch: pickParams('newSkillId', 'return_url', 'source_application_id'),
+  validateSearch: pickParams('newSkillId', 'return_url', 'source_application_id', 'view'),
   beforeLoad: skillsGuardBeforeLoad,
   pendingComponent: RoutePending,
   errorComponent: RouteError,

@@ -50,7 +50,7 @@ function CredentialsRoute() {
 }
 
 export const Route = createFileRoute('/_shell/credentials/$tab')({
-  validateSearch: pickParams('forceCustom', 'from', 'prefill_id', 'prefill_name', 'section'),
+  validateSearch: pickParams('forceCustom', 'from', 'prefill_id', 'prefill_name', 'section', 'view'),
   pendingComponent: RoutePending,
   errorComponent: RouteError,
   component: CredentialsRoute,

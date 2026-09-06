@@ -1,8 +1,6 @@
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 
 import Box from '@mui/material/Box';
-import ButtonBase from '@mui/material/ButtonBase';
-import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
 import { useNavigate } from '@tanstack/react-router';
@@ -17,6 +15,7 @@ import { getConfig } from '@/shared/config';
 import { t } from '@/shared/i18n';
 import { BaseTab } from '@/shared/ui/BaseTab';
 import { BaseTabs } from '@/shared/ui/BaseTabs';
+import { EntityCard, entityTypeIcon } from '@/shared/ui/EntityCardList';
 
 import { useSelectedProjectId } from './lib/useSelectedProjectId';
 import { ToolkitsAuthorCard } from './ui/ToolkitsAuthorCard';
@@ -25,23 +24,8 @@ const PAGE_SIZE = 20;
 
 const pageSx: SxProps<Theme> = { height: '100%', display: 'flex', flexDirection: 'column' };
 const tabBarSx: SxProps<Theme> = { flexShrink: 0, borderBottom: 1, borderColor: 'divider', padding: '0 1.5rem' };
-const tabPanelSx: SxProps<Theme> = { flex: 1, minHeight: 0, overflowY: 'auto', padding: '1.5rem' };
+const tabPanelSx: SxProps<Theme> = { flex: 1, minHeight: 0, overflowY: 'auto' };
 const listSx: SxProps<Theme> = { height: '100%' };
-
-const cardSx: SxProps<Theme> = (theme: Theme) => ({
-  display: 'flex',
-  flexDirection: 'column',
-  alignItems: 'flex-start',
-  gap: theme.spacing(0.5),
-  width: '100%',
-  padding: theme.spacing(2),
-  border: `1px solid ${theme.vars.palette.border.lines}`,
-  borderRadius: theme.vars.shape.radiusMd,
-  textAlign: 'left',
-  '&:hover': { backgroundColor: theme.vars.palette.action.hover },
-});
-
-const cardTypeSx: SxProps<Theme> = { color: 'text.secondary' };
 
 export interface ToolkitsProps {
   readonly isMCP?: boolean;
@@ -254,30 +238,31 @@ function useToolkitsListData(projectId: string | undefined, isMCP: boolean, isPu
 
 interface ToolkitCardProps {
   readonly item: ToolkitListItem;
+  readonly isMCP: boolean;
   readonly onOpen: () => void;
 }
 
-function ToolkitCard({ item, onOpen }: ToolkitCardProps): ReactNode {
+/**
+ * One toolkit/MCP card. The bespoke `ButtonBase` tile this used to render
+ * is replaced by the shared `EntityCard` every other list page now uses, so
+ * a toolkit card carries the same round gradient icon tile, `headingSmall`
+ * title and divider-separated bottom row as an agent or pipeline card. The
+ * toolkit's `type` rides in the bottom row's chip slot (and the table
+ * view's "Type" column), which is where the production reference shows it.
+ */
+function ToolkitCard({ item, isMCP, onOpen }: ToolkitCardProps): ReactNode {
   return (
-    <ButtonBase
+    <EntityCard
       data-testid="toolkit-card"
-      onClick={onOpen}
-      disableRipple
-      sx={cardSx}
-    >
-      <Typography
-        variant="bodyMedium"
-        noWrap
-      >
-        {item.name}
-      </Typography>
-      <Typography
-        variant="bodySmall"
-        sx={cardTypeSx}
-      >
-        {item.type}
-      </Typography>
-    </ButtonBase>
+      item={{
+        id: item.id,
+        name: item.name,
+        icon: entityTypeIcon(isMCP ? 'mcp' : 'toolkit'),
+        tags: [{ id: item.type, name: item.type }],
+        typeLabel: item.type,
+        onClick: onOpen,
+      }}
+    />
   );
 }
 
@@ -371,6 +356,7 @@ export function Toolkits({ isMCP = false }: ToolkitsProps): ReactNode {
               <ToolkitCard
                 key={item.id}
                 item={item}
+                isMCP={isMCP}
                 onOpen={() => handleOpen(item.id)}
               />
             )}
