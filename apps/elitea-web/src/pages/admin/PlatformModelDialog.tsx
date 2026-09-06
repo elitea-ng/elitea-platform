@@ -44,6 +44,28 @@ import {
 /** The sentinel for "this model names no credential". */
 const NO_CREDENTIAL = '';
 
+/**
+ * The Kind a NEW platform model opens on.
+ *
+ * The dialog took `modelTypes[0]`, and `model_types` arrives in the server's
+ * own order, not in an order this screen chose. On this deployment the first
+ * entry is `asr_model`, so "Add a platform model" opened on "Speech to text" —
+ * an operator adding a chat model had to notice the wrong Kind and change it,
+ * and one who did not published a model the gateway dispatches to the ASR
+ * section. Chat is what almost every platform model is.
+ *
+ * The server still decides what is OFFERED: this default is used only when the
+ * deployment actually dispatches it, and a deployment that does not falls back
+ * to the first type it does.
+ */
+const DEFAULT_MODEL_TYPE = 'llm_model';
+
+/** The Kind to open on: chat when this deployment dispatches it, else whatever it does. */
+function defaultModelType(modelTypes: readonly string[]): string {
+  if (modelTypes.includes(DEFAULT_MODEL_TYPE)) return DEFAULT_MODEL_TYPE;
+  return modelTypes[0] ?? DEFAULT_MODEL_TYPE;
+}
+
 export interface PlatformModelDialogProps {
   readonly open: boolean;
   readonly editing: PlatformModel | undefined;
@@ -68,7 +90,7 @@ export function PlatformModelDialog({
   onSubmit,
 }: PlatformModelDialogProps): ReactNode {
   const [name, setName] = useState('');
-  const [type, setType] = useState('llm_model');
+  const [type, setType] = useState(DEFAULT_MODEL_TYPE);
   const [modelName, setModelName] = useState('');
   const [credential, setCredential] = useState<string>(NO_CREDENTIAL);
 
@@ -77,7 +99,7 @@ export function PlatformModelDialog({
   useEffect(() => {
     if (!open) return;
     setName(editing?.elitea_title ?? '');
-    setType(editing?.type ?? modelTypes[0] ?? 'llm_model');
+    setType(editing?.type ?? defaultModelType(modelTypes));
     setModelName(editing?.model_name ?? '');
     setCredential(editing?.credential_name ?? NO_CREDENTIAL);
     // `modelTypes` is read rather than depended on, so a refetch cannot reset a

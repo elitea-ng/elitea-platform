@@ -16,6 +16,7 @@ import {
   type ApplicationCreationInput,
 } from '@/entities/application-form';
 import { CreateAgentForm } from '@/features/agents';
+import { PIPELINE_STARTER_TEMPLATE } from '@/shared/lib/pipelineStarterTemplate';
 import { areAgentLlmSettingsEqual, type AgentLlmSettings } from '@/shared/api/agentLlmSettings';
 import { t } from '@/shared/i18n';
 import { AgentModelSettings } from '@/widgets/agent-model-settings';
@@ -64,6 +65,31 @@ function areExtraFieldsEqual(a: CreatePipelineFormExtraFields, b: CreatePipeline
     const other = b.variables[index];
     return other !== undefined && variable.name === other.name && variable.value === other.value;
   });
+}
+
+/**
+ * The YAML graph a new pipeline is STORED with.
+ *
+ * `instructions` IS the pipeline's graph: `usePipelineVersionSync` parses the
+ * saved string and seeds both the YAML pane and the canvas from it, and
+ * `pipeline_settings` only supplies node geometry on top. An empty string
+ * therefore stored a pipeline with no graph, and Create pipeline -> Save
+ * opened the editor on a blank document with `End` alone on the canvas. It was
+ * also unrunnable: the compiler refuses an empty document, so the first chat
+ * turn failed in another process with no signal on this screen.
+ *
+ * The fallback fires only on a document the user did not author. Anything
+ * typed on this page wins, so this can never overwrite real work — and the
+ * seed stays out of the create FORM's own state, which is why the Instructions
+ * control still opens empty and the unsaved-changes guard (#133) still reads
+ * a fresh page as clean.
+ *
+ * `usePipelineEditorCreate` applies the same template to the chat surface's
+ * create path. This page is the other one, and it is the one the UI actually
+ * takes.
+ */
+function pipelineInstructions(authored: string): string {
+  return authored.trim() === '' ? PIPELINE_STARTER_TEMPLATE : authored;
 }
 
 const pageSx: SxProps<Theme> = {
@@ -258,7 +284,9 @@ export function CreatePipeline(): ReactNode {
          */
         version: {
           ...draftDefaults.versionDetails,
-          instructions: extraFields.instructions,
+          // Never the raw field: a blank one stores a pipeline no runtime can
+          // run and no editor can show. See `pipelineInstructions`.
+          instructions: pipelineInstructions(extraFields.instructions),
           // The same key the agents twin was missing: held in `extraFields`,
           // echoed back into the form, and absent from this body — so a
           // pipeline's welcome message was dropped on create with a 201 back.

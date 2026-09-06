@@ -6,7 +6,7 @@ import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/gen
 import { server } from '@/test/setup';
 
 import { renderHookWithProviders } from '../__tests__/testUtils';
-import { PIPELINE_STARTER_TEMPLATE } from './pipelineStarterTemplate';
+import { PIPELINE_STARTER_TEMPLATE } from '@/shared/lib/pipelineStarterTemplate';
 import { usePipelineEditorCreate } from './usePipelineEditorCreate';
 
 beforeEach(() => {

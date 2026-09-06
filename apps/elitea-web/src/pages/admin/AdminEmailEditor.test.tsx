@@ -226,4 +226,63 @@ describe('AdminEmailEditor', () => {
       expect(posts[0]?.body).toEqual({ to: 'a@b.example' });
     });
   });
+
+  /*
+   * DEFECT this pins. The password tag read `sources.password`, and the
+   * server's `sources` map describes the SETTINGS document only — the password
+   * is not part of that document, so there is no `password` member in it. The
+   * live API answers `password_set: true` with no such key, so after an
+   * operator saved a password the tag still read "Not set" beside a control
+   * whose placeholder said one was stored and a "Remove the stored password"
+   * button that only appears when one is: three controls on one row,
+   * contradicting each other.
+   *
+   * `STATE` above carries `sources.password`, which is why every existing test
+   * here was green. These serve what the server really sends.
+   */
+  describe('the password source tag', () => {
+    /** `STATE` minus the `sources.password` key the API does not send. */
+    function stateWithoutPasswordSource(overrides: Record<string, unknown> = {}) {
+      const { password: _password, ...sources } = STATE.sources;
+      return { ...STATE, sources, ...overrides };
+    }
+
+    it('reads "Set here" from password_set when sources carries no password key', async () => {
+      useEmailHandlers({ state: stateWithoutPasswordSource({ password_source: 'unset' }) });
+      renderAdminRoute(<AdminEmailEditor />);
+
+      expect(await screen.findByTestId('admin-email-source-password')).toHaveTextContent('Set here');
+      // The row's other two controls, which always agreed with each other and
+      // never with the tag.
+      expect(screen.getByTestId('admin-email-password')).toHaveAttribute(
+        'placeholder',
+        'A password is stored. Type to replace it.',
+      );
+      expect(screen.getByText('Remove the stored password')).toBeInTheDocument();
+    });
+
+    it('reads "Not set" when no password is in force', async () => {
+      useEmailHandlers({
+        state: stateWithoutPasswordSource({ password_set: false, password_source: 'unset' }),
+      });
+      renderAdminRoute(<AdminEmailEditor />);
+
+      expect(await screen.findByTestId('admin-email-source-password')).toHaveTextContent('Not set');
+    });
+
+    /* `password_set` is a fallback, never a claim that this page set it: a
+       password the deployment supplies through SMTP_PASSWORD still belongs to
+       the environment, and telling an operator they set it here would send
+       them looking for a row that does not exist. */
+    it('keeps an environment password tagged as the environment\'s', async () => {
+      useEmailHandlers({
+        state: stateWithoutPasswordSource({ password_set: true, password_source: 'environment' }),
+      });
+      renderAdminRoute(<AdminEmailEditor />);
+
+      expect(await screen.findByTestId('admin-email-source-password')).toHaveTextContent(
+        'From the environment',
+      );
+    });
+  });
 });

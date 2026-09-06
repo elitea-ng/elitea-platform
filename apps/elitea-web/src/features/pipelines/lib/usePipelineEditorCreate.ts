@@ -6,7 +6,7 @@ import type { AgentLlmSettings } from '@/shared/api/agentLlmSettings';
 import type { ApplicationCreatedResponse } from '@/shared/api/generated/model';
 
 import { setFieldValueAtPath } from './pipelineFieldChange';
-import { PIPELINE_STARTER_TEMPLATE } from './pipelineStarterTemplate';
+import { PIPELINE_STARTER_TEMPLATE } from '@/shared/lib/pipelineStarterTemplate';
 import type { PipelineDraftValues, PipelineFieldChange } from '../model/types';
 
 /**

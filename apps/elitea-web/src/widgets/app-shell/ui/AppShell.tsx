@@ -19,6 +19,7 @@ import {
 } from '@/widgets/sidebar';
 
 import { useSelectedProject } from '../model/useSelectedProject.hooks';
+import { useSettleShellAfterProvisioning } from '../model/useSettleShellAfterProvisioning';
 import { MaintenanceSplash } from './MaintenanceSplash';
 import { NavBlockerDialog } from './NavBlockerDialog';
 import { PlatformBanner } from './PlatformBanner';
@@ -130,12 +131,27 @@ export function AppShell({ children }: AppShellProps): ReactNode {
   const personalProjectId = personalProjectIdOf(authorQuery.data);
   const { project, selectProject } = useSelectedProject();
   const { projects, isLoading: projectsLoading } = useProjectOptions(publicProjectId, personalProjectId);
-  const permissions = usePermissionSet(project?.id);
+  /* Read once. Three call sites needed it, and three separate optional chains
+     put this function over the §3.5 complexity budget on their own. */
+  const selectedProjectId = project?.id;
+  const permissions = usePermissionSet(selectedProjectId);
   const collapsed = useSidebarCollapsedStore((state) => state.collapsed);
   const pathname = useRouterState({ select: (routerState) => routerState.location.pathname });
   const { banner, maintenance } = usePlatformAnnouncements();
   const isOnboardingPage = pathname === ONBOARDING_PATHNAME;
   const hideSidebar = isOnboardingPage && !personalProjectId;
+
+  // First login: both lists above were answered before provisioning created
+  // the personal project, and nothing re-asked. See the hook's own header —
+  // it is what keeps the shell from opening on "Project: No projects" and a
+  // nav missing every permission-gated row until the user reloads the page.
+  useSettleShellAfterProvisioning({
+    personalProjectId,
+    publicProjectId,
+    projects,
+    projectsLoading,
+    selectedProjectId,
+  });
 
   // Old app: `settings.js`'s `authorDetails.matchFulfilled` extraReducer
   // defaults the selected project to the CALLER'S OWN personal/private
@@ -195,7 +211,7 @@ export function AppShell({ children }: AppShellProps): ReactNode {
         <Sidebar
           permissions={permissions}
           projects={projects}
-          selectedProjectId={project?.id}
+          selectedProjectId={selectedProjectId}
           onSelectProject={selectProject}
         />
       )}
