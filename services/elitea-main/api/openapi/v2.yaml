@@ -4549,6 +4549,63 @@ components:
         (asc|desc) drive ORDER BY (repos/skills.go List — sort_by is
         whitelisted, never interpolated raw).
 
+    ApplicationSkillAttachment:
+      type: object
+      required: [name, description, skill_id, version_name, version_missing]
+      properties:
+        name: { type: string }
+        description: { type: string }
+        skill_id: { type: integer }
+        version_id:
+          type: integer
+          nullable: true
+          description: >
+            NULL when the attachment names a version the skill no longer has.
+            Read it together with `version_missing`.
+        version_name: { type: string }
+        version_missing:
+          type: boolean
+          description: >
+            True when entity_skill_mapping points at a version that is gone. The
+            row is still listed, because hiding it would report the agent as
+            having no skill at all.
+        icon_meta:
+          allOf: [{ $ref: '#/components/schemas/ProjectIconMeta' }]
+      description: >
+        NOTE(W2): internal/api/v2/applicationskills/handler.go:45-51,
+        CurrentApplicationSkill.
+
+    ApplicationSkillsList:
+      allOf:
+        - $ref: '#/components/schemas/SkillsList'
+        - type: object
+          properties:
+            skills:
+              type: array
+              items: { $ref: '#/components/schemas/ApplicationSkillAttachment' }
+              description: >
+                The attachment view of the SAME rows `items` carries. The two
+                halves are built from one row set and cannot disagree.
+            max_skills:
+              type: integer
+              description: How many skills one agent version may attach.
+      description: >
+        NOTE(issue 621): ONE body answers two clients on this path, and the
+        deployment decides which half is real.
+
+        `items`, `total`, `page`, `page_size` and `total_pages` are the
+        published contract, which apps/elitea-web reads through
+        shared/api/unwrap.ts. `skills` and `max_skills` are the shape
+        apps/elitea-ui reads. The reviewed route
+        (internal/api/v2/applicationskills, currentApplicationSkillsResponse)
+        has emitted all seven keys since issue 395 — before it carried the
+        first five, turning ELITEA_APPLICATION_SKILLS_ENABLED on gave the web
+        client a body with no `items` key, which unwrapList reports as an
+        unrecognised shape and renders as "no skills".
+
+        The compatibility handler this route replaces emits the five keys only.
+        A client reads the union.
+
     SkillCreateRequest:
       type: object
       properties:
@@ -11650,10 +11707,16 @@ paths:
 
         NOTE(#367): this route used to point at the project skills List
         handler, which never read app_version_id and answered with every
-        skill in the project, at 200. The envelope is unchanged — it is
-        still SkillsList — so a client sees the same shape and different,
-        correct contents. A malformed app_version_id is now refused with
-        400 instead of being coerced.
+        skill in the project, at 200. The five published keys are unchanged —
+        a client sees the same shape and different, correct contents. A
+        malformed app_version_id is now refused with 400 instead of being
+        coerced.
+
+        NOTE(issue 621): the response schema is ApplicationSkillsList, not
+        SkillsList. It is SkillsList plus the `skills` and `max_skills` keys
+        the reviewed handler also emits (issue 395). SkillsList itself stays
+        as it is, because the project-skills List operation shares it and
+        emits neither key.
       tags: [skills]
       responses:
         '200':
@@ -11661,7 +11724,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SkillsList'
+                $ref: '#/components/schemas/ApplicationSkillsList'
         '400': { $ref: '#/components/responses/400' }
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }

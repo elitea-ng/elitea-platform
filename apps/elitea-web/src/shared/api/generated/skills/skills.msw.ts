@@ -45,6 +45,7 @@ import { HttpResponse, delay, http } from "msw";
 import type { RequestHandlerOptions } from "msw";
 
 import type {
+  ApplicationSkillsList,
   AttachPublicSkill200,
   ListAgentsWithSkill200,
   ListPublicSkills200,
@@ -58,78 +59,122 @@ import type {
   UnpublishSkill200,
 } from "../model";
 
-export const getListApplicationSkillsResponseMock = (
-  overrideResponse: Partial<Extract<SkillsList, object>> = {},
-): SkillsList => ({
-  items: Array.from(
-    { length: faker.number.int({ min: 1, max: 10 }) },
-    (_, i) => i + 1,
-  ).map(() => ({
-    id: faker.string.alpha({ length: { min: 10, max: 20 } }),
-    project_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
-    name: faker.string.alpha({ length: { min: 10, max: 20 } }),
-    description: faker.helpers.arrayElement([
-      faker.string.alpha({ length: { min: 10, max: 20 } }),
-      undefined,
-    ]),
-    type: faker.string.alpha({ length: { min: 10, max: 20 } }),
-    config: faker.helpers.arrayElement([{}, undefined]),
-    is_default: faker.datatype.boolean(),
-    instructions: faker.helpers.arrayElement([
-      faker.string.alpha({ length: { min: 10, max: 20 } }),
-      undefined,
-    ]),
-    tags: faker.helpers.arrayElement([
-      Array.from(
-        { length: faker.number.int({ min: 1, max: 10 }) },
-        (_, i) => i + 1,
-      ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
-      undefined,
-    ]),
-    versions: faker.helpers.arrayElement([
-      Array.from(
+export const getListApplicationSkillsResponseMock =
+  (): ApplicationSkillsList => ({
+    ...{
+      items: Array.from(
         { length: faker.number.int({ min: 1, max: 10 }) },
         (_, i) => i + 1,
       ).map(() => ({
-        id: faker.helpers.arrayElement([
+        id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        project_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        description: faker.helpers.arrayElement([
           faker.string.alpha({ length: { min: 10, max: 20 } }),
           undefined,
         ]),
-        name: faker.string.alpha({ length: { min: 10, max: 20 } }),
-        instructions: faker.string.alpha({ length: { min: 10, max: 20 } }),
-        tags: Array.from(
-          { length: faker.number.int({ min: 1, max: 10 }) },
-          (_, i) => i + 1,
-        ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
-      })),
-      undefined,
-    ]),
-    version_details: faker.helpers.arrayElement([
-      {
-        ...{
-          id: faker.helpers.arrayElement([
-            faker.string.alpha({ length: { min: 10, max: 20 } }),
-            undefined,
-          ]),
-          name: faker.string.alpha({ length: { min: 10, max: 20 } }),
-          instructions: faker.string.alpha({ length: { min: 10, max: 20 } }),
-          tags: Array.from(
+        type: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        config: faker.helpers.arrayElement([{}, undefined]),
+        is_default: faker.datatype.boolean(),
+        instructions: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          undefined,
+        ]),
+        tags: faker.helpers.arrayElement([
+          Array.from(
             { length: faker.number.int({ min: 1, max: 10 }) },
             (_, i) => i + 1,
           ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
-        },
-      },
-      undefined,
-    ]),
-    created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
-    updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
-  })),
-  total: faker.number.int(),
-  page: faker.number.int(),
-  page_size: faker.number.int(),
-  total_pages: faker.number.int(),
-  ...overrideResponse,
-});
+          undefined,
+        ]),
+        versions: faker.helpers.arrayElement([
+          Array.from(
+            { length: faker.number.int({ min: 1, max: 10 }) },
+            (_, i) => i + 1,
+          ).map(() => ({
+            id: faker.helpers.arrayElement([
+              faker.string.alpha({ length: { min: 10, max: 20 } }),
+              undefined,
+            ]),
+            name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+            instructions: faker.string.alpha({ length: { min: 10, max: 20 } }),
+            tags: Array.from(
+              { length: faker.number.int({ min: 1, max: 10 }) },
+              (_, i) => i + 1,
+            ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+          })),
+          undefined,
+        ]),
+        version_details: faker.helpers.arrayElement([
+          {
+            ...{
+              id: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 20 } }),
+                undefined,
+              ]),
+              name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+              instructions: faker.string.alpha({
+                length: { min: 10, max: 20 },
+              }),
+              tags: Array.from(
+                { length: faker.number.int({ min: 1, max: 10 }) },
+                (_, i) => i + 1,
+              ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+            },
+          },
+          undefined,
+        ]),
+        created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+        updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+      })),
+      total: faker.number.int(),
+      page: faker.number.int(),
+      page_size: faker.number.int(),
+      total_pages: faker.number.int(),
+    },
+    ...{
+      skills: faker.helpers.arrayElement([
+        Array.from(
+          { length: faker.number.int({ min: 1, max: 10 }) },
+          (_, i) => i + 1,
+        ).map(() => ({
+          name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+          description: faker.string.alpha({ length: { min: 10, max: 20 } }),
+          skill_id: faker.number.int(),
+          version_id: faker.helpers.arrayElement([
+            faker.helpers.arrayElement([faker.number.int(), null]),
+            undefined,
+          ]),
+          version_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+          version_missing: faker.datatype.boolean(),
+          icon_meta: faker.helpers.arrayElement([
+            faker.helpers.arrayElement([
+              {
+                name: faker.helpers.arrayElement([
+                  faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 20 } }),
+                    null,
+                  ]),
+                  undefined,
+                ]),
+                url: faker.helpers.arrayElement([
+                  faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 20 } }),
+                    null,
+                  ]),
+                  undefined,
+                ]),
+              },
+              null,
+            ]),
+            undefined,
+          ]),
+        })),
+        undefined,
+      ]),
+      max_skills: faker.helpers.arrayElement([faker.number.int(), undefined]),
+    },
+  });
 
 export const getListSkillsResponseMock = (
   overrideResponse: Partial<Extract<SkillsList, object>> = {},
@@ -836,10 +881,10 @@ export const getListAgentsWithSkillResponseMock = (
 
 export const getListApplicationSkillsMockHandler = (
   overrideResponse?:
-    | SkillsList
+    | ApplicationSkillsList
     | ((
         info: Parameters<Parameters<typeof http.get>[1]>[0],
-      ) => Promise<SkillsList> | SkillsList),
+      ) => Promise<ApplicationSkillsList> | ApplicationSkillsList),
   options?: RequestHandlerOptions,
 ) => {
   return http.get(

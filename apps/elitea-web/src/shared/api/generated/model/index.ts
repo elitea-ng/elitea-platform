@@ -69,6 +69,8 @@ export * from "./applicationList.zod";
 export * from "./applicationRelationList.zod";
 export * from "./applicationRelationUpdateRequest.zod";
 export * from "./applicationRelationUpdatedResponse.zod";
+export * from "./applicationSkillAttachment.zod";
+export * from "./applicationSkillsList.zod";
 export * from "./applicationUpdateRequest.zod";
 export * from "./applicationUpdatedResponse.zod";
 export * from "./applicationVersionDetail.zod";
