@@ -74,17 +74,25 @@ package middleware
 //
 // ── DECISION 4: RETENTION ─────────────────────────────────────────────────
 //
-// This adds UNBOUNDED GROWTH, and no sweeper is built here. What would bound
-// it: a retention window enforced by a periodic
-// `DELETE FROM centry.audit_events WHERE timestamp < now() - $window`, which
-// belongs to elitea-scheduler (it already runs a per-minute loop over
-// centry.schedule) rather than to a request path, plus monthly RANGE
-// partitioning on `timestamp` if the delete ever becomes too slow to run
-// online. Sized against the policy above — administrative and security-relevant
+// This adds growth that this middleware does not bound, and it is bounded
+// elsewhere — issue #619 built the sweeper this paragraph used to ask for.
+// `services/elitea-scheduler/internal/auditretention` runs bounded, batched
+// `DELETE FROM centry.audit_events WHERE timestamp < $cutoff` passes on a timer,
+// with the window set by `AUDIT_RETENTION_DAYS` (365 days by default) and the
+// sweep suppressed while the platform is in a maintenance window.
+//
+// Nothing on this path changed, and nothing on it should: the bound belongs to
+// a daemon, not to a request. Two properties of the sweeper matter to a reader
+// of this file. It only DELETES — the middleware remains the single writer of
+// what an audit row means — and it deletes by `timestamp` alone, so no
+// annotation, entity or status code here can put a row outside its reach.
+//
+// Sized against the policy above — administrative and security-relevant
 // mutations plus refusals, not general traffic — the arrival rate is single
-// digits per second at platform scale, so this is a quarters-to-years problem,
-// not a weeks one. It is called out here so it is a known debt and not a
-// surprise.
+// digits per second at platform scale. If the sweep ever cannot keep up (it
+// logs at WARN when a pass ends at its batch ceiling), the next step is monthly
+// RANGE partitioning on `timestamp`, which is deliberately not done
+// pre-emptively.
 //
 // ── PERFORMANCE ───────────────────────────────────────────────────────────
 //

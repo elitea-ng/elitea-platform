@@ -32,6 +32,25 @@ type Config struct {
 	BudgetWriteBackBatchSize  int
 	BudgetWriteBackAckWait    time.Duration
 	BudgetWriteBackMaxDeliver int
+
+	// Audit-event retention sweep (issue #619). `centry.audit_events` got its
+	// first product writer in issue #615 and no bound on its growth, so the
+	// table grows for the life of the deployment.
+	//
+	// AuditRetentionDays is the ONE knob an operator normally sets, and it is
+	// also the off switch: a value of 0 or less disables the sweep, which
+	// internal/auditretention reports at WARN so that "this table is unbounded"
+	// is a statement in the log rather than an absence in it. There is no
+	// separate AUDIT_RETENTION_ENABLED, because two settings that must agree
+	// are two settings that can disagree.
+	//
+	// The other three bound ONE pass so the sweep cannot become the heaviest
+	// statement on the database. See internal/auditretention for what each one
+	// does to a pass.
+	AuditRetentionDays       int
+	AuditRetentionInterval   time.Duration
+	AuditRetentionBatchSize  int
+	AuditRetentionMaxBatches int
 }
 
 // FromEnv reads configuration from environment variables.
@@ -55,6 +74,24 @@ func FromEnv() Config {
 		BudgetWriteBackBatchSize:  intEnv("BUDGET_WRITEBACK_BATCH_SIZE", 500),
 		BudgetWriteBackAckWait:    durationEnv("BUDGET_WRITEBACK_ACK_WAIT", 30*time.Second),
 		BudgetWriteBackMaxDeliver: intEnv("BUDGET_WRITEBACK_MAX_DELIVER", 10),
+
+		// 365 days, and ON by default.
+		//
+		// ON, because a retention sweeper that ships disabled is a retention
+		// sweeper that does not exist: this repository has shipped flags no
+		// deployment sets more than once (issues #394 and #395), and the table
+		// this one bounds grows in every deployment that has the audit
+		// middleware — which is all of them.
+		//
+		// 365 days, because the window has to be longer than the longest
+		// question an operator asks of an audit trail, and "what changed a year
+		// ago" is that question. A shorter default would quietly destroy the
+		// evidence the trail exists to hold, on the first upgrade, in every
+		// deployment that did not read the release note.
+		AuditRetentionDays:       intEnv("AUDIT_RETENTION_DAYS", 365),
+		AuditRetentionInterval:   durationEnv("AUDIT_RETENTION_INTERVAL", time.Hour),
+		AuditRetentionBatchSize:  intEnv("AUDIT_RETENTION_BATCH_SIZE", 1000),
+		AuditRetentionMaxBatches: intEnv("AUDIT_RETENTION_MAX_BATCHES", 50),
 	}
 }
 

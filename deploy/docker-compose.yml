@@ -372,6 +372,16 @@ services:
       RPC_HMAC_KEY: ""
       HTTP_ADDR: ":8081"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
+      # Audit-event retention sweep (issue #619). centry.audit_events gained a
+      # product writer in issue #615 and no bound on its growth; this is the
+      # bound. Same names, meanings and defaults as
+      # deploy/helm/elitea/values.yaml's scheduler.env block — read that block
+      # for why the window is 365 days, why 0 is the off switch, and why a
+      # positive window under 7 days is refused rather than applied.
+      AUDIT_RETENTION_DAYS: "365"
+      AUDIT_RETENTION_INTERVAL: "1h"
+      AUDIT_RETENTION_BATCH_SIZE: "1000"
+      AUDIT_RETENTION_MAX_BATCHES: "50"
     depends_on:
       postgres:
         condition: service_healthy

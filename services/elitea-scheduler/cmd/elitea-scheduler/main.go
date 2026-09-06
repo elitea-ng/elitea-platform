@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/EliteaAI/elitea-platform/libs/go/observability"
+	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/auditretention"
 	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/budgetwriteback"
 	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/config"
 	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/health"
@@ -112,6 +114,40 @@ func main() {
 			slog.Info("starting price-sync worker", "interval", cfg.PriceSyncInterval, "sources", len(sources))
 			go worker.Run(ctx)
 		}
+	}
+
+	// Audit-event retention sweep (issue #619): bounded batched DELETEs that
+	// keep centry.audit_events from growing for the life of the deployment.
+	//
+	// Every outcome of the construction is stated in the log, and that is the
+	// point of the shape below. A sweeper that failed to start silently would
+	// leave the table unbounded and look exactly like one that is running with
+	// nothing to remove.
+	//
+	// sched.MaintenanceActive is the SAME gate the dispatch tick consults, not
+	// a second reading of the switch — see internal/scheduler/maintenance.go.
+	auditSweeper, auditErr := auditretention.New(pool, sched.MaintenanceActive, auditretention.Config{
+		RetentionDays:     cfg.AuditRetentionDays,
+		Interval:          cfg.AuditRetentionInterval,
+		BatchSize:         cfg.AuditRetentionBatchSize,
+		MaxBatchesPerPass: cfg.AuditRetentionMaxBatches,
+	}, logger)
+	switch {
+	case errors.Is(auditErr, auditretention.ErrDisabled):
+		slog.Warn("audit retention sweep is OFF (AUDIT_RETENTION_DAYS<=0); "+
+			"centry.audit_events grows without bound on this deployment",
+			"audit_retention_days", cfg.AuditRetentionDays)
+	case auditErr != nil:
+		// A refused window is a configuration mistake, not a reason to take the
+		// whole daemon down: the schedule poller, price sync and budget
+		// write-back are unrelated to it and an operator needs them running
+		// while they correct the value.
+		slog.Error("audit retention sweep did not start; centry.audit_events grows without bound",
+			"err", auditErr, "audit_retention_days", cfg.AuditRetentionDays)
+	default:
+		slog.Info("starting audit retention sweeper",
+			"window_days", cfg.AuditRetentionDays, "interval", cfg.AuditRetentionInterval)
+		go auditSweeper.Run(ctx)
 	}
 
 	// Budget write-back consumer (design §8.6): durable pull consumer draining
