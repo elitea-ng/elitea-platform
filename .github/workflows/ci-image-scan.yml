@@ -440,6 +440,27 @@ jobs:
               EXTRAS=[storage-postgres]
             expect_type: python-pkg
             blocking: false
+          # The Inventory provider engine (ADR-0023 H4c). Repo ROOT context:
+          # the Containerfile COPYs services/elitea-inventory from there.
+          #
+          # No build_args, exactly as publish.yml releases it. Scanning the
+          # `-engine` build instead would report on a closure nobody publishes,
+          # which is a scan of something that does not ship.
+          #
+          # EXEMPT, and the exemption is INHERITED rather than measured again:
+          # this image is python:3.12.14-slim with the same --only-upgrade of
+          # the three packages Debian trixie has a fix for, so its base
+          # findings are elitea-deepwiki's base findings. That is the same
+          # cause, so it is the same register entry — findings #635,
+          # retirement #636 — and the coverage job holds this field and
+          # .github/image-scan-exempt.txt in step.
+          - name: elitea-inventory
+            context: .
+            dockerfile: ./services/elitea-inventory/Containerfile
+            target: ""
+            build_args: ""
+            expect_type: python-pkg
+            blocking: false
 
     steps:
       - uses: actions/checkout@v7

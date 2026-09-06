@@ -56,3 +56,14 @@ elitea-worker-python
 #   16 and nothing in the image runs perl, so removing it may end this entry
 #   before Debian does
 elitea-deepwiki
+
+# findings #635 — the SAME cause as elitea-deepwiki above, not a second one:
+#   this image is the same python:3.12.14-slim base with the same
+#   --only-upgrade of the three packages Debian trixie has a fix for, so its
+#   HIGH/CRITICAL findings are that base's findings. It is listed separately
+#   because the register is keyed by image and a shared entry would hide which
+#   images are exempt.
+# retirement #636 — the same path ends both: the base bump that fixes them, or
+#   removing perl-base. Re-measure this image at the same time, and delete both
+#   lines together.
+elitea-inventory
