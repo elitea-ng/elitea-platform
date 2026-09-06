@@ -354,7 +354,18 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// white-labeling is net-new, so the legacy catalogue has no string for
 	// it. A new file for 0082's reason — 0060 returns early on any configured
 	// deployment, and migrations are checksum-immutable.
-	require.EqualValues(t, 110, Head(shared))
+	// 111: shared/0111_default_project_roles_and_bootstrap_account.sql, two
+	// repairs to rows the BOOTSTRAP schema hand-writes and nothing else does.
+	// "Default Project" (id 1) got none of the four project roles every
+	// provisioned project gets, so nobody could be made a member of the
+	// shared/AI project and it appeared in no switcher. And the pre-seeded
+	// `dev@elitea.ai` account held `administration|admin` while holding no
+	// identity-provider link: it cannot sign in, but the OIDC path adopts an
+	// existing account BY E-MAIL, so anyone who obtained that address became a
+	// global administrator on first login. The revoke is fenced on the account
+	// still being the untouched seed, so an adopted one keeps its roles. It
+	// grants no permission string, so no grant ledger moves.
+	require.EqualValues(t, 111, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

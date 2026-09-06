@@ -104,8 +104,12 @@ func TestGetAuthorProvisionsTheMissingPersonalProject(t *testing.T) {
 	pool := newPersonalProjectSocialPool(t)
 	userID := seedAuthorUser(t, pool, "stuck-on-onboarding@autotest.local", "Newcomer")
 
+	// A wait long enough that the ensure this request starts can finish inside
+	// it. Production uses three seconds; see WithPersonalProjectWait for why a
+	// test must not.
 	routes := handler.NewHandler(pool,
 		handler.WithPersonalProjectEnsurer(newAuthorEnsurer(t, pool)),
+		handler.WithPersonalProjectWait(120*time.Second),
 	).Routes()
 
 	author := func() struct {
@@ -130,26 +134,24 @@ func TestGetAuthorProvisionsTheMissingPersonalProject(t *testing.T) {
 		return decoded
 	}
 
-	// The first read is the honest "" — provisioning has only just been asked
-	// for. This is the state the onboarding screen is written against, and it
-	// is asserted rather than skipped past: an implementation that blocked the
-	// request until the tenant was built would hold a poll open for minutes.
-	if first := author(); first.PersonalProjectID != "" {
-		t.Fatalf("the first read already answered %q; the fixture is not a fresh account",
-			first.PersonalProjectID)
-	}
-
-	// The read the SPA is waiting for. Before this change it never arrived.
-	deadline := time.Now().Add(60 * time.Second)
-	var resolved string
-	for time.Now().Before(deadline) {
-		if resolved = author().PersonalProjectID; resolved != "" {
-			break
-		}
-		time.Sleep(200 * time.Millisecond)
-	}
+	// THE FIRST READ REPORTS THE PROJECT (F2).
+	//
+	// It used to answer the "honest" "" — provisioning had only just been asked
+	// for — and the SPA reads "" as "no personal project yet":
+	// routes/-guards/indexRoute.ts redirects to `/onboarding`, a screen that
+	// says "about 5 minutes". A reload seconds later went straight to chat,
+	// because the project the FIRST request provisioned was already there. The
+	// user was sent to a waiting room for work this very request had done.
+	//
+	// GetAuthor now waits a bounded moment for the attempt IT started and
+	// re-resolves. The wait never cancels the provisioning, so a machine slower
+	// than the bound degrades to the previous behaviour instead of hanging —
+	// which the sibling test below is what measures.
+	resolved := author().PersonalProjectID
 	if resolved == "" {
-		t.Fatal("GET /social/author never reported a personal project: a new user stays on /onboarding forever")
+		t.Fatal("the first GET /social/author still reported no personal project, " +
+			"so a first-time user is sent to /onboarding for a project this very " +
+			"request provisioned")
 	}
 
 	// And it names the caller's OWN project — the resolver's first branch is
@@ -273,4 +275,60 @@ func newPersonalProjectSocialPool(t *testing.T) *pgxpool.Pool {
 			"DROP DATABASE IF EXISTS "+pgx.Identifier{databaseName}.Sanitize()+" WITH (FORCE)")
 	})
 	return pool
+}
+
+// THE FALLBACK, WHICH IS THE HALF THAT KEEPS THE ENDPOINT HONEST (F2).
+//
+// The bounded wait must bound the WAIT and never the WORK. With a wait this
+// short the first read cannot see the finished project, so it answers "" — the
+// behaviour that shipped before — and the provisioning it started keeps running
+// on its own deadline. A later poll then resolves the id.
+//
+// Without this case, "the first read answers the id" could be satisfied by an
+// implementation that blocks the request until the tenant corpus is applied,
+// which holds a poll open for minutes; or by one that cancels the attempt when
+// the wait expires, which leaves a half-built project for the next attempt to
+// repair on every single first login.
+func TestGetAuthorFallsBackToThePollWhenTheWaitExpires(t *testing.T) {
+	pool := newPersonalProjectSocialPool(t)
+	userID := seedAuthorUser(t, pool, "slow-provisioning@autotest.local", "Patient")
+
+	routes := handler.NewHandler(pool,
+		handler.WithPersonalProjectEnsurer(newAuthorEnsurer(t, pool)),
+		handler.WithPersonalProjectWait(time.Nanosecond),
+	).Routes()
+
+	read := func() string {
+		request := httptest.NewRequest(http.MethodGet, "/author/", nil)
+		request = request.WithContext(auth.ContextWithUser(request.Context(),
+			auth.User{ID: strconv.FormatInt(userID, 10), Email: "slow-provisioning@autotest.local"}))
+		recorder := httptest.NewRecorder()
+		routes.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("GET /author/ status = %d (body %s)", recorder.Code, recorder.Body.String())
+		}
+		var decoded struct {
+			PersonalProjectID string `json:"personal_project_id"`
+		}
+		if err := json.Unmarshal(recorder.Body.Bytes(), &decoded); err != nil {
+			t.Fatalf("decode author response %s: %v", recorder.Body.String(), err)
+		}
+		return decoded.PersonalProjectID
+	}
+
+	if first := read(); first != "" {
+		t.Fatalf("the first read answered %q with a one-nanosecond wait; the "+
+			"request is waiting for the whole provisioning run, not for a bounded moment",
+			first)
+	}
+
+	deadline := time.Now().Add(120 * time.Second)
+	for time.Now().Before(deadline) {
+		if read() != "" {
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	t.Fatal("the abandoned wait also abandoned the work: no later poll ever " +
+		"reported a personal project")
 }

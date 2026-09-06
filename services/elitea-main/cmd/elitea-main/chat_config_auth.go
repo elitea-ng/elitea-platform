@@ -40,6 +40,27 @@ func chatConfigAuthConfig(
 			Validator:                 formGraph,
 			PrincipalValidator:        principalValidator,
 			ForwardedIdentityVerifier: forwardedIdentityVerifier,
+			// SessionSecret, and this branch had none (F3).
+			//
+			// apimw.Auth's cookie branch is inert without it, so a browser
+			// holding a valid `elitea_session` had NO credential this route
+			// accepts and got `401 missing authorization header` — on the one
+			// path that only a browser ever calls, in the one deployment shape
+			// that sets both a form config and OIDC (the standalone stack).
+			// Every other /api/v2 route answered 200 to the same request,
+			// because apiGroupAuthConfig's form branch has always carried it.
+			//
+			// The SPA reads that 401 as an expired session and starts a fresh
+			// OIDC round-trip, so every visit to /app/artifacts — which reads
+			// this endpoint for its upload limit — re-authenticated.
+			//
+			// This is the SAME correction, for the same reason, that the
+			// notification routes needed: see main.go's `formSessionSecret`
+			// comment. It is not a new trust decision. It is the same cookie,
+			// verified with the same APPLICATION_SECRET_KEY and the same
+			// principal validator, and the per-project permission gate in
+			// front of the handler is unchanged.
+			SessionSecret: sessionSecret,
 		}
 	}
 	return apimw.AuthConfig{

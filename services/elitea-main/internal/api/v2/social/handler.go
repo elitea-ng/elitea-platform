@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -27,6 +28,10 @@ type Handler struct {
 	// tenant migration corpus, and this is a read endpoint the SPA polls. See
 	// GetAuthor.
 	personalProject personalproject.AsyncEnsurer
+
+	// personalProjectWait bounds the wait GetAuthor puts on an ensure it just
+	// started. Zero means defaultPersonalProjectWait, the production value.
+	personalProjectWait time.Duration
 }
 
 // Option configures a Handler at construction time.
@@ -42,6 +47,22 @@ type Option func(*Handler)
 // route uses.
 func WithPersonalProjectEnsurer(ensurer personalproject.AsyncEnsurer) Option {
 	return func(h *Handler) { h.personalProject = ensurer }
+}
+
+// WithPersonalProjectWait replaces the bounded wait GetAuthor puts on an
+// ensure it started. Zero and negative values are ignored.
+//
+// It exists for the integration suite, which must be able to state the two
+// outcomes SEPARATELY: a wait long enough to prove the first read reports the
+// project, and a wait short enough to prove the endpoint still answers "" and
+// lets the poll finish the job. A test that took the production value would
+// measure how fast the machine applies a migration corpus.
+func WithPersonalProjectWait(wait time.Duration) Option {
+	return func(h *Handler) {
+		if wait > 0 {
+			h.personalProjectWait = wait
+		}
+	}
 }
 
 func NewHandler(pool *pgxpool.Pool, options ...Option) *Handler {
@@ -157,15 +178,42 @@ func (h *Handler) GetAuthor(w http.ResponseWriter, r *http.Request) {
 	// select a different user's profile).
 	resp.ID = user.ID
 	resp.PersonalProjectID = h.resolvePersonalProjectID(ctx, user.ID)
-	if resp.PersonalProjectID == "" {
-		h.ensurePersonalProject(user)
+	if resp.PersonalProjectID == "" && h.ensurePersonalProject(ctx, user) {
+		// The attempt this request started has FINISHED, so the answer this
+		// request can give has changed. Re-reading is the whole point: the
+		// value below is what the SPA routes on, and reporting "" for a
+		// project that now exists sends a first-time user to the onboarding
+		// screen for five minutes of nothing.
+		resp.PersonalProjectID = h.resolvePersonalProjectID(ctx, user.ID)
 	}
 
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// ensurePersonalProject asks for the caller's personal project to be created,
-// and does not wait for it.
+// startedEnsurer is the completion-aware half of *personalproject.Ensurer,
+// declared at the consumer.
+//
+// The field stays `personalproject.AsyncEnsurer`, because the OTHER reader of
+// "the caller's personal project" — api/middleware's project resolver — wants
+// exactly the fire-and-forget method and nothing more. Widening the shared
+// interface would force a wait it has no request to hold open for.
+type startedEnsurer interface {
+	EnsureStarted(userID int64) <-chan struct{}
+}
+
+// defaultPersonalProjectWait bounds how long this read waits for a personal
+// project it just asked for.
+//
+// SHORT ON PURPOSE. The request must still answer; the wait only decides
+// whether it answers with the id or with "". Three seconds is inside the
+// browser's patience and well under the SPA's five-second poll, so a slower
+// provisioning run degrades to exactly the behaviour that shipped before —
+// "" now, the real id on a later poll — rather than to a hung request.
+const defaultPersonalProjectWait = 3 * time.Second
+
+// ensurePersonalProject asks for the caller's personal project to be created
+// and waits a bounded moment for the answer. It reports whether the attempt it
+// started finished, which is the caller's cue to re-resolve.
 //
 // WHY HERE. This endpoint is the one that answers "which project do your
 // private things live in", it is authenticated on every plane, and the SPA
@@ -175,13 +223,23 @@ func (h *Handler) GetAuthor(w http.ResponseWriter, r *http.Request) {
 // layer, for every authenticated request, through the `auth_visitor` event
 // (legacy/plugins/projects/events/projects.py:8).
 //
+// WHY IT WAITS AT ALL. The account is provisioned BY THIS REQUEST, and the
+// request then reported that it had no personal project. The SPA routes on
+// that field, so a first login landed on `/onboarding` ("about 5 minutes")
+// while the project it was waiting for already existed; a reload went straight
+// to chat. The wait closes the gap between the two answers.
+//
+// WHAT IT DOES NOT DO. It never cancels the provisioning — EnsureStarted keeps
+// the detached deadline — it never queues behind a full slot budget, and it
+// never waits on an attempt another poll already owns. Each of those returns a
+// nil channel and this function falls back to the previous behaviour: answer
+// "" and let the poll ask again.
+//
 // It costs nothing on an account that HAS a personal project, because it is
-// reached only when the resolver above answered "". A first-time caller gets
-// "" on this response and the real id on a later one, which is exactly the
-// contract the onboarding screen is written against.
-func (h *Handler) ensurePersonalProject(user auth.User) {
+// reached only when the resolver answered "".
+func (h *Handler) ensurePersonalProject(ctx context.Context, user auth.User) bool {
 	if h.personalProject == nil {
-		return
+		return false
 	}
 	// `OwningUserID`, not a fresh parse of `user.ID`: it is this repository's
 	// reviewed answer to "which auth_core__user owns this principal". It reads
@@ -191,9 +249,36 @@ func (h *Handler) ensurePersonalProject(user auth.User) {
 	// of.
 	id, ok := user.OwningUserID()
 	if !ok {
-		return
+		return false
 	}
-	h.personalProject.EnsureAsync(id)
+
+	awaitable, canWait := h.personalProject.(startedEnsurer)
+	if !canWait {
+		h.personalProject.EnsureAsync(id)
+		return false
+	}
+	done := awaitable.EnsureStarted(id)
+	if done == nil {
+		// Nothing was started for this call: the budget was full, or another
+		// in-flight attempt already owns this user. Either way there is
+		// nothing to wait for.
+		return false
+	}
+
+	wait := h.personalProjectWait
+	if wait <= 0 {
+		wait = defaultPersonalProjectWait
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return true
+	case <-timer.C:
+		return false
+	case <-ctx.Done():
+		return false
+	}
 }
 
 // resolvePersonalProjectID answers "which project do this user's private

@@ -18,6 +18,7 @@ import (
 
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/authcomposition"
 )
 
 // deactivatedPrincipals is the shape authsvc.PrincipalValidator takes when the
@@ -229,4 +230,86 @@ func signedSessionCookie(t *testing.T, secret, userID string, expiry time.Time) 
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write([]byte(payload))
 	return payload + "." + hex.EncodeToString(mac.Sum(nil))
+}
+
+// TestChatConfigFormAuthAcceptsABrowserSession pins the credential the FORM
+// branch had lost.
+//
+// `GET /api/v2/elitea_core/chat_config/prompt_lib/{projectID}` is called by
+// apps/elitea-web's artifacts page and by nothing else. Only a browser calls
+// it, and a browser's credential is the `elitea_session` cookie. The form
+// branch carried no SessionSecret, so apimw.Auth's cookie branch was inert and
+// the request fell through to `401 missing authorization header` — while every
+// other /api/v2 route accepted the same cookie, because apiGroupAuthConfig's
+// form branch has always carried the secret.
+//
+// The SPA reads a 401 as an expired session (`needsReauth` in
+// apps/elitea-web/src/shared/api/http.ts is 401-only, deliberately), so the
+// page opened a fresh OIDC round-trip on every visit.
+//
+// Removing `SessionSecret` from chatConfigAuthConfig's form branch turns this
+// red. The deactivated row is the control: a 200 for BOTH principals would
+// mean the cookie was accepted without re-checking the principal, which is the
+// #301 defect in a second shape.
+func TestChatConfigFormAuthAcceptsABrowserSession(t *testing.T) {
+	const secret = "chat-config-form-session-secret"
+
+	for _, testCase := range []struct {
+		name       string
+		principals *countingPrincipals
+		wantStatus int
+	}{
+		{
+			name:       "active principal is served",
+			principals: &countingPrincipals{inner: activePrincipals{}},
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "deactivated principal is still refused",
+			principals: &countingPrincipals{inner: deactivatedPrincipals{}},
+			wantStatus: http.StatusUnauthorized,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			// A non-nil *FormGraph is the whole condition that selects the
+			// branch. Its methods are never reached: no Authorization header
+			// is sent, so the token validator is not consulted.
+			config := chatConfigAuthConfig(
+				&authcomposition.FormGraph{},
+				testCase.principals,
+				nil,
+				nil,
+				secret,
+			)
+			if config.SessionSecret != secret {
+				t.Fatalf("form branch SessionSecret = %q, want %q: without it "+
+					"apimw.Auth's cookie branch is inert and a browser has no "+
+					"credential this route accepts", config.SessionSecret, secret)
+			}
+
+			handler := apimw.Auth(config)(http.HandlerFunc(
+				func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) },
+			))
+			request := httptest.NewRequest(
+				http.MethodGet,
+				"/api/v2/elitea_core/chat_config/prompt_lib/1",
+				nil,
+			)
+			request.AddCookie(&http.Cookie{
+				Name:  "elitea_session",
+				Value: signedSessionCookie(t, secret, "42", time.Now().Add(time.Hour)),
+			})
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, request)
+
+			if recorder.Code != testCase.wantStatus {
+				t.Fatalf("status = %d, want %d (body %q)",
+					recorder.Code, testCase.wantStatus, recorder.Body.String())
+			}
+			if testCase.principals.consulted() != 1 {
+				t.Fatalf("PrincipalValidator consulted %d times, want 1",
+					testCase.principals.consulted())
+			}
+		})
+	}
 }
