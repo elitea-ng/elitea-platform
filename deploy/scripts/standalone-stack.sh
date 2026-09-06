@@ -173,6 +173,84 @@ WORKER_JOIN_TIMEOUT="${STANDALONE_WORKER_JOIN_TIMEOUT:-90}"
 # order, and an index run then starts, becomes durable, and dies in the worker
 # with a 404.
 
+# stack_is_settled reports whether every container of this project is in its
+# final good state: each long-running service running (and healthy where it has
+# a healthcheck), each one-shot job exited 0.
+#
+# It exists because `compose up -d --wait` returns 1 on a stack that is
+# COMPLETELY healthy. `--wait` waits for every container to become healthy OR to
+# exit, and it counts an exit — any exit, including 0 — as a failure. This stack
+# has NINE one-shot jobs (db-init, elitea-migrate, elitea-agentstate-migrate,
+# rustfs-bucket-init, runtime-material, runtime-bootstrap, runtime-session-init,
+# worker-spool-init, mcp-mock-trust), so a perfect `up` ends with:
+#
+#   Container elitea-standalone-elitea-agentstate-migrate-1  Healthy
+#   container elitea-standalone-elitea-agentstate-migrate-1 exited (0)
+#   Error: ... exit status 1
+#
+# Reproduced on Docker Compose v2.40.1 with a two-service project — one long
+# runner with a healthcheck, one `echo done` — which is the whole shape.
+#
+# The post-check reads `compose ps --all --format json`. Measured output on that
+# version is ONE JSON OBJECT PER LINE, not an array:
+#
+#   {"Name":"psprobe-longrunner-1","Service":"longrunner","State":"running",
+#    "Health":"healthy","ExitCode":0,"Status":"Up 8 seconds"}
+#   {"Name":"psprobe-oneshot-1","Service":"oneshot","State":"exited",
+#    "Health":"","ExitCode":0,"Status":"Exited (0) 8 seconds ago"}
+#
+# Other builds emit a JSON array, so the reader accepts both. `--all` is
+# required: without it `ps` hides every exited container, and a one-shot that
+# failed would then be INVISIBLE — the check would pass by finding nothing,
+# which is the failure mode it exists to prevent.
+#
+# ExitCode is 0 on a running container too, so it is read only in the exited
+# branch. A container whose health is `starting` or `unhealthy` is NOT settled:
+# this must never turn a real failure green.
+stack_is_settled() {
+  $COMPOSE_BIN $COMPOSE_F ps --all --format json 2>/dev/null | python3 -c '
+import json, re, sys
+
+raw = sys.stdin.read().strip()
+if not raw:
+    print("compose ps returned no containers", file=sys.stderr)
+    raise SystemExit(1)
+
+try:
+    parsed = json.loads(raw)
+    containers = parsed if isinstance(parsed, list) else [parsed]
+except json.JSONDecodeError:
+    containers = [json.loads(line) for line in raw.splitlines() if line.strip()]
+
+exited = re.compile(r"Exited \((\d+)\)")
+unsettled = []
+for container in containers:
+    name = container.get("Name") or container.get("Service") or "?"
+    state = (container.get("State") or "").lower()
+    health = (container.get("Health") or "").lower()
+    status = container.get("Status") or ""
+    if state == "running":
+        if health in ("", "healthy"):
+            continue
+        unsettled.append("%s: running but %s" % (name, health or "health unknown"))
+        continue
+    if state == "exited":
+        code = container.get("ExitCode")
+        if code is None:
+            match = exited.search(status)
+            code = int(match.group(1)) if match else None
+        if code == 0:
+            continue
+        unsettled.append("%s: exited (%s)" % (name, code if code is not None else status))
+        continue
+    unsettled.append("%s: %s" % (name, state or status or "unknown state"))
+
+for line in unsettled:
+    print(line, file=sys.stderr)
+raise SystemExit(1 if unsettled else 0)
+'
+}
+
 # reject_retired_embedding_var stops a run that still sets the retired variable.
 # A silent no-op would hide the reason the value stopped taking effect.
 reject_retired_embedding_var() {
@@ -693,8 +771,34 @@ case "${1:-}" in
       exit 1
     fi
     echo "→ Bringing up the full standalone stack (${COMPOSE_BIN})…"
-    $COMPOSE_BIN $COMPOSE_F up -d --wait
-    echo "→ Stack ready at http://localhost:${PORT}/app/"
+    # `--wait` returns 1 on a stack that is COMPLETELY healthy, because it reads
+    # a one-shot job's exit as a failure even when the code is 0. This stack has
+    # nine of them, so `up` reported failure on every good run and every caller
+    # — an operator, a CI step, a `&&` chain — read a working stack as broken.
+    # See stack_is_settled for the measured behaviour and the ps output shape.
+    #
+    # The exit status is not simply discarded. It is re-derived from the
+    # container states, so a REAL failure — a service stuck `starting`, an
+    # unhealthy container, a migration that exited non-zero — still exits 1.
+    up_status=0
+    $COMPOSE_BIN $COMPOSE_F up -d --wait || up_status=$?
+    if [ "$up_status" -ne 0 ]; then
+      if stack_is_settled; then
+        echo "→ compose --wait exited ${up_status} because a one-shot job finished;"
+        echo "   every service is healthy and every job exited 0."
+      else
+        echo "ERROR: the stack did not come up. The containers above are not settled." >&2
+        $COMPOSE_BIN $COMPOSE_F ps --all >&2 || true
+        exit "$up_status"
+      fi
+    fi
+    echo "→ Stack ready."
+    echo "     web app       http://localhost:${PORT}/app/"
+    echo "     admin console http://localhost:${PORT}/admin/app/"
+    echo "     API           http://localhost:${PORT}/api/v2"
+    echo "     OIDC provider http://localhost:9400"
+    echo "     gateway       https://localhost:${STANDALONE_GATEWAY_PORT:-8085} (mTLS)"
+    echo "   Next: $0 seed && $0 seed-runtime && $0 seed-llm && $0 check"
     ;;
 
   build)

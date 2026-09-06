@@ -36,6 +36,27 @@
   and which Go source reads it.
 */}}
 {{- include "elitea-llm-gateway.validateGuards" . -}}
+{{/*
+  Migration ordering, checked and recorded here rather than added.
+
+  The gateway reads gateway.governance_config once at boot and enforces the
+  compiled result on every request. `gateway` is a SHARED schema, created by
+  migrations/shared/0067_gateway_budget_schema.sql, which templates/main/
+  migrate-job.yaml applies.
+
+  That Job is a `helm.sh/hook: pre-install,pre-upgrade`. Helm applies and AWAITS
+  every pre-install/pre-upgrade hook before it touches any of the release's
+  normal manifests, and this Deployment is a normal manifest. ArgoCD maps the
+  same annotation to a PreSync hook, which likewise completes before Sync. So
+  this Deployment cannot start before the migration completes, and it needs no
+  init container or ordering annotation of its own.
+
+  A restart LATER — an eviction, a scale-up, a node failure — can still find the
+  database briefly unreachable. That is not an ordering problem and no chart
+  edge would fix it, so the gateway retries its first governance load on a short
+  backoff instead. See the initialLoad* constants in
+  services/elitea-llm-gateway/internal/policy/store.go.
+*/}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:

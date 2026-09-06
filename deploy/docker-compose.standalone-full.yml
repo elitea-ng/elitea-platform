@@ -545,6 +545,22 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      # The gateway reads gateway.governance_config ONCE at boot, before it
+      # opens its listener, and enforces the compiled result on every request.
+      # Without this edge it wins the race against the migration on a fresh
+      # install: the table does not exist, the read fails, and the gateway logs
+      # `policy: initial governance load failed ... enforcing NO authored
+      # definitions until a refresh succeeds`. It then serves requests with no
+      # model allowlist, no MCP allowlist, no rate policy and no authored egress
+      # entry until the next poll.
+      #
+      # The store now retries that first read on a short backoff, so this edge
+      # is belt-and-braces rather than the only defence — but it is the cheaper
+      # of the two, and it makes the ordering explicit for anyone reading the
+      # file. Kubernetes has no equivalent: see the retry schedule in
+      # services/elitea-llm-gateway/internal/policy/store.go.
+      elitea-migrate:
+        condition: service_completed_successfully
       # Not required at boot — the gateway dials an upstream per request — but
       # ordering it here means a `seed-llm` immediately after `up` cannot race a
       # mock that has not bound its port yet.
