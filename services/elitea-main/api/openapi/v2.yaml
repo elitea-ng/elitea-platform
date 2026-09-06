@@ -12953,7 +12953,16 @@ paths:
                 properties:
                   id: { type: integer }
                   uuid: { type: string }
-                  project_id: { type: string }
+                  project_id:
+                    type: integer
+                    description: >
+                      The owning project's numeric id. This route re-emits the
+                      detail route's Configuration projection
+                      (internal/api/v2/configurations/handler.go), whose
+                      ProjectID is a Go int, so the value on the wire is a JSON
+                      number. The spec declared a string, and the generated web
+                      client turned that into `zod.string()`; a zod parse of a
+                      correct answer threw.
                   label: { type: string }
                   name: { type: string }
                   type: { type: string }
