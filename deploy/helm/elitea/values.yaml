@@ -2014,6 +2014,29 @@ llmGateway:
     # than this the FSM forces closed (503) regardless of snapshot freshness. Default: 10.
     LLM_BUDGET_NATS_DEGRADED_MAX_DURATION_MIN: "10"
 
+    # ISSUE #304 — what the process does at STARTUP when the budget gate could
+    # not be wired. It is not a fourth fail mode: LLM_BUDGET_NATS_FAIL_MODE
+    # above decides what a RUNNING gateway does when NATS breaks, and it can
+    # only act on a connection that once succeeded.
+    #
+    #   auto (default)  Refuse to start when GATEWAY_NATS_URL is empty AND the
+    #                   database holds an enforcing budget row. That state
+    #                   cannot recover — nothing re-dials a URL that was never
+    #                   given — and /readyz reports ready, so nothing else
+    #                   reports it. A CONFIGURED NATS that did not answer keeps
+    #                   the current behaviour: /readyz reports not ready and the
+    #                   background loop re-dials (issue #315).
+    #   on              Refuse to start whenever the budget gate is not wired.
+    #                   Choose this when the deployment must never serve one
+    #                   unmetered request, and accept a CrashLoopBackOff for as
+    #                   long as NATS is down.
+    #   off             Never refuse. It needs llmGateway.acknowledgeUnenforcedBudgets
+    #                   below, because it accepts unmetered spend.
+    #
+    # The binary reads any OTHER value as "auto"; the chart refuses to render
+    # one, so a values file cannot say "false" and mean "off".
+    LLM_BUDGET_REQUIRE_ENFORCEMENT: "auto"
+
     # BFF.6 — circular-routing guard #1 (spec §2.6): the platform's own /llm
     # origins, comma-separated. Any credential api_base matching one of these is
     # rejected with SELF_REFERENTIAL_CREDENTIAL at request time. MUST list every
@@ -2242,6 +2265,16 @@ llmGateway:
   # address. Private reachability follows from an entry that NAMES a private
   # host or block, and never from the mere presence of an allowlist.
   egressPosture: ""
+
+  # acknowledgeUnenforcedBudgets — issue #304. It is read ONLY when
+  # env.LLM_BUDGET_REQUIRE_ENFORCEMENT above is "off".
+  #
+  # "off" removes the binary's own startup refusal, so the gateway starts and
+  # serves /llm even when it can enforce no ceiling and record no spend. That is
+  # a supported posture — a bootstrap install, or a deployment that runs no
+  # budgets — and it is not one an operator should reach by copying a values
+  # file. This key is the statement that the spend is accepted.
+  acknowledgeUnenforcedBudgets: false
 
   networkPolicy:
     enabled: false

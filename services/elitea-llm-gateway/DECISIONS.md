@@ -305,6 +305,46 @@ decision]** are risk/policy calls an autonomous agent must NOT change without si
   `TestMemberSoftAlert_PlatformSwitchSuppressesMember`. *Not done:* spec §8.3
   still documents a project-only `budget.soft_alert` payload; it lives in
   `elitea-docs`, a different repository.
+- **2026-09-06 (issue #304) — the gateway REFUSES TO START in the one unwired
+  state that cannot recover and cannot be seen.** *Finding:* three states share
+  the symptom "the budget gate is not wired", and only one of them had no
+  control. (1) `GATEWAY_NATS_URL` is set and the dial failed: `/readyz` reports
+  not ready and `startBudgetRecovery` re-dials, so the pod drains and returns to
+  service on its own. (2) `GATEWAY_NATS_URL` is EMPTY while the database holds
+  an enforcing budget row: nothing re-dials a URL that was never given, and
+  `budgetEnforcementUnwired` is scoped to a CONFIGURED NATS, so `/readyz`
+  answers ready. That pod serves `/llm` with every authored ceiling ignored,
+  bills nothing, and reports healthy for its whole life. (3) nothing configured
+  and nothing authored: the supported bootstrap and local-development posture.
+  *Decision:* add `LLM_BUDGET_REQUIRE_ENFORCEMENT`, with three values, and
+  refuse BEFORE the listener opens (`cmd/elitea-llm-gateway/
+  budget_startup_gate.go`, called from `main` and asserted by the wiring gate).
+  `auto` (the shipped default) refuses state 2 only. `on` refuses every unwired
+  state, which is criterion 2 of the issue. `off` refuses nothing and is the
+  documented opt-out; `deploy/docker-compose.standalone-full.yml` states it,
+  because that stack runs no NATS on purpose. *Why `auto` does NOT refuse state
+  1:* that would replace a pod which recovers by itself (issue #315) with a
+  CrashLoopBackOff that cannot start until NATS does, and the outage and the
+  restart never overlap. This is a startup policy and NOT a fourth fail mode:
+  `LLM_BUDGET_NATS_FAIL_MODE` decides what a RUNNING gateway does when NATS
+  breaks, and it can only act on a connection that once succeeded. *Rules that
+  hold this up:* the probe counts a CEILING (`enabled AND NOT is_unlimited AND
+  hard_limit_usd IS NOT NULL`, and the member equivalent) and not a row, because
+  every project that opens a budget screen can get an unlimited row; a probe
+  that could not READ answers "unknown" and never "no budgets", so a database
+  blip cannot disarm the gate; and the table-existence probe is its own round
+  trip, because PostgreSQL resolves relations at parse time and a `to_regclass`
+  guard in the same statement guards nothing. The chart refuses the matching
+  render-time shapes (`templates/llmGateway/_helpers.tpl`, guard #3): an empty
+  effective `GATEWAY_NATS_URL`, a `LLM_BUDGET_REQUIRE_ENFORCEMENT` value the
+  binary does not read, and `off` without
+  `llmGateway.acknowledgeUnenforcedBudgets`. Guarded by
+  `TestBudgetStartupRefusal_Matrix`, `TestRequireEnforcementRejectsATypo`,
+  `TestProbeAuthoredBudgets`, `TestPostgresBudgetProbeReadsTheShippedSchema`,
+  `TestGatewayRefusesToStartWithoutEnforcement` (which runs the real `main` in a
+  subprocess and reads the exit status, with an `off` negative control), the
+  `budgetStartupGate(` wiring-gate entry, and six cases in
+  `deploy/helm/tests/render-llm-path.sh`.
 
 ## Authored governance (issue #218, 2026-08-23)
 

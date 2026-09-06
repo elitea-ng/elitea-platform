@@ -411,7 +411,10 @@ services:
   # Dependencies are far lighter than the helm chart implies:
   #   NATS   — optional. Unset GATEWAY_NATS_URL disables budget enforcement with
   #            a startup warning. Enforcement needs a JetStream cluster; local
-  #            functional testing does not.
+  #            functional testing does not. This stack therefore states the
+  #            opt-out explicitly with LLM_BUDGET_REQUIRE_ENFORCEMENT below
+  #            (issue #304): without it, the gateway refuses to start as soon as
+  #            somebody authors a budget row in this database.
   #   Redis  — not a dependency at all; the module does not import a redis client.
   #   Vault  — SECRETS_MASTER_KEY is optional as long as seeded credentials carry
   #            a literal api_key rather than a {{secret.NAME}} reference.
@@ -439,6 +442,13 @@ services:
       # X-Elitea-Project-Id / X-Elitea-User-Id / X-Elitea-Tenant-Id headers that
       # elitea-main signs and the gateway verifies.
       GATEWAY_IDENTITY_SECRET: "${GATEWAY_IDENTITY_SECRET:-standalone-dev-identity-secret}"
+      # ISSUE #304 — the documented local-development opt-out. This stack runs
+      # no NATS on purpose, so the budget gate is never wired and no ceiling in
+      # gateway.project_budget or gateway.user_budget applies. The default
+      # "auto" posture refuses to start in exactly that state, once a budget row
+      # exists. That is right for a cluster and wrong for a laptop.
+      # Set it to "auto" to reproduce the cluster posture.
+      LLM_BUDGET_REQUIRE_ENFORCEMENT: "${LLM_BUDGET_REQUIRE_ENFORCEMENT:-off}"
       # Serve TLS and require client certs. Presenting all three is what turns on
       # mutual auth; elitea-main's side is non-optional, so this is not a choice.
       GATEWAY_TLS_CERT_FILE: /run/certs/gateway-server.crt
