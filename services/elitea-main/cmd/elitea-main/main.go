@@ -2180,13 +2180,15 @@ func (p *poolChecker) Ping(ctx context.Context) error {
 // this process wraps with SECRETS_MASTER_KEY, so no SQL migration can write it
 // — a migration could only store material the readers cannot open. This is the
 // first point after the pool and the master key are both settled, and it is
-// before the listeners accept a request, so no project serves a request with
-// the guessable default while the pass is still running.
+// before the listeners accept a request, so no project is asked for its
+// X-SECRET value while the pass is still running.
 //
-// IT NEVER STOPS THE SERVICE. A project that keeps the default `secret` value
-// is the state every project is in today, so a failed pass is no worse than no
-// pass. It is logged at error level with the counts it reached, because a
-// silent pass is exactly how the operator would come to believe work happened
+// IT NEVER STOPS THE SERVICE. A project the pass does not reach has no X-SECRET
+// value, and the version-details route then refuses every caller for it (#408
+// step 3) rather than accepting the guessable literal. That is a narrow, loud
+// and repairable outage on one route, so a failed pass must not keep the whole
+// service down. It is logged at error level with the counts it reached, because
+// a silent pass is exactly how the operator would come to believe work happened
 // that did not.
 //
 // IT IS CHEAP TO RE-RUN. Every project that holds a value is counted and left
@@ -2198,7 +2200,7 @@ func backfillProjectSecretsHeaderValues(ctx context.Context, pool *pgxpool.Pool,
 	report, err := v2secrets.NewHandler(pool).BackfillProjectSecretsHeaderValues(ctx)
 	if err != nil {
 		logger.ErrorContext(ctx, "the project X-SECRET backfill did not finish; "+
-			"the projects it did not reach still accept the default value",
+			"the version details route refuses every caller for the projects it did not reach",
 			"vaults", report.Vaults,
 			"written", report.Written,
 			"already_set", report.AlreadySet,

@@ -15,19 +15,35 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 )
 
 const (
-	defaultMaxInputContentBytes  = 256 * 1024
-	defaultMaxContentRequests    = 16
-	maxRuntimeGeneration         = uint64(1<<63 - 1)
-	claimIDHeader                = "X-Elitea-Claim-Id"
-	fenceHeader                  = "X-Elitea-Fence"
-	SourceContentDigestHeader    = "X-Elitea-Source-Content-Digest"
-	SourceContentLengthHeader    = "X-Elitea-Source-Content-Length"
-	SourceImmutableVersionHeader = "X-Elitea-Source-Immutable-Version"
+	defaultMaxInputContentBytes = 256 * 1024
+	defaultMaxContentRequests   = 16
+	maxRuntimeGeneration        = uint64(1<<63 - 1)
+	claimIDHeader               = "X-Elitea-Claim-Id"
+	fenceHeader                 = "X-Elitea-Fence"
+	// runtimeContextAcceptHeader names the OPTIONAL runtime-context fields the
+	// worker is able to read. It exists because both workers refuse a response
+	// that carries a key they do not know: the Python worker compares the key
+	// set (transport/runtime_context.py) and the native worker parses with
+	// `deny_unknown_fields` (src/transport/runtime_context.rs). A new field
+	// served unconditionally would therefore fail every token redemption on
+	// every worker pod a rolling deploy has not yet replaced, which is an
+	// outage of all agent execution and not a compatibility inconvenience.
+	//
+	// The value is a comma-separated list of field names. An unknown name is
+	// ignored, so the header never refuses a request.
+	runtimeContextAcceptHeader = "X-Elitea-Runtime-Context-Accept"
+	// runtimeContextFieldSecretsHeader is the accept-list name for the
+	// project's `X-SECRET` value (#408).
+	runtimeContextFieldSecretsHeader = "secrets-header-value"
+	SourceContentDigestHeader        = "X-Elitea-Source-Content-Digest"
+	SourceContentLengthHeader        = "X-Elitea-Source-Content-Length"
+	SourceImmutableVersionHeader     = "X-Elitea-Source-Immutable-Version"
 )
 
 var (
@@ -402,6 +418,11 @@ func (s *ContentServer) PostEliteaClientToken(w http.ResponseWriter, r *http.Req
 		return
 	}
 	value, err := s.runtimeToken.Resolve(r.Context(), claim)
+	if err == nil && !runtimeContextAccepts(r, runtimeContextFieldSecretsHeader) {
+		// The worker did not say it can read this field, so it does not get it.
+		// See runtimeContextAcceptHeader above for why silence means "no".
+		value.SecretsHeaderValue = ""
+	}
 	if err != nil {
 		status := http.StatusServiceUnavailable
 		if errors.Is(err, ErrContentUnauthorized) {
@@ -690,6 +711,24 @@ func claimPathIdentity(r *http.Request, name string) (uint64, bool) {
 		return 0, false
 	}
 	return value, true
+}
+
+// runtimeContextAccepts reports whether the request asked for one optional
+// runtime-context field by name.
+//
+// It reads every value of the header, not one, because a proxy is free to split
+// a comma list across repeated header lines. Names are compared case-blind and
+// with the surrounding space removed, and an empty or absent header accepts
+// nothing.
+func runtimeContextAccepts(r *http.Request, field string) bool {
+	for _, line := range r.Header.Values(runtimeContextAcceptHeader) {
+		for _, name := range strings.Split(line, ",") {
+			if strings.EqualFold(strings.TrimSpace(name), field) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func singleHeader(header http.Header, name string) (string, bool) {
