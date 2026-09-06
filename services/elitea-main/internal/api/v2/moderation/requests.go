@@ -4,8 +4,9 @@ package moderation
 //
 //	GET  /admin/moderation_statuses/administration            — the request queue
 //	PUT  /admin/moderation_status/administration              — approve / reject
-//	GET  /admin/moderation_status/{mode}/{projectID}/{entityID} — my own requests
-//	POST /admin/moderation_status/{mode}/{projectID}/{entityID} — raise a request
+//	GET    /admin/moderation_status/{mode}/{projectID}/{entityID} — my own requests
+//	POST   /admin/moderation_status/{mode}/{projectID}/{entityID} — raise a request
+//	DELETE /admin/moderation_status/{mode}/{projectID}/{entityID} — withdraw mine
 //
 // ## What these rows ARE
 //
@@ -126,7 +127,9 @@ package moderation
 //
 // The per-entity read is additionally scoped to the CALLER's own rows, in SQL
 // and not in the client, matching pylon: the endpoint answers "what have I
-// asked for", never "what has anyone asked for".
+// asked for", never "what has anyone asked for". The per-entity DELETE carries
+// the same scope, and takes `admin.moderation.create`: a person who may file a
+// request may withdraw it. See RequestDelete.
 
 import (
 	"context"
@@ -732,6 +735,141 @@ func createFields(body requestCreateBody) (issueType, description string, err er
 		return "", "", errors.New("description is required")
 	}
 	return issueType, description, nil
+}
+
+// RequestDelete serves `DELETE /admin/moderation_status/{mode}/{projectID}/{entityID}`.
+//
+// "Withdraw what I asked for." The caller removes their OWN requests for one
+// catalogue entry in one project, together with the decision notifications that
+// name it.
+//
+// ## Why this route exists (issue #544)
+//
+// A moderation row could be created and decided, and never removed. pylon has
+// no delete either, so a deployment accumulated one row per request for ever,
+// and the queue's first page filled with dead rows. The end-to-end suite made
+// the same fault visible fastest: 20 runs on one stack left 111 rows, and the
+// journeys that file a probe row could no longer find their own.
+//
+// ## The scope is the CALLER's own rows, not the operator's queue
+//
+// The delete uses the same three-column scope as the per-entity GET beside it —
+// `project_id`, `entity_id` and the authenticated `user_id` — and the `{mode}`
+// segment selects nothing. An `administration` value on the path must not widen
+// the answer, exactly as it must not widen the read.
+//
+// So a moderator cannot delete another person's request. That is deliberate:
+// the row is the record of what an operator was asked and what they answered,
+// and a moderator who could erase it could erase the evidence of their own
+// decision. The requester deletes only their own record, which no gate reads:
+// nothing in this platform treats an approved row as an authorisation (see this
+// file's header on what a decision causes), so a withdrawn request takes no
+// access with it.
+//
+// ## The notifications go too
+//
+// A decision writes a `centry.notifications` row addressed to the requester and
+// naming the entity. Leaving those behind reproduces the fault this route
+// exists for on a second table: the requester's own notification list is read
+// with a limit, so a hundred dead decision notices push the newest one off the
+// first page. Only the caller's own rows for this entity are removed, and only
+// the two `moderation_*` event types this handler writes.
+//
+// ## Authorisation
+//
+// Gated in internal/api/router.go on `admin.moderation.create`, in the default
+// mode, resolved against the caller's membership of `{projectID}` — the same
+// permission as the POST beside it. A person who may file a request may take it
+// back. No new permission is granted, so no deployment gains a capability that
+// an operator has to review.
+func (h *Handler) RequestDelete(w http.ResponseWriter, r *http.Request) {
+	if h.pool == nil {
+		writeModerationError(w, http.StatusServiceUnavailable, "database unavailable")
+		return
+	}
+
+	projectID, ok := pathProjectID(r)
+	if !ok {
+		writeModerationError(w, http.StatusBadRequest, "invalid project id")
+		return
+	}
+	entityID := chi.URLParam(r, "entityID")
+	if strings.TrimSpace(entityID) == "" {
+		writeModerationError(w, http.StatusBadRequest, "entity id is required")
+		return
+	}
+	userID, err := requesterID(r)
+	if err != nil {
+		writeModerationError(w, http.StatusForbidden, err.Error())
+		return
+	}
+
+	rows, notifications, err := h.deleteOwnRequests(r.Context(), int64(projectID), entityID, userID)
+	if err != nil {
+		writeModerationError(w, http.StatusInternalServerError, "failed to delete the app request")
+		return
+	}
+	if len(rows) == 0 {
+		// A 404, not a 200 that removed nothing. A caller that deleted somebody
+		// else's row by mistake, or named an entity that does not exist, must
+		// read a different answer from a caller whose row is really gone —
+		// otherwise a teardown reports success while the table keeps growing,
+		// which is how this issue was measured in the first place.
+		writeModerationError(w, http.StatusNotFound, "app request not found")
+		return
+	}
+	writeModerationJSON(w, http.StatusOK, map[string]any{
+		"total": len(rows), "rows": rows, "notifications_deleted": notifications,
+	})
+}
+
+// deleteOwnRequests removes the caller's rows for one entity and the decision
+// notifications that name it, in ONE transaction.
+//
+// One transaction because the two deletes are one act: a commit that removed
+// the request and kept the notice would leave the requester a message about a
+// request that no longer exists, and the reverse would leave the row this
+// endpoint was called to remove.
+func (h *Handler) deleteOwnRequests(
+	ctx context.Context, projectID int64, entityID string, userID int64,
+) ([]requestRow, int64, error) {
+	tx, err := h.pool.Begin(ctx)
+	if err != nil {
+		return nil, 0, fmt.Errorf("begin delete: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// The address is not selected: it lives on another table, and the row is
+	// gone by the time the caller reads this answer. See applyDecision.
+	deleted, err := scanRequests(ctx,
+		func(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+			return tx.Query(ctx, sql, args...)
+		}, `
+DELETE FROM centry.moderation_state m
+WHERE m.project_id = $1 AND m.entity_id = $2 AND m.user_id = $3
+RETURNING m.id, m.user_id, ''::text, m.project_id, m.issue_type, COALESCE(m.entity_id, ''),
+          m.description, m.status, m.rejection_comment, m.created_at, m.updated_at`,
+		projectID, entityID, userID)
+	if err != nil {
+		return nil, 0, err
+	}
+	if len(deleted) == 0 {
+		return nil, 0, nil
+	}
+
+	tag, err := tx.Exec(ctx, `
+DELETE FROM centry.notifications
+WHERE user_id = $1 AND project_id = $2
+  AND event_type IN ('moderation_approved', 'moderation_rejected')
+  AND meta->>'entity_id' = $3`, userID, projectID, entityID)
+	if err != nil {
+		return nil, 0, fmt.Errorf("delete decision notifications: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, 0, fmt.Errorf("commit delete: %w", err)
+	}
+	return deleted, tag.RowsAffected(), nil
 }
 
 /* ── shared ─────────────────────────────────────────────────────────────── */

@@ -35,8 +35,7 @@
  *
  * ## How this stays re-runnable
  *
- * There is no delete endpoint for a moderation row, and no reopen either — a
- * decided request cannot be returned to `pending`, deliberately. So the seeded
+ * A decided request cannot be returned to `pending`, deliberately. So the seeded
  * row is treated as READ-ONLY by every test here (J34 renders it, J34c aims
  * refused forgeries at it and asserts nothing moved), and each test that needs a
  * decidable row FILES ITS OWN with a run-unique key and leaves it DECIDED. The
@@ -44,11 +43,11 @@
  *
  * ## What this run leaves behind, and what reads past it (issue #544)
  *
- * A row filed here cannot be removed: `moderation_status` has a POST, a GET and
- * a decision PUT, and no DELETE at any mode (internal/api/router.go). So each
- * run adds three rows per browser project to `centry.moderation_state`, for
- * ever, on a stack that is not re-created. Measured: 20 runs of the webkit
- * journeys on one stack left 111 rows, and runs 19 and 20 failed.
+ * Nothing, now. Each run used to add three rows per browser project to
+ * `centry.moderation_state`, for ever, on a stack that is not re-created:
+ * `moderation_status` had a POST, a GET and a decision PUT, and no DELETE at any
+ * mode. Measured: 20 runs of the webkit journeys on one stack left 111 rows, and
+ * runs 19 and 20 failed.
  *
  * Two corrections, because the leak and the failure are different faults:
  *
@@ -58,10 +57,19 @@
  *    every test here asks about, is the first to fall off the end. The
  *    assertion said "must be present in the queue" and meant "is on page one".
  *    A read that names the row cannot be beaten by the size of the table.
- *  - `afterAll` DECIDES every row this run filed and left pending, so a run
- *    that fails half way still leaves the Pending tab as it found it. It cannot
- *    delete the rows; nothing can. `scripts/e2e-stack.sh seed` removes the ones
- *    earlier runs left, which is the only place with a database to do it in.
+ *  - `afterAll` DELETES every row this run filed, through
+ *    `DELETE /admin/moderation_status/default/1/{entity}` — the withdraw route,
+ *    added for this issue beside the POST that files a request
+ *    (services/elitea-main/internal/api/v2/moderation/requests.go). The delete
+ *    is scoped to the AUTHOR's own rows in SQL, so each row is withdrawn through
+ *    the session that filed it, and the removal is then PROVED through the
+ *    operator's queue rather than read from the delete's own status code.
+ *    J34g asserts the same round trip where a person can see it: the row leaves
+ *    the grid after a full reload.
+ *
+ * `scripts/e2e-stack.sh seed` keeps its sweep. It is what removes the rows that
+ * runs made BEFORE this correction left behind, and the rows of a run that dies
+ * between the POST and the teardown.
  */
 import { test as adminTest, expect, request as apiRequest, type APIRequestContext, type Page } from '@playwright/test';
 
@@ -88,9 +96,10 @@ function seededLabel(projectName: string): string {
 /**
  * A key unique to this run AND this browser engine.
  *
- * Unique per run because a row filed by a previous run still exists — nothing
- * deletes one — so a fixed key would match two rows and every `toHaveCount(1)`
- * would fail on the second run against the same stack.
+ * Unique per run because a row a previous run left behind may still exist — its
+ * teardown removes what it filed, and a run that died before the teardown
+ * removes nothing — so a fixed key could match two rows and every
+ * `toHaveCount(1)` would fail on the next run against the same stack.
  */
 const RUN_ID = `${Date.now()}`;
 function runEntity(projectName: string, suffix: string): string {
@@ -102,60 +111,99 @@ const QUEUE_URL = '/api/v2/admin/moderation_statuses/administration';
 const DECISION_URL = '/api/v2/admin/moderation_status/administration';
 
 /**
- * The requests this run filed, so the teardown can find them again.
+ * One request this run filed, and the session that filed it.
+ *
+ * The persona is recorded because the withdraw is scoped to the AUTHOR's own
+ * rows in SQL: the admin's session cannot delete the row the member filed in
+ * J34f, and must not be able to. A flat list of names would leave that row
+ * behind and report success.
+ */
+interface FiledRequest {
+  readonly entity: string;
+  /** The persona storage state whose session created the row. */
+  readonly author: string;
+}
+
+/**
+ * The requests this run filed, so the teardown can remove them again.
  *
  * Filled by `fileRequest` on a 201 only: a refused POST created nothing, and a
  * teardown that looked for it would report a missing row as a fault.
  */
-const filedEntities: string[] = [];
+const filedEntities: FiledRequest[] = [];
+
+/** `DELETE /admin/moderation_status/default/1/{entity}` — the withdraw (#544). */
+function withdrawURL(entity: string): string {
+  return `/api/v2/admin/moderation_status/default/1/${entity}`;
+}
 
 /**
- * Leaves the Pending tab as this run found it (issue #544).
+ * Removes every row this run filed (issue #544).
  *
- * Every test that files a row also decides it, so on a clean run this hook has
- * nothing to do. It exists for the run that does NOT reach the decision: a
- * failed assertion, or a timeout, between the POST and the Approve click leaves
- * a pending row that no later run can remove and every later operator sees.
+ * Each row is deleted through the session that CREATED it, because the route
+ * refuses to reach another person's request — that scope is what stops a
+ * moderator erasing the record of what they answered, and it is asserted
+ * server-side by TestWithdrawCannotReachAnotherPersonsRequest.
  *
- * It is a decision and not a delete because there is no delete. Rows still
- * accumulate; `scripts/e2e-stack.sh seed` sweeps them, since it is the only
- * step in this suite that can reach the database.
+ * THE PROOF IS THE READ-BACK, NOT THE STATUS CODE. A 404 from the delete means
+ * the row is already gone, which is what this hook wants; a 200 that removed
+ * somebody else's row would be the same 200. So every entity is re-read through
+ * the OPERATOR's queue afterwards, and a row that survives is named.
  *
  * Best effort, and LOUD about what it could not do. A teardown that fails the
  * run for a transient 503 turns a green suite red for a reason that is not the
  * product's; a teardown that hides the same 503 leaves the next reader with a
- * pending row and no account of where it came from.
+ * stray row and no account of where it came from.
  */
 adminTest.afterAll(async () => {
   if (filedEntities.length === 0) return;
-  // Its OWN request context: `page` belongs to a test, and the test this hook
-  // has to clean up after may be the one whose page is already gone.
-  const api = await apiRequest.newContext({
-    baseURL: BASE_URL,
-    storageState: STORAGE_STATE.admin,
-  });
+  // Its OWN request contexts: `page` belongs to a test, and the test this hook
+  // has to clean up after may be the one whose page is already gone. One
+  // context per persona, reused, because a context is a browser-sized object.
+  const contexts = new Map<string, APIRequestContext>();
+  const contextFor = async (state: string): Promise<APIRequestContext> => {
+    const existing = contexts.get(state);
+    if (existing) return existing;
+    const created = await apiRequest.newContext({ baseURL: BASE_URL, storageState: state });
+    contexts.set(state, created);
+    return created;
+  };
+
   try {
-    for (const entity of filedEntities) {
-      const response = await api.get(queueByEntity(entity));
-      if (!response.ok()) {
+    // The queue read is gated on `admin.moderation`, which only the operator
+    // holds — so the delete speaks as the author and the proof speaks as the
+    // admin.
+    const operator = await contextFor(STORAGE_STATE.admin);
+    for (const filed of filedEntities) {
+      const author = await contextFor(filed.author);
+      const removed = await author.delete(withdrawURL(filed.entity));
+      // 404 = nothing left to remove. A test that withdrew its own row (J34g)
+      // reaches this hook that way, and that is the outcome this hook wants.
+      if (!removed.ok() && removed.status() !== 404) {
         // eslint-disable-next-line no-console -- a silent teardown is how the rows accumulated
-        console.warn(`J34 teardown: cannot read ${entity} back (${String(response.status())})`);
+        console.warn(
+          `J34 teardown: ${filed.entity} was not withdrawn (${String(removed.status())})`,
+        );
+      }
+
+      const readBack = await operator.get(queueByEntity(filed.entity));
+      if (!readBack.ok()) {
+        // eslint-disable-next-line no-console -- see above
+        console.warn(
+          `J34 teardown: cannot read ${filed.entity} back (${String(readBack.status())})`,
+        );
         continue;
       }
-      const body = (await response.json()) as { rows?: { id: number; status: string }[] };
-      for (const row of body.rows ?? []) {
-        if (row.status !== 'pending') continue;
-        const decided = await api.put(DECISION_URL, { data: { id: row.id, status: 'approved' } });
-        if (!decided.ok()) {
-          // eslint-disable-next-line no-console -- see above
-          console.warn(
-            `J34 teardown: ${entity} stays pending (${String(decided.status())} on the decision)`,
-          );
-        }
+      const body = (await readBack.json()) as { rows?: { id: number }[] };
+      if ((body.rows ?? []).length > 0) {
+        // eslint-disable-next-line no-console -- see above
+        console.warn(
+          `J34 teardown: ${filed.entity} still has ${String((body.rows ?? []).length)} row(s) in the queue`,
+        );
       }
     }
   } finally {
-    await api.dispose();
+    for (const context of contexts.values()) await context.dispose();
   }
 });
 
@@ -196,8 +244,10 @@ async function fileRequest(
     [entity, label] as const,
   );
   // Recorded here, next to the call that creates the row, so a test added later
-  // cannot file one the teardown does not know about.
-  if (filed.status === 201) filedEntities.push(entity);
+  // cannot file one the teardown does not know about. `page` is the ADMIN
+  // persona's, and the withdraw is scoped to the author, so the author is the
+  // admin for every row filed through this helper.
+  if (filed.status === 201) filedEntities.push({ entity, author: STORAGE_STATE.admin });
   return filed;
 }
 
@@ -497,6 +547,70 @@ adminTest('J34e: rejecting requires a reason, and the reason is rendered back', 
   await checkA11y(page);
 });
 
+adminTest('J34g: a withdrawn request leaves the queue, and the seeded row stays (#544)', async ({ page }, testInfo) => {
+  const entity = runEntity(testInfo.project.name, 'withdraw');
+  const label = 'E2E Withdraw Probe';
+  const seeded = seededEntity(testInfo.project.name);
+
+  await openAppRequests(page);
+  expect((await fileRequest(page, entity, label)).status).toBe(201);
+
+  // The row is really there first. A journey that asserted only the ABSENCE
+  // below would pass against a queue that never showed the row at all.
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.getByRole('row').filter({ hasText: entity })).toHaveCount(1, {
+    timeout: 20_000,
+  });
+
+  // The withdraw, through the same route family that filed it. The status is
+  // read here because the list contents below are the real assertion — a 200
+  // that removed nothing cannot pass them.
+  const withdrawn = await page.evaluate(async (target) => {
+    const response = await fetch(`/api/v2/admin/moderation_status/default/1/${target}`, {
+      method: 'DELETE',
+      credentials: 'include',
+    });
+    return { status: response.status, body: await response.text() };
+  }, entity);
+  expect(
+    withdrawn.status,
+    `withdrawing a request must be authorised and applied: ${withdrawn.body.slice(0, 300)}`,
+  ).toBe(200);
+
+  // A FULL RELOAD. This is the assertion a delete that answers 200 and removes
+  // nothing cannot pass — and it is this issue's fault from the other side: the
+  // rows that could not be removed at all.
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.getByRole('row').filter({ hasText: seeded })).toHaveCount(1, {
+    timeout: 20_000,
+  });
+  // …and the withdrawn one is gone. Both counts in one state: a delete that
+  // emptied the queue fails the line above, and one that removed nothing fails
+  // this line.
+  await expect(page.getByRole('row').filter({ hasText: entity })).toHaveCount(0);
+
+  // Gone from the TABLE, not only from the tab this page opens on.
+  const readBack = await page.evaluate(async (url) => {
+    const response = await fetch(url, { credentials: 'include' });
+    const body = (await response.json()) as { total?: number };
+    return { status: response.status, total: body.total ?? 0 };
+  }, queueByEntity(entity));
+  expect(readBack.status).toBe(200);
+  expect(readBack.total, 'the withdrawn request must leave no row behind').toBe(0);
+
+  // A second withdraw is a 404, not a 200 that removed nothing. A teardown that
+  // read success from an empty delete would report a clean stack while the
+  // table kept growing, which is how this issue stayed invisible for 18 runs.
+  const again = await page.evaluate(async (target) => {
+    const response = await fetch(`/api/v2/admin/moderation_status/default/1/${target}`, {
+      method: 'DELETE',
+      credentials: 'include',
+    });
+    return response.status;
+  }, entity);
+  expect(again, 'a withdraw that removes nothing must not answer 200').toBe(404);
+});
+
 /* ───────────────────────────────────────────────────────────────────────────
  * MODEL CONNECTION REQUESTS — the second kind of request this one queue holds
  *
@@ -614,8 +728,9 @@ adminTest('J34f: a model-connection request is isolated by issue type, approved,
       `the member must be able to file: ${(await filed.text()).slice(0, 300)}`,
     ).toBe(201);
     // Recorded next to the call that created it, so the file-level teardown
-    // decides it even if this test fails before the approve below.
-    filedEntities.push(entity);
+    // removes it even if this test fails before the approve below. The MEMBER
+    // filed it, so only the member's session can withdraw it.
+    filedEntities.push({ entity, author: STORAGE_STATE.member });
 
     // The clerical pin's BEFORE read, taken before the operator sees the queue.
     const before = await readConfigurations(member);

@@ -98,6 +98,21 @@ export function unfilteredPagedReads(source) {
     .filter((line) => line.includes('?limit=') && !line.includes('entity_id'));
 }
 
+/**
+ * The body of the file-level `afterAll` hook, or `''` when there is none.
+ *
+ * Read as text, and only as far as the first line that closes at column zero:
+ * a rule that searched the WHOLE file would be satisfied by a delete made
+ * anywhere in it, including by the one J34g makes inside a test.
+ */
+export function teardownBody(source) {
+  const start = source.indexOf('adminTest.afterAll(');
+  if (start < 0) return '';
+  const rest = source.slice(start);
+  const end = rest.indexOf('\n});');
+  return end < 0 ? rest : rest.slice(0, end);
+}
+
 /* ── the rules, on the real files and on the shape they replaced ────────── */
 
 describe('#539 — one failure must not hide eight journeys', () => {
@@ -154,7 +169,38 @@ describe('#544 — the app-requests journey must not read only the first page', 
   it('files every request through the helper that records it for the teardown', () => {
     const source = read(APP_REQUESTS_SPEC);
     expect(source).toContain('adminTest.afterAll(');
-    expect(source).toContain('filedEntities.push(entity)');
+    // The record carries the AUTHOR as well as the name: the withdraw is scoped
+    // to the session that filed the row, so a bare list of names cannot remove
+    // the one the member persona filed.
+    expect(source).toContain('filedEntities.push({ entity, author:');
+  });
+
+  /*
+   * The teardown must DELETE, and prove it.
+   *
+   * The hook used to approve the rows it found still pending, because no delete
+   * route existed. It does now, and a teardown that only decides leaves every
+   * row behind — which is the half of #544 that stayed open after #610.
+   */
+  it('the teardown withdraws each row and re-reads it', () => {
+    const source = read(APP_REQUESTS_SPEC);
+    const hook = teardownBody(source);
+    expect(hook).not.toEqual('');
+    expect(hook).toContain('.delete(withdrawURL(');
+    // The proof is the read-back through the operator's queue, not the delete's
+    // own status code: a delete that reached the wrong row answers 200 too.
+    expect(hook).toContain('queueByEntity(');
+  });
+
+  it('rejects a teardown that only decides the rows it filed', () => {
+    const before = [
+      'adminTest.afterAll(async () => {',
+      "  const decided = await api.put(DECISION_URL, { data: { id: row.id, status: 'approved' } });",
+      '});',
+    ].join('\n');
+    const hook = teardownBody(before);
+    expect(hook).not.toEqual('');
+    expect(hook).not.toContain('.delete(withdrawURL(');
   });
 
   it('the seed removes the probe rows earlier runs left behind', () => {
