@@ -111,9 +111,18 @@ export function RailTagsPanelView({ tags, selectedTags, onToggleTag, onClearTags
               sx={skeletonChipSx}
             />
           ))}
-        {isError && !isLoading && <Typography variant="body2">{t('shared.ui.entityRail.tags.loadError', 'Failed to load.')}</Typography>}
+        {/*
+          `bodyMedium`, not MUI's stock `body2`: same 14px/400 face, but the
+          pack's own 24px leading instead of MUI's `lineHeight: 1.43`. 1.43
+          against a 14px base is a 20.02px line box — the only fractional line
+          in this rail, and one of the two 14px/400 bands issue #819's
+          `pipelines-list-empty` diff is made of (the other is the empty
+          state's description; see `EntityEmptyState`). Every other label in
+          this file already reads from the pack (`subtitle` above).
+        */}
+        {isError && !isLoading && <Typography variant="bodyMedium">{t('shared.ui.entityRail.tags.loadError', 'Failed to load.')}</Typography>}
         {!isLoading && !isError && sorted.length === 0 && (
-          <Typography variant="body2">{t('shared.ui.entityRail.tags.empty', 'No tags to display.')}</Typography>
+          <Typography variant="bodyMedium">{t('shared.ui.entityRail.tags.empty', 'No tags to display.')}</Typography>
         )}
         {!isLoading &&
           !isError &&

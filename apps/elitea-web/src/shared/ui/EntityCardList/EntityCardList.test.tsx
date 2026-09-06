@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { basename, resolve } from 'node:path';
+
 import { fireEvent } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -5,6 +8,7 @@ import { renderWithTheme } from '../lib/testTheme';
 import { EntityCard } from './EntityCard';
 import { EntityCardList } from './EntityCardList';
 import { EntityEmptyState } from './EntityEmptyState';
+import type { EmptyStateArt } from './EntityEmptyState';
 import { EntityListPagination } from './EntityListPagination';
 import type { EntityListItem } from './model';
 
@@ -205,5 +209,72 @@ describe('EntityEmptyState', () => {
       />,
     );
     expect(withoutCta.container.querySelector('button')).toBeNull();
+  });
+});
+
+const EMPTY_STATE_ARTS: readonly EmptyStateArt[] = ['applications', 'skills', 'credentials'];
+
+/** The `<img>` pair (light first, dark second) an empty state paints for one art. */
+function renderArt(art: EmptyStateArt): readonly HTMLImageElement[] {
+  const { container } = renderWithTheme(
+    <EntityEmptyState
+      art={art}
+      title="Nothing yet"
+      description="Create the first one."
+    />,
+  );
+  return [...container.querySelectorAll('img')];
+}
+
+/** Width and height out of a WebP header — VP8X, VP8 (lossy) and VP8L (lossless). */
+function readWebpSize(file: string): { width: number; height: number } {
+  const bytes = readFileSync(file);
+  const chunk = bytes.toString('ascii', 12, 16);
+  if (chunk === 'VP8X') return { width: bytes.readUIntLE(24, 3) + 1, height: bytes.readUIntLE(27, 3) + 1 };
+  if (chunk === 'VP8 ') return { width: bytes.readUInt16LE(26) & 0x3fff, height: bytes.readUInt16LE(28) & 0x3fff };
+  const bits = bytes.readUInt32LE(21);
+  return { width: (bits & 0x3fff) + 1, height: ((bits >> 14) & 0x3fff) + 1 };
+}
+
+/**
+ * Issue #819 — the empty-state illustration paints on the DEVICE grid.
+ *
+ * The illustrations were painted `width: 15rem; height: auto`, so the box took
+ * its height from the source bitmap's ratio: 240 * 512 / 720 = 170.65625px.
+ * Every box under it inherited that fraction — measured in the pinned visual
+ * container, the heading reported `getBoundingClientRect().top = 361.40625`
+ * and the description 401.40625, which at the suite's `deviceScaleFactor: 2`
+ * are device rows 722.8125 and 802.8125. Layout was reproducible; how a
+ * renderer rounds a 14px/400 glyph run onto a device row eight tenths away is
+ * not, and `pipelines-list-empty` flipped between two captures that differ
+ * ONLY over that text.
+ *
+ * jsdom runs no layout, so these assert the DECLARATION rather than the paint:
+ * a whole-pixel box in both axes, stated as HTML attributes (which reserve it
+ * before the WebP decodes) and matched to the source within half a pixel (a
+ * re-encode that moved a source would otherwise letterbox silently).
+ */
+describe('EntityEmptyState — device grid', () => {
+  it.each(EMPTY_STATE_ARTS)('declares an integer painted size for both %s variants', (art) => {
+    const images = renderArt(art);
+    expect(images).toHaveLength(2);
+    for (const image of images) {
+      const width = Number(image.getAttribute('width'));
+      const height = Number(image.getAttribute('height'));
+      expect(Number.isInteger(width)).toBe(true);
+      expect(Number.isInteger(height)).toBe(true);
+      // A whole CSS pixel is a whole device row at any integer scale factor.
+      expect(width).toBe(240);
+      expect(height).toBeGreaterThan(0);
+    }
+  });
+
+  it.each(EMPTY_STATE_ARTS)('keeps the declared %s height within half a pixel of its source ratio', (art) => {
+    for (const image of renderArt(art)) {
+      const file = basename(new URL(image.src, 'http://localhost').pathname);
+      const source = readWebpSize(resolve('src/assets/empty-states', file));
+      const natural = (Number(image.getAttribute('width')) * source.height) / source.width;
+      expect(Math.abs(Number(image.getAttribute('height')) - natural)).toBeLessThanOrEqual(0.5);
+    }
   });
 });

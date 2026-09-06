@@ -103,15 +103,20 @@ export async function shellSettled(
  * on this branch that is the gap that matters.
  *
  * The illustrated empty states (`shared/ui/EntityCardList/EntityEmptyState`)
- * paint `src/assets/empty-states/*.webp` at `width: 15rem; height: auto`, with
- * no width/height attributes and no `aspect-ratio`. The box is therefore ZERO
- * high until the WebP's header has arrived, and 170.65625px high afterwards
- * (720x512 source painted 240px wide). Everything under it — the heading, the
- * description, the `+ Create` pill — moves by 170px between those two states.
- * An un-waited image is not a small difference in such a shot; it is a
- * different screenshot, and `--update-snapshots` would pin whichever one the
- * shutter caught. `waitForTimeout(300)` was the only thing covering that, and
- * a fixed sleep is a hope, not a wait.
+ * paint `src/assets/empty-states/*.webp`. They USED to paint them at
+ * `width: 15rem; height: auto` with no width/height attributes and no
+ * `aspect-ratio`, so the box was ZERO high until the WebP's header arrived and
+ * 170.65625px high afterwards (720x512 source painted 240px wide) — the
+ * heading, the description and the `+ Create` pill all moved by 170px between
+ * those two states. An un-waited image is not a small difference in such a
+ * shot; it is a different screenshot, and `--update-snapshots` would pin
+ * whichever one the shutter caught. `waitForTimeout(300)` was the only thing
+ * covering that, and a fixed sleep is a hope, not a wait.
+ *
+ * That component now declares a whole-pixel box in both axes, so the reserved
+ * and the decoded layouts are the same one. This wait is no longer what stands
+ * between the suite and a 170px jump THERE — but every other image in every
+ * other shot is still sized by its bitmap, so it stays.
  *
  * SAID PLAINLY: this wait has not been caught doing work. On the standalone
  * stack, with the assets already in the HTTP cache, both `<img>` elements
@@ -121,14 +126,14 @@ export async function shellSettled(
  *
  * ── WHAT THESE SHOTS ARE SENSITIVE TO, AND WHAT NO WAIT CAN FIX ────────────
  *
- * The illustration's height is not a whole pixel: 240 * 512 / 720 is 170.666…,
- * so every box under it sits off the pixel grid. Measured in the pinned image
- * against the standalone stack, on all 8 loads: the empty-state heading reports
- * `getBoundingClientRect().top = 361.40625` and the description 401.40625 —
- * device rows 722.8125 and 802.8125 at this project's `deviceScaleFactor: 2`.
- * Layout is REPRODUCIBLE (the same values every load); what is not guaranteed
- * is how a renderer rounds a glyph run onto a device row eight tenths of a
- * pixel away.
+ * The illustration's height WAS not a whole pixel: 240 * 512 / 720 is 170.666…,
+ * laid out at 170.65625, so every box under it sat off the pixel grid. Measured
+ * in the pinned image against the standalone stack, on all 8 loads: the
+ * empty-state heading reported `getBoundingClientRect().top = 361.40625` and
+ * the description 401.40625 — device rows 722.8125 and 802.8125 at this
+ * project's `deviceScaleFactor: 2`. Layout was REPRODUCIBLE (the same values
+ * every load); what is not guaranteed is how a renderer rounds a glyph run onto
+ * a device row eight tenths of a pixel away.
  *
  * Issue #819 is what that looks like when two runs round it differently. The
  * `pipelines-list-empty` failure is 1342 pixels, all of them 400-weight 14px
@@ -142,10 +147,21 @@ export async function shellSettled(
  * before and after it, and it is the one that was committed.
  *
  * So a baseline recorded here can be an outlier, and no amount of waiting
- * prevents that. Two things do: regenerating in `ci-web-e2e.yml`'s
- * `full_visual_refresh` and reading `scripts/compare-visual-baselines.mjs`, and
- * — for the empty states specifically — giving the illustration an intrinsic
- * size so the text lands back on the grid. Both are outside this helper.
+ * prevents that. Two things do, both outside this helper. Regenerating in
+ * `ci-web-e2e.yml`'s `full_visual_refresh` and reading
+ * `scripts/compare-visual-baselines.mjs` is the general one, and still applies
+ * to every shot.
+ *
+ * The empty states got the specific one: `EntityEmptyState` now declares a
+ * whole-pixel painted box per illustration (240x171 dark, 240x170 or 240x165
+ * light, `object-fit: contain` absorbing the ≤0.34px rounding), and
+ * `RailTagsPanel`'s "No tags to display." reads the pack's 24px `bodyMedium`
+ * leading instead of MUI's fractional `body2` 20.02px. Measured in Chromium at
+ * `deviceScaleFactor: 2`, against the same component and theme: the
+ * description's slot-relative top went from 290.65625 to 291 in dark and from
+ * 285.328125 to 285 in light — whole device rows 582 and 570. Both 14px/400
+ * bands the #819 diff is made of are on the grid; the shots moved by ≤0.34px
+ * and need a `full_visual_refresh` once.
  *
  * ── WHY THE FONT WAIT IS WRITTEN OUT ───────────────────────────────────────
  *
