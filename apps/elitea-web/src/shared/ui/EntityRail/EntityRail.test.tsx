@@ -155,6 +155,53 @@ describe('RailTagsPanelView', () => {
     expect(screen.getAllByTestId('entity-rail-tag-skeleton')).toHaveLength(10);
     expect(screen.queryByText('No tags to display.')).toBeNull();
   });
+
+  /*
+   * DEFECT this pins. The panel took `flex: 1` whatever it held, so on a
+   * project with no tags it claimed the whole rail for one line of text and
+   * pushed `RailAuthorCard` onto the bottom edge of the viewport, ~600px below
+   * the panel it belongs under. Absorbing the rail's free height is what a
+   * FULL tag list does; an empty one has nothing to absorb it with.
+   */
+  it('gives up the rail\'s free height when it holds no chips, and takes it when it does', () => {
+    const view = renderWithTheme(
+      <RailTagsPanelView
+        tags={[]}
+        selectedTags={[]}
+        onToggleTag={vi.fn()}
+        onClearTags={vi.fn()}
+        isLoading={false}
+        isError={false}
+      />,
+    );
+    expect(getComputedStyle(screen.getByTestId('entity-rail-tags')).flexGrow).toBe('0');
+
+    view.rerender(
+      <RailTagsPanelView
+        tags={tags}
+        selectedTags={[]}
+        onToggleTag={vi.fn()}
+        onClearTags={vi.fn()}
+        isLoading={false}
+        isError={false}
+      />,
+    );
+    expect(getComputedStyle(screen.getByTestId('entity-rail-tags')).flexGrow).toBe('1');
+
+    // The loading state holds ten skeleton chips, so it keeps the slack: the
+    // card must not move once while tags load and again when they arrive.
+    view.rerender(
+      <RailTagsPanelView
+        tags={[]}
+        selectedTags={[]}
+        onToggleTag={vi.fn()}
+        onClearTags={vi.fn()}
+        isLoading
+        isError={false}
+      />,
+    );
+    expect(getComputedStyle(screen.getByTestId('entity-rail-tags')).flexGrow).toBe('1');
+  });
 });
 
 describe('RailAuthorCardView', () => {

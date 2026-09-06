@@ -49,7 +49,7 @@ function renderSidebar(permissions: ReadonlySet<string> = allPermissions) {
 describe('Sidebar', () => {
   it('renders all 9 nav entries when every permission is granted (SHELL-001..009)', async () => {
     await renderSidebar();
-    for (const label of ['Chats', 'Agents', 'Pipelines', 'Skills', 'Toolkits', 'MCPs', 'Credentials', 'Applications', 'Artifacts']) {
+    for (const label of ['Chats', 'Agents', 'Pipelines', 'Skills', 'Toolkits & Indexes', 'MCPs', 'Credentials', 'Applications', 'Artifacts']) {
       expect(screen.getByText(label)).toBeInTheDocument();
     }
   });
@@ -110,7 +110,7 @@ describe('Sidebar', () => {
     );
     expect(screen.queryByText('Skills')).not.toBeInTheDocument();
     // Unrelated siblings stay visible.
-    expect(screen.getByText('Toolkits')).toBeInTheDocument();
+    expect(screen.getByText('Toolkits & Indexes')).toBeInTheDocument();
   });
 
   it('R3: shows "Skills" when the selected project is not the public project', async () => {

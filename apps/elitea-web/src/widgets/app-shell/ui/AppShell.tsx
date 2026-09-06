@@ -6,8 +6,6 @@ import { useRouterState } from '@tanstack/react-router';
 
 import { getConfig } from '@/shared/config';
 import { usePlatformAnnouncements } from '@/shared/lib/hooks/usePlatformAnnouncements';
-import type { SocialAuthorProfile } from '@/shared/api/generated/model';
-import { useGetCurrentAuthor } from '@/shared/api/generated/social/social';
 import { SupportAssistantWidget } from '@/widgets/support-assistant';
 import {
   Sidebar,
@@ -18,6 +16,7 @@ import {
   COLLAPSED_SIDE_BAR_WIDTH_PX,
 } from '@/widgets/sidebar';
 
+import { usePersonalProjectId } from '../model/usePersonalProjectId';
 import { useSelectedProject } from '../model/useSelectedProject.hooks';
 import { useSettleShellAfterProvisioning } from '../model/useSettleShellAfterProvisioning';
 import { MaintenanceSplash } from './MaintenanceSplash';
@@ -27,18 +26,6 @@ import { PageTitleSetter } from './PageTitleSetter';
 
 export interface AppShellProps {
   children: ReactNode;
-}
-
-/**
- * `useGetCurrentAuthor()`'s `.data` is the same enveloped `{data, status,
- * headers}` shape `pages/chat/useChatPageData.ts`'s `currentAuthorOf` reads
- * through (`getCurrentAuthorResponse200`, `shared/api/generated/social/
- * social.ts`) — `eliteaFetch` throws on non-2xx (§3.6 unwrap contract), so
- * the 401 branch is declared but unreachable at this read site, same
- * established precedent.
- */
-function personalProjectIdOf(data: unknown): string | undefined {
-  return (data as { readonly data?: SocialAuthorProfile } | undefined)?.data?.personal_project_id;
 }
 
 /** Old app: `RouteDefinitions.Onboarding` (`routes.js`), matched by exact pathname equality (`useIsOnboarding.hooks.js`). */
@@ -127,8 +114,9 @@ export function AppShell({ children }: AppShellProps): ReactNode {
   const configResult = getConfig();
   const publicProjectId = configResult.status === 'ok' ? configResult.config.vite_public_project_id : '';
 
-  const authorQuery = useGetCurrentAuthor();
-  const personalProjectId = personalProjectIdOf(authorQuery.data);
+  // Re-asked until the server names a project — see the hook's own header.
+  // A first login is answered "" here while provisioning is still running.
+  const personalProjectId = usePersonalProjectId();
   const { project, selectProject } = useSelectedProject();
   const { projects, isLoading: projectsLoading } = useProjectOptions(publicProjectId, personalProjectId);
   /* Read once. Three call sites needed it, and three separate optional chains

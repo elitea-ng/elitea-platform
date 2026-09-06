@@ -42,6 +42,29 @@
  * (`getDefaultLLMInputMapping` in `lib/flow-editor/hooks/useLLMInputMapping.ts`
  * seeds `system`, `task` and `chat_history`), so the template opens in the
  * editor as an ordinary LLM node with its prompt fields filled in.
+ *
+ * ## Why every `state:` entry is a MAPPING, not a bare type name
+ *
+ * The template wrote the scalar shorthand (`input: str`). Both client readers
+ * accept it — `YamlStateVariableSpec` declares the union and
+ * `graphAdmission.helpers.ts`'s `readStateTypeName` reads either — so the
+ * document parsed, drew a canvas, and saved. It could not RUN. The SDK
+ * mutates each entry in place:
+ *
+ *     for k, v in d.items():        # elitea_sdk/runtime/langchain/
+ *         if k == 'input': continue #   langraph_agent.py:1631, set_defaults()
+ *         if 'value' not in v:
+ *             v['value'] = type_defaults.get(v['type'], None)
+ *
+ * `v` is a `str` there, so the first turn of every pipeline created from this
+ * template died in the worker with `TypeError: 'str' object does not support
+ * item assignment` (`create_graph`, langraph_agent.py:1530), settled FAILED,
+ * and reached the person as "The runtime operation failed."
+ *
+ * The mapping form is also what the editor itself writes: `DefaultState`
+ * (`lib/flow-editor/constants/flowEditor.constants.ts`) is
+ * `{input: {type: 'str'}, messages: {type: 'list'}}`. The template was the
+ * only place in the app that spelled the state block the other way.
  */
 
 /** Node id of the single LLM node the template ships. Referenced by `entry_point`. */
@@ -55,8 +78,10 @@ export const PIPELINE_STARTER_ENTRY_NODE_ID = 'LLM_1';
  * (`state -> entry_point -> nodes`, `dumpYaml.helpers.ts`).
  */
 export const PIPELINE_STARTER_TEMPLATE = `state:
-  input: str
-  messages: list
+  input:
+    type: str
+  messages:
+    type: list
 entry_point: LLM_1
 nodes:
   - id: LLM_1

@@ -10004,14 +10004,14 @@
       "domain": "shell",
       "kind": "shell",
       "priority": "must",
-      "title": "Sidebar entry \"Toolkits\" (group 2)",
+      "title": "Sidebar entry \"Toolkits & Indexes\" (group 2)",
       "source": [
         "apps/elitea-ui/src/[fsd]/widgets/sidebar-root/ui/SidebarBody.jsx:135"
       ],
       "acceptance": [
         "GIVEN a user whose permissions allow the toolkits area",
         "WHEN the sidebar renders",
-        "THEN the \"Toolkits\" entry appears in group 2 and navigates to its screen with the matching breadcrumb",
+        "THEN the \"Toolkits & Indexes\" entry appears in group 2 and navigates to its screen with the matching breadcrumb",
         "AND the entry is absent when its permission group or visibility rule excludes it"
       ],
       "verify": {
