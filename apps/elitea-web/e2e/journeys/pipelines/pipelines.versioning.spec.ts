@@ -93,10 +93,16 @@ async function saveAndAwaitPersist(page: Page): Promise<void> {
  *
  * `expectGraphCarry` waits for the follow-up PUT as well — the create alone
  * leaves the new version without its geometry, and asserting before that lands
- * would race. Pass `false` for a pipeline whose flow editor holds nothing yet
- * (a freshly created one stores no `instructions`, so `usePipelineGraphDraft`
- * returns `undefined` and NO second request is made — deliberately, since
- * writing then would blank a real stored graph).
+ * would race. Pass `false` in a test that asserts nothing about the graph.
+ *
+ * `usePipelineGraphDraft` returns `undefined`, and no second request is made,
+ * only for an editor whose YAML pane is EMPTY — deliberately, since writing
+ * then would blank a real stored graph. That is no longer the state a freshly
+ * created pipeline is in: `pages/pipelines/CreatePipeline.tsx` stores
+ * `shared/lib/pipelineStarterTemplate.ts` when the author typed no document,
+ * so a new pipeline opens on a real graph and the carry PUT follows every
+ * clone. A `false` here therefore means "do not wait for it", not "it does
+ * not happen".
  */
 async function saveAsVersion(page: Page, versionName: string, expectGraphCarry = true): Promise<string> {
   const created = page.waitForResponse(
@@ -144,12 +150,29 @@ test('J16b: "Save As Version" stores a runnable pipeline version, graph and all'
 
   const baseVersionId = await resolveLatestPipelineVersionId(page.request, DEFAULT_PROJECT_ID, id);
   const baseStored = await readStoredPipelineVersion(page.request, DEFAULT_PROJECT_ID, id, baseVersionId);
-  const baseNodeId = storedNodeIds(parseStoredGraph(baseStored.instructions)).find(nodeId => nodeId.startsWith('Printer'));
+  /**
+   * Every node id the base version holds BEFORE the clone.
+   *
+   * Read once, and used below as the exclusion set that names the node this
+   * test added. A new pipeline is no longer created on an empty document:
+   * `pages/pipelines/CreatePipeline.tsx` stores
+   * `shared/lib/pipelineStarterTemplate.ts` when the author typed none, so a
+   * new pipeline opens runnable. That template ships one LLM node, and it is
+   * called `LLM_1`. "The LLM node in the clone" is therefore ambiguous, and
+   * `find(id => id.startsWith('LLM'))` matched the STARTER's node — which the
+   * base legitimately holds — so the last assertion read the base's own
+   * content as an overwrite. Identify the added node by difference instead.
+   */
+  const baseIdsBefore = storedNodeIds(parseStoredGraph(baseStored.instructions));
+  const baseNodeId = baseIdsBefore.find(nodeId => nodeId.startsWith('Printer'));
   expect(baseNodeId, 'the authored Printer node must reach the base version').toBeTruthy();
 
   // Add a SECOND node, do NOT press Save, and clone. The clone must carry the
   // live canvas, not the last-stored document — that is what "Save As Version"
   // means, and the create POST alone would send the stored `instructions`.
+  // The editor mints `LLM_2` here, because `getInitialNodeId`
+  // (`features/pipelines/lib/flow-editor/helpers/nodeIdentity.helpers.ts`)
+  // skips the starter's `LLM_1`.
   await addNodeThroughMenu(page, 'LLM');
   const newVersionId = await saveAsVersion(page, `v${Date.now() % 1e5}`);
   expect(newVersionId).not.toBe(baseVersionId);
@@ -165,7 +188,10 @@ test('J16b: "Save As Version" stores a runnable pipeline version, graph and all'
   const graph = parseStoredGraph(stored.instructions);
   const ids = storedNodeIds(graph);
   expect(ids).toContain(baseNodeId as string);
-  const clonedLlmId = ids.find(nodeId => nodeId.startsWith('LLM'));
+  // The LLM node the base did NOT already carry — that one, and only that
+  // one, was on the canvas and never saved. Matching any `LLM*` would also
+  // match the starter template's `LLM_1`, which the base and the clone share.
+  const clonedLlmId = ids.find(nodeId => nodeId.startsWith('LLM') && !baseIdsBefore.includes(nodeId));
   expect(clonedLlmId, 'the unsaved canvas node must travel with the clone').toBeTruthy();
   for (const nodeId of ids) {
     expect(nodeId, `stored node id "${nodeId}" is not addressable by the pipeline compiler`).toMatch(
@@ -185,8 +211,15 @@ test('J16b: "Save As Version" stores a runnable pipeline version, graph and all'
   expect(stored.meta['step_limit']).toBeDefined();
 
   // The base version is untouched — a clone is a new row, not an overwrite.
+  // Compared against the ids read BEFORE the clone, not against a name shape:
+  // the exclusion above already removed the only id both versions may share by
+  // right, so an equality here says "nothing moved", which is the claim.
   const baseAfter = await readStoredPipelineVersion(page.request, DEFAULT_PROJECT_ID, id, baseVersionId);
-  expect(storedNodeIds(parseStoredGraph(baseAfter.instructions))).not.toContain(clonedLlmId as string);
+  const baseIdsAfter = storedNodeIds(parseStoredGraph(baseAfter.instructions));
+  // Sorted: node ORDER inside the document is not part of the claim, node
+  // CONTENT is. A reorder must not fail this test for the wrong reason.
+  expect(baseIdsAfter).not.toContain(clonedLlmId as string);
+  expect([...baseIdsAfter].sort()).toEqual([...baseIdsBefore].sort());
 });
 
 /**
@@ -277,8 +310,8 @@ test('J16b: "Set as default" moves the pipeline default the SERVER reports', asy
   await expect(page.locator('.react-flow__node[data-id="END"]')).toBeVisible({ timeout: 15_000 });
 
   const baseVersionId = await resolveLatestPipelineVersionId(page.request, DEFAULT_PROJECT_ID, id);
-  // No graph authored here, so no carry PUT follows the create — see
-  // `saveAsVersion`. This test is about the default pointer, not the graph.
+  // This test is about the default POINTER, not the graph, so it does not
+  // wait for the carry PUT — see `saveAsVersion`.
   const newVersionId = await saveAsVersion(page, `v${Date.now() % 1e5}`, false);
   await page.waitForURL(new RegExp(`/app/pipelines/\\w+/${id}/${newVersionId}`), { timeout: 20_000 });
 
