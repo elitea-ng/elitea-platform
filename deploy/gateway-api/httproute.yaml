@@ -91,7 +91,13 @@ spec:
         - path:
             type: Exact
             value: /auth
-        # The liveness endpoint. `/readyz` and `/startupz` are deliberately
+        # The liveness endpoint. It is PUBLIC on both layers (#569): this
+        # match forwards it, and internal/api/main_public_rules.go admits it
+        # with no session (go.health.healthz). The deployment's copy of this
+        # rule carries the forward-auth ExtensionRef, and that filter asks the
+        # policy before it forwards, so a routed-but-not-public /healthz
+        # answered every probe with a 302 to the login form. The body is the
+        # minimal {"status":"ok"}. `/readyz` and `/startupz` are deliberately
         # absent: their bodies name each dependency's state, and no caller
         # reaches them through an edge. The probes reach the pod directly.
         - path:

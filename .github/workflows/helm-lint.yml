@@ -130,6 +130,16 @@ jobs:
       - name: The charts do not ship the LLM path off, and the guards refuse
         run: bash deploy/helm/tests/render-llm-path.sh
 
+      # The liveness path at the chart's own edge (#569). On the cluster,
+      # /healthz sat in the HTTPRoute rule that carries the forward-auth
+      # ExtensionRef while the policy did not name it, so every probe of the
+      # public hostname got a 302 to the login form. This step reads the
+      # RENDERED HTTPRoute and Ingress: both reach /healthz, and no ExtensionRef
+      # stands in front of it. The Go half — the policy admits the path — is
+      # tests/deployedge/edge_public_policy_test.go in the No Binaries workflow.
+      - name: The chart edge publishes /healthz with no authenticating filter
+        run: bash deploy/helm/tests/render-edge-healthz.sh
+
       # The worker templates were rendered by NOTHING before this step: every
       # other render script here, and the template matrix below, set
       # `worker.enabled=false`, and `helm lint` does not enter a body its
