@@ -69,3 +69,7 @@ deploy/helm/*/charts/*.tgz
 # produced by elitea-main's Containerfile from the source in apps/deepwiki-ui;
 # committing it would be a second artefact nobody rebuilds.
 apps/deepwiki-ui/dist/
+
+# Local screenshot scratch from browser validation runs; never committed.
+.shots/
+.shots-tmp/
