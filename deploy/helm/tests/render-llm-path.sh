@@ -310,6 +310,56 @@ refuses "an egress posture that is not one of the two modes" \
   --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS="https://elitea.example.com/llm/v1" \
   --set-string llmGateway.egressPosture=off
 
+# The gateway, guard #3: budget enforcement at startup (issue #304). The budget
+# counters live in NATS, so a gateway with no NATS admits every request, bills
+# nothing, and reports READY — the /readyz gate is scoped to a CONFIGURED NATS.
+refuses "a gateway with no NATS to count budgets in" \
+  "empty GATEWAY_NATS_URL" "$GATEWAY" \
+  --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS="https://elitea.example.com/llm/v1" \
+  --set-string llmGateway.egressPosture=public-unrestricted \
+  --set-string nats.service=
+
+refuses "a require-enforcement value the binary does not read" \
+  "must be one of auto, on or off" "$GATEWAY" \
+  --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS="https://elitea.example.com/llm/v1" \
+  --set-string llmGateway.egressPosture=public-unrestricted \
+  --set-string llmGateway.env.LLM_BUDGET_REQUIRE_ENFORCEMENT=false
+
+refuses "the unmetered posture with no acknowledgement" \
+  "acknowledgeUnenforcedBudgets" "$GATEWAY" \
+  --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS="https://elitea.example.com/llm/v1" \
+  --set-string llmGateway.egressPosture=public-unrestricted \
+  --set-string llmGateway.env.LLM_BUDGET_REQUIRE_ENFORCEMENT=off
+
+# ...and the other direction, twice, because a guard that refused every value
+# would also pass every test above.
+renders "the acknowledged unmetered posture" "$GATEWAY" \
+  --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS="https://elitea.example.com/llm/v1" \
+  --set-string llmGateway.egressPosture=public-unrestricted \
+  --set-string llmGateway.env.LLM_BUDGET_REQUIRE_ENFORCEMENT=off \
+  --set llmGateway.acknowledgeUnenforcedBudgets=true
+
+renders "the strict startup posture" "$GATEWAY" \
+  --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS="https://elitea.example.com/llm/v1" \
+  --set-string llmGateway.egressPosture=public-unrestricted \
+  --set-string llmGateway.env.LLM_BUDGET_REQUIRE_ENFORCEMENT=on
+
+# The setting has to REACH the container, not only survive the guard.
+helm template ${ONLY_GATEWAY} test-release "$GATEWAY" \
+  --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS="https://elitea.example.com/llm/v1" \
+  --set-string llmGateway.egressPosture=public-unrestricted \
+  --set-string llmGateway.env.LLM_BUDGET_REQUIRE_ENFORCEMENT=on >"$WORK/gw-require.yaml"
+if [ "$(deployEnv LLM_BUDGET_REQUIRE_ENFORCEMENT "$WORK/gw-require.yaml")" = "on" ]; then
+  pass "LLM_BUDGET_REQUIRE_ENFORCEMENT reaches the container environment"
+else
+  fail "LLM_BUDGET_REQUIRE_ENFORCEMENT does not reach the container environment, so the startup gate keeps its default"
+fi
+if [ -n "$(deployEnv GATEWAY_NATS_URL "$WORK/gw-require.yaml")" ]; then
+  pass "a default gateway install renders a non-empty GATEWAY_NATS_URL"
+else
+  fail "a default gateway install renders GATEWAY_NATS_URL empty, so budget enforcement is never wired"
+fi
+
 # Both valid postures render, and both reach the container. A guard that
 # refuses everything also passes a test that only checks refusal.
 helm template ${ONLY_GATEWAY} test-release "$GATEWAY" "${GUARDS_OK[@]}" >"$WORK/gw-allowlist.yaml"
