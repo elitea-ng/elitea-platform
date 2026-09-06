@@ -39,6 +39,14 @@ target "elitea-deepwiki" {
 target "elitea-deepwiki-engine" {
   cache-from = ["type=gha,scope=elitea-deepwiki-linux-amd64"]
 }
+// The Inventory provider service runs the Go sub-application host image; its
+// engine sidecar is the elitea-inventory image (a Python service, Debian base).
+target "elitea-inventory" {
+  cache-from = ["type=gha,scope=elitea-subapp-host-linux-amd64"]
+}
+target "elitea-inventory-engine" {
+  cache-from = ["type=gha,scope=elitea-inventory-linux-amd64"]
+}
 target "elitea-web" {
   cache-from = ["type=gha,scope=elitea-web-linux-amd64"]
 }
@@ -57,7 +65,7 @@ target "mcp-mock-trust" {
 
 // deploy/docker-compose.e2e-standalone.yml
 group "e2e" {
-  targets = ["elitea-main", "elitea-deepwiki", "elitea-web"]
+  targets = ["elitea-main", "elitea-deepwiki", "elitea-inventory", "elitea-web"]
 }
 
 // deploy/docker-compose.standalone-full.yml (+ the rust overlay)
@@ -65,6 +73,7 @@ group "standalone" {
   targets = [
     "elitea-migrate", "elitea-agentstate-migrate", "elitea-main",
     "elitea-llm-gateway", "llm-mock", "elitea-deepwiki", "elitea-deepwiki-engine",
+    "elitea-inventory", "elitea-inventory-engine",
     "elitea-web", "elitea-worker", "mcp-mock", "mcp-mock-trust",
   ]
 }
