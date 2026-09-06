@@ -428,6 +428,22 @@ in a release note.**
   own check happens at connect time with no race. The check runs BEFORE
   `vault.Resolve`, so a non-allowlisted destination never causes a decrypt of
   the tenant's `{{secret.NAME}}` key material.
+- **2026-09-05 — The connection probe uses the DIALER's egress predicate, not a
+  second one.** The egress-governance work (gap G6) split one question into two:
+  `EgressAllowlistConfigured` answers "is an allowlist armed", and
+  `allowsPrivateNetwork` answers "does an entry EXPLICITLY name a private host
+  or CIDR". The dialer moved to the second question; `/llm/v1/check_connection`
+  and `/llm/v1/list_provider_models` kept the first. With a name-only entry —
+  the chart's own example — the two disagree. "Test connection" then reported
+  success and wrote `status_ok`, and every chat turn died in the dialer.
+  `EgressPolicy` now declares `EgressPrivateNetworkAllowed`, and
+  `probeAllowsPrivateNetwork` (internal/llmproxy/checkconnection.go) is the ONE
+  place both routes read it. Read it from the account's gate, never from the
+  environment: the gate merges the authored `egress_allowlist` governance rows
+  with the `GATEWAY_EGRESS_ALLOWLIST` floor. Guarded by
+  `TestProbeEgressPredicate_MatchesTheDialer`, which drives the real account and
+  compares the probe's decision with `GetConfigForProvider`; mutation-verified
+  2026-09-05.
 - **[human decision] 2026-08-09 — Upstream response bodies are NEVER echoed to
   callers (issue #13).** bifrost/core puts an unparsable non-2xx body verbatim
   into `Error.Message` (`core@v1.7.3 providers/utils/utils.go`, prefix

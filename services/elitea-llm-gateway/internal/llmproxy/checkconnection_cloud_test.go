@@ -641,7 +641,7 @@ func TestCheckConnection_BedrockEgressDeniedNeverDials(t *testing.T) {
 	fp := newFakeCloudProvider(http.StatusOK, http.StatusOK)
 	defer fp.Close()
 
-	h := newCheckConnectionHandler(fakeEgressPolicy{allow: false, configured: true})
+	h := newCheckConnectionHandler(fakeEgressPolicy{allow: false, privateNetwork: true})
 	rec := doCheckConnection(t, h, checkConnectionRequest{
 		Type: "amazon_bedrock", AWSAccessKeyID: "AKIA", AWSSecretAccessKey: "s", AWSRegionName: "us-east-1",
 	})
@@ -663,7 +663,7 @@ func TestCheckConnection_VertexEgressDeniedNeverDials(t *testing.T) {
 	fp := newFakeCloudProvider(http.StatusOK, http.StatusOK)
 	defer fp.Close()
 
-	h := newCheckConnectionHandler(fakeEgressPolicy{allow: false, configured: true})
+	h := newCheckConnectionHandler(fakeEgressPolicy{allow: false, privateNetwork: true})
 	rec := doCheckConnection(t, h, checkConnectionRequest{
 		Type: "vertex_ai", VertexProject: "p", VertexLocation: "us-central1",
 		VertexCredentials: jsonTextField(`{"type":"service_account","token_uri":"https://sts.example.com/token"}`),
@@ -719,7 +719,7 @@ func TestCheckConnection_CloudMissingFieldsNeverDials(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			h := newCheckConnectionHandler(fakeEgressPolicy{allow: true, configured: true})
+			h := newCheckConnectionHandler(fakeEgressPolicy{allow: true, privateNetwork: true})
 			rec := doCheckConnection(t, h, c.req)
 			resp := decodeCheckConnectionResponse(t, rec)
 			if resp.Success {

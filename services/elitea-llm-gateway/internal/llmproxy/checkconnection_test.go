@@ -12,13 +12,19 @@ import (
 )
 
 // fakeEgressPolicy is a test double for EgressPolicy.
+//
+// privateNetwork stands for "an entry EXPLICITLY names a private host or
+// CIDR", which is the dialer's own predicate. It is NOT "an allowlist is
+// armed": the two disagree for a name-only entry, and the probe read the
+// wrong one. TestProbeEgressPredicate_* drives the REAL account and proves
+// this double still stands for the same decision.
 type fakeEgressPolicy struct {
-	allow      bool
-	configured bool
+	allow          bool
+	privateNetwork bool
 }
 
-func (p fakeEgressPolicy) EgressAllows(string) bool        { return p.allow }
-func (p fakeEgressPolicy) EgressAllowlistConfigured() bool { return p.configured }
+func (p fakeEgressPolicy) EgressAllows(string) bool          { return p.allow }
+func (p fakeEgressPolicy) EgressPrivateNetworkAllowed() bool { return p.privateNetwork }
 
 // fakeProvider is an httptest server standing in for a real AI provider. It
 // counts every request it receives and returns a configurable status, so
@@ -180,7 +186,7 @@ func TestCheckConnection_CloudProviderNeverDialsPrivateAddress(t *testing.T) {
 
 	// Allowlist says yes (operator named this host), but Azure is a cloud
 	// class, so private destinations must still be refused.
-	h := newCheckConnectionHandler(fakeEgressPolicy{allow: true, configured: true})
+	h := newCheckConnectionHandler(fakeEgressPolicy{allow: true, privateNetwork: true})
 	rec := doCheckConnection(t, h, checkConnectionRequest{
 		Type: "azure_open_ai", APIBase: fp.URL, APIKey: "sk-test",
 	})
@@ -214,7 +220,7 @@ func TestCheckConnection_OpenAIWithAPrivateBaseProbesLikeTheRequestPath(t *testi
 	fp := newFakeProvider(http.StatusOK)
 	defer fp.Close()
 
-	h := newCheckConnectionHandler(fakeEgressPolicy{allow: true, configured: true})
+	h := newCheckConnectionHandler(fakeEgressPolicy{allow: true, privateNetwork: true})
 	rec := doCheckConnection(t, h, checkConnectionRequest{
 		Type: "open_ai", APIBase: fp.URL + "/v1", APIKey: "sk-test",
 	})
@@ -231,16 +237,16 @@ func TestCheckConnection_OpenAIWithAPrivateBaseProbesLikeTheRequestPath(t *testi
 	}
 }
 
-// TestCheckConnection_OpenAIWithAPrivateBaseStillNeedsTheAllowlist keeps the
+// TestCheckConnection_OpenAIWithAPrivateBaseStillNeedsAPrivateEntry keeps the
 // gate the fix above must not remove. The private-network carve-out is
-// conditional on the operator having armed GATEWAY_EGRESS_ALLOWLIST, exactly
-// as GetConfigForProvider's carve-out is. With no allowlist no tenant can
-// steer this probe into the cluster.
-func TestCheckConnection_OpenAIWithAPrivateBaseStillNeedsTheAllowlist(t *testing.T) {
+// conditional on the merged allowlist EXPLICITLY naming a private host or
+// CIDR, exactly as GetConfigForProvider's carve-out is. While no entry names
+// one, no tenant can steer this probe into the cluster.
+func TestCheckConnection_OpenAIWithAPrivateBaseStillNeedsAPrivateEntry(t *testing.T) {
 	fp := newFakeProvider(http.StatusOK)
 	defer fp.Close()
 
-	h := newCheckConnectionHandler(fakeEgressPolicy{allow: true, configured: false})
+	h := newCheckConnectionHandler(fakeEgressPolicy{allow: true, privateNetwork: false})
 	rec := doCheckConnection(t, h, checkConnectionRequest{
 		Type: "open_ai", APIBase: fp.URL + "/v1", APIKey: "sk-test",
 	})
@@ -266,7 +272,7 @@ func TestCheckConnection_VLLMProbesTheOpenAISurface(t *testing.T) {
 	fp := newFakeProvider(http.StatusOK)
 	defer fp.Close()
 
-	h := newCheckConnectionHandler(fakeEgressPolicy{allow: true, configured: true})
+	h := newCheckConnectionHandler(fakeEgressPolicy{allow: true, privateNetwork: true})
 	rec := doCheckConnection(t, h, checkConnectionRequest{
 		Type: "vllm", APIBase: fp.URL + "/v1",
 	})
@@ -324,7 +330,7 @@ func TestCheckConnection_OllamaSuccess_RealRoundTrip(t *testing.T) {
 	fp := newFakeProvider(http.StatusOK)
 	defer fp.Close()
 
-	h := newCheckConnectionHandler(fakeEgressPolicy{allow: true, configured: true})
+	h := newCheckConnectionHandler(fakeEgressPolicy{allow: true, privateNetwork: true})
 	rec := doCheckConnection(t, h, checkConnectionRequest{Type: "ollama", APIBase: fp.URL})
 
 	resp := decodeCheckConnectionResponse(t, rec)
@@ -347,7 +353,7 @@ func TestCheckConnection_OllamaBadCredential_RealRoundTrip(t *testing.T) {
 	fp := newFakeProvider(http.StatusUnauthorized)
 	defer fp.Close()
 
-	h := newCheckConnectionHandler(fakeEgressPolicy{allow: true, configured: true})
+	h := newCheckConnectionHandler(fakeEgressPolicy{allow: true, privateNetwork: true})
 	rec := doCheckConnection(t, h, checkConnectionRequest{Type: "ollama", APIBase: fp.URL})
 
 	resp := decodeCheckConnectionResponse(t, rec)
@@ -374,7 +380,7 @@ func TestCheckConnection_IdentitySignatureRequiredWhenConfigured(t *testing.T) {
 	defer fp.Close()
 
 	h := NewHandler(nil, nil, []byte("shared-secret"))
-	h.egressPolicy = fakeEgressPolicy{allow: true, configured: true}
+	h.egressPolicy = fakeEgressPolicy{allow: true, privateNetwork: true}
 
 	raw, _ := json.Marshal(checkConnectionRequest{Type: "ollama", APIBase: fp.URL})
 	req := httptest.NewRequest(http.MethodPost, "/llm/v1/check_connection", bytes.NewReader(raw))

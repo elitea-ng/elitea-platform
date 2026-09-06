@@ -134,7 +134,7 @@ func TestListProviderModels_NeverReachesAPrivateAddress(t *testing.T) {
 	defer fp.Close()
 
 	// Allowlist says yes; Azure is a cloud class, so private is still out.
-	h := newCheckConnectionHandler(fakeEgressPolicy{allow: true, configured: true})
+	h := newCheckConnectionHandler(fakeEgressPolicy{allow: true, privateNetwork: true})
 	resp := doListProviderModels(t, h, checkConnectionRequest{
 		Type: "azure_open_ai", APIBase: fp.URL, APIKey: "sk-test",
 	})
@@ -158,7 +158,7 @@ func TestListProviderModels_OpenAIWithAPrivateBaseListsLikeTheRequestPath(t *tes
 	fp := newFakeListProvider(http.StatusOK, `{"data":[{"id":"qwen3-0.6b"}]}`)
 	defer fp.Close()
 
-	h := newCheckConnectionHandler(fakeEgressPolicy{allow: true, configured: true})
+	h := newCheckConnectionHandler(fakeEgressPolicy{allow: true, privateNetwork: true})
 	resp := doListProviderModels(t, h, checkConnectionRequest{
 		Type: "open_ai", APIBase: fp.URL + "/v1", APIKey: "sk-test",
 	})
@@ -177,7 +177,7 @@ func TestListProviderModels_VLLMListsFromTheOpenAISurface(t *testing.T) {
 	fp := newFakeListProvider(http.StatusOK, `{"data":[{"id":"qwen3-0.6b"}]}`)
 	defer fp.Close()
 
-	h := newCheckConnectionHandler(fakeEgressPolicy{allow: true, configured: true})
+	h := newCheckConnectionHandler(fakeEgressPolicy{allow: true, privateNetwork: true})
 	resp := doListProviderModels(t, h, checkConnectionRequest{
 		Type: "vllm", APIBase: fp.URL + "/v1",
 	})
@@ -203,7 +203,7 @@ func TestListProviderModels_ReturnsIDsAndNothingElse(t *testing.T) {
 	],"account":"org-secret-4711","message":"internal detail"}`)
 	defer fp.Close()
 
-	h := newCheckConnectionHandler(fakeEgressPolicy{allow: true, configured: true})
+	h := newCheckConnectionHandler(fakeEgressPolicy{allow: true, privateNetwork: true})
 	req := httptest.NewRequest(http.MethodPost, "/llm/v1/list_provider_models",
 		strings.NewReader(fmt.Sprintf(`{"type":"ollama","api_base":%q}`, fp.URL)))
 	rec := httptest.NewRecorder()
@@ -265,7 +265,7 @@ func TestListProviderModels_UnsupportedTypeNeverDials(t *testing.T) {
 	fp := newFakeListProvider(http.StatusOK, `{"data":[{"id":"gpt-4o"}]}`)
 	defer fp.Close()
 
-	h := newCheckConnectionHandler(fakeEgressPolicy{allow: true, configured: true})
+	h := newCheckConnectionHandler(fakeEgressPolicy{allow: true, privateNetwork: true})
 	// vllm is listable now, so it is no longer one of these. anthropic still
 	// is: providerConfigTypes can build a key for it, and no lister exists.
 	for _, providerType := range []string{"", "anthropic", "github", "pgvector"} {
@@ -282,7 +282,7 @@ func TestListProviderModels_UnsupportedTypeNeverDials(t *testing.T) {
 // TestListProviderModels_MissingAPIBaseNeverDials proves a payload that names
 // no destination is refused by the checker's own dialTargets function.
 func TestListProviderModels_MissingAPIBaseNeverDials(t *testing.T) {
-	h := newCheckConnectionHandler(fakeEgressPolicy{allow: true, configured: true})
+	h := newCheckConnectionHandler(fakeEgressPolicy{allow: true, privateNetwork: true})
 	resp := doListProviderModels(t, h, checkConnectionRequest{Type: "open_ai", APIBase: "   "})
 	if resp.Success || resp.Reason != checkConnectionReasonMissingBase {
 		t.Fatalf("resp = %+v, want %q", resp, checkConnectionReasonMissingBase)
@@ -305,7 +305,7 @@ func TestListProviderModels_RejectedCredentialIsNotAnEmptyList(t *testing.T) {
 		{http.StatusBadGateway, checkConnectionReasonUpstream},
 	} {
 		fp := newFakeListProvider(tc.status, `{"error":"nope"}`)
-		h := newCheckConnectionHandler(fakeEgressPolicy{allow: true, configured: true})
+		h := newCheckConnectionHandler(fakeEgressPolicy{allow: true, privateNetwork: true})
 		resp := doListProviderModels(t, h, checkConnectionRequest{Type: "ollama", APIBase: fp.URL})
 		fp.Close()
 
@@ -331,7 +331,7 @@ func TestListProviderModels_UnreadableBodyIsNotACredentialVerdict(t *testing.T) 
 	fp := newFakeListProvider(http.StatusOK, `<html>not json</html>`)
 	defer fp.Close()
 
-	h := newCheckConnectionHandler(fakeEgressPolicy{allow: true, configured: true})
+	h := newCheckConnectionHandler(fakeEgressPolicy{allow: true, privateNetwork: true})
 	resp := doListProviderModels(t, h, checkConnectionRequest{Type: "ollama", APIBase: fp.URL})
 
 	if resp.Success {
@@ -403,7 +403,7 @@ func TestListProviderModels_OllamaListsTags(t *testing.T) {
 		`{"models":[{"name":"llama3:latest","model":"llama3:latest"},{"name":"","model":"qwen2:7b"}]}`)
 	defer fp.Close()
 
-	h := newCheckConnectionHandler(fakeEgressPolicy{allow: true, configured: true})
+	h := newCheckConnectionHandler(fakeEgressPolicy{allow: true, privateNetwork: true})
 	resp := doListProviderModels(t, h, checkConnectionRequest{Type: "ollama", APIBase: fp.URL})
 
 	if !resp.Success {
@@ -586,7 +586,7 @@ func TestListProviderModels_CapIsAppliedEndToEnd(t *testing.T) {
 	fp := newFakeListProvider(http.StatusOK, `{"models":[`+strings.Join(entries, ",")+`]}`)
 	defer fp.Close()
 
-	h := newCheckConnectionHandler(fakeEgressPolicy{allow: true, configured: true})
+	h := newCheckConnectionHandler(fakeEgressPolicy{allow: true, privateNetwork: true})
 	resp := doListProviderModels(t, h, checkConnectionRequest{Type: "ollama", APIBase: fp.URL})
 
 	if !resp.Success {
