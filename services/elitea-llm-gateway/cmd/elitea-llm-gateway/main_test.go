@@ -69,6 +69,7 @@ func TestMainWiring(t *testing.T) {
 		{"policyStore.Start(", "the definition store never performs its first load and never refreshes — the gateway would hold the Empty snapshot for the life of the process and enforce no authored definition"},
 		{"govStore.SetBudgetDefaults(", "an authored budget row is never used as the fallback ceiling — a project with no gateway.project_budget row stays unlimited, so the budget rows on the governance page gate nothing"},
 		{`mux.HandleFunc("/governance/status"`, "the operator cannot ask whether a saved definition is actually loaded — a rejected or inert row would be visible only in the logs of whichever pod happened to read it"},
+		{"startEgressAllowlistPlane(", "the authored egress_allowlist rows are never bound to the account's egress gate — every row would load, appear on /governance/status and govern nothing, so an on-premise model endpoint would still need a chart edit and a pod restart (gap G6). The same call starts the watcher that rebuilds the vLLM and Ollama provider workers, whose SSRF-safe dialer LATCHES AllowPrivateNetwork when the worker is created"},
 		{"drainForShutdown(", "in-flight billing + persist goroutines must be drained before pool.Close() or spend is dropped / a pool races"},
 		{"grace.StopStreamGrace(", "phase 1 of shutdown is missing — the stream grace would extend the pod's termination window (issue #9)"},
 		{"srv.ShutdownHTTP(", "graceful drain of in-flight SSE streams (§9.5) — without it, deploys truncate live responses"},

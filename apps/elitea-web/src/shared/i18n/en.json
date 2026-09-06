@@ -3312,5 +3312,17 @@
   "pages.admin.branding.package.versions.restoring": "Restoring…",
   "pages.admin.branding.package.versions.table": "Kept branding packages",
   "pages.admin.branding.package.versions.title": "Previous packages",
-  "pages.admin.branding.package.versions.unnamed": "Unnamed"
+  "pages.admin.branding.package.versions.unnamed": "Unnamed",
+  "pages.admin.governance.field.egressAllowlist": "Permitted destinations",
+  "pages.admin.governance.field.egressAllowlistHelp": "One entry per line, or comma separated: host, host:port, *.domain, or a CIDR block such as 192.168.29.0/24. The FIRST entry turns the restriction on for every provider credential. A private address is only reachable when an entry names that address or its block — a host name alone does not unlock it, because the gateway never resolves a name to decide.",
+  "pages.admin.governance.help.egressAllowlist": "The hosts a provider credential may point at. It applies to every project, and it is added to the GATEWAY_EGRESS_ALLOWLIST the chart sets; nothing here can withdraw a host the chart named.",
+  "pages.admin.governance.scope.noDestinations": "no destinations",
+  "pages.admin.governance.type.egressAllowlist": "Egress allowlist",
+  "pages.admin.llmProxy.status.egressDropped": "The gateway could not parse these authored entries, so they permit nothing: {{entries}}.",
+  "pages.admin.llmProxy.status.egressEffective": "Permitted destinations",
+  "pages.admin.llmProxy.status.egressFromChart": "From the chart",
+  "pages.admin.llmProxy.status.egressFromGovernance": "From governance",
+  "pages.admin.llmProxy.status.egressPrivateClosed": "No entry names a private address or block, so a self-hosted endpoint on a private network is not reachable. Add the host AND its block, for example 192.168.29.60:8000 and 192.168.29.0/24. A host name alone does not unlock it, because the gateway never resolves a name to decide.",
+  "pages.admin.llmProxy.status.egressTitle": "Egress allowlist in force",
+  "pages.admin.llmProxy.status.egressUnrestricted": "No entry is configured anywhere, so a credential may name any public host. Private addresses stay unreachable. Adding the first entry turns the restriction on for every credential."
 }

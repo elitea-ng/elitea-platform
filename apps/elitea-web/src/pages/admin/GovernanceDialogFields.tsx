@@ -48,6 +48,8 @@ export function typeLabel(type: string): string {
       return t('pages.admin.governance.type.credentialPolicy', 'Credential rate policy');
     case 'routing_rule':
       return t('pages.admin.governance.type.routingRule', 'CEL routing rule');
+    case 'egress_allowlist':
+      return t('pages.admin.governance.type.egressAllowlist', 'Egress allowlist');
     default:
       return type;
   }
@@ -85,6 +87,11 @@ export function typeHelp(type: string): string {
       return t(
         'pages.admin.governance.help.routingRule',
         'A CEL predicate plus weighted targets. When it matches, the request is dispatched to one of the targets instead. A routed target is still judged by the model allowlist.',
+      );
+    case 'egress_allowlist':
+      return t(
+        'pages.admin.governance.help.egressAllowlist',
+        'The hosts a provider credential may point at. It applies to every project, and it is added to the GATEWAY_EGRESS_ALLOWLIST the chart sets; nothing here can withdraw a host the chart named.',
       );
     default:
       return '';
@@ -320,6 +327,23 @@ export function TypeFields({
       );
     case 'routing_rule':
       return <RoutingFields draft={draft} onChange={onChange} />;
+    case 'egress_allowlist':
+      return (
+        <TextField
+          label={t('pages.admin.governance.field.egressAllowlist', 'Permitted destinations')}
+          helperText={t(
+            'pages.admin.governance.field.egressAllowlistHelp',
+            'One entry per line, or comma separated: host, host:port, *.domain, or a CIDR block such as 192.168.29.0/24. The FIRST entry turns the restriction on for every provider credential. A private address is only reachable when an entry names that address or its block \u2014 a host name alone does not unlock it, because the gateway never resolves a name to decide.',
+          )}
+          value={draft.egressAllowlist}
+          onChange={(event) => onChange({ egressAllowlist: event.target.value })}
+          size="small"
+          fullWidth
+          multiline
+          minRows={3}
+          slotProps={{ htmlInput: { 'data-testid': 'governance-egress-allowlist' } }}
+        />
+      );
     case 'model_config':
       return null;
   }

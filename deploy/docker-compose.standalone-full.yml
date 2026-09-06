@@ -469,7 +469,21 @@ services:
       # spares the operator who enables the profile a second, easily-forgotten
       # variable — the failure that variable prevents is a 502 that reads as
       # "the model is down".
-      GATEWAY_EGRESS_ALLOWLIST: "${GATEWAY_EGRESS_ALLOWLIST-llm-mock:8090,llm-real:8090}"
+      #
+      # GAP G6: the three RFC 1918 blocks are HERE, and they are load-bearing.
+      # The gateway relaxes bifrost's SSRF-safe dialer only when an entry NAMES
+      # a private address or block; a hostname alone does not, because the
+      # gateway never resolves a name to make that decision. `llm-mock` and
+      # `llm-real` are compose service names that resolve inside the compose
+      # network, which is private, so without a block entry every hop to them
+      # fails with a dialer refusal that reads as "the model is down".
+      #
+      # All three blocks rather than one: compose picks the subnet, and it
+      # differs between podman, Docker Desktop and a plain Linux daemon. This is
+      # a DEVELOPMENT stack on one machine, so the breadth costs nothing here.
+      # A Helm install names its own host and block instead — see
+      # deploy/helm/elitea/values.yaml.
+      GATEWAY_EGRESS_ALLOWLIST: "${GATEWAY_EGRESS_ALLOWLIST-llm-mock:8090,llm-real:8090,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}"
 
       # Issue #458 — the platform's SHARED ("public") project.
       #

@@ -3,6 +3,7 @@ go 1.25.8
 use (
 	./gen/go
 	./libs/go/authlib
+	./libs/go/egresslib
 	./libs/go/eventslib
 	./libs/go/observability
 	./libs/go/rpclib

@@ -141,6 +141,19 @@ func (s *Store) Current() *Snapshot {
 	return Empty
 }
 
+// EgressAllowlist returns the authored egress entries of the CURRENT snapshot.
+//
+// It exists so the store itself satisfies account.EgressSource: the account
+// holds one long-lived reference and always reads the live snapshot through it,
+// rather than being handed a snapshot that goes stale on the next refresh. A
+// nil store reports nothing, which leaves the account on its environment floor.
+func (s *Store) EgressAllowlist() []string {
+	if s == nil {
+		return nil
+	}
+	return s.Current().EgressAllowlist()
+}
+
 // Load performs one read-and-compile, publishing the result on success.
 //
 // A FAILED read leaves the previous snapshot in place. That is deliberate and
@@ -215,6 +228,7 @@ func (s *Store) logSnapshot(snap *Snapshot) {
 		"mcp_allowlists", d.MCPAllowlists,
 		"credential_policies", d.CredentialPolicy,
 		"routing_rules", d.RoutingRules,
+		"egress_allowlists", d.EgressAllowlists,
 		"rejected", len(d.Rejected),
 		"inert", len(d.Inert),
 	)

@@ -21,7 +21,7 @@ import (
 func statusBody(t *testing.T, sharedProjectID string) governanceStatusBody {
 	t.Helper()
 	recorder := httptest.NewRecorder()
-	makeGovernanceStatusHandler(nil, nil, sharedProjectID)(
+	makeGovernanceStatusHandler(nil, nil, sharedProjectID, nil)(
 		recorder, httptest.NewRequest(http.MethodGet, "/governance/status", nil))
 
 	if recorder.Code != http.StatusOK {
@@ -48,7 +48,7 @@ func TestTheStatusRouteNamesTheSharedProject(t *testing.T) {
 // gateway is too old to say".
 func TestAnUnarmedSharedScopeReportsEmpty(t *testing.T) {
 	recorder := httptest.NewRecorder()
-	makeGovernanceStatusHandler(nil, nil, "")(
+	makeGovernanceStatusHandler(nil, nil, "", nil)(
 		recorder, httptest.NewRequest(http.MethodGet, "/governance/status", nil))
 
 	var raw map[string]json.RawMessage

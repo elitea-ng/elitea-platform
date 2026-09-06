@@ -630,7 +630,7 @@ EOF
           echo "   ! the gateway does NOT allow egress to '${EGRESS_NEEDED}' (allowlist: '${EGRESS_HAVE:-<unset>}')."
           echo "     Every turn will reach the model and come back 500 EGRESS_HOST_NOT_ALLOWED."
           echo "     Restart the gateway with it allowed:"
-          echo "       GATEWAY_EGRESS_ALLOWLIST=\"${EGRESS_HAVE:-llm-mock:8090},${EGRESS_NEEDED}\" \\"
+          echo "       GATEWAY_EGRESS_ALLOWLIST=\"${EGRESS_HAVE:-llm-mock:8090},${EGRESS_NEEDED},10.0.0.0/8,172.16.0.0/12,192.168.0.0/16\" \\"
           echo "         $0 up          # or: compose up -d --force-recreate elitea-llm-gateway" ;;
       esac
     fi
