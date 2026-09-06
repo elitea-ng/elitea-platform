@@ -355,8 +355,10 @@ jobs:
             target: ""
             expect_type: gobinary
             blocking: true
+          # Repo ROOT context: the Containerfile COPYs libs/go/egresslib, the
+          # local `replace` target in this module's go.mod.
           - name: elitea-llm-gateway
-            context: ./services/elitea-llm-gateway
+            context: .
             dockerfile: ./services/elitea-llm-gateway/Containerfile
             target: final
             expect_type: gobinary

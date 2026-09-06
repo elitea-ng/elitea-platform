@@ -3,8 +3,16 @@
 # elitea-llm-gateway is a STANDALONE Go module that needs Go 1.26.4 or above
 # (required by github.com/maximhq/bifrost/core). It is deliberately NOT part of
 # the root go.work workspace — that workspace stays on Go 1.25.8 for elitea-main
-# and elitea-scheduler, whose toolchain must not be bumped. The build context is
-# this module directory only, so it never inherits the workspace toolchain.
+# and elitea-scheduler, whose toolchain must not be bumped.
+#
+# The build context is the REPOSITORY ROOT, not this directory. The module
+# replaces github.com/EliteaAI/elitea-platform/libs/go/egresslib with
+# ../../libs/go/egresslib, and `go mod download` reads that replacement's
+# go.mod before anything else: with a module-only context the build failed at
+# once with "reading /src/libs/go/egresslib/go.mod: no such file or directory".
+# The root context does NOT make this module inherit the workspace toolchain —
+# go.work is never copied in, and `go build` still runs with GOWORK=off. Keep
+# it that way: copy this module and the libraries it replaces, nothing else.
 #
 # The tag was `golang:1.26.4-alpine`. An exact patch pin freezes the Go standard
 # library, and the standard library gets CVEs like any other package: the scan
@@ -15,8 +23,13 @@
 FROM golang:1.26-alpine AS builder
 WORKDIR /src
 
+# Preserve the repository-relative module layout, because the relative
+# `replace` directives in go.mod resolve against this module's directory.
+# EVERY relative replace needs a line here.
+COPY libs/go/egresslib ./libs/go/egresslib
 # Cache module downloads separately from source.
-COPY go.mod go.sum ./
+COPY services/elitea-llm-gateway/go.mod services/elitea-llm-gateway/go.sum ./services/elitea-llm-gateway/
+WORKDIR /src/services/elitea-llm-gateway
 # A TRANSIENT proxy.golang.org failure must not fail the build.
 #
 # Observed in CI: `read "https://proxy.golang.org/.../@v/vX.Y.Z.zip": stream
@@ -46,7 +59,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     echo "go mod download failed after 5 attempts" >&2; \
     exit 1
 
-COPY . .
+COPY services/elitea-llm-gateway/ ./
 
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64

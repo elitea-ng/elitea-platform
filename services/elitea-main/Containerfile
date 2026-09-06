@@ -42,10 +42,18 @@ WORKDIR /src
 ARG VERSION=dev
 
 # Preserve the repository-relative module layout because elitea-main replaces
-# the generated protobuf module with ../../libs/proto/gen/go, and (issue #250)
-# the observability module with ../../libs/go/observability.
+# the generated protobuf module with ../../libs/proto/gen/go, (issue #250) the
+# observability module with ../../libs/go/observability, and the egress
+# allowlist parser with ../../libs/go/egresslib.
+#
+# EVERY relative `replace` in services/elitea-main/go.mod needs a line here.
+# `go mod download` reads the replacement's go.mod before it reads anything
+# else, so a missing directory fails the build immediately with
+# "reading /src/libs/go/<name>/go.mod: no such file or directory" — the whole
+# image, not one package.
 COPY libs/proto/gen/go ./libs/proto/gen/go
 COPY libs/go/observability ./libs/go/observability
+COPY libs/go/egresslib ./libs/go/egresslib
 COPY services/elitea-main/go.mod services/elitea-main/go.sum ./services/elitea-main/
 WORKDIR /src/services/elitea-main
 # A TRANSIENT proxy.golang.org failure must not fail the build.

@@ -240,8 +240,10 @@ jobs:
           # golang:1.26-alpine and carries its own toolchain, so no runner-image
           # bump is required here. scripts/ci/check-gateway-toolchain.sh holds
           # that tag and the ci-gateway.yml pin together (#506).
+          # Repo ROOT context: the Containerfile COPYs libs/go/egresslib, the
+          # local `replace` target in this module's go.mod.
           - name: elitea-llm-gateway
-            context: ./services/elitea-llm-gateway
+            context: .
             dockerfile: ./services/elitea-llm-gateway/Containerfile
           # Repo ROOT context, like elitea-main and unlike the two services
           # above: the Containerfile COPYs libs/proto (:19) and
