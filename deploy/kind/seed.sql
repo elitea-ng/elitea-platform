@@ -67,11 +67,16 @@ ON CONFLICT (project_id, name) WHERE deleted_at IS NULL DO NOTHING;
 -- ── The caller's project membership ─────────────────────────────────────────
 -- internal/infra/legacyrbac/postgres.go resolves a PROJECT permission from
 -- auth_core__project_user_role and nothing else: a global role grants nothing
--- inside a project. 001_initial.sql seeds project 1 with no project roles at
--- all, so the dev user is not a member of it and every facade call answers
--- 403 "insufficient permissions".
+-- inside a project. Without a membership row the dev user is not a member of
+-- project 1 and every facade call answers 403 "insufficient permissions".
 --
--- The three roles are created and the user is made an admin of the project.
+-- Shared migration 0111 now gives project 1 the roles a provisioned project
+-- gets — admin, editor, viewer and system — so the INSERT below usually
+-- writes nothing. It stays for the database 0111 skips: 0111 seeds the roles
+-- only when centry.project already holds id 1 when it runs.
+--
+-- The MEMBERSHIP is what this file still owns. 0111 creates roles and makes
+-- nobody a member of anything.
 -- DELIBERATELY WITHOUT auth_core__project_role_permission ROWS: the resolver
 -- falls back to the CENTRAL matrix for a project role that carries no
 -- overrides, and the central matrix is where shared migration 0106 grants
