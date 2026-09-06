@@ -102,10 +102,18 @@ type ProvisionResult struct {
 }
 
 // Repository owns the transaction that resolves or creates the user, links
-// the provider, applies current-baseline group/profile/initial-admin rules, and
-// applies project reconciliation in that same transaction. A successful result
-// is returned only after all those effects commit. A suspended result must be
-// returned without committing provisioning or reconciliation effects.
+// the provider, applies current-baseline group/profile/initial-admin rules,
+// applies project reconciliation, and issues the actor personal access token
+// the agent runtime signs the person's calls with — all in that same
+// transaction. A successful result is returned only after all those effects
+// commit. A suspended result must be returned without committing provisioning
+// or reconciliation effects.
+//
+// The actor token belongs in the SAME list as the initial-admin grant because
+// the other browser plane (internal/api/v2/auth, mounted when single sign-on
+// is configured) already leaves both rows behind. When only one plane left the
+// token behind, which login route an operator chose decided whether a fresh
+// install could complete a chat turn.
 type Repository interface {
 	Provision(ctx context.Context, command ProvisionCommand) (ProvisionResult, error)
 }
