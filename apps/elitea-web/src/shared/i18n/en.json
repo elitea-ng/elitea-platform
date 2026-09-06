@@ -3016,7 +3016,7 @@
   "deepwiki.generate.confirmStart": "Generate",
   "deepwiki.generate.confirmTitle": "Generate wiki documentation?",
   "deepwiki.generate.excludeTests": "Skip tests",
-  "deepwiki.generate.noCodeToolkit": "Set code_toolkit in the toolkit settings first: the provider needs a repository toolkit to clone from.",
+  "deepwiki.generate.noSource": "The toolkit names no source. Set code_toolkit for a repository toolkit to clone, or choose an artifact folder to read.",
   "deepwiki.generate.noInvocation": "The provider accepted the request but returned no invocation to follow.",
   "deepwiki.generate.planner": "Planner",
   "deepwiki.generate.plannerAgentic": "Agentic",
@@ -3532,5 +3532,10 @@
   "shared.entityList.table.authors": "Authors",
   "shared.entityList.table.created": "Created",
   "shared.entityList.table.name": "Name & Description",
-  "shared.entityList.table.type": "Type"
+  "shared.entityList.table.type": "Type",
+  "deepwiki.source.bucket": "Bucket",
+  "deepwiki.source.folder": "Artifact folder",
+  "deepwiki.source.label": "Wiki source",
+  "deepwiki.source.prefix": "Folder (optional)",
+  "deepwiki.source.repository": "Repository"
 }

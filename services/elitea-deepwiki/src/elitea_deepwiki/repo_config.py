@@ -16,15 +16,32 @@ Only the GitHub path is covered by a P0 fixture
 (``generation/composed_result.json``'s ``engine_call.repo_config``); the other
 three are carried on trust, which is an argument for copying, not against.
 
-ONE MODIFICATION, named here because the copy is otherwise verbatim: the
-legacy code logged its suspicious-ADO warning through Pylon's ``log``. That is
-the stdlib logger below. Nothing else differs.
+TWO MODIFICATIONS, named here because the copy is otherwise verbatim.
+
+1. The legacy code logged its suspicious-ADO warning through Pylon's ``log``.
+   That is the stdlib logger below.
+2. A FIFTH provider type, ``artifact``, which the legacy plugin never had: a
+   wiki whose source is a folder in the invoking project's artifact store
+   rather than a git remote. It is a new branch, placed BEFORE the legacy
+   four-provider test and returning early, so no legacy path changes shape.
+   See ``elitea_deepwiki.artifact_source`` for what the engine then does with
+   it, and ``run/repoconfig.go`` for the Go twin of this branch.
+
+Nothing else differs.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Optional
+
+from .artifact_source import (
+    ARTIFACT_SCHEME,
+    is_artifact_source,
+    parse_artifact_source,
+    repo_config_for,
+    source_from_configuration,
+)
 
 log = logging.getLogger(__name__)
 
@@ -34,7 +51,54 @@ _TOOLKIT_PROVIDER_KEYS = (
     'gitlab_configuration',
     'bitbucket_configuration',
     'ado_configuration',
+    # The fifth, added here rather than only in the branch below so that the
+    # prefixed and unprefixed spellings merge the same way every other
+    # provider's do. The UI and the API disagree about the prefix for all of
+    # them, and an artifact source is no exception.
+    'artifact_configuration',
 )
+
+
+ARTIFACT_CONFIGURATION_KEYS = (
+    'artifact_configuration',
+    'toolkit_configuration_artifact_configuration',
+)
+
+
+def _extract_artifact_source(repo_settings: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The fifth provider: a folder in the project's artifact store.
+
+    Returns the normalised ``repo_config``, or ``None`` when this payload
+    names no artifact source — in which case the legacy four-provider chain
+    below runs exactly as it always did.
+
+    Two spellings are accepted, because two layers name the source. The
+    toolkit carries an ``artifact_configuration`` block with a bucket and an
+    optional folder prefix; a request that was already normalised carries the
+    ``artifact://`` repository string alone. Both resolve to the same source.
+    """
+    if not isinstance(repo_settings, dict):
+        return None
+
+    branch = (
+        repo_settings.get('active_branch')
+        or repo_settings.get('toolkit_configuration_active_branch')
+        or repo_settings.get('version_label')
+        or repo_settings.get('branch')
+        or 'main'
+    )
+
+    for key in ARTIFACT_CONFIGURATION_KEYS:
+        source = source_from_configuration(repo_settings.get(key))
+        if source is not None:
+            return repo_config_for(source, branch)
+
+    repository = repo_settings.get('repository')
+    if is_artifact_source(repository):
+        return repo_config_for(parse_artifact_source(repository), branch)
+    return None
+
+
 def _payload_contains_provider_key(params: Dict[str, Any], provider_key: str) -> bool:
     """Check known toolkit payload locations for a provider-specific config key."""
     sources = [
@@ -118,7 +182,7 @@ def _extract_repo_config_from_toolkit(params: Dict[str, Any]) -> Dict[str, Any]:
     """
     Extract repository configuration from expanded code_toolkit.
     
-    Supports: github, gitlab, bitbucket, ado_repos
+    Supports: github, gitlab, bitbucket, ado_repos, and — added here — artifact
     
     Returns a normalized repo_config dict with:
         - provider_type: str (github, gitlab, bitbucket, ado_repos)
@@ -152,6 +216,15 @@ def _extract_repo_config_from_toolkit(params: Dict[str, Any]) -> Dict[str, Any]:
 
     if not repo_settings and isinstance(params, dict):
         repo_settings = _merge_provider_configs(params)
+
+    # ELITEA-PLATFORM ADDITION. The artifact source is tested FIRST and
+    # returns early: it shares none of the four providers' key precedence, and
+    # a payload that names one names nothing else.
+    artifact_config = _extract_artifact_source(repo_settings)
+    if artifact_config is None and isinstance(params, dict):
+        artifact_config = _extract_artifact_source(params)
+    if artifact_config is not None:
+        return artifact_config
 
     if isinstance(repo_settings, dict) and any(
         key in repo_settings
@@ -250,4 +323,4 @@ def _extract_repo_config_from_toolkit(params: Dict[str, Any]) -> Dict[str, Any]:
     return repo_config
 
 
-__all__ = ["_extract_repo_config_from_toolkit"]
+__all__ = ["ARTIFACT_SCHEME", "_extract_artifact_source", "_extract_repo_config_from_toolkit"]

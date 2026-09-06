@@ -73,14 +73,100 @@ function DeepWikiProbe(): null {
 }
 
 describe('WikiGenerationPanel', () => {
-  it('refuses to start without a code_toolkit, naming the setting, and sends nothing', async () => {
+  it('refuses to start when the settings name no source at all, and sends nothing', async () => {
     const user = userEvent.setup();
     serveSlots();
     let posted = false;
     server.use(http.post(`${BASE}/deepwiki/tools/:p/:tk/:tool/invoke`, () => { posted = true; return HttpResponse.json({ invocation_id: 'x' }); }));
     show(<WikiGenerationPanel projectId="7" toolkitId="42" settings={{ repository: 'acme/svc' }} hasWiki={false} />);
     await user.click(await screen.findByTestId('wiki-generate'));
-    expect(await screen.findByTestId('wiki-generate-error')).toHaveTextContent(/code_toolkit/);
+    // The message names BOTH sources: a folder is as good an answer as a
+    // repository toolkit, and one that named only `code_toolkit` sent an
+    // operator who had chosen a folder looking for the wrong setting.
+    expect(await screen.findByTestId('wiki-generate-error')).toHaveTextContent(/repository toolkit/);
+    expect(await screen.findByTestId('wiki-generate-error')).toHaveTextContent(/artifact folder/);
+    expect(posted).toBe(false);
+  });
+
+  it('starts a FOLDER source without a code_toolkit, and without the refusal', async () => {
+    // A folder source travels in the settings themselves. The facade derives
+    // the repository from `artifact_configuration` and needs no reference at
+    // all, so the check that guards the repository path must not refuse it.
+    const user = userEvent.setup();
+    serveSlots();
+    let body: Record<string, unknown> | null = null;
+    server.use(
+      http.post(`${BASE}/deepwiki/tools/:p/:tk/:tool/invoke`, async ({ request }) => {
+        body = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({ invocation_id: 'inv-folder', status: 'Started' });
+      }),
+    );
+    servePolls([{ status: 'InProgress' }]);
+    show(
+      <WikiGenerationPanel
+        projectId="7"
+        toolkitId="42"
+        settings={{ artifact_configuration: { bucket: 'docs', prefix: 'handbook' }, llm_model: 'gpt-5' }}
+        hasWiki={false}
+      />,
+    );
+    await user.click(await screen.findByTestId('wiki-generate'));
+    await waitFor(() => expect(body).not.toBeNull());
+    expect(body).toMatchObject({
+      configuration: { parameters: { artifact_configuration: { bucket: 'docs', prefix: 'handbook' } } },
+    });
+    expect(screen.queryByTestId('wiki-generate-error')).toBeNull();
+  });
+
+  it('sends ONE source: a folder drops the code_toolkit the settings still carry', async () => {
+    // The facade answers 400 to a body naming both ("a wiki has one source"),
+    // and a toolkit that used to name a repository still carries the
+    // reference. Spreading the settings unchanged would send both.
+    const user = userEvent.setup();
+    serveSlots();
+    let parameters: Record<string, unknown> | null = null;
+    server.use(
+      http.post(`${BASE}/deepwiki/tools/:p/:tk/:tool/invoke`, async ({ request }) => {
+        const sent = (await request.json()) as { configuration: { parameters: Record<string, unknown> } };
+        parameters = sent.configuration.parameters;
+        return HttpResponse.json({ invocation_id: 'inv-folder', status: 'Started' });
+      }),
+    );
+    servePolls([{ status: 'InProgress' }]);
+    show(
+      <WikiGenerationPanel
+        projectId="7"
+        toolkitId="42"
+        settings={{ artifact_configuration: { bucket: 'docs' }, code_toolkit: 9, toolkit_configuration_code_toolkit: 9 }}
+        hasWiki={false}
+      />,
+    );
+    await user.click(await screen.findByTestId('wiki-generate'));
+    await waitFor(() => expect(parameters).not.toBeNull());
+    expect(parameters).toEqual({ artifact_configuration: { bucket: 'docs' } });
+  });
+
+  it('still refuses a folder this deployment will not accept', async () => {
+    // A malformed block is not a source. The panel then asks for a source it
+    // can use, rather than sending a body the facade refuses.
+    const user = userEvent.setup();
+    serveSlots();
+    let posted = false;
+    server.use(http.post(`${BASE}/deepwiki/tools/:p/:tk/:tool/invoke`, () => { posted = true; return HttpResponse.json({ invocation_id: 'x' }); }));
+    show(
+      <WikiGenerationPanel
+        projectId="7"
+        toolkitId="42"
+        settings={{ artifact_configuration: { bucket: 'My_Docs' } }}
+        hasWiki={false}
+      />,
+    );
+    await user.click(await screen.findByTestId('wiki-generate'));
+    // The message names BOTH sources: a folder is as good an answer as a
+    // repository toolkit, and one that named only `code_toolkit` sent an
+    // operator who had chosen a folder looking for the wrong setting.
+    expect(await screen.findByTestId('wiki-generate-error')).toHaveTextContent(/repository toolkit/);
+    expect(await screen.findByTestId('wiki-generate-error')).toHaveTextContent(/artifact folder/);
     expect(posted).toBe(false);
   });
 

@@ -67,6 +67,8 @@ import json
 import re
 from typing import Any, Callable, Iterable
 
+from .artifact_source import is_artifact_source, parse_artifact_source
+
 #: The whole block's ceiling, in characters.
 TOTAL_BUDGET_CHARS = 32_000
 
@@ -117,12 +119,18 @@ class ContextRefused(ValueError):
     """
 
 
-def wiki_id_for(repo_config: dict[str, Any] | None, branch: str | None) -> str:
-    """The canonical ``{owner}--{repo}--{branch}`` the engine derives.
+def display_repository_for(repo_config: dict[str, Any] | None) -> str:
+    """The repository a wiki is NAMED after.
 
-    The one derivation in this package: the fixture runner imports it rather
-    than keeping a second copy, because a fixture that derived a different
-    wiki id would land its pages under keys nothing reads.
+    For a git source it is the repository itself. For an artifact folder it is
+    ``{bucket}/{prefix}``: the ``artifact://`` scheme is dropped first,
+    because this string becomes the wiki id — an object-key prefix, and what
+    the browser matches a manifest on — and ``artifact:----docs--handbook``
+    is not a name anybody asked for.
+
+    The Go twin is ``run.DisplayRepositoryFor``; the two must agree, because
+    the Go and the Python fixture runners serve the same journeys on
+    different stacks.
     """
     repository = ""
     if isinstance(repo_config, dict):
@@ -131,7 +139,20 @@ def wiki_id_for(repo_config: dict[str, Any] | None, branch: str | None) -> str:
             provider = repo_config.get("provider_config")
             if isinstance(provider, dict):
                 repository = str(provider.get("repository") or "")
-    repository = repository.strip().strip("/") or "fixture/repository"
+    if is_artifact_source(repository):
+        source = parse_artifact_source(repository)
+        return f"{source.bucket}/{source.prefix}" if source.prefix else source.bucket
+    return repository.strip().strip("/")
+
+
+def wiki_id_for(repo_config: dict[str, Any] | None, branch: str | None) -> str:
+    """The canonical ``{owner}--{repo}--{branch}`` the engine derives.
+
+    The one derivation in this package: the fixture runner imports it rather
+    than keeping a second copy, because a fixture that derived a different
+    wiki id would land its pages under keys nothing reads.
+    """
+    repository = display_repository_for(repo_config) or "fixture/repository"
     return f"{repository.replace('/', '--')}--{(branch or 'main').strip() or 'main'}"
 
 
