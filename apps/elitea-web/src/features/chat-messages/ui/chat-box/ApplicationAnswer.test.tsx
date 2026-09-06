@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 
 import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 
@@ -107,5 +108,50 @@ describe('ApplicationAnswer caption line and reasoning summary', () => {
     const panel = screen.getByText('The user is greeting me.').closest('.MuiCollapse-root');
     expect(panel).not.toBeNull();
     expect(panel?.className).toContain('MuiCollapse-hidden');
+  });
+
+  it('still opens the reasoning panel of a turn the reader WATCHED stream', async () => {
+    // The regression the toolkit journey caught, and the reason a click test
+    // on a freshly-mounted row could not: this panel mounts with its first
+    // action, which arrives while the turn is still streaming. MUI decides
+    // controlled-vs-uncontrolled once, on that first render, so a panel that
+    // took `expanded` only while `isStreaming` mounted CONTROLLED and stayed
+    // controlled — and it was passed no `onChange`. When the turn settled the
+    // panel closed and the summary became inert: every tool call and every
+    // reasoning step of the turn was unreachable until a page reload.
+    //
+    // Reloading is what the earlier test above renders, which is why it kept
+    // passing. The transition is the subject here, so the render starts
+    // streaming and the flag is dropped exactly as the settle path drops it.
+    const user = userEvent.setup();
+    const { rerender } = renderWithTheme(
+      <ApplicationAnswer
+        answer={withActions}
+        messageId={withActions.id}
+        toolActions={withActions.toolActions}
+        author={{ participantName: 'Elitea' }}
+        status={{ isStreaming: true }}
+      />,
+    );
+
+    // While the turn runs the panel is forced open, as in the baseline.
+    expect(screen.getByRole('button', { name: /Thought for/ }).getAttribute('aria-expanded')).toBe('true');
+
+    rerender(
+      <ApplicationAnswer
+        answer={withActions}
+        messageId={withActions.id}
+        toolActions={withActions.toolActions}
+        author={{ participantName: 'Elitea' }}
+        status={{ isStreaming: false }}
+      />,
+    );
+
+    const summary = screen.getByRole('button', { name: /Thought for/ });
+    expect(summary.getAttribute('aria-expanded')).toBe('false');
+
+    await user.click(summary);
+    expect(summary.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByText('The user is greeting me.')).toBeVisible();
   });
 });

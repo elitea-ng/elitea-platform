@@ -6,8 +6,8 @@
  * `ApplicationThinkView` (full streaming-liveness parity is out of scope,
  * see `ApplicationAnswer.tsx`'s module doc).
  */
-import type { ReactNode } from 'react';
-import { useMemo } from 'react';
+import type { ReactNode, SyntheticEvent } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 
 import Box from '@mui/material/Box';
 import type { Theme } from '@mui/material/styles';
@@ -149,6 +149,34 @@ export interface ApplicationAnswerThinkingProps {
 }
 
 export function ApplicationAnswerThinking({ actions, isStreaming = false }: ApplicationAnswerThinkingProps): ReactNode {
+  /*
+   * THE PANEL'S OWN OPEN STATE, which it did not have.
+   *
+   * It used to spread `expanded` onto the accordion only while streaming
+   * (`{...(isStreaming ? { expanded: true } : {})}`) and pass no `onChange`.
+   * MUI decides controlled-vs-uncontrolled ONCE, on the first render, from
+   * `expanded !== undefined` (`@mui/utils`'s `useControlled`, whose
+   * `isControlled` is a `useRef`). This component mounts with its first
+   * action, which arrives WHILE the turn streams — so it mounted controlled,
+   * for the whole life of that message. When the turn settled `expanded` went
+   * back to `undefined`: the panel closed, and because a controlled
+   * `Accordion` toggles only through `onChange`, which was never passed,
+   * clicking the summary did nothing at all. Every tool call and every
+   * reasoning step of a turn the user WATCHED was then unreachable until the
+   * page was reloaded, when the same component mounted uncontrolled and
+   * behaved. That is the defect the toolkit journey caught as a permanently
+   * hidden `chat-tool-action` row.
+   *
+   * The state is local and always defined, so the accordion is controlled for
+   * its whole lifetime and the transition never happens. The value is the
+   * baseline's own (`ApplicationThinkView.jsx`: `expanded={isStreaming ||
+   * expanded}`): forced open while the turn runs, the reader's choice after.
+   */
+  const [openedByReader, setOpenedByReader] = useState(false);
+  const handleToggle = useCallback((_event: SyntheticEvent, value: boolean) => {
+    setOpenedByReader(value);
+  }, []);
+
   const blocks = useMemo(
     () =>
       partitionActionsIntoBlocks(actions, {
@@ -168,7 +196,8 @@ export function ApplicationAnswerThinking({ actions, isStreaming = false }: Appl
       uppercase={false}
       showMode="left"
       defaultExpanded={false}
-      {...(isStreaming ? { expanded: true } : {})}
+      expanded={isStreaming || openedByReader}
+      onChange={handleToggle}
       slotSx={{ root: { width: '100%' }, ...thinkingSlotSx }}
       items={[
         {
