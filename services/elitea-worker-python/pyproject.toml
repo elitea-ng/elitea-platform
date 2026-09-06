@@ -18,7 +18,7 @@ dependencies = [
   # registry's lightweight tools package initializer. Keep these aligned with
   # the pinned SDK runtime extra without installing the full indexing stack in
   # the configuration-validation worker image.
-  "langchain-core==1.2.7",
+  "langchain-core==1.3.3",
   # langsmith 0.12.0 moved its HTTP stack from httpx to httpx2/httpcore2, which
   # requires h11>=0.16 — and httpx<1 above resolves httpcore 1.0.7, which
   # requires h11<0.15. The two cannot coexist, so every image build failed with
@@ -26,14 +26,14 @@ dependencies = [
   #
   # langsmith is TRANSITIVE (langchain-core requires langsmith>=0.3.45,<1.0.0),
   # so nothing here named it and nothing here bounded it. This is the same
-  # class the mcp==1.27.1 pin below was written for, and the same remedy: state
+  # class the mcp==1.28.1 pin below was written for, and the same remedy: state
   # the boundary explicitly so a clean build cannot silently cross it.
   #
   # MEASURED, not guessed: 0.11.2 requires httpx<1,>=0.23.0 and 0.12.0 requires
   # httpx2<3,>=2 (PyPI metadata). Lift this when the SDK's own stack moves to
   # httpx2 — not before, or the conflict simply returns.
   "langsmith>=0.3.45,<0.12",
-  "langgraph==1.0.7",
+  "langgraph==1.2.11",
   "protobuf>=5.29,<7",
   "pydantic>=2.10,<3",
   "redis>=6.2,<8.2",
@@ -51,8 +51,8 @@ agent-current = [
   # which conflicts with the current SDK's admitted httpcore==1.0.7/h11<0.15.
   # Pin the current deployed baseline explicitly so clean image builds cannot
   # silently cross that incompatible major-version boundary.
-  "mcp==1.27.1",
-  "langgraph-checkpoint-postgres==2.0.21",
+  "mcp==1.28.1",
+  "langgraph-checkpoint-postgres==3.1.1",
 ]
 indexing-current = [
   # Exact current-baseline indexing closure. This intentionally replaces
@@ -78,35 +78,35 @@ indexing-current = [
   "html5lib==1.1",
   "isodate==0.7.2",
   "joblib==1.5.3",
-  "langchain==1.2.6",
-  "langchain-anthropic==1.3.1",
-  "langchain-classic==1.0.1",
+  "langchain==1.4.0",
+  "langchain-anthropic==1.7.1",
+  "langchain-classic==1.0.7",
   "langchain-community==0.4.1",
-  "langchain-openai==1.1.7",
+  "langchain-openai==1.1.14",
   "langchain-postgres==0.0.16",
-  "langchain-text-splitters==1.1.0",
-  "langgraph-checkpoint==2.1.2",
+  "langchain-text-splitters==1.1.2",
+  "langgraph-checkpoint==4.1.1",
   "langgraph-prebuilt==1.0.7",
   "langdetect==1.0.9",
-  "lxml==5.2.2",
-  "mammoth==1.9.0",
+  "lxml==6.1.0",
+  "mammoth==1.12.1",
   "markdownify==1.1.0",
   "msrest==0.7.1",
   "numpy==1.26.4",
   "oauthlib==3.3.1",
   "openpyxl==3.1.5",
-  "nltk==3.10.0",
+  "nltk==3.10.3",
   "nest-asyncio==1.6.0",
   "pandas==2.2.3",
   "pdf2image==1.16.3",
   "pgvector==0.2.5",
-  "pillow==11.1.0",
+  "pillow==12.3.0",
   "psutil==7.1.3",
   "psycopg[binary]==3.3.4",
   "psycopg-pool==3.3.1",
   "pytesseract==0.3.13",
   "pymupdf==1.24.9",
-  "pypdf==4.3.1",
+  "pypdf==6.16.1",
   "pypdfium2==5.8.0",
   "PyGithub==2.3.0",
   "python-iso639==2026.7.23",
@@ -140,7 +140,7 @@ indexing-current = [
   # QTest and other document families share the SDK Markdown parser. Keep the
   # parser and its client on the current Pylon-compatible pair and verify the
   # actual parser path before the worker opens its command stream.
-  "unstructured==0.16.23",
+  "unstructured==0.24.0",
   "unstructured-client==0.39.1",
   "xlrd==1.2.0",
 ]
