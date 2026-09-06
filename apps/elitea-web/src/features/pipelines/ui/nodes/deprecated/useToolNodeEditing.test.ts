@@ -109,6 +109,41 @@ describe('useToolNodeEditing functionOptions', () => {
     );
     expect(result.current.functionOptions).toEqual([{ label: 'create_issue', value: 'create_issue' }]);
   });
+
+  /** #440: a toolkit that declares no `selected_tools` publishes them at run time; the caller reads the catalogue and passes the names in. */
+  it('lists the catalogue names, alphabetically, when the toolkit declares no selected_tools', () => {
+    const { result } = renderHook(() =>
+      useToolNodeEditing({
+        id: 'tool-1',
+        selectedToolkit: { type: 'openapi', toolkit_name: 'my-api' },
+        getToolkitNameFromSchema: () => '',
+        getSelectedTools: () => [],
+        yamlJsonObject: { nodes: [] },
+        setYamlJsonObject: vi.fn(),
+        dynamicToolNames: ['zeta_op', 'alpha_op'],
+      }),
+    );
+    expect(result.current.functionOptions).toEqual([
+      { label: 'alpha_op', value: 'alpha_op' },
+      { label: 'zeta_op', value: 'zeta_op' },
+    ]);
+  });
+
+  /** An explicit selection still wins: the catalogue is the fallback tier, not an override. */
+  it('ignores the catalogue names when the toolkit declares its own selected_tools', () => {
+    const { result } = renderHook(() =>
+      useToolNodeEditing({
+        id: 'tool-1',
+        selectedToolkit: { type: 'github', toolkit_name: 'my-github', settings: { selected_tools: ['create_issue'] } },
+        getToolkitNameFromSchema: () => '',
+        getSelectedTools: () => [],
+        yamlJsonObject: { nodes: [] },
+        setYamlJsonObject: vi.fn(),
+        dynamicToolNames: ['should_not_appear'],
+      }),
+    );
+    expect(result.current.functionOptions).toEqual([{ label: 'create_issue', value: 'create_issue' }]);
+  });
 });
 
 describe('useToolNodeEditing onSelectToolkit', () => {

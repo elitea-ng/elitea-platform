@@ -20,13 +20,22 @@
  * the follow-on consequence (dynamic MCP tool schemas cannot be kept live
  * this way either).
  */
+import { useCallback } from 'react';
+
 import type { ToolkitTypeSchemaMap } from '@/entities/toolkit';
 import { useListToolkits } from '@/shared/api/generated/toolkits/toolkits';
 
 export interface UseToolkitTypeSchemasResult {
   readonly toolkitTypeSchemas: ToolkitTypeSchemaMap | undefined;
   readonly isFetching: boolean;
+  /**
+   * The read failed (#440). Every node that builds a tool picker from these
+   * schemas must render this as its own state: an empty picker means the
+   * toolkit offers no tools, never that the read was lost.
+   */
   readonly isError: boolean;
+  /** Reads the schemas again. Connect it to the retry control of the error state. */
+  readonly refetch: () => void;
 }
 
 export function useToolkitTypeSchemas(projectId: string | undefined): UseToolkitTypeSchemasResult {
@@ -36,9 +45,17 @@ export function useToolkitTypeSchemas(projectId: string | undefined): UseToolkit
   // with it (mutator.ts's §3.6 unwrap contract).
   const toolkitTypeSchemas = query.data?.data as ToolkitTypeSchemaMap | undefined;
 
+  // A stable identity: a caller hands this straight to a retry control, and a
+  // fresh closure every render would invalidate any memo it lands in.
+  const { refetch: refetchQuery } = query;
+  const refetch = useCallback(() => {
+    void refetchQuery();
+  }, [refetchQuery]);
+
   return {
     toolkitTypeSchemas,
     isFetching: query.isFetching,
     isError: query.isError,
+    refetch,
   };
 }

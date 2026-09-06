@@ -160,6 +160,44 @@ describe('TestToolSettings', () => {
       expect(await screen.findByLabelText('Tool')).toBeInTheDocument();
       expect(screen.queryByTestId('tool-list-error')).not.toBeInTheDocument();
     });
+
+    /**
+     * The second read behind this picker. A lost schema read empties the
+     * static tier, so the catalogue tier takes over; on a 200 with no tools
+     * the screen used to show an empty picker for a failure.
+     */
+    it('shows an error, not the empty picker, when the toolkit schema read fails', async () => {
+      server.use(http.get('/api/v2/elitea_core/toolkits/prompt_lib/:projectId', () => HttpResponse.json({ error: 'schemas unavailable' }, { status: 500 })));
+      server.use(http.post(DISCOVER_PATH, () => HttpResponse.json({ tools: [], total: 0 })));
+
+      renderTestToolSettings({ values: DYNAMIC_VALUES });
+
+      expect(await screen.findByTestId('tool-list-error')).toBeInTheDocument();
+      expect(screen.queryByLabelText('Tool')).not.toBeInTheDocument();
+    });
+  });
+
+  /**
+   * #440. The argument form drew no fields both for a tool that takes no
+   * arguments and for a lost schema read. `toolSchemaRead` tells them apart.
+   */
+  describe('tool argument schema read (#440)', () => {
+    it('shows an error with a retry above the argument form when the schema read failed', async () => {
+      const onRetry = vi.fn();
+      renderTestToolSettings({ selectedTool: 'list_issues', selectedToolSchema: null, toolSchemaRead: { isError: true, onRetry } });
+
+      const error = await screen.findByTestId('tool-schema-error');
+      expect(error).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+      expect(onRetry).toHaveBeenCalledTimes(1);
+    });
+
+    it('shows no error when the schema read succeeded and the tool takes no arguments', async () => {
+      renderTestToolSettings({ selectedTool: 'list_issues', selectedToolSchema: { properties: {} }, toolSchemaRead: { isError: false, onRetry: vi.fn() } });
+
+      expect(await screen.findByText('RUN TOOL')).toBeInTheDocument();
+      expect(screen.queryByTestId('tool-schema-error')).not.toBeInTheDocument();
+    });
   });
 
   it('calls onChangeTool with the selected value', async () => {

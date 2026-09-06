@@ -26,6 +26,10 @@ export interface ToolkitFormState {
   readonly onManualViewChange: (view: string) => void;
   readonly isValidSchema: boolean;
   readonly effectiveToolSchema: RawToolkitTypeSchema | undefined;
+  /** A read that feeds the "Tools" section failed (#440). Show it; an empty section must not stand for it. */
+  readonly toolListReadFailed: boolean;
+  /** Runs both reads again. */
+  readonly retryToolListRead: () => void;
   readonly hasErrors: boolean;
   readonly configuration: ToolkitConfigurationState;
   readonly isCreatingConfiguration: boolean;
@@ -62,7 +66,7 @@ export function useToolkitFormState(props: ResolvedToolkitFormProps): ToolkitFor
     projectId,
     slots,
   } = props;
-  const { view, setView, onManualViewChange, isValidSchema, effectiveToolSchema, hasErrors, mergedToolErrors, editField, setToolErrors, showValidation, configurationErrors, setConfigurationErrors, configurationName, setConfigurationName, configuration, setConfiguration, toolType, ToolComponent } = core;
+  const { view, setView, onManualViewChange, isValidSchema, effectiveToolSchema, toolListReadFailed, retryToolListRead, hasErrors, mergedToolErrors, editField, setToolErrors, showValidation, configurationErrors, setConfigurationErrors, configurationName, setConfigurationName, configuration, setConfiguration, toolType, ToolComponent } = core;
   const { isCreatingConfiguration, isTestingConnection, onCreateConfiguration, onTestConnection, onRevertCredentials, shouldShowDisabledConfigFields, onCredentialReload, isLoading } = config;
   const renderCredentialLikeField = useCredentialLikeFieldSlot(projectId, slots?.renderCredentialPicker);
 
@@ -137,6 +141,8 @@ export function useToolkitFormState(props: ResolvedToolkitFormProps): ToolkitFor
     onManualViewChange,
     isValidSchema,
     effectiveToolSchema,
+    toolListReadFailed,
+    retryToolListRead,
     hasErrors,
     configuration,
     isCreatingConfiguration,

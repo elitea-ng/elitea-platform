@@ -267,3 +267,21 @@ export function useIndexDetailsTabSync(params: UseIndexDetailsTabSyncParams): vo
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [indexId, selectedRunTool, activeEditTab]);
 }
+
+/**
+ * The result of the injected `useSelectedToolSchema` hook (#440).
+ *
+ * It is a RESULT OBJECT, not the bare schema. The argument schema comes from
+ * a server read — `ListTypeSchemas` merges the SDK argument schemas into each
+ * toolkit type — so a lost read used to resolve to `null` and draw a form
+ * with no fields, which is the screen a tool that takes no arguments draws.
+ * `isError`/`refetch` keep the two apart.
+ *
+ * Declared here, not in `IndexDetails.tsx`, to keep that file under the §3.5
+ * 400-line budget.
+ */
+export interface SelectedToolSchemaRead {
+  readonly toolSchema: JsonSchemaLike | null;
+  readonly isError: boolean;
+  readonly refetch: () => void;
+}

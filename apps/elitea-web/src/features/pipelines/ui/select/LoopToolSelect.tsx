@@ -1,13 +1,12 @@
 import type { ReactNode } from 'react';
 import { useCallback, useMemo } from 'react';
 
-import Alert from '@mui/material/Alert';
 import type { SxProps, Theme } from '@mui/material/styles';
 
 import { toolkitTools } from '@/entities/toolkit';
 import { t } from '@/shared/i18n';
-import { BaseBtn, BUTTON_VARIANTS } from '@/shared/ui/BaseBtn';
 import { SingleSelect, type SingleSelectOption } from '@/shared/ui/SingleSelect';
+import { ToolListError } from '@/shared/ui/ToolListError';
 
 import { getToolName } from '../../lib/flow-editor/helpers/flowEditor.helpers';
 import type { YamlPipelineNode } from '../../lib/flow-editor/helpers/pipelineFlow.types';
@@ -100,7 +99,10 @@ function useLoopToolSelection(
   selectedTool: string,
 ): LoopToolSelection {
   const projectId = useSelectedProjectId();
-  const { toolkitTypeSchemas } = useToolkitTypeSchemas(projectId);
+  // `isError` has a reader now (#440). The type schemas name the toolkit a
+  // node points at, so a lost read can leave this picker with nothing to
+  // show — an empty picker must not stand for that.
+  const { toolkitTypeSchemas, isError: typeSchemasReadFailed, refetch: retryTypeSchemasRead } = useToolkitTypeSchemas(projectId);
   const { getToolkitNameFromSchema } = useGetToolkitNameFromSchema(toolkitTypeSchemas);
 
   const toolkits = useMemo<ToolkitOption[]>(
@@ -149,7 +151,18 @@ function useLoopToolSelection(
     return options;
   }, [dynamicTools.toolNames, enabledTools, selectedTool]);
 
-  return { toolkits, toolkit, functionOptions, toolsReadFailed: dynamicTools.isError, retryToolsRead: dynamicTools.refetch };
+  // Both reads feed the same picker, so one retry control must run both.
+  const { refetch: retryDynamicToolsRead } = dynamicTools;
+  const retryToolsRead = useCallback(() => {
+    retryDynamicToolsRead();
+    retryTypeSchemasRead();
+  }, [retryDynamicToolsRead, retryTypeSchemasRead]);
+
+  // A lost type-schema read that still left options on screen keeps the
+  // working picker: the list the user sees is real.
+  const toolsReadFailed = dynamicTools.isError || (typeSchemasReadFailed && functionOptions.length === 0);
+
+  return { toolkits, toolkit, functionOptions, toolsReadFailed, retryToolsRead };
 }
 
 interface ToolPickerProps {
@@ -172,21 +185,10 @@ interface ToolPickerProps {
 function ToolPicker({ readFailed, onRetry, label, value, options, onSelect, disabled }: ToolPickerProps): ReactNode {
   if (readFailed) {
     return (
-      <Alert
-        severity="error"
-        data-testid="loop-tool-list-error"
-        action={
-          <BaseBtn
-            variant={BUTTON_VARIANTS.tertiary}
-            size="small"
-            onClick={onRetry}
-          >
-            {t('pipelines.loopToolSelect.retry', 'Retry')}
-          </BaseBtn>
-        }
-      >
-        {t('pipelines.loopToolSelect.toolListError', 'The tool list did not load. Try again.')}
-      </Alert>
+      <ToolListError
+        onRetry={onRetry}
+        testId="loop-tool-list-error"
+      />
     );
   }
   if (options.length === 0) return null;

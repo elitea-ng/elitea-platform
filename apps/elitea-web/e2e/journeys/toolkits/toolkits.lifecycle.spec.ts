@@ -375,3 +375,130 @@ test('J17.5: a toolkit whose type supports indexing renders the real Indexes pan
 
   await checkA11y(page);
 });
+
+/** `ToolActionsSelector.toOption`: a chip label is the tool name with the first letter capitalised and every underscore turned into a space. */
+function toolChipLabel(toolName: string): string {
+  return `${toolName.charAt(0).toUpperCase()}${toolName.slice(1)}`.replaceAll('_', ' ');
+}
+
+/**
+ * #440. Both halves of the defect, at the surface that showed it.
+ *
+ * Issue #381 made the two tool-catalogue routes answer a failed database read
+ * with an error. Before that a failed read gave 200 with an empty list, and
+ * the screen still behaved that way: one empty tool picker stood for "this
+ * toolkit offers no tools", "this toolkit publishes its tools at run time"
+ * and "the read failed".
+ *
+ * The type and the tool name below are DERIVED from the live catalogue, never
+ * hardcoded: if the server stops serving tools for that type the test fails
+ * loudly instead of asserting nothing.
+ */
+test('J17.6: the Tools section lists the tools the server supplies for the toolkit type', async ({ page }) => {
+  const schemasResp = await page.request.get(`${API_BASE}/elitea_core/toolkits/prompt_lib/${DEFAULT_PROJECT_ID}`);
+  expect(schemasResp.status(), await schemasResp.text()).toBe(200);
+  const schemas = (await schemasResp.json()) as Record<
+    string,
+    { properties?: { selected_tools?: { args_schemas?: Record<string, unknown>; items?: { enum?: string[] } } } }
+  >;
+
+  const withTools = Object.entries(schemas).find(([, schema]) => {
+    const selected = schema.properties?.selected_tools;
+    return Object.keys(selected?.args_schemas ?? {}).length > 0 || (selected?.items?.enum ?? []).length > 0;
+  });
+  expect(
+    withTools,
+    `no toolkit type in GET /elitea_core/toolkits/prompt_lib declares any tool; measured types: ${Object.keys(schemas).join(', ')}`,
+  ).toBeTruthy();
+
+  const [type, schema] = withTools as [string, { properties?: { selected_tools?: { args_schemas?: Record<string, unknown>; items?: { enum?: string[] } } } }];
+  const selected = schema.properties?.selected_tools;
+  const toolNames = Object.keys(selected?.args_schemas ?? {}).length > 0 ? Object.keys(selected?.args_schemas ?? {}) : (selected?.items?.enum ?? []);
+  const firstTool = toolNames[0] as string;
+
+  const created = await page.request.post(`${API_BASE}/elitea_core/tools/prompt_lib/${DEFAULT_PROJECT_ID}`, {
+    data: { name: toolkitName(), type, description: 'JRNY-017 tool-picker fixture (#440)', settings: { selected_tools: [] } },
+  });
+  expect(created.status(), await created.text()).toBe(201);
+  const { id } = (await created.json()) as { id: string };
+  createdIds.push(id);
+
+  await page.goto(`${BASE_URL}/app/toolkits/all/${id}`, { waitUntil: 'domcontentloaded' });
+
+  // The chip is drawn from the SERVED schema, never from a list compiled into
+  // the app, and the error state must not stand where a real list exists.
+  await expect(page.getByRole('button', { name: toolChipLabel(firstTool), exact: true })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId('toolkit-form-tool-list-error')).toHaveCount(0);
+});
+
+test('J17.7: a failed tool-catalogue read shows an error with a retry, not an empty Tools section', async ({ page }) => {
+  const schemasResp = await page.request.get(`${API_BASE}/elitea_core/toolkits/prompt_lib/${DEFAULT_PROJECT_ID}`);
+  expect(schemasResp.status(), await schemasResp.text()).toBe(200);
+  const schemas = (await schemasResp.json()) as Record<
+    string,
+    { properties?: { selected_tools?: { args_schemas?: Record<string, unknown>; items?: { enum?: string[] } } } }
+  >;
+
+  // A type that declares no tools of its own publishes them at run time, so
+  // the catalogue route is the tier that feeds its Tools section.
+  const runtimeType = Object.entries(schemas).find(([, schema]) => {
+    const selected = schema.properties?.selected_tools;
+    return selected !== undefined && Object.keys(selected.args_schemas ?? {}).length === 0 && (selected.items?.enum ?? []).length === 0;
+  })?.[0];
+  expect(
+    runtimeType,
+    `every toolkit type declares its own tools, so no type exercises the catalogue tier; measured types: ${Object.keys(schemas).join(', ')}`,
+  ).toBeTruthy();
+
+  const created = await page.request.post(`${API_BASE}/elitea_core/tools/prompt_lib/${DEFAULT_PROJECT_ID}`, {
+    data: { name: toolkitName(), type: runtimeType, description: 'JRNY-017 failed-read fixture (#440)', settings: { selected_tools: [] } },
+  });
+  expect(created.status(), await created.text()).toBe(201);
+  const { id } = (await created.json()) as { id: string };
+  createdIds.push(id);
+
+  // The server answers this route with an error for a lost read (#381). The
+  // route is failed at the network layer here because a healthy stack cannot
+  // be asked to lose a read on demand.
+  // Counted off the wire, not inside the route handler: a glob that matches
+  // nothing leaves the handler silent, and a count taken there would then read
+  // zero for two different reasons.
+  const catalogueUrls: string[] = [];
+  page.on('request', (request) => {
+    if (/toolkit_(available|discover)_tools/.test(request.url())) catalogueUrls.push(request.url());
+  });
+  let catalogueReads = 0;
+  let failReads = true;
+  // A `*` glob, not an extglob: Playwright's URL matcher supports `*`, `**`,
+  // `?`, `[]` and `{a,b}` only, so `@(available|discover)` matched nothing and
+  // the real route answered 200 — the test then measured the healthy path
+  // while claiming to measure the failed one.
+  await page.route('**/elitea_core/toolkit_*_tools/**', async (route) => {
+    catalogueReads += 1;
+    if (!failReads) {
+      await route.continue();
+      return;
+    }
+    await route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'read available tools failed' }) });
+  });
+
+  await page.goto(`${BASE_URL}/app/toolkits/all/${id}`, { waitUntil: 'domcontentloaded' });
+
+  // The read itself first: without it the error assertion below could pass or
+  // fail for a reason that has nothing to do with the failed-read state.
+  await expect
+    .poll(() => catalogueUrls.length, { message: `the picker never read the catalogue for type ${String(runtimeType)}`, timeout: 20_000 })
+    .toBeGreaterThan(0);
+  expect(catalogueReads, `the catalogue read was not intercepted: ${catalogueUrls.join(', ')}`).toBeGreaterThan(0);
+
+  const error = page.getByTestId('toolkit-form-tool-list-error');
+  await expect(error, `no failed-read state for type ${String(runtimeType)}`).toBeVisible({ timeout: 20_000 });
+  await expect(error).toContainText('The tool list did not load. Try again.');
+
+  // The retry reads again, and the error goes when the read succeeds.
+  const readsBeforeRetry = catalogueReads;
+  failReads = false;
+  await error.getByRole('button', { name: 'Retry' }).click();
+  await expect(error).toHaveCount(0, { timeout: 20_000 });
+  expect(catalogueReads).toBeGreaterThan(readsBeforeRetry);
+});

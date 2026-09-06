@@ -27,8 +27,18 @@ import type { JsonSchemaLike } from '../../indexes/lib/helpers/indexChat.helpers
  * it marshals has no schema field. So the route answers "which tools exist",
  * which is what `TestToolSettings.tsx` reads it for, and it cannot answer
  * "what arguments does this tool take". `toolSchema` therefore resolves from
- * the static and pre-loaded-MCP tiers only. Restoring the third tier needs a
- * schema field on that response first — a backend change, not a client one.
+ * the static and pre-loaded-MCP tiers only. The static tier is real data
+ * from the server: `ListTypeSchemas` merges the SDK argument schemas into
+ * `properties.selected_tools.args_schemas` of each type
+ * (`internal/api/v2/toolkits/handler.go`'s `toolkitTypeCatalogue`).
+ *
+ * A FAILED READ IS NOT AN EMPTY FORM (#440). Because the static tier IS that
+ * server read, a lost read used to resolve to `null` and draw an argument
+ * form with no fields — the same screen a tool that takes no arguments
+ * draws. This hook returns `isError` and `refetch` beside the schema now, so
+ * the caller can show the failure and offer a retry. It returns a RESULT
+ * OBJECT rather than the bare schema for that reason; every caller reads
+ * `.toolSchema` where it used to read the return value.
  *
  * `toolkitId`/`projectId` stay off this hook's own signature (the baseline
  * threads both through purely to drive that dynamic query) rather than being
@@ -90,13 +100,24 @@ function resolveToolSchema(params: UseGetSelectedToolSchemaParams & { readonly t
   return toolSchema ? normalizeMcpInputSchema(toolSchema) : null;
 }
 
-export function useGetSelectedToolSchema(params: UseGetSelectedToolSchemaParams): JsonSchemaLike | null {
+export interface UseGetSelectedToolSchemaResult {
+  /** The resolved argument schema, or `null` when the tool takes no arguments. */
+  readonly toolSchema: JsonSchemaLike | null;
+  /** The schema read failed (#440). Show it. A `null` schema beside it means nothing. */
+  readonly isError: boolean;
+  /** Reads the schemas again. Connect it to the retry control of the error state. */
+  readonly refetch: () => void;
+}
+
+export function useGetSelectedToolSchema(params: UseGetSelectedToolSchemaParams): UseGetSelectedToolSchemaResult {
   const { toolkitType, toolOptionType, availableMcpTools } = params;
-  const { toolkitSchemas } = useGetCurrentToolkitSchemas();
+  const { toolkitSchemas, isError, refetch } = useGetCurrentToolkitSchemas();
   const toolkitTypeSchema = toolkitType !== undefined ? toolkitSchemas?.[toolkitType] : undefined;
 
-  return useMemo(
+  const toolSchema = useMemo(
     () => resolveToolSchema({ toolkitType, toolOptionType, availableMcpTools, toolkitTypeSchema }),
     [toolkitType, toolOptionType, availableMcpTools, toolkitTypeSchema],
   );
+
+  return { toolSchema, isError, refetch };
 }

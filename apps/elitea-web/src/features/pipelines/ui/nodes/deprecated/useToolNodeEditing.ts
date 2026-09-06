@@ -12,11 +12,12 @@
  * (:1914), and `entities/toolkit`'s `toolkitTools.useToolkitTools` is the
  * client for both — `ui/select/LoopToolSelect.tsx` already reads it.
  *
- * `functionOptions` here is still populated ONLY from an explicit
- * `selectedToolkit.settings.selected_tools` list. That is now a WIRING gap
- * in this deprecated node, not a missing endpoint: the work is to call the
- * same hook and to render its `isError` as its own state, the way
- * `LoopToolSelect.tsx` does.
+ * The wiring gap is closed. `functionOptions` falls back to the catalogue
+ * names the caller reads with that hook, and `ToolNode.tsx` renders a failed
+ * read as its own state with a retry, the way `LoopToolSelect.tsx` does. The
+ * read itself stays in the component, not here, because this hook is pure
+ * derivation over values the component already holds — the same split
+ * `useToolNodeState` above already follows.
  */
 import { useCallback, useMemo } from 'react';
 import type { ChangeEvent } from 'react';
@@ -98,6 +99,9 @@ interface ToolOption {
   readonly value: string;
 }
 
+/** A stable empty list. A fresh `[]` default would rebuild `functionOptions` on every render. */
+const NO_DYNAMIC_TOOL_NAMES: readonly string[] = [];
+
 export interface UseToolNodeEditingArgs {
   readonly id: string;
   readonly selectedToolkit: PipelineToolEntry | undefined;
@@ -105,6 +109,8 @@ export interface UseToolNodeEditingArgs {
   readonly getSelectedTools: (type: string) => readonly string[];
   readonly yamlJsonObject: YamlPipelineDocument | undefined;
   readonly setYamlJsonObject: ((next: YamlPipelineDocument) => void) | undefined;
+  /** The tool names the backend publishes for the selected toolkit (#440). Used when the toolkit declares no `selected_tools` of its own. */
+  readonly dynamicToolNames?: readonly string[];
 }
 
 export interface UseToolNodeEditingResult {
@@ -130,9 +136,14 @@ function resolveExplicitTool(newToolkit: PipelineToolEntry): string | undefined 
 function resolveFunctionOptions(
   selectedToolkit: PipelineToolEntry | undefined,
   getSelectedTools: (type: string) => readonly string[],
+  dynamicToolNames: readonly string[],
 ): readonly ToolOption[] {
   const explicitSelected: readonly string[] | undefined = selectedToolkit?.settings?.selected_tools;
-  if (!Array.isArray(explicitSelected) || explicitSelected.length === 0) return [];
+  // The catalogue tier (#440): a toolkit that declares no `selected_tools`
+  // publishes its tools at run time, and this list used to stay empty.
+  if (!Array.isArray(explicitSelected) || explicitSelected.length === 0) {
+    return dynamicToolNames.map(name => ({ label: getToolName(name), value: getToolName(name) })).sort((a, b) => a.label.localeCompare(b.label));
+  }
 
   const availableTools = getSelectedTools(selectedToolkit?.type ?? '');
   const enabledTools: readonly string[] =
@@ -142,7 +153,7 @@ function resolveFunctionOptions(
 }
 
 export function useToolNodeEditing(args: UseToolNodeEditingArgs): UseToolNodeEditingResult {
-  const { id, selectedToolkit, getToolkitNameFromSchema, getSelectedTools, yamlJsonObject, setYamlJsonObject } = args;
+  const { id, selectedToolkit, getToolkitNameFromSchema, getSelectedTools, yamlJsonObject, setYamlJsonObject, dynamicToolNames = NO_DYNAMIC_TOOL_NAMES } = args;
 
   const onSelectToolkit = useCallback(
     (newToolkit: PipelineToolEntry | null) => {
@@ -177,7 +188,10 @@ export function useToolNodeEditing(args: UseToolNodeEditingArgs): UseToolNodeEdi
     [id, setYamlJsonObject, yamlJsonObject],
   );
 
-  const functionOptions = useMemo(() => resolveFunctionOptions(selectedToolkit, getSelectedTools), [getSelectedTools, selectedToolkit]);
+  const functionOptions = useMemo(
+    () => resolveFunctionOptions(selectedToolkit, getSelectedTools, dynamicToolNames),
+    [dynamicToolNames, getSelectedTools, selectedToolkit],
+  );
 
   return { onSelectToolkit, handleSetTask, handleSetTool, functionOptions };
 }

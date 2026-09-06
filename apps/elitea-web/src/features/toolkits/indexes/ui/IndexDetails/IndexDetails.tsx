@@ -4,6 +4,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Box from '@mui/material/Box';
 import type { SxProps, Theme } from '@mui/material/styles';
 
+import { t } from '@/shared/i18n';
+import { ToolListError } from '@/shared/ui/ToolListError';
+
 import {
   EditViewTabsEnum,
   IndexStatuses,
@@ -11,7 +14,7 @@ import {
   IndexesToolsEnum,
   RUNNABLE_INDEX_STATUSES,
 } from '../../lib/constants/indexDetails.constants';
-import { adjustIndexDataSchema, getMockToolkitIndexConversation, type IndexChatMessage, type JsonSchemaLike } from '../../lib/helpers/indexChat.helpers';
+import { adjustIndexDataSchema, getMockToolkitIndexConversation, type IndexChatMessage } from '../../lib/helpers/indexChat.helpers';
 import { toDisplayString } from '../../lib/helpers/displayString.local';
 import { useIndexNameValidation } from '../../lib/hooks/useIndexNameValidation.hooks';
 import type { IndexRow } from '../../model/indexesStore';
@@ -26,7 +29,7 @@ import { IndexNameWrapper } from './IndexNameWrapper';
 import { IndexViewToggler } from './IndexViewToggler';
 import { IndexViews } from './IndexViews';
 import { computeDefaultConfigValues, computeIndexConfigWrapperSx, validateToolkitForm, useIndexDetailsTabSync, TOOLKIT_CHAT_MODE_CREATE_INDEX } from './IndexDetails.helpers';
-import type { UseToolkitChatParams, UseToolkitChatResult } from './IndexDetails.helpers';
+import type { SelectedToolSchemaRead, UseToolkitChatParams, UseToolkitChatResult } from './IndexDetails.helpers';
 
 /** Re-exported for backward compatibility — `IndexesContainer.test.tsx`/`IndexDetails.test.tsx` (and any other consumer) import these two types from this module path; the underlying definitions moved to `IndexDetails.helpers.ts` (see that file's own doc comment) purely to keep this file under the 400-line budget. */
 export type { UseToolkitChatParams, UseToolkitChatResult };
@@ -80,7 +83,8 @@ export interface IndexDetailsProps {
   readonly values: Record<string, unknown>;
 
   readonly useToolkitChat: (params: UseToolkitChatParams) => UseToolkitChatResult;
-  readonly useSelectedToolSchema: (params: { toolkitType: string; toolOptionType: string | null }) => JsonSchemaLike | null;
+  /** #440: a RESULT OBJECT, not the bare schema — see `SelectedToolSchemaRead`. A lost read must not look like a tool that takes no arguments. */
+  readonly useSelectedToolSchema: (params: { toolkitType: string; toolOptionType: string | null }) => SelectedToolSchemaRead;
   readonly useToolkitSchemas: (params: { isMCP: boolean }) => UseToolkitSchemasResult;
   readonly ToolFormField: ComponentType<ToolFormFieldProps>;
   readonly LLMModelSelector: ComponentType<LLMModelSelectorProps>;
@@ -172,7 +176,7 @@ export function IndexDetails(props: IndexDetailsProps): ReactNode {
 
   const toolSchemaName = activeEditTab === EditViewTabsEnum.configuration || isCreateView ? IndexesToolsEnum.indexData : selectedRunTool;
 
-  const indexDataSchema = useSelectedToolSchema({ toolkitType: toDisplayString(values['type']), toolOptionType: toolSchemaName });
+  const { toolSchema: indexDataSchema, isError: toolSchemaReadFailed, refetch: retryToolSchemaRead } = useSelectedToolSchema({ toolkitType: toDisplayString(values['type']), toolOptionType: toolSchemaName });
 
   const adjustedIndexDataSchema = useMemo(() => {
     const adjustment =
@@ -326,6 +330,8 @@ export function IndexDetails(props: IndexDetailsProps): ReactNode {
 
       <Box sx={mainContentSx}>
         <Box sx={computeIndexConfigWrapperSx(isFullScreenChat)}>
+          {/* #440: a lost schema read is its own state — without it the form below renders no fields, which is what a tool with no arguments looks like. */}
+          {toolSchemaReadFailed && <ToolListError onRetry={retryToolSchemaRead} testId="index-tool-schema-error" message={t('features.toolkits.indexDetails.toolSchemaError', 'The tool settings did not load. Try again.')} />}
           {isCreateView ? (
             <IndexViews
               activeView={IndexViewsEnum.create}
