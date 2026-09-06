@@ -3163,8 +3163,45 @@ components:
                 type: array
                 items: { type: string }
         total: { type: integer }
+        document_types:
+          type: object
+          additionalProperties: { type: string }
+          x-elitea-passthrough: >-
+            NOTE(W2): extension -> MIME type, keyed by file extension
+            (internal/api/v2/indextypes/handler.go:29, CurrentIndexTypes). The
+            key set IS the data — it is the list of extensions this deployment
+            can index — so it cannot be enumerated in a schema.
+        image_types:
+          type: object
+          additionalProperties: { type: string }
+          x-elitea-passthrough: >-
+            NOTE(W2): same shape, image extensions
+            (internal/api/v2/indextypes/handler.go:30).
+        code_types:
+          type: object
+          additionalProperties: { type: string }
+          x-elitea-passthrough: >-
+            NOTE(W2): same shape, source-code extensions
+            (internal/api/v2/indextypes/handler.go:31).
       description: >
-        NOTE(W2): static list, internal/api/v2/toolkits/handler.go:466-510.
+        NOTE(W2): ONE body answers two clients, and the deployment decides which
+        half is real.
+
+        `items` and `total` are the published contract. With
+        ELITEA_INDEX_TYPES_ENABLED off the compatibility handler answered them
+        as a six-element hand-written list that no SDK, snapshot, database or
+        configuration produced; that handler now refuses with 501 instead.
+
+        `document_types`, `image_types` and `code_types` are the pylon keys
+        apps/elitea-ui reads (src/slices/fileTypes.js). They were UNDESCRIBED
+        here, which is why this note exists: the reviewed route
+        (internal/api/v2/indextypes, currentIndexTypesResponse) has emitted all
+        five keys since issue 394, and a client generated from this document
+        could not see three of them.
+
+        The two halves project the SAME rows and cannot disagree: every
+        `supported_extensions` list is the sorted key set of the map named by
+        the same `type`.
 
     PipelineTrigger:
       type: object

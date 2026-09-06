@@ -52,9 +52,12 @@ export const DocumentLoadersResponse = zod
       }),
     ),
     total: zod.int(),
+    document_types: zod.record(zod.string(), zod.string()).optional(),
+    image_types: zod.record(zod.string(), zod.string()).optional(),
+    code_types: zod.record(zod.string(), zod.string()).optional(),
   })
   .describe(
-    "NOTE(W2): static list, internal\/api\/v2\/toolkits\/handler.go:466-510.\n",
+    "NOTE(W2): ONE body answers two clients, and the deployment decides which half is real.\n`items` and `total` are the published contract. With ELITEA_INDEX_TYPES_ENABLED off the compatibility handler answered them as a six-element hand-written list that no SDK, snapshot, database or configuration produced; that handler now refuses with 501 instead.\n`document_types`, `image_types` and `code_types` are the pylon keys apps\/elitea-ui reads (src\/slices\/fileTypes.js). They were UNDESCRIBED here, which is why this note exists: the reviewed route (internal\/api\/v2\/indextypes, currentIndexTypesResponse) has emitted all five keys since issue 394, and a client generated from this document could not see three of them.\nThe two halves project the SAME rows and cannot disagree: every `supported_extensions` list is the sorted key set of the map named by the same `type`.\n",
   );
 
 export type DocumentLoadersResponse = zod.input<typeof DocumentLoadersResponse>;

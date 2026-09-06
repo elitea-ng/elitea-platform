@@ -3538,6 +3538,30 @@ export const getGetDocumentLoadersResponseMock = (
     ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
   })),
   total: faker.number.int(),
+  document_types: faker.helpers.arrayElement([
+    {
+      [faker.string.alphanumeric(5)]: faker.string.alpha({
+        length: { min: 10, max: 20 },
+      }),
+    },
+    undefined,
+  ]),
+  image_types: faker.helpers.arrayElement([
+    {
+      [faker.string.alphanumeric(5)]: faker.string.alpha({
+        length: { min: 10, max: 20 },
+      }),
+    },
+    undefined,
+  ]),
+  code_types: faker.helpers.arrayElement([
+    {
+      [faker.string.alphanumeric(5)]: faker.string.alpha({
+        length: { min: 10, max: 20 },
+      }),
+    },
+    undefined,
+  ]),
   ...overrideResponse,
 });
 
