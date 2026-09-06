@@ -390,6 +390,60 @@ describe('Admin › Projects', () => {
       expect(screen.getByText(/did not complete/)).toBeInTheDocument();
       expect(screen.getByText(/was not started/)).toBeInTheDocument();
     });
+
+    /**
+     * The half of criterion 1 (#377) that lives in the client: "the new project
+     * APPEARS IN THE LIST".
+     *
+     * The POST landing is not enough. The row reaches the screen only because
+     * the mutation invalidates `adminProjectsKeys.all`, and a mutation that
+     * invalidated a key the listing does not use would leave an operator
+     * looking at a list without the project they had just made — the API is
+     * right and the screen is empty, which is the shape #132 shipped twice.
+     *
+     * The listing answers DIFFERENTLY the second time, so the assertion can only
+     * pass on a real refetch. J31g asserts the same property against the real
+     * server, through a full reload.
+     */
+    it('puts the created project on screen, because the create refreshes the listing', async () => {
+      let listings = 0;
+      server.use(
+        http.get('*/admin/projects/administration', () => {
+          listings += 1;
+          if (listings === 1) return HttpResponse.json(PROJECTS_BODY);
+          return HttpResponse.json({
+            ...PROJECTS_BODY,
+            rows: [
+              ...PROJECTS_BODY.rows,
+              {
+                id: 99,
+                name: 'cygnus',
+                owner_id: 7,
+                owner_name: 'Ada Owner',
+                admin_names: ['Bo Admin'],
+                status: 'active',
+                suspended: false,
+                create_success: true,
+                is_personal: false,
+              },
+            ],
+            total: 4,
+            counts: { team: 4, personal: 12 },
+          });
+        }),
+      );
+      const user = userEvent.setup();
+      renderAdminRoute(<AdminProjects />);
+      await screen.findByText('atlas');
+      expect(screen.queryByText('cygnus')).not.toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: 'Create project' }));
+      await user.type(await screen.findByRole('textbox', { name: 'Project name' }), 'cygnus');
+      await user.click(screen.getByRole('button', { name: 'Create' }));
+
+      expect(await screen.findByText('cygnus')).toBeInTheDocument();
+      expect(listings).toBeGreaterThan(1);
+    });
   });
 
   describe('delete', () => {
@@ -463,6 +517,52 @@ describe('Admin › Projects', () => {
       // only honest report when it happens.
       expect(await screen.findByText(/borealis:/)).toBeInTheDocument();
       expect(screen.queryByText(/atlas:/)).not.toBeInTheDocument();
+    });
+
+    /**
+     * The half of criterion 3 (#377) that lives in the client: "the project
+     * LEAVES THE LIST".
+     *
+     * The loop invalidates ONCE, after every DELETE has been sent — invalidating
+     * per mutation would make each iteration wait for a full listing refetch
+     * before the next request went out. So the refresh is written in a different
+     * place from the write it belongs to, and nothing else asserts that the two
+     * still meet.
+     *
+     * The listing answers DIFFERENTLY the second time, so this can only pass on
+     * a real refetch. J31g asserts the same property against the real server.
+     */
+    it('takes the deleted project off screen, because the delete refreshes the listing', async () => {
+      let listings = 0;
+      server.use(
+        http.get('*/admin/projects/administration', () => {
+          listings += 1;
+          if (listings === 1) return HttpResponse.json(PROJECTS_BODY);
+          return HttpResponse.json({
+            ...PROJECTS_BODY,
+            rows: PROJECTS_BODY.rows.filter((row) => row.name !== 'atlas'),
+            total: 2,
+            counts: { team: 2, personal: 12 },
+          });
+        }),
+      );
+      const user = userEvent.setup();
+      renderAdminRoute(<AdminProjects />);
+      await screen.findByText('atlas');
+
+      await selectRow(user, 'atlas');
+      await user.click(screen.getByRole('button', { name: 'Delete projects' }));
+      await user.type(
+        await screen.findByRole('textbox', { name: 'Type DELETE to confirm' }),
+        'DELETE',
+      );
+      await user.click(screen.getByRole('button', { name: 'Delete permanently' }));
+
+      await waitFor(() => expect(screen.queryByText('atlas')).not.toBeInTheDocument());
+      // The refresh removed ONE row, not the table: a listing that failed to
+      // render at all would also have no `atlas` in it.
+      expect(screen.getByText('borealis')).toBeInTheDocument();
+      expect(listings).toBeGreaterThan(1);
     });
   });
 

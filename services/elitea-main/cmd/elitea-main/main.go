@@ -54,6 +54,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/webhook"
 	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
 	identityapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/identity"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
 	socialapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/social"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/authcomposition"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
@@ -768,7 +769,20 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// The project vector-store collaborator the project-create route provisions
 	// with (#371). It is composed from the Configurations runtime, so it exists
 	// only where that runtime does; without it a created project cannot index.
-	var projectVectorStore *runtimecomposition.ProjectVectorStore
+	//
+	// DECLARED AS THE INTERFACE, never as the concrete pointer (#377). A nil
+	// `*runtimecomposition.ProjectVectorStore` assigned into an interface field
+	// is a TYPED NIL: `cfg.ProjectVectorStore != nil` in internal/api/router.go
+	// is then true, the provisioner takes the collaborator, and every step of
+	// the create pipeline runs until `project_pgvector` answers "project vector
+	// store is not configured" — so a deployment that composes no Configurations
+	// runtime could not create a project at all. It answered 500 and rolled the
+	// whole tenant back. Measured on the end-to-end stack by J31g.
+	//
+	// Same rule as toolkitSettingsValidator below: the concrete value is
+	// assigned inside the branch that composes it, and the variable is a nil
+	// INTERFACE everywhere else.
+	var projectVectorStore projectprovisioning.ProjectVectorStore
 	// The save-time credential gate for the toolkit write path (#613). It is
 	// composed from the same Configurations graph agent-version freezing uses,
 	// so it exists only where that graph does.
@@ -821,13 +835,18 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		// deliberately NOT used here: it keys off ELITEA_VAULT_MASTER_KEY_FILE,
 		// which no file under deploy/ sets, so it could not open the vault the
 		// handler had just created.
-		projectVectorStore, err = currentConfigurationsRoot.NewProjectVectorStore(
+		vectorStore, err := currentConfigurationsRoot.NewProjectVectorStore(
 			pool,
 			v2secrets.NewHandler(pool),
 			logger,
 		)
 		if err != nil {
 			return fmt.Errorf("compose project vector-store provisioning: %w", err)
+		}
+		// Through the concrete value, and only when there IS one. See the
+		// declaration above for what a typed nil costs here.
+		if vectorStore != nil {
+			projectVectorStore = vectorStore
 		}
 		toolkitSettingsResolver, err := currentConfigurationsRoot.NewToolkitSettingsValidator(pool)
 		if err != nil {
