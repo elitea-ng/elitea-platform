@@ -3460,5 +3460,7 @@
   "pages.admin.roles.saved.roleCreated": "Role created. Grant its permissions below, then use Apply to Projects to push a standard role to existing projects.",
   "pages.admin.roles.saved.roleDeleted": "Role deleted.",
   "pages.admin.roles.saved.roleRenamed": "Role renamed.",
-  "widgets.sidebar.supportBot": "Support Bot"
+  "widgets.sidebar.supportBot": "Support Bot",
+  "credentials.typeSelector.title": "Choose the credentials type",
+  "pages.toolkits.createToolkit.back": "Back"
 }

@@ -45,6 +45,36 @@ describe('CredentialTypeSelector', () => {
     expect(onSelectType).toHaveBeenCalledWith('openai');
   });
 
+  /**
+   * [visual-parity regression] The baseline renders this picker through
+   * `Category.GroupedCategory`: a centred "Choose the credentials type"
+   * heading, a category-chip row, uppercase per-category section headings and
+   * a leading brand glyph on every tile. This port rendered a bare `<div>`
+   * with a `SimpleSearchBar` and an ungrouped list, so none of the four
+   * existed. Every assertion below fails against the pre-fix component.
+   */
+  it('renders the catalogue chrome: title, a chip per category, per-category headings and a tile icon', () => {
+    const twoCategories: ConfigurationTypeDescriptor[] = [
+      { type: 'github', config_schema: { title: 'GitHub', properties: { data: { metadata: { categories: ['Code Repositories'] } } } } },
+      { type: 'slack', config_schema: { title: 'Slack', properties: { data: { metadata: { categories: ['Communication'] } } } } },
+    ];
+    renderWithTheme(
+      <CredentialTypeSelector
+        configurationsData={twoCategories}
+        isFetching={false}
+        onSelectType={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Choose the credentials type')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Code Repositories' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Communication' })).toBeInTheDocument();
+    // One chip + one section heading per category.
+    expect(screen.getAllByText('Code Repositories')).toHaveLength(2);
+    expect(screen.getAllByText('Communication')).toHaveLength(2);
+    expect(screen.getByText('GitHub').closest('button')?.querySelector('svg')).not.toBeNull();
+  });
+
   it('hides types marked config_schema.metadata.hidden', () => {
     renderWithTheme(
       <CredentialTypeSelector
