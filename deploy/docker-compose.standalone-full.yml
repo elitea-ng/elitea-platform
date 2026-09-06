@@ -421,11 +421,14 @@ services:
   # exits 1 when it is empty and the credential Account is wired.
   elitea-llm-gateway:
     image: ghcr.io/elitea-ng/elitea-llm-gateway:standalone
-    # Build context is the module directory only — it must not inherit the root
-    # go.work, which pins Go 1.25.8 for elitea-main/elitea-scheduler.
+    # Build context is the repository ROOT: the module replaces
+    # libs/go/egresslib, which sits outside services/elitea-llm-gateway. The
+    # image still does not inherit the root go.work — the Containerfile never
+    # copies it and the build sets GOWORK=off — so Go 1.25.8 for
+    # elitea-main/elitea-scheduler stays out of this build.
     build:
-      context: ../services/elitea-llm-gateway
-      dockerfile: Containerfile
+      context: ..
+      dockerfile: services/elitea-llm-gateway/Containerfile
     environment:
       GATEWAY_HTTP_ADDR: ":8083"
       DATABASE_URL: "postgres://elitea:elitea@postgres:5432/elitea?sslmode=disable"

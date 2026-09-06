@@ -83,7 +83,10 @@ export type GovernanceType = (typeof GOVERNANCE_TYPES)[number];
  * that reaches it anyway. Showing the fields would invite the operator to
  * author exactly the entry that is refused.
  */
-export const GLOBAL_GOVERNANCE_TYPES: readonly GovernanceType[] = ['egress_allowlist'];
+// Module-local on purpose. `isGlobalGovernanceType` below is the only reader,
+// and an exported constant that nothing outside this file imports fails the
+// dead-code gate (scripts/check-dead-code.mjs).
+const GLOBAL_GOVERNANCE_TYPES: readonly GovernanceType[] = ['egress_allowlist'];
 
 /** Whether this type carries a scope at all. */
 export function isGlobalGovernanceType(type: GovernanceType): boolean {
