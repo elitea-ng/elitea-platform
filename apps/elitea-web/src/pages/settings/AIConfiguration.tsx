@@ -87,9 +87,16 @@ function ConfigurationsError({ error, onRetry, styles }: {
 export interface AIConfigurationProps {
   /** Currently-selected project id — threaded down from the route. */
   projectId: string;
+  /**
+   * The `?reveal=` search param — the just-saved/edited configuration's id.
+   * Threaded down to `ConfigurationsPanel` so the section holding that row
+   * opens on return from create/edit, instead of every non-LLM section
+   * defaulting collapsed regardless of what the user just saved.
+   */
+  revealConfigurationId?: string;
 }
 
-export const AIConfiguration = memo(function AIConfiguration({ projectId }: AIConfigurationProps) {
+export const AIConfiguration = memo(function AIConfiguration({ projectId, revealConfigurationId }: AIConfigurationProps) {
   const [activeTab, setActiveTab] = useState(0);
   const { data: configurationsBySection, isLoading, error, refetch } = useConfigurationsBySection(projectId);
   const theme = useTheme();
@@ -178,6 +185,7 @@ export const AIConfiguration = memo(function AIConfiguration({ projectId }: AICo
             configurationsBySection={configurationsBySection as unknown as Record<string, Record<string, unknown>[]>}
             projectId={projectId}
             isLoading={isLoading}
+            {...(revealConfigurationId !== undefined ? { revealConfigurationId } : {})}
           />
         ) : activeTab === 0 && !configurationsBySection && isLoading ? (
           <Box sx={styles.loadingCenter}>

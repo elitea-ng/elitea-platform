@@ -68,3 +68,13 @@ export function withDefaultModels(data: ModelsApiResponse | undefined): ModelsAp
   return data ?? EMPTY_MODELS_RESPONSE;
 }
 
+/** Whether one of `configs` is the row named by `revealConfigurationId` (the
+ * `?reveal=` search param — see `ConfigurationsPanel.tsx`'s prop doc comment).
+ * `undefined` (no reveal in play) never matches. A top-level helper, not an
+ * inline `.some()` at each of the 6 non-LLM call sites, for the same
+ * complexity-budget reason as this file's other helpers. */
+export function sectionHoldsRevealedRow(configs: readonly Record<string, unknown>[], revealConfigurationId: string | undefined): boolean {
+  if (revealConfigurationId === undefined) return false;
+  return configs.some((c) => String(c['id']) === revealConfigurationId);
+}
+

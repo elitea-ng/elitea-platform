@@ -16,7 +16,8 @@ export interface EditCredentialProps {
   readonly context: CredentialFormContext;
   readonly credentialUid: string;
   readonly configurationMode?: boolean;
-  readonly onSaved: () => void;
+  /** See `useCredentialFormController.ts`'s `onSaved` doc comment. */
+  readonly onSaved: (savedId?: string) => void;
   readonly onDiscarded: () => void;
 }
 

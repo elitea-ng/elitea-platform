@@ -40,9 +40,18 @@ function CreateConfigurationRoute() {
    * credential lost it. See `credentials/create-credential.tsx` for the twin.
    */
   const { prefill_id: prefillId, prefill_name: prefillName, section } = Route.useSearch();
-  const leave = useCallback(() => {
-    void navigate({ to: '/settings/model-configuration' });
-  }, [navigate]);
+  // `savedId` is only known on a successful save (`onCreated`) — `onCancelled`
+  // calls this with no argument, so Cancel still lands on a plain
+  // `/settings/model-configuration` with no `reveal` in the URL.
+  const leave = useCallback(
+    (savedId?: string) => {
+      void navigate({
+        to: '/settings/model-configuration',
+        ...(savedId !== undefined ? { search: { reveal: savedId } } : {}),
+      });
+    },
+    [navigate],
+  );
   // Navigates to ROUTE-064, not ROUTE-024 — `useCredentialSearch.js:29`
   // switches destination on `isFromSettings` for exactly this reason: a type
   // picked inside settings must stay inside settings, or the user lands on

@@ -222,6 +222,15 @@ export const paramSchemas = {
   // ── settings (PARAM-060/061) ─────────────────────────────────────────────
   createSecret: flag(),
   inviteUsers: flag(),
+  /**
+   * Not in P1's manifest — added by the fix for J19b (credentials lifecycle
+   * E2E): after saving a new/edited configuration, `/settings/*-configuration`
+   * routes navigate back to `/settings/model-configuration?reveal=<id>` so
+   * `ConfigurationsPanel` can open the ONE section the saved row actually
+   * lives in, instead of every non-LLM section defaulting collapsed
+   * regardless of what was just created. `String(ConfigurationWire.id)`.
+   */
+  reveal: text(),
 
   // ── shared/"any" scope (PARAM-062..087) ──────────────────────────────────
   author_id: text(),

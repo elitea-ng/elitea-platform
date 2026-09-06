@@ -54,7 +54,8 @@ export type { CredentialFormContext, CredentialFormMode, CredentialFormPrefill }
 export interface CredentialFormProps {
   readonly context: CredentialFormContext;
   readonly mode: CredentialFormMode;
-  readonly onSaved: () => void;
+  /** See `useCredentialFormController.ts`'s `onSaved` doc comment. */
+  readonly onSaved: (savedId?: string) => void;
   readonly onDiscarded: () => void;
   readonly prefill?: CredentialFormPrefill;
   readonly onTypeChosen?: (type: string) => void;
