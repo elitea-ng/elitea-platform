@@ -6,6 +6,7 @@ import type { SxProps, Theme } from '@mui/material/styles';
 
 import { ToolTypes } from '@/entities/toolkit';
 import { combineSx } from '@/shared/ui/lib/combineSx';
+import { ToolListError } from '@/shared/ui/ToolListError';
 
 import type { RawToolkitTypeSchema } from '../../../lib/helpers/toolkitSchema.helpers';
 
@@ -69,16 +70,21 @@ export type { ToolkitFormEditDetail, ToolkitFormProps, ToolkitValidationInjected
  *     `entities/toolkit`'s `toolkitTools.useToolkitTools`, and
  *     `ui/test-tools/TestToolSettings.tsx` reads it for its tool picker.
  *
- *     The dynamic `selected_tools` SCHEMA enrichment
- *     (`shouldFetchDynamicSchemas`/`toolSchemaWithDynamicTools`) stays
- *     dropped, for a narrower reason: the route returns tool
- *     `id`/`name`/`type`/`description` and no argument schema (see
- *     `ui/test-tools/useGetSelectedToolSchema.ts`'s own header for the
- *     evidence), so there is nothing to enrich the schema WITH.
- *     `effectiveToolSchema` stays the static `convertToolkitSchema`
- *     result. Toolkit-settings validation errors are still accepted via an
- *     optional injected `toolkitValidation` prop (`{isError, error,
- *     refetch}`) — same "inject the network call" convention as
+ *     The NAMES half of the baseline's `toolSchemaWithDynamicTools` is
+ *     restored: `ToolkitForm.core.hooks.ts` reads the catalogue for a
+ *     toolkit type that declares no tools of its own and writes the names
+ *     into `selected_tools.items.enum`, which is where `ToolBase.render.tsx`'s
+ *     `resolveAvailableTools` already looks. A failed read renders as its
+ *     own state above the form with a retry, so an empty "Tools" section
+ *     keeps its one meaning.
+ *
+ *     The ARGUMENT-SCHEMA half stays dropped, for a narrower reason: the
+ *     route returns tool `id`/`name`/`type`/`description` and no argument
+ *     schema (see `ui/test-tools/useGetSelectedToolSchema.ts`'s own header
+ *     for the evidence), so there is nothing to enrich `args_schemas` WITH.
+ *     Toolkit-settings validation errors are still accepted via an optional
+ *     injected `toolkitValidation` prop (`{isError, error, refetch}`) — same
+ *     "inject the network call" convention as
  *     `features/agents/api/useValidateToolkit.ts`.
  *  3. **`McpAuthHelpers.logout(url)`** (`features/mcp`, sideways-forbidden
  *     regardless) becomes an optional injected `onMcpScopesChanged`
@@ -170,7 +176,7 @@ interface ToolkitFormViewProps {
 /** The JSX-only render — every value it reads is already resolved by `useToolkitFormState`/the caller's own prop defaults, so this stays a thin, low-complexity template. */
 function ToolkitFormView({ props, state }: ToolkitFormViewProps): ReactNode {
   const { editToolDetail, onChangeToolDetail, isEditing, isToolDirty, hasNotSavedCredentials, isViewToggleVisible, hideOperationButtons, updateKey, sx, formValues, formInitialValues, onResetForm, isTeamProject, onSave, onSaveSuccess, onSaveError, onConfigurationCreated, projectId } = props;
-  const { isLoading, view, setView, onManualViewChange, isValidSchema, effectiveToolSchema, hasErrors, configuration, isCreatingConfiguration, isTestingConnection, onCreateConfiguration, onTestConnection, onRevertCredentials, setShowValidation, editField, setToolErrors, ToolComponent, toolComponentProps } = state;
+  const { isLoading, view, setView, onManualViewChange, isValidSchema, effectiveToolSchema, toolListReadFailed, retryToolListRead, hasErrors, configuration, isCreatingConfiguration, isTestingConnection, onCreateConfiguration, onTestConnection, onRevertCredentials, setShowValidation, editField, setToolErrors, ToolComponent, toolComponentProps } = state;
 
   if (isLoading) {
     return (
@@ -184,6 +190,13 @@ function ToolkitFormView({ props, state }: ToolkitFormViewProps): ReactNode {
 
   return (
     <Box sx={combineSx(containerSx, sx)}>
+      {/* #440: a lost tool-list read is its own state. Without it the "Tools" section is empty, which is what a toolkit with no tools looks like. */}
+      {toolListReadFailed && (
+        <ToolListError
+          onRetry={retryToolListRead}
+          testId="toolkit-form-tool-list-error"
+        />
+      )}
       {showFormViewToggle && (
         <Box sx={formViewToggleSx}>
           <FormViewToggle

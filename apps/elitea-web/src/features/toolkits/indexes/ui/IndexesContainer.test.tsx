@@ -66,7 +66,7 @@ const baseProps: Omit<IndexesContainerProps, 'toolkitId'> = {
   selectedIndexTools: ['index_data', 'search_index', 'remove_index'],
   values: { type: 'github', id: 'tk-1' },
   useToolkitChat: fakeUseToolkitChat,
-  useSelectedToolSchema: () => null,
+  useSelectedToolSchema: () => ({ toolSchema: null, isError: false, refetch: () => {} }),
   useToolkitSchemas: () => noSchemas,
   ToolFormField: FakeToolFormField,
   LLMModelSelector: FakeModelSelector,

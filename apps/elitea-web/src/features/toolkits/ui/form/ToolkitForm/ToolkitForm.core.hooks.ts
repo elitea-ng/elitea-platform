@@ -2,6 +2,7 @@ import type { Dispatch, SetStateAction } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import type { ToolkitTypeSchemaMap } from '@/entities/toolkit';
+import { toolkitTools } from '@/entities/toolkit';
 import { ToolkitViewOptions } from '@/shared/lib/enums';
 
 import { getToolComponent } from '../../../lib/helpers/toolComponent.helpers';
@@ -35,6 +36,93 @@ export type EditFieldFn = (
   options?: { readonly isAutoSelect?: boolean; readonly section?: string },
 ) => Promise<void>;
 
+/**
+ * The tool names a toolkit type declares in its own settings schema — the
+ * exact pair `ToolBase.render.tsx`'s `resolveAvailableTools` reads to draw
+ * the "Tools" chip picker. An empty result means the type declares no tools
+ * and publishes them at run time instead (openapi, mcp, mcp_config).
+ */
+function readStaticToolNames(schema: RawToolkitTypeSchema | undefined): readonly string[] {
+  const selectedTools = (schema?.properties as Record<string, SelectedToolsSchemaShape> | undefined)?.['selected_tools'];
+  const argsSchemaNames = Object.keys(selectedTools?.args_schemas ?? {});
+  if (argsSchemaNames.length > 0) return argsSchemaNames;
+  return selectedTools?.items?.enum ?? [];
+}
+
+interface SelectedToolsSchemaShape {
+  readonly args_schemas?: Readonly<Record<string, unknown>> | undefined;
+  readonly items?: { readonly enum?: readonly string[] | undefined } | undefined;
+}
+
+/**
+ * The baseline's `toolSchemaWithDynamicTools` (#440), names half.
+ *
+ * A toolkit type that declares no tools of its own used to leave the "Tools"
+ * chip picker empty for ever, because nothing read the catalogue the backend
+ * publishes for it. The names go into `selected_tools.items.enum`, which is
+ * where `resolveAvailableTools` already looks. Only the two nodes on that
+ * path are rebuilt; every sibling property is carried over untouched.
+ *
+ * The ARGUMENT schemas stay out of this: neither tool route carries one (see
+ * `ui/test-tools/useGetSelectedToolSchema.ts`'s header), so there is nothing
+ * to enrich `args_schemas` with.
+ */
+function withDynamicToolNames(schema: RawToolkitTypeSchema | undefined, dynamicToolNames: readonly string[]): RawToolkitTypeSchema | undefined {
+  if (schema === undefined || dynamicToolNames.length === 0) return schema;
+  const properties: Record<string, unknown> = schema.properties ?? {};
+  const selectedTools = (properties['selected_tools'] as Record<string, unknown> | undefined) ?? { type: 'array' };
+  const items = (selectedTools['items'] as Record<string, unknown> | undefined) ?? {};
+  return {
+    ...schema,
+    properties: { ...properties, selected_tools: { ...selectedTools, items: { ...items, enum: [...dynamicToolNames] } } },
+  };
+}
+
+interface ToolCatalogueRead {
+  readonly toolNames: readonly string[];
+  /** The read failed AND left the "Tools" section with nothing to show. A failed read that still produced a list keeps the working picker. */
+  readonly readFailed: boolean;
+  readonly retry: () => void;
+}
+
+interface ToolCatalogueReadArgs {
+  readonly projectId: string | undefined;
+  readonly toolkitId: string | number | undefined;
+  readonly toolkitType: string;
+  readonly staticToolNames: readonly string[];
+  readonly schemasAreFetching: boolean;
+  readonly schemasReadFailed: boolean;
+  readonly retrySchemasRead: () => void;
+}
+
+/**
+ * The catalogue tier of the "Tools" section (#440). It runs only for a
+ * toolkit type that declares no tools of its own, which is the type that
+ * publishes them at run time. Split out of `useToolkitFormCore` to keep that
+ * function under the §3.5 complexity budget.
+ */
+function useToolCatalogueRead(args: ToolCatalogueReadArgs): ToolCatalogueRead {
+  const { projectId, toolkitId, toolkitType, staticToolNames, schemasAreFetching, schemasReadFailed, retrySchemasRead } = args;
+
+  const dynamicTools = toolkitTools.useToolkitTools({
+    projectId,
+    // `ToolkitFormEditDetail.id` is `string | number`; the route takes a path segment.
+    toolkitId: toolkitId !== undefined ? String(toolkitId) : undefined,
+    toolkitType,
+    enabled: !schemasAreFetching && staticToolNames.length === 0,
+  });
+
+  // Both reads feed the "Tools" section, so one retry control must run both.
+  const { refetch: retryDynamicToolsRead } = dynamicTools;
+  const retry = useCallback(() => {
+    retryDynamicToolsRead();
+    retrySchemasRead();
+  }, [retryDynamicToolsRead, retrySchemasRead]);
+
+  const nothingToShow = staticToolNames.length === 0 && dynamicTools.toolNames.length === 0;
+  return { toolNames: dynamicTools.toolNames, readFailed: (dynamicTools.isError || schemasReadFailed) && nothingToShow, retry };
+}
+
 export interface CoreState {
   readonly view: string;
   readonly setView: Dispatch<SetStateAction<string>>;
@@ -55,6 +143,10 @@ export interface CoreState {
   readonly isFetching: boolean;
   readonly toolType: string;
   readonly effectiveToolSchema: RawToolkitTypeSchema | undefined;
+  /** A read that feeds the "Tools" section failed — the type schemas, or the tool catalogue (#440). */
+  readonly toolListReadFailed: boolean;
+  /** Runs both reads again. */
+  readonly retryToolListRead: () => void;
   readonly ToolComponent: ToolFormComponent | undefined;
   readonly isValidSchema: boolean;
   readonly nameIsRequired: boolean;
@@ -64,7 +156,7 @@ export interface CoreState {
 }
 
 export function useToolkitFormCore(props: ResolvedToolkitFormProps): CoreState {
-  const { editToolDetail, onChangeToolDetail, isMCP, onValidationStateChange, formValues, onSetFormField, onMcpScopesChanged, forceCustomView, onResetForm } = props;
+  const { editToolDetail, onChangeToolDetail, isMCP, onValidationStateChange, formValues, onSetFormField, onMcpScopesChanged, forceCustomView, onResetForm, projectId } = props;
 
   const hasSetViewManually = useRef(false);
   const [view, setView] = useState<string>(ToolkitViewOptions.Form);
@@ -79,7 +171,10 @@ export function useToolkitFormCore(props: ResolvedToolkitFormProps): CoreState {
   });
 
   const isMcpType = editToolDetail.type === 'mcp';
-  const { toolkitSchemas, isFetching } = useGetCurrentToolkitSchemas({ isMCP: Boolean(isMCP) && !isMcpType });
+  // `isError` has a reader now (#440): a lost schema read leaves the "Tools"
+  // section with nothing to offer, which is what a toolkit with no tools
+  // looks like.
+  const { toolkitSchemas, isFetching, isError: schemasReadFailed, refetch: retrySchemasRead } = useGetCurrentToolkitSchemas({ isMCP: Boolean(isMCP) && !isMcpType });
 
   const toolType = editToolDetail.type ?? '';
 
@@ -91,7 +186,18 @@ export function useToolkitFormCore(props: ResolvedToolkitFormProps): CoreState {
     () => (editToolDetail.schema ?? convertToolkitSchema(toolkitSchemas?.[toolType])) as RawToolkitTypeSchema,
     [editToolDetail.schema, toolkitSchemas, toolType],
   );
-  const effectiveToolSchema = toolSchema;
+  const staticToolNames = useMemo(() => readStaticToolNames(toolSchema), [toolSchema]);
+  const toolCatalogue = useToolCatalogueRead({
+    projectId,
+    toolkitId: editToolDetail.id,
+    toolkitType: toolType,
+    staticToolNames,
+    schemasAreFetching: isFetching,
+    schemasReadFailed,
+    retrySchemasRead,
+  });
+
+  const effectiveToolSchema = useMemo(() => withDynamicToolNames(toolSchema, toolCatalogue.toolNames), [toolSchema, toolCatalogue.toolNames]);
 
   const ToolComponent = useMemo(() => {
     const useJsonView = forceCustomView || view === ToolkitViewOptions.Json;
@@ -178,6 +284,8 @@ export function useToolkitFormCore(props: ResolvedToolkitFormProps): CoreState {
     isFetching,
     toolType,
     effectiveToolSchema,
+    toolListReadFailed: toolCatalogue.readFailed,
+    retryToolListRead: toolCatalogue.retry,
     ToolComponent,
     isValidSchema,
     nameIsRequired,

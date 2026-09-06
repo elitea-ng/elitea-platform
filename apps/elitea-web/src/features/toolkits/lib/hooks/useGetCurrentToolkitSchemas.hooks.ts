@@ -54,6 +54,8 @@ export interface UseGetCurrentToolkitSchemasResult {
    * with no schemas produces. A caller must keep the two apart.
    */
   readonly isError: boolean;
+  /** Reads the schemas again. Connect it to the retry control of the error state. */
+  readonly refetch: () => void;
 }
 
 export function useGetCurrentToolkitSchemas(params: UseGetCurrentToolkitSchemasParams = {}): UseGetCurrentToolkitSchemasResult {
@@ -77,9 +79,17 @@ export function useGetCurrentToolkitSchemas(params: UseGetCurrentToolkitSchemasP
     return () => socket.off('mcp_status', handleMcpStatusEvent);
   }, [socket, handleMcpStatusEvent]);
 
+  // A stable identity: a caller hands this straight to a retry control, and a
+  // fresh closure every render would invalidate any memo it lands in.
+  const { refetch: refetchQuery } = query;
+  const refetch = useCallback(() => {
+    void refetchQuery();
+  }, [refetchQuery]);
+
   return {
     toolkitSchemas,
     isFetching: query.isFetching,
     isError: query.isError,
+    refetch,
   };
 }

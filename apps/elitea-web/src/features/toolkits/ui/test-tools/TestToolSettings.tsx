@@ -1,17 +1,17 @@
 import type { ComponentType, ReactNode } from 'react';
 import { useCallback, useMemo } from 'react';
 
-import PlayArrowIcon from '@mui/icons-material/PlayArrow';
-import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
 import { t } from '@/shared/i18n';
-import { BaseBtn, BUTTON_VARIANTS } from '@/shared/ui/BaseBtn';
 import { SingleSelect, type SingleSelectOption } from '@/shared/ui/SingleSelect';
+import { ToolListError } from '@/shared/ui/ToolListError';
 
 import { toolkitTools } from '@/entities/toolkit';
+
+import { ToolArgumentPanel } from './ToolArgumentPanel';
 
 import { IndexesToolsEnum } from '../../indexes/lib/constants/indexDetails.constants';
 import type { JsonSchemaLike } from '../../indexes/lib/helpers/indexChat.helpers';
@@ -20,8 +20,6 @@ import type { ToolkitConversationValues } from '../../lib/helpers/toolkitConvers
 import { useGetCurrentToolkitSchemas } from '../../lib/hooks/useGetCurrentToolkitSchemas.hooks';
 import { useSelectedProjectId } from '../../lib/hooks/useSelectedProjectId';
 import type { LLMModelSelectorProps } from '../../indexes/ui/IndexDetails/IndexChat';
-import type { ToolFormContainerProperty, ToolFormContainerSchema } from '../form/ToolFormContainer';
-import { ToolFormContainer } from '../form/ToolFormContainer';
 
 /**
  * Ported from `apps/elitea-ui/src/[fsd]/features/toolkits/ui/test-tools/
@@ -128,6 +126,12 @@ export interface TestToolSettingsProps {
   readonly LLMModelSelector: ComponentType<LLMModelSelectorProps>;
   /** Grouped — the four `useIndexNameValidation()` fields the baseline reads individually. */
   readonly indexNameValidation: UseIndexNameValidationResult;
+  /**
+   * The state of the read that produced `selectedToolSchema` (#440). Grouped
+   * because the two fields are only ever read together. Absent means the
+   * caller resolves the schema without a read.
+   */
+  readonly toolSchemaRead?: { readonly isError: boolean; readonly onRetry: () => void };
 }
 
 interface SelectedToolsSchemaShape {
@@ -178,25 +182,7 @@ interface ToolPickerProps {
  * component to keep `TestToolSettings` under the §3.5 complexity budget.
  */
 function ToolPicker({ dynamicTierActive, readFailed, onRetry, value, options, onSelect, onClear }: ToolPickerProps): ReactNode {
-  if (dynamicTierActive && readFailed) {
-    return (
-      <Alert
-        severity="error"
-        data-testid="tool-list-error"
-        action={
-          <BaseBtn
-            variant={BUTTON_VARIANTS.tertiary}
-            size="small"
-            onClick={onRetry}
-          >
-            {t('features.toolkits.testToolSettings.toolListRetry', 'Retry')}
-          </BaseBtn>
-        }
-      >
-        {t('features.toolkits.testToolSettings.toolListError', 'The tool list did not load. Try again.')}
-      </Alert>
-    );
-  }
+  if (dynamicTierActive && readFailed) return <ToolListError onRetry={onRetry} />;
 
   return (
     <SingleSelect
@@ -221,11 +207,14 @@ function resolveAvailableTools(
 }
 
 export function TestToolSettings(props: TestToolSettingsProps): ReactNode {
-  const { selectedTool, onChangeTool, toolInputVariables, onChangeInputVariables, onRunTool, isRunning, isValidForm, selectedToolSchema, values, llm, LLMModelSelector, indexNameValidation } = props;
+  const { selectedTool, onChangeTool, toolInputVariables, onChangeInputVariables, onRunTool, isRunning, isValidForm, selectedToolSchema, values, llm, LLMModelSelector, indexNameValidation, toolSchemaRead } = props;
   const { clearIndexNameError, updateIndexNameError, isIndexNameValid, indexNameError } = indexNameValidation;
 
   const projectId = useSelectedProjectId();
-  const { toolkitSchemas, isFetching: isFetchingSchemas } = useGetCurrentToolkitSchemas();
+  // `isError` has a reader now (#440). A lost schema read empties the static
+  // tier, which makes the dynamic tier take over and, on a 200 with no tools,
+  // draws an empty picker for a failure. It counts as a failed read here.
+  const { toolkitSchemas, isFetching: isFetchingSchemas, isError: schemasReadFailed, refetch: retrySchemasRead } = useGetCurrentToolkitSchemas();
   const selectedToolsSchema = values.type !== undefined ? (toolkitSchemas?.[values.type] as { properties?: { selected_tools?: SelectedToolsSchemaShape } } | undefined)?.properties?.selected_tools : undefined;
   const disabledRunTool = !isValidForm || isRunning || Boolean(indexNameError);
 
@@ -279,6 +268,13 @@ export function TestToolSettings(props: TestToolSettingsProps): ReactNode {
   const onClearTool = useCallback(() => onChangeTool(null), [onChangeTool]);
   const onSelectTool = useCallback((value: string) => onChangeTool(value), [onChangeTool]);
 
+  // Both reads feed the same picker, so one retry control must run both.
+  const onRetryToolList = useCallback(() => {
+    dynamicTools.refetch();
+    retrySchemasRead();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `dynamicTools` is a fresh object every render; its `refetch` is the stable identity this depends on
+  }, [dynamicTools.refetch, retrySchemasRead]);
+
   return (
     <Box sx={rootSx}>
       <Box sx={contentContainerSx}>
@@ -291,8 +287,8 @@ export function TestToolSettings(props: TestToolSettingsProps): ReactNode {
         <Box sx={toolSelectContainerSx}>
           <ToolPicker
             dynamicTierActive={usesDynamicTier}
-            readFailed={dynamicTools.isError}
-            onRetry={dynamicTools.refetch}
+            readFailed={dynamicTools.isError || schemasReadFailed}
+            onRetry={onRetryToolList}
             value={selectedTool ?? ''}
             options={allToolsOptions}
             onSelect={onSelectTool}
@@ -301,32 +297,14 @@ export function TestToolSettings(props: TestToolSettingsProps): ReactNode {
         </Box>
 
         {selectedTool && (
-          <Box sx={configContainerSx}>
-            <Box sx={scrollableSectionSx}>
-              {Object.keys(selectedToolSchema?.properties ?? {}).map((key) => (
-                <ToolFormContainer
-                  key={key}
-                  fieldKey={key}
-                  property={selectedToolSchema?.properties?.[key] as ToolFormContainerProperty}
-                  toolInputVariables={toolInputVariables}
-                  schema={selectedToolSchema as ToolFormContainerSchema | undefined}
-                  onChangeInputVariables={onFieldChange}
-                />
-              ))}
-            </Box>
-
-            <Box sx={runToolBtnSx}>
-              <BaseBtn
-                variant={BUTTON_VARIANTS.special}
-                fullWidth
-                disabled={disabledRunTool}
-                onClick={onRunTool}
-                startIcon={<PlayArrowIcon />}
-              >
-                {t('features.toolkits.testToolSettings.runTool', 'RUN TOOL')}
-              </BaseBtn>
-            </Box>
-          </Box>
+          <ToolArgumentPanel
+            schema={selectedToolSchema}
+            schemaRead={toolSchemaRead}
+            toolInputVariables={toolInputVariables}
+            onFieldChange={onFieldChange}
+            onRunTool={onRunTool}
+            runDisabled={disabledRunTool}
+          />
         )}
       </Box>
     </Box>
@@ -368,31 +346,5 @@ const toolSelectContainerSx: SxProps<Theme> = {
   paddingRight: '0.5rem',
 };
 
-const configContainerSx: SxProps<Theme> = {
-  display: 'flex',
-  flexDirection: 'column',
-  flex: 1,
-  minHeight: '25rem',
-};
 
-const scrollableSectionSx: SxProps<Theme> = (theme) => ({
-  flex: 1,
-  overflowY: 'auto',
-  overflowX: 'hidden',
-  paddingRight: '.5rem',
-  marginRight: '-.5rem',
-  '&::-webkit-scrollbar': { width: '.375rem' },
-  '&::-webkit-scrollbar-track': { background: 'transparent' },
-  '&::-webkit-scrollbar-thumb': { background: theme.vars.palette.divider, borderRadius: theme.vars.shape.radiusSm },
-  '&::-webkit-scrollbar-thumb:hover': { background: theme.vars.palette.action.hover },
-});
 
-const runToolBtnSx: SxProps<Theme> = (theme) => ({
-  marginTop: '1rem',
-  paddingRight: '0.5rem',
-  paddingTop: '1rem',
-  borderTop: `.0625rem solid ${theme.vars.palette.divider}`,
-  position: 'sticky',
-  bottom: 0,
-  zIndex: 1,
-});

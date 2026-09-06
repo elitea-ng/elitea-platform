@@ -28,6 +28,7 @@ import type { ReactNode } from 'react';
 import { memo, useCallback, useContext, useMemo } from 'react';
 
 import { SingleSelect } from '@/shared/ui/SingleSelect';
+import { ToolListError } from '@/shared/ui/ToolListError';
 import { ToolTypes } from '@/entities/toolkit';
 
 import { FlowEditorContext, type FlowEditorContextValue } from '../../lib/flow-editor/flowEditorContext';
@@ -216,21 +217,40 @@ interface ToolFunctionSelectProps {
   readonly onChangeTool: (newValue: string | undefined) => void;
   readonly onClearTool: () => void;
   readonly disabled: boolean;
+  /** The tool catalogue read failed (#440). */
+  readonly catalogueReadFailed: boolean;
+  /** The toolkit type schema read failed (#440) — it supplies the tool list of a statically-declared type. */
+  readonly typeSchemasReadFailed: boolean;
+  readonly onRetry: () => void;
 }
 
-/** `BaseToolNode.jsx:149-161` (the conditional "Tool" select) as its own named component -- split out purely to keep `BaseToolNode` under the §3.5 complexity ceiling. */
-function ToolFunctionSelect({ functionOptions, selectedTool, onChangeTool, onClearTool, disabled }: ToolFunctionSelectProps): ReactNode {
-  if (functionOptions.length === 0) return null;
-  return (
-    <SingleSelect
-      label={t('pipelines.flowEditor.baseToolNode.toolLabel', 'Tool')}
-      value={selectedTool}
-      onChange={onChangeTool}
-      options={[...functionOptions]}
-      disabled={disabled}
-      onClear={onClearTool}
-    />
-  );
+/**
+ * `BaseToolNode.jsx:149-161` (the conditional "Tool" select) as its own
+ * named component -- split out purely to keep `BaseToolNode` under the §3.5
+ * complexity ceiling.
+ *
+ * NO EMPTY LIST FOR A FAILED READ (#440). The node used to render nothing at
+ * all when the option list was empty, whatever the cause. An empty list now
+ * keeps one meaning — the toolkit offers no tools — and a failed read gets
+ * its own visible state with a retry. A failed read that still produced
+ * options (the toolkit carries its own `selected_tools`, and only the type
+ * schemas were lost) keeps the working picker: the list on screen is real.
+ */
+function ToolFunctionSelect({ functionOptions, selectedTool, onChangeTool, onClearTool, disabled, catalogueReadFailed, typeSchemasReadFailed, onRetry }: ToolFunctionSelectProps): ReactNode {
+  if (functionOptions.length > 0) {
+    return (
+      <SingleSelect
+        label={t('pipelines.flowEditor.baseToolNode.toolLabel', 'Tool')}
+        value={selectedTool}
+        onChange={onChangeTool}
+        options={[...functionOptions]}
+        disabled={disabled}
+        onClear={onClearTool}
+      />
+    );
+  }
+  if (catalogueReadFailed || typeSchemasReadFailed) return <ToolListError onRetry={onRetry} />;
+  return null;
 }
 
 export const BaseToolNode = memo(function BaseToolNode(props: BaseToolNodeProps): ReactNode {
@@ -248,6 +268,8 @@ export const BaseToolNode = memo(function BaseToolNode(props: BaseToolNodeProps)
     toolkit,
     selectedToolkit,
     dynamicToolNames,
+    dynamicToolsReadFailed,
+    retryDynamicToolsRead,
     inputMappings,
     defaultValues,
   } = useFunctionInputMapping({
@@ -261,7 +283,10 @@ export const BaseToolNode = memo(function BaseToolNode(props: BaseToolNodeProps)
   });
 
   const projectId = useSelectedProjectId();
-  const { toolkitTypeSchemas } = useToolkitTypeSchemas(projectId);
+  // `isError` has a reader now (#440). The type schemas supply the tool list
+  // of a statically-declared toolkit type, so a lost read can empty this
+  // node's picker just as a lost catalogue read can.
+  const { toolkitTypeSchemas, isError: typeSchemasReadFailed, refetch: retryTypeSchemasRead } = useToolkitTypeSchemas(projectId);
   const { getToolkitNameFromSchema, getSelectedTools } = useGetToolkitNameFromSchema(toolkitTypeSchemas);
 
   const functionOptions = useMemo(
@@ -287,6 +312,12 @@ export const BaseToolNode = memo(function BaseToolNode(props: BaseToolNodeProps)
   const onClearTool = useCallback(() => {
     onChangeTool(undefined);
   }, [onChangeTool]);
+
+  // Both reads feed the same picker, so one retry control must run both.
+  const onRetryToolList = useCallback(() => {
+    retryDynamicToolsRead();
+    retryTypeSchemasRead();
+  }, [retryDynamicToolsRead, retryTypeSchemasRead]);
 
   return (
     <NodeCard
@@ -316,6 +347,9 @@ export const BaseToolNode = memo(function BaseToolNode(props: BaseToolNodeProps)
         onChangeTool={onChangeTool}
         onClearTool={onClearTool}
         disabled={Boolean(isRunningPipeline)}
+        catalogueReadFailed={dynamicToolsReadFailed}
+        typeSchemasReadFailed={typeSchemasReadFailed}
+        onRetry={onRetryToolList}
       />
       <InputSelect
         id={id}

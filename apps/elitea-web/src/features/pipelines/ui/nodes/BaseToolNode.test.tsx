@@ -1,4 +1,4 @@
-import { cleanup, waitFor, type RenderResult } from '@testing-library/react';
+import { cleanup, fireEvent, waitFor, within, type RenderResult } from '@testing-library/react';
 import { HttpResponse, http } from 'msw';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
@@ -69,10 +69,16 @@ function renderBaseToolNode(
   );
 }
 
+const DISCOVER = `${BASE}/elitea_core/toolkit_discover_tools/prompt_lib/${PROJECT_ID}/:toolkitType`;
+
 describe('BaseToolNode', () => {
   describe('with an empty toolkit-type catalogue', () => {
     beforeEach(() => {
       server.use(http.get(`${BASE}/elitea_core/toolkits/prompt_lib/${PROJECT_ID}`, () => HttpResponse.json({})));
+      // The catalogue read (#440) runs for a toolkit without its own
+      // `selected_tools`. A per-test `server.use` still wins: msw puts
+      // run-time handlers ahead of this one.
+      server.use(http.post(DISCOVER, () => HttpResponse.json({ tools: [], total: 0 })));
     });
 
     it('renders the node id as the card name and both handles', async () => {
@@ -235,5 +241,89 @@ describe('computeFunctionOptions', () => {
       { label: 'create_issue', value: 'create_issue' },
       { label: 'list_issues', value: 'list_issues' },
     ]);
+  });
+});
+
+/**
+ * #440. The node used to render nothing when the option list was empty,
+ * whatever the cause, so a toolkit with no tools and a lost read drew the
+ * same screen. The cases below discriminate the three outcomes.
+ */
+describe('BaseToolNode dynamic tool catalogue (#440)', () => {
+  /** A toolkit with no `selected_tools` of its own, so the catalogue tier is the one in use. */
+  const dynamicVersionTools: readonly PipelineToolEntry[] = [{ type: 'github', toolkit_name: 'my-github' }];
+
+  beforeEach(() => {
+    server.use(http.get(`${BASE}/elitea_core/toolkits/prompt_lib/${PROJECT_ID}`, () => HttpResponse.json({})));
+  });
+
+  it('lists the tools the backend publishes for the selected toolkit', async () => {
+    server.use(http.post(DISCOVER, () => HttpResponse.json({ tools: [{ id: '1', name: 'alpha_op', type: 'github' }], total: 1 })));
+
+    const { getAllByRole, findByText, queryByTestId } = renderBaseToolNode({ versionTools: dynamicVersionTools });
+
+    await findByText('my-github');
+    // Toolkit ToolSelect + the "Tool" select + InputSelect + OutputSelect.
+    await waitFor(() => expect(getAllByRole('combobox', { hidden: true })).toHaveLength(4));
+    expect(queryByTestId('tool-list-error')).not.toBeInTheDocument();
+  });
+
+  it('shows an error with a retry, not an empty node, when the catalogue read fails', async () => {
+    let schemaReads = 0;
+    let catalogueReads = 0;
+    server.use(
+      http.get(`${BASE}/elitea_core/toolkits/prompt_lib/${PROJECT_ID}`, () => {
+        schemaReads += 1;
+        return HttpResponse.json({});
+      }),
+    );
+    server.use(
+      http.post(DISCOVER, () => {
+        catalogueReads += 1;
+        return HttpResponse.json({ error: 'read available tools failed' }, { status: 500 });
+      }),
+    );
+
+    const { findByTestId, findByText, getAllByRole } = renderBaseToolNode({ versionTools: dynamicVersionTools });
+
+    await findByText('my-github');
+    const alert = await findByTestId('tool-list-error');
+    expect(alert).toBeInTheDocument();
+    // No "Tool" select stands in for the failure.
+    expect(getAllByRole('combobox', { hidden: true })).toHaveLength(3);
+
+    // The retry runs BOTH reads that feed this picker.
+    const beforeSchemaReads = schemaReads;
+    const beforeCatalogueReads = catalogueReads;
+    const retry = within(alert).getByText('Retry');
+    fireEvent.click(retry);
+    await waitFor(() => expect(catalogueReads).toBe(beforeCatalogueReads + 1));
+    await waitFor(() => expect(schemaReads).toBe(beforeSchemaReads + 1));
+  });
+
+  it('shows no error and no picker when the read succeeds with no tools', async () => {
+    let requestCount = 0;
+    server.use(
+      http.post(DISCOVER, () => {
+        requestCount += 1;
+        return HttpResponse.json({ tools: [], total: 0 });
+      }),
+    );
+
+    const { findByText, getAllByRole, queryByTestId } = renderBaseToolNode({ versionTools: dynamicVersionTools });
+
+    await findByText('my-github');
+    await waitFor(() => expect(requestCount).toBe(1));
+    expect(queryByTestId('tool-list-error')).not.toBeInTheDocument();
+    expect(getAllByRole('combobox', { hidden: true })).toHaveLength(3);
+  });
+
+  it('shows an error when the toolkit type schema read fails and leaves the picker empty', async () => {
+    server.use(http.get(`${BASE}/elitea_core/toolkits/prompt_lib/${PROJECT_ID}`, () => HttpResponse.json({ error: 'schemas unavailable' }, { status: 500 })));
+    server.use(http.post(DISCOVER, () => HttpResponse.json({ tools: [], total: 0 })));
+
+    const { findByTestId } = renderBaseToolNode({ versionTools: dynamicVersionTools });
+
+    expect(await findByTestId('tool-list-error')).toBeInTheDocument();
   });
 });
