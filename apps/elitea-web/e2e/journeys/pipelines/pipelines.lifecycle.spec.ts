@@ -15,6 +15,18 @@
  * assertion below now names something a stub cannot produce: a specific
  * form control, a backend-minted SERIAL id in the URL, a React-Flow node
  * element, or a name echoed back by the detail fetch.
+ *
+ * ── A new pipeline is NOT empty ─────────────────────────────────────────────
+ * `pages/pipelines/CreatePipeline.tsx` shows and stores
+ * `shared/lib/pipelineStarterTemplate.ts` when the author typed no document,
+ * so the editor opens on one `LLM_1` node wired to `END` and that graph runs.
+ * Every "the node I added" claim below is therefore computed by DIFFERENCE
+ * against the ids present right after creation — on the canvas through
+ * `canvasNodeIds`, in the stored document through a read of the created
+ * version. A bare `startsWith('LLM')` or a `>= n` count matches the starter's
+ * own content and would let a journey prove itself with a node it never
+ * authored, which is the trap `pipelines.versioning.spec.ts`'s J16b already
+ * hit.
  */
 import { test, expect, type Page } from '@playwright/test';
 
@@ -73,6 +85,23 @@ const SAVEABLE_NODE_LABELS = ADMITTED_NODE_LABELS.filter(
 async function addNodeThroughMenu(page: Page, label: string): Promise<void> {
   await page.getByRole('button', { name: 'Add node' }).click();
   await page.getByRole('menuitem', { name: label, exact: true }).click();
+}
+
+/**
+ * Every node id currently drawn on the canvas.
+ *
+ * Read BEFORE the first `addNodeThroughMenu` call, this is the baseline every
+ * "the node I added" assertion below is computed against. A pipeline created
+ * through this form is no longer empty: `pages/pipelines/CreatePipeline.tsx`
+ * seeds `shared/lib/pipelineStarterTemplate.ts`, so the editor opens on one
+ * `LLM_1` node next to `END`. "The LLM node" is therefore ambiguous, and a
+ * `find(id => id.startsWith('LLM'))` matches the STARTER — which would let a
+ * journey report the starter's own content as the thing it added.
+ * `pipelines.versioning.spec.ts`'s J16b hit exactly that and identifies its
+ * node by difference for the same reason.
+ */
+async function canvasNodeIds(page: Page): Promise<readonly string[]> {
+  return page.locator('.react-flow__node').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-id') ?? ''));
 }
 
 /** Click Save and wait for the version PUT to actually land, not just for the click. */
@@ -167,6 +196,21 @@ test('J16: create a pipeline through the real form and land on a live flow edito
   await expect(page.getByTestId('rf__wrapper')).toBeVisible();
   await expect(page.locator('.react-flow__node[data-id="END"]')).toBeVisible();
 
+  /*
+   * `END` ALONE is the state this product decision moved away from: a new
+   * pipeline is created on `shared/lib/pipelineStarterTemplate.ts`, so the
+   * editor opens on a graph that runs rather than on an empty canvas. The
+   * starter's own id goes through the same compiler grammar as a minted one —
+   * it is stored in the very same document.
+   */
+  const starterIds = (await canvasNodeIds(page)).filter(nodeId => nodeId !== 'END');
+  expect(starterIds.length, 'a new pipeline must open on the starter graph, not on END alone').toBeGreaterThan(0);
+  for (const nodeId of starterIds) {
+    expect(nodeId, `starter node id "${nodeId}" is not addressable by the pipeline compiler`).toMatch(
+      COMPILER_LEGAL_NODE_ID,
+    );
+  }
+
   // Backend-derived: EditPipeline.tsx renders `pipelineDetailDisplayName(detail)`
   // from the GET application-detail response, not from anything it navigated with.
   await expect(page.getByRole('heading', { name, exact: true })).toBeVisible({ timeout: 15_000 });
@@ -210,6 +254,19 @@ test('J16: an edited flow graph survives a save + reload', async ({ page }) => {
 
   await expect(page.locator('.react-flow__node[data-id="END"]')).toBeVisible({ timeout: 15_000 });
 
+  /*
+   * What the STARTER already stored, read before this journey touches the
+   * graph. The added node is named by difference against this list — the
+   * starter ships an `LLM_1` node of its own, so "the LLM node in the stored
+   * document" is ambiguous and the first `LLM*` id in document order is the
+   * starter's, not the one added below. Matching that would have let this
+   * journey prove the round trip using content it never authored.
+   */
+  const versionId = await resolveLatestPipelineVersionId(page.request, DEFAULT_PROJECT_ID, id);
+  const before = await readStoredPipelineVersion(page.request, DEFAULT_PROJECT_ID, id, versionId);
+  const idsBefore = storedNodeIds(parseStoredGraph(before.instructions));
+  expect(idsBefore.length, 'a new pipeline must be created on the starter graph').toBeGreaterThan(0);
+
   // Edit the graph: add an LLM node through the editor's own menu. (Was an
   // Agent node; an Agent's `tool` participant alias is seeded empty on
   // purpose — see SAVEABLE_NODE_LABELS — so the editor refuses to save one
@@ -228,12 +285,18 @@ test('J16: an edited flow graph survives a save + reload', async ({ page }) => {
    * pipeline authored in this editor was unloadable and this journey was
    * green the whole time.
    */
-  const versionId = await resolveLatestPipelineVersionId(page.request, DEFAULT_PROJECT_ID, id);
   const stored = await readStoredPipelineVersion(page.request, DEFAULT_PROJECT_ID, id, versionId);
   const graph = parseStoredGraph(stored.instructions);
-  const storedAddedId = storedNodeIds(graph).find(nodeId => nodeId.startsWith('LLM'));
+  const storedIds = storedNodeIds(graph);
+  const storedAddedId = storedIds.find(nodeId => nodeId.startsWith('LLM') && !idsBefore.includes(nodeId));
   expect(storedAddedId, 'the added LLM node must reach the stored document').toBeTruthy();
   expect(storedAddedId).toMatch(COMPILER_LEGAL_NODE_ID);
+  // A save ADDS to the graph the pipeline was created with; it does not
+  // replace it. Without this, a save that dropped the starter and wrote only
+  // the new node would still satisfy every assertion above.
+  for (const nodeId of idsBefore) {
+    expect(storedIds, 'the starter graph must survive the save').toContain(nodeId);
+  }
 
   await page.goto(BASE_URL + `/app/pipelines/latest/${id}`);
   // The reload really did re-fetch this pipeline (backend-derived name).
@@ -241,10 +304,14 @@ test('J16: an edited flow graph survives a save + reload', async ({ page }) => {
   await expect(page.locator('.react-flow__node[data-id="END"]')).toBeVisible({ timeout: 15_000 });
 
   // Acceptance (1): the saved pipeline reloads with the SAME graph — matched
-  // against the id the backend stored, not one this file invented.
+  // against the ids the backend stored, not ones this file invented. Both
+  // halves: the node this journey added, and the starter nodes it did not.
   await expect(page.locator(`.react-flow__node[data-id="${storedAddedId as string}"]`)).toBeVisible({
     timeout: 10_000,
   });
+  for (const nodeId of idsBefore) {
+    await expect(page.locator(`.react-flow__node[data-id="${nodeId}"]`)).toBeVisible({ timeout: 10_000 });
+  }
 });
 
 test('J16: the Add-node menu offers exactly the node types the pipeline compiler admits', async ({ page }) => {
@@ -296,15 +363,21 @@ test('J16: every node type the menu offers mints a compiler-legal id', async ({ 
   await createPipelineThroughUi(page, name);
   await expect(page.locator('.react-flow__node[data-id="END"]')).toBeVisible({ timeout: 15_000 });
 
+  // The canvas the starter opened on — the baseline every "added" count below
+  // is taken against. See `canvasNodeIds`.
+  const starterIds = await canvasNodeIds(page);
+
   for (const label of ADMITTED_NODE_LABELS) {
     await addNodeThroughMenu(page, label);
   }
 
-  const canvasIds = await page.locator('.react-flow__node').evaluateAll(nodes =>
-    nodes.map(node => node.getAttribute('data-id') ?? ''),
-  );
-  // One node per menu item, plus the default END node.
-  expect(canvasIds.length).toBeGreaterThanOrEqual(ADMITTED_NODE_LABELS.length);
+  const canvasIds = await canvasNodeIds(page);
+  // Exactly one node per menu item was added. Counted over the whole canvas,
+  // `>= ADMITTED_NODE_LABELS.length` now counts the starter node and `END`
+  // towards a total the MENU is supposed to have produced, so two menu items
+  // could stop adding anything and the count would still pass.
+  const addedIds = canvasIds.filter(nodeId => !starterIds.includes(nodeId));
+  expect(addedIds.length, 'every menu item must add exactly one node').toBe(ADMITTED_NODE_LABELS.length);
   expect(canvasIds).not.toContain('Agent 1');
   for (const nodeId of canvasIds) {
     expect(nodeId, `minted node id "${nodeId}" is not addressable by the pipeline compiler`).toMatch(
@@ -329,19 +402,39 @@ test('J16: the STORED pipeline document carries only compiler-legal ids', async 
   const id = await createPipelineThroughUi(page, name);
   await expect(page.locator('.react-flow__node[data-id="END"]')).toBeVisible({ timeout: 15_000 });
 
+  /*
+   * The document the CREATE stored, before this journey adds anything. The
+   * starter template is itself a stored graph now, so it goes through the same
+   * grammar as anything the editor mints — and it is the baseline the added
+   * count is taken against, because `ids.length >= SAVEABLE_NODE_LABELS.length`
+   * over the whole document counts the starter's node towards a total the
+   * editor is supposed to have produced.
+   */
+  const versionId = await resolveLatestPipelineVersionId(page.request, DEFAULT_PROJECT_ID, id);
+  const before = await readStoredPipelineVersion(page.request, DEFAULT_PROJECT_ID, id, versionId);
+  const idsBefore = storedNodeIds(parseStoredGraph(before.instructions));
+  expect(idsBefore.length, 'a new pipeline must be created on the starter graph').toBeGreaterThan(0);
+  for (const nodeId of idsBefore) {
+    expect(nodeId, `starter node id "${nodeId}" is not addressable by the pipeline compiler`).toMatch(
+      COMPILER_LEGAL_NODE_ID,
+    );
+  }
+
   for (const label of SAVEABLE_NODE_LABELS) {
     await addNodeThroughMenu(page, label);
   }
   await saveAndAwaitPersist(page);
 
-  const versionId = await resolveLatestPipelineVersionId(page.request, DEFAULT_PROJECT_ID, id);
   const stored = await readStoredPipelineVersion(page.request, DEFAULT_PROJECT_ID, id, versionId);
   const graph = parseStoredGraph(stored.instructions);
 
   // One node per label actually reached the backend — otherwise every id
-  // assertion below would be vacuously true of an empty list.
+  // assertion below would be vacuously true of the starter's own node.
   const ids = storedNodeIds(graph);
-  expect(ids.length).toBeGreaterThanOrEqual(SAVEABLE_NODE_LABELS.length);
+  const addedIds = ids.filter(nodeId => !idsBefore.includes(nodeId));
+  expect(addedIds.length, 'every saveable node type must reach the stored document').toBe(
+    SAVEABLE_NODE_LABELS.length,
+  );
 
   for (const nodeId of ids) {
     expect(nodeId, `stored node id "${nodeId}" is not addressable by the pipeline compiler`).toMatch(
@@ -350,8 +443,9 @@ test('J16: the STORED pipeline document carries only compiler-legal ids', async 
   }
 
   // `entry_point` goes through the same `valid_graph_id` check
-  // (`compiler.rs:464`) and is set to the first node added, so it is the very
-  // first thing a space would break.
+  // (`compiler.rs:464`). It names the starter's node on a pipeline created
+  // through this form, and the first node ADDED on a document that has none,
+  // so it is the very first thing a space would break either way.
   expect(graph.entry_point, 'the stored graph must declare an entry point').toBeTruthy();
   expect(graph.entry_point as string).toMatch(COMPILER_LEGAL_NODE_ID);
   expect(ids).toContain(graph.entry_point as string);
