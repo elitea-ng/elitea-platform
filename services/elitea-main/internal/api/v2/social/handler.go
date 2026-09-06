@@ -234,8 +234,15 @@ type startedEnsurer interface {
 const defaultPersonalProjectWait = 3 * time.Second
 
 // ensurePersonalProject asks for the caller's personal project to be created
-// and waits a bounded moment for the answer. It reports whether the attempt it
-// started finished, which is the caller's cue to re-resolve.
+// and waits a bounded moment for the answer. It reports whether the attempt for
+// this user finished, which is the caller's cue to re-resolve.
+//
+// THE ATTEMPT IS NOT NECESSARILY THIS REQUEST'S. The SPA sends two of these
+// requests at boot, inside the same second. EnsureStarted gives BOTH of them
+// the running attempt's channel, so both wait for the same work and both
+// answer the same id. It used to give the second one nil, and that request
+// answered "" while its twin answered the real project — one boot, two
+// contradictory answers, on the field the SPA routes on.
 //
 // WHY HERE. This endpoint is the one that answers "which project do your
 // private things live in", it is authenticated on every plane, and the SPA
@@ -252,10 +259,9 @@ const defaultPersonalProjectWait = 3 * time.Second
 // to chat. The wait closes the gap between the two answers.
 //
 // WHAT IT DOES NOT DO. It never cancels the provisioning — EnsureStarted keeps
-// the detached deadline — it never queues behind a full slot budget, and it
-// never waits on an attempt another poll already owns. Each of those returns a
-// nil channel and this function falls back to the previous behaviour: answer
-// "" and let the poll ask again.
+// the detached deadline — and it never queues behind a full slot budget. A
+// dropped attempt returns a nil channel and this function falls back to the
+// previous behaviour: answer "" and let the poll ask again.
 //
 // It costs nothing on an account that HAS a personal project, because it is
 // reached only when the resolver answered "".
@@ -281,9 +287,9 @@ func (h *Handler) ensurePersonalProject(ctx context.Context, user auth.User) boo
 	}
 	done := awaitable.EnsureStarted(id)
 	if done == nil {
-		// Nothing was started for this call: the budget was full, or another
-		// in-flight attempt already owns this user. Either way there is
-		// nothing to wait for.
+		// No attempt exists for this user at all — the slot budget dropped it.
+		// There is nothing to wait for, so answer as this endpoint always did
+		// and let the SPA's poll ask again.
 		return false
 	}
 

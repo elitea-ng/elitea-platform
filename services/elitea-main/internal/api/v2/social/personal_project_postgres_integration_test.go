@@ -177,6 +177,93 @@ func TestGetAuthorProvisionsTheMissingPersonalProject(t *testing.T) {
 	}
 }
 
+// THE TWO REQUESTS THE SPA ACTUALLY SENDS AT BOOT.
+//
+// apps/elitea-web asks for `/social/author` twice, inside the same second. Both
+// find no personal project, so both ask for one. The first took the attempt and
+// waited for it; the second was told "another attempt already owns this user",
+// had nothing to wait for, and answered `personal_project_id: ""`. One boot,
+// two contradictory answers, on the field routes/-guards/indexRoute.ts routes
+// on — so a first-time user was sent to `/onboarding` or to the product
+// depending on which of the two the SPA read last.
+//
+// EnsureStarted now hands a concurrent caller for the SAME user the running
+// attempt's channel, so both requests wait for the one provisioning run and
+// both report the one project.
+func TestTwoConcurrentFirstReadsAgreeOnThePersonalProject(t *testing.T) {
+	pool := newPersonalProjectSocialPool(t)
+	userID := seedAuthorUser(t, pool, "two-boot-requests@autotest.local", "Twin")
+
+	routes := handler.NewHandler(pool,
+		handler.WithPersonalProjectEnsurer(newAuthorEnsurer(t, pool)),
+		handler.WithPersonalProjectWait(120*time.Second),
+	).Routes()
+
+	read := func() string {
+		request := httptest.NewRequest(http.MethodGet, "/author/", nil)
+		request = request.WithContext(auth.ContextWithUser(request.Context(),
+			auth.User{ID: strconv.FormatInt(userID, 10), Email: "two-boot-requests@autotest.local"}))
+		recorder := httptest.NewRecorder()
+		routes.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusOK {
+			return fmt.Sprintf("status %d: %s", recorder.Code, recorder.Body.String())
+		}
+		var decoded struct {
+			PersonalProjectID string `json:"personal_project_id"`
+		}
+		if err := json.Unmarshal(recorder.Body.Bytes(), &decoded); err != nil {
+			return fmt.Sprintf("undecodable body %s: %v", recorder.Body.String(), err)
+		}
+		return decoded.PersonalProjectID
+	}
+
+	// Sent together, as the browser sends them. The slot budget is one, so the
+	// second request cannot start an attempt of its own: it either joins the
+	// first or it is refused, and this is what tells the two apart.
+	answers := make([]string, 2)
+	var boot sync.WaitGroup
+	begin := make(chan struct{})
+	for index := range answers {
+		boot.Add(1)
+		go func() {
+			defer boot.Done()
+			<-begin
+			answers[index] = read()
+		}()
+	}
+	close(begin)
+	boot.Wait()
+
+	for index, answer := range answers {
+		if answer == "" {
+			t.Fatalf("request %d answered no personal project while its twin answered %q; "+
+				"the SPA routes on this field, so one boot sends the user to the product "+
+				"and the other to /onboarding", index, answers[1-index])
+		}
+		// A failed request is reported through this same slice, because a test
+		// goroutine may not call Fatalf. An answer that is not an id is one.
+		if _, err := strconv.ParseInt(answer, 10, 64); err != nil {
+			t.Fatalf("request %d did not answer an id: %s", index, answer)
+		}
+	}
+	if answers[0] != answers[1] {
+		t.Fatalf("the two boot requests named different personal projects: %q and %q",
+			answers[0], answers[1])
+	}
+
+	// One project, not two: the joining request must not have provisioned a
+	// second `project_user_<uid>` beside the first.
+	var projects int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM centry.project WHERE name = $1`, personalproject.Name(userID),
+	).Scan(&projects); err != nil {
+		t.Fatalf("count the personal projects of user %d: %v", userID, err)
+	}
+	if projects != 1 {
+		t.Fatalf("%d projects are named %s, want 1", projects, personalproject.Name(userID))
+	}
+}
+
 // The endpoint must keep working when the composition could not build an
 // ensurer — a pool-less deployment, which is the same gate the project-create
 // route uses. The handler holds a nil ensurer and answers as it always did.
