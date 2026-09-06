@@ -85,7 +85,13 @@ const (
 	// failing this gate outright, because the allowlist was already AT its cap
 	// and could not take them. Describing the endpoint was the only sanctioned
 	// way out, and it needed the route to exist first.
-	maxAllowlistEntries = 93
+	//
+	// 93 -> 78 (issue 621), when pathCoveredBySpec was repaired. It compared
+	// the manifest path against the BASED spec candidate ("/api/v2/..."), which
+	// no manifest entry carries, so the path arm of the reverse check never
+	// matched and this list could never shrink. Fifteen ids the document
+	// already described came off it in one step. See pathCoveredBySpec.
+	maxAllowlistEntries = 78
 )
 
 // buildFullSurfaceConfig returns a RouterConfig for the real production

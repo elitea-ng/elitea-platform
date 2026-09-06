@@ -132,6 +132,14 @@ func writeRepoFailure(w http.ResponseWriter, err error) {
 //	                    the accumulator's count of billing PERIODS.
 //	total_tokens        prompt + completion, summed.
 //
+// The three figures below have no producer. Each probe names the assignment
+// that closing the gap would create, so the day one of them is answerable this
+// comment fails the build instead of going quietly stale (issue 621).
+//
+// DISCLOSURE-CHECK: absent `kpis["tool_runs"]` in services/elitea-main/internal/api/v2/analytics/handler.go
+// DISCLOSURE-CHECK: absent `kpis["chat_msgs"]` in services/elitea-main/internal/api/v2/analytics/handler.go
+// DISCLOSURE-CHECK: absent `kpis["agent_runs"]` in services/elitea-main/internal/api/v2/analytics/handler.go
+//
 //	tool_runs           ABSENT — no producer.
 //	chat_msgs           ABSENT — no producer.
 //	agent_runs          ABSENT — no producer. It used to be set to the same

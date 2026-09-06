@@ -3,10 +3,18 @@
 #
 # TestSpecRouterConformance/manifest_reverse_check reads
 # apps/elitea-web/src/shared/api/endpoints.manifest.json and requires every
-# endpoint the new UI calls to be covered by api/openapi/v2.yaml. The 94 ids
-# below are the Wave-2 hand-written slices (source:"handwritten",
-# operationId:null in the manifest). Spec §5.3 expects them to arrive in the
-# document one by one.
+# endpoint the new UI calls to be covered by api/openapi/v2.yaml. The ids below
+# are the Wave-2 hand-written slices (source:"handwritten", operationId:null in
+# the manifest). Spec §5.3 expects them to arrive in the document one by one.
+#
+# 93 -> 78 (issue 621). Fifteen lines went at once because the rule below could
+# not fire until then: pathCoveredBySpec compared the manifest path, which has
+# no server base, against `servers[0].url` + the document path, so the first
+# segment compared "api" against the plugin name and NO hand-written entry ever
+# matched. Nine of the fifteen — the whole secrets domain issue 151 described,
+# the single-toolkit GET, and the two entity_settings writes — had been
+# described for some time and the list still carried them. The other six are
+# the two `/configurations/*` reads this change describes.
 #
 # RULES
 # - The list may only shrink. Describe the endpoint in v2.yaml, then delete
@@ -22,7 +30,6 @@ artifacts.artifactList
 artifacts.bucketList
 artifacts.getArtifactContent
 artifacts.listBucketMetadata
-artifacts.listS3Configurations
 artifacts.putArtifactToS3
 canvas.canvasDetails
 canvas.createCanvas
@@ -53,13 +60,8 @@ credentials.createConfiguration
 credentials.deleteConfiguration
 credentials.getAvailableConfigurationsType
 credentials.getConfigurationDetail
-credentials.getConfigurationsBySection
-credentials.getConfigurationsByType
-credentials.getConfigurationsList
-credentials.getSharedConfigurations
 credentials.getTtsVoices
 credentials.listCredentialTypes
-credentials.listModels
 credentials.setProjectDefaultModel
 credentials.testConfigurationConnection
 credentials.toggleConfigurationSharing
@@ -79,16 +81,8 @@ notifications.list
 notifications.read
 participant.addParticipantIntoConversation
 participant.deleteParticipantFromConversation
-participant.updateParticipantLlmSettings
-participant.updateParticipantSettings
 pipelines.stopLlmTask
 runtime.executionEvents
-secrets.create
-secrets.delete
-secrets.hide
-secrets.list
-secrets.show
-secrets.update
 skills.createSkillVersion
 skills.deleteSkill
 skills.deleteSkillVersion
@@ -103,7 +97,6 @@ skills.updateSkill
 skills.updateSkillVersion
 toolkits.deleteIndexItem
 toolkits.getIndexHistoryConversationDetails
-toolkits.getIndexSchedule
 toolkits.getIndexesList
 toolkits.startIndexExecution
 toolkits.stopIndexingItem

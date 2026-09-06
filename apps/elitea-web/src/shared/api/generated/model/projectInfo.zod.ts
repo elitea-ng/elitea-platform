@@ -40,27 +40,20 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { ProjectIconMeta } from "./projectIconMeta.zod";
 
-export const DocumentLoadersResponse = zod
+export const ProjectInfo = zod
   .object({
-    items: zod.array(
-      zod.object({
-        type: zod.string(),
-        name: zod.string(),
-        description: zod.string(),
-        supported_extensions: zod.array(zod.string()),
-      }),
-    ),
-    total: zod.int(),
-    document_types: zod.record(zod.string(), zod.string()).optional(),
-    image_types: zod.record(zod.string(), zod.string()).optional(),
-    code_types: zod.record(zod.string(), zod.string()).optional(),
+    teammates_count: zod
+      .int()
+      .describe(
+        "DISTINCT members of the project. The count excludes the `system_user_<project_id>@centry.user` account. It is 0, not an error, when the identity tables cannot be read: this reader treats the membership dependency as optional.\n",
+      ),
+    icon_meta: ProjectIconMeta,
   })
   .describe(
-    "NOTE(W2): ONE body answers two clients, and the deployment decides which half is real.\n`items` and `total` are the published contract. With ELITEA_INDEX_TYPES_ENABLED off the compatibility handler answered them as a six-element hand-written list that no SDK, snapshot, database or configuration produced; that handler now refuses with 501 instead.\n`document_types`, `image_types` and `code_types` are the pylon keys apps\/elitea-ui reads (src\/slices\/fileTypes.js). They were UNDESCRIBED here, which is why this note exists: the reviewed route (internal\/api\/v2\/indextypes, currentIndexTypesResponse) has emitted all five keys since issue 394, and a client generated from this document could not see three of them.\nThe two halves project the SAME rows and cannot disagree: every `supported_extensions` list is the sorted key set of the map named by the same `type`.\n",
+    "NOTE(W2): internal\/api\/v2\/projectinfo\/handler.go, CurrentProjectInfo. Both keys are always present on a 200.\n",
   );
 
-export type DocumentLoadersResponse = zod.input<typeof DocumentLoadersResponse>;
-export type DocumentLoadersResponseOutput = zod.output<
-  typeof DocumentLoadersResponse
->;
+export type ProjectInfo = zod.input<typeof ProjectInfo>;
+export type ProjectInfoOutput = zod.output<typeof ProjectInfo>;

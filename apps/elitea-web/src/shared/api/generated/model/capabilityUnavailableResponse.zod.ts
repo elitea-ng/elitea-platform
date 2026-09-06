@@ -41,26 +41,28 @@
  */
 import * as zod from "zod";
 
-export const DocumentLoadersResponse = zod
+export const CapabilityUnavailableResponse = zod
   .object({
-    items: zod.array(
-      zod.object({
-        type: zod.string(),
-        name: zod.string(),
-        description: zod.string(),
-        supported_extensions: zod.array(zod.string()),
-      }),
-    ),
-    total: zod.int(),
-    document_types: zod.record(zod.string(), zod.string()).optional(),
-    image_types: zod.record(zod.string(), zod.string()).optional(),
-    code_types: zod.record(zod.string(), zod.string()).optional(),
+    error: zod.string().describe("Human-readable refusal message."),
+    code: zod
+      .enum(["project_info_not_available", "index_types_not_available"])
+      .describe(
+        "The machine-readable reason. One value per capability, stable across deployments, so a client branches on this and never on the message text.\n",
+      ),
+    detail: zod
+      .string()
+      .optional()
+      .describe(
+        "The operator-facing half: it names the environment variable that turns the capability on.\n",
+      ),
   })
   .describe(
-    "NOTE(W2): ONE body answers two clients, and the deployment decides which half is real.\n`items` and `total` are the published contract. With ELITEA_INDEX_TYPES_ENABLED off the compatibility handler answered them as a six-element hand-written list that no SDK, snapshot, database or configuration produced; that handler now refuses with 501 instead.\n`document_types`, `image_types` and `code_types` are the pylon keys apps\/elitea-ui reads (src\/slices\/fileTypes.js). They were UNDESCRIBED here, which is why this note exists: the reviewed route (internal\/api\/v2\/indextypes, currentIndexTypesResponse) has emitted all five keys since issue 394, and a client generated from this document could not see three of them.\nThe two halves project the SAME rows and cannot disagree: every `supported_extensions` list is the sorted key set of the map named by the same `type`.\n",
+    'NOTE(W2): the 501 body issue 615 gave the two capability-gated compatibility handlers — internal\/api\/v2\/eliteacore\/handler.go (ProjectInfo) and internal\/api\/v2\/toolkits\/handler.go (IndexTypes). Both write `{error, code, detail}`, which is WIDER than ErrorResponse: a client that must tell \"this deployment does not run the capability\" from \"the request failed\" reads `code`, and ErrorResponse carries no such field.\nWHY 501 AND NOT 500. An absent producer is the server\'s final answer, and it will be the final answer to the next identical request. See internal\/api\/v2\/analytics\/handler.go for the argument in full.\n',
   );
 
-export type DocumentLoadersResponse = zod.input<typeof DocumentLoadersResponse>;
-export type DocumentLoadersResponseOutput = zod.output<
-  typeof DocumentLoadersResponse
+export type CapabilityUnavailableResponse = zod.input<
+  typeof CapabilityUnavailableResponse
+>;
+export type CapabilityUnavailableResponseOutput = zod.output<
+  typeof CapabilityUnavailableResponse
 >;

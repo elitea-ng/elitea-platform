@@ -53,6 +53,7 @@ import type {
 } from "@tanstack/react-query";
 
 import type {
+  ApplicationSkillsList,
   AttachPublicSkill200,
   AttachPublicSkillBody,
   ListAgentsWithSkill200,
@@ -104,7 +105,7 @@ const withQueryKey = <T extends object, K>(
 };
 
 export type listApplicationSkillsResponse200 = {
-  data: SkillsList;
+  data: ApplicationSkillsList;
   status: 200;
 };
 
@@ -151,10 +152,16 @@ export const getListApplicationSkillsUrl = (
  *
  * NOTE(#367): this route used to point at the project skills List
  * handler, which never read app_version_id and answered with every
- * skill in the project, at 200. The envelope is unchanged — it is
- * still SkillsList — so a client sees the same shape and different,
- * correct contents. A malformed app_version_id is now refused with
- * 400 instead of being coerced.
+ * skill in the project, at 200. The five published keys are unchanged —
+ * a client sees the same shape and different, correct contents. A
+ * malformed app_version_id is now refused with 400 instead of being
+ * coerced.
+ *
+ * NOTE(issue 621): the response schema is ApplicationSkillsList, not
+ * SkillsList. It is SkillsList plus the `skills` and `max_skills` keys
+ * the reviewed handler also emits (issue 395). SkillsList itself stays
+ * as it is, because the project-skills List operation shares it and
+ * emits neither key.
  * @summary List skills attached to an agent version
  */
 export const listApplicationSkills = async (

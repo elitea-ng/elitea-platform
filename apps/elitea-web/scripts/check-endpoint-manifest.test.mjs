@@ -360,8 +360,24 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
  * budgets became clearable (gap G4): clearProjectBudget and clearMemberBudget,
  * the DELETE twins of the two PUT routes that already existed. Described for
  * the generated client the admin Budgets page calls.
+ *
+ * 178 -> 182, MANIFEST_ENTRY_COUNT unchanged, when the spec-truth pass landed
+ * (issue 621, plus issue 36 items 9 and 11). Four operations arrived:
+ * getProjectInfo and updateProjectInfo (the project-info path, whose GET now
+ * answers 501 with a machine-readable `code` when ELITEA_PROJECT_INFO_ENABLED
+ * is off, and whose refusal no client could see because the path was in no
+ * document at all), listConfigurations and listConfigurationModels (the two
+ * `/configurations/*` reads that four separate elitea-web slices had each
+ * hand-written).
+ *
+ * MANIFEST_ENTRY_COUNT does not move, for the reason every step above gives:
+ * the app still calls all four through its hand-written clients
+ * (entities/project/api/projectContextApi.ts,
+ * features/credentials/api/configurations.ts and configurationConnections.ts).
+ * The operations are described so a generated client exists to migrate those
+ * files onto; the migration is the change that moves the manifest.
  */
-const GENERATED_OPERATION_COUNT = 178;
+const GENERATED_OPERATION_COUNT = 182;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

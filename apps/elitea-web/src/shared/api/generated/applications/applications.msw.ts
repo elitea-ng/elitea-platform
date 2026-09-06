@@ -66,6 +66,8 @@ import type {
   OkResponse,
   PredictLLMResponse,
   ProjectContext,
+  ProjectInfo,
+  ProjectInfoUpdateResponse,
   ProjectQuota,
   ProjectStatistics,
   ProjectWithGroups,
@@ -3536,6 +3538,30 @@ export const getGetDocumentLoadersResponseMock = (
     ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
   })),
   total: faker.number.int(),
+  document_types: faker.helpers.arrayElement([
+    {
+      [faker.string.alphanumeric(5)]: faker.string.alpha({
+        length: { min: 10, max: 20 },
+      }),
+    },
+    undefined,
+  ]),
+  image_types: faker.helpers.arrayElement([
+    {
+      [faker.string.alphanumeric(5)]: faker.string.alpha({
+        length: { min: 10, max: 20 },
+      }),
+    },
+    undefined,
+  ]),
+  code_types: faker.helpers.arrayElement([
+    {
+      [faker.string.alphanumeric(5)]: faker.string.alpha({
+        length: { min: 10, max: 20 },
+      }),
+    },
+    undefined,
+  ]),
   ...overrideResponse,
 });
 
@@ -4207,6 +4233,65 @@ export const getUpdateProjectContextResponseMock = (
     null,
   ]),
   enabled: faker.helpers.arrayElement([faker.datatype.boolean(), null]),
+  ...overrideResponse,
+});
+
+export const getGetProjectInfoResponseMock = (
+  overrideResponse: Partial<Extract<ProjectInfo, object>> = {},
+): ProjectInfo => ({
+  teammates_count: faker.number.int(),
+  icon_meta: faker.helpers.arrayElement([
+    {
+      name: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          null,
+        ]),
+        undefined,
+      ]),
+      url: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          null,
+        ]),
+        undefined,
+      ]),
+    },
+    null,
+  ]),
+  ...overrideResponse,
+});
+
+export const getUpdateProjectInfoResponseMock = (
+  overrideResponse: Partial<Extract<ProjectInfoUpdateResponse, object>> = {},
+): ProjectInfoUpdateResponse => ({
+  ok: faker.datatype.boolean(),
+  name: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  icon_meta: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([
+      {
+        name: faker.helpers.arrayElement([
+          faker.helpers.arrayElement([
+            faker.string.alpha({ length: { min: 10, max: 20 } }),
+            null,
+          ]),
+          undefined,
+        ]),
+        url: faker.helpers.arrayElement([
+          faker.helpers.arrayElement([
+            faker.string.alpha({ length: { min: 10, max: 20 } }),
+            null,
+          ]),
+          undefined,
+        ]),
+      },
+      null,
+    ]),
+    undefined,
+  ]),
   ...overrideResponse,
 });
 
@@ -5416,6 +5501,58 @@ export const getUpdateProjectContextMockHandler = (
     options,
   );
 };
+
+export const getGetProjectInfoMockHandler = (
+  overrideResponse?:
+    | ProjectInfo
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<ProjectInfo> | ProjectInfo),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/project_info/prompt_lib/:projectId/project-info",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetProjectInfoResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getUpdateProjectInfoMockHandler = (
+  overrideResponse?:
+    | ProjectInfoUpdateResponse
+    | ((
+        info: Parameters<Parameters<typeof http.put>[1]>[0],
+      ) => Promise<ProjectInfoUpdateResponse> | ProjectInfoUpdateResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.put(
+    "*/elitea_core/project_info/prompt_lib/:projectId/project-info",
+    async (info: Parameters<Parameters<typeof http.put>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getUpdateProjectInfoResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
 export const getApplicationsMock = () => [
   getPredictLLMMockHandler(),
   getListApplicationsMockHandler(),
@@ -5464,4 +5601,6 @@ export const getApplicationsMock = () => [
   getGetProjectStatisticsMockHandler(),
   getGetProjectContextMockHandler(),
   getUpdateProjectContextMockHandler(),
+  getGetProjectInfoMockHandler(),
+  getUpdateProjectInfoMockHandler(),
 ];

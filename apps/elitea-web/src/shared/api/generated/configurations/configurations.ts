@@ -57,10 +57,15 @@ import type {
   CheckStoredConfigurationConnection200,
   CheckStoredConfigurationConnection400,
   CheckStoredConfigurationConnection404,
+  ConfigurationListResponse,
+  ConfigurationModelListResponse,
   ErrorResponse,
+  ListConfigurationModelsParams,
+  ListConfigurationsParams,
   N401Response,
   N403Response,
   N404Response,
+  N500Response,
   RevalidateConfiguration200,
   StoredConnectionCheckRow,
 } from "../model";
@@ -86,6 +91,536 @@ const withQueryKey = <T extends object, K>(
   }
   return result;
 };
+
+export type listConfigurationsResponse200 = {
+  data: ConfigurationListResponse;
+  status: 200;
+};
+
+export type listConfigurationsResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type listConfigurationsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listConfigurationsResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listConfigurationsResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type listConfigurationsResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type listConfigurationsResponseSuccess =
+  listConfigurationsResponse200 & {
+    headers: Headers;
+  };
+export type listConfigurationsResponseError = (
+  | listConfigurationsResponse400
+  | listConfigurationsResponse401
+  | listConfigurationsResponse403
+  | listConfigurationsResponse500
+  | listConfigurationsResponse503
+) & {
+  headers: Headers;
+};
+
+export type listConfigurationsResponse =
+  listConfigurationsResponseSuccess | listConfigurationsResponseError;
+
+export const getListConfigurationsUrl = (
+  projectId: string,
+  params?: ListConfigurationsParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    const explodeParameters = ["section", "type"];
+
+    if (Array.isArray(value) && explodeParameters.includes(key)) {
+      value.forEach((v) => {
+        normalizedParams.append(key, v === null ? "null" : String(v));
+      });
+      return;
+    }
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/configurations/configurations/${projectId}?${stringifiedParams}`
+    : `/configurations/configurations/${projectId}`;
+};
+
+/**
+ * NOTE(W2): internal/api/v2/configurations/handler.go, List
+ * (compatibility) and internal/application/configurations/crud.go
+ * (reviewed). The page carries every row the project OWNS, shared or
+ * not. The old `shared = false` predicate hid a shared credential from
+ * its own project.
+ *
+ * A project whose tenant schema does not exist yet answers 200 with an
+ * empty page. Every OTHER database error answers 500. An empty page
+ * reports a timeout as a project that holds no credentials, and the user
+ * then creates a credential that already exists.
+ *
+ * The app calls this through a hand-written client today
+ * (apps/elitea-web/src/features/credentials/api/configurations.ts). It is
+ * described here so a generated client exists to migrate onto.
+ * @summary List a project's stored credentials and integrations
+ */
+export const listConfigurations = async (
+  projectId: string,
+  params?: ListConfigurationsParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listConfigurationsResponse> => {
+  return eliteaFetch<listConfigurationsResponse>(
+    getListConfigurationsUrl(projectId, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListConfigurationsQueryKey = (
+  projectId: string,
+  params?: ListConfigurationsParams,
+) => {
+  return [
+    `/configurations/configurations/${projectId}`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getListConfigurationsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listConfigurations>>,
+  TError = ErrorResponse | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  params?: ListConfigurationsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listConfigurations>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListConfigurationsQueryKey(projectId, params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listConfigurations>>
+  > = ({ signal }) =>
+    listConfigurations(projectId, params, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listConfigurations>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListConfigurationsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listConfigurations>>
+>;
+export type ListConfigurationsQueryError =
+  ErrorResponse | N401Response | N403Response | N500Response;
+
+export function useListConfigurations<
+  TData = Awaited<ReturnType<typeof listConfigurations>>,
+  TError = ErrorResponse | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  params: undefined | ListConfigurationsParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listConfigurations>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listConfigurations>>,
+          TError,
+          Awaited<ReturnType<typeof listConfigurations>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListConfigurations<
+  TData = Awaited<ReturnType<typeof listConfigurations>>,
+  TError = ErrorResponse | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  params?: ListConfigurationsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listConfigurations>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listConfigurations>>,
+          TError,
+          Awaited<ReturnType<typeof listConfigurations>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListConfigurations<
+  TData = Awaited<ReturnType<typeof listConfigurations>>,
+  TError = ErrorResponse | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  params?: ListConfigurationsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listConfigurations>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List a project's stored credentials and integrations
+ */
+
+export function useListConfigurations<
+  TData = Awaited<ReturnType<typeof listConfigurations>>,
+  TError = ErrorResponse | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  params?: ListConfigurationsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listConfigurations>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListConfigurationsQueryOptions(
+    projectId,
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listConfigurationModelsResponse200 = {
+  data: ConfigurationModelListResponse;
+  status: 200;
+};
+
+export type listConfigurationModelsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listConfigurationModelsResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listConfigurationModelsResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type listConfigurationModelsResponseSuccess =
+  listConfigurationModelsResponse200 & {
+    headers: Headers;
+  };
+export type listConfigurationModelsResponseError = (
+  | listConfigurationModelsResponse401
+  | listConfigurationModelsResponse403
+  | listConfigurationModelsResponse500
+) & {
+  headers: Headers;
+};
+
+export type listConfigurationModelsResponse =
+  listConfigurationModelsResponseSuccess | listConfigurationModelsResponseError;
+
+export const getListConfigurationModelsUrl = (
+  projectId: string,
+  params?: ListConfigurationModelsParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/configurations/models/${projectId}?${stringifiedParams}`
+    : `/configurations/models/${projectId}`;
+};
+
+/**
+ * NOTE(W2): internal/api/v2/configurations/handler.go, ListModels
+ * (compatibility) and internal/application/configurations/models.go
+ * (reviewed). The compatibility handler reads the five model rows of the
+ * tenant `configuration` table: llm_model, embedding_model, asr_model,
+ * tts_model and image_generation_model. It reads at most 1000 rows.
+ *
+ * THE ROWS CARRY NO SERVER-ASSIGNED `id` ON THE REVIEWED ROUTE. The
+ * shipped client synthesises one from `project_id` and `name`
+ * (apps/elitea-web/src/features/credentials/api/configurationConnections.ts,
+ * withModelId). Do not read `id` as an identifier the server assigned.
+ *
+ * The app calls this through a hand-written client today, and four
+ * separate slices re-derived that client independently. It is described
+ * here so one generated client replaces all four.
+ * @summary List the models a project can select
+ */
+export const listConfigurationModels = async (
+  projectId: string,
+  params?: ListConfigurationModelsParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listConfigurationModelsResponse> => {
+  return eliteaFetch<listConfigurationModelsResponse>(
+    getListConfigurationModelsUrl(projectId, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListConfigurationModelsQueryKey = (
+  projectId: string,
+  params?: ListConfigurationModelsParams,
+) => {
+  return [
+    `/configurations/models/${projectId}`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getListConfigurationModelsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listConfigurationModels>>,
+  TError = N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  params?: ListConfigurationModelsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listConfigurationModels>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getListConfigurationModelsQueryKey(projectId, params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listConfigurationModels>>
+  > = ({ signal }) =>
+    listConfigurationModels(projectId, params, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listConfigurationModels>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListConfigurationModelsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listConfigurationModels>>
+>;
+export type ListConfigurationModelsQueryError =
+  N401Response | N403Response | N500Response;
+
+export function useListConfigurationModels<
+  TData = Awaited<ReturnType<typeof listConfigurationModels>>,
+  TError = N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  params: undefined | ListConfigurationModelsParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listConfigurationModels>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listConfigurationModels>>,
+          TError,
+          Awaited<ReturnType<typeof listConfigurationModels>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListConfigurationModels<
+  TData = Awaited<ReturnType<typeof listConfigurationModels>>,
+  TError = N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  params?: ListConfigurationModelsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listConfigurationModels>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listConfigurationModels>>,
+          TError,
+          Awaited<ReturnType<typeof listConfigurationModels>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListConfigurationModels<
+  TData = Awaited<ReturnType<typeof listConfigurationModels>>,
+  TError = N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  params?: ListConfigurationModelsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listConfigurationModels>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List the models a project can select
+ */
+
+export function useListConfigurationModels<
+  TData = Awaited<ReturnType<typeof listConfigurationModels>>,
+  TError = N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  params?: ListConfigurationModelsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listConfigurationModels>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListConfigurationModelsQueryOptions(
+    projectId,
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
 
 export type checkStoredConfigurationConnectionResponse200 = {
   data: CheckStoredConfigurationConnection200;

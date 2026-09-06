@@ -40,27 +40,20 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { ConfigurationRow } from "./configurationRow.zod";
 
-export const DocumentLoadersResponse = zod
+export const ConfigurationSharedPage = zod
   .object({
-    items: zod.array(
-      zod.object({
-        type: zod.string(),
-        name: zod.string(),
-        description: zod.string(),
-        supported_extensions: zod.array(zod.string()),
-      }),
-    ),
+    items: zod.array(ConfigurationRow),
     total: zod.int(),
-    document_types: zod.record(zod.string(), zod.string()).optional(),
-    image_types: zod.record(zod.string(), zod.string()).optional(),
-    code_types: zod.record(zod.string(), zod.string()).optional(),
+    offset: zod.int().optional(),
+    limit: zod.int().optional(),
   })
   .describe(
-    "NOTE(W2): ONE body answers two clients, and the deployment decides which half is real.\n`items` and `total` are the published contract. With ELITEA_INDEX_TYPES_ENABLED off the compatibility handler answered them as a six-element hand-written list that no SDK, snapshot, database or configuration produced; that handler now refuses with 501 instead.\n`document_types`, `image_types` and `code_types` are the pylon keys apps\/elitea-ui reads (src\/slices\/fileTypes.js). They were UNDESCRIBED here, which is why this note exists: the reviewed route (internal\/api\/v2\/indextypes, currentIndexTypesResponse) has emitted all five keys since issue 394, and a client generated from this document could not see three of them.\nThe two halves project the SAME rows and cannot disagree: every `supported_extensions` list is the sorted key set of the map named by the same `type`.\n",
+    "NOTE(W2): the `shared` block, read from the PUBLIC project's schema. `compat` always emits the block and leaves it empty when no public project is configured; `reviewed` omits the key instead.\n",
   );
 
-export type DocumentLoadersResponse = zod.input<typeof DocumentLoadersResponse>;
-export type DocumentLoadersResponseOutput = zod.output<
-  typeof DocumentLoadersResponse
+export type ConfigurationSharedPage = zod.input<typeof ConfigurationSharedPage>;
+export type ConfigurationSharedPageOutput = zod.output<
+  typeof ConfigurationSharedPage
 >;

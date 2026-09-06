@@ -46,9 +46,246 @@ import type { RequestHandlerOptions } from "msw";
 
 import type {
   CheckStoredConfigurationConnection200,
+  ConfigurationListResponse,
+  ConfigurationModelListResponse,
   RevalidateConfiguration200,
   StoredConnectionCheckRow,
 } from "../model";
+
+export const getListConfigurationsResponseMock = (
+  overrideResponse: Partial<Extract<ConfigurationListResponse, object>> = {},
+): ConfigurationListResponse => ({
+  items: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    id: faker.helpers.arrayElement([faker.number.int(), undefined]),
+    uuid: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    project_id: faker.number.int(),
+    elitea_title: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    name: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    label: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        null,
+      ]),
+      undefined,
+    ]),
+    type: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    section: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    data: faker.helpers.arrayElement([{}, undefined]),
+    meta: faker.helpers.arrayElement([{}, undefined]),
+    shared: faker.datatype.boolean(),
+    status_ok: faker.datatype.boolean(),
+    status_logs: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        null,
+      ]),
+      undefined,
+    ]),
+    source: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    author_id: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([faker.number.int(), null]),
+      undefined,
+    ]),
+    created_at: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    updated_at: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        null,
+      ]),
+      undefined,
+    ]),
+    is_pinned: faker.helpers.arrayElement([
+      faker.datatype.boolean(),
+      undefined,
+    ]),
+    options: faker.helpers.arrayElement([{}, undefined]),
+  })),
+  total: faker.number.int(),
+  offset: faker.number.int(),
+  limit: faker.number.int(),
+  shared: faker.helpers.arrayElement([
+    {
+      ...{
+        items: Array.from(
+          { length: faker.number.int({ min: 1, max: 10 }) },
+          (_, i) => i + 1,
+        ).map(() => ({
+          id: faker.helpers.arrayElement([faker.number.int(), undefined]),
+          uuid: faker.helpers.arrayElement([
+            faker.string.alpha({ length: { min: 10, max: 20 } }),
+            undefined,
+          ]),
+          project_id: faker.number.int(),
+          elitea_title: faker.helpers.arrayElement([
+            faker.string.alpha({ length: { min: 10, max: 20 } }),
+            undefined,
+          ]),
+          name: faker.helpers.arrayElement([
+            faker.string.alpha({ length: { min: 10, max: 20 } }),
+            undefined,
+          ]),
+          label: faker.helpers.arrayElement([
+            faker.helpers.arrayElement([
+              faker.string.alpha({ length: { min: 10, max: 20 } }),
+              null,
+            ]),
+            undefined,
+          ]),
+          type: faker.string.alpha({ length: { min: 10, max: 20 } }),
+          section: faker.string.alpha({ length: { min: 10, max: 20 } }),
+          data: faker.helpers.arrayElement([{}, undefined]),
+          meta: faker.helpers.arrayElement([{}, undefined]),
+          shared: faker.datatype.boolean(),
+          status_ok: faker.datatype.boolean(),
+          status_logs: faker.helpers.arrayElement([
+            faker.helpers.arrayElement([
+              faker.string.alpha({ length: { min: 10, max: 20 } }),
+              null,
+            ]),
+            undefined,
+          ]),
+          source: faker.string.alpha({ length: { min: 10, max: 20 } }),
+          author_id: faker.helpers.arrayElement([
+            faker.helpers.arrayElement([faker.number.int(), null]),
+            undefined,
+          ]),
+          created_at: faker.string.alpha({ length: { min: 10, max: 20 } }),
+          updated_at: faker.helpers.arrayElement([
+            faker.helpers.arrayElement([
+              faker.string.alpha({ length: { min: 10, max: 20 } }),
+              null,
+            ]),
+            undefined,
+          ]),
+          is_pinned: faker.helpers.arrayElement([
+            faker.datatype.boolean(),
+            undefined,
+          ]),
+          options: faker.helpers.arrayElement([{}, undefined]),
+        })),
+        total: faker.number.int(),
+        offset: faker.helpers.arrayElement([faker.number.int(), undefined]),
+        limit: faker.helpers.arrayElement([faker.number.int(), undefined]),
+      },
+    },
+    undefined,
+  ]),
+  ...overrideResponse,
+});
+
+export const getListConfigurationModelsResponseMock = (
+  overrideResponse: Partial<
+    Extract<ConfigurationModelListResponse, object>
+  > = {},
+): ConfigurationModelListResponse => ({
+  items: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    id: faker.helpers.arrayElement([faker.number.int(), undefined]),
+    name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    display_name: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        null,
+      ]),
+      undefined,
+    ]),
+    type: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    project_id: faker.number.int(),
+    section: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    shared: faker.helpers.arrayElement([faker.datatype.boolean(), undefined]),
+    is_default: faker.helpers.arrayElement([
+      faker.datatype.boolean(),
+      undefined,
+    ]),
+    default: faker.helpers.arrayElement([faker.datatype.boolean(), undefined]),
+    config_id: faker.helpers.arrayElement([faker.number.int(), undefined]),
+    config_name: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    context_window: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([faker.number.int(), null]),
+      undefined,
+    ]),
+    max_output_tokens: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([faker.number.int(), null]),
+      undefined,
+    ]),
+    supports_reasoning: faker.helpers.arrayElement([
+      faker.datatype.boolean(),
+      undefined,
+    ]),
+    supports_vision: faker.helpers.arrayElement([
+      faker.datatype.boolean(),
+      undefined,
+    ]),
+    low_tier: faker.helpers.arrayElement([faker.datatype.boolean(), undefined]),
+    high_tier: faker.helpers.arrayElement([
+      faker.datatype.boolean(),
+      undefined,
+    ]),
+    openai_compatible: faker.helpers.arrayElement([
+      faker.datatype.boolean(),
+      undefined,
+    ]),
+    data: faker.helpers.arrayElement([{}, undefined]),
+  })),
+  total: faker.number.int(),
+  default_model_name: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    undefined,
+  ]),
+  default_model_project_id: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([faker.number.int(), null]),
+    undefined,
+  ]),
+  low_tier_default_model_name: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    undefined,
+  ]),
+  low_tier_default_model_project_id: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([faker.number.int(), null]),
+    undefined,
+  ]),
+  high_tier_default_model_name: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    undefined,
+  ]),
+  high_tier_default_model_project_id: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([faker.number.int(), null]),
+    undefined,
+  ]),
+  ...overrideResponse,
+});
 
 export const getCheckStoredConfigurationConnectionResponseMock = (
   overrideResponse: Partial<
@@ -120,6 +357,60 @@ export const getRevalidateConfigurationResponseMock = (
   ]),
   ...overrideResponse,
 });
+
+export const getListConfigurationsMockHandler = (
+  overrideResponse?:
+    | ConfigurationListResponse
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<ConfigurationListResponse> | ConfigurationListResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/configurations/configurations/:projectId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListConfigurationsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getListConfigurationModelsMockHandler = (
+  overrideResponse?:
+    | ConfigurationModelListResponse
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) =>
+        | Promise<ConfigurationModelListResponse>
+        | ConfigurationModelListResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/configurations/models/:projectId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListConfigurationModelsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
 
 export const getCheckStoredConfigurationConnectionMockHandler = (
   overrideResponse?:
@@ -201,6 +492,8 @@ export const getRevalidateConfigurationMockHandler = (
   );
 };
 export const getConfigurationsMock = () => [
+  getListConfigurationsMockHandler(),
+  getListConfigurationModelsMockHandler(),
   getCheckStoredConfigurationConnectionMockHandler(),
   getBatchCheckStoredConfigurationConnectionsMockHandler(),
   getRevalidateConfigurationMockHandler(),

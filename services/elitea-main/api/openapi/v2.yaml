@@ -1034,6 +1034,40 @@ components:
         UNDOCUMENTED sites remain on toolkits/handler.go (:286, 312, 324, 350,
         362).
 
+    CapabilityUnavailableResponse:
+      type: object
+      required: [error, code]
+      properties:
+        error:
+          type: string
+          description: Human-readable refusal message.
+        code:
+          type: string
+          description: >
+            The machine-readable reason. One value per capability, stable
+            across deployments, so a client branches on this and never on the
+            message text.
+          enum:
+            - project_info_not_available
+            - index_types_not_available
+        detail:
+          type: string
+          description: >
+            The operator-facing half: it names the environment variable that
+            turns the capability on.
+      description: >
+        NOTE(W2): the 501 body issue 615 gave the two capability-gated
+        compatibility handlers — internal/api/v2/eliteacore/handler.go
+        (ProjectInfo) and internal/api/v2/toolkits/handler.go (IndexTypes).
+        Both write `{error, code, detail}`, which is WIDER than ErrorResponse:
+        a client that must tell "this deployment does not run the capability"
+        from "the request failed" reads `code`, and ErrorResponse carries no
+        such field.
+
+        WHY 501 AND NOT 500. An absent producer is the server's final answer,
+        and it will be the final answer to the next identical request. See
+        internal/api/v2/analytics/handler.go for the argument in full.
+
     ValidationFieldError:
       type: object
       required: [loc, msg, type]
@@ -2574,12 +2608,21 @@ components:
         total_tokens:
           type: number
           description: Prompt plus completion tokens, summed over the window.
+        # DISCLOSURE-CHECK: present `INSERT INTO centry.audit_events` in services/elitea-main/internal/audit
+        # DISCLOSURE-CHECK: absent `kpis["unique_users"]` in services/elitea-main/internal/api/v2/analytics
         unique_users:
           type: number
           description: >
-            NO PRODUCER. "Active in the project by any means" needs a source of
-            non-LLM activity, and centry.audit_events — the table that had one —
-            is READ-ONLY from this service. Never emitted today.
+            NO PRODUCER, and the reason changed. "Active in the project by any
+            means" needs a source of non-LLM activity. centry.audit_events is
+            no longer READ-ONLY from this service — issue 615 gave it a writer
+            (internal/audit/postgres.go:23, driven by
+            internal/api/middleware/audit.go) — but that writer records
+            ADMINISTRATIVE and security-relevant requests only. It skips
+            content CRUD, it skips every successful GET and it skips the /llm
+            path, so a count over it measures administration, not project
+            activity. Never emitted today.
+        # DISCLOSURE-CHECK: absent `kpis["tool_runs"]` in services/elitea-main/internal/api/v2/analytics
         tool_runs:
           type: number
           description: >
@@ -2587,9 +2630,11 @@ components:
             no toolkit_id and covers chat turns only, so a count built from it
             would silently exclude every tool call made outside a chat. Never
             emitted today.
+        # DISCLOSURE-CHECK: absent `kpis["chat_msgs"]` in services/elitea-main/internal/api/v2/analytics
         chat_msgs:
           type: number
           description: NO PRODUCER. Never emitted today.
+        # DISCLOSURE-CHECK: absent `kpis["agent_runs"]` in services/elitea-main/internal/api/v2/analytics
         agent_runs:
           type: number
           description: >
@@ -3118,8 +3163,45 @@ components:
                 type: array
                 items: { type: string }
         total: { type: integer }
+        document_types:
+          type: object
+          additionalProperties: { type: string }
+          x-elitea-passthrough: >-
+            NOTE(W2): extension -> MIME type, keyed by file extension
+            (internal/api/v2/indextypes/handler.go:29, CurrentIndexTypes). The
+            key set IS the data — it is the list of extensions this deployment
+            can index — so it cannot be enumerated in a schema.
+        image_types:
+          type: object
+          additionalProperties: { type: string }
+          x-elitea-passthrough: >-
+            NOTE(W2): same shape, image extensions
+            (internal/api/v2/indextypes/handler.go:30).
+        code_types:
+          type: object
+          additionalProperties: { type: string }
+          x-elitea-passthrough: >-
+            NOTE(W2): same shape, source-code extensions
+            (internal/api/v2/indextypes/handler.go:31).
       description: >
-        NOTE(W2): static list, internal/api/v2/toolkits/handler.go:466-510.
+        NOTE(W2): ONE body answers two clients, and the deployment decides which
+        half is real.
+
+        `items` and `total` are the published contract. With
+        ELITEA_INDEX_TYPES_ENABLED off the compatibility handler answered them
+        as a six-element hand-written list that no SDK, snapshot, database or
+        configuration produced; that handler now refuses with 501 instead.
+
+        `document_types`, `image_types` and `code_types` are the pylon keys
+        apps/elitea-ui reads (src/slices/fileTypes.js). They were UNDESCRIBED
+        here, which is why this note exists: the reviewed route
+        (internal/api/v2/indextypes, currentIndexTypesResponse) has emitted all
+        five keys since issue 394, and a client generated from this document
+        could not see three of them.
+
+        The two halves project the SAME rows and cannot disagree: every
+        `supported_extensions` list is the sorted key set of the map named by
+        the same `type`.
 
     PipelineTrigger:
       type: object
@@ -3161,13 +3243,17 @@ components:
         only enabled/schedule/type are echoed back (:187-192), while the
         nil-pool branch echoes the ENTIRE body plus version_id (:171-174).
 
+    # DISCLOSURE-CHECK: present `func (h *Handler) TrendingAuthors(w http.ResponseWriter, _ *http.Request) {` in services/elitea-main/internal/api/v2/eliteacore/handler.go
     TrendingAuthor:
       type: object
       x-elitea-passthrough: >-
         NOTE(W2): TrendingAuthors is a stub that always returns []
-        (internal/api/v2/eliteacore/handler.go:1582-1584) — element shape is
-        not defined by the Go side. Channel-B fixture required before the UI
-        consumes elements (M1).
+        (internal/api/v2/eliteacore/handler.go:2034-2036) — element
+        shape is not defined by the Go side. Channel-B fixture required before
+        the UI consumes elements (M1). The handler takes `_ *http.Request`,
+        which is what the DISCLOSURE-CHECK above reads: a handler that answers
+        from the corpus must name that parameter, so the probe fails on the day
+        the stub becomes real.
       description: Trending-author element — never emitted today (stub).
 
     ForkVersionInput:
@@ -3621,6 +3707,354 @@ components:
         enabled: { type: boolean }
       description: >
         NOTE(W2): typed decode, internal/api/v2/eliteacore/handler.go:137-141.
+
+    ProjectIconMeta:
+      type: object
+      nullable: true
+      properties:
+        name:
+          type: string
+          nullable: true
+          description: The stored file name, or null.
+        url:
+          type: string
+          nullable: true
+          description: The stored URL, or null. Nothing here invents one.
+      description: >
+        NOTE(W2): the exact object internal/api/v2/eliteacore/handler.go's
+        normalizeProjectIconMeta produces — the two keys `name` and `url`, each
+        of which may be null, and NO other key survives the write. A null
+        `icon_meta` means the project has no icon.
+
+    ProjectInfo:
+      type: object
+      required: [teammates_count, icon_meta]
+      properties:
+        teammates_count:
+          type: integer
+          format: int64
+          description: >
+            DISTINCT members of the project. The count excludes the
+            `system_user_<project_id>@centry.user` account. It is 0, not an
+            error, when the identity tables cannot be read: this reader treats
+            the membership dependency as optional.
+        icon_meta:
+          allOf: [{ $ref: '#/components/schemas/ProjectIconMeta' }]
+      description: >
+        NOTE(W2): internal/api/v2/projectinfo/handler.go, CurrentProjectInfo.
+        Both keys are always present on a 200.
+
+    ProjectInfoUpdateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          description: >
+            The new project name. An empty string is treated as absent, so it
+            renames nothing.
+        icon_meta:
+          allOf: [{ $ref: '#/components/schemas/ProjectIconMeta' }]
+          description: >
+            ABSENT leaves the icon alone. Explicit null CLEARS it. The two are
+            different requests and the handler tests presence, not nil-ness.
+      description: >
+        NOTE(W2): internal/api/v2/eliteacore/handler.go, UpdateProjectInfo —
+        the body is decoded into a map and only these two keys are read.
+
+    ProjectInfoUpdateResponse:
+      type: object
+      required: [ok]
+      properties:
+        ok:
+          type: boolean
+          description: Always true on a 200. A failure answers 4xx/5xx instead.
+        name:
+          type: string
+          description: Present ONLY when the request renamed the project.
+        icon_meta:
+          allOf: [{ $ref: '#/components/schemas/ProjectIconMeta' }]
+          description: Present ONLY when the request wrote the icon.
+      description: >
+        NOTE(W2): internal/api/v2/eliteacore/handler.go, UpdateProjectInfo —
+        the response echoes what was written and nothing else.
+
+    # ---- Configurations ----------------------------------------------------------
+    # Issue 36 items 9 and 11. Two handlers serve each of the two paths, and the
+    # deployment picks one with ELITEA_CONFIGURATIONS_ENABLED, so every schema
+    # here is the UNION of the two projections and each field says which handler
+    # emits it. `compat` is internal/api/v2/configurations/handler.go; `reviewed`
+    # is internal/application/configurations.
+    ConfigurationRow:
+      type: object
+      required: [type, section, project_id, shared, status_ok, source, created_at]
+      properties:
+        id:
+          type: integer
+          description: The `configuration` row id. BOTH handlers emit it.
+        uuid:
+          type: string
+          description: >
+            BOTH. `compat` omits the key when the column is empty; `reviewed`
+            emits an empty string instead.
+        project_id:
+          type: integer
+          description: >
+            BOTH, and a NUMBER on both. It was a string on `compat` until the
+            two were aligned, and a client comparing the two routes with `===`
+            broke on exactly one deployment.
+        elitea_title:
+          type: string
+          description: >
+            `reviewed` only. The row's stored title. `compat` serves the same
+            column as `name`.
+        name:
+          type: string
+          description: >
+            `compat` only. The same column `reviewed` serves as
+            `elitea_title`. A client that must read both routes reads
+            `elitea_title ?? name`.
+        label:
+          type: string
+          nullable: true
+          description: >
+            BOTH. `compat` omits the key when the column is empty; `reviewed`
+            emits null.
+        type:
+          type: string
+          description: The credential type, for example `sharepoint`.
+        section:
+          type: string
+          description: >
+            The catalogue section the type belongs to. The list is filtered on
+            it, one request per section.
+        data:
+          type: object
+          additionalProperties: true
+          x-elitea-passthrough: >-
+            NOTE(W2): the `data` jsonb column, forwarded verbatim
+            (internal/api/v2/configurations/handler.go:575, in
+            scanConfigurationRows).
+            Its keys are the credential TYPE's own schema, which the registry
+            snapshot owns and this document does not repeat. Every
+            schema-declared password field is replaced by a `{{secret.NAME}}`
+            reference before the row is stored, so no key value reaches a
+            client.
+        meta:
+          type: object
+          additionalProperties: true
+          x-elitea-passthrough: >-
+            NOTE(W2): the `meta` jsonb column, forwarded verbatim
+            (internal/api/v2/configurations/handler.go:578, in
+            scanConfigurationRows).
+            Per-type bookkeeping with no fixed key set.
+        shared:
+          type: boolean
+          description: BOTH. True when the row is published to the public project.
+        status_ok:
+          type: boolean
+          description: >
+            BOTH. The admission verdict for the row. It is NOT a live
+            connection check.
+        status_logs:
+          type: string
+          nullable: true
+          description: BOTH. Why `status_ok` is what it is.
+        source:
+          type: string
+          description: BOTH. Which writer created the row.
+        author_id:
+          type: integer
+          nullable: true
+          description: BOTH.
+        created_at:
+          type: string
+          description: BOTH.
+        updated_at:
+          type: string
+          nullable: true
+          description: BOTH.
+        is_pinned:
+          type: boolean
+          description: '`reviewed` only.'
+        options:
+          type: object
+          additionalProperties: true
+          x-elitea-passthrough: >-
+            NOTE(W2): `reviewed` only, and omitted unless the type declares
+            options — internal/api/v2/configurations/dto.go:31,
+            `Options *map[string]any` with `omitempty`. The key set is the
+            credential type's own.
+      description: >
+        NOTE(W2): the union of internal/api/v2/configurations/handler.go's
+        Configuration (compat) and internal/api/v2/configurations/dto.go's
+        CurrentConfigurationDTO (reviewed).
+
+    ConfigurationSharedPage:
+      type: object
+      required: [items, total]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/ConfigurationRow' }
+        total: { type: integer }
+        offset: { type: integer }
+        limit: { type: integer }
+      description: >
+        NOTE(W2): the `shared` block, read from the PUBLIC project's schema.
+        `compat` always emits the block and leaves it empty when no public
+        project is configured; `reviewed` omits the key instead.
+
+    ConfigurationListResponse:
+      type: object
+      required: [items, total, offset, limit]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/ConfigurationRow' }
+        total:
+          type: integer
+          description: >
+            Rows that match the filter, not rows in this page. It is counted
+            before the page is read, so it survives a page that comes back
+            short.
+        offset: { type: integer }
+        limit: { type: integer }
+        shared:
+          allOf: [{ $ref: '#/components/schemas/ConfigurationSharedPage' }]
+          description: >
+            Present only when `include_shared=true`. `compat` emits an empty
+            block rather than omitting the key.
+      description: >
+        NOTE(W2): internal/api/v2/configurations/handler.go, ListResponse
+        (compat) and dto.go, CurrentConfigurationListDTO (reviewed).
+
+    ConfigurationModelItem:
+      type: object
+      required: [name, project_id]
+      properties:
+        id:
+          type: integer
+          description: >
+            `compat` only, and it is the CONFIGURATION row id, not a model id.
+            `reviewed` emits no id at all, and the shipped client synthesises
+            one from `project_id` and `name`.
+        name:
+          type: string
+          description: BOTH. The model name a caller selects.
+        display_name:
+          type: string
+          nullable: true
+          description: '`reviewed` only.'
+        type:
+          type: string
+          description: >
+            `compat` only. One of llm_model, embedding_model, asr_model,
+            tts_model, image_generation_model.
+        project_id:
+          type: integer
+          description: BOTH, and a NUMBER on both, for the reason ConfigurationRow gives.
+        section:
+          type: string
+          description: '`compat` only.'
+        shared:
+          type: boolean
+          description: '`reviewed` only.'
+        is_default:
+          type: boolean
+          description: >
+            `compat` only, and it is ALWAYS false: that handler does not read
+            the project default. Read `default_model_name` on the envelope
+            instead.
+        default:
+          type: boolean
+          description: '`reviewed` only. The project default.'
+        config_id:
+          type: integer
+          description: '`compat` only. A copy of `id`.'
+        config_name:
+          type: string
+          description: '`compat` only. A copy of `name`.'
+        context_window:
+          type: integer
+          nullable: true
+          description: '`reviewed` only.'
+        max_output_tokens:
+          type: integer
+          nullable: true
+          description: '`reviewed` only.'
+        supports_reasoning:
+          type: boolean
+          nullable: true
+          description: '`reviewed` only.'
+        supports_vision:
+          type: boolean
+          nullable: true
+          description: '`reviewed` only.'
+        low_tier:
+          type: boolean
+          nullable: true
+          description: '`reviewed` only.'
+        high_tier:
+          type: boolean
+          nullable: true
+          description: '`reviewed` only.'
+        openai_compatible:
+          type: boolean
+          nullable: true
+          description: '`reviewed` only.'
+        data:
+          type: object
+          additionalProperties: true
+          x-elitea-passthrough: >-
+            NOTE(W2): `compat` only. The `data` jsonb column of the model's
+            configuration row, forwarded verbatim
+            (internal/api/v2/configurations/handler.go:1529, in ListModels).
+            The key set is the model type's own.
+      description: >
+        NOTE(W2): the union of internal/api/v2/configurations/handler.go's
+        Model (compat) and internal/application/configurations/models.go's
+        CurrentModelCatalogItem (reviewed).
+
+    ConfigurationModelListResponse:
+      type: object
+      required: [items, total]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/ConfigurationModelItem' }
+        total: { type: integer }
+        default_model_name:
+          type: string
+          nullable: true
+          description: >
+            `reviewed` only. `compat` emits neither this key nor the one below,
+            and its `is_default` is always false, so a client reading a default
+            model from a compat deployment gets nothing rather than a wrong
+            answer.
+        default_model_project_id:
+          type: integer
+          nullable: true
+          description: '`reviewed` only.'
+        low_tier_default_model_name:
+          type: string
+          nullable: true
+          description: '`reviewed` only, and omitted when unset.'
+        low_tier_default_model_project_id:
+          type: integer
+          nullable: true
+          description: '`reviewed` only, and omitted when unset.'
+        high_tier_default_model_name:
+          type: string
+          nullable: true
+          description: '`reviewed` only, and omitted when unset.'
+        high_tier_default_model_project_id:
+          type: integer
+          nullable: true
+          description: '`reviewed` only, and omitted when unset.'
+      description: >
+        NOTE(W2): internal/api/v2/configurations/handler.go, ListModels
+        (compat) and internal/application/configurations/models.go,
+        CurrentModelCatalog (reviewed).
 
     # ---- Artifacts ---------------------------------------------------------------
     # docs/plans/storage-migration-plan.md S7. Replaces the retired
@@ -4114,6 +4548,63 @@ components:
         name/description, and ?sort_by (name|created_at)/?sort_order
         (asc|desc) drive ORDER BY (repos/skills.go List — sort_by is
         whitelisted, never interpolated raw).
+
+    ApplicationSkillAttachment:
+      type: object
+      required: [name, description, skill_id, version_name, version_missing]
+      properties:
+        name: { type: string }
+        description: { type: string }
+        skill_id: { type: integer }
+        version_id:
+          type: integer
+          nullable: true
+          description: >
+            NULL when the attachment names a version the skill no longer has.
+            Read it together with `version_missing`.
+        version_name: { type: string }
+        version_missing:
+          type: boolean
+          description: >
+            True when entity_skill_mapping points at a version that is gone. The
+            row is still listed, because hiding it would report the agent as
+            having no skill at all.
+        icon_meta:
+          allOf: [{ $ref: '#/components/schemas/ProjectIconMeta' }]
+      description: >
+        NOTE(W2): internal/api/v2/applicationskills/handler.go:45-51,
+        CurrentApplicationSkill.
+
+    ApplicationSkillsList:
+      allOf:
+        - $ref: '#/components/schemas/SkillsList'
+        - type: object
+          properties:
+            skills:
+              type: array
+              items: { $ref: '#/components/schemas/ApplicationSkillAttachment' }
+              description: >
+                The attachment view of the SAME rows `items` carries. The two
+                halves are built from one row set and cannot disagree.
+            max_skills:
+              type: integer
+              description: How many skills one agent version may attach.
+      description: >
+        NOTE(issue 621): ONE body answers two clients on this path, and the
+        deployment decides which half is real.
+
+        `items`, `total`, `page`, `page_size` and `total_pages` are the
+        published contract, which apps/elitea-web reads through
+        shared/api/unwrap.ts. `skills` and `max_skills` are the shape
+        apps/elitea-ui reads. The reviewed route
+        (internal/api/v2/applicationskills, currentApplicationSkillsResponse)
+        has emitted all seven keys since issue 395 — before it carried the
+        first five, turning ELITEA_APPLICATION_SKILLS_ENABLED on gave the web
+        client a body with no `items` key, which unwrapList reports as an
+        unrecognised shape and renders as "no skills".
+
+        The compatibility handler this route replaces emits the five keys only.
+        A client reads the union.
 
     SkillCreateRequest:
       type: object
@@ -9096,8 +9587,28 @@ paths:
       operationId: getDocumentLoaders
       summary: Get available document loader / index type configurations
       description: |
-        NOTE(W2): static {items, total} envelope (NOT a bare array),
-        internal/api/v2/toolkits/handler.go:466-510.
+        TWO handlers serve this ONE path, and the deployment chooses which.
+
+        ELITEA_INDEX_TYPES_ENABLED=true composes the reviewed catalogue
+        (internal/api/v2/indextypes, CurrentIndexTypesRoute), which
+        production_router.go registers on the root router. chi prefers that
+        explicit registration, so the reviewed route answers 200 with the
+        document/image/code extension maps taken from the pinned SDK snapshot
+        (internal/runtimecomposition/current_index_types_snapshot.json).
+
+        The variable is "false" in the shipped chart
+        (deploy/helm/elitea/values.yaml), so a default install reaches the
+        compatibility handler instead, and that handler REFUSES with 501 and a
+        machine-readable `code` (issue 615, internal/api/v2/toolkits/handler.go,
+        IndexTypes). It used to answer 200 with six hand-written loader
+        entries that no SDK, snapshot, database or configuration produced.
+
+        NOTE(W2): the 200 envelope is a static {items, total} object, NOT a
+        bare array.
+
+        A generated client must handle BOTH answers. 501 is FINAL, not
+        transient: apps/elitea-web/src/app/providers/queryClient.ts classifies
+        it with `isFinalClientAnswer` and does not retry it.
       tags: [applications]
       responses:
         '200':
@@ -9108,6 +9619,14 @@ paths:
                 $ref: '#/components/schemas/DocumentLoadersResponse'
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
+        '501':
+          description: >
+            The catalogue is not available on this deployment.
+            `code` is `index_types_not_available`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CapabilityUnavailableResponse'
 
   # APPLICATIONS — pipeline triggers
   # NOTE(#126): getPipelineTrigger (GET) and updatePipelineTrigger (PUT) on
@@ -10038,6 +10557,113 @@ paths:
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
 
+  # APPLICATIONS — project info (issue 621)
+  #
+  # TWO handlers serve the GET, and the deployment chooses which; the PUT has
+  # only one. ELITEA_PROJECT_INFO_ENABLED=true composes the reviewed reader
+  # (internal/api/v2/projectinfo, CurrentProjectInfoRoute), which
+  # production_router.go registers on the root router for GET ONLY. chi prefers
+  # that explicit registration over the nested compatibility group, so the
+  # reviewed reader answers 200 there.
+  #
+  # The variable is "false" in the shipped chart, so a default install reaches
+  # the compatibility handler, and that handler REFUSES the GET with 501 and a
+  # machine-readable `code` (issue 615, internal/api/v2/eliteacore/handler.go,
+  # ProjectInfo). It used to answer 200 with a literal null `icon_meta` on both
+  # branches and no `teammates_count` at all, and the web client rendered the
+  # absent key as "Teammates: 0" — a counted figure the server never counted.
+  #
+  # The PUT is NOT capability-gated. production_router.go registers no reviewed
+  # replacement for it, so internal/api/v2/eliteacore/handler.go's
+  # UpdateProjectInfo answers it in every deployment.
+  #
+  # The app calls both through a hand-written client today
+  # (apps/elitea-web/src/entities/project/api/projectContextApi.ts). The two
+  # operations are described here so a generated client exists to migrate that
+  # file onto, and so the 501 is visible to anyone generating from this
+  # document.
+  /elitea_core/project_info/prompt_lib/{project_id}/project-info:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+
+    get:
+      operationId: getProjectInfo
+      summary: Read a project's teammate count and icon
+      description: |
+        NOTE(W2): 200 comes from internal/api/v2/projectinfo/handler.go
+        (CurrentProjectInfo) — `teammates_count` counts DISTINCT members of
+        public.auth_core__project_user_role, excluding the
+        `system_user_<id>@centry.user` account, and `icon_meta` is read from
+        the tenant `configuration` row (type='project_icon').
+
+        501 comes from internal/api/v2/eliteacore/handler.go (ProjectInfo)
+        when ELITEA_PROJECT_INFO_ENABLED is off. `code` is
+        `project_info_not_available`. It is FINAL, not transient.
+      tags: [applications]
+      responses:
+        '200':
+          description: Project info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectInfo'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '501':
+          description: >
+            Project info is not available on this deployment.
+            `code` is `project_info_not_available`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CapabilityUnavailableResponse'
+
+    put:
+      operationId: updateProjectInfo
+      summary: Rename a project, set its icon, or both
+      description: |
+        NOTE(W2): internal/api/v2/eliteacore/handler.go (UpdateProjectInfo).
+
+        BOTH BODY FIELDS ARE OPTIONAL, AND ABSENT IS NOT NULL. An absent
+        `icon_meta` leaves the icon alone; an explicit null CLEARS it. A PUT
+        with neither field is a no-op that answers `{"ok": true}`.
+
+        The response echoes only what it wrote: `name` appears when the project
+        was renamed, `icon_meta` when the icon was written. A failed write is
+        reported as a failure — this route used to discard every database error
+        and still answer `{"ok": true}`.
+      tags: [applications]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectInfoUpdateRequest'
+      responses:
+        '200':
+          description: What was written
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectInfoUpdateResponse'
+        '400':
+          description: >
+            `icon_meta` is neither null nor an object with string
+            `name`/`url`. `code` is `invalid_icon_meta`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500':
+          description: >
+            The write failed. `code` is `project_info_write_failed`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   # ==========================================================================
   # ARTIFACTS — buckets, objects, transfer grants
   # docs/plans/storage-migration-plan.md S7. Replaces the retired legacy
@@ -10750,18 +11376,213 @@ paths:
   # path. Re-add it here only together with removing that hand-written client.
 
   # ==========================================================================
-  # CONFIGURATIONS
-  # TODO: Enumerate endpoints when inventory is available
+  # CONFIGURATIONS (issue 36, items 9 and 11)
+  #
+  # The header used to read "TODO: Enumerate endpoints when inventory is
+  # available". The inventory has been available since the Wave-2 census, and
+  # the TODO outlived it: four elitea-web slices had each hand-written the same
+  # two reads independently, and the parity census carries them as
+  # `credentials.getConfigurationsList`, `getConfigurationsByType`,
+  # `getConfigurationsBySection` and `credentials.listModels`.
+  #
+  # The two reads below are described here. The rest of the domain is described
+  # under the stored-credential checks, further down.
+  #
+  # TWO HANDLERS SERVE EACH OF THESE PATHS, AND THE TWO SHAPES DIFFER.
+  # ELITEA_CONFIGURATIONS_ENABLED=true composes the reviewed service
+  # (internal/application/configurations), which production_router.go registers
+  # on the root router; chi prefers it. The shipped chart leaves the variable
+  # off, so a default install reaches the compatibility handler
+  # (internal/api/v2/configurations/handler.go). Every field below states which
+  # of the two emits it. A client must read the union — this is the whole
+  # reason the two compatibility structs were forced to emit `project_id` as a
+  # NUMBER (handler.go, Configuration and Model): one deployment gave a string
+  # and another a number, and a client comparing with `===` broke on exactly
+  # one of them.
+  #
+  # The `{mode}` twins of both paths are registered for pylon URL parity and
+  # are deliberately absent from this document: the mode segment is decoration
+  # on this surface, one handler serves both forms, and no client in the
+  # workspace calls the mode-ful URL.
   # ==========================================================================
+  /configurations/configurations/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: section
+        in: query
+        required: false
+        description: >
+          Repeatable. The client fires ONE request per section, and this filter
+          used to be ignored: every section received the whole table, so one
+          credential rendered under all seven headings.
+        schema:
+          type: array
+          items: { type: string }
+      - name: type
+        in: query
+        required: false
+        description: Repeatable credential-type filter, for example `sharepoint`.
+        schema:
+          type: array
+          items: { type: string }
+      - name: query
+        in: query
+        required: false
+        description: >
+          Label search. A value longer than 1024 characters is refused with
+          400. It is not truncated.
+        schema: { type: string }
+      - name: limit
+        in: query
+        required: false
+        description: Page size. The default is 20 and the clamp is 200.
+        schema: { type: integer, default: 20, maximum: 200 }
+      - name: offset
+        in: query
+        required: false
+        schema: { type: integer, default: 0, minimum: 0 }
+      - name: sort_by
+        in: query
+        required: false
+        schema: { type: string }
+      - name: sort_order
+        in: query
+        required: false
+        schema: { type: string, enum: [asc, desc] }
+      - name: include_shared
+        in: query
+        required: false
+        description: >
+          Adds the `shared` block, read from the PUBLIC project's schema and
+          never from the caller's own. Without a configured public project the
+          block stays empty. That is the honest answer: the caller's own schema
+          is a wrong answer, not a fallback.
+        schema: { type: boolean, default: false }
+      - name: shared_offset
+        in: query
+        required: false
+        schema: { type: integer, default: 0, minimum: 0 }
+      - name: shared_limit
+        in: query
+        required: false
+        schema: { type: integer, default: 20, maximum: 200 }
+
+    get:
+      operationId: listConfigurations
+      summary: List a project's stored credentials and integrations
+      description: |
+        NOTE(W2): internal/api/v2/configurations/handler.go, List
+        (compatibility) and internal/application/configurations/crud.go
+        (reviewed). The page carries every row the project OWNS, shared or
+        not. The old `shared = false` predicate hid a shared credential from
+        its own project.
+
+        A project whose tenant schema does not exist yet answers 200 with an
+        empty page. Every OTHER database error answers 500. An empty page
+        reports a timeout as a project that holds no credentials, and the user
+        then creates a credential that already exists.
+
+        The app calls this through a hand-written client today
+        (apps/elitea-web/src/features/credentials/api/configurations.ts). It is
+        described here so a generated client exists to migrate onto.
+      tags: [configurations]
+      responses:
+        '200':
+          description: One page of configurations
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigurationListResponse'
+        '400':
+          description: >
+            A filter is out of bounds: more than 64 values, a value longer than
+            128 characters, or a `query` longer than 1024 characters.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500': { $ref: '#/components/responses/500' }
+        '503':
+          description: The configuration store is not available.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /configurations/models/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: section
+        in: query
+        required: false
+        schema: { type: string }
+      - name: include_shared
+        in: query
+        required: false
+        schema: { type: boolean, default: false }
+
+    get:
+      operationId: listConfigurationModels
+      summary: List the models a project can select
+      description: |
+        NOTE(W2): internal/api/v2/configurations/handler.go, ListModels
+        (compatibility) and internal/application/configurations/models.go
+        (reviewed). The compatibility handler reads the five model rows of the
+        tenant `configuration` table: llm_model, embedding_model, asr_model,
+        tts_model and image_generation_model. It reads at most 1000 rows.
+
+        THE ROWS CARRY NO SERVER-ASSIGNED `id` ON THE REVIEWED ROUTE. The
+        shipped client synthesises one from `project_id` and `name`
+        (apps/elitea-web/src/features/credentials/api/configurationConnections.ts,
+        withModelId). Do not read `id` as an identifier the server assigned.
+
+        The app calls this through a hand-written client today, and four
+        separate slices re-derived that client independently. It is described
+        here so one generated client replaces all four.
+      tags: [configurations]
+      responses:
+        '200':
+          description: The model catalogue for this project
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigurationModelListResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500': { $ref: '#/components/responses/500' }
 
   # ==========================================================================
   # NOTIFICATIONS
-  # TODO: Enumerate endpoints when inventory is available
+  # NOTE(issue 621): the header used to read "TODO: Enumerate endpoints when
+  # inventory is available". The inventory is available. The TODO was stale.
+  #
+  # The routes exist. internal/api/router.go registers GET
+  # /elitea_core/notifications/prompt_lib/{projectID}, and PUT and DELETE on
+  # both that path and /elitea_core/notification/prompt_lib/{projectID}/{id}.
+  # internal/api/v2/notifications carries the reviewed copy of the same surface.
+  #
+  # They stay undescribed for ONE reason, and the inventory is not it: the
+  # domain's sixth endpoint is an SSE stream (`notifications.eventStream`),
+  # which no generated client models. Describing five of the six here splits
+  # one feature's client across two mechanisms. Describe the domain when the
+  # stream has an agreed contract, and delete the five allowlist lines in
+  # internal/api/oapiserver/testdata/reverse_check_allowlist.txt at the same
+  # time.
   # ==========================================================================
 
   # ==========================================================================
   # RESOURCES
-  # TODO: Enumerate endpoints when inventory is available
+  # NOTE(issue 621): the header used to read "TODO: Enumerate endpoints when
+  # inventory is available". The inventory is available. The TODO was stale.
+  #
+  # ONE route carries this name: GET
+  # /admin/plugin_config_values/prompt_lib/resources
+  # (internal/api/router.go, adminHandler.PromptLibResourcesValues). It is the
+  # Help Center's link list, and the only config section pylon exposes to a
+  # non-administrator. It stays undescribed because no elitea-web client calls
+  # it: the Help Center renders the baseline's own hardcoded fallback copy
+  # (RESOURCE_CARD_CONFIGS). Describe it when a page reads it (issue 36,
+  # item 7).
   # ==========================================================================
 
   # ==========================================================================
@@ -10774,7 +11595,12 @@ paths:
 
   # ==========================================================================
   # SECRETS
-  # TODO: Enumerate endpoints when inventory is available
+  # NOTE(issue 621): the header used to read "TODO: Enumerate endpoints when
+  # inventory is available", and it was FALSE, not merely stale. Issue 151
+  # described the whole domain: six operations over
+  # /secrets/{secrets,secret,hide}/{mode}/{projectID}, further down this
+  # document. Read the section headed "SECRETS (issue 151)". Nothing about this
+  # domain is pending here.
   # ==========================================================================
 
   # ==========================================================================
@@ -10881,10 +11707,16 @@ paths:
 
         NOTE(#367): this route used to point at the project skills List
         handler, which never read app_version_id and answered with every
-        skill in the project, at 200. The envelope is unchanged — it is
-        still SkillsList — so a client sees the same shape and different,
-        correct contents. A malformed app_version_id is now refused with
-        400 instead of being coerced.
+        skill in the project, at 200. The five published keys are unchanged —
+        a client sees the same shape and different, correct contents. A
+        malformed app_version_id is now refused with 400 instead of being
+        coerced.
+
+        NOTE(issue 621): the response schema is ApplicationSkillsList, not
+        SkillsList. It is SkillsList plus the `skills` and `max_skills` keys
+        the reviewed handler also emits (issue 395). SkillsList itself stays
+        as it is, because the project-skills List operation shares it and
+        emits neither key.
       tags: [skills]
       responses:
         '200':
@@ -10892,7 +11724,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SkillsList'
+                $ref: '#/components/schemas/ApplicationSkillsList'
         '400': { $ref: '#/components/responses/400' }
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }

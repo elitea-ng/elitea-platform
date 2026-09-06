@@ -41,26 +41,18 @@
  */
 import * as zod from "zod";
 
-export const DocumentLoadersResponse = zod
+export const ProjectIconMeta = zod
   .object({
-    items: zod.array(
-      zod.object({
-        type: zod.string(),
-        name: zod.string(),
-        description: zod.string(),
-        supported_extensions: zod.array(zod.string()),
-      }),
-    ),
-    total: zod.int(),
-    document_types: zod.record(zod.string(), zod.string()).optional(),
-    image_types: zod.record(zod.string(), zod.string()).optional(),
-    code_types: zod.record(zod.string(), zod.string()).optional(),
+    name: zod.string().nullish().describe("The stored file name, or null."),
+    url: zod
+      .string()
+      .nullish()
+      .describe("The stored URL, or null. Nothing here invents one."),
   })
+  .nullable()
   .describe(
-    "NOTE(W2): ONE body answers two clients, and the deployment decides which half is real.\n`items` and `total` are the published contract. With ELITEA_INDEX_TYPES_ENABLED off the compatibility handler answered them as a six-element hand-written list that no SDK, snapshot, database or configuration produced; that handler now refuses with 501 instead.\n`document_types`, `image_types` and `code_types` are the pylon keys apps\/elitea-ui reads (src\/slices\/fileTypes.js). They were UNDESCRIBED here, which is why this note exists: the reviewed route (internal\/api\/v2\/indextypes, currentIndexTypesResponse) has emitted all five keys since issue 394, and a client generated from this document could not see three of them.\nThe two halves project the SAME rows and cannot disagree: every `supported_extensions` list is the sorted key set of the map named by the same `type`.\n",
+    "NOTE(W2): the exact object internal\/api\/v2\/eliteacore\/handler.go's normalizeProjectIconMeta produces — the two keys `name` and `url`, each of which may be null, and NO other key survives the write. A null `icon_meta` means the project has no icon.\n",
   );
 
-export type DocumentLoadersResponse = zod.input<typeof DocumentLoadersResponse>;
-export type DocumentLoadersResponseOutput = zod.output<
-  typeof DocumentLoadersResponse
->;
+export type ProjectIconMeta = zod.input<typeof ProjectIconMeta>;
+export type ProjectIconMetaOutput = zod.output<typeof ProjectIconMeta>;

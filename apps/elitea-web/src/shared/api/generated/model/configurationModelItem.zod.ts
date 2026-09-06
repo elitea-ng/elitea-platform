@@ -41,26 +41,58 @@
  */
 import * as zod from "zod";
 
-export const DocumentLoadersResponse = zod
+export const ConfigurationModelItem = zod
   .object({
-    items: zod.array(
-      zod.object({
-        type: zod.string(),
-        name: zod.string(),
-        description: zod.string(),
-        supported_extensions: zod.array(zod.string()),
-      }),
-    ),
-    total: zod.int(),
-    document_types: zod.record(zod.string(), zod.string()).optional(),
-    image_types: zod.record(zod.string(), zod.string()).optional(),
-    code_types: zod.record(zod.string(), zod.string()).optional(),
+    id: zod
+      .int()
+      .optional()
+      .describe(
+        "`compat` only, and it is the CONFIGURATION row id, not a model id. `reviewed` emits no id at all, and the shipped client synthesises one from `project_id` and `name`.\n",
+      ),
+    name: zod.string().describe("BOTH. The model name a caller selects."),
+    display_name: zod.string().nullish().describe("`reviewed` only."),
+    type: zod
+      .string()
+      .optional()
+      .describe(
+        "`compat` only. One of llm_model, embedding_model, asr_model, tts_model, image_generation_model.\n",
+      ),
+    project_id: zod
+      .int()
+      .describe(
+        "BOTH, and a NUMBER on both, for the reason ConfigurationRow gives.",
+      ),
+    section: zod.string().optional().describe("`compat` only."),
+    shared: zod.boolean().optional().describe("`reviewed` only."),
+    is_default: zod
+      .boolean()
+      .optional()
+      .describe(
+        "`compat` only, and it is ALWAYS false: that handler does not read the project default. Read `default_model_name` on the envelope instead.\n",
+      ),
+    default: zod
+      .boolean()
+      .optional()
+      .describe("`reviewed` only. The project default."),
+    config_id: zod.int().optional().describe("`compat` only. A copy of `id`."),
+    config_name: zod
+      .string()
+      .optional()
+      .describe("`compat` only. A copy of `name`."),
+    context_window: zod.int().nullish().describe("`reviewed` only."),
+    max_output_tokens: zod.int().nullish().describe("`reviewed` only."),
+    supports_reasoning: zod.boolean().nullish().describe("`reviewed` only."),
+    supports_vision: zod.boolean().nullish().describe("`reviewed` only."),
+    low_tier: zod.boolean().nullish().describe("`reviewed` only."),
+    high_tier: zod.boolean().nullish().describe("`reviewed` only."),
+    openai_compatible: zod.boolean().nullish().describe("`reviewed` only."),
+    data: zod.record(zod.string(), zod.unknown()).optional(),
   })
   .describe(
-    "NOTE(W2): ONE body answers two clients, and the deployment decides which half is real.\n`items` and `total` are the published contract. With ELITEA_INDEX_TYPES_ENABLED off the compatibility handler answered them as a six-element hand-written list that no SDK, snapshot, database or configuration produced; that handler now refuses with 501 instead.\n`document_types`, `image_types` and `code_types` are the pylon keys apps\/elitea-ui reads (src\/slices\/fileTypes.js). They were UNDESCRIBED here, which is why this note exists: the reviewed route (internal\/api\/v2\/indextypes, currentIndexTypesResponse) has emitted all five keys since issue 394, and a client generated from this document could not see three of them.\nThe two halves project the SAME rows and cannot disagree: every `supported_extensions` list is the sorted key set of the map named by the same `type`.\n",
+    "NOTE(W2): the union of internal\/api\/v2\/configurations\/handler.go's Model (compat) and internal\/application\/configurations\/models.go's CurrentModelCatalogItem (reviewed).\n",
   );
 
-export type DocumentLoadersResponse = zod.input<typeof DocumentLoadersResponse>;
-export type DocumentLoadersResponseOutput = zod.output<
-  typeof DocumentLoadersResponse
+export type ConfigurationModelItem = zod.input<typeof ConfigurationModelItem>;
+export type ConfigurationModelItemOutput = zod.output<
+  typeof ConfigurationModelItem
 >;
