@@ -112,7 +112,7 @@ input: []
 fn router_rejects_ambiguous_labels_unknown_fields_and_invalid_inputs() {
     for yaml in [
         "id: choose\ntype: router\nroutes: [next.step, next_step]\n",
-        "id: choose\ntype: router\nroutes: ['bad target']\n",
+        "id: choose\ntype: router\nroutes: ['bad/target']\n",
         "id: choose\ntype: router\ninput: [value, value]\n",
         "id: choose\ntype: router\ntransition: END\n",
     ] {

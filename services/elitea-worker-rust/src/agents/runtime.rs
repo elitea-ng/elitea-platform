@@ -311,6 +311,7 @@ impl<'a> AuthorizedNativeAssembly<'a> {
         self,
         policy: &ToolAdmissionPolicy,
     ) -> Result<AdmittedPipelineNativeAssembly<'a>, NativeAgentAssemblyError> {
+        tracing::Span::current().record("stage", "start_admission");
         let has_continuation = has_continuation(self.request);
         let start = if has_continuation {
             if self.request.payload.should_continue && !self.request.payload.hitl_resume {
@@ -334,6 +335,7 @@ impl<'a> AuthorizedNativeAssembly<'a> {
         } else {
             PipelineNativeStart::Fresh
         };
+        tracing::Span::current().record("stage", "profile_validation");
         let mut profile = match &start {
             PipelineNativeStart::McpAuthorization(_) => {
                 PipelineExecutionProfile::validate_mcp_authorization_resume(self.request)?
@@ -345,10 +347,13 @@ impl<'a> AuthorizedNativeAssembly<'a> {
             }
             _ => PipelineExecutionProfile::validate(self.request, start.is_resume())?,
         };
+        tracing::Span::current().record("stage", "tool_snapshot");
         let frozen_toolsets =
             FrozenToolSnapshot::from_request(self.request).map_err(tool_snapshot_error)?;
+        tracing::Span::current().record("stage", "tool_scope");
         profile.validate_tool_snapshot(&frozen_toolsets, policy)?;
         let toolsets = frozen_toolsets.apply_policy(policy);
+        tracing::Span::current().record("stage", "execution_plan");
         let plan = OrdinaryNativeAgentPlan::from_authorized_pipeline(
             self.request,
             profile.shell(),

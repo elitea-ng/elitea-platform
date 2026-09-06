@@ -119,6 +119,45 @@ fn whole_pipeline_yaml_is_bounded_strict_and_digest_stable() {
     );
 }
 
+#[test]
+fn legacy_ui_graph_identifiers_are_normalized_without_rewriting_storage() {
+    let legacy = r"
+entry_point: Agent 1
+nodes:
+  - id: Agent 1
+    type: agent
+    input: [input]
+    input_mapping:
+      task:
+        type: variable
+        value: input
+    output: [messages]
+    tool: Full Name Resolver
+    transition: END
+";
+    let canonical = legacy.replace("Agent 1", "Agent1");
+    let legacy = PipelineDefinition::from_yaml(legacy).expect("legacy UI pipeline");
+    let canonical = PipelineDefinition::from_yaml(&canonical).expect("canonical pipeline");
+
+    assert_eq!(legacy.entry_point(), "Agent1");
+    assert_eq!(legacy.definition_digest(), canonical.definition_digest());
+
+    let collision = r"
+entry_point: Agent 1
+nodes:
+  - id: Agent 1
+    type: state_modifier
+    transition: END
+  - id: Agent1
+    type: state_modifier
+    transition: END
+";
+    let Err(error) = PipelineDefinition::from_yaml(collision) else {
+        panic!("normalized node identifier collision must be rejected");
+    };
+    assert_eq!(error.code(), "graph.pipeline.invalid_configuration");
+}
+
 #[tokio::test]
 async fn active_state_modifier_yaml_runs_natively_and_surfaces_terminal_output() {
     let definition = PipelineDefinition::from_yaml(

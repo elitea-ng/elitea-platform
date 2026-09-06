@@ -7,7 +7,7 @@ use serde::de::{Deserializer, SeqAccess, Visitor};
 use thiserror::Error;
 
 const MAX_YAML_NODE_BYTES: usize = 64 * 1024;
-const MAX_NODE_ID_BYTES: usize = 128;
+pub(crate) const MAX_NODE_ID_BYTES: usize = 128;
 const MAX_OUTPUT_KEY_BYTES: usize = 256;
 const MAX_BRANCHES: usize = 64;
 const MAX_CONCURRENCY: u32 = 32;

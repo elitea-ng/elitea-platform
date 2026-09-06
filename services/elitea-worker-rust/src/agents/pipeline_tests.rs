@@ -1549,7 +1549,12 @@ async fn direct_saved_agent_node_streams_one_exact_pipeline_hierarchy() {
         Arc::clone(&checkpointer) as Arc<dyn Checkpointer>,
     )
     .with_runtime_clients(platform, model_facade);
-    let request = agent_pipeline_request("release-agent", "agent");
+    let mut request = agent_pipeline_request("release-agent", "agent");
+    let instructions = request.payload.application["version_details"]["instructions"]
+        .as_str()
+        .expect("saved pipeline YAML")
+        .replace("delegate", "Agent 1");
+    request.payload.application["version_details"]["instructions"] = json!(instructions);
     let mut invocation = assembler
         .assemble(authorized(&request))
         .await
@@ -1596,8 +1601,20 @@ async fn direct_saved_agent_node_streams_one_exact_pipeline_hierarchy() {
         assert!(
             path[0]["call_id"]
                 .as_str()
-                .is_some_and(|call_id| call_id.starts_with("pipeline:delegate:"))
+                .is_some_and(|call_id| call_id.starts_with("pipeline:Agent1:"))
         );
+    }
+    for event in &browser {
+        for field in ["name", "tool_name"] {
+            assert_ne!(
+                event[field], "Agent1",
+                "internal node ID became a display label"
+            );
+            assert_ne!(
+                event[field], "Agent 1",
+                "legacy node ID became a display label"
+            );
+        }
     }
     assert!(
         browser

@@ -44,7 +44,7 @@ use super::printer::{
 use super::resume::PipelineResume;
 use super::router::{RouterNode, RouterNodeDefinition};
 use super::state_modifier::{StateModifierNode, StateModifierNodeDefinition};
-use super::yaml::{valid_graph_id, valid_output_key};
+use super::yaml::{MAX_NODE_ID_BYTES, valid_graph_id, valid_output_key};
 use super::{pipeline_completed_event, pipeline_result_event};
 
 const MAX_PIPELINE_YAML_BYTES: usize = 512 * 1024;
@@ -450,8 +450,18 @@ impl PipelineDefinition {
         if yaml.is_empty() || yaml.len() > MAX_PIPELINE_YAML_BYTES {
             return Err(PipelineConfigurationError::ResourceExhausted);
         }
-        let raw = serde_yaml_ng::from_str::<RawPipelineDefinition>(yaml)
+        let mut document = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(yaml)
             .map_err(|source| PipelineConfigurationError::MalformedYaml { source })?;
+        let normalized_identifier_count = normalize_legacy_graph_identifiers(&mut document);
+        let raw = serde_yaml_ng::from_value::<RawPipelineDefinition>(document)
+            .map_err(|source| PipelineConfigurationError::MalformedYaml { source })?;
+        if normalized_identifier_count > 0 {
+            tracing::warn!(
+                event = "pipeline_legacy_identifier_normalized",
+                normalized_identifier_count,
+                "normalized legacy pipeline graph identifiers for runtime compatibility"
+            );
+        }
         Self::from_raw(raw)
     }
 
@@ -1024,6 +1034,116 @@ impl PipelineDefinition {
             fallback_data_keys: fallback_keys,
         }
     }
+}
+
+/// Normalize only graph identifiers that the current Python compiler rewrites.
+///
+/// Older `EliteaUI` versions persisted labels such as `Agent 1` directly as node
+/// identifiers. The Python runtime passes every identifier and target through
+/// `clean_string`, so those documents execute as `Agent1`. New UI versions
+/// author strict identifiers, but they intentionally do not rewrite stored
+/// documents on load. This compatibility pass is therefore runtime-local. It
+/// preserves already-valid Rust identifiers, applies the Python transformation
+/// only to legacy values, and leaves malformed or oversized values for the
+/// normal validators to reject. Duplicate normalized node IDs are rejected by
+/// `parse_pipeline_nodes`.
+fn normalize_legacy_graph_identifiers(document: &mut serde_yaml_ng::Value) -> usize {
+    let Some(root) = document.as_mapping_mut() else {
+        return 0;
+    };
+    let mut count = 0;
+    normalize_mapping_graph_identifier(root, "entry_point", &mut count);
+    normalize_mapping_graph_identifier_sequence(root, "interrupt_before", &mut count);
+    normalize_mapping_graph_identifier_sequence(root, "interrupt_after", &mut count);
+
+    let Some(serde_yaml_ng::Value::Sequence(nodes)) = root.get_mut("nodes") else {
+        return count;
+    };
+    for node in nodes {
+        let Some(node) = node.as_mapping_mut() else {
+            continue;
+        };
+        normalize_mapping_graph_identifier(node, "id", &mut count);
+        normalize_mapping_graph_identifier(node, "transition", &mut count);
+        normalize_mapping_graph_identifier(node, "default_output", &mut count);
+        let node_type = node
+            .get("type")
+            .and_then(serde_yaml_ng::Value::as_str)
+            .map(str::to_owned);
+        match node_type.as_deref() {
+            Some("decision") => {
+                normalize_mapping_graph_identifier_sequence(node, "nodes", &mut count);
+            }
+            Some("router") => {
+                normalize_mapping_graph_identifier_sequence(node, "routes", &mut count);
+            }
+            Some("hitl") => {
+                if let Some(serde_yaml_ng::Value::Mapping(routes)) = node.get_mut("routes") {
+                    for target in routes.values_mut() {
+                        normalize_graph_identifier(target, &mut count);
+                    }
+                }
+            }
+            // Retain the identifier boundary for the separately gated parallel
+            // node so its later compiler integration cannot regress legacy
+            // branch labels.
+            Some("parallel") => {
+                if let Some(serde_yaml_ng::Value::Sequence(branches)) = node.get_mut("branches") {
+                    for branch in branches {
+                        let Some(branch) = branch.as_mapping_mut() else {
+                            continue;
+                        };
+                        normalize_mapping_graph_identifier(branch, "id", &mut count);
+                        normalize_mapping_graph_identifier(branch, "node", &mut count);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    count
+}
+
+fn normalize_mapping_graph_identifier(
+    mapping: &mut serde_yaml_ng::Mapping,
+    field: &str,
+    count: &mut usize,
+) {
+    if let Some(value) = mapping.get_mut(field) {
+        normalize_graph_identifier(value, count);
+    }
+}
+
+fn normalize_mapping_graph_identifier_sequence(
+    mapping: &mut serde_yaml_ng::Mapping,
+    field: &str,
+    count: &mut usize,
+) {
+    let Some(serde_yaml_ng::Value::Sequence(values)) = mapping.get_mut(field) else {
+        return;
+    };
+    for value in values {
+        normalize_graph_identifier(value, count);
+    }
+}
+
+fn normalize_graph_identifier(value: &mut serde_yaml_ng::Value, count: &mut usize) {
+    let serde_yaml_ng::Value::String(identifier) = value else {
+        return;
+    };
+    if valid_graph_id(identifier) || identifier.is_empty() || identifier.len() > MAX_NODE_ID_BYTES {
+        return;
+    }
+    let normalized = identifier
+        .bytes()
+        .filter(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+        .map(|byte| if byte == b'.' { '_' } else { byte as char })
+        .collect::<String>();
+    if normalized.is_empty() || normalized.len() > MAX_NODE_ID_BYTES {
+        return;
+    }
+    *identifier = normalized;
+    *count += 1;
 }
 
 #[derive(Clone)]
