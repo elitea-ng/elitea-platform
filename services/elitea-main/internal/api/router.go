@@ -1633,6 +1633,45 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				r.With(central("configuration.roles.roles.view")).
 					Get("/roles/administration/{projectID}", coreHandler.Roles)
 
+				// Role DEFINITIONS — create, rename, delete (gap G9).
+				//
+				// The two GETs above LIST roles. Nothing could add one, rename
+				// one, or take one away, while pylon's
+				// legacy/plugins/admin/api/v2/roles.py is full CRUD. A
+				// deployment that wanted a `security_reviewer` role had to
+				// INSERT it into auth_core__role by hand.
+				//
+				// THE SECOND SEGMENT IS NOT A PROJECT ID HERE. These three take
+				// `{scope}/{mode}` — the shape /admin/permissions already uses,
+				// where the first segment picks the matrix (administration,
+				// public, support) and the second the target mode. That is the
+				// pair the admin Roles page's four tabs are keyed on, and the
+				// role columns those tabs render come from exactly that pair.
+				//
+				// chi keeps the two shapes apart: `{mode}` and `{scope}` are
+				// separate param nodes, and the static `administration` node
+				// the GET above registers carries no POST/PUT/DELETE, so those
+				// fall through to `{scope}`.
+				// TestAdminRoleWriteRoutesResolve pins that resolution, because
+				// it is a property of chi's trie rather than of this file.
+				//
+				// Gated on the three permissions roles.py declares, resolved in
+				// ADMINISTRATION mode like every other admin-panel gate above.
+				// They are distinct from `configuration.roles.permissions.*`:
+				// moving a checkbox in the matrix and deleting the role that
+				// checkbox belongs to are different privileges, and pylon
+				// separates them too.
+				//
+				// migrations/shared/0111 grants them. No migration did before,
+				// so all three would have answered 403 to every caller on a
+				// clean database.
+				r.With(central(admin.RolesCreatePermission)).
+					Post("/roles/{scope}/{mode}", adminHandler.AdminRoleCreate)
+				r.With(central(admin.RolesEditPermission)).
+					Put("/roles/{scope}/{mode}", adminHandler.AdminRoleRename)
+				r.With(central(admin.RolesDeletePermission)).
+					Delete("/roles/{scope}/{mode}", adminHandler.AdminRoleDelete)
+
 				// App requests / moderation (unit A14). Four routes, of which
 				// three did not exist and the fourth answered from a constant:
 				// `moderation_status/{mode}/{projectID}/{entityID}` returned

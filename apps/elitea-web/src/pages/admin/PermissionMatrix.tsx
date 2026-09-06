@@ -17,8 +17,11 @@
  */
 import { Fragment, memo, useCallback, useMemo, useState } from 'react';
 
+import DeleteOutlinedIcon from '@mui/icons-material/DeleteOutlined';
+import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
+import IconButton from '@mui/material/IconButton';
 import Table from '@mui/material/Table';
 import TableBody from '@mui/material/TableBody';
 import TableCell from '@mui/material/TableCell';
@@ -38,6 +41,14 @@ export interface PermissionMatrixProps {
   readonly search: string;
   readonly readOnly: boolean;
   readonly onChange: (updater: (rows: readonly PermissionMatrixRow[]) => PermissionMatrixRow[]) => void;
+  /**
+   * Role DEFINITION controls, per column (gap G9). Returning `undefined` for a
+   * role means the control is not offered for it — a built-in role, or an
+   * operator who is not shown the permission. The server refuses either way;
+   * these two exist so a control does not appear to work and then 409.
+   */
+  readonly renameHandlerFor?: (role: string) => (() => void) | undefined;
+  readonly deleteHandlerFor?: (role: string) => (() => void) | undefined;
 }
 
 type PermissionGroup = readonly [string, PermissionMatrixRow[]];
@@ -87,6 +98,8 @@ export const PermissionMatrix = memo(function PermissionMatrix({
   search,
   readOnly,
   onChange,
+  renameHandlerFor,
+  deleteHandlerFor,
 }: PermissionMatrixProps) {
   const [expansion, setExpansion] = useState<ExpansionState>({ search: '', groups: new Set() });
 
@@ -158,13 +171,52 @@ export const PermissionMatrix = memo(function PermissionMatrix({
                 </Button>
               </Box>
             </TableCell>
-            {roles.map((role) => (
-              <TableCell key={role} align="center">
-                <Typography variant="labelMedium" sx={{ textTransform: 'capitalize' }}>
-                  {humaniseRole(role)}
-                </Typography>
-              </TableCell>
-            ))}
+            {roles.map((role) => {
+              const onRename = renameHandlerFor?.(role);
+              const onDelete = deleteHandlerFor?.(role);
+              return (
+                <TableCell key={role} align="center">
+                  <Box
+                    sx={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      gap: '0.125rem',
+                    }}
+                  >
+                    <Typography variant="labelMedium" sx={{ textTransform: 'capitalize' }}>
+                      {humaniseRole(role)}
+                    </Typography>
+                    {onRename || onDelete ? (
+                      <Box sx={{ display: 'flex', gap: '0.125rem' }}>
+                        {onRename ? (
+                          <IconButton
+                            size="small"
+                            aria-label={t('pages.admin.roles.action.renameRole', 'Rename role: {{role}}', {
+                              role,
+                            })}
+                            onClick={onRename}
+                          >
+                            <EditOutlinedIcon fontSize="inherit" />
+                          </IconButton>
+                        ) : null}
+                        {onDelete ? (
+                          <IconButton
+                            size="small"
+                            aria-label={t('pages.admin.roles.action.deleteRole', 'Delete role: {{role}}', {
+                              role,
+                            })}
+                            onClick={onDelete}
+                          >
+                            <DeleteOutlinedIcon fontSize="inherit" />
+                          </IconButton>
+                        ) : null}
+                      </Box>
+                    ) : null}
+                  </Box>
+                </TableCell>
+              );
+            })}
           </TableRow>
         </TableHead>
         <TableBody>

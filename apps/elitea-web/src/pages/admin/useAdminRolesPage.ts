@@ -12,6 +12,20 @@
  * operator is mid-edit must not discard what they typed. The draft is therefore
  * seeded ONCE per tab — when the tab changes, or when its data first arrives —
  * and never again. Discard re-seeds it explicitly.
+ *
+ * ## …except when the COLUMNS change, which is a different event (gap G9)
+ *
+ * Creating, renaming or deleting a role changes which columns the matrix has.
+ * A draft seeded before that change has the old column set, so leaving it in
+ * place would hide the role the operator just created — the control would look
+ * like it did nothing. Those three writes therefore bump `seedToken`, and the
+ * draft is re-seeded when the token moves.
+ *
+ * The token is bumped AFTER the refetch has settled, never before: the three
+ * mutations return their `invalidateQueries` promise from `onSuccess`
+ * (`./api/adminRolesApi`), so by the time the call-site `onSuccess` below runs,
+ * `serverRows` already carries the new column. Bumping first would re-seed from
+ * the matrix that still lacks it, and the effect would not fire a second time.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
@@ -24,6 +38,7 @@ import {
   type PermissionMatrixRow,
   type PermissionMatrixTarget,
 } from './api/adminRolesApi';
+import { useAdminRoleDefinitions, type AdminRoleDefinitionsState } from './useAdminRoleDefinitions';
 
 /** The four tabs, in render order, with the endpoint each addresses. */
 const ROLE_TABS = [
@@ -45,7 +60,7 @@ const ROLE_ORDER: readonly string[] = ['system', 'super_admin', 'admin', 'editor
 /** The permission the (hardcoded) admin-panel config advertises for editing. */
 const PERMISSION_ROLES_EDIT = 'configuration.roles.permissions.edit';
 
-export interface AdminRolesPageState {
+interface AdminRolesMatrixState {
   readonly activeTab: number;
   readonly search: string;
   readonly rows: readonly PermissionMatrixRow[] | undefined;
@@ -72,10 +87,24 @@ export interface AdminRolesPageState {
   readonly onSave: () => void;
   /** `undefined` ⇒ "Apply to Projects" is not offered on this tab. */
   readonly onApplyToProjects: (() => void) | undefined;
+
 }
+
+/**
+ * What the page renders. The role-DEFINITION half comes from
+ * `./useAdminRoleDefinitions`: create, rename and delete change WHICH COLUMNS
+ * the matrix has, while everything above is about the cells (gap G9).
+ */
+export type AdminRolesPageState = AdminRolesMatrixState & AdminRoleDefinitionsState;
 
 interface Draft {
   readonly tabKey: RoleTabKey;
+  /**
+   * The `seedToken` the draft was seeded at. A role create, rename or delete
+   * changes the matrix COLUMNS, which a draft seeded before it cannot show —
+   * see this module's header.
+   */
+  readonly seedToken: number;
   readonly rows: PermissionMatrixRow[];
 }
 
@@ -116,6 +145,9 @@ export function useAdminRolesPage(): AdminRolesPageState {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [errorMessage, setErrorMessage] = useState('');
   const [savedMessage, setSavedMessage] = useState('');
+  // Bumped once per successful role-definition write, after its refetch has
+  // settled. See this module's header for why the order matters.
+  const [seedToken, setSeedToken] = useState(0);
 
   const tab = ROLE_TABS[activeTab] ?? ROLE_TABS[0];
   const target = useMemo(
@@ -129,12 +161,17 @@ export function useAdminRolesPage(): AdminRolesPageState {
 
   const serverRows = matrixQuery.data;
 
-  // Seed once per tab. See this module's header: a later refetch must not
-  // discard an edit in progress.
+  // Seed once per tab, and once more per role-definition write. See this
+  // module's header: a background refetch must not discard an edit in progress,
+  // but a change to the COLUMNS is not a background refetch.
   useEffect(() => {
     if (!serverRows) return;
-    setDraft((previous) => (previous?.tabKey === tab.key ? previous : { tabKey: tab.key, rows: [...serverRows] }));
-  }, [serverRows, tab.key]);
+    setDraft((previous) =>
+      previous?.tabKey === tab.key && previous.seedToken === seedToken
+        ? previous
+        : { tabKey: tab.key, seedToken, rows: [...serverRows] },
+    );
+  }, [serverRows, tab.key, seedToken]);
 
   const rows = draft?.tabKey === tab.key ? draft.rows : undefined;
   const isDirty = useMemo(
@@ -150,8 +187,8 @@ export function useAdminRolesPage(): AdminRolesPageState {
   );
 
   const onDiscard = useCallback(() => {
-    if (serverRows) setDraft({ tabKey: tab.key, rows: [...serverRows] });
-  }, [serverRows, tab.key]);
+    if (serverRows) setDraft({ tabKey: tab.key, seedToken, rows: [...serverRows] });
+  }, [serverRows, tab.key, seedToken]);
 
   const reportFailure = useCallback((fallback: string, error: unknown) => {
     setSavedMessage('');
@@ -180,12 +217,29 @@ export function useAdminRolesPage(): AdminRolesPageState {
     });
   }, [syncMatrix, reportFailure]);
 
-  const onTabChange = useCallback((_event: unknown, next: number) => {
-    setActiveTab(next);
-    setSearch('');
+  // The seed token moves ONLY here, and only after a role write has settled —
+  // which, because the three mutations return their invalidation promise from
+  // `onSuccess`, is after the matrix has been re-read with its new columns.
+  const onRoleWritten = useCallback((message: string) => {
     setErrorMessage('');
-    setSavedMessage('');
+    setSeedToken((previous) => previous + 1);
+    setSavedMessage(message);
   }, []);
+  const definitions = useAdminRoleDefinitions(target, onRoleWritten);
+  const { onCloseRoleDialog } = definitions;
+
+  const onTabChange = useCallback(
+    (_event: unknown, next: number) => {
+      setActiveTab(next);
+      setSearch('');
+      setErrorMessage('');
+      setSavedMessage('');
+      // A dialog left open across a tab change would write to the tab the
+      // operator moved away from: the target is read at submit time.
+      onCloseRoleDialog();
+    },
+    [onCloseRoleDialog],
+  );
 
   const canEdit = adminUiShowsControlFor(PERMISSION_ROLES_EDIT);
 
@@ -215,6 +269,14 @@ export function useAdminRolesPage(): AdminRolesPageState {
     // "Apply to Projects" pushes the STANDARD matrix onto shared projects. The
     // server defines it for `administration/default` alone, so offering it on
     // any other tab would be a control with nothing behind it.
+    //
+    // It is ALSO how a newly created standard role reaches projects that
+    // already exist: `AdminPermissionsSync` cross-joins every central
+    // default-mode role into every in-scope project, so a create followed by
+    // this button is the whole propagation path (gap G9). No second control
+    // was invented for it.
     onApplyToProjects: canEdit && tab.key === 'standard' ? onApply : undefined,
+
+    ...definitions,
   };
 }

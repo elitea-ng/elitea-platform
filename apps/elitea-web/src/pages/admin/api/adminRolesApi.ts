@@ -147,3 +147,103 @@ export function useSyncPermissionMatrix(): UseMutationResult<void, Error, void> 
     onSuccess: () => queryClient.invalidateQueries({ queryKey: adminRolesKeys.all }),
   });
 }
+
+/* ── role DEFINITIONS: create, rename, delete (gap G9) ─────────────────── */
+
+/**
+ * `POST | PUT | DELETE /admin/roles/{scope}/{targetMode}`.
+ *
+ * The matrix above edits the CELLS of a table whose columns already exist.
+ * These three change the columns themselves. pylon has had them all along
+ * (`legacy/plugins/admin/api/v2/roles.py`); Go had only the two GET listings, so
+ * a deployment that wanted a `security_reviewer` role had to INSERT it by hand,
+ * and a hand-inserted role reached projects created afterwards and no existing
+ * one.
+ *
+ * They take the SAME `{scope}/{targetMode}` pair the matrix does, because a role
+ * belongs to exactly one of this page's four tabs. The bodies are pylon's:
+ * `{name}` for create and delete, `{name, new_name}` for the rename.
+ *
+ * Handwritten, like the matrix calls above and for the same reason: `v2.yaml`
+ * describes `GET /admin/roles/default/{project_id}` — the project role LISTING,
+ * which the app calls through a generated hook — and none of the
+ * `{scope}/{mode}` admin-panel routes. Describing these three would put them in
+ * a spec whose siblings on the same page are absent from it, so they follow the
+ * convention this module already states in its header.
+ *
+ * Each returns the invalidation promise from `onSuccess`, so the mutation does
+ * not settle until the matrix has been re-read. `useAdminRolesPage` re-seeds its
+ * draft on that settlement; without the await it would re-seed from the matrix
+ * that still lacks the new column.
+ */
+function roleDefinitionUrl(target: PermissionMatrixTarget): string {
+  return `/admin/roles/${target.scope}/${target.targetMode}`;
+}
+
+export interface RoleCreateVariables {
+  readonly target: PermissionMatrixTarget;
+  readonly name: string;
+}
+
+export interface RoleRenameVariables {
+  readonly target: PermissionMatrixTarget;
+  readonly name: string;
+  readonly newName: string;
+}
+
+export interface RoleDeleteVariables {
+  readonly target: PermissionMatrixTarget;
+  readonly name: string;
+}
+
+export function useCreateRole(): UseMutationResult<void, Error, RoleCreateVariables> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ target, name }: RoleCreateVariables) => {
+      await eliteaFetch<unknown>(roleDefinitionUrl(target), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: adminRolesKeys.all }),
+  });
+}
+
+export function useRenameRole(): UseMutationResult<void, Error, RoleRenameVariables> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ target, name, newName }: RoleRenameVariables) => {
+      await eliteaFetch<unknown>(roleDefinitionUrl(target), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, new_name: newName }),
+      });
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: adminRolesKeys.all }),
+  });
+}
+
+/**
+ * The name travels in the BODY, which is what pylon's client sends and what the
+ * Go handler reads first, AND in the query string. A DELETE body is legal but is
+ * dropped by enough intermediaries that a delete which silently became "no name
+ * given" is a real failure mode; the server prefers the body and falls back to
+ * `?name=`.
+ */
+export function useDeleteRole(): UseMutationResult<void, Error, RoleDeleteVariables> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ target, name }: RoleDeleteVariables) => {
+      await eliteaFetch<unknown>(
+        `${roleDefinitionUrl(target)}?name=${encodeURIComponent(name)}`,
+        {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name }),
+        },
+      );
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: adminRolesKeys.all }),
+  });
+}

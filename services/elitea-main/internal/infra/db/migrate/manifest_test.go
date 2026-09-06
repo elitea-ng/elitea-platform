@@ -354,7 +354,24 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// white-labeling is net-new, so the legacy catalogue has no string for
 	// it. A new file for 0082's reason — 0060 returns early on any configured
 	// deployment, and migrations are checksum-immutable.
-	require.EqualValues(t, 110, Head(shared))
+	//
+	// 111: shared/0111_role_definition_permissions.sql, the three
+	// administration-mode grants behind role create, rename and delete (gap
+	// G9): `configuration.roles.roles.create`, `.edit` and `.delete` to
+	// super_admin, admin and system.
+	//
+	// Recovered rather than chosen, unlike 106, 108 and 110: all three strings
+	// are the `permissions` lists of legacy/plugins/admin/api/v2/roles.py, and
+	// all three are already in testdata/postgres/legacy-rbac-matrix.json's
+	// catalogue. 0068 and 0085 granted the fourth string of that group,
+	// `.view`, and left the three writes to no migration at all — which is the
+	// exact shape router_permission_grant_gate_test.go was written for. The
+	// routes that need them ship in the same change, so the gate never sees a
+	// window in which they are ungranted.
+	//
+	// A new file for 0110's reason: 0060 returns early on any configured
+	// deployment, and migrations are checksum-immutable.
+	require.EqualValues(t, 111, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
