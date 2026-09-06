@@ -37,6 +37,22 @@
 /services/elitea-main/elitea-main
 /services/elitea-main/cutover-ctl
 /services/elitea-scheduler/elitea-scheduler
+/services/elitea-llm-gateway/elitea-llm-gateway
+
+# ── elitea-llm-gateway: rules its own .dockerignore used to carry ────────────
+# That module built from its OWN directory as the context, so
+# services/elitea-llm-gateway/.dockerignore governed it. The context is the
+# repository root now (the module replaces libs/go/egresslib with
+# ../../libs/go/egresslib), and a build reads the .dockerignore beside the
+# CONTEXT ROOT only — the module's file is no longer consulted at all. Its
+# rules move here rather than lapsing silently.
+#
+# `.env` is the one that matters: a developer's local file would otherwise
+# enter the build context and land in a builder layer, and builder layers go
+# to the `type=gha` cache.
+/services/elitea-llm-gateway/.env
+/services/elitea-llm-gateway/.env.*
+/services/elitea-llm-gateway/vendor
 
 # ── Go test / coverage output ─────────────────────────────────────────────────
 coverage.out

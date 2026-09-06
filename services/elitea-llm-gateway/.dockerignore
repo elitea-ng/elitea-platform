@@ -1,3 +1,16 @@
+# NOT CONSULTED ANY MORE. Read the repository root's .dockerignore instead.
+#
+# A build reads the .dockerignore beside the CONTEXT ROOT, and this module's
+# build context moved to the repository root: the module replaces
+# libs/go/egresslib with ../../libs/go/egresslib, which a module-only context
+# cannot reach. Every rule below is now carried by /.dockerignore, under
+# "elitea-llm-gateway". Add a new rule THERE.
+#
+# The file stays so that a `podman build ... services/elitea-llm-gateway` run
+# by hand behaves as it always did. That build cannot succeed today — it fails
+# on the missing replacement — but a deleted ignore file is a rule that lapses
+# without a trace, which is the failure this whole change is about.
+#
 # compiled binary (built inside the image, never copied from host)
 elitea-llm-gateway
 
