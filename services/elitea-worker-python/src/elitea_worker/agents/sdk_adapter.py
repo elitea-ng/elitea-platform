@@ -312,6 +312,33 @@ def verify_sdk_markdown_runtime(sentinel: str) -> None:
         raise RuntimeError("markdown-output-mismatch")
 
 
+def _secrets_header_kwargs(context: EliteaClientContext) -> dict[str, str]:
+    """The X-SECRET argument for one SDK client, or no argument at all.
+
+    THE SDK DEFAULTS THIS HEADER TO THE LITERAL "secret"
+    (``elitea_sdk/runtime/clients/client.py``, ``kwargs.get('XSECRET',
+    'secret')``), and every project used to accept that literal because pylon
+    read ``secrets.get("secrets_header_value", "secret")``. The platform no
+    longer accepts it (issue 408), so a call that carries the project's own
+    value is the only call the version-details route answers.
+
+    ``XSECRET`` is the argument, NOT ``api_extra_headers``. Both put the value
+    in the client's platform headers, but ``api_extra_headers`` is also copied
+    onto the MODEL call as ``default_headers``, and on one branch it replaces
+    that header map entirely (``client.py``, the openai-compatible path). The
+    value authenticates one platform route, so it goes only where that route
+    reads it.
+
+    An empty value adds NO argument. The SDK then sends its literal, the
+    platform answers 403, and the operator sees one refusal that names the
+    repair — which is better than a header this worker made up.
+    """
+
+    if not context.secrets_header_value:
+        return {}
+    return {"XSECRET": context.secrets_header_value}
+
+
 class EliteaSdkIndexingAdapter:
     """Pinned adapter for the current ``index_data`` SDK entrypoint.
 
@@ -338,6 +365,7 @@ class EliteaSdkIndexingAdapter:
             project_id=context.project_id,
             base_url=context.base_url,
             auth_token=context.auth_token,
+            **_secrets_header_kwargs(context),
         )
         return cls(client)
 
@@ -417,6 +445,7 @@ class EliteaSdkAgentAdapter:
             project_id=context.project_id,
             base_url=context.base_url,
             auth_token=context.auth_token,
+            **_secrets_header_kwargs(context),
         )
         return cls(
             client,

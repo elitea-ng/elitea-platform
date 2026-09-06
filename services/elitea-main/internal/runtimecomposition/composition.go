@@ -9,6 +9,7 @@ import (
 
 	executionapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/executions"
 	indexingapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indexing"
+	secretsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/secrets"
 	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
 	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
@@ -907,18 +908,26 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	}
 	var runtimeToken *storage.EliteaClientTokenService
 	if config.IndexIngestDispatchEnabled || config.AgentExecutionDispatchEnabled {
+		// projectSecretsHeader is what stops the SDK sending the literal
+		// "secret" (#408). The worker asks for it with its bearer token and
+		// puts it on every call it makes back to this service, so the
+		// version-details route can refuse a project that has no value instead
+		// of accepting a value printed in the pylon source.
+		projectSecretsHeader := secretsapi.NewHandler(dependencies.ContentPool)
 		if projectSystemTokens != nil {
 			runtimeToken, err = storage.NewEliteaClientTokenServiceWithSchedules(
 				contentRepository,
 				dependencies.ActorTokenIssuer,
 				projectSystemTokens,
 				dependencies.ProjectTokenValidator,
+				projectSecretsHeader,
 			)
 		} else {
 			runtimeToken, err = storage.NewEliteaClientTokenService(
 				contentRepository,
 				dependencies.ActorTokenIssuer,
 				dependencies.ProjectTokenValidator,
+				projectSecretsHeader,
 			)
 		}
 		if err != nil {

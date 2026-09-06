@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/applications"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/secrets"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
@@ -927,10 +928,19 @@ func TestHandlerPostgres_ExpandedVersionDetailCarriesTheStoredTags(t *testing.T)
 	}
 
 	// The expanded read is the SDK's, and it checks X-SECRET against the
-	// project vault. This project has no vault, so pylon's own default
-	// value applies (see TestVersionPatchFallsBackToThePylonDefaultSecret).
+	// project vault. The project therefore needs the value provisioning writes
+	// for it: the literal "secret" is refused now (#408, see
+	// TestVersionPatchRefusesAProjectWithNoHeaderValue).
+	const headerValue = "expanded-tags-header-value"
+	storeContext, cancelStore := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancelStore()
+	if err := secrets.NewHandler(pool).StoreSecret(
+		storeContext, nil, "1", "secrets_header_value", headerValue,
+	); err != nil {
+		t.Fatalf("store the project secrets_header_value: %v", err)
+	}
 	request := httptest.NewRequest(http.MethodPatch, versionPath, bytes.NewReader(nil))
-	request.Header.Set("X-SECRET", "secret")
+	request.Header.Set("X-SECRET", headerValue)
 	patchRecorder := httptest.NewRecorder()
 	router.ServeHTTP(patchRecorder, request)
 	if patchRecorder.Code != http.StatusOK {

@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strconv"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
@@ -21,6 +22,7 @@ const (
 	runtimeContextStageSystemPATIssuance = "project_system_pat_issuance"
 	runtimeContextStagePATValidation     = "pat_validation"
 	runtimeContextStagePrincipalBinding  = "principal_binding"
+	runtimeContextStageSecretsHeader     = "project_secrets_header"
 	runtimeContextInitiatorUser          = "user"
 	runtimeContextInitiatorSchedule      = "schedule"
 )
@@ -178,6 +180,35 @@ type EliteaClientTokenContext struct {
 	SchemaVersion string `json:"schema_version"`
 	ProjectID     int64  `json:"project_id"`
 	Token         string `json:"token"`
+	// SecretsHeaderValue is the project's own `X-SECRET` value, which the SDK
+	// client puts on every call it makes back to this service (#408).
+	//
+	// It is `omitempty` for two reasons, and both are load-bearing:
+	//
+	//  1. A worker that does not ASK for it never sees it. The field is served
+	//     only to a request that carries the accept header
+	//     (content_server.go, runtimeContextAcceptHeader), so a worker built
+	//     before this field existed keeps receiving the exact three-key object
+	//     it validates. Both current workers reject an unknown key outright —
+	//     Python compares the key set, Rust uses `deny_unknown_fields` — so an
+	//     unconditional field would fail every token redemption on every worker
+	//     pod that a rolling deploy has not yet replaced.
+	//  2. A project with NO value serves no field. The absence is not silent:
+	//     Resolve logs it, and the version-details route answers 403 with the
+	//     repair. Failing the whole redemption instead would take every agent
+	//     turn on that project down for a fault that costs it sub-agent calls
+	//     alone.
+	SecretsHeaderValue string `json:"secrets_header_value,omitempty"`
+}
+
+// ProjectSecretsHeaderReader reads one project's `secrets_header_value` — the
+// value the SDK must send in `X-SECRET`, and the value
+// api/v2/applications.secretHeaderRefusal compares that header against.
+//
+// The vault holds it under a per-project Fernet key, so this is a real read
+// against the secrets handler and not a lookup the runtime can do itself.
+type ProjectSecretsHeaderReader interface {
+	ResolveProjectSecretsHeaderValue(ctx context.Context, projectID int64) (string, error)
 }
 
 // EliteaClientTokenService materializes the exact bearer identity selected by
@@ -190,20 +221,23 @@ type EliteaClientTokenService struct {
 	actorIssuer   ActorTokenIssuer
 	projectIssuer ProjectSystemTokenIssuer
 	validator     ProjectTokenValidator
+	secretsHeader ProjectSecretsHeaderReader
 }
 
 func NewEliteaClientTokenService(
 	authorizer RuntimeContextAuthorizer,
 	issuer ActorTokenIssuer,
 	validator ProjectTokenValidator,
+	secretsHeader ProjectSecretsHeaderReader,
 ) (*EliteaClientTokenService, error) {
-	if authorizer == nil || issuer == nil || validator == nil {
+	if authorizer == nil || issuer == nil || validator == nil || secretsHeader == nil {
 		return nil, errors.New("runtime context dependencies are required")
 	}
 	return &EliteaClientTokenService{
-		authorizer:  authorizer,
-		actorIssuer: issuer,
-		validator:   validator,
+		authorizer:    authorizer,
+		actorIssuer:   issuer,
+		validator:     validator,
+		secretsHeader: secretsHeader,
 	}, nil
 }
 
@@ -216,8 +250,10 @@ func NewEliteaClientTokenServiceWithSchedules(
 	actorIssuer ActorTokenIssuer,
 	projectIssuer ProjectSystemTokenIssuer,
 	validator ProjectTokenValidator,
+	secretsHeader ProjectSecretsHeaderReader,
 ) (*EliteaClientTokenService, error) {
-	if authorizer == nil || actorIssuer == nil || projectIssuer == nil || validator == nil {
+	if authorizer == nil || actorIssuer == nil || projectIssuer == nil ||
+		validator == nil || secretsHeader == nil {
 		return nil, errors.New("runtime context dependencies are required")
 	}
 	return &EliteaClientTokenService{
@@ -225,6 +261,7 @@ func NewEliteaClientTokenServiceWithSchedules(
 		actorIssuer:   actorIssuer,
 		projectIssuer: projectIssuer,
 		validator:     validator,
+		secretsHeader: secretsHeader,
 	}, nil
 }
 
@@ -288,10 +325,41 @@ func (s *EliteaClientTokenService) Resolve(
 		return EliteaClientTokenContext{}, err
 	}
 	return EliteaClientTokenContext{
-		SchemaVersion: EliteaClientTokenSchemaVersion,
-		ProjectID:     authorization.ResourceProjectID,
-		Token:         token,
+		SchemaVersion:      EliteaClientTokenSchemaVersion,
+		ProjectID:          authorization.ResourceProjectID,
+		Token:              token,
+		SecretsHeaderValue: s.projectSecretsHeaderValue(ctx, authorization.ResourceProjectID),
 	}, nil
+}
+
+// projectSecretsHeaderValue reads the project's `X-SECRET` value, or reports
+// the empty string when the project has none.
+//
+// IT DOES NOT FAIL THE REDEMPTION. The bearer token above is the identity of
+// the whole execution: with no token nothing can run, so its issuance is a hard
+// dependency. This value is narrower — it authenticates ONE route, the
+// version-details read the SDK's sub-agent toolkit makes. A project whose vault
+// will not open would lose every agent turn if this failed the redemption, and
+// it loses only its sub-agent calls if this returns empty. The route says so
+// with a 403 that names the repair (api/v2/applications, secretHeaderRefusal).
+//
+// The warning is the operator's signal, and it names the project, because a
+// worker that quietly sends no `X-SECRET` looks exactly like a worker that
+// sends the wrong one.
+func (s *EliteaClientTokenService) projectSecretsHeaderValue(
+	ctx context.Context,
+	projectID int64,
+) string {
+	value, err := s.secretsHeader.ResolveProjectSecretsHeaderValue(ctx, projectID)
+	if err != nil || value == "" {
+		slog.WarnContext(ctx,
+			"the project has no X-SECRET value, so the worker cannot authenticate its version details reads",
+			"project_id", projectID,
+			"stage", runtimeContextStageSecretsHeader,
+			"error", err)
+		return ""
+	}
+	return value
 }
 
 func issueProjectSystemToken(

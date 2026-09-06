@@ -39,6 +39,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	v2applications "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/applications"
+	v2secrets "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/secrets"
 	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/skills"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/migrate"
@@ -49,10 +50,14 @@ import (
 const (
 	relationDatabaseURLVariable = "ELITEA_TEST_DATABASE_URL"
 	relationProjectID           = "1"
-	// relationSecretHeader is the value `check_secret_header` accepts when the
-	// project vault holds no secrets_header_value
-	// (internal/api/v2/applications/handler.go:1093-1098).
-	relationSecretHeader = "secret"
+	// relationSecretHeader is the value this fixture seals into the project
+	// vault under `secrets_header_value`.
+	//
+	// It used to be the literal "secret", which the version-details route
+	// accepted on any project whose vault held no value. That fallback is gone
+	// (#408): the route now refuses such a project with 403, so the fixture
+	// must give the project the value provisioning gives a real one.
+	relationSecretHeader = "relation-fixture-header-value"
 )
 
 // relationFixture is one project schema that holds two agent versions, one
@@ -131,6 +136,13 @@ func newRelationFixture(t *testing.T) *relationFixture {
 
 	for _, name := range []string{"Reviewer", "Summarizer", "Translator"} {
 		fixture.seedSkill(t, name, name+" instructions")
+	}
+
+	// The X-SECRET value the version-details read below compares against.
+	if err := v2secrets.NewHandler(pool).StoreSecret(
+		ctx, nil, relationProjectID, "secrets_header_value", relationSecretHeader,
+	); err != nil {
+		t.Fatalf("store the project secrets_header_value: %v", err)
 	}
 
 	appHandler := v2applications.NewHandler(nil, pool)
