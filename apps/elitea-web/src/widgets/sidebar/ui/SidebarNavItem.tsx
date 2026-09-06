@@ -57,6 +57,13 @@ export function SidebarNavItem({ label, icon, to, selected, showLabel }: Sidebar
           '&:hover': { background: theme.vars.palette.background.button.drawerMenu.hover },
           '&.Mui-selected': { background: theme.vars.palette.background.button.drawerMenu.selected },
           '&.Mui-selected:hover': { background: theme.vars.palette.background.button.drawerMenu.hover },
+          // `SidebarMenuItem.jsx`'s `styles.button` paints BOTH the glyph and
+          // the label from the selected flag (`icon.fill.secondary`/
+          // `text.secondary` when current, `text.metrics` otherwise). The port
+          // set neither, so every row — current one included — inherited the
+          // same body colour and the rail showed no selected row at all.
+          '& path': { fill: selected ? theme.vars.palette.icon.fill.secondary : theme.vars.palette.text.metrics },
+          '& span': { color: selected ? theme.vars.palette.text.secondary : theme.vars.palette.text.metrics },
         })}
       >
         <ListItemIcon

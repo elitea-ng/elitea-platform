@@ -23,8 +23,14 @@ describe('PERMISSIONS', () => {
 describe('PERMISSION_GROUPS', () => {
   it('maps each nav group to its gating permission(s)', () => {
     expect(PERMISSION_GROUPS.chat).toEqual([PERMISSIONS.chat.folders.get]);
-    expect(PERMISSION_GROUPS.agents).toEqual([PERMISSIONS.applications.list]);
-    expect(PERMISSION_GROUPS.pipelines).toEqual([PERMISSIONS.pipelines.list]);
+    // BOTH list permissions gate these two rows. The baseline names only the
+    // public-feed one, which the Go RBAC seed grants to nobody — so on a real
+    // install the Agents and Pipelines rows disappeared from the rail while
+    // every neighbour rendered. Production shows all three of
+    // Chats/Agents/Pipelines.
+    expect(PERMISSION_GROUPS.agents).toEqual([PERMISSIONS.applications.list, PERMISSIONS.applications.projectList]);
+    expect(PERMISSION_GROUPS.pipelines).toEqual([PERMISSIONS.pipelines.list, PERMISSIONS.applications.projectList]);
+    expect(PERMISSIONS.applications.projectList).toBe('models.applications.applications.list');
     expect(PERMISSION_GROUPS.credentials).toEqual([PERMISSIONS.toolkits.list]);
     expect(PERMISSION_GROUPS.artifacts).toEqual([PERMISSIONS.artifacts.view]);
     expect(PERMISSION_GROUPS.toolkits).toEqual([PERMISSIONS.toolkits.list]);

@@ -72,11 +72,14 @@ export function RailTagsPanelView({ tags, selectedTags, onToggleTag, onClearTags
   );
 
   return (
-    <Box data-testid="entity-rail-tags">
+    <Box
+      data-testid="entity-rail-tags"
+      sx={panelSx}
+    >
       <Box sx={headerRowSx}>
         <Typography
           component="div"
-          variant="subtitle1"
+          variant="subtitle"
           sx={titleSx}
         >
           {heading}
@@ -150,6 +153,15 @@ export function RailTagsPanel({ projectId, ...viewProps }: RailTagsPanelProps): 
   );
 }
 
+/**
+ * `RightInfoPanel.jsx` gives its column `height: 100dvh` and passes
+ * `Categories` `{flex: 1, minHeight: 0}` — the tag list is what ABSORBS the
+ * rail's free height, which is what leaves the author card sitting on the
+ * bottom edge of the viewport in production. Without it, the card floated
+ * directly under the last chip near the top of the page.
+ */
+const panelSx: SxProps<Theme> = { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' };
+
 const headerRowSx: SxProps<Theme> = (theme: Theme) => ({
   display: 'flex',
   flexDirection: 'row',
@@ -163,6 +175,7 @@ const titleSx: SxProps<Theme> = (theme: Theme) => ({ marginBottom: theme.spacing
 const chipsContainerSx: SxProps<Theme> = (theme: Theme) => ({
   marginBottom: theme.spacing(3),
   minHeight: '5.5em',
+  flex: 1,
   display: 'flex',
   flexWrap: 'wrap',
   gap: theme.spacing(1),

@@ -207,14 +207,32 @@ export function AppShell({ children }: AppShellProps): ReactNode {
 
   return (
     <Box sx={{ display: 'flex' }}>
-      {!hideSidebar && (
-        <Sidebar
-          permissions={permissions}
-          projects={projects}
-          selectedProjectId={selectedProjectId}
-          onSelectProject={selectProject}
-        />
-      )}
+      {/*
+       * The assistant widget wraps the SIDEBAR now, and the reason is the
+       * render prop it has always had: `SidebarBody.jsx` puts a "Support Bot"
+       * hit area in the rail's footer bar whenever a deployment has an
+       * assistant to open, and the only place that `onToggleAssistant` handle
+       * exists is inside this render prop. It used to be called with `() =>
+       * null`, so the footer bar had nothing to render and the rail fell back
+       * to a plain Help Center row on every deployment, enabled or not.
+       *
+       * The widget renders a FRAGMENT — the children plus its own
+       * fixed-position overlay — so both stay direct flex children of this
+       * row exactly as before; nothing about the overlay's placement changes.
+       */}
+      <SupportAssistantWidget project={project ?? undefined}>
+        {({ onToggleAssistant }) =>
+          hideSidebar ? null : (
+            <Sidebar
+              permissions={permissions}
+              projects={projects}
+              selectedProjectId={selectedProjectId}
+              onSelectProject={selectProject}
+              onToggleAssistant={onToggleAssistant}
+            />
+          )
+        }
+      </SupportAssistantWidget>
       <Box
         component="main"
         sx={{
@@ -236,29 +254,6 @@ export function AppShell({ children }: AppShellProps): ReactNode {
         {children}
         <NavBlockerDialog />
       </Box>
-      {/*
-       * The in-app support assistant.
-       *
-       * MOUNTED HERE, OUTSIDE `main`, and last: it is a floating overlay with
-       * its own fixed positioning, so putting it inside the scrolling content
-       * column would scroll the button off the page.
-       *
-       * It renders NOTHING on a deployment that has not enabled it — the
-       * component asks `GET /support_assistant/config` and mounts the overlay
-       * only on `enabled: true`, which the server answers only when an operator
-       * has turned the section on AND chosen a support agent. That check is the
-       * whole reason the widget is mounted unconditionally here rather than
-       * behind a flag read in this file: there is one place that decides, and it
-       * is the one that also knows whether the assistant can actually answer.
-       *
-       * The render-prop child is `null` on purpose. `onToggleAssistant` exists
-       * so a caller can offer its own "ask support" affordance; this shell has
-       * no such affordance to offer, and the assistant's own floating button is
-       * how a user opens it. A future caller — the baseline's
-       * `CredentialWarningBanner`, whose `onMount` was written for exactly this
-       * — reaches the same handle through `useEliteaAssistantRef()`.
-       */}
-      <SupportAssistantWidget project={project ?? undefined}>{() => null}</SupportAssistantWidget>
     </Box>
   );
 }
