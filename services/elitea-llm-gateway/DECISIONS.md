@@ -1211,6 +1211,20 @@ in a release note.**
   pool can exceed 50 ms. The number needs a k6 run on staging
   (`cmd/cutover-ctl/testdata/overhead_loadtest.js`); it cannot be measured from
   a unit test, so the threshold is unchanged for now.
+  **The direction of the error is safe, and that is why this waits for #19
+  rather than blocking it (2026-09-06).** The header is a strict SUPERSET of
+  what it reported before: the same start instant, a later stop instant. An
+  unchanged threshold over a larger measurement can therefore produce a FALSE
+  FAILURE and never a false pass, so the gate cannot sign off a hop it did not
+  measure. `parseK6SummaryForOverhead` already refuses the two ways a run could
+  report a flattering number it did not earn — a summary with no
+  `gateway_overhead_ms` metric, and one whose `gateway_overhead_fallback`
+  counter shows the header never arrived. What remains is a tuning decision on
+  real staging numbers, and it needs a deployed gateway (#19).
+  The measurement itself cannot silently narrow again:
+  `TestElapsedHeaderIsAlwaysFedByAMeter` reads the source and fails a stamp
+  that is not fed by `overhead.Meter.Overhead`, or a handler that stamps the
+  header without attaching a Meter.
 - ~~Set `secrets.*.optional: false` ... for `GATEWAY_IDENTITY_SECRET`~~ — DONE
   2026-08-09 (issue #11, see the Trust-boundary entry above): it is `false` in
   the base chart for both the gateway and elitea-main. `SECRETS_MASTER_KEY`
