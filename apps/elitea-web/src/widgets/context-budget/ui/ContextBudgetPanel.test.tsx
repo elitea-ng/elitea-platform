@@ -4,7 +4,7 @@ import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 
 import type { ContextBudgetStats } from '../lib/contextStatus';
 import { toContextBudgetStats } from '../lib/contextStatus';
-import { ContextBudgetPanel } from './ContextBudgetPanel';
+import { ContextBudgetCollapsed, ContextBudgetPanel } from './ContextBudgetPanel';
 
 const NBSP = '\u00a0';
 
@@ -61,5 +61,41 @@ describe('ContextBudgetPanel', () => {
 
     expect(queryByTestId('context-budget-attention-icon')).toBeNull();
     expect(getByTestId('context-budget-progress').getAttribute('data-percentage')).toBe('9');
+  });
+});
+
+/**
+ * The collapsed rail's own form, which did not exist.
+ *
+ * `ContextBudget` rendered the full card whatever the rail's width, so in the
+ * 3.25rem collapsed rail every line of it wrapped to one word and the card
+ * overflowed past the right edge of the viewport (measured: its children sat
+ * at x=2002 in a 2000px viewport). The production rail shows the percentage
+ * and a short status line there, and nothing else — `ContextBudgetInfo.jsx`'s
+ * `if (collapsed) return <ContextBudgetCollapsed/>` branch.
+ */
+describe('ContextBudgetCollapsed', () => {
+  it('shows only the percentage and the status line', () => {
+    const { getByTestId, queryByTestId } = renderWithTheme(
+      <ContextBudgetCollapsed stats={statsFrom()} />,
+    );
+
+    expect(getByTestId('context-budget-collapsed')).toBeTruthy();
+    expect(getByTestId('context-budget-utilization').textContent).toBe('9%');
+    expect(getByTestId('context-budget-progress').getAttribute('data-percentage')).toBe('9');
+    // None of the card's own rows: no title, no token line, no stat rows.
+    expect(queryByTestId('context-budget-tokens')).toBeNull();
+    expect(queryByTestId('context-budget-stat-messages')).toBeNull();
+    expect(queryByTestId('context-budget-stat-summaries')).toBeNull();
+    expect(queryByTestId('context-budget-stat-strategy')).toBeNull();
+  });
+
+  it('caps the status line at 100% while the label keeps the true figure', () => {
+    const { getByTestId } = renderWithTheme(
+      <ContextBudgetCollapsed stats={statsFrom({ current_tokens: 200000 })} />,
+    );
+
+    expect(getByTestId('context-budget-utilization').textContent).toBe('156%');
+    expect(getByTestId('context-budget-progress').getAttribute('data-percentage')).toBe('100');
   });
 });

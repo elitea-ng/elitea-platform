@@ -132,7 +132,7 @@ const ChatBoxInner = memo(function ChatBox({
   const messages = data.messageList.messages;
 
   // Participant normalisation + details fetch
-  const { participantForEditor, normalisedParticipants, agentEditorParticipantDetails, isFetchingParticipantDetails } = useChatBoxParticipant({
+  const { participantForEditor, normalisedParticipants, agentEditorParticipantDetails, isFetchingParticipantDetails, assistantName } = useChatBoxParticipant({
     activeParticipant,
     conversationParticipants,
   });
@@ -327,7 +327,7 @@ const ChatBoxInner = memo(function ChatBox({
     <Box sx={chatShellSx(isEmptyConversation)}>
       <Box sx={chatColumnSx(isEmptyConversation)}>
         <ChatMessageList
-          emptyState={<ChatEmptyGreeting userName={userName} />}
+          assistantName={assistantName} emptyState={<ChatEmptyGreeting userName={userName} />}
           chatHistory={messages} isStreaming={isStreaming} userId={userId ?? ''} projectId={projectIdString}
           messageActions={{
             onCopyToClipboard: handleCopy,
@@ -364,7 +364,7 @@ const ChatBoxInner = memo(function ChatBox({
           ref={chatInputRef}
           conversationId={conversationId !== undefined ? String(conversationId) : undefined}
           state={{ isLoading: isInputLoading, isStreaming, disabledSend, isCreatingConversation: data.lifecycle.isCreating }}
-          content={{ placeholder: t('widgets.chatBox.inputPlaceholder', 'Type a message...'), clearInputAfterSubmit: true, slashHighlights: state.combinedHighlightRanges }}
+          content={{ placeholder: t('widgets.chatBox.inputPlaceholder', 'Type your message...'), clearInputAfterSubmit: true, slashHighlights: state.combinedHighlightRanges }}
           callbacks={{ onSend: handleSend, onStopGeneration: stopGeneration, onNormalKeyDown: state.onNormalKeyDown, onInputChange: state.onInputChange }}
           agentEditor={buildAgentEditorProps({
             participantForEditor,

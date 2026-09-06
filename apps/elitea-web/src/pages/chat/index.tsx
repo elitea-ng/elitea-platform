@@ -276,10 +276,11 @@ const ChatPage = memo(({ editorCallbacks, entitySubmenus }: ChatPageProps) => {
          * lowest layer allowed to name the widget. `projectId` comes from
          * `useChatPageData`, which already resolves it for `ChatBox`.
          */
-        renderContextBudget={({ conversationId: budgetConversationId }) => (
+        renderContextBudget={({ conversationId: budgetConversationId, collapsed: budgetCollapsed }) => (
           <ContextBudget
             conversationId={activeConversation?.isNew || activeConversation?.isPlayback ? undefined : budgetConversationId}
             projectId={projectId}
+            collapsed={budgetCollapsed ?? false}
           />
         )}
       />

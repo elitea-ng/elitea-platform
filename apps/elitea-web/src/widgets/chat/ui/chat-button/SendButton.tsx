@@ -63,8 +63,36 @@ export interface SendButtonProps {
 
 const voicewaveIconStyle = { width: '1rem', height: '1rem' };
 
-/** Keeps the 0.5 disabled opacity the previous `<span>` markup painted by hand, now that MUI owns the disabled state. */
-const disabledOpacitySx = { '&.Mui-disabled': { opacity: 0.5 } };
+/**
+ * The filled accent disc both composer end-buttons render as.
+ *
+ * Baseline `ComponentsLib/Chat/UserInput.jsx:693-704`'s `styles.sendButton`:
+ * a 1.75rem square filled `primary.main` (`#6ae8fa`), icon in
+ * `icon.fill.send`, `background.button.primary.disabled` when disabled — and
+ * `NewChatInput.jsx:361-365` is what supplies those three values. Measured
+ * live on next.elitea.ai: `28×28`, `border-radius: 50%`,
+ * `background: rgb(106,232,250)`, icon `rgb(14,19,29)`.
+ *
+ * Both controls used to be bare `IconButton`s with only a `color`, so the
+ * composer ended in a flat outline where the production UI has a solid accent
+ * button — the single most visible difference in the whole input row.
+ */
+function accentButtonSx(theme: Theme) {
+  return {
+    width: '1.75rem',
+    height: '1.75rem',
+    padding: 0,
+    borderRadius: theme.vars.shape.radiusPill,
+    backgroundColor: theme.vars.palette.primary.main,
+    color: theme.vars.palette.icon.fill.send,
+    '&:hover': { backgroundColor: theme.vars.palette.primary.main },
+    '&.Mui-disabled': {
+      opacity: 1,
+      backgroundColor: theme.vars.palette.background.button.primary.disabled,
+      color: theme.vars.palette.icon.fill.send,
+    },
+  };
+}
 
 function micTooltipTitle(temporarilyDisabled: boolean): string {
   return temporarilyDisabled
@@ -94,7 +122,7 @@ function SendControl({ tooltip, disabled, onSend }: SendControlProps) {
           disabled={disabled}
           onClick={onSend}
           aria-label={tooltip}
-          sx={{ ...disabledOpacitySx, color: disabled ? 'text.disabled' : 'primary.main' }}
+          sx={accentButtonSx}
         >
           <SendIcon fontSize="small" />
         </IconButton>
@@ -122,7 +150,7 @@ function MicControl({ disabled, temporarilyDisabled, onEnterSpeaking }: MicContr
           disabled={disabled}
           onClick={onEnterSpeaking}
           aria-label={title}
-          sx={{ ...disabledOpacitySx, color: 'text.secondary' }}
+          sx={accentButtonSx}
         >
           <VoicewaveIcon style={voicewaveIconStyle} />
         </IconButton>

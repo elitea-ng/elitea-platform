@@ -181,7 +181,7 @@ describe('ChatPage new-conversation promotion', () => {
     try {
       const router = renderAt('/chat');
       const user = userEvent.setup();
-      const input = await screen.findByPlaceholderText('Type a message...');
+      const input = await screen.findByPlaceholderText('Type your message...');
 
       await user.type(input, 'First turn{Enter}');
       await waitFor(() => expect(router.state.location.pathname).toBe(`/chat/${CONVERSATION}`), { timeout: 5000 });

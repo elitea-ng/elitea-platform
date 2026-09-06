@@ -353,6 +353,7 @@ function useContextBudgetSlot(
     ? (slotProps: Parameters<Parameters<typeof ParticipantsWrapper>[0]['renderContextBudget']>[0]) =>
         renderContextBudget({
           conversationId: slotProps.conversationId ?? _conversationId,
+          collapsed: slotProps.collapsed,
           contextStrategy: slotProps.contextStrategy ?? contextStrategy,
           setActiveConversation: slotProps.setActiveConversation,
           conversationInstructions: slotProps.conversationInstructions ?? conversationInstructions,

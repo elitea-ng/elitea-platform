@@ -359,7 +359,7 @@ export function ParticipantsLayout({
       {/* Context budget slot */}
       {renderContextBudget && (
         <Box sx={styles.contextBudgetWrapper}>
-          {renderContextBudget({ conversationId })}
+          {renderContextBudget({ conversationId, collapsed: header.showCollapsedParticipants })}
         </Box>
       )}
     </Box>
