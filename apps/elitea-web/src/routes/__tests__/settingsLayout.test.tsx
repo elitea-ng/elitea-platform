@@ -89,24 +89,30 @@ describe('settings nested layout', () => {
     });
   });
 
-  it('index redirect: /settings alone lands on model-configuration', async () => {
-    mountAt('/settings');
+  /*
+   * The default tab is General, as it is in the reference
+   * (`pages/settings/index.jsx:130`) and on a live deployment. It used to be
+   * AI Providers here, which is why this assertion used to look for that
+   * tab's "OpenAI Template" control.
+   */
+  it('index redirect: /settings alone lands on project-general', async () => {
+    const router = mountAt('/settings');
 
     await waitFor(() => {
-      expect(screen.getByRole('tab', { name: 'OpenAI Template' })).toBeInTheDocument();
+      expect(router.state.location.pathname).toBe('/settings/project-general');
     });
   });
 
-  it('D4 ROUTE-076 anomaly: an unknown tab is handled by SettingsRedirect which redirects to model-configuration', async () => {
+  it('D4 ROUTE-076 anomaly: an unknown tab is handled by SettingsRedirect which redirects to project-general', async () => {
     const router = mountAt('/settings/this-tab-does-not-exist');
 
     await waitFor(() => {
       // SettingsRedirect fires an async redirect for unknown tabs
-      expect(router.state.location.pathname).toBe('/settings/model-configuration');
+      expect(router.state.location.pathname).toBe('/settings/project-general');
     });
 
     await waitFor(() => {
-      expect(screen.getByRole('tab', { name: 'OpenAI Template' })).toBeInTheDocument();
+      expect(router.state.matches.at(-1)?.routeId).toBe('/_shell/settings/project-general');
     });
   });
   /**

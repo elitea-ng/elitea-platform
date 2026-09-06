@@ -94,7 +94,11 @@ export const projectContextStyles = {
     flexDirection: 'column',
     gap: '1rem',
     width: '100%',
-    maxWidth: '43.75rem',
+    // 46.875rem (750px), the reference's own value in every project-context
+    // view (`ProjectContextEditor.jsx:334`, `ProjectContextSavedView.jsx:201`)
+    // and in `ProjectGeneralContent.jsx`. This app had 43.75rem, so the column
+    // was 50px narrower than production on one tab and correct on none.
+    maxWidth: '46.875rem',
   },
   charCounterWrapper: {
     display: 'flex',

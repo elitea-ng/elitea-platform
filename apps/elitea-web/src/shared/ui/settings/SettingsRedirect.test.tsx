@@ -6,7 +6,7 @@
  * `project-params.tsx`, `model-configuration.tsx`, `analytics.tsx`, ...)
  * never declares a `tab` param, so `tab` was always `undefined` for them and
  * the component fired a `replace: true` navigation back to
- * `/settings/model-configuration` on every fresh mount — direct URL entry,
+ * the default settings tab on every fresh mount — direct URL entry,
  * refresh, bookmark, back/forward, or any deep link straight into a
  * non-default tab.
  *
@@ -63,7 +63,11 @@ import { DEFAULT_BRAND_PACK, DEFAULT_COLOR_SCHEME, buildEliteaTheme } from '@/sh
 
 import { routeTree } from '../../../routeTree.gen';
 import { stubAuthContext } from '@/app/router-context';
-import { computeShouldRedirect } from './SettingsRedirect';
+import {
+  DEFAULT_SETTINGS_TAB,
+  computeRedirectTarget,
+  computeShouldRedirect,
+} from './SettingsRedirect';
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false, throwOnError: true } },
@@ -134,36 +138,72 @@ describe('SettingsRedirect — static leaf routes (mount shape: explicit file, n
 });
 
 describe('SettingsRedirect — settings index (mount shape: no settings child matched yet)', () => {
-  it('still redirects /settings alone to model-configuration, as before', async () => {
+  /*
+   * `project-general`, NOT `model-configuration`. The reference's
+   * `DEFAULT_TAB` is `project-general` (`pages/settings/index.jsx:130`) and a
+   * live deployment lands there: clicking Settings in the nav rail opens
+   * `/app/settings/project-general`. This app used to send every such visit
+   * to AI Providers, so the General tab was unreachable by default even
+   * after it existed.
+   */
+  it('redirects /settings alone to the default tab, project-general', async () => {
     const router = mountAt('/settings');
 
-    await expectSettledAt(router, '/settings/model-configuration');
+    await expectSettledAt(router, '/settings/project-general');
 
-    expect(router.state.matches.at(-1)?.routeId).toBe('/_shell/settings/model-configuration');
+    expect(router.state.matches.at(-1)?.routeId).toBe('/_shell/settings/project-general');
   });
 });
 
 describe('SettingsRedirect — $tab.tsx catch-all (mount shape: only route that ever populates `tab`)', () => {
-  it('still redirects a legacy tab slug (configuration) to model-configuration, as before', async () => {
+  it('redirects a legacy tab slug (configuration) to the default tab', async () => {
     const router = mountAt('/settings/configuration');
 
-    await expectSettledAt(router, '/settings/model-configuration');
+    await expectSettledAt(router, '/settings/project-general');
 
-    expect(router.state.matches.at(-1)?.routeId).toBe('/_shell/settings/model-configuration');
+    expect(router.state.matches.at(-1)?.routeId).toBe('/_shell/settings/project-general');
   });
 
-  it('still redirects the other legacy tab slug (information) to model-configuration, as before', async () => {
+  it('redirects the other legacy tab slug (information) to the default tab', async () => {
     const router = mountAt('/settings/information');
 
-    await expectSettledAt(router, '/settings/model-configuration');
+    await expectSettledAt(router, '/settings/project-general');
   });
 
-  it('still redirects a genuinely unknown tab slug to model-configuration (D4 ROUTE-076), as before', async () => {
-    const router = mountAt('/settings/this-tab-does-not-exist');
+  /*
+   * PRODUCTION'S OWN SLUGS RESOLVE.
+   *
+   * The reference routes AI Providers at `ai-providers` and Project Context
+   * at `project-context`; this app's route files are `model-configuration`
+   * and `project-params`. Before the alias table, a URL copied out of
+   * production fell through to the unknown-tab branch: `project-context`
+   * landed the reader on AI Providers, silently, with no sign anything had
+   * gone wrong. `ai-providers` happened to reach the right screen only
+   * because AI Providers WAS the unknown-tab fallback — an accident that
+   * changing the default tab would have broken.
+   */
+  it("resolves production's `ai-providers` slug to this app's model-configuration route", async () => {
+    const router = mountAt('/settings/ai-providers');
 
     await expectSettledAt(router, '/settings/model-configuration');
 
     expect(router.state.matches.at(-1)?.routeId).toBe('/_shell/settings/model-configuration');
+  });
+
+  it("resolves production's `project-context` slug to this app's project-params route", async () => {
+    const router = mountAt('/settings/project-context');
+
+    await expectSettledAt(router, '/settings/project-params');
+
+    expect(router.state.matches.at(-1)?.routeId).toBe('/_shell/settings/project-params');
+  });
+
+  it('redirects a genuinely unknown tab slug to the default tab (D4 ROUTE-076)', async () => {
+    const router = mountAt('/settings/this-tab-does-not-exist');
+
+    await expectSettledAt(router, '/settings/project-general');
+
+    expect(router.state.matches.at(-1)?.routeId).toBe('/_shell/settings/project-general');
   });
 });
 
@@ -288,5 +328,61 @@ describe('SettingsRedirect — in-flight navigation race (matches not yet promot
     for (const snapshot of fromFirstPossibleMount) {
       expect(snapshot.shouldRedirect).toBe(false);
     }
+  });
+});
+
+/**
+ * `computeRedirectTarget` is the pure half — the router-free view of the same
+ * decision the mounted tests above exercise. It is worth its own cases
+ * because the alias table lives in it, and an alias that resolves to the
+ * WRONG screen is invisible in a mounted test that only checks "did we
+ * redirect".
+ */
+describe('computeRedirectTarget (pure)', () => {
+  /* A hand-built RouterState slice. `computeRedirectTarget` reads exactly two
+   * fields, `isLoading` and `matches`; building the real 20-parameter generic
+   * would say nothing more about the behaviour under test. */
+  type StateSlice = Parameters<typeof computeRedirectTarget>[0];
+  const settled = (routeId: string, params: Record<string, string> = {}): StateSlice =>
+    ({ isLoading: false, matches: [{ routeId, params }] }) as unknown as StateSlice;
+
+  it('says nothing while a navigation is still in flight', () => {
+    expect(
+      computeRedirectTarget({ isLoading: true, matches: [] } as unknown as StateSlice),
+    ).toBeUndefined();
+  });
+
+  it('leaves an explicitly-declared settings child alone', () => {
+    expect(computeRedirectTarget(settled('/_shell/settings/secrets'))).toBeUndefined();
+    expect(computeRedirectTarget(settled('/_shell/settings/project-general'))).toBeUndefined();
+  });
+
+  it('sends the layout route itself, and a missing tab param, to the default tab', () => {
+    expect(computeRedirectTarget(settled('/_shell/settings'))).toBe(DEFAULT_SETTINGS_TAB);
+    expect(computeRedirectTarget(settled('/_shell/settings/$tab'))).toBe(DEFAULT_SETTINGS_TAB);
+  });
+
+  it("maps production's slugs onto this app's route names", () => {
+    // The whole point of the table: a URL copied out of next.elitea.ai has to
+    // reach the screen it named, not the unknown-tab fallback.
+    expect(computeRedirectTarget(settled('/_shell/settings/$tab', { tab: 'ai-providers' }))).toBe(
+      'model-configuration',
+    );
+    expect(computeRedirectTarget(settled('/_shell/settings/$tab', { tab: 'project-context' }))).toBe(
+      'project-params',
+    );
+  });
+
+  it('sends legacy and unknown slugs to the default tab', () => {
+    for (const tab of ['configuration', 'information', 'this-tab-does-not-exist']) {
+      expect(computeRedirectTarget(settled('/_shell/settings/$tab', { tab }))).toBe(
+        DEFAULT_SETTINGS_TAB,
+      );
+    }
+  });
+
+  it('agrees with the boolean form it backs', () => {
+    expect(computeShouldRedirect(settled('/_shell/settings/secrets'))).toBe(false);
+    expect(computeShouldRedirect(settled('/_shell/settings/$tab', { tab: 'ai-providers' }))).toBe(true);
   });
 });

@@ -57,6 +57,7 @@
   "/settings/personalization",
   "/settings/preferences",
   "/settings/profile",
+  "/settings/project-general",
   "/settings/project-params",
   "/settings/prompts",
   "/settings/secrets",

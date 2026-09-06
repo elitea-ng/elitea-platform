@@ -247,7 +247,37 @@ const ROUTES: readonly VisualRoute[] = [
     // loading branch returns the spinner, the error branch returns a banner,
     // and the no-view-permission branch returns a different banner still.
     // Re-measured under the corrected method: loaded YES, stalled no.
-    landmark: (page) => page.getByTestId('project-context-body'),
+    //
+    // TWO LANDMARKS, because the tab now has two resolved screens. Production
+    // shows a centred "Still no Project Context" invitation for a project with
+    // nothing saved and the editor for one that has content; this app grew the
+    // first of those in the settings-parity pass. On THIS stack the seed
+    // creates no project context, so the empty state is what renders and a
+    // `project-context-body`-only landmark would wait for an element that is
+    // never coming — the loud half of the failure class the note above
+    // describes, but a wait we can simply spell correctly instead. Both ids
+    // exist only on a settled query, so neither can photograph the spinner.
+    //
+    // THE BASELINE PNG MUST BE REGENERATED with this change: the screen goes
+    // from the toggle card + editor to the centred empty state.
+    landmark: (page) =>
+      page.getByTestId('project-context-body').or(page.getByTestId('project-context-empty-state')),
+  },
+  {
+    // @covers /settings/project-general
+    name: 'settings-project-general',
+    path: '/app/settings/project-general',
+    // NEW SCREEN — the PROJECT section's first tab and the one `/settings`
+    // itself opens on. It had no route here at all before the settings-parity
+    // pass, so it has no baseline yet; the first run records one.
+    //
+    // `project-general-body` is the page's own root and is rendered
+    // unconditionally, so on its own it would be satisfied while the three
+    // accordions are still empty. The landmark is therefore the AVATAR ROW's
+    // teammate count inside the General accordion, which `ProjectParamsHeader`
+    // draws only once `useProjectInfoQuery` has answered — the one part of
+    // this page that is genuinely asynchronous.
+    landmark: (page) => page.getByTestId('project-general-body').getByText('Teammates:'),
   },
 
   // ── Routes re-classified to `wired` in this change ────────────────────────

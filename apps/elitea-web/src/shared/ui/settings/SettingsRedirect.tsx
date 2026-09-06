@@ -5,6 +5,7 @@ import type { RegisteredRouter, RouterState } from '@tanstack/react-router';
 
 /** Tab identifiers that have explicit files in `routes/_shell/settings/`. */
 const VALID_TABS = [
+  'project-general',
   'model-configuration',
   'prompts',
   'environment',
@@ -22,8 +23,36 @@ const VALID_TABS = [
   'notifications',
 ] as const;
 
-/** Old tabs that mapped to `model-configuration` in the original app. */
+/** Old tabs that mapped to the default tab in the original app. */
 const LEGACY_TABS = ['configuration', 'information'] as const;
+
+/**
+ * The tab `/settings` itself opens on. The reference's `DEFAULT_TAB`
+ * (`pages/settings/index.jsx:130`) is `project-general`, and a live
+ * deployment confirms it: clicking "Settings" in the nav rail lands on
+ * `/app/settings/project-general`. This app sent every such visit to
+ * `model-configuration` instead.
+ */
+export const DEFAULT_SETTINGS_TAB = 'project-general';
+
+/**
+ * PRODUCTION URL SLUGS THAT THIS APP NAMES DIFFERENTLY.
+ *
+ * The reference routes AI Providers at `ai-providers` and Project Context at
+ * `project-context` (`VALID_TABS`, `pages/settings/index.jsx:29-45`). This
+ * app's route files are named `model-configuration.tsx` and
+ * `project-params.tsx`, and renaming them would break every bookmark THIS
+ * app has already handed out. Both names therefore resolve: a request for a
+ * reference slug is redirected to the local route that serves it.
+ *
+ * Without this, `/settings/project-context` — a URL a user can copy straight
+ * out of production — fell through `$tab.tsx` to the unknown-tab branch and
+ * silently landed on AI Providers.
+ */
+const SLUG_ALIASES: Readonly<Record<string, string>> = {
+  'ai-providers': 'model-configuration',
+  'project-context': 'project-params',
+};
 
 /**
  * Route id of the `/settings/:tab` catch-all (`$tab.tsx`) — the ONLY
@@ -105,18 +134,30 @@ const SETTINGS_ROUTE_ID = '/_shell/settings';
  * exercised directly against synthetic/real `RouterState` snapshots — see
  * `SettingsRedirect.test.tsx`.
  */
-export function computeShouldRedirect(state: RouterState<RegisteredRouter['routeTree']>): boolean {
-  if (state.isLoading) return false;
+export function computeRedirectTarget(
+  state: RouterState<RegisteredRouter['routeTree']>,
+): string | undefined {
+  if (state.isLoading) return undefined;
 
   const leaf = state.matches.at(-1);
-  if (!leaf || leaf.routeId === SETTINGS_ROUTE_ID) return true;
-  if (leaf.routeId !== TAB_CATCH_ALL_ROUTE_ID) return false;
+  if (!leaf || leaf.routeId === SETTINGS_ROUTE_ID) return DEFAULT_SETTINGS_TAB;
+  if (leaf.routeId !== TAB_CATCH_ALL_ROUTE_ID) return undefined;
 
   const { tab } = leaf.params;
-  if (!tab) return true;
-  if (LEGACY_TABS.includes(tab as (typeof LEGACY_TABS)[number])) return true;
-  if (!VALID_TABS.includes(tab as (typeof VALID_TABS)[number])) return true;
-  return false;
+  if (!tab) return DEFAULT_SETTINGS_TAB;
+  const alias = SLUG_ALIASES[tab];
+  if (alias) return alias;
+  if (LEGACY_TABS.includes(tab as (typeof LEGACY_TABS)[number])) return DEFAULT_SETTINGS_TAB;
+  if (!VALID_TABS.includes(tab as (typeof VALID_TABS)[number])) return DEFAULT_SETTINGS_TAB;
+  return undefined;
+}
+
+/**
+ * Back-compatible boolean form of {@link computeRedirectTarget}, kept because
+ * it is the shape the existing race-condition tests assert against.
+ */
+export function computeShouldRedirect(state: RouterState<RegisteredRouter['routeTree']>): boolean {
+  return computeRedirectTarget(state) !== undefined;
 }
 
 /**
@@ -149,14 +190,14 @@ export function computeShouldRedirect(state: RouterState<RegisteredRouter['route
 export function SettingsRedirect() {
   const navigate = useNavigate();
 
-  const shouldRedirect = useRouterState({ select: computeShouldRedirect });
+  const target = useRouterState({ select: computeRedirectTarget });
 
   useEffect(() => {
-    if (shouldRedirect) {
+    if (target) {
       // oxlint-disable-next-line typescript/no-floating-promises -- navigate() returns Promise<void>; we fire-and-forget.
-      void navigate({ to: '/settings/model-configuration', replace: true });
+      void navigate({ to: '/settings/$tab', params: { tab: target }, replace: true });
     }
-  }, [navigate, shouldRedirect]);
+  }, [navigate, target]);
 
   return null;
 }

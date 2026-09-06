@@ -25,21 +25,25 @@ import CircularProgress from '@mui/material/CircularProgress';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 
 import { BannerMessage } from '@/shared/ui/BannerMessage';
-import { projectContextFeature, type SelectedProjectIcon } from '@/features/settings';
+import { projectContextFeature } from '@/features/settings';
 import { DrawerPage } from '@/shared/ui/settings/DrawerPage';
+import { DrawerPageHeader } from '@/shared/ui/settings/DrawerPageHeader';
 import { t } from '@/shared/i18n';
 import {
   updateProjectContext,
   useGetProjectContext,
 } from '@/shared/api/generated/applications/applications';
-import {
-  useUpdateProjectInfoMutation,
-} from '@/entities/project';
 import { PERMISSIONS } from '@/shared/lib/permissions';
 import { usePermissionSet } from '@/widgets/sidebar';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-const { ProjectContextBody, ProjectContextToasts, projectContextStyles } = projectContextFeature;
+const {
+  ProjectContextBody,
+  ProjectContextEmptyState,
+  ProjectContextToasts,
+  hasSavedProjectContext,
+  projectContextStyles,
+} = projectContextFeature;
 
 /* ── constants ─────────────────────────────────────────────────────────── */
 
@@ -119,8 +123,6 @@ export function ProjectContext({
     },
   } as { mutateAsync: (args: { content: string; enabled: boolean }) => Promise<unknown> });
 
-  const updateProjectInfoMutation = useUpdateProjectInfoMutation(projectId);
-
   /* ── local state ────────────────────────────────────────────────── */
 
   const [isSaving, setIsSaving] = useState(false);
@@ -131,6 +133,19 @@ export function ProjectContext({
   const [enabled, setEnabled] = useState(true);
   const [mode, setMode] = useState<'edit' | 'preview'>('edit');
   const [isDirty, setIsDirty] = useState(false);
+  /*
+   * THE EMPTY STATE IS A SCREEN, NOT A PLACEHOLDER INSIDE THE EDITOR.
+   *
+   * The reference splits this tab in two (`ProjectContextContent.jsx`): a
+   * project with saved content gets the editor, a project without gets a
+   * centred invitation, and "Create" / "Build with AI" route to the editor.
+   * That router hop has no equivalent here — this app serves the whole tab
+   * from one route — so the same two-screen shape is held in state. It starts
+   * false on every mount, which is what makes the empty state the DEFAULT for
+   * a project with nothing saved, exactly as production behaves.
+   */
+  const [isEditing, setIsEditing] = useState(false);
+  const [openAiOnMount, setOpenAiOnMount] = useState(false);
 
   /* ── server data ────────────────────────────────────────────────── */
 
@@ -203,6 +218,15 @@ export function ProjectContext({
     setIsDirty(false);
   }, [isProjectContext, serverData]);
 
+  const handleCreate = useCallback(() => {
+    setIsEditing(true);
+  }, []);
+
+  const handleBuildWithAi = useCallback(() => {
+    setIsEditing(true);
+    setOpenAiOnMount(true);
+  }, []);
+
   const handleAIGenerated = useCallback((generatedContent: string) => {
     setContent(generatedContent);
     setIsDirty(true);
@@ -217,20 +241,6 @@ export function ProjectContext({
   const handleImportClick = useCallback(() => {
     fileInputRef.current?.click();
   }, []);
-
-  // The `url` travels with the `name`. Sending the name alone stored an
-  // icon_meta the header could not draw — it renders `icon_meta.url` and has no
-  // way to resolve a name into an image (see SelectedProjectIcon).
-  const handleIconChange = useCallback(async (icon: SelectedProjectIcon | null) => {
-    try {
-      await updateProjectInfoMutation.mutateAsync(
-        icon ? { name: icon.name, url: icon.url ?? null } : null,
-      );
-    } catch {
-      // Icon persistence error — not fatal, but worth noting
-      console.error(t('entities.projectContext.content.iconSaveFailed', 'Failed to save icon'));
-    }
-  }, [updateProjectInfoMutation]);
 
   const handleCloseErrorToast = useCallback(() => setShowErrorToast(false), []);
   const handleCloseSaveToast = useCallback(() => setShowSaveToast(false), []);
@@ -293,15 +303,38 @@ export function ProjectContext({
     );
   }
 
+  /*
+   * THE EMPTY STATE — the branch this port never had. See
+   * `features/settings/lib/project-context/hasSavedContent.ts` for why the
+   * test reads the SERVER's content and not the editor's buffer.
+   */
+  if (!hasSavedProjectContext(serverData) && !isEditing) {
+    return (
+      <Box sx={s.root}>
+        <DrawerPage>
+          <DrawerPageHeader
+            title={t('entities.projectContext.content.title', 'Project Context')}
+            showBorder
+          />
+          <ProjectContextEmptyState
+            canEdit={canEdit}
+            onCreate={handleCreate}
+            onBuildWithAi={handleBuildWithAi}
+          />
+        </DrawerPage>
+      </Box>
+    );
+  }
+
   return (
     <>
       <ProjectContextBody
         project={{ projectId, projectName }}
         pageState={{ enabled, showReadOnlyBanner, showDisabledBanner, showEditorContent, content, mode }}
-        editorState={{ isEditorFocused, showEditorControls, canEdit, isDirty, isSaving }}
+        editorState={{ isEditorFocused, showEditorControls, canEdit, isDirty, isSaving, openAiOnMount }}
         contentActions={{ handleToggle, handleContentChange, handleModeChange, handleAIGenerated }}
         editorActions={{ handleEditorBlur, onFocus: () => setIsEditorFocused(true), onImportClick: handleImportClick }}
-        saveActions={{ handleIconChange, handleSave, handleDiscard }}
+        saveActions={{ handleSave, handleDiscard }}
       />
       <input
         ref={fileInputRef}
