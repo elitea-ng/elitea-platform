@@ -171,10 +171,10 @@ type EliteaAccount struct {
 	// rejected by the self-referential guard.
 	selfOrigins map[string]struct{}
 
-	// egress is the operator's allowlist for tenant-authored api_base hosts
-	// (issue #13). Never nil after New; `configured()` reports whether the
-	// operator supplied any entry.
-	egress *egressAllowlist
+	// egress is the merged allowlist for tenant-authored api_base hosts: the
+	// GATEWAY_EGRESS_ALLOWLIST floor UNION the authored `egress_allowlist`
+	// governance rows (issues #13, G6). Never nil after New.
+	egress *egressGate
 
 	// publicProjectID is the platform's shared project (issue #316). Empty
 	// disables the shared scope. It is operator configuration and is never
@@ -206,14 +206,21 @@ type Config struct {
 	// SELF_REFERENTIAL_CREDENTIAL. Values are normalised (scheme+host+path,
 	// trailing slash stripped) before comparison.
 	SelfOrigins []string
-	// EgressAllowlist enumerates the hosts a tenant-authored credential
-	// api_base may name: `host`, `host:port`, `*.domain`, `*.domain:port`
-	// (issue #13, GATEWAY_EGRESS_ALLOWLIST). Empty leaves api_base hosts
-	// unrestricted AND keeps bifrost's SSRF-safe dialer on for every provider,
-	// so no tenant can reach a private address. Non-empty restricts api_base to
-	// these hosts and, for the self-hosted classes only, permits private
-	// destinations. See egress.go for why this is a NAME allowlist.
+	// EgressAllowlist is the operator's BOOTSTRAP FLOOR for the hosts a
+	// tenant-authored credential api_base may name: `host`, `host:port`,
+	// `*.domain`, `*.domain:port` or a CIDR block (issue #13,
+	// GATEWAY_EGRESS_ALLOWLIST). A malformed entry fails construction.
+	//
+	// It is a floor, not the whole policy. EgressSource supplies the rows an
+	// admin authors at runtime, and the gate enforces the UNION. See egress.go.
 	EgressAllowlist []string
+	// EgressSource is the runtime half of the allowlist: the compiled
+	// `egress_allowlist` governance rows. nil leaves the gate on the
+	// environment floor alone, which is the posture of a gateway with no
+	// governance store. It can also be bound after construction with
+	// SetEgressSource, because the policy store is built later than the
+	// account.
+	EgressSource EgressSource
 	// PublicProjectID is the platform's shared ("public") project id as a
 	// decimal string (ELITEA_AI_PROJECT_ID). When set, GetKeysForProvider also
 	// returns that project's `shared = true` credentials, so a platform-published
@@ -256,7 +263,7 @@ func New(cfg Config) (*EliteaAccount, error) {
 			origins[n] = struct{}{}
 		}
 	}
-	egress, err := newEgressAllowlist(cfg.EgressAllowlist)
+	egress, err := newEgressGate(cfg.EgressAllowlist, cfg.EgressSource, logger)
 	if err != nil {
 		return nil, fmt.Errorf("account: %w", err)
 	}
@@ -280,11 +287,41 @@ func New(cfg Config) (*EliteaAccount, error) {
 	}, nil
 }
 
-// EgressAllowlistConfigured reports whether an operator egress allowlist is in
-// force. main() logs this at startup: the two policy modes differ in whether a
-// tenant can reach a private network at all, and an operator must be able to
-// see which one is armed without reading the code (issue #13).
+// SetEgressSource binds the runtime allowlist plane after construction.
+//
+// The account is a hard dependency of the bifrost client and is built first;
+// the policy store is optional and is built later. Rather than reorder two
+// independent lifecycles, main() calls this once the store exists, before the
+// listener opens.
+func (a *EliteaAccount) SetEgressSource(source EgressSource) {
+	if a == nil {
+		return
+	}
+	a.egress.SetSource(source)
+}
+
+// EgressAllowlistConfigured reports whether an egress allowlist is in force,
+// from either source. main() logs this at startup: the two policy modes differ
+// in whether a tenant-authored api_base host is restricted at all, and an
+// operator must be able to see which one is armed without reading the code
+// (issue #13).
 func (a *EliteaAccount) EgressAllowlistConfigured() bool { return a.egress.configured() }
+
+// EgressPrivateNetworkAllowed reports whether the merged allowlist EXPLICITLY
+// names a private destination, which is what relaxes bifrost's SSRF-safe dialer
+// for the self-hosted provider classes.
+//
+// It is deliberately not the same question as EgressAllowlistConfigured. An
+// allowlist naming only public SaaS hosts restricts api_base and grants no
+// private reachability at all; conflating the two is what made a private
+// on-premise endpoint impossible to reach without also widening the dialer for
+// destinations nobody named.
+func (a *EliteaAccount) EgressPrivateNetworkAllowed() bool {
+	if a == nil {
+		return false
+	}
+	return a.egress.allowsPrivateNetwork()
+}
 
 // EgressAllows reports whether apiBase may be dialled under the operator's
 // configured egress allowlist. It exposes the identical decision
@@ -331,19 +368,33 @@ func (a *EliteaAccount) GetConfigForProvider(provider schemas.ModelProvider) (*s
 	// ISSUE #13: that carve-out used to be unconditional, and the URL those
 	// classes dial is TENANT-AUTHORED — any user who could author a credential
 	// row could make the gateway open a connection to any address the pod can
-	// reach. The exemption is now gated on the operator having enumerated the
-	// legitimate destinations in GATEWAY_EGRESS_ALLOWLIST; GetKeysForProvider
-	// refuses every credential whose api_base is not on that list, so the only
-	// private addresses reachable are ones an operator named. With no
-	// allowlist the dialer's guard stays on for EVERY provider and no tenant
-	// can steer the gateway into the cluster at all.
+	// reach. The exemption is gated on the operator having enumerated the
+	// legitimate destinations; GetKeysForProvider refuses every credential
+	// whose api_base is not on that list, so the only private addresses
+	// reachable are ones an operator named.
+	//
+	// GAP G6: the gate used to be "is ANY allowlist configured", and that read
+	// the wrong signal in both directions at once. An allowlist naming only
+	// public SaaS hosts relaxed the dialer for the whole private network, while
+	// an operator who wanted one private vLLM had to edit the chart and restart
+	// the pod. The gate is now "does an entry EXPLICITLY name a private host or
+	// CIDR" — see egresslib.AllowsPrivateNetwork — and the entries may come
+	// from an authored governance row rather than only from the chart.
+	//
+	// bifrost LATCHES this value: ConfigureDialer runs when the provider worker
+	// is created, so a later change does not reach a worker that already exists.
+	// main() closes that gap by calling bifrost.UpdateProvider for the two
+	// self-hosted classes when the merged decision flips, which re-reads this
+	// method and rebuilds the worker. Without that call an authored row would
+	// appear on /governance/status and change nothing until a restart, which is
+	// the exact shape of defect this work exists to remove.
 	//
 	// This method takes no context and no key, so it cannot decide per
 	// credential — which is exactly why the per-credential half of the policy
 	// has to live in GetKeysForProvider.
 	switch provider {
 	case schemas.VLLM, schemas.Ollama:
-		cfg.NetworkConfig.AllowPrivateNetwork = a.egress.configured()
+		cfg.NetworkConfig.AllowPrivateNetwork = a.egress.allowsPrivateNetwork()
 	}
 
 	// ISSUE #164: the OUTBOUND half of hop-marker detection. bifrost applies

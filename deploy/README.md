@@ -463,6 +463,65 @@ picker offers them, and the request then finds no credential. Both ship empty, b
 does not exist makes every credential read fail, so the operator must choose
 one project and set it in both places.
 
+### `GATEWAY_EGRESS_ALLOWLIST` is the bootstrap floor, not the whole policy
+
+`llmGateway.env.GATEWAY_EGRESS_ALLOWLIST` names the hosts a provider credential's
+`api_base` may point at. It is the FLOOR. The gateway also reads
+`egress_allowlist` rows from `gateway.governance_config`, and it enforces the
+UNION of the two. Edit the rows at runtime in **Admin → LLM Proxy →
+Governance**; no chart edit and no pod restart are necessary.
+
+An authored row can only ADD a destination. Nothing an admin authors withdraws a
+host the chart named, because the chart and the admin console are different
+authorities: a mistaken admin session must not cut the platform off from its own
+provider, when the recovery would then need a database edit rather than a chart
+rollback.
+
+Set the environment variable for the hosts that must be reachable before anybody
+can log in — the platform's own provider — and author the rest.
+
+**One grammar serves both.** An entry is a host, a `host:port`, a `*.domain`
+wildcard, or a CIDR block:
+
+```
+api.openai.com
+*.openai.azure.com
+vllm.ml.svc.cluster.local:8000
+192.168.29.60:8000
+192.168.29.0/24
+```
+
+**The first entry turns the restriction on.** With no entry in either source, a
+credential may name any public host. Add one entry anywhere and every credential
+must then match the list.
+
+**A private endpoint needs its address named, not only its hostname.** bifrost's
+SSRF-safe dialer refuses RFC 1918 and loopback destinations unless an entry
+EXPLICITLY names a private address or block. A hostname alone does not unlock it:
+the gateway never resolves a name to make this decision, because resolving a name
+here and dialing it later is the DNS-rebinding race a name allowlist avoids. To
+reach a self-hosted vLLM at `http://192.168.29.60:8000/v1`, name the address; to
+reach one behind a name, name both:
+
+```
+vllm.ml.svc.cluster.local:8000
+10.0.0.0/8
+```
+
+Link-local addresses (`169.254.0.0/16`, `fe80::/10`) stay refused whatever the
+allowlist says. They carry the cloud instance-metadata endpoints.
+
+**This changed in the G6 release.** The private-network exemption used to follow
+from "is any allowlist configured", so an allowlist of public SaaS hosts relaxed
+the dialer for the whole private network. It now follows from an entry naming a
+private destination. An existing install that reaches a private endpoint through
+a HOSTNAME must add that host's block or address.
+
+`GET /governance/status` on the gateway reports the merged list, tagged by
+source, and the admin **LLM Proxy → Status** tab shows the same report: what the
+chart contributed, what governance contributed, what is in force, and whether a
+private destination is reachable at all.
+
 ## What a Kubernetes install does NOT give you
 
 Stated plainly, because the gap between compose and Helm is where deploys break:

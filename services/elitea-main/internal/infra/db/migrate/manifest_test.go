@@ -354,7 +354,22 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// white-labeling is net-new, so the legacy catalogue has no string for
 	// it. A new file for 0082's reason — 0060 returns early on any configured
 	// deployment, and migrations are checksum-immutable.
-	require.EqualValues(t, 110, Head(shared))
+	//
+	// 112: shared/0112_governance_config_egress_allowlist.sql, which widens
+	// 0093's `governance_config_type_known` CHECK with `egress_allowlist` — the
+	// LLM gateway's egress policy, which until now had one authoring surface:
+	// the GATEWAY_EGRESS_ALLOWLIST environment variable in the chart. An
+	// on-premise model endpoint therefore needed a chart edit and a pod restart.
+	// A new file for 0093's reason: migrations are checksum-immutable, so the
+	// value set is widened by REPLACING the constraint rather than by editing
+	// the file that added it.
+	//
+	// It was written as 0111 and renumbered. 0111 is claimed by
+	// shared/0111_mcp_prebuilt_parameter_schema.sql on its own branch, and both
+	// authors were correct against a main whose head was 0110. 111 stays free
+	// here for that file: LoadManifest sorts by version and Head() reads the
+	// last entry, so a gap costs nothing.
+	require.EqualValues(t, 112, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

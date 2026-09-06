@@ -1925,24 +1925,42 @@ llmGateway:
     GATEWAY_SELF_LLM_ORIGINS: ""
 
     # Issue #13 — egress allowlist for TENANT-AUTHORED credential `api_base`
-    # values. Comma-separated `host`, `host:port`, `*.domain` or `*.domain:port`.
-    # An unparsable entry is FATAL at startup (a typo must not silently narrow or
-    # widen the policy).
+    # values. Comma-separated `host`, `host:port`, `*.domain`, `*.domain:port`
+    # or a CIDR block. An unparsable entry is FATAL at startup (a typo must not
+    # silently narrow or widen the policy).
+    #
+    # GAP G6: this key is the BOOTSTRAP FLOOR, not the whole policy. The gateway
+    # also reads `egress_allowlist` rows from gateway.governance_config, written
+    # in Admin > LLM Proxy > Governance, and it enforces the UNION. An authored
+    # row can only ADD a destination: nothing an admin authors withdraws a host
+    # this key names, because the chart and the admin console are different
+    # authorities. Set this for the hosts that must work before anybody can log
+    # in, and author the rest.
     #
     # Two modes, and there is deliberately no third:
-    #   ""       (default) api_base hosts are unrestricted, and bifrost's
-    #            SSRF-safe dialer stays ON for every provider — so no tenant can
-    #            steer the gateway at an RFC-1918 address. Self-hosted vLLM /
-    #            Ollama on a private network does NOT work in this mode.
+    #   ""       (default) api_base hosts are unrestricted UNTIL an admin
+    #            authors the first row, and bifrost's SSRF-safe dialer stays ON
+    #            for every provider — so no tenant can steer the gateway at an
+    #            RFC-1918 address. Self-hosted vLLM / Ollama on a private
+    #            network does NOT work in this mode.
     #   non-empty  every credential api_base must match an entry (checked BEFORE
     #            the Fernet vault decrypts its api_key, so a non-allowlisted
-    #            destination never receives a resolved secret), and private
-    #            destinations become reachable for the self-hosted classes only.
+    #            destination never receives a resolved secret).
+    #
+    # PRIVATE DESTINATIONS NEED AN EXPLICIT ENTRY. The dialer is relaxed for the
+    # self-hosted classes only when an entry NAMES a private address or block —
+    # `192.168.29.60:8000` or `192.168.29.0/24`. A hostname alone does not
+    # unlock it: the gateway never resolves a name to make this decision,
+    # because resolving here and dialing later is the DNS-rebinding race a name
+    # allowlist avoids. To reach a private endpoint behind a name, list both.
+    # This is narrower than the pre-G6 rule, which relaxed the dialer whenever
+    # ANY entry was set. An install that reaches a private endpoint through a
+    # hostname must add its block.
     #
     # Pin the port where you can. Setting this is also the only way to stop a
     # tenant shipping its own vault secrets to an arbitrary PUBLIC host as a
-    # Bearer token — leaving it empty accepts that risk.
-    # e.g. "vllm.ml.svc.cluster.local:8000,ollama.ml.svc.cluster.local:11434"
+    # Bearer token — leaving it empty accepts that risk until a row is authored.
+    # e.g. "vllm.ml.svc.cluster.local:8000,10.0.0.0/8"
     #
     # ISSUE #467: this key is governed by `egressPosture` at the bottom of this
     # file. The chart refuses to render until that posture is stated, because the
@@ -2091,30 +2109,32 @@ llmGateway:
   # GATEWAY_EGRESS_ALLOWLIST, which no operator had chosen and which behaves in
   # two opposite ways at once.
   #
-  # Read internal/account/egress.go and internal/account/account.go. The gateway
-  # sets AllowPrivateNetwork from whether the allowlist is configured, so:
+  # Read internal/account/egress.go and libs/go/egresslib. The posture states
+  # what THIS CHART contributes; gap G6 added a second contributor, the
+  # `egress_allowlist` governance rows, and the gateway enforces the union.
   #
-  #   "allowlist"            env.GATEWAY_EGRESS_ALLOWLIST names every host a
-  #                          tenant may put in api_base. Private destinations
-  #                          become reachable for the self-hosted provider
-  #                          classes (vLLM, Ollama). This is the only posture in
-  #                          which a self-hosted model on a private network
-  #                          works. The host check runs BEFORE the Fernet vault
-  #                          decrypts the api_key, so a host that is not on the
-  #                          list never receives a resolved secret.
+  #   "allowlist"            env.GATEWAY_EGRESS_ALLOWLIST names the hosts a
+  #                          tenant may put in api_base. The host check runs
+  #                          BEFORE the Fernet vault decrypts the api_key, so a
+  #                          host that is not on the list never receives a
+  #                          resolved secret. Add a private address or CIDR to
+  #                          reach a self-hosted model on a private network.
   #
   #   "public-unrestricted"  env.GATEWAY_EGRESS_ALLOWLIST stays empty. A tenant
   #                          may name ANY public host in api_base, and the
-  #                          gateway then sends that tenant's credential to it.
-  #                          bifrost's SSRF-safe dialer stays armed, so no tenant
-  #                          can steer the gateway at a private address — and a
-  #                          self-hosted vLLM or Ollama CANNOT WORK at all.
-  #                          Choose this only when every model is a public
-  #                          provider AND you accept that a tenant may ship its
-  #                          own vault secret to an address of its choosing.
+  #                          gateway then sends that tenant's credential to it,
+  #                          UNTIL an admin authors the first egress_allowlist
+  #                          row — the first entry from either source turns the
+  #                          restriction on. bifrost's SSRF-safe dialer stays
+  #                          armed, so no tenant can steer the gateway at a
+  #                          private address. Choose this only when every model
+  #                          is a public provider AND you accept that a tenant
+  #                          may ship its own vault secret to an address of its
+  #                          choosing.
   #
-  # There is deliberately no third mode in which a tenant reaches an arbitrary
-  # private address.
+  # There is deliberately no mode in which a tenant reaches an arbitrary private
+  # address. Private reachability follows from an entry that NAMES a private
+  # host or block, and never from the mere presence of an allowlist.
   egressPosture: ""
 
   networkPolicy:

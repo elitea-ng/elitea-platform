@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/account"
 	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/policy"
 )
 
@@ -55,6 +56,22 @@ type governanceStatusBody struct {
 	Store           policy.Status      `json:"store"`
 	Definitions     policy.Diagnostics `json:"definitions"`
 	RateLimiter     *rateLimiterCounts `json:"rate_limiter,omitempty"`
+	// Egress is the MERGED allowlist the gateway is enforcing, tagged by
+	// source: the GATEWAY_EGRESS_ALLOWLIST floor, the authored
+	// `egress_allowlist` rows, and the union of the two (gap G6).
+	//
+	// It belongs here for the same reason as everything else on this route: it
+	// is something the gateway HOLDS that the authoring side cannot see. The
+	// admin list shows the rows in the table; only the gateway knows which of
+	// them parsed, what the chart already contributed, and — the question an
+	// operator actually has — whether a private destination is reachable at all.
+	//
+	// It carries no secret material. A host name is not a credential, and this
+	// route is on the internal listener behind mutual TLS.
+	//
+	// nil when the gateway has no vault-backed account, which is the posture
+	// with no database pool: there are then no credentials to govern.
+	Egress *account.EgressReport `json:"egress,omitempty"`
 }
 
 // rateLimiterCounts reports how often the limiter refused and how often it
@@ -70,13 +87,20 @@ type rateLimiterCounts struct {
 // rather than erroring: a gateway without a database is a supported posture,
 // not a fault.
 func makeGovernanceStatusHandler(
-	store *policy.Store, limiter *policy.Limiter, sharedProjectID string,
+	store *policy.Store, limiter *policy.Limiter, sharedProjectID string, acct *account.EliteaAccount,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		body := governanceStatusBody{
 			Enabled:               store != nil,
 			RateLimitsEnforceable: limiter.Enabled(),
 			SharedProjectID:       sharedProjectID,
+		}
+		if acct != nil {
+			// Read it per request, not once at wiring: the authored half of the
+			// list changes on the governance poll, and a value captured at
+			// startup would report the floor for the life of the pod.
+			rep := acct.EgressReport()
+			body.Egress = &rep
 		}
 		if store != nil {
 			body.Store = store.Status()

@@ -67,9 +67,28 @@ export const GOVERNANCE_TYPES = [
   'mcp_allowlist',
   'credential_policy',
   'routing_rule',
+  'egress_allowlist',
 ] as const;
 
 export type GovernanceType = (typeof GOVERNANCE_TYPES)[number];
+
+/**
+ * The row types that are GLOBAL: they carry no scope, and the dialog withholds
+ * the scope fields for them.
+ *
+ * `egress_allowlist` is global because half of what it governs — whether the
+ * gateway's SSRF-safe dialer is relaxed for the self-hosted provider classes —
+ * is decided by bifrost with no project in hand. A scoped entry could only be
+ * half-honoured, so the server refuses one on write and the gateway rejects one
+ * that reaches it anyway. Showing the fields would invite the operator to
+ * author exactly the entry that is refused.
+ */
+export const GLOBAL_GOVERNANCE_TYPES: readonly GovernanceType[] = ['egress_allowlist'];
+
+/** Whether this type carries a scope at all. */
+export function isGlobalGovernanceType(type: GovernanceType): boolean {
+  return GLOBAL_GOVERNANCE_TYPES.includes(type);
+}
 
 /**
  * The row type this page LISTS but must never edit.

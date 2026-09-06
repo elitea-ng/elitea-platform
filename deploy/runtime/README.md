@@ -207,17 +207,30 @@ model turn completes with no network and no billing. Three things are easy to
 get wrong:
 
 **The credential must be type `vllm`.** bifrost lifts its SSRF-safe dialer only
-for the self-hosted provider classes — `account.go:235` sets
-`AllowPrivateNetwork` for `schemas.VLLM` and `schemas.Ollama` alone, and only
-when `GATEWAY_EGRESS_ALLOWLIST` is non-empty. An `open_ai` credential pointing
-at a compose address is refused by the dialer no matter what the allowlist says.
+for the self-hosted provider classes — `GetConfigForProvider` sets
+`AllowPrivateNetwork` for `schemas.VLLM` and `schemas.Ollama` alone. An
+`open_ai` credential pointing at a compose address is refused by the dialer no
+matter what the allowlist says.
 
-**`GATEWAY_EGRESS_ALLOWLIST` must name the mock.** `llm-mock:8090` is a private
-address; without the entry the hop fails with `provider_connection_failed`,
-which reads like a broken service rather than a policy decision. The compose
-default is written `${GATEWAY_EGRESS_ALLOWLIST-llm-mock:8090}` with a single
-`-`: the `:-` form treats empty and unset alike, so an operator disarming the
-allowlist would silently get the mock allowlisted back.
+**The allowlist must name the mock AND a private block.** `llm-mock:8090` is a
+compose service name that resolves to a private address. The host entry permits
+the NAME; a private block entry is what relaxes the dialer, because the gateway
+never resolves a name to make that decision (gap G6 — resolving here and dialing
+later is the DNS-rebinding race a name allowlist avoids). Without both, the hop
+fails with `provider_connection_failed`, which reads like a broken service
+rather than a policy decision.
+
+The compose default therefore carries the two hosts and the three RFC 1918
+blocks, and it is written with a single `-`
+(`${GATEWAY_EGRESS_ALLOWLIST-…}`): the `:-` form treats empty and unset alike,
+so an operator disarming the allowlist would silently get the mock allowlisted
+back.
+
+**The environment variable is only the floor.** The gateway also reads
+`egress_allowlist` rows from `gateway.governance_config` and enforces the union,
+so a destination can be added at runtime in Admin > LLM Proxy > Governance
+without touching compose. `GET /governance/status` reports the merged list with
+its source, and says whether a private destination is reachable at all.
 
 **The wire model carries a provider prefix**, `vllm/E2E-MOCK-MODEL`. bifrost
 resolves the provider from the model string alone (`ParseModelString`) with an

@@ -803,7 +803,7 @@ func governanceSection() map[string]any {
 		"id":                  "governance",
 		"unavailable_reason":  governanceElsewhereUnavailable,
 		"title":               "LLM Governance",
-		"description":         "Author LLM-gateway governance: budgets, rate limits, credential billing policy, per-model/provider scopes, MCP allowlists, and CEL routing rules. Definitions are enforced by the LLM gateway on every request.",
+		"description":         "Author LLM-gateway governance: budgets, rate limits, credential billing policy, per-model/provider scopes, MCP allowlists, egress allowlists, and CEL routing rules. Definitions are enforced by the LLM gateway on every request.",
 		"order":               5,
 		"icon":                "policy",
 		"required_permission": "configuration.governance",
@@ -936,6 +936,26 @@ func governanceSection() map[string]any {
 				"title":       "MCP Server Allowlist",
 				"description": "MCP server ids permitted through the gateway. Empty disables the allowlist (all servers permitted).",
 				"path":        "mcp.allowlist",
+				"section":     "governance",
+				"default":     []any{},
+			},
+			// --- Egress allowlist (gap G6) ---
+			//
+			// This is the operator's runtime egress policy. Until shared
+			// migration 0112 it had exactly one authoring surface, the
+			// GATEWAY_EGRESS_ALLOWLIST environment variable in the chart, so an
+			// on-premise model endpoint needed a chart edit and a pod restart.
+			//
+			// The environment variable is now the BOOTSTRAP FLOOR. The gateway
+			// enforces the UNION of the two, and nothing authored here can
+			// withdraw a host the chart named.
+			{
+				"key":         "egress_allowlist",
+				"type":        "array",
+				"items":       map[string]any{"type": "string"},
+				"title":       "Egress Allowlist",
+				"description": "Hosts a provider credential's api_base may name: `host`, `host:port`, `*.domain` or a CIDR block such as 192.168.29.0/24. The gateway unions this with the GATEWAY_EGRESS_ALLOWLIST floor. The FIRST entry turns the restriction on for every credential. A private destination (RFC 1918 or loopback) is only reachable when an entry names that address or its block; a hostname alone does not unlock it, because the gateway never resolves a name to decide.",
+				"path":        "egress.allowlist",
 				"section":     "governance",
 				"default":     []any{},
 			},
