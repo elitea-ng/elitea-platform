@@ -21,9 +21,18 @@ function EditConfigurationRoute() {
   const navigate = useNavigate();
   const { credential_uid: credentialUid } = Route.useParams();
   const context = useCredentialFormContext();
-  const leave = useCallback(() => {
-    void navigate({ to: '/settings/model-configuration' });
-  }, [navigate]);
+  // `savedId` is only known on a successful save (`onSaved`) — `onDiscarded`
+  // (delete) calls this with no argument, so it still lands on a plain
+  // `/settings/model-configuration` with no `reveal` in the URL.
+  const leave = useCallback(
+    (savedId?: string) => {
+      void navigate({
+        to: '/settings/model-configuration',
+        ...(savedId !== undefined ? { search: { reveal: savedId } } : {}),
+      });
+    },
+    [navigate],
+  );
 
   return (
     <EditCredential

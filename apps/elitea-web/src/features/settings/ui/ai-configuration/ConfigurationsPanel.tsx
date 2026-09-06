@@ -4,7 +4,7 @@
  * AI Credentials).
  * Ported from `apps/elitea-ui/src/[fsd]/features/settings/ui/ai-configuration/Configuration/ConfigurationsPanel.jsx`.
  */
-import { memo, useCallback, useMemo } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useTheme, type Theme } from '@mui/material/styles';
 
 import Box from '@mui/material/Box';
@@ -27,6 +27,7 @@ import {
   buildOptions,
   computeProjectGating,
   defaultValueOf,
+  sectionHoldsRevealedRow,
   tierDefaultValueOf,
   withDefaultModels,
 } from './configurationsPanel.helpers';
@@ -44,6 +45,8 @@ interface ConfigurationsPanelProps {
    * each section's real default model. */
   projectId: string;
   isLoading: boolean;
+  /** Just-saved/edited configuration id (`?reveal=`) — opens the section holding it. */
+  revealConfigurationId?: string;
 }
 
 /* ── component ──────────────────────────────────────────────────────────── */
@@ -52,9 +55,11 @@ export default memo(function ConfigurationsPanel({
   configurationsBySection,
   projectId,
   isLoading,
+  revealConfigurationId,
 }: ConfigurationsPanelProps) {
   const theme = useTheme();
   const styles = getStyles(theme);
+  const panelRef = useRef<HTMLDivElement | null>(null);
 
   /* Extract sections safely (TS doesn't know the key types) */
   const llmConfigs = configurationsBySection['llm'] ?? [];
@@ -157,8 +162,17 @@ export default memo(function ConfigurationsPanel({
     [renderInfoLabel, highTierOptions, lowTierOptions, handleDefaultChange, llmDefaults, saveErrors],
   );
 
+  // Scrolls the revealed card into view (its section can open below the fold).
+  useEffect(() => {
+    if (revealConfigurationId === undefined || isLoading) return;
+    const card = panelRef.current?.querySelector(`[data-configuration-id="${revealConfigurationId}"]`);
+    if (card instanceof HTMLElement && typeof card.scrollIntoView === 'function') {
+      card.scrollIntoView({ block: 'center' });
+    }
+  }, [revealConfigurationId, isLoading, configurationsBySection]);
+
   return (
-    <Box sx={styles.panel}>
+    <Box sx={styles.panel} ref={panelRef}>
       {/*
         A TOOLBAR, not a second title bar. This row used to carry a
         `headingMedium` "Configurations" heading and a bottom rule of its own,
@@ -222,7 +236,7 @@ export default memo(function ConfigurationsPanel({
         {/* Embedding Models */}
         <ConfigurationSection
           title={t('ai-configuration.section.embeddingModels', 'Embedding Models')}
-          display={{ testId: 'ai-providers-section-embedding-models' }}
+          display={{ testId: 'ai-providers-section-embedding-models', defaultExpanded: sectionHoldsRevealedRow(embeddingConfigs, revealConfigurationId) }}
           configurations={embeddingConfigs}
           projectId={projectId}
           isLoading={isLoading}
@@ -243,7 +257,7 @@ export default memo(function ConfigurationsPanel({
         {/* Vector Storage */}
         <ConfigurationSection
           title={t('ai-configuration.section.vectorStorage', 'Vector Storage')}
-          display={{ testId: 'ai-providers-section-vector-storage' }}
+          display={{ testId: 'ai-providers-section-vector-storage', defaultExpanded: sectionHoldsRevealedRow(vectorStorageConfigs, revealConfigurationId) }}
           configurations={vectorStorageConfigs}
           projectId={projectId}
           isLoading={isLoading}
@@ -264,7 +278,7 @@ export default memo(function ConfigurationsPanel({
         {/* Image Generation */}
         <ConfigurationSection
           title={t('ai-configuration.section.imageGeneration', 'Image Generation')}
-          display={{ testId: 'ai-providers-section-image-generation' }}
+          display={{ testId: 'ai-providers-section-image-generation', defaultExpanded: sectionHoldsRevealedRow(imageConfigs, revealConfigurationId) }}
           configurations={imageConfigs}
           projectId={projectId}
           isLoading={isLoading}
@@ -285,7 +299,7 @@ export default memo(function ConfigurationsPanel({
         {/* Speech Recognition (ASR) */}
         <ConfigurationSection
           title={t('ai-configuration.section.asr', 'Speech Recognition (ASR)')}
-          display={{ testId: 'ai-providers-section-asr' }}
+          display={{ testId: 'ai-providers-section-asr', defaultExpanded: sectionHoldsRevealedRow(asrConfigs, revealConfigurationId) }}
           configurations={asrConfigs}
           projectId={projectId}
           isLoading={isLoading}
@@ -306,7 +320,7 @@ export default memo(function ConfigurationsPanel({
         {/* Text to Speech (TTS) */}
         <ConfigurationSection
           title={t('ai-configuration.section.tts', 'Text to Speech (TTS)')}
-          display={{ testId: 'ai-providers-section-tts' }}
+          display={{ testId: 'ai-providers-section-tts', defaultExpanded: sectionHoldsRevealedRow(ttsConfigs, revealConfigurationId) }}
           configurations={ttsConfigs}
           projectId={projectId}
           isLoading={isLoading}
@@ -327,7 +341,7 @@ export default memo(function ConfigurationsPanel({
         {/* AI Credentials */}
         <ConfigurationSection
           title={t('ai-configuration.section.aiCredentials', 'AI Credentials')}
-          display={{ testId: 'ai-providers-section-ai-credentials' }}
+          display={{ testId: 'ai-providers-section-ai-credentials', defaultExpanded: sectionHoldsRevealedRow(aiCredentialsConfigs, revealConfigurationId) }}
           configurations={aiCredentialsConfigs}
           projectId={projectId}
           isLoading={isLoading}

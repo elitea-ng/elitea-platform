@@ -230,6 +230,9 @@ export default memo(
       <Box
         onClick={handleCardClick}
         sx={styles.cardContainer(disabled)}
+        // Anchor for `ConfigurationsPanel`'s reveal-scroll effect — not a
+        // new prop, just a DOM marker on data this card already has.
+        data-configuration-id={toConfigurationId(configuration.id)}
       >
         <Box sx={styles.content}>
           <Box sx={styles.iconContainer}>

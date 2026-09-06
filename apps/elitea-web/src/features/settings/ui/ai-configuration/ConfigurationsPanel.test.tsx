@@ -347,3 +347,106 @@ describe('ConfigurationsPanel card navigation', () => {
     expect(await screen.findByTestId('edit-configuration-route')).toHaveTextContent('1');
   });
 });
+
+/**
+ * DEFECT this pins (J19b, `credentials.lifecycle.spec.ts:179`). A row saved
+ * into a non-LLM section (e.g. "AI Credentials") landed in a COLLAPSED
+ * accordion on return from `/settings/create-configuration`, because only
+ * the LLMs section ever passed `defaultExpanded: true`. `revealConfigurationId`
+ * (the route's `?reveal=` search param) is what fixes it: the section whose
+ * `configurations` include that id opens too, everything else keeps its
+ * production default.
+ */
+describe('ConfigurationsPanel reveal (?reveal=) opens the saved row\'s section', () => {
+  const AI_CREDENTIAL_CONFIG = {
+    id: 42,
+    project_id: PROJECT_ID,
+    elitea_title: 'GitHub token',
+    label: 'GitHub token',
+    type: 'custom',
+    section: 'ai_credentials',
+    shared: false,
+    data: {},
+  };
+  // A second non-LLM, non-matching section — proves `revealConfigurationId`
+  // opens ONLY the section holding it, not every non-LLM section at once.
+  const EMBEDDING_CONFIG = {
+    id: 7,
+    project_id: PROJECT_ID,
+    elitea_title: 'Embed model',
+    label: 'embed',
+    type: 'openai',
+    section: 'embedding',
+    shared: false,
+    data: { name: 'text-embed' },
+  };
+
+  function mockModels(): void {
+    server.use(
+      http.get(`${BASE}/configurations/models/${PROJECT_ID}`, () =>
+        HttpResponse.json({ items: [], total: 0, default_model_name: '', default_model_project_id: '' }),
+      ),
+    );
+  }
+
+  it('reveal id inside AI Credentials expands that section; LLMs stays expanded too', async () => {
+    setConfig();
+    configureGeneratedClient({ baseUrl: BASE });
+    mockEditPermission();
+    mockModels();
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const theme = buildEliteaTheme(DEFAULT_BRAND_PACK);
+    const rootRoute = createRootRoute({
+      component: () => (
+        <QueryClientProvider client={queryClient}>
+          <ThemeProvider theme={theme} defaultMode={DEFAULT_COLOR_SCHEME}>
+            <CssBaseline />
+            <ConfigurationsPanel
+              configurationsBySection={{ llm: [LLM_CONFIG], embedding: [EMBEDDING_CONFIG], ai_credentials: [AI_CREDENTIAL_CONFIG] }}
+              projectId={PROJECT_ID}
+              isLoading={false}
+              revealConfigurationId="42"
+            />
+          </ThemeProvider>
+        </QueryClientProvider>
+      ),
+    });
+    const router = createRouter({ routeTree: rootRoute, history: createMemoryHistory({ initialEntries: ['/'] }) });
+    render(<RouterProvider router={router} />);
+
+    expect(await screen.findByTestId('ai-providers-section-ai-credentials')).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByTestId('ai-providers-section-llms')).toHaveAttribute('aria-expanded', 'true');
+    // A section with no reveal match keeps its own (collapsed) default.
+    expect(screen.getByTestId('ai-providers-section-embedding-models')).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('no reveal id: AI Credentials stays collapsed, LLMs is still expanded', async () => {
+    setConfig();
+    configureGeneratedClient({ baseUrl: BASE });
+    mockEditPermission();
+    mockModels();
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const theme = buildEliteaTheme(DEFAULT_BRAND_PACK);
+    const rootRoute = createRootRoute({
+      component: () => (
+        <QueryClientProvider client={queryClient}>
+          <ThemeProvider theme={theme} defaultMode={DEFAULT_COLOR_SCHEME}>
+            <CssBaseline />
+            <ConfigurationsPanel
+              configurationsBySection={{ llm: [LLM_CONFIG], ai_credentials: [AI_CREDENTIAL_CONFIG] }}
+              projectId={PROJECT_ID}
+              isLoading={false}
+            />
+          </ThemeProvider>
+        </QueryClientProvider>
+      ),
+    });
+    const router = createRouter({ routeTree: rootRoute, history: createMemoryHistory({ initialEntries: ['/'] }) });
+    render(<RouterProvider router={router} />);
+
+    expect(await screen.findByTestId('ai-providers-section-llms')).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByTestId('ai-providers-section-ai-credentials')).toHaveAttribute('aria-expanded', 'false');
+  });
+});
