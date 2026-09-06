@@ -2,12 +2,9 @@ package auth
 
 import (
 	"context"
-	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
-	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -128,14 +125,9 @@ func (h *OIDCHandler) Login(w http.ResponseWriter, r *http.Request) {
 
 	stateValue := stateNonce + "|" + targetTo
 
-	mac := hmac.New(sha256.New, []byte(h.secretKey))
-	mac.Write([]byte(stateValue))
-	sig := hex.EncodeToString(mac.Sum(nil))
-	cookieValue := stateValue + "." + sig
-
 	http.SetCookie(w, &http.Cookie{
-		Name:     "oidc_state",
-		Value:    cookieValue,
+		Name:     oidcStateCookie,
+		Value:    signBrowserValue(h.secretKey, stateValue),
 		Path:     "/",
 		HttpOnly: true,
 		Secure:   h.secureCookies,
@@ -212,6 +204,42 @@ func (h *OIDCHandler) consumeCodeVerifier(w http.ResponseWriter, r *http.Request
 	return cookie.Value, true
 }
 
+// oidcStateCookie holds the signed state of ONE login attempt. It carries the
+// per-login nonce and the redirect target, as `<nonce>|<target_to>.<mac>`.
+const oidcStateCookie = "oidc_state"
+
+// consumeState returns the redirect target the state cookie carries, and
+// reports whether that cookie belongs to THIS callback.
+//
+// IT SPLITS ON THE LAST ".", which is what signBrowserValue and
+// verifyBrowserValue do — the MAC is hex and holds no dot, while `target_to` is
+// a path the caller chose and can. This handler used to keep its own copy of
+// the split, on the FIRST dot, so a target such as `/artifacts/report.v2.pdf`
+// moved the boundary: the MAC was then computed over half the state and every
+// such login died with "state cookie signature invalid". saml.go signs and
+// verifies the same shape and has used the shared helpers since the same defect
+// was fixed there.
+//
+// The query parameter must repeat the WHOLE signed state, which is what Login
+// sent to the identity provider. That is the check that ties this callback to a
+// login this server started.
+func (h *OIDCHandler) consumeState(cookieValue, queryState string) (string, bool) {
+	state, verified := verifyBrowserValue(h.secretKey, cookieValue)
+	if !verified {
+		return "", false
+	}
+	if subtle.ConstantTimeCompare([]byte(state), []byte(queryState)) != 1 {
+		return "", false
+	}
+	// The target is read from the SIGNED value, never from the query, so a
+	// browser cannot redirect itself anywhere the login did not agree to.
+	targetTo := "/"
+	if separator := strings.Index(state, "|"); separator >= 0 {
+		targetTo = safeRedirectTarget(state[separator+1:])
+	}
+	return targetTo, true
+}
+
 // oidcNonceCookie holds the nonce of ONE login attempt.
 //
 // The state cookie proves the callback belongs to a login this server started.
@@ -255,38 +283,25 @@ func (h *OIDCHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	stateCookie, err := r.Cookie("oidc_state")
+	stateCookie, err := r.Cookie(oidcStateCookie)
 	if err != nil || stateCookie.Value == "" {
 		http.Error(w, "missing state cookie", http.StatusBadRequest)
 		return
 	}
 
-	parts := strings.SplitN(stateCookie.Value, ".", 2)
-	if len(parts) != 2 {
+	targetTo, ok := h.consumeState(stateCookie.Value, r.URL.Query().Get("state"))
+	if !ok {
+		// One message for every way the state can fail. The caller is
+		// unauthenticated, and which check refused it is a fact about this
+		// server, not about the browser's next move.
+		slog.Warn("OIDC: the state cookie does not belong to this callback")
 		http.Error(w, "invalid state cookie", http.StatusBadRequest)
-		return
-	}
-
-	storedState := parts[0]
-	storedSig := parts[1]
-
-	mac := hmac.New(sha256.New, []byte(h.secretKey))
-	mac.Write([]byte(storedState))
-	expectedSig := hex.EncodeToString(mac.Sum(nil))
-	if !hmac.Equal([]byte(storedSig), []byte(expectedSig)) {
-		http.Error(w, "state cookie signature invalid", http.StatusBadRequest)
-		return
-	}
-
-	queryState := r.URL.Query().Get("state")
-	if queryState != storedState {
-		http.Error(w, "state mismatch", http.StatusBadRequest)
 		return
 	}
 
 	// Clear the state cookie
 	http.SetCookie(w, &http.Cookie{
-		Name:     "oidc_state",
+		Name:     oidcStateCookie,
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
@@ -294,12 +309,6 @@ func (h *OIDCHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   -1,
 	})
-
-	// Extract target_to from state
-	targetTo := "/"
-	if idx := strings.Index(storedState, "|"); idx >= 0 {
-		targetTo = safeRedirectTarget(storedState[idx+1:])
-	}
 
 	// Exchange authorization code for tokens
 	code := r.URL.Query().Get("code")
