@@ -20,8 +20,8 @@ const ROWS: readonly PipelineListRow[] = [
 ];
 
 describe('PipelineListPanel', () => {
-  it('shows a loading message while loading', () => {
-    const { getByText } = renderWithTheme(
+  it('shows card skeletons while loading', () => {
+    const { container } = renderWithTheme(
       <PipelineListPanel
         {...BASE_PROPS}
         rows={[]}
@@ -29,7 +29,9 @@ describe('PipelineListPanel', () => {
         isError={false}
       />,
     );
-    expect(getByText('Loading…')).toBeInTheDocument();
+    // The grid shows card-shaped skeletons while the first page loads — the
+    // "Loading…" text line it used to render belonged to the plain <List>.
+    expect(container.querySelectorAll('[data-testid="entity-card-skeleton"]').length).toBeGreaterThan(0);
   });
 
   it('shows an alert with the error message on error', () => {
@@ -68,7 +70,9 @@ describe('PipelineListPanel', () => {
       />,
     );
     expect(getByText('My Pipeline')).toBeInTheDocument();
-    expect(getByText('Another pipeline')).toBeInTheDocument();
+    // The card face shows the NAME only (the description rides in its tooltip),
+    // which is what `components/Card.jsx` renders.
+    expect(getByText('Other Pipeline')).toBeInTheDocument();
 
     getByText('My Pipeline').click();
     expect(onSelect).toHaveBeenCalledWith('1');

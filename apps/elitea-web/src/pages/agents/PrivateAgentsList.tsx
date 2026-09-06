@@ -29,7 +29,14 @@ function applicationName(application: Application): string {
 }
 
 function toRow(application: Application): ApplicationListRow {
-  return { id: application.id, name: applicationName(application), description: application.description ?? '' };
+  return {
+    id: application.id,
+    name: applicationName(application),
+    description: application.description ?? '',
+    authors: (application.authors ?? []).map((author) => ({ id: author.id, name: author.name })),
+    tags: application.tags ?? [],
+    createdAt: application.created_at,
+  };
 }
 
 function matchesQuery(application: Application, query: string): boolean {
@@ -159,13 +166,19 @@ export function PrivateAgentsList({ statuses, cardContentType }: PrivateAgentsLi
         emptyTitle={
           query
             ? t('pages.agents.privateList.emptyFound.title', 'Nothing found.')
-            : t('pages.agents.privateList.empty.title', 'You have no agents.')
+            : t('pages.agents.privateList.empty.title', 'No agents yet')
         }
         emptyDescription={
           query
             ? t('pages.agents.privateList.emptyFound.description', 'Create yours now!')
-            : t('pages.agents.privateList.empty.description', 'Create your first agent to get started.')
+            : t(
+                'pages.agents.privateList.empty.description',
+                'Create your first agent to get started. Agents combine a prompt, a model and the toolkits they are allowed to call.',
+              )
         }
+        onCreate={() => {
+          void navigate({ to: '/agents/create' });
+        }}
         onSelect={(id) => {
           void navigate({ to: '/agents/$tab/$agentId', params: { tab: params.tab ?? 'all', agentId: id } });
         }}

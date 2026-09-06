@@ -27,7 +27,14 @@ function applicationName(application: Application): string {
 }
 
 function toRow(application: Application): PipelineListRow {
-  return { id: application.id, name: applicationName(application), description: application.description ?? '' };
+  return {
+    id: application.id,
+    name: applicationName(application),
+    description: application.description ?? '',
+    authors: (application.authors ?? []).map((author) => ({ id: author.id, name: author.name })),
+    tags: application.tags ?? [],
+    createdAt: application.created_at,
+  };
 }
 
 function matchesQuery(application: Application, query: string): boolean {
@@ -151,13 +158,19 @@ export function PrivatePipelinesList({ cardContentType }: PrivatePipelinesListPr
         emptyTitle={
           query
             ? t('pages.pipelines.privateList.emptyFound.title', 'Nothing found.')
-            : t('pages.pipelines.privateList.empty.title', 'You have no pipelines.')
+            : t('pages.pipelines.privateList.empty.title', 'No pipelines yet')
         }
         emptyDescription={
           query
             ? t('pages.pipelines.privateList.emptyFound.description', 'Create yours now!')
-            : t('pages.pipelines.privateList.empty.description', 'Create your first pipeline to get started.')
+            : t(
+                'pages.pipelines.privateList.empty.description',
+                'Create your first pipeline to get started. Pipelines chain agents, skills and toolkits into one repeatable flow.',
+              )
         }
+        onCreate={() => {
+          void navigate({ to: '/pipelines/create' });
+        }}
         onSelect={(id) => {
           void navigate({ to: '/pipelines/$tab/$agentId', params: { tab: params.tab ?? 'all', agentId: id } });
         }}

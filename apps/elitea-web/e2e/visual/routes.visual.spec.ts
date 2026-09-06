@@ -269,7 +269,7 @@ const ROUTES: readonly VisualRoute[] = [
     // strip renders during load (loaded YES, stalled YES) — it is chrome. The
     // empty-state copy renders only from a resolved, empty list: loaded YES,
     // stalled no.
-    landmark: (page) => page.getByText('You have no agents.'),
+    landmark: (page) => page.getByText('No agents yet'),
     light: true,
   },
   {
@@ -292,7 +292,7 @@ const ROUTES: readonly VisualRoute[] = [
     name: 'pipelines-list-empty',
     path: '/app/pipelines/latest',
     // Loaded YES, stalled no.
-    landmark: (page) => page.getByText('You have no pipelines.'),
+    landmark: (page) => page.getByText('No pipelines yet'),
   },
   {
     // @covers /pipelines/create
@@ -340,7 +340,7 @@ const ROUTES: readonly VisualRoute[] = [
     name: 'credentials-list-empty',
     path: '/app/credentials/latest',
     // Loaded YES, stalled no.
-    landmark: (page) => page.getByText('You have no credentials.'),
+    landmark: (page) => page.getByText('No credentials yet'),
   },
   {
     // @covers /settings/secrets

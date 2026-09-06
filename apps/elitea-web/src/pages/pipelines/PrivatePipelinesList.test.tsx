@@ -65,7 +65,7 @@ describe('PrivatePipelinesList', () => {
       { projectId: 'proj-1' },
     );
 
-    expect(await screen.findByText('You have no pipelines.')).toBeInTheDocument();
+    expect(await screen.findByText('No pipelines yet')).toBeInTheDocument();
   });
 
   it('filters client-side by the search box', async () => {

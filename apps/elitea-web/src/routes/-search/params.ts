@@ -165,8 +165,18 @@ export const paramSchemas = {
    */
   tab: text(),
 
-  // ── apps (PARAM-022/023) ─────────────────────────────────────────────────
-  view: z.enum(['grid', 'list']).catch('grid').prefault('grid'),
+  // ── apps (PARAM-022/023) + every entity list page ────────────────────────
+  //
+  // ONE key, TWO vocabularies, both real. `pages/apps` writes `grid`/`list`
+  // (its own catalogue toggle, PARAM-022/023); every OTHER list page — agents,
+  // pipelines, skills, toolkits, MCPs, credentials — uses the baseline's
+  // `ViewOptions` (`apps/elitea-ui/src/common/constants.js:318-321`:
+  // `cards`/`table`), which is what `components/ViewToggle.jsx` writes and
+  // `hooks/useIsTableView.js` reads. Both sets live in one enum because they
+  // live on one query key; each reader only recognises its own two values and
+  // falls back to its own default for the other pair
+  // (`shared/ui/EntityCardList` treats anything that is not `table` as cards).
+  view: z.enum(['grid', 'list', 'cards', 'table']).catch('grid').prefault('grid'),
 
   // ── artifacts (PARAM-024..027) ───────────────────────────────────────────
   bucket: text(),

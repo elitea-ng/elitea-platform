@@ -1,11 +1,6 @@
 import type { ReactNode } from 'react';
 
-import Box from '@mui/material/Box';
-import type { SxProps, Theme } from '@mui/material/styles';
-import Typography from '@mui/material/Typography';
-
-import { t } from '@/shared/i18n';
-import { BaseBtn } from '@/shared/ui/BaseBtn';
+import { EntityEmptyState } from '@/shared/ui/EntityCardList';
 
 /**
  * A toolkit-domain-scoped local copy of
@@ -18,10 +13,12 @@ import { BaseBtn } from '@/shared/ui/BaseBtn';
  * `features/agents/ui/AuthorsButton.tsx`'s own doc comment already
  * documents for an identically-situated baseline dependency.
  *
- * DISCLOSED CUT: no illustration image. The baseline renders a dark/light
- * PNG pair (`assets/images/Applications_{Dark,Light}_1.png`) — S2 only
- * ported the app's SVG icon set, not its PNG illustrations, and none of
- * that pair exists anywhere in this app yet. Text + CTA button only.
+ * DISCLOSED CUT CLOSED: the illustration the baseline renders
+ * (`assets/images/Applications_{Dark,Light}_1.png`) now exists in this app,
+ * re-encoded as WebP under `src/assets/empty-states/`, and this component is
+ * a thin alias over `shared/ui/EntityEmptyState`, which paints it. Kept as a
+ * named toolkit-domain component so the slice's own callers (and its tests)
+ * keep their import.
  */
 export interface ToolkitsEmptyStateProps {
   readonly title: string;
@@ -32,65 +29,12 @@ export interface ToolkitsEmptyStateProps {
 
 export function ToolkitsEmptyState({ title, description, onCreateClick, onGuidedTourClick }: ToolkitsEmptyStateProps): ReactNode {
   return (
-    <Box sx={containerSx}>
-      <Typography
-        variant="headingSmall"
-        sx={titleSx}
-      >
-        {title}
-      </Typography>
-      <Typography
-        variant="bodyMedium"
-        sx={descriptionSx}
-      >
-        {description}
-      </Typography>
-      <Box sx={actionsSx}>
-        <BaseBtn
-          variant="special"
-          onClick={onCreateClick}
-        >
-          {t('features.toolkits.emptyState.create', 'Create')}
-        </BaseBtn>
-        {onGuidedTourClick && (
-          <BaseBtn
-            variant="secondary"
-            onClick={onGuidedTourClick}
-          >
-            {t('features.toolkits.emptyState.guidedTour', 'Start Guided Tour')}
-          </BaseBtn>
-        )}
-      </Box>
-    </Box>
+    <EntityEmptyState
+      art="applications"
+      title={title}
+      description={description}
+      onCreateClick={onCreateClick}
+      {...(onGuidedTourClick === undefined ? {} : { onGuidedTourClick })}
+    />
   );
 }
-
-const containerSx: SxProps<Theme> = (theme: Theme) => ({
-  display: 'flex',
-  flexDirection: 'column',
-  alignItems: 'center',
-  justifyContent: 'center',
-  gap: theme.spacing(2),
-  paddingTop: theme.spacing(6),
-  paddingBottom: theme.spacing(6),
-  paddingLeft: theme.spacing(3),
-  paddingRight: theme.spacing(3),
-  textAlign: 'center',
-});
-
-const titleSx: SxProps<Theme> = (theme: Theme) => ({
-  color: theme.vars.palette.text.secondary,
-});
-
-const descriptionSx: SxProps<Theme> = (theme: Theme) => ({
-  color: theme.vars.palette.background.tooltip.default,
-  maxWidth: '24rem',
-});
-
-const actionsSx: SxProps<Theme> = (theme: Theme) => ({
-  display: 'flex',
-  flexDirection: 'column',
-  alignItems: 'center',
-  gap: theme.spacing(1.5),
-  marginTop: theme.spacing(1),
-});

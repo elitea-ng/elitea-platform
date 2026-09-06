@@ -8,7 +8,7 @@ import { useNavigate, useParams } from '@tanstack/react-router';
 import { t } from '@/shared/i18n';
 import { BaseTab } from '@/shared/ui/BaseTab';
 import { BaseTabs } from '@/shared/ui/BaseTabs';
-import { EntityListRail, RAIL_CONTENT_WIDTH, useEntityRailVisible } from '@/shared/ui/EntityRail';
+import { EntityListRail } from '@/shared/ui/EntityRail';
 import { useSidebarCollapsedStore } from '@/widgets/sidebar';
 
 import { isPublicAgentsProject } from './lib/isPublicAgentsProject';
@@ -35,9 +35,6 @@ const tabPanelSx: SxProps<Theme> = {
   minHeight: 0,
   overflowY: 'auto',
 };
-
-/** `CARD_LIST_WIDTH` (`apps/elitea-ui/src/common/constants.js:511`) — the list shrinks by exactly the rail's width while the rail is on screen, and reclaims it when the rail collapses. */
-const contentWidthSx = (railVisible: boolean): SxProps<Theme> => ({ width: railVisible ? RAIL_CONTENT_WIDTH : '100%' });
 
 /** The four public tabs (`latest`/`my-liked`/`trending`) plus `admin` are the ones the baseline pins to "Trending Authors" (`RightInfoPanel` picks per-project elsewhere; `PrivateAgentsList.jsx:141-151` hard-codes it for Admin). */
 const TRENDING_AUTHOR_TABS: readonly string[] = ['latest', 'my-liked', 'trending', 'admin'];
@@ -112,8 +109,6 @@ export function Applications(): ReactNode {
     void navigate({ to: '/agents/$tab', params: { tab: nextTab.value } });
   };
 
-  const railVisible = useEntityRailVisible(navRailCollapsed);
-
   return (
     <Box sx={pageSx}>
       <Box sx={tabBarSx}>
@@ -135,7 +130,7 @@ export function Applications(): ReactNode {
         sx={tabPanelSx}
         role="tabpanel"
       >
-        <Box sx={contentWidthSx(railVisible)}>{selectedIndex !== -1 ? visibleTabs[selectedIndex]?.content : null}</Box>
+        {selectedIndex !== -1 ? visibleTabs[selectedIndex]?.content : null}
       </Box>
       <EntityListRail
         projectId={projectId}
