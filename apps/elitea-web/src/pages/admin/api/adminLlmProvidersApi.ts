@@ -73,6 +73,7 @@ import {
 } from '@tanstack/react-query';
 
 import { EliteaApiError, eliteaFetch } from '@/shared/api/generated/mutator';
+import { platformModelKeys } from './adminLlmPlatformModelsApi';
 import { unwrapBody } from '@/shared/api/unwrap';
 
 const PROVIDERS_URL = '/admin/gateway/providers';
@@ -175,6 +176,18 @@ const providerKeys = {
   all: ['admin', 'llmProxy', 'providers'] as const,
 };
 
+/**
+ * A provider write changes TWO listings: this one, and the platform-MODEL
+ * listing whose `credential_names` fills the model dialog's "Platform
+ * provider" select (see `platformModelKeys`' own comment). Every mutation goes
+ * through this, deletes included — a withdrawn provider must stop being
+ * offered for the same reason a new one must start.
+ */
+function invalidateProviderResource(queryClient: ReturnType<typeof useQueryClient>): void {
+  void queryClient.invalidateQueries({ queryKey: providerKeys.all });
+  void queryClient.invalidateQueries({ queryKey: platformModelKeys.all });
+}
+
 /** `GET /admin/gateway/providers`. */
 export function useAdminLlmProviders(): UseQueryResult<LlmProviderList, Error> {
   return useQuery({
@@ -210,7 +223,7 @@ export function useCreateAdminLlmProvider(): UseMutationResult<void, Error, LlmP
         body: JSON.stringify(draft),
       });
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: providerKeys.all }),
+    onSuccess: () => { invalidateProviderResource(queryClient); },
   });
 }
 
@@ -235,7 +248,7 @@ export function useUpdateAdminLlmProvider(): UseMutationResult<
         body: JSON.stringify(draft),
       });
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: providerKeys.all }),
+    onSuccess: () => { invalidateProviderResource(queryClient); },
   });
 }
 
@@ -253,7 +266,7 @@ export function useDeleteAdminLlmProvider(): UseMutationResult<void, Error, numb
     mutationFn: async (id: number) => {
       await eliteaFetch<unknown>(`${PROVIDERS_URL}/${String(id)}`, { method: 'DELETE' });
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: providerKeys.all }),
+    onSuccess: () => { invalidateProviderResource(queryClient); },
   });
 }
 

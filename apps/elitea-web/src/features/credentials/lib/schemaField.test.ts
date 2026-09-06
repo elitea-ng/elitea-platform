@@ -1,6 +1,35 @@
 import { describe, expect, it } from 'vitest';
 
-import { classifySchemaField, initialDataForSchema, initialValueForSchemaField, isLikelySecretField } from './schemaField';
+import {
+  classifySchemaField,
+  configurationSectionsOf,
+  initialDataForSchema,
+  initialValueForSchemaField,
+  isLikelySecretField,
+} from './schemaField';
+
+/**
+ * The `data` half of the registry's real `llm_model` descriptor, copied from
+ * `services/elitea-main/internal/application/configurations/
+ * current_available_snapshot.json` — the exact schema the AI-Configuration
+ * form renders. It is the fixture for both blockers this file covers: the
+ * integer field whose name contains `token`, and the reference field that
+ * must not be free text.
+ */
+const LLM_MODEL_DATA_SCHEMA = {
+  properties: {
+    ai_credentials: {
+      anyOf: [{ $ref: '#/$defs/AiCredentials' }, { type: 'null' }],
+      configuration_sections: ['ai_credentials'],
+      default: null,
+    },
+    context_window: { default: 128000, title: 'Context Window', type: 'integer' },
+    max_output_tokens: { default: 16000, title: 'Max Output Tokens', type: 'integer' },
+    name: { title: 'Name', type: 'string' },
+    supports_vision: { anyOf: [{ type: 'boolean' }, { type: 'null' }], default: true, title: 'Supports Vision' },
+  },
+  required: ['name', 'ai_credentials'],
+} as const;
 
 describe('isLikelySecretField', () => {
   it('matches format: password', () => {
@@ -90,6 +119,73 @@ describe('classifySchemaField', () => {
     expect(classifySchemaField('base_url', { type: 'string' })).toBe('string');
     expect(classifySchemaField('base_url', undefined)).toBe('string');
   });
+
+  /**
+   * BLOCKER regression (D1). `SECRET_NAME_RE` matched the SUBSTRING `token`,
+   * so `max_output_tokens` — a declared `type: 'integer'` — classified as a
+   * secret. It rendered as `<input type="password">` and serialised
+   * `"16000"`, a string. `mapCurrentModelCandidate`
+   * (services/elitea-main/internal/infra/db/repos/models.go) then skipped the
+   * whole row with "skipping a malformed model configuration", so a model
+   * saved through the AI-Configuration form never reached any model picker.
+   *
+   * Both halves are asserted: the declared type wins, AND the name heuristic
+   * on its own no longer reads a token BUDGET as a token CREDENTIAL.
+   */
+  it('never masks a declared integer field, whatever it is called (max_output_tokens blocker)', () => {
+    expect(classifySchemaField('max_output_tokens', { type: 'integer', default: 16000 })).toBe('number');
+    expect(classifySchemaField('max_tokens', { type: 'integer' })).toBe('number');
+    expect(classifySchemaField('token_limit', { type: 'integer' })).toBe('number');
+    expect(classifySchemaField('context_window', { type: 'integer' })).toBe('number');
+    expect(classifySchemaField('max_output_tokens', { anyOf: [{ type: 'integer' }, { type: 'null' }] })).toBe('number');
+  });
+
+  it('does not read a token budget as a credential even when the schema declares no type', () => {
+    expect(classifySchemaField('max_output_tokens', undefined)).toBe('string');
+    expect(classifySchemaField('max_tokens', undefined)).toBe('string');
+    expect(classifySchemaField('token_limit', undefined)).toBe('string');
+    expect(isLikelySecretField('max_output_tokens', undefined)).toBe(false);
+    expect(isLikelySecretField('max_tokens', undefined)).toBe(false);
+    expect(isLikelySecretField('token_limit', undefined)).toBe(false);
+  });
+
+  it('still classifies real credential names as secrets', () => {
+    expect(classifySchemaField('api_token', { type: 'string' })).toBe('secret');
+    expect(classifySchemaField('access_token', { type: 'string' })).toBe('secret');
+    expect(classifySchemaField('api_key', { type: 'string' })).toBe('secret');
+    expect(classifySchemaField('token', { type: 'string' })).toBe('secret');
+    expect(classifySchemaField('private_key', undefined)).toBe('secret');
+    expect(classifySchemaField('client_secret', undefined)).toBe('secret');
+    expect(classifySchemaField('password', undefined)).toBe('secret');
+    expect(classifySchemaField('apiKey', undefined)).toBe('secret');
+  });
+
+  it('does not mistake an ordinary trailing "key" for a credential', () => {
+    expect(classifySchemaField('sort_key', { type: 'string' })).toBe('string');
+    expect(classifySchemaField('partition_key', undefined)).toBe('string');
+  });
+
+  /** An explicit schema marker still outranks everything, including a declared type. */
+  it('keeps an explicitly marked field masked even when it declares a numeric type', () => {
+    expect(classifySchemaField('rotation', { type: 'integer', format: 'password' })).toBe('secret');
+  });
+
+  it("classifies a configuration_sections reference as its own kind, not free text", () => {
+    expect(classifySchemaField('ai_credentials', LLM_MODEL_DATA_SCHEMA.properties.ai_credentials)).toBe('configuration');
+  });
+});
+
+describe('configurationSectionsOf', () => {
+  it('reads the sections a reference field draws from', () => {
+    expect(configurationSectionsOf(LLM_MODEL_DATA_SCHEMA.properties.ai_credentials)).toEqual(['ai_credentials']);
+  });
+
+  it('is undefined for an ordinary property', () => {
+    expect(configurationSectionsOf({ type: 'string' })).toBeUndefined();
+    expect(configurationSectionsOf(undefined)).toBeUndefined();
+    expect(configurationSectionsOf({ configuration_sections: [] })).toBeUndefined();
+    expect(configurationSectionsOf({ configuration_sections: 'ai_credentials' })).toBeUndefined();
+  });
 });
 
 describe('initialValueForSchemaField', () => {
@@ -163,5 +259,21 @@ describe('initialDataForSchema', () => {
       },
     });
     expect(result).toEqual({ credentials: '', base_url: 'https://api.example.com' });
+  });
+
+  /**
+   * The whole `llm_model` form, seeded. `max_output_tokens` must arrive as
+   * the NUMBER 16000 (it used to arrive as `''`, because the field was
+   * classified secret and secrets are forced empty), and `ai_credentials` as
+   * `null` — never `''`, which the server stores as a bare string.
+   */
+  it('seeds the real llm_model schema with typed values, not masked blanks', () => {
+    expect(initialDataForSchema(LLM_MODEL_DATA_SCHEMA)).toEqual({
+      ai_credentials: null,
+      context_window: 128000,
+      max_output_tokens: 16000,
+      name: '',
+      supports_vision: true,
+    });
   });
 });

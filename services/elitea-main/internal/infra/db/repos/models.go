@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"sort"
 	"strconv"
+	"strings"
 
 	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
@@ -294,6 +295,25 @@ func requiredCurrentModelString(data map[string]json.RawMessage, key string) (st
 	return value, nil
 }
 
+// optionalCurrentModelInt reads one integer field from a stored `data`
+// document. It accepts a JSON number AND a JSON string that holds a decimal
+// integer.
+//
+// The string form is not a theoretical case. The AI-Configuration form
+// classified `max_output_tokens` as a secret, because the key contains the
+// substring `token`, and a masked text input serialises its value as a string:
+// every model saved through that form stored `"max_output_tokens": "16000"`.
+// This reader refused the value, mapCurrentModelCandidate skipped the whole
+// row, and the model never appeared in any picker — one wrongly typed optional
+// field removed a model that was otherwise complete and correct.
+//
+// The form is fixed (apps/elitea-web features/credentials/lib/schemaField.ts),
+// but the rows it already wrote are still in the database, and no other
+// component rewrites them. Coercing here recovers them without a migration.
+//
+// A value that is not an integer at all — "", "abc", "1.5", true, an object —
+// is still refused, so the row is still skipped and still warned about. This
+// widens what counts as well-formed; it does not stop reporting malformed.
 func optionalCurrentModelInt(data map[string]json.RawMessage, key string) (*int, error) {
 	raw, ok := data[key]
 	if !ok || currentModelJSONNull(raw) {
@@ -305,16 +325,36 @@ func optionalCurrentModelInt(data map[string]json.RawMessage, key string) (*int,
 	if err := decoder.Decode(&value); err != nil {
 		return nil, errInvalidCurrentModelConfiguration
 	}
-	number, ok := value.(json.Number)
-	if !ok {
-		return nil, errInvalidCurrentModelConfiguration
+	literal, err := currentModelIntegerLiteral(value)
+	if err != nil {
+		return nil, err
 	}
-	parsed, err := strconv.ParseInt(number.String(), 10, strconv.IntSize)
+	parsed, err := strconv.ParseInt(literal, 10, strconv.IntSize)
 	if err != nil {
 		return nil, errInvalidCurrentModelConfiguration
 	}
 	result := int(parsed)
 	return &result, nil
+}
+
+// currentModelIntegerLiteral returns the decimal text a decoded JSON value
+// carries, for the two shapes an integer field is stored in: a number, and a
+// quoted number. Surrounding whitespace inside the string is trimmed; nothing
+// else about the text is rewritten, so ParseInt stays the single authority on
+// what an integer is.
+func currentModelIntegerLiteral(value any) (string, error) {
+	switch typed := value.(type) {
+	case json.Number:
+		return typed.String(), nil
+	case string:
+		trimmed := strings.TrimSpace(typed)
+		if trimmed == "" {
+			return "", errInvalidCurrentModelConfiguration
+		}
+		return trimmed, nil
+	default:
+		return "", errInvalidCurrentModelConfiguration
+	}
 }
 
 func optionalCurrentModelBool(data map[string]json.RawMessage, key string) (*bool, error) {

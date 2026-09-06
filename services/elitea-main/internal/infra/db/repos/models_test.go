@@ -2,6 +2,7 @@ package repos
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"strconv"
@@ -217,8 +218,13 @@ func TestCurrentModelsRepositorySkipsMalformedRowsAndKeepsTheGoodOnes(t *testing
 		{name: "missing display name", data: `{"name":"model"}`},
 		{name: "data is not object", data: `[]`},
 		{name: "name has wrong type", data: `{"name":7}`},
-		{name: "integer field sent as a string", data: `{"name":"model","context_window":"128000"}`},
-		{name: "numeric string is not cast", data: `{"name":"model","max_output_tokens":"private-secret"}`},
+		// A quoted DECIMAL INTEGER is no longer malformed — see
+		// TestCurrentModelsRepositoryReadsIntegerFieldsStoredAsStrings. These
+		// four are still malformed, because none of them is an integer at all.
+		{name: "non-numeric string", data: `{"name":"model","max_output_tokens":"private-secret"}`},
+		{name: "empty string", data: `{"name":"model","context_window":""}`},
+		{name: "fractional string", data: `{"name":"model","context_window":"128000.5"}`},
+		{name: "integer field sent as a bool", data: `{"name":"model","context_window":true}`},
 		{name: "boolean field sent as a string", data: `{"name":"model","supports_vision":"private-secret"}`},
 	}
 
@@ -244,6 +250,100 @@ func TestCurrentModelsRepositorySkipsMalformedRowsAndKeepsTheGoodOnes(t *testing
 				t.Fatalf("items=%#v", items)
 			}
 		})
+	}
+}
+
+// The AI-Configuration form classified `max_output_tokens` as a SECRET,
+// because the property key contains the substring `token`
+// (apps/elitea-web src/features/credentials/lib/schemaField.ts). A masked text
+// input serialises a string, so every model saved through that form stored
+// `"max_output_tokens": "16000"`.
+//
+// optionalCurrentModelInt refused the quoted number, mapCurrentModelCandidate
+// skipped the row, and the model was absent from every model picker while the
+// row itself was complete and correct. One optional field with the wrong JSON
+// type removed the whole model.
+//
+// The form is fixed. The rows it already wrote are not, and nothing rewrites
+// them, so the reader coerces a quoted decimal integer instead of dropping the
+// row. The value must be the SAME as the unquoted form: a coercion that
+// produced a different number would be worse than the refusal.
+func TestCurrentModelsRepositoryReadsIntegerFieldsStoredAsStrings(t *testing.T) {
+	queries := &currentModelQueriesStub{rows: []sqlcgen.ListCurrentModelConfigurationsRow{
+		currentModelRow(1, 7, configurationapp.CurrentModelSectionLLM, "Quoted", false,
+			`{"name":"quoted","context_window":"128000","max_output_tokens":" 16000 "}`),
+		currentModelRow(2, 7, configurationapp.CurrentModelSectionLLM, "Unquoted", false,
+			`{"name":"unquoted","context_window":128000,"max_output_tokens":16000}`),
+	}}
+	repository := newCurrentModelsRepositoryForTest(t, &currentModelProjectStore{}, queries)
+
+	items, err := repository.List(context.Background(), 7, configurationapp.CurrentModelSectionLLM, false)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("a row whose integer field is a quoted number was skipped: items=%#v", items)
+	}
+	for _, item := range items {
+		if item.ContextWindow == nil || *item.ContextWindow != 128000 {
+			t.Fatalf("%s context_window=%v, want 128000", item.Name, item.ContextWindow)
+		}
+		if item.MaxOutputTokens == nil || *item.MaxOutputTokens != 16000 {
+			t.Fatalf("%s max_output_tokens=%v, want 16000", item.Name, item.MaxOutputTokens)
+		}
+	}
+}
+
+// A negative and a plus-signed literal are integers in both shapes. This pins
+// that the coercion adds no rewriting of its own: strconv.ParseInt stays the
+// single authority on what an integer is, quoted or not.
+func TestOptionalCurrentModelIntAcceptsTheSameLiteralsQuotedAndUnquoted(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want int
+		ok   bool
+	}{
+		{name: "number", raw: `16000`, want: 16000, ok: true},
+		{name: "quoted number", raw: `"16000"`, want: 16000, ok: true},
+		{name: "quoted number with spaces", raw: `"  16000  "`, want: 16000, ok: true},
+		{name: "quoted negative", raw: `"-1"`, want: -1, ok: true},
+		{name: "quoted plus sign", raw: `"+7"`, want: 7, ok: true},
+		{name: "quoted empty", raw: `""`},
+		{name: "quoted words", raw: `"sixteen thousand"`},
+		{name: "quoted fraction", raw: `"1.5"`},
+		{name: "unquoted fraction", raw: `1.5`},
+		{name: "bool", raw: `true`},
+		{name: "object", raw: `{"value":1}`},
+		{name: "array", raw: `[1]`},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			data := map[string]json.RawMessage{"max_output_tokens": json.RawMessage(test.raw)}
+			got, err := optionalCurrentModelInt(data, "max_output_tokens")
+			if !test.ok {
+				if !errors.Is(err, errInvalidCurrentModelConfiguration) {
+					t.Fatalf("value=%v err=%v, want the malformed-configuration error", got, err)
+				}
+				return
+			}
+			if err != nil || got == nil || *got != test.want {
+				t.Fatalf("value=%v err=%v, want %d", got, err, test.want)
+			}
+		})
+	}
+
+	// Absent and JSON null both stay "no value", not an error: the field is
+	// optional and always was.
+	for _, data := range []map[string]json.RawMessage{
+		{},
+		{"max_output_tokens": json.RawMessage(`null`)},
+	} {
+		got, err := optionalCurrentModelInt(data, "max_output_tokens")
+		if err != nil || got != nil {
+			t.Fatalf("absent/null value=%v err=%v, want nil/nil", got, err)
+		}
 	}
 }
 

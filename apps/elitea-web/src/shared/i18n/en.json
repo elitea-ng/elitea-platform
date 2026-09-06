@@ -3364,5 +3364,6 @@
   "pages.admin.email.subtitle": "The relay this deployment sends invitations and notices through. A change takes effect on the next message; no restart.",
   "pages.admin.nav.email": "E-mail",
   "pages.admin.email.field.fromExample": "noreply@example.com",
-  "pages.admin.email.field.publicBaseUrlExample": "https://elitea.example.com"
+  "pages.admin.email.field.publicBaseUrlExample": "https://elitea.example.com",
+  "credentials.form.noLinkedConfiguration": "None"
 }

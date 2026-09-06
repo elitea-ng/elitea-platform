@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { useCheckStoredConfigurationConnection, useTestConfigurationConnection } from './api/useConfigurations';
+import { classifySchemaField, configurationSectionsOf, initialDataForSchema } from './lib/schemaField';
 import { useCredentialWarningModal } from './model/useCredentialWarningModal';
 import { CredentialsControls } from './ui/CredentialsControls';
 import { CredentialsTabBar } from './ui/CredentialsTabBar';
@@ -57,8 +58,7 @@ const PUBLIC_SURFACE = [
   'useDeleteConfiguration',
   'useUpdateConfiguration',
   'CredentialConnectionChecks',
-  'classifySchemaField',
-  'initialDataForSchema',
+  'SchemaField',
   'extractInformationFromCredentialError',
   'generateCredentialTagList',
   'normalizeCredentialPage',
@@ -108,5 +108,13 @@ describe('features/credentials public surface (A7-api-model)', () => {
     expect(exported).not.toContain('CredentialsTabBar');
     expect(exported).not.toContain('CredentialsControls');
     expect(exported).not.toContain('useTestConfigurationConnection');
+    expect(exported).not.toContain('classifySchemaField');
+    expect(exported).not.toContain('initialDataForSchema');
+  });
+
+  it('groups the schema-field classifier, its section reader and the form seeder under SchemaField', () => {
+    expect(slice.SchemaField.classify).toBe(classifySchemaField);
+    expect(slice.SchemaField.configurationSections).toBe(configurationSectionsOf);
+    expect(slice.SchemaField.initialData).toBe(initialDataForSchema);
   });
 });

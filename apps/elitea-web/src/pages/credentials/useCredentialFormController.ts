@@ -11,7 +11,7 @@ import type { Dispatch, SetStateAction } from 'react';
 
 import {
   extractInformationFromCredentialError,
-  initialDataForSchema,
+  SchemaField,
   useAvailableConfigurationsType,
   useConfigurationDetail,
   useCreateConfiguration,
@@ -200,10 +200,10 @@ function useFormSeeding(
       setName(detailData.label ?? detailData.elitea_title ?? '');
       setEliteaTitle(detailData.elitea_title);
       setShared(detailData.shared ?? false);
-      setData({ ...initialDataForSchema(dataSchema), ...detailData.data });
+      setData({ ...SchemaField.initialData(dataSchema), ...detailData.data });
       return;
     }
-    if (dataSchema) setData(initialDataForSchema(dataSchema));
+    if (dataSchema) setData(SchemaField.initialData(dataSchema));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- re-seeds only when the loaded detail or the resolved type schema actually changes.
   }, [mode.kind, detailData, dataSchema]);
 }

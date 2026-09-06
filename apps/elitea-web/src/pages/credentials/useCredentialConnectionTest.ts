@@ -41,7 +41,7 @@
  */
 import { useCallback, useMemo, useRef, useState } from 'react';
 
-import { CredentialConnectionChecks, classifySchemaField } from '@/features/credentials';
+import { CredentialConnectionChecks, SchemaField } from '@/features/credentials';
 import { t } from '@/shared/i18n';
 import type { ConfigSchemaNode } from '@/features/credentials';
 
@@ -63,7 +63,7 @@ export interface CredentialConnectionTestParams {
   readonly configId: string | undefined;
   readonly configType: string | undefined;
   readonly data: Readonly<Record<string, unknown>>;
-  /** Used only to work out which field keys are secret-shaped (`classifySchemaField(...) === 'secret'`). */
+  /** Used only to work out which field keys are secret-shaped (`SchemaField.classify(...) === 'secret'`). */
   readonly schemaProperties: Readonly<Record<string, ConfigSchemaNode>>;
 }
 
@@ -186,7 +186,7 @@ export function useCredentialConnectionTest(params: CredentialConnectionTestPara
   const [secretTouched, setSecretTouched] = useState(false);
 
   const secretFieldKeys = useMemo(
-    () => new Set(Object.entries(schemaProperties).filter(([key, property]) => classifySchemaField(key, property) === 'secret').map(([key]) => key)),
+    () => new Set(Object.entries(schemaProperties).filter(([key, property]) => SchemaField.classify(key, property) === 'secret').map(([key]) => key)),
     [schemaProperties],
   );
   // Read through a ref so `noteFieldChanged` stays referentially stable across
