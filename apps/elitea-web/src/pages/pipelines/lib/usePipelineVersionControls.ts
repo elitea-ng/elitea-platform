@@ -76,8 +76,6 @@ export interface PipelineVersionControlsState {
   readonly handleNewVersionSaved: (created: ApplicationVersionDetail) => void;
   readonly versionDelete:
     | {
-        readonly applicationVersionId: number | undefined;
-        readonly versionName: string;
         readonly onVersionDeleted: () => void;
         readonly onVersionDeleteError: (message: string) => void;
       }
@@ -290,18 +288,20 @@ export function usePipelineVersionControls(args: PipelineVersionControlsArgs): P
   const versionDelete = useMemo(() => {
     if (activeVersion === undefined) return undefined;
     return {
-      applicationVersionId: Number(activeVersion.id),
-      versionName: activeVersion.name,
       onVersionDeleted: handleVersionDeleted,
       /*
-       * `DeleteVersionButton` treats `onError` as its ONLY failure channel:
-       * on a refusal it deliberately leaves its confirm dialog open and
-       * renders nothing itself. Omitting this left a refused delete — the
-       * server answers "Published version can not be updated/deleted.
-       * Unpublish first." for a published or embedded version — with the
+       * The banner is the SECOND place the refusal appears. `DeleteVersionDialog`
+       * shows it inside the confirm dialog too (#147); before that slot
+       * existed this callback was the only channel, and omitting it left a
+       * refused delete — the server answers "Unpublish first. Cannot delete a
+       * published version." for a published or embedded version — with the
        * dialog just sitting there, spinner off, and every re-Confirm failing
        * silently. The banner and its `reportVersionError` setter were already
        * wired for the other two version writes; this was the third.
+       *
+       * The version to delete is no longer named here: #147 moved the
+       * trigger into the version menu, which acts on whichever version that
+       * menu marks as selected.
        */
       onVersionDeleteError: setVersionError,
     };

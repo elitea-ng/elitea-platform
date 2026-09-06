@@ -1,17 +1,16 @@
 import type { ReactNode } from 'react';
-import { useCallback, useState } from 'react';
 
 import Box from '@mui/material/Box';
 import type { SxProps, Theme } from '@mui/material/styles';
 
 import type { ApplicationVersionDetail, VersionWriteRequest } from '@/shared/api/generated/model';
 
-import { useSetDefaultVersion } from '../model/useSetDefaultVersion';
+import { useVersionBarCommands } from '../model/useVersionBarCommands';
 import type { AgentPipelineVersionOption } from '../lib/types';
 
 import { AgentPipelineVersionSelector } from './AgentPipelineVersionSelector';
 import { CompareVersionsButton } from './compare-versions/CompareVersionsButton';
-import { DeleteVersionButton } from './DeleteVersionButton';
+import { DeleteVersionDialog } from './DeleteVersionDialog';
 import { SaveNewVersionButton } from './SaveNewVersionButton';
 import { SetDefaultVersionDialog } from './SetDefaultVersionDialog';
 
@@ -37,8 +36,9 @@ import { SetDefaultVersionDialog } from './SetDefaultVersionDialog';
  * `AgentPipelineVersionSelector`'s own "the version-SWITCH mutation is
  * entirely caller-owned" contract.
  *
- * **SET DEFAULT (#147) is the one mutation this component does own, and the
- * reason is that the page has nothing to do with the result.** JRNY-015's
+ * **SET DEFAULT AND DELETE VERSION (#147) are the two mutations this
+ * component owns, and the reason is that the page has nothing to do with the
+ * first and only navigates after the second.** JRNY-015's
  * middle step ("create a new version -> SET DEFAULT -> delete old") had no
  * UI at all: the route, the handler, the repo write and the generated
  * `setApplicationDefaultVersion` all existed, and nothing in the app called
@@ -58,14 +58,21 @@ import { SetDefaultVersionDialog } from './SetDefaultVersionDialog';
  * (`AgentPipelineVersionOption.is_default`), so the default shows on FIRST
  * render and survives a reload.
  *
- * The remembered id below is now an OVERRIDE for the window between a
- * successful PATCH and the next detail fetch, not the only source. It wins
- * while set, because in that window the server flag this component was
- * rendered with is known-stale by exactly the write it just made.
+ * The remembered id is now an OVERRIDE for the window between a successful
+ * PATCH and the next detail fetch, not the only source. It wins while set,
+ * because in that window the server flag this component was rendered with is
+ * known-stale by exactly the write it just made. The same holds for a version
+ * this component has seen deleted: it leaves the menu at once, not at the
+ * next fetch.
  *
  * The one thing still not readable is a default recorded for a version the
  * list does not contain; the list is the whole version set, so that is a
  * database inconsistency rather than a gap.
+ *
+ * BOTH of those overrides, and the pending state of the two dialogs, live in
+ * `../model/useVersionBarCommands`. They were inline here until the delete
+ * half landed and put this component at a cyclomatic complexity of 17 against
+ * the §3.5 budget of 12.
  */
 export interface AgentVersionControlsProps {
   readonly applicationId: string;
@@ -98,18 +105,29 @@ export interface AgentVersionControlsProps {
   readonly onNewVersionSaved: (created: ApplicationVersionDetail) => void;
   readonly onNewVersionError?: ((message: string) => void) | undefined;
   /**
-   * #307 — version delete. `useDeleteVersion` was exported from this slice's
-   * public API for "a not-yet-built version-delete dialog" and then had no
-   * caller anywhere; `VersionReplacementModal`, its in-use branch, had none
-   * either. Both hang off `DeleteVersionButton`, composed here so the
+   * #307/#147 — version delete. `useDeleteVersion` was exported from this
+   * slice's public API for "a not-yet-built version-delete dialog" and then
+   * had no caller anywhere; `VersionReplacementModal`, its in-use branch, had
+   * none either. Both hang off `DeleteVersionDialog`, composed here so the
    * version bar stays the single mount point for everything version-scoped.
    * Optional: a caller that cannot supply `onVersionDeleted` (nowhere to
    * navigate afterwards) gets no delete affordance rather than a dead one.
+   *
+   * #147 moved the TRIGGER into the version menu, beside "Set as default",
+   * where the baseline puts it — see `DeleteVersionDialog`'s doc comment.
+   * The version to delete now comes FROM THAT MENU (whichever version it
+   * marks as selected), so the caller no longer names one. The old
+   * `applicationVersionId`/`versionName` pair said "the page's active
+   * version" and is gone: it could only ever delete the version the user was
+   * already on, while the menu's item, like the baseline's, reaches any of
+   * them.
+   *
+   * `onVersionDeleteError` is a SECOND reporting channel, not the only one:
+   * the refusal is shown inside the dialog whether or not a caller supplies
+   * this. Leaving it unset used to mean the refusal reached nobody.
    */
   readonly versionDelete?:
     | {
-        readonly applicationVersionId: number | undefined;
-        readonly versionName: string;
         readonly onVersionDeleted: () => void;
         readonly onVersionDeleteError?: ((message: string) => void) | undefined;
       }
@@ -117,31 +135,6 @@ export interface AgentVersionControlsProps {
 }
 
 const wrapperSx: SxProps<Theme> = { display: 'flex', alignItems: 'center', gap: '0.75rem' };
-
-/**
- * Which version the menu marks as the default.
- *
- * `justSet` — the id of a PATCH this component has already seen succeed — wins
- * over the flag on the options, because in the window before the detail is
- * re-fetched those options are stale by exactly that write. With no such write,
- * the server's own answer decides.
- *
- * `find` rather than `filter`: exactly one version may carry the flag (the Go
- * handler derives every row's from the single `applications.meta.
- * default_version_id`), so a second one would be a database inconsistency, not
- * a case to render. `=== true` so an option list that omits the field reads as
- * "this list cannot say" rather than as a truthiness accident.
- *
- * Module-level, not inline: `AgentVersionControls` sits on oxlint's
- * `complexity` budget (§3.5, ≤12) and the predicate alone put it over.
- */
-function resolveDefaultVersionId(
-  versions: readonly AgentPipelineVersionOption[],
-  justSet: number | undefined,
-): number | undefined {
-  if (justSet !== undefined) return justSet;
-  return versions.find((version) => version.is_default === true)?.id;
-}
 
 export function AgentVersionControls({
   applicationId,
@@ -156,43 +149,20 @@ export function AgentVersionControls({
   onNewVersionError,
   versionDelete,
 }: AgentVersionControlsProps): ReactNode {
-  /* #147 — the version awaiting confirmation, and the default this component
-     has itself just set (see the module doc: an override over the server's
-     own flag, for the window before the detail is re-fetched). */
-  const [pendingDefault, setPendingDefault] = useState<AgentPipelineVersionOption | undefined>(undefined);
-  const [justSetDefaultId, setJustSetDefaultId] = useState<number | undefined>(undefined);
-
-  const defaultVersionId = resolveDefaultVersionId(versions, justSetDefaultId);
-
-  // The hook's ids are non-optional; the item is only offered once `projectId`
-  // resolves, so the placeholder below is never the one a request is made with
-  // — the same guard `DeleteVersionButton` states for its own ids.
-  const { doSetDefaultVersion, isSettingDefaultVersion, errorMessage, resetError } = useSetDefaultVersion({
-    projectId: projectId ?? '',
-    applicationId: Number(applicationId),
+  /*
+   * Both commands' state lives in one hook (#147). Inline, the two flows put
+   * this component at a cyclomatic complexity of 17 against the §3.5 budget
+   * of 12 — and every branch they added was state, not layout. The hook hands
+   * back finished dialog props, so the JSX below spreads them and decides
+   * nothing.
+   */
+  const commands = useVersionBarCommands({
+    applicationId,
+    projectId,
+    versions,
+    canWrite: canSaveNewVersion,
+    versionDelete,
   });
-
-  const canSetDefault = canSaveNewVersion && projectId !== undefined;
-
-  const requestSetDefault = useCallback(
-    (version: AgentPipelineVersionOption) => {
-      resetError();
-      setPendingDefault(version);
-    },
-    [resetError],
-  );
-
-  const closeSetDefault = useCallback(() => setPendingDefault(undefined), []);
-
-  const confirmSetDefault = useCallback(async (): Promise<void> => {
-    if (pendingDefault === undefined) return;
-    const ok = await doSetDefaultVersion(pendingDefault.id);
-    // Left open on failure: the default is unchanged, and closing the dialog
-    // would read as "done". `errorMessage` carries the server's own refusal.
-    if (!ok) return;
-    setJustSetDefaultId(pendingDefault.id);
-    setPendingDefault(undefined);
-  }, [doSetDefaultVersion, pendingDefault]);
 
   return (
     <Box sx={wrapperSx}>
@@ -204,41 +174,31 @@ export function AgentVersionControls({
       <CompareVersionsButton
         projectId={projectId}
         applicationId={Number(applicationId)}
-        versions={versions}
+        versions={commands.visibleVersions}
         activeVersionId={activeVersionId}
       />
+      {/* `onSetDefaultVersion`/`onDeleteVersion` are `undefined` when the
+          command is not on offer, and the menu renders no item for an absent
+          callback — see `AgentPipelineVersionSelector`'s prop docs. */}
       <AgentPipelineVersionSelector
         applicationVersionId={activeVersionId}
-        versions={versions}
+        versions={commands.visibleVersions}
         onSelectVersion={onSelectVersion}
-        defaultVersionId={defaultVersionId}
-        {...(canSetDefault ? { onSetDefaultVersion: requestSetDefault } : {})}
+        defaultVersionId={commands.defaultVersionId}
+        onSetDefaultVersion={commands.onSetDefaultVersion}
+        onDeleteVersion={commands.onDeleteVersion}
       />
-      <SetDefaultVersionDialog
-        open={pendingDefault !== undefined}
-        versionName={pendingDefault?.name ?? ''}
-        confirming={isSettingDefaultVersion}
-        errorMessage={errorMessage}
-        onClose={closeSetDefault}
-        onConfirm={() => {
-          void confirmSetDefault();
-        }}
-      />
-      {versionDelete !== undefined && canSaveNewVersion && (
-        <DeleteVersionButton
-          projectId={projectId}
-          applicationId={Number(applicationId)}
-          versionId={versionDelete.applicationVersionId}
-          versionName={versionDelete.versionName}
-          onDeleted={versionDelete.onVersionDeleted}
-          {...(versionDelete.onVersionDeleteError === undefined ? {} : { onError: versionDelete.onVersionDeleteError })}
-        />
-      )}
+      <SetDefaultVersionDialog {...commands.setDefaultDialog} />
+      {/* #147 — the delete confirmation. The version it acts on is the one
+          the MENU offered, not the page's active version: the menu's item
+          works on whichever version the menu marks as selected, exactly as
+          "Set as default" does. */}
+      <DeleteVersionDialog {...commands.deleteDialog} />
       {canSaveNewVersion && (
         <SaveNewVersionButton
           applicationId={applicationId}
           projectId={projectId}
-          existingVersionNames={versions.map((version) => version.name)}
+          existingVersionNames={commands.visibleVersions.map((version) => version.name)}
           version={versionBody}
           disabled={saveNewVersionDisabled}
           onSuccess={onNewVersionSaved}

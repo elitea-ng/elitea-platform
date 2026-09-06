@@ -83,6 +83,7 @@
   "agents.toolMenu.searchToolkits": "Search toolkits...",
   "agents.toolMenu.toolkit": "Toolkit",
   "agents.versionSelector.defaultMarker": "Default",
+  "agents.versionSelector.deleteVersion": "Delete version",
   "agents.versionSelector.invalidVersion": "Invalid version",
   "agents.versionSelector.invalidVersionTooltip": "The selected version no longer exists. Please select a valid version or remove this agent/pipeline.",
   "agents.versionSelector.noVersions": "No versions available",

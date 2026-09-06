@@ -11,7 +11,18 @@ import {
 } from '@/shared/api/generated/applications/applications';
 import type { ApplicationRelationList, OkResponse } from '@/shared/api/generated/model';
 
-import { applicationErrorMessage } from '../lib/errorMessage';
+import { t } from '@/shared/i18n';
+
+import { applicationServerErrorMessage } from '../lib/errorMessage';
+
+/**
+ * The message shown when the server refused the delete and explained nothing.
+ * A function, not a module constant: `t` reads the loaded bundle, and a
+ * module-level call would freeze the string at import time.
+ */
+function deleteFailedFallback(): string {
+  return t('features.agents.deleteVersion.error', 'Failed to delete this version.');
+}
 
 /**
  * Port of `apps/elitea-ui/src/hooks/application/useDeleteVersion.js`.
@@ -100,11 +111,32 @@ export interface UseDeleteVersionInput {
   readonly versionId: number;
 }
 
+/**
+ * What one delete attempt answered.
+ *
+ * `errorMessage` IS ON THE OUTCOME, not only in the hook's state, and that is
+ * the point (#147). `error` below is React state: a caller that reads
+ * `errorMessage` from its own closure straight after `await doDeleteVersion()`
+ * reads the value from the render it was created in, which is the value from
+ * BEFORE the failure. `DeleteVersionButton` did exactly that, so the server's
+ * own refusal ("Unpublish first. Cannot delete a published version.") was
+ * replaced by the generic fallback on every first failure. The state fields
+ * stay, for a caller that renders the message reactively.
+ *
+ * Not exported: the shape is reachable through `UseDeleteVersionResult`, and
+ * knip flags an unused named export — the same discipline
+ * `CheckVersionInUseResult` above records.
+ */
+interface DeleteVersionOutcome {
+  readonly ok: boolean;
+  readonly errorMessage: string | undefined;
+}
+
 export interface UseDeleteVersionResult {
   readonly doCheckVersionInUse: () => Promise<CheckVersionInUseResult | undefined>;
   readonly isCheckingInUse: boolean;
   /** `undefined` when a replacement version id is supplied — deletion happens via the batch-replace endpoint in that case, not this one; see the module doc comment. */
-  readonly doDeleteVersion: (replacementVersionId?: number) => Promise<boolean>;
+  readonly doDeleteVersion: (replacementVersionId?: number) => Promise<DeleteVersionOutcome>;
   readonly isDeletingVersion: boolean;
   readonly error: unknown;
   readonly errorMessage: string | undefined;
@@ -143,7 +175,7 @@ export function useDeleteVersion(input: UseDeleteVersionInput): UseDeleteVersion
   }, [input.applicationId, input.projectId, input.versionId, queryClient]);
 
   const doDeleteVersion = useCallback(
-    async (replacementVersionId?: number): Promise<boolean> => {
+    async (replacementVersionId?: number): Promise<DeleteVersionOutcome> => {
       setIsDeletingVersion(true);
       setError(undefined);
       try {
@@ -155,15 +187,15 @@ export function useDeleteVersion(input: UseDeleteVersionInput): UseDeleteVersion
             { delete_old: true },
           );
           const response = await queryClient.query(options);
-          return (response as { data: OkResponse }).data.ok;
+          return { ok: (response as { data: OkResponse }).data.ok, errorMessage: undefined };
         }
         await queryClient.query(
           getDeleteApplicationVersionQueryOptions(input.projectId, input.applicationId, input.versionId),
         );
-        return true;
+        return { ok: true, errorMessage: undefined };
       } catch (caught) {
         setError(caught);
-        return false;
+        return { ok: false, errorMessage: applicationServerErrorMessage(caught, deleteFailedFallback()) };
       } finally {
         setIsDeletingVersion(false);
       }
@@ -177,6 +209,6 @@ export function useDeleteVersion(input: UseDeleteVersionInput): UseDeleteVersion
     doDeleteVersion,
     isDeletingVersion,
     error,
-    errorMessage: error === undefined ? undefined : applicationErrorMessage(error),
+    errorMessage: error === undefined ? undefined : applicationServerErrorMessage(error, deleteFailedFallback()),
   };
 }
