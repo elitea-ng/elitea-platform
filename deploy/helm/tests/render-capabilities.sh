@@ -807,7 +807,7 @@ refuses "the Configurations plane without ANY authentication" \
 # only on the enabled path and refuses to start without it, so the pair is a
 # CrashLoopBackOff whose cause is one log line. The chart states it instead.
 refuses "the Configurations plane without a public project id" \
-  "needs env.ELITEA_AI_PROJECT_ID" \
+  "needs a public project id" \
   --set-string main.env.OIDC_ISSUER_URL=https://sso.example.invalid \
   --set-string main.env.ELITEA_CONFIGURATIONS_ENABLED=true
 

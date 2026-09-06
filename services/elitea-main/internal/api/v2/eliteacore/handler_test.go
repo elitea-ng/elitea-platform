@@ -16,6 +16,7 @@ import (
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/publicproject"
 )
 
 // newHandler creates a Handler with a nil pool. Safe only for static handlers
@@ -128,6 +129,40 @@ func TestPlatformSettings(t *testing.T) {
 			t.Errorf("%s should be false", key)
 		}
 	}
+}
+
+// TestPlatformSettingsPublishesPublicProjectID covers the key the SPA reads
+// instead of its build-time VITE_PUBLIC_PROJECT_ID copy. The default and the
+// configured value are BOTH asserted: a handler that published a constant 1
+// would pass the default case on its own, and a deployment whose public project
+// is not id 1 is exactly the case this key exists for.
+func TestPlatformSettingsPublishesPublicProjectID(t *testing.T) {
+	t.Run("default", func(t *testing.T) {
+		for _, name := range append([]string{publicproject.Canonical}, publicproject.Deprecated...) {
+			t.Setenv(name, "")
+		}
+		h := newHandler()
+		w := httptest.NewRecorder()
+		h.PlatformSettings(w, httptest.NewRequest(http.MethodGet, "/", nil))
+		assertStatus(t, w, http.StatusOK)
+		if got := decodeObj(t, w)["public_project_id"]; got != float64(publicproject.Default) {
+			t.Errorf("public_project_id = %v, want %d", got, publicproject.Default)
+		}
+	})
+
+	t.Run("configured", func(t *testing.T) {
+		for _, name := range append([]string{publicproject.Canonical}, publicproject.Deprecated...) {
+			t.Setenv(name, "")
+		}
+		t.Setenv(publicproject.Canonical, "42")
+		h := newHandler()
+		w := httptest.NewRecorder()
+		h.PlatformSettings(w, httptest.NewRequest(http.MethodGet, "/", nil))
+		assertStatus(t, w, http.StatusOK)
+		if got := decodeObj(t, w)["public_project_id"]; got != float64(42) {
+			t.Errorf("public_project_id = %v, want 42", got)
+		}
+	})
 }
 
 // ---- ProjectContext / UpdateProjectContext ----------------------------------

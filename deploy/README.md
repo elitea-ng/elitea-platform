@@ -364,7 +364,7 @@ file whose capability set matches `docker-compose.standalone-full.yml`.
 | `ELITEA_ARTIFACTS_ENABLED` | on | on | object storage configured |
 | `ELITEA_CONFIGURATIONS_ENABLED` | **derived** | **on** | any authentication **and** `ELITEA_AI_PROJECT_ID` |
 | `ELITEA_PROJECT_INFO_ENABLED` | off | **on** | production authentication |
-| `ELITEA_AI_PROJECT_ID` | empty | **set** | must name a project that exists |
+| `ELITEA_AI_PROJECT_ID` | empty | **set** | must name a project that exists — set `platform.aiProjectId`, not this key |
 | `ELITEA_CONFIGURATIONS_MUTATION_ENABLED` | off | off | `ELITEA_CONFIGURATIONS_ENABLED` **and** `runtime.enabled` — read below |
 | `ELITEA_INDEX_TYPES_ENABLED` | off | **on** | production authentication |
 | `ELITEA_APPLICATION_SKILLS_ENABLED` | off | **on** | production authentication |
@@ -416,7 +416,8 @@ configuration write path, and that path decides `status_ok` in the request
 
 `deploy/helm/elitea/values-auth-minimal.yaml` is that shape:
 `fileConfig.authConfig` + `runtimeRedis`, **no runtime plane**, and
-`ELITEA_CONFIGURATIONS_ENABLED` + `ELITEA_AI_PROJECT_ID` on top.
+`ELITEA_CONFIGURATIONS_ENABLED` + the public project (`platform.aiProjectId`)
+on top.
 `templates/guards.yaml` ties the worker to the runtime plane and to
 `runtimeRedis`; it does not tie `runtimeRedis` to the runtime plane, so this
 combination renders. The TLS Redis is not optional even so — production Form
@@ -643,16 +644,40 @@ exactly like their `runtime.material` counterparts, and
 `fileConfig.authConfig.material.volume` is the same alternative for a CSI secret
 driver.
 
-### `ELITEA_AI_PROJECT_ID` is set in two places
+### The public project: set `platform.aiProjectId`, once
 
-`deploy/helm/elitea/values.yaml` carries this key under `main.env` and under
-`llmGateway.env`, and **both must name the same project**. elitea-main merges
-that project's configurations into every other project's option lookups; the
-gateway reads it to serve the shared models an operator publishes (issue
-#316). Empty on the gateway side leaves shared models unreachable: the model
-picker offers them, and the request then finds no credential. Both ship empty, because an id naming a schema that
-does not exist makes every credential read fail, so the operator must choose
-one project and set it in both places.
+```yaml
+platform:
+  aiProjectId: "1"   # the project whose `shared = true` configurations everyone uses
+```
+
+Three components need this id, and each one used to take its own copy:
+`main.env.ELITEA_AI_PROJECT_ID`, `llmGateway.env.ELITEA_AI_PROJECT_ID` and the
+SPA's `web.env.VITE_PUBLIC_PROJECT_ID`. `platform.aiProjectId` fills all three.
+
+**Two copies that disagree produce no error.** elitea-main merges that project's
+configurations into every other project's option lookups and the admin provider
+surface WRITES a shared credential into `p_<id>`; the gateway RESOLVES shared
+credentials out of `p_<id>` (issue #316); the SPA decides which project is
+public with a third copy. When they differ, the credential is stored, listed and
+reported healthy, and resolves for nobody — with every pod Ready and nothing
+logged.
+
+`helm template` now refuses a values file whose copies disagree, and elitea-main
+refuses to start when the environment names two different projects. A values
+file that still sets the component keys keeps working while the values agree.
+
+It must name a project that EXISTS: the id becomes the PostgreSQL schema name
+`p_<id>`, so an id with no schema fails every credential read. It ships **empty**
+for that reason. Empty also matters for a default install: with
+`ELITEA_CONFIGURATIONS_ENABLED` off, elitea-main refuses to start when
+`ELITEA_AI_PROJECT_ID` is present at all. The SPA still gets `"1"` when nothing
+names a project, which is what every reference deployment here uses.
+
+The SPA no longer depends on its own copy for correctness. elitea-main publishes
+the resolved id on `GET /api/v2/elitea_core/platform_settings/prompt_lib`
+(`public_project_id`), and the browser prefers that; `VITE_PUBLIC_PROJECT_ID`
+is the fallback for a deployment too old to send the key.
 
 ### `GATEWAY_EGRESS_ALLOWLIST` is the bootstrap floor, not the whole policy
 

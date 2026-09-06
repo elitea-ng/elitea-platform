@@ -28,6 +28,7 @@ import {
 import { usePermissionList } from '@/shared/api/generated/auth/auth';
 import type { Permission } from '@/shared/api/generated/model';
 import { PERMISSIONS } from '@/shared/lib/permissions';
+import { useIsPublicProject } from '@/shared/lib/hooks/usePublicProjectId';
 import { useSelectedProjectStore } from '@/widgets/app-shell';
 import { t } from '@/shared/i18n';
 import type { PromptConfig } from '@/features/settings';
@@ -36,10 +37,6 @@ import { servicePromptsFeature } from '@/features/settings';
 const { ServicePromptsBody } = servicePromptsFeature;
 
 /* ── helpers ──────────────────────────────────────────────────────────── */
-
-function isPublicProject(projectId: string | null | undefined): boolean {
-  return projectId === '1' || projectId === undefined;
-}
 
 function deriveLabelFromKey(key: string): string {
   const safe = String(key || '').trim();
@@ -60,7 +57,20 @@ function extractErrorMessage(err: unknown, fallback: string): string {
 /* ── component ────────────────────────────────────────────────────────── */
 export const ServicePrompts = memo(function ServicePrompts() {
   const projectId = useSelectedProjectStore((s) => s.project?.id ?? '');
-  const enabled = !!projectId && isPublicProject(projectId);
+  /*
+   * The public-project test used to be `projectId === '1'`, a literal, and this
+   * whole section is gated on it. On a deployment whose public project is not
+   * id 1, every query below stayed disabled and the page rendered its empty
+   * state — with no request made, no error, and nothing in the console.
+   *
+   * `useIsPublicProject` asks the server for the id (published on
+   * `platform_settings`) and falls back to the image's
+   * `VITE_PUBLIC_PROJECT_ID`. On a deployment whose public project IS id 1 —
+   * every reference deployment in this repository — the answer is identical to
+   * the literal it replaced.
+   */
+  const isPublic = useIsPublicProject(projectId);
+  const enabled = !!projectId && isPublic;
 
   /* ── data fetching ─────────────────────────────────────────────────── */
   const { data: configsData, isLoading, isFetching } = useGetConfigurationsListQuery(

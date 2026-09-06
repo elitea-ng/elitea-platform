@@ -82,7 +82,7 @@ manifest and the guards cannot disagree about what the plane is doing.
 {{- $stated := get $env "ELITEA_CONFIGURATIONS_ENABLED" | toString -}}
 {{- if $stated -}}
 {{- $stated -}}
-{{- else if and (eq (include "elitea-main.authenticationComposed" .) "true") (get $env "ELITEA_AI_PROJECT_ID" | toString) -}}
+{{- else if and (eq (include "elitea-main.authenticationComposed" .) "true") (include "elitea.aiProjectId" .) -}}
 true
 {{- else -}}
 false
@@ -141,8 +141,8 @@ because it passes a manifest the binary then rejects.
   The variable is read only on the enabled path, so this pair looks from the
   outside like a pod that starts, exits and restarts. State it here instead.
 */}}
-{{- if not (get $env "ELITEA_AI_PROJECT_ID" | toString) -}}
-{{- fail "env.ELITEA_CONFIGURATIONS_ENABLED=\"true\" needs env.ELITEA_AI_PROJECT_ID. Name the project whose configurations are PUBLIC and merge into every other project's option lookups; it must name a project that EXISTS. cmd/elitea-main/configurations_config.go refuses to start with \"ELITEA_AI_PROJECT_ID is required\"." -}}
+{{- if not (include "elitea.aiProjectId" .) -}}
+{{- fail "env.ELITEA_CONFIGURATIONS_ENABLED=\"true\" needs a public project id (platform.aiProjectId, or env.ELITEA_AI_PROJECT_ID). Name the project whose configurations are PUBLIC and merge into every other project's option lookups; it must name a project that EXISTS. cmd/elitea-main/configurations_config.go refuses to start with \"ELITEA_AI_PROJECT_ID is required\"." -}}
 {{- end -}}
 {{- end -}}
 
