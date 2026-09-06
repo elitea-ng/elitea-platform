@@ -13,12 +13,14 @@
 #   2. There is a recorded path that ends the exemption.
 #
 # Criterion 1 used to read "the finding set is owned outside this repository",
-# full stop. elitea-worker-python widened it, deliberately and visibly: 50 of
-# its 80 findings come from the Debian base and have no fix in bookworm, while
-# 30 are ours and fixable. Under the old wording that image had no honest home
-# — it could not block (the 50 make every branch red) and it could not be
-# exempt (the 30 are ours). The wording now describes the mixed case, and the
-# retirement issue is what keeps it from being a hiding place: it names the 30.
+# full stop. elitea-worker-python widened it, deliberately and visibly: most of
+# its findings come from a Debian base with no fix published, while a smaller
+# part was ours and fixable. Under the old wording that image had no honest
+# home — it could not block (the base findings make every branch red) and it
+# could not be exempt (the rest were ours). The wording now describes the mixed
+# case, and the retirement issue is what keeps it from being a hiding place: it
+# names the fixable part. #554 has since bumped that part, and the entry below
+# records exactly what is left and who owns it.
 #
 # Name both issues on the line above the entry: the findings, and the path that
 # ends the entry. Delete the entry when that path completes.
@@ -41,18 +43,42 @@
 # retirement #339 — the index plane moves to index v2 and this image is deleted
 pylon-indexer
 
-# findings #553 — 50 HIGH/CRITICAL from the python:3.12-slim Debian base with
-#   no fix in bookworm, plus 30 in site-packages that ARE fixable
-# retirement #554 — bump the 11 fixable packages through elitea-sdk.lock.json,
-#   then flip blocking to true and delete this line
+# findings #553 — RE-MEASURED 2026-09-06 on cold local builds (trivy 0.74.0,
+#   --severity HIGH,CRITICAL, the scan job's settings). 101 lines, 7 CRITICAL
+#   and 94 HIGH: 82 from the Debian base and 19 in site-packages. Before this
+#   change the same measurement read 120 lines (84 Debian, 36 Python).
+#
+#   The Debian half has NO published fixed version for any of the 82, on either
+#   base: bookworm reported 84 and trixie 82. That half satisfies criterion 1
+#   and is why the entry stays.
+#
+#   The Python half is now 19, and 17 of the 19 are three packages that
+#   elitea-sdk 0.9.8 pins in its OWN base dependencies, not in this repository:
+#     pillow 11.1.0 (13 lines) — SDK `pillow~=11.1.0`, fixes start at 12.1.1
+#     starlette 0.45.3 (3)     — SDK `fastapi==0.115.9`, which caps starlette<0.46
+#     h11 0.14.0 (1)           — SDK `httpcore==1.0.7`, which caps h11<0.15
+#   A resolver refuses every attempt to raise them, so those 17 are also owned
+#   outside this repository. The last 2 are nltk CVE-2026-81726 (no fixed
+#   version published) and unstructured CVE-2026-71428 (fixed in 0.24.0, which
+#   states beautifulsoup4>=4.14.3, psutil>=7.2.2 and charset-normalizer>=3.4.4 —
+#   a closure move under every indexing family, so it waits for a parity run).
+# retirement #554 — the 11 fixable packages named in #553 are bumped (see
+#   services/elitea-worker-python/pyproject.toml). What is left needs an
+#   elitea-sdk release that raises pillow, fastapi and httpcore, plus the
+#   unstructured 0.24.0 parity run. Delete this line and flip blocking to true
+#   when the image reports zero.
 elitea-worker-python
 
-# findings #635 — 16 HIGH/CRITICAL, ALL from the Debian base and NONE from this
-#   project's own packages, with no fixed version published for any of them.
-#   Measured down from 73 first: the base moved from python:3.12.10-slim
-#   (Debian 12.11) to 3.12.14-slim (trixie), and the three findings that DID
-#   have a fix are closed by an --only-upgrade in the Containerfile.
-# retirement #636 — re-measure on each base bump; perl-base alone is 8 of the
-#   16 and nothing in the image runs perl, so removing it may end this entry
-#   before Debian does
+# findings #635 — RE-MEASURED 2026-09-06 on a cold local build of the shipping
+#   image (trivy 0.74.0, --severity HIGH,CRITICAL, the scan job's settings):
+#   54 lines, 3 CRITICAL and 51 HIGH. ALL 54 are Debian base packages, NONE is
+#   in this project's own packages, and trivy publishes NO fixed version for
+#   any of them, so the --only-upgrade list in the Containerfile has nothing to
+#   add. The entry was written at 16; util-linux (CVE-2026-76642, -78408,
+#   -78409, -78410 across nine binary packages) and systemd (CVE-2026-16742)
+#   were published after that measurement. The base is unchanged and is the
+#   newest python:3.12-slim.
+# retirement #636 — re-measure on each base bump. perl-base is 8 of the 54, so
+#   removing it no longer ends this entry on its own; the entry ends when
+#   Debian ships the fixes.
 elitea-deepwiki

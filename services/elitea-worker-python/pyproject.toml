@@ -8,7 +8,10 @@ version = "0.1.0"
 description = "Standalone language-neutral ELITEA runtime reference worker"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-  "cryptography>=48.0.1,<49",
+  # Raised from >=48.0.1 for CVE-2026-69247 (fixed in 50.0.0) and
+  # CVE-2026-69249 (fixed in 49.0.0). The lock records the exact wheel digest
+  # for each architecture, so the floor and the lock move together (#554).
+  "cryptography>=50.0.1,<51",
   "elitea-sdk==0.9.8",
   "elitea-runtime-proto==0.1.0",
   "grpcio>=1.76,<2",
@@ -18,7 +21,11 @@ dependencies = [
   # registry's lightweight tools package initializer. Keep these aligned with
   # the pinned SDK runtime extra without installing the full indexing stack in
   # the configuration-validation worker image.
-  "langchain-core==1.2.7",
+  #
+  # Raised from 1.2.7 for CVE-2026-34070 (fixed in 1.2.22) and CVE-2026-44843
+  # (fixed in 1.3.3). 1.3.3 is also the floor langchain-classic 1.0.7 states,
+  # so one version answers both (#554).
+  "langchain-core==1.3.3",
   # langsmith 0.12.0 moved its HTTP stack from httpx to httpx2/httpcore2, which
   # requires h11>=0.16 — and httpx<1 above resolves httpcore 1.0.7, which
   # requires h11<0.15. The two cannot coexist, so every image build failed with
@@ -26,8 +33,8 @@ dependencies = [
   #
   # langsmith is TRANSITIVE (langchain-core requires langsmith>=0.3.45,<1.0.0),
   # so nothing here named it and nothing here bounded it. This is the same
-  # class the mcp==1.27.1 pin below was written for, and the same remedy: state
-  # the boundary explicitly so a clean build cannot silently cross it.
+  # class the mcp pin below was written for, and the same remedy: state the
+  # boundary explicitly so a clean build cannot silently cross it.
   #
   # MEASURED, not guessed: 0.11.2 requires httpx<1,>=0.23.0 and 0.12.0 requires
   # httpx2<3,>=2 (PyPI metadata). Lift this when the SDK's own stack moves to
@@ -51,8 +58,17 @@ agent-current = [
   # which conflicts with the current SDK's admitted httpcore==1.0.7/h11<0.15.
   # Pin the current deployed baseline explicitly so clean image builds cannot
   # silently cross that incompatible major-version boundary.
-  "mcp==1.27.1",
-  "langgraph-checkpoint-postgres==2.0.21",
+  #
+  # Raised from 1.27.1 for CVE-2026-52869 and CVE-2026-52870 (fixed in 1.27.2)
+  # and CVE-2026-59950 (fixed in 1.28.1). MEASURED: 1.28.1 still declares
+  # httpx<1.0.0 and starlette>=0.27 on Python 3.12, so it stays inside the SDK
+  # boundary above (#554).
+  "mcp==1.28.1",
+  # Raised from 2.0.21 with langgraph-checkpoint below: CVE-2025-64439 is fixed
+  # in langgraph-checkpoint 3.0.0, and 2.0.21 states langgraph-checkpoint<3.0.0.
+  # The two versions must move together. langgraph 1.0.7 admits
+  # langgraph-checkpoint>=2.1.0,<5.0.0, so it does not need to move.
+  "langgraph-checkpoint-postgres==3.0.0",
 ]
 indexing-current = [
   # Exact current-baseline indexing closure. This intentionally replaces
@@ -80,33 +96,47 @@ indexing-current = [
   "joblib==1.5.3",
   "langchain==1.2.6",
   "langchain-anthropic==1.3.1",
-  "langchain-classic==1.0.1",
+  # Raised from 1.0.1 for CVE-2026-45134. 1.0.7 states langchain-core>=1.3.3
+  # and langchain-text-splitters>=1.1.2, which is why those two move with it.
+  "langchain-classic==1.0.7",
   "langchain-community==0.4.1",
   "langchain-openai==1.1.7",
   "langchain-postgres==0.0.16",
-  "langchain-text-splitters==1.1.0",
-  "langgraph-checkpoint==2.1.2",
+  "langchain-text-splitters==1.1.2",
+  # Raised from 2.1.2 for CVE-2025-64439. It carries
+  # langgraph-checkpoint-postgres to 3.0.0; see the note in agent-current.
+  "langgraph-checkpoint==3.0.0",
   "langgraph-prebuilt==1.0.7",
   "langdetect==1.0.9",
-  "lxml==5.2.2",
+  # Raised from 5.2.2 for CVE-2026-41066.
+  "lxml==6.1.0",
   "mammoth==1.9.0",
   "markdownify==1.1.0",
   "msrest==0.7.1",
   "numpy==1.26.4",
   "oauthlib==3.3.1",
   "openpyxl==3.1.5",
-  "nltk==3.10.0",
+  # Raised from 3.10.0 for CVE-2026-79675, CVE-2026-71513, CVE-2026-72818 and
+  # CVE-2026-78680. CVE-2026-81726 has no fixed version and stays.
+  "nltk==3.10.3",
   "nest-asyncio==1.6.0",
   "pandas==2.2.3",
   "pdf2image==1.16.3",
   "pgvector==0.2.5",
+  # PINNED BY THE SDK, NOT BY THIS FILE. elitea-sdk 0.9.8 declares
+  # `pillow~=11.1.0`, so 11.1.0 is the only version this image can install.
+  # It carries 13 HIGH findings whose fixes start at pillow 12.1.1. They are
+  # the largest part of what keeps elitea-worker-python in
+  # .github/image-scan-exempt.txt, and they end with an elitea-sdk release,
+  # not with a change here (#554).
   "pillow==11.1.0",
   "psutil==7.1.3",
   "psycopg[binary]==3.3.4",
   "psycopg-pool==3.3.1",
   "pytesseract==0.3.13",
   "pymupdf==1.24.9",
-  "pypdf==4.3.1",
+  # Raised from 4.3.1 for CVE-2026-59935 and CVE-2026-59936.
+  "pypdf==6.14.2",
   "pypdfium2==5.8.0",
   "PyGithub==2.3.0",
   "python-iso639==2026.7.23",
@@ -140,7 +170,11 @@ indexing-current = [
   # QTest and other document families share the SDK Markdown parser. Keep the
   # parser and its client on the current Pylon-compatible pair and verify the
   # actual parser path before the worker opens its command stream.
-  "unstructured==0.16.23",
+  # Raised from 0.16.23 for CVE-2025-64712. CVE-2026-71428 needs 0.24.0, which
+  # states beautifulsoup4>=4.14.3, psutil>=7.2.2 and charset-normalizer>=3.4.4.
+  # Those three are shared by every current indexing family, so that step waits
+  # for a parity run (#554).
+  "unstructured==0.18.18",
   "unstructured-client==0.39.1",
   "xlrd==1.2.0",
 ]
