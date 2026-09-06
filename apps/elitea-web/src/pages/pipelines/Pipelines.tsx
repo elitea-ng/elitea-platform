@@ -5,6 +5,7 @@ import type { SxProps, Theme } from '@mui/material/styles';
 
 import { useNavigate, useParams } from '@tanstack/react-router';
 
+import { EntityImportButton, useEntityImport } from '@/features/agent-lifecycle';
 import { t } from '@/shared/i18n';
 import { BaseTab } from '@/shared/ui/BaseTab';
 import { BaseTabs } from '@/shared/ui/BaseTabs';
@@ -28,6 +29,10 @@ const tabBarSx: SxProps<Theme> = {
   borderBottom: 1,
   borderColor: 'divider',
   padding: '0 1.5rem',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: '1rem',
 };
 
 const tabPanelSx: SxProps<Theme> = {
@@ -94,6 +99,7 @@ export function Pipelines(): ReactNode {
   const hasAdminPermission = useHasAdminPermission(isPublicProject ? projectId : undefined);
   const navRailCollapsed = useSidebarCollapsedStore((state) => state.collapsed);
   const totals = usePipelinesData(projectId, hasAdminPermission);
+  const entityImport = useEntityImport(projectId);
   const tabs = usePipelineTabs(isPublicProject, totals, hasAdminPermission);
 
   const visibleTabs = useMemo(() => tabs.filter((tab) => tab.hidden !== true), [tabs]);
@@ -129,6 +135,23 @@ export function Pipelines(): ReactNode {
             />
           ))}
         </BaseTabs>
+        {/*
+         * Import (validation-matrix gap 12). Production carries this control
+         * on the Agents, Pipelines and Skills list headers; this app had it on
+         * Skills only, so an agent could be exported and never brought back —
+         * `POST /elitea_core/import_wizard/prompt_lib/{project}` was generated
+         * and had `"usedBy": []`. Hidden for the PUBLIC project's lists, which
+         * are read-only catalogues, matching the create button's own rule.
+         */}
+        {!isPublicProject && (
+          <EntityImportButton
+            testIdPrefix="pipelines"
+            isImporting={entityImport.run.isPending}
+            onImport={async (document) => {
+              await entityImport.run.mutateAsync(document);
+            }}
+          />
+        )}
       </Box>
       <Box
         sx={tabPanelSx}

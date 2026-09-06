@@ -279,7 +279,9 @@
             "source": "generated",
             "responseSchema": "ApplicationExportResponse",
             "fixture": null,
-            "usedBy": []
+            "usedBy": [
+                "features/agent-lifecycle"
+            ]
         },
         {
             "id": "applications.forkAgent",
@@ -289,7 +291,9 @@
             "source": "generated",
             "responseSchema": "ForkResponse",
             "fixture": null,
-            "usedBy": []
+            "usedBy": [
+                "features/agent-lifecycle"
+            ]
         },
         {
             "id": "applications.generateAgentDraft",
@@ -425,7 +429,9 @@
             "source": "generated",
             "responseSchema": "ImportWizardResponse",
             "fixture": null,
-            "usedBy": []
+            "usedBy": [
+                "features/agent-lifecycle"
+            ]
         },
         {
             "id": "applications.listApplications",
@@ -475,7 +481,9 @@
             "source": "generated",
             "responseSchema": "PublishSuccessResponse",
             "fixture": null,
-            "usedBy": []
+            "usedBy": [
+                "features/agent-lifecycle"
+            ]
         },
         {
             "id": "applications.putProjectGroups",
@@ -535,7 +543,9 @@
             "source": "generated",
             "responseSchema": "UnpublishResponse",
             "fixture": null,
-            "usedBy": []
+            "usedBy": [
+                "features/agent-lifecycle"
+            ]
         },
         {
             "id": "applications.updateApplicationRelation",
@@ -609,7 +619,9 @@
             "source": "generated",
             "responseSchema": "PublishValidationResult",
             "fixture": null,
-            "usedBy": []
+            "usedBy": [
+                "features/agent-lifecycle"
+            ]
         },
         {
             "id": "artifacts.artifactList",
@@ -792,7 +804,8 @@
             "responseSchema": "SkillsList",
             "fixture": null,
             "usedBy": [
-                "features/skills"
+                "features/skills",
+                "features/agent-skills"
             ]
         },
         {
@@ -2296,6 +2309,32 @@
             "usedBy": [
                 "pages/settings"
             ]
+        },
+        {
+            "id": "agentSkills.listProjectSkills",
+            "method": "GET",
+            "path": "/elitea_core/skills/prompt_lib/{projectId}",
+            "operationId": null,
+            "source": "handwritten",
+            "responseSchema": "SkillsList",
+            "fixture": null,
+            "usedBy": [
+                "features/agent-skills"
+            ],
+            "$comment": "The generated listSkills exists (skills.listSkills) but its ListSkillsParams knows only page/page_size, while the handler also reads sort_by, sort_order, query, limit and offset (internal/api/v2/skills/handler.go). The agent-editor skill picker needs the search and the sort, so it builds the URL itself. Retire this entry when v2.yaml documents the five missing query parameters."
+        },
+        {
+            "id": "agentSkills.setSkillRelation",
+            "method": "PATCH",
+            "path": "/elitea_core/skill/prompt_lib/{projectId}/{skillId}",
+            "operationId": null,
+            "source": "handwritten",
+            "responseSchema": "SkillAttachment",
+            "fixture": null,
+            "usedBy": [
+                "features/agent-skills"
+            ],
+            "$comment": "Attach (201) or detach (200) one skill on one agent VERSION. A `has_relation` key in the body selects a second operation inside the same handler (internal/api/v2/skills/handler.go updateSkillRelation), which one OpenAPI operation cannot express — skills.updateSkill covers only the plain update on the same URL."
         }
     ]
 }
