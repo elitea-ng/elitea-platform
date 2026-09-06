@@ -1556,7 +1556,7 @@ web:
   #   2. `nginx -s quit` is the GRACEFUL stop, finishing in-flight requests.
   # The container normally exits during the hook, so SIGTERM's fast shutdown is
   # never reached. Must stay well under terminationGracePeriodSeconds above.
-  # The nginx:1.27-alpine runtime has a shell, unlike the gateway's distroless
+  # The nginx alpine runtime has a shell, unlike the gateway's distroless
   # image where the equivalent hook has to stay disabled.
   preStop:
     enabled: true
