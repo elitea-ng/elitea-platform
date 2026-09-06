@@ -68,6 +68,7 @@ import type {
   ApplicationVersionDetailExpanded,
   AuthorDetail,
   BatchReplaceVersionReferencesParams,
+  CapabilityUnavailableResponse,
   DefaultIcon,
   DeleteApplicationVersionParams,
   DocumentLoadersResponse,
@@ -102,6 +103,9 @@ import type {
   ProjectContextUpdateRequest,
   ProjectGroupCreate,
   ProjectGroupsUpdate,
+  ProjectInfo,
+  ProjectInfoUpdateRequest,
+  ProjectInfoUpdateResponse,
   ProjectQuota,
   ProjectQuotaUpdate,
   ProjectStatistics,
@@ -8372,12 +8376,19 @@ export type getDocumentLoadersResponse403 = {
   status: 403;
 };
 
+export type getDocumentLoadersResponse501 = {
+  data: CapabilityUnavailableResponse;
+  status: 501;
+};
+
 export type getDocumentLoadersResponseSuccess =
   getDocumentLoadersResponse200 & {
     headers: Headers;
   };
 export type getDocumentLoadersResponseError = (
-  getDocumentLoadersResponse401 | getDocumentLoadersResponse403
+  | getDocumentLoadersResponse401
+  | getDocumentLoadersResponse403
+  | getDocumentLoadersResponse501
 ) & {
   headers: Headers;
 };
@@ -8390,8 +8401,28 @@ export const getGetDocumentLoadersUrl = (projectId: string) => {
 };
 
 /**
- * NOTE(W2): static {items, total} envelope (NOT a bare array),
- * internal/api/v2/toolkits/handler.go:466-510.
+ * TWO handlers serve this ONE path, and the deployment chooses which.
+ *
+ * ELITEA_INDEX_TYPES_ENABLED=true composes the reviewed catalogue
+ * (internal/api/v2/indextypes, CurrentIndexTypesRoute), which
+ * production_router.go registers on the root router. chi prefers that
+ * explicit registration, so the reviewed route answers 200 with the
+ * document/image/code extension maps taken from the pinned SDK snapshot
+ * (internal/runtimecomposition/current_index_types_snapshot.json).
+ *
+ * The variable is "false" in the shipped chart
+ * (deploy/helm/elitea/values.yaml), so a default install reaches the
+ * compatibility handler instead, and that handler REFUSES with 501 and a
+ * machine-readable `code` (issue 615, internal/api/v2/toolkits/handler.go,
+ * IndexTypes). It used to answer 200 with six hand-written loader
+ * entries that no SDK, snapshot, database or configuration produced.
+ *
+ * NOTE(W2): the 200 envelope is a static {items, total} object, NOT a
+ * bare array.
+ *
+ * A generated client must handle BOTH answers. 501 is FINAL, not
+ * transient: apps/elitea-web/src/app/providers/queryClient.ts classifies
+ * it with `isFinalClientAnswer` and does not retry it.
  * @summary Get available document loader / index type configurations
  */
 export const getDocumentLoaders = async (
@@ -8413,7 +8444,7 @@ export const getGetDocumentLoadersQueryKey = (projectId: string) => {
 
 export const getGetDocumentLoadersQueryOptions = <
   TData = Awaited<ReturnType<typeof getDocumentLoaders>>,
-  TError = N401Response | N403Response,
+  TError = N401Response | N403Response | CapabilityUnavailableResponse,
 >(
   projectId: string,
   options?: {
@@ -8452,11 +8483,12 @@ export const getGetDocumentLoadersQueryOptions = <
 export type GetDocumentLoadersQueryResult = NonNullable<
   Awaited<ReturnType<typeof getDocumentLoaders>>
 >;
-export type GetDocumentLoadersQueryError = N401Response | N403Response;
+export type GetDocumentLoadersQueryError =
+  N401Response | N403Response | CapabilityUnavailableResponse;
 
 export function useGetDocumentLoaders<
   TData = Awaited<ReturnType<typeof getDocumentLoaders>>,
-  TError = N401Response | N403Response,
+  TError = N401Response | N403Response | CapabilityUnavailableResponse,
 >(
   projectId: string,
   options: {
@@ -8483,7 +8515,7 @@ export function useGetDocumentLoaders<
 };
 export function useGetDocumentLoaders<
   TData = Awaited<ReturnType<typeof getDocumentLoaders>>,
-  TError = N401Response | N403Response,
+  TError = N401Response | N403Response | CapabilityUnavailableResponse,
 >(
   projectId: string,
   options?: {
@@ -8510,7 +8542,7 @@ export function useGetDocumentLoaders<
 };
 export function useGetDocumentLoaders<
   TData = Awaited<ReturnType<typeof getDocumentLoaders>>,
-  TError = N401Response | N403Response,
+  TError = N401Response | N403Response | CapabilityUnavailableResponse,
 >(
   projectId: string,
   options?: {
@@ -8533,7 +8565,7 @@ export function useGetDocumentLoaders<
 
 export function useGetDocumentLoaders<
   TData = Awaited<ReturnType<typeof getDocumentLoaders>>,
-  TError = N401Response | N403Response,
+  TError = N401Response | N403Response | CapabilityUnavailableResponse,
 >(
   projectId: string,
   options?: {
@@ -11724,6 +11756,459 @@ export function useUpdateProjectContext<
   const queryOptions = getUpdateProjectContextQueryOptions(
     projectId,
     projectContextUpdateRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getProjectInfoResponse200 = {
+  data: ProjectInfo;
+  status: 200;
+};
+
+export type getProjectInfoResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getProjectInfoResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type getProjectInfoResponse501 = {
+  data: CapabilityUnavailableResponse;
+  status: 501;
+};
+
+export type getProjectInfoResponseSuccess = getProjectInfoResponse200 & {
+  headers: Headers;
+};
+export type getProjectInfoResponseError = (
+  | getProjectInfoResponse401
+  | getProjectInfoResponse403
+  | getProjectInfoResponse501
+) & {
+  headers: Headers;
+};
+
+export type getProjectInfoResponse =
+  getProjectInfoResponseSuccess | getProjectInfoResponseError;
+
+export const getGetProjectInfoUrl = (projectId: string) => {
+  return `/elitea_core/project_info/prompt_lib/${projectId}/project-info`;
+};
+
+/**
+ * NOTE(W2): 200 comes from internal/api/v2/projectinfo/handler.go
+ * (CurrentProjectInfo) — `teammates_count` counts DISTINCT members of
+ * public.auth_core__project_user_role, excluding the
+ * `system_user_<id>@centry.user` account, and `icon_meta` is read from
+ * the tenant `configuration` row (type='project_icon').
+ *
+ * 501 comes from internal/api/v2/eliteacore/handler.go (ProjectInfo)
+ * when ELITEA_PROJECT_INFO_ENABLED is off. `code` is
+ * `project_info_not_available`. It is FINAL, not transient.
+ * @summary Read a project's teammate count and icon
+ */
+export const getProjectInfo = async (
+  projectId: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getProjectInfoResponse> => {
+  return eliteaFetch<getProjectInfoResponse>(getGetProjectInfoUrl(projectId), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetProjectInfoQueryKey = (projectId: string) => {
+  return [
+    `/elitea_core/project_info/prompt_lib/${projectId}/project-info`,
+  ] as const;
+};
+
+export const getGetProjectInfoQueryOptions = <
+  TData = Awaited<ReturnType<typeof getProjectInfo>>,
+  TError = N401Response | N403Response | CapabilityUnavailableResponse,
+>(
+  projectId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getProjectInfo>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetProjectInfoQueryKey(projectId);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getProjectInfo>>> = ({
+    signal,
+  }) => getProjectInfo(projectId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getProjectInfo>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetProjectInfoQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getProjectInfo>>
+>;
+export type GetProjectInfoQueryError =
+  N401Response | N403Response | CapabilityUnavailableResponse;
+
+export function useGetProjectInfo<
+  TData = Awaited<ReturnType<typeof getProjectInfo>>,
+  TError = N401Response | N403Response | CapabilityUnavailableResponse,
+>(
+  projectId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getProjectInfo>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getProjectInfo>>,
+          TError,
+          Awaited<ReturnType<typeof getProjectInfo>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetProjectInfo<
+  TData = Awaited<ReturnType<typeof getProjectInfo>>,
+  TError = N401Response | N403Response | CapabilityUnavailableResponse,
+>(
+  projectId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getProjectInfo>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getProjectInfo>>,
+          TError,
+          Awaited<ReturnType<typeof getProjectInfo>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetProjectInfo<
+  TData = Awaited<ReturnType<typeof getProjectInfo>>,
+  TError = N401Response | N403Response | CapabilityUnavailableResponse,
+>(
+  projectId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getProjectInfo>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Read a project's teammate count and icon
+ */
+
+export function useGetProjectInfo<
+  TData = Awaited<ReturnType<typeof getProjectInfo>>,
+  TError = N401Response | N403Response | CapabilityUnavailableResponse,
+>(
+  projectId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getProjectInfo>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetProjectInfoQueryOptions(projectId, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type updateProjectInfoResponse200 = {
+  data: ProjectInfoUpdateResponse;
+  status: 200;
+};
+
+export type updateProjectInfoResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type updateProjectInfoResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type updateProjectInfoResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type updateProjectInfoResponse500 = {
+  data: ErrorResponse;
+  status: 500;
+};
+
+export type updateProjectInfoResponseSuccess = updateProjectInfoResponse200 & {
+  headers: Headers;
+};
+export type updateProjectInfoResponseError = (
+  | updateProjectInfoResponse400
+  | updateProjectInfoResponse401
+  | updateProjectInfoResponse403
+  | updateProjectInfoResponse500
+) & {
+  headers: Headers;
+};
+
+export type updateProjectInfoResponse =
+  updateProjectInfoResponseSuccess | updateProjectInfoResponseError;
+
+export const getUpdateProjectInfoUrl = (projectId: string) => {
+  return `/elitea_core/project_info/prompt_lib/${projectId}/project-info`;
+};
+
+/**
+ * NOTE(W2): internal/api/v2/eliteacore/handler.go (UpdateProjectInfo).
+ *
+ * BOTH BODY FIELDS ARE OPTIONAL, AND ABSENT IS NOT NULL. An absent
+ * `icon_meta` leaves the icon alone; an explicit null CLEARS it. A PUT
+ * with neither field is a no-op that answers `{"ok": true}`.
+ *
+ * The response echoes only what it wrote: `name` appears when the project
+ * was renamed, `icon_meta` when the icon was written. A failed write is
+ * reported as a failure — this route used to discard every database error
+ * and still answer `{"ok": true}`.
+ * @summary Rename a project, set its icon, or both
+ */
+export const updateProjectInfo = async (
+  projectId: string,
+  projectInfoUpdateRequest?: ProjectInfoUpdateRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<updateProjectInfoResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+  return eliteaFetch<updateProjectInfoResponse>(
+    getUpdateProjectInfoUrl(projectId),
+    {
+      ...options,
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(projectInfoUpdateRequest),
+    },
+  );
+};
+
+export const getUpdateProjectInfoQueryKey = (
+  projectId: string,
+  projectInfoUpdateRequest?: ProjectInfoUpdateRequest,
+) => {
+  return [
+    "PUT",
+    `/elitea_core/project_info/prompt_lib/${projectId}/project-info`,
+    projectInfoUpdateRequest,
+  ] as const;
+};
+
+export const getUpdateProjectInfoQueryOptions = <
+  TData = Awaited<ReturnType<typeof updateProjectInfo>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  projectInfoUpdateRequest?: ProjectInfoUpdateRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateProjectInfo>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getUpdateProjectInfoQueryKey(projectId, projectInfoUpdateRequest);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof updateProjectInfo>>
+  > = ({ signal }) =>
+    updateProjectInfo(projectId, projectInfoUpdateRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof updateProjectInfo>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type UpdateProjectInfoQueryResult = NonNullable<
+  Awaited<ReturnType<typeof updateProjectInfo>>
+>;
+export type UpdateProjectInfoQueryError =
+  ErrorResponse | N401Response | N403Response;
+
+export function useUpdateProjectInfo<
+  TData = Awaited<ReturnType<typeof updateProjectInfo>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  projectInfoUpdateRequest: undefined | ProjectInfoUpdateRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateProjectInfo>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof updateProjectInfo>>,
+          TError,
+          Awaited<ReturnType<typeof updateProjectInfo>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUpdateProjectInfo<
+  TData = Awaited<ReturnType<typeof updateProjectInfo>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  projectInfoUpdateRequest?: ProjectInfoUpdateRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateProjectInfo>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof updateProjectInfo>>,
+          TError,
+          Awaited<ReturnType<typeof updateProjectInfo>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUpdateProjectInfo<
+  TData = Awaited<ReturnType<typeof updateProjectInfo>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  projectInfoUpdateRequest?: ProjectInfoUpdateRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateProjectInfo>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Rename a project, set its icon, or both
+ */
+
+export function useUpdateProjectInfo<
+  TData = Awaited<ReturnType<typeof updateProjectInfo>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  projectInfoUpdateRequest?: ProjectInfoUpdateRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateProjectInfo>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getUpdateProjectInfoQueryOptions(
+    projectId,
+    projectInfoUpdateRequest,
     options,
   );
 
