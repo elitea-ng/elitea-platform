@@ -463,6 +463,40 @@ picker offers them, and the request then finds no credential. Both ship empty, b
 does not exist makes every credential read fail, so the operator must choose
 one project and set it in both places.
 
+### `GATEWAY_NATS_URL` — budgets are stored without it and enforced only with it
+
+Admin → Budgets writes `gateway.project_budget` and `gateway.user_budget`.
+The LLM gateway is what enforces those rows, and it enforces them through a
+NATS JetStream counter. `GATEWAY_NATS_URL` names that cluster.
+
+Leave it empty and the gateway starts, logs a warning, and serves `/llm` with
+**no budget enforcement**. Nothing else changes shape:
+
+- every budget write still answers 200;
+- every limit still reads back exactly as it was authored;
+- Settings → Usage still reports the period's accrued spend;
+- and no call is ever refused.
+
+That is the failure this key produces. An operator sets a ceiling, sees it on
+the screen, and it stops nothing. Two surfaces report the real state:
+
+- the gateway's `GET /governance/status`, proxied at
+  `GET /api/v2/admin/gateway/status`. Its `rate_limits_enforceable` is false
+  exactly when the gateway holds no counter, and that counter is the one the
+  budget path admits against too;
+- Admin → Budgets, which raises a warning banner from that field once any
+  budget row exists.
+
+`deploy/docker-compose.standalone-full.yml` runs **no NATS service** and leaves
+`GATEWAY_NATS_URL` unset deliberately — see the comment above its
+`elitea-llm-gateway` service. Budget authoring and the usage read are fully
+exercisable there; budget enforcement is not, and the banner says so. Add a
+JetStream service and set the key to exercise enforcement.
+
+Spend accounting needs the gateway but not the counter: the accumulators the
+Usage page reads are written by elitea-scheduler's write-back consumer from the
+gateway's billing deltas.
+
 ## What a Kubernetes install does NOT give you
 
 Stated plainly, because the gap between compose and Helm is where deploys break:

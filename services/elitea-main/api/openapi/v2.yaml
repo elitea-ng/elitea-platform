@@ -449,7 +449,7 @@ components:
     ProjectBudget:
       allOf:
         - type: object
-          required: [project_id, budget_period]
+          required: [project_id, budget_period, nats_fail_mode]
           properties:
             project_id:
               type: integer
@@ -457,9 +457,25 @@ components:
               type: string
               enum: [monthly]
               description: |
-                Reported, not settable. The gateway derives the period from the
-                calendar month unconditionally, so any other value would be one
-                nothing honours.
+                The STORED period, read back from the row rather than reported
+                as a constant. `monthly` is the only accepted value: the gateway
+                derives the billing window from the calendar month
+                unconditionally, so any other value would be one nothing
+                computes and nothing bills against.
+            nats_fail_mode:
+              type: string
+              nullable: true
+              enum: [tiered_hybrid, fail_open, fail_closed]
+              description: |
+                The per-project NATS-failure policy the gateway applies when the
+                budget counter is unreachable.
+
+                NULL means this project authors none and inherits the platform
+                baseline (`LLM_BUDGET_NATS_FAIL_MODE`). That is a distinct state
+                from any of the three modes, so it is reported as null rather
+                than resolved to the baseline here — a client that showed the
+                inherited value as if it were authored would make a later change
+                to the baseline look like a change nobody made.
         - $ref: '#/components/schemas/BudgetState'
 
     MemberBudget:
@@ -513,6 +529,39 @@ components:
           description: |
             Percent-of-limit at which this scope warns. Omitted leaves the
             stored threshold untouched.
+
+    ProjectBudgetWrite:
+      description: |
+        The project budget PUT payload: the shared fields plus the two policy
+        columns that exist only at project scope.
+
+        Neither extra field is accepted by the member PUT, which answers 400
+        rather than storing it: `gateway.user_budget` has neither column, and
+        the gateway reads a project's fail mode from the OWNING project's row on
+        the member path too. A member accrues over the same calendar window for
+        the same reason.
+      allOf:
+        - $ref: '#/components/schemas/BudgetWrite'
+        - type: object
+          properties:
+            budget_period:
+              type: string
+              enum: [monthly]
+              description: |
+                Omitted leaves the stored period untouched. `monthly` is the
+                only accepted value — see the response schema for why.
+            nats_fail_mode:
+              type: string
+              nullable: true
+              enum: [tiered_hybrid, fail_open, fail_closed]
+              description: |
+                The per-project NATS-failure policy override.
+
+                This field has THREE inputs, not two. Omitted leaves the stored
+                mode untouched, so an edit that changes only the limit does not
+                silently reset a policy chosen earlier. An explicit `null`
+                clears the override back to the platform baseline. A named mode
+                sets it.
 
     ProjectBudgetRow:
       allOf:
@@ -9260,13 +9309,17 @@ paths:
         `currency` other than `USD` is rejected rather than stored. Nothing in
         the money path converts, so an accepted label would sit on a limit the
         gateway still enforces in dollars.
+
+        `budget_period` and `nats_fail_mode` are settable here and nowhere else.
+        Both are columns the gateway reads and nothing in the platform used to
+        write.
       tags: [budgets]
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/BudgetWrite'
+              $ref: '#/components/schemas/ProjectBudgetWrite'
       responses:
         '200':
           description: Budget state after the write
@@ -9275,11 +9328,45 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProjectBudget'
         '400':
-          description: Negative or non-numeric limit, unsupported currency, or out-of-range threshold.
+          description: |
+            Negative or non-numeric limit, unsupported currency, out-of-range
+            threshold, or an unsupported `budget_period` / `nats_fail_mode`.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500': { $ref: '#/components/responses/500' }
+
+    delete:
+      operationId: clearProjectBudget
+      summary: Clear a project's budget back to the platform default (admin)
+      description: |
+        Removes the authored row, so the project inherits the platform's
+        soft-alert threshold and NATS-failure policy again and is unlimited.
+
+        This is NOT the same as `enabled: false`. That stores "deliberately
+        exempt" — an authored decision that keeps the old ceiling on the screen
+        and pins the threshold that was chosen with it. A cleared project has no
+        authored budget at all and follows the platform as it changes.
+
+        The response is the resulting state, for the same reason the PUT's is:
+        after a clear the effective figures are the inherited ones, and a 204
+        would leave the caller to guess them.
+
+        Clearing a project that has no budget succeeds. The endpoint states an
+        intent that is already true, so a retry after a lost response is not a
+        failure. Current-period spend is untouched.
+      tags: [budgets]
+      responses:
+        '200':
+          description: Budget state after the clear
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectBudget'
+        '400': { $ref: '#/components/responses/400' }
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '500': { $ref: '#/components/responses/500' }
@@ -9406,8 +9493,11 @@ paths:
       description: |
         Caps a single member's share without changing the project's own limit.
 
-        NOT ENFORCED: see `enforced` on the response. The row is stored and read
-        back faithfully, but nothing in the gateway blocks a call on it today.
+        ENFORCED since issue #321: see `enforced` on the response.
+
+        `budget_period` and `nats_fail_mode` are REFUSED with a 400 rather than
+        ignored. Both are project-scoped, and a 200 over a discarded field is
+        indistinguishable from one that took effect.
       tags: [budgets]
       requestBody:
         required: true
@@ -9423,11 +9513,42 @@ paths:
               schema:
                 $ref: '#/components/schemas/MemberBudget'
         '400':
-          description: Negative or non-numeric limit, unsupported currency, or out-of-range threshold.
+          description: |
+            Negative or non-numeric limit, unsupported currency, out-of-range
+            threshold, or a project-scoped `budget_period` / `nats_fail_mode`.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500': { $ref: '#/components/responses/500' }
+
+    delete:
+      operationId: clearMemberBudget
+      summary: Clear one member's budget back to the project default (admin)
+      description: |
+        Removes the member's authored cap, so they are bounded by the project
+        ceiling alone.
+
+        It matters more here than at project scope, because a member cap is
+        enforced: the gateway refuses an over-cap member with 402
+        `member_budget_exceeded`. Without this route the only way to lift a cap
+        set by mistake was `enabled: false`, which stores the different fact
+        "this member is deliberately exempt" and leaves the wrong number beside
+        it.
+
+        Clearing a member who has no cap succeeds, and the member's
+        current-period spend is untouched.
+      tags: [budgets]
+      responses:
+        '200':
+          description: The member's budget state after the clear
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemberBudget'
+        '400': { $ref: '#/components/responses/400' }
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '500': { $ref: '#/components/responses/500' }

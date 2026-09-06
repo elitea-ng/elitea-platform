@@ -55,6 +55,7 @@
  */
 import type { ComponentType } from 'react';
 
+import AccountBalanceWalletOutlinedIcon from '@mui/icons-material/AccountBalanceWalletOutlined';
 import AssignmentOutlinedIcon from '@mui/icons-material/AssignmentOutlined';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import PaletteOutlinedIcon from '@mui/icons-material/PaletteOutlined';
@@ -244,6 +245,18 @@ function navGroups(): readonly AdminNavGroup[] {
           // — see this module's header on why an unissuable name is a nav item
           // that disappears for good.
           anyPermission: ['configuration', 'configuration.governance'],
+        },
+        {
+          id: 'budgets',
+          path: '/budgets',
+          label: t('pages.admin.nav.budgets', 'Budgets'),
+          icon: AccountBalanceWalletOutlinedIcon,
+          // The exact permission `internal/api/router.go` gates every
+          // administration-mode budget read on (`requireBudgetsView`), and one
+          // that IS issued: shared migration 0062 grants it to both the `admin`
+          // and `super_admin` administration roles. See this module's header on
+          // why a name nothing grants is a nav item that disappears for good.
+          anyPermission: ['models.admin.project_budgets.view'],
         },
         {
           id: 'audit',

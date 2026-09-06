@@ -54,6 +54,35 @@ type Handler struct {
 	// Outbound e-mail for project invitations (users_write.go); nil means
 	// the invite result reports no delivery.
 	mailer InviteMailer
+	// costBudgets says whether LLM cost tracking exists on this deployment, so
+	// PlatformSettings can publish `cost_budgets_enabled`. See
+	// WithCostBudgets for what it is derived from.
+	costBudgets bool
+}
+
+// WithCostBudgets declares that this deployment tracks LLM cost, which is what
+// `cost_budgets_enabled` means to a client.
+//
+// The reference answered the same question with an RPC into the LiteLLM plugin
+// (`litellm_budgets_mode`, true for "observe" and "enforce") and the Usage tab
+// was hidden when it was false. This platform's equivalent is whether the LLM
+// gateway is composed: the gateway is what bills a call, publishes the budget
+// delta and populates gateway.llm_budget_accumulators, so with no gateway
+// address configured every spend figure the Usage tab renders is structurally
+// zero and every budget row is authored against nothing.
+//
+// It is deliberately NOT the stronger claim "enforcement is on". Enforcement
+// additionally needs GATEWAY_NATS_URL, and the gateway reports that itself
+// through `GET /governance/status`, proxied at
+// `GET /api/v2/admin/gateway/status`. Folding that into this flag would make an
+// unreachable gateway hide a Usage tab whose accumulator history is still
+// perfectly readable from PostgreSQL — a network fault silently removing a
+// screenful of real data. The admin Budgets page reads the status route
+// directly and warns there instead.
+func WithCostBudgets(enabled bool) Option {
+	return func(handler *Handler) {
+		handler.costBudgets = enabled
+	}
 }
 
 // InviteMailer is the seam to internal/application/mailer.
@@ -247,6 +276,21 @@ func (h *Handler) PlatformSettings(w http.ResponseWriter, r *http.Request) {
 	// client that ignores this key still meets a 403 rather than an open
 	// endpoint behind a hidden button.
 	defaults["analytics_enabled"] = h.analyticsFlags(r.Context()).enabled
+
+	// The cost-budget switch, which gates Settings → Usage exactly as the
+	// reference's own platform_settings endpoint gated it
+	// (legacy/plugins/elitea_core/api/v2/platform_settings.py
+	// `_is_cost_budgets_enabled`, true for LiteLLM budget modes "observe" and
+	// "enforce"). Without it the tab had no way to know the platform keeps no
+	// cost data, and rendered a page of structural zeroes as if they were
+	// measurements.
+	//
+	// Added rather than overlaid, under the same `additionalProperties: true`
+	// permission as the pairs above: a project's own `environment_settings` row
+	// must not be able to claim cost tracking this deployment does not do.
+	//
+	// This is NOT a claim that enforcement is on. See WithCostBudgets.
+	defaults["cost_budgets_enabled"] = h.costBudgets
 
 	writeJSON(w, http.StatusOK, defaults)
 }

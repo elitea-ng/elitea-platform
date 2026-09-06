@@ -91,6 +91,7 @@ const AdminGatewayGovernance = lazyRouteComponent(
   () => import('./GatewayGovernance'),
   'AdminGatewayGovernance',
 );
+const AdminBudgets = lazyRouteComponent(() => import('./Budgets'), 'AdminBudgets');
 const AdminBranding = lazyRouteComponent(() => import('./Branding'), 'AdminBranding');
 
 /**
@@ -187,6 +188,18 @@ const governanceRoute = createRoute({
 });
 
 /**
+ * Admin › Budgets (gap G4). The per-project and per-member LLM spend limits.
+ * The REST routes have existed since #246 and had no caller at all; this is the
+ * screen behind them, and the only writer of `gateway.project_budget`'s
+ * `budget_period` and `nats_fail_mode` columns.
+ */
+const budgetsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/budgets',
+  component: AdminBudgets,
+});
+
+/**
  * Admin › Branding (ADR-0024 WP4). The `branding` section of the platform
  * configuration edited as what it is — a brand pack — with a live preview,
  * asset uploads and font faces. The Configuration page keeps the section's
@@ -213,6 +226,7 @@ const adminRouteTree = rootRoute.addChildren([
   serviceDescriptorsRoute,
   featuresRoute,
   governanceRoute,
+  budgetsRoute,
 ]);
 
 export function createAdminRouter(): AnyRouter {

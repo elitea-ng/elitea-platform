@@ -6,6 +6,7 @@ import type { SxProps, Theme } from '@mui/material/styles';
 import { performLogout } from '@/shared/api/auth';
 import { t } from '@/shared/i18n';
 import { useIsAnalyticsVisible } from '@/shared/lib/hooks/useIsAnalyticsVisible';
+import { useIsUsageVisible } from '@/shared/lib/hooks/useIsUsageVisible';
 import { SETTINGS_LAYOUT } from '@/shared/ui/settings/settings.constants';
 import { type SettingsSection, SettingsDrawer } from '@/shared/ui/settings/SettingsDrawer';
 import { SettingsRedirect } from '@/shared/ui/settings/SettingsRedirect';
@@ -31,6 +32,11 @@ export function SettingsLayout() {
   // 403 `internal/api/router.go`'s `requireAnalyticsEnabled` puts on every
   // `/analytics*` route.
   const analyticsVisible = useIsAnalyticsVisible();
+  // `cost_budgets_enabled` — the reference gated the same tab on the same key.
+  // It defaults CLOSED rather than open, unlike every other flag hook here; see
+  // `useIsUsageVisible` for why a tab of structural zeroes is worse than a
+  // missing tab.
+  const usageVisible = useIsUsageVisible();
   const sections: SettingsSection[] = [
     {
       section: 'PROJECT',
@@ -59,6 +65,14 @@ export function SettingsLayout() {
           id: 'users',
           label: 'Users',
         },
+        ...(usageVisible
+          ? [
+              {
+                id: 'usage',
+                label: 'Usage',
+              },
+            ]
+          : []),
         ...(analyticsVisible
           ? [
               {

@@ -130,6 +130,53 @@ func TestPlatformSettings(t *testing.T) {
 	}
 }
 
+// cost_budgets_enabled gates Settings → Usage, exactly as the reference's own
+// platform_settings endpoint gated it. Two properties matter and neither is
+// observable from the tab itself:
+//
+//   - it is ALWAYS present. An absent key is read by the client as a boolean
+//     that is not false, so a deployment with no gateway would show a Usage tab
+//     of structural zeroes as if they were measurements.
+//   - it tracks the composed gateway rather than defaulting open. This is the
+//     one flag on this endpoint whose safe direction is CLOSED: every other one
+//     hides a feature that still works, this one hides a page that has no data
+//     behind it at all.
+func TestPlatformSettingsPublishesCostBudgets(t *testing.T) {
+	for _, testCase := range []struct {
+		name    string
+		enabled bool
+	}{
+		{name: "no gateway composed", enabled: false},
+		{name: "gateway composed", enabled: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			h := eliteacore.NewHandler(nil, eliteacore.WithCostBudgets(testCase.enabled))
+			w := httptest.NewRecorder()
+			h.PlatformSettings(w, httptest.NewRequest(http.MethodGet, "/", nil))
+			assertStatus(t, w, http.StatusOK)
+
+			body := decodeObj(t, w)
+			value, present := body["cost_budgets_enabled"]
+			if !present {
+				t.Fatal("cost_budgets_enabled is absent; the client reads that as enabled")
+			}
+			if got, _ := value.(bool); got != testCase.enabled {
+				t.Fatalf("cost_budgets_enabled = %#v, want %v", value, testCase.enabled)
+			}
+		})
+	}
+}
+
+// The default is the closed one: a handler nobody told about a gateway must not
+// claim this platform tracks cost.
+func TestPlatformSettingsDefaultsCostBudgetsOff(t *testing.T) {
+	w := httptest.NewRecorder()
+	newHandler().PlatformSettings(w, httptest.NewRequest(http.MethodGet, "/", nil))
+	if got, _ := decodeObj(t, w)["cost_budgets_enabled"].(bool); got {
+		t.Fatal("cost_budgets_enabled defaulted to true with no gateway configured")
+	}
+}
+
 // ---- ProjectContext / UpdateProjectContext ----------------------------------
 
 func TestProjectContext(t *testing.T) {

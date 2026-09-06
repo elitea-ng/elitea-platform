@@ -1180,6 +1180,15 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				v2core.WithObjectStore(cfg.ObjectStore),
 				v2core.WithInviteMailer(inviteMailer),
 				v2core.WithPrebuiltMCPCatalogue(prebuiltMCPStore, prebuiltMCPVault),
+				// `cost_budgets_enabled`, from the one fact this process holds
+				// about whether LLM cost is tracked at all: a gateway address
+				// was configured. cfg.GatewayStatus is built from
+				// LLM_GATEWAY_URL and is left nil when that is empty
+				// (cmd/elitea-main/main.go), so the nil check IS the
+				// "is the gateway composed" question — and it is a nil
+				// INTERFACE check that holds, because that field is documented
+				// never to receive a boxed nil pointer.
+				v2core.WithCostBudgets(cfg.GatewayStatus != nil),
 			)
 
 			// === Auth endpoints ===
@@ -2985,6 +2994,14 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					Get("/project_budget/administration/{projectID}/budget", budgetsHandler.GetProjectBudgetAdmin)
 				r.With(requireBudgetsEdit).
 					Put("/project_budget/administration/{projectID}/budget", budgetsHandler.PutProjectBudget)
+				// Clearing a budget is the same authority as setting one, so it
+				// takes the SAME permission rather than a new string. A separate
+				// `…delete` permission would need its own grant migration to
+				// reach anybody and would be 403-for-everyone until it did
+				// (#386), while the operator who may set a ceiling to any value
+				// can already remove it in every way that matters.
+				r.With(requireBudgetsEdit).
+					Delete("/project_budget/administration/{projectID}/budget", budgetsHandler.DeleteProjectBudget)
 				r.With(requireBudgetsView).
 					Get("/project_budgets/administration", budgetsHandler.ListProjectBudgets)
 				r.With(requireProjectBudgetRead).
@@ -2993,6 +3010,8 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					Get("/user_budget/administration/{projectID}/user_budget/{userID}", budgetsHandler.GetUserBudgetAdmin)
 				r.With(requireBudgetsEdit).
 					Put("/user_budget/administration/{projectID}/user_budget/{userID}", budgetsHandler.PutUserBudget)
+				r.With(requireBudgetsEdit).
+					Delete("/user_budget/administration/{projectID}/user_budget/{userID}", budgetsHandler.DeleteUserBudget)
 				r.With(requireProjectBudgetRead).
 					Get("/user_budgets/prompt_lib/{projectID}", budgetsHandler.ListUserBudgets)
 				r.With(requireBudgetsView).
