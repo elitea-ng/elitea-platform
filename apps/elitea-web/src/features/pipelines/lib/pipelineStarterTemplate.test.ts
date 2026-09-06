@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 
 import type { YamlPipelineDocument } from './flow-editor/helpers/pipelineFlow.types';
 import { collectGraphAdmissionIssues } from './graphAdmission.helpers';
+import { PipelineNodeTypes } from './flow-editor/constants/flowEditor.constants';
+import { getInitialNodeId } from './flow-editor/helpers/nodeIdentity.helpers';
 import { PIPELINE_STARTER_ENTRY_NODE_ID, PIPELINE_STARTER_TEMPLATE } from '@/shared/lib/pipelineStarterTemplate';
 
 function starterDocument(): YamlPipelineDocument {
@@ -41,6 +43,20 @@ describe('the pipeline starter template', () => {
     expect(mapping?.['system']?.type).toBe('fstring');
     expect(mapping?.['task']).toEqual({ type: 'variable', value: 'input' });
     expect(starterDocument().nodes?.[0]?.input).toEqual(['input']);
+  });
+
+  it('makes the editor mint LLM_2 for the next LLM node the author adds', () => {
+    // Consequence of shipping a template, and the one that is easy to miss:
+    // a new pipeline no longer opens on an empty canvas, so `LLM_1` is
+    // already taken. Any caller that reads back "the LLM node" of a pipeline
+    // by name prefix now gets the STARTER's node, not the author's.
+    // `e2e/journeys/pipelines/pipelines.versioning.spec.ts` (J16b) did exactly
+    // that and read the base version's own starter node as an overwrite.
+    const document = starterDocument();
+
+    expect(getInitialNodeId(PipelineNodeTypes.LLM, document.nodes ?? [])).toBe('LLM_2');
+    // On an empty canvas — the state before the template — it was `LLM_1`.
+    expect(getInitialNodeId(PipelineNodeTypes.LLM, [])).toBe(PIPELINE_STARTER_ENTRY_NODE_ID);
   });
 
   it('declares every state variable its node reads and writes', () => {

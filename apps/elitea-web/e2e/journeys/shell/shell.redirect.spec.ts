@@ -36,10 +36,20 @@ test('J1: cold load / redirects through to /chat', async ({ page }) => {
 
   // `features/chat-input/ui/UserInputEditableArea.tsx:96` wraps a real MUI
   // `TextField`; the inner textarea carries `chat-message-input` and the
-  // "Type a message..." placeholder.
+  // placeholder `widgets/chat-box/ui/ChatBox.tsx` passes down.
+  //
+  // The copy is "Type your message...", not "Type a message...". That string
+  // is not this journey's own decision: it is the value of the
+  // `widgets.chatBox.inputPlaceholder` key in `shared/i18n/en.json`, and it
+  // matches the parity baseline (`apps/elitea-ui`'s `NewChat.jsx:1336`,
+  // `NewConversationView.jsx:943`) and the production screen the composer was
+  // measured against. This test held the pre-parity copy and read a deliberate
+  // correction as a regression; the copy was only ever a proxy for "this is
+  // the product composer, not a stub", which the exact production string
+  // states more strictly.
   const textarea = composer.getByTestId('chat-message-input');
   await expect(textarea).toBeEditable();
-  await expect(textarea).toHaveAttribute('placeholder', 'Type a message...');
+  await expect(textarea).toHaveAttribute('placeholder', 'Type your message...');
 
   // Typing must actually land in the composer — proves the chat feature is
   // mounted and interactive, not merely painted.
@@ -150,10 +160,20 @@ test('J4: logout clears user state and el.* storage', async ({ page }) => {
   // have matched a chain that got no further). Step 2 additionally asserts the
   // SERVER session is really gone, which the previous revision never checked
   // at all.
-  await page.goto(BASE_URL + '/app/settings/personalization', { waitUntil: 'domcontentloaded' });
+  // Settings › PROFILE, not Personalization. "Log out" used to be a NAV ITEM
+  // in the drawer's PERSONAL group, and this journey opened whichever settings
+  // screen was cheapest because the drawer carried the control on every one of
+  // them. It is now a BUTTON on the Profile page, under the identity rows
+  // (`features/settings/ui/profile/ProfileIdentity.tsx`), which is where the
+  // parity baseline and the production UI put it — an action stopped
+  // pretending to be a tab. `src/routes/__tests__/settingsLogout.test.tsx`
+  // covers the storage sweep in jsdom and names THIS journey as the half that
+  // proves the browser really leaves the app, so the page it opens has to be
+  // the page the control is on.
+  await page.goto(BASE_URL + '/app/settings/profile', { waitUntil: 'domcontentloaded' });
 
-  // Wait for the settings drawer to be interactive before touching storage.
-  const logoutItem = page.getByText('Log out', { exact: true });
+  // Wait for the logout control to be interactive before touching storage.
+  const logoutItem = page.getByRole('button', { name: 'Log out', exact: true });
   await expect(logoutItem).toBeVisible({ timeout: 20_000 });
 
   // Precondition: the session this journey is about to destroy really exists.
