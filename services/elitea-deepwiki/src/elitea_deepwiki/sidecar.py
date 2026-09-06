@@ -6,9 +6,16 @@ is the engine — the copied tool layer and its dependency closure — so that
 stays here, in this process, listening on a Unix socket next to the host:
 
     POST /engine/invoke                  {invocation_id, tool, arguments}
-      → application/x-ndjson: {"thinking": …}* then {"result": …} | {"error": …}
+      → application/x-ndjson: {"thinking": …} and {"token": …} interleaved,
+        then {"result": …} | {"error": …}
     POST /engine/invocations/{id}/stop   a cooperative stop
     GET  /engine/health
+
+``thinking`` is progress text and ``token`` is a fragment of the ANSWER; they
+share one queue so their order is the order the engine produced them in, and
+they are separate keys so that neither hop below has to guess which one a
+line is (issue #701, ``conformance/provider/fixtures/deepwiki/stream/
+token_events.json``).
 
 ``arguments`` is the legacy keyword set the host already derived
 (``ArgumentsFor``); the engine call is exactly the one ``LegacyToolRunner``
@@ -44,12 +51,12 @@ ENGINE_TOOLS = ("generate_wiki", "ask", "deep_research", "resolve_wiki")
 
 
 class SidecarContext:
-    """The five hooks the tool layer needs, for one sidecar invocation.
+    """The hooks the tool layer needs, for one sidecar invocation.
 
-    ``thinking`` feeds the stream; ``checkpoint`` raises once the host has
-    asked for a stop, after terminating the tracked worker processes —
-    exactly what :class:`elitea_deepwiki.invocations.InvocationContext` does,
-    without an invocation store behind it.
+    ``thinking`` feeds the progress stream and ``token`` feeds the answer
+    stream; ``checkpoint`` raises once the host has asked for a stop, after
+    terminating the tracked worker processes — exactly what the legacy
+    ``InvocationContext`` did, without an invocation store behind it.
     """
 
     def __init__(self, invocation_id: str, tool_name: str, queue: asyncio.Queue) -> None:
@@ -73,6 +80,17 @@ class SidecarContext:
 
     async def thinking(self, message: str) -> None:
         await self._queue.put({"thinking": message})
+
+    async def token(self, text: str) -> None:
+        """One fragment of the answer, on the same queue as the progress.
+
+        An empty fragment is DROPPED here rather than downstream: the poll
+        drain discards an event with an empty message, so letting one
+        through would spend a read-once event slot on nothing.
+        """
+        if not text:
+            return
+        await self._queue.put({"token": text})
 
     async def checkpoint(self) -> None:
         if not self.stop_requested:

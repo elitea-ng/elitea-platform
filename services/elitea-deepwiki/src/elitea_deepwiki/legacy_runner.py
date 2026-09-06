@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 #: invoke-time value is the one that reached the platform, so it is the one
 #: that is preserved.
 class ToolHost:
-    """The five hooks the copied tool layer expects from its Pylon module.
+    """The hooks the copied tool layer expects from its Pylon module.
 
     ``tool_operations.Method`` is a mixin: every method it defines calls back
     into ``self`` for progress events, cancellation, child-process tracking and
@@ -46,7 +46,9 @@ class ToolHost:
 
     Discovering that the tool layer needed exactly five hooks — and no Pylon
     behaviour beyond them — is what made copying it viable instead of
-    rewriting 1400 lines.
+    rewriting 1400 lines. ``invocation_token`` is a sixth, added with the
+    answer-token channel (issue #701); it is OURS, not the legacy module's,
+    which is why it is optional on the context side.
     """
 
     def __init__(self, settings, context: Any) -> None:
@@ -82,6 +84,20 @@ class ToolHost:
 
     def invocation_thinking(self, message: str) -> None:
         self._call_async(self._context.thinking(message))
+
+    def invocation_token(self, text: str) -> None:
+        """One fragment of the answer, on the token channel (issue #701).
+
+        The SIXTH hook, and the only one the legacy Pylon module never had:
+        the legacy service streamed tokens over socket.io, which ADR-0022
+        removed. A context that predates the channel has no ``token``, so
+        this degrades to progress-only rather than failing the tool — the
+        answer still arrives whole with the result.
+        """
+        emit = getattr(self._context, "token", None)
+        if emit is None:
+            return
+        self._call_async(emit(text))
 
     def invocation_stop_checkpoint(self) -> None:
         self._call_async(self._context.checkpoint())
@@ -377,6 +393,15 @@ class LegacyToolRunner:
     async def _paced(self, tool_name: str, context: Any) -> None:
         """Progress emitted before the engine answers; the fixture paces here."""
 
+    async def _streamed(self, tool_name: str, result: Any, context: Any) -> None:
+        """The answer token channel; the fixture streams here.
+
+        A no-op for the real engine, which emits its own tokens from inside
+        the tool (``invocation_token``) while it is still writing. The
+        fixture has no model to write with, so it streams the answer it has
+        already computed — see :mod:`elitea_deepwiki.fixture_runner`.
+        """
+
     async def run_engine_tool(
         self, tool_name: str, arguments: dict[str, Any], context: Any
     ) -> Any:
@@ -395,7 +420,9 @@ class LegacyToolRunner:
         arguments = self._apply_context_paths(tool_name, arguments)
         await self._paced(tool_name, context)
         tool = self._bound_tool(tool_name, context)
-        return await asyncio.to_thread(functools.partial(tool, **arguments))
+        result = await asyncio.to_thread(functools.partial(tool, **arguments))
+        await self._streamed(tool_name, result, context)
+        return result
 
     async def publish(self, result: dict[str, Any], context: Any) -> None:
         """Publish a generated index — the sidecar's name for ``_publish``."""

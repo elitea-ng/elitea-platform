@@ -421,6 +421,35 @@ read-modify-write under a lock on the hottest path; as rows it is one
 event nor lose one. Read-once remains the contract — the P0 fixtures pin it —
 and making events durable does not make them re-readable.
 
+### Two channels down one event list (issue #701)
+
+The sidecar's NDJSON stream carries `{"thinking": …}` for progress and
+`{"token": …}` for one fragment of the ANSWER. The Go host turns each into
+one read-once event: progress keeps its text, a fragment is wrapped as
+`{"event":"llm_chunk","data":{"text":…}}` — the structured envelope the
+event text already carries for `todo_update` and `tool_start` — so the frozen
+poll envelope does not change and no facade, OpenAPI document or generated
+client moves. The browser separates them again and shows the answer as it is
+written.
+
+They are two KEYS on the socket rather than a convention about what a
+progress message may contain, because otherwise a progress line whose text
+happened to look like a token envelope would be shown as an answer. Order is
+preserved: both go on one queue, so an answer that arrives around a tool call
+still reads in the order it was produced.
+
+For the real engine this is the agentic `ask` path — `ask_engine.py` emits one
+fragment per chunk, the ask worker prints `[LLM_CHUNK] …` and the tool layer
+puts it on the token channel, all three declared in
+`tools/refresh_engine_copy.py`. Model streaming is on by default and a
+deployment turns it off with `llm_settings.streaming: false`. `deep_research`
+does NOT stream its report: it is written by sub-agents whose own final
+messages reach the same stream, so joining them would join several reports
+into one; it streams its PLAN through `todo_update` instead. Both fixture
+runners stream the answer they return, which is what the browser journeys run
+against. The contract is
+`conformance/provider/fixtures/deepwiki/stream/token_events.json`.
+
 ## What is not wired yet
 
 1. **The dependency closure is optional.** `pip install -e ".[engine]"`
