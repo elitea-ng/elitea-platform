@@ -46,10 +46,27 @@ type EgressPolicy interface {
 	// operator's GATEWAY_EGRESS_ALLOWLIST — the identical decision
 	// GetKeysForProvider applies to every persisted credential (issue #13).
 	EgressAllows(apiBase string) bool
-	// EgressAllowlistConfigured reports whether an allowlist is armed at
-	// all, matching GetConfigForProvider's private-network carve-out for the
-	// self-hosted provider classes.
-	EgressAllowlistConfigured() bool
+	// EgressPrivateNetworkAllowed reports whether the merged allowlist
+	// EXPLICITLY names a private host or CIDR. It is the SAME question, read
+	// from the SAME gate, that account.GetConfigForProvider asks before it
+	// sets NetworkConfig.AllowPrivateNetwork for the self-hosted provider
+	// classes.
+	//
+	// It used to be "is an allowlist armed at all"
+	// (account.EgressAllowlistConfigured). The egress-governance change made
+	// those two different questions: a name-only entry arms the allowlist and
+	// grants NO private reachability, because a name cannot declare where it
+	// resolves (egresslib, "Why a NAME allowlist"). The probe then reported
+	// success for a destination every chat turn refused in the dialer, and it
+	// wrote status_ok for it. One predicate, one gate instance, both
+	// directions: the probe must never pass a destination the request path
+	// refuses, and it must never refuse one the request path dials.
+	//
+	// The gate instance matters as much as the predicate. The account merges
+	// the environment floor with the authored `egress_allowlist` governance
+	// rows, so a decision taken from the environment alone would drift from
+	// the dialer the moment an admin authors a row.
+	EgressPrivateNetworkAllowed() bool
 }
 
 // checkConnectionProbeTimeout bounds the single provider round trip a check
@@ -194,9 +211,10 @@ type checkConnectionProvider struct {
 // ProviderForCredential), is the whole fix: a second copy keyed on the type
 // alone is what drifted.
 //
-// A private destination is still refused unless the operator has ALSO armed
-// GATEWAY_EGRESS_ALLOWLIST — that gate is applied by the caller, and every
-// target has already passed EgressAllows before this is consulted.
+// A private destination is still refused unless the operator's merged
+// allowlist EXPLICITLY names a private host or CIDR — that half of the gate is
+// applied by probeAllowsPrivateNetwork, and every target has already passed
+// EgressAllows before this is consulted.
 func checkConnectionAllowsPrivateNetwork(req checkConnectionRequest) bool {
 	provider, ok := account.ProviderForCredential(req.Type, req.APIBase)
 	if !ok {
@@ -205,6 +223,28 @@ func checkConnectionAllowsPrivateNetwork(req checkConnectionRequest) bool {
 	// The self-hosted provider classes, and only them — the identical switch
 	// account.GetConfigForProvider applies to AllowPrivateNetwork.
 	return provider == schemas.VLLM || provider == schemas.Ollama
+}
+
+// probeAllowsPrivateNetwork is the WHOLE private-network decision for a probe,
+// and it is the request path's decision, not a second one.
+//
+// account.GetConfigForProvider builds NetworkConfig.AllowPrivateNetwork from
+// two facts: the credential resolves to a self-hosted provider class, AND the
+// merged egress allowlist explicitly names a private destination. This reads
+// the same two facts, the second one from the same gate instance through
+// EgressPolicy, so a probe cannot pass a destination the dialer refuses.
+//
+// Both callers (CheckConnection and ListProviderModels) go through here. Two
+// copies of one predicate is exactly how the earlier per-type flag drifted.
+//
+// A nil policy answers false: a handler composed without WithEgressPolicy
+// refuses the request before this is reached, and this must not be the one
+// place that would have opened the private network for it.
+func (h *Handler) probeAllowsPrivateNetwork(req checkConnectionRequest) bool {
+	if h == nil || h.egressPolicy == nil {
+		return false
+	}
+	return checkConnectionAllowsPrivateNetwork(req) && h.egressPolicy.EgressPrivateNetworkAllowed()
 }
 
 // checkConnectionFieldError is a pre-dial refusal: the payload itself cannot
@@ -353,7 +393,7 @@ func (h *Handler) CheckConnection(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	allowPrivate := checkConnectionAllowsPrivateNetwork(req) && h.egressPolicy.EgressAllowlistConfigured()
+	allowPrivate := h.probeAllowsPrivateNetwork(req)
 	client := newCheckConnectionProbeClient(allowPrivate)
 
 	ctx, cancel := context.WithTimeout(r.Context(), checkConnectionProbeTimeout)
@@ -505,9 +545,9 @@ func checkConnectionProbeDo(client *http.Client, httpReq *http.Request) error {
 // is exactly the check-then-dial DNS-rebinding race account/egress.go's own
 // doc comment warns about; dialing the validated IP directly closes it.
 //
-// allowPrivate is true only for a self-hosted credential class (currently
-// just Ollama) AND only when the operator has armed
-// GATEWAY_EGRESS_ALLOWLIST — mirroring GetConfigForProvider's
+// allowPrivate comes from probeAllowsPrivateNetwork ONLY. It is true for a
+// self-hosted credential class AND only when the merged allowlist explicitly
+// names a private host or CIDR — mirroring GetConfigForProvider's
 // NetworkConfig.AllowPrivateNetwork exactly.
 func newCheckConnectionProbeClient(allowPrivate bool) *http.Client {
 	dialer := &net.Dialer{Timeout: 5 * time.Second}

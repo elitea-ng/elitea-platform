@@ -196,7 +196,7 @@ func (h *Handler) ListProviderModels(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	allowPrivate := checkConnectionAllowsPrivateNetwork(req) && h.egressPolicy.EgressAllowlistConfigured()
+	allowPrivate := h.probeAllowsPrivateNetwork(req)
 	client := newCheckConnectionProbeClient(allowPrivate)
 
 	ctx, cancel := context.WithTimeout(r.Context(), checkConnectionProbeTimeout)
