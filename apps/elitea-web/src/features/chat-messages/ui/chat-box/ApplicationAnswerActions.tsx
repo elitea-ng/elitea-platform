@@ -38,7 +38,13 @@ export function ApplicationAnswerActions({
   onDelete,
 }: ApplicationAnswerActionsProps): ReactNode {
   return (
-    <Box className="actionButtons" sx={{ display: 'flex', justifyContent: 'flex-end', gap: 0.5, mt: 1, visibility: 'hidden' }}>
+    // Always visible, never hover-gated: the production row shows Read
+    // out / Copy / Regenerate / Delete on every answer at rest (measured
+    // `visibility: visible` live, and baseline `RelativeButtonsContainer`
+    // sets no `hidden` base — its `&:hover` rule is vestigial). Hidden until
+    // hover, the transcript looked action-less and the icons the reference
+    // screenshots show were simply absent.
+    <Box className="actionButtons" sx={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'flex-start', gap: 1, mt: 1, paddingLeft: '2rem' }}>
       {onAutoSpeak && hasSpeakableText && (
         <Tooltip title="Read out" placement="top">
           <span>

@@ -138,6 +138,58 @@ export function ContextBudgetPanel({ stats }: ContextBudgetPanelProps): ReactNod
   );
 }
 
+/**
+ * The collapsed rail's form of the same reading: the utilisation percentage
+ * over a short coloured status line, with the full breakdown in a tooltip.
+ *
+ * Ported from `apps/elitea-ui/src/[fsd]/widgets/context-budget/ui/
+ * ContextBudgetCollapsed.jsx` (its `container` / `percentageWrapper` /
+ * `lineContainer` / `lineIndicator` styles verbatim). Measured on the live
+ * production rail: the collapsed foot shows `0` `%` above a 2.25rem line, and
+ * nothing else.
+ *
+ * This branch did not exist here. The full `ContextBudgetPanel` was rendered
+ * into the collapsed 44px-wide rail, so its title, token line, progress bar
+ * and three stat rows each wrapped to one word per line and the card's right
+ * edge sat ~18px past the right edge of the viewport.
+ */
+export function ContextBudgetCollapsed({ stats }: ContextBudgetPanelProps): ReactNode {
+  return (
+    <Tooltip
+      title={t('widgets.contextBudget.collapsedTooltip', '{{tokens}} tokens — {{percentage}}% of the context budget', {
+        tokens: stats.tokensDisplay,
+        percentage: stats.utilizationPercentage,
+      })}
+      placement="left"
+    >
+      <Box
+        data-testid="context-budget-collapsed"
+        sx={{ width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.2rem', cursor: 'default' }}
+      >
+        <Typography
+          variant="bodySmall"
+          data-testid="context-budget-utilization"
+          sx={(theme: Theme) => ({ color: theme.vars.palette.text.default })}
+        >
+          {t('widgets.contextBudget.collapsedPercentage', '{{percentage}}%', { percentage: stats.utilizationPercentage })}
+        </Typography>
+        <Box sx={{ width: '2.25rem', height: '0.1875rem' }}>
+          <Box
+            data-testid="context-budget-progress"
+            data-percentage={Math.min(stats.utilizationPercentage, 100)}
+            sx={(theme: Theme) => ({
+              width: '100%',
+              height: '100%',
+              borderRadius: theme.vars.shape.radiusPill,
+              backgroundColor: stats.isHighUtilization ? theme.vars.palette.warning.yellow : theme.vars.palette.success.main,
+            })}
+          />
+        </Box>
+      </Box>
+    </Tooltip>
+  );
+}
+
 function ProgressBar({ percentage, isHigh }: { readonly percentage: number; readonly isHigh: boolean }): ReactNode {
   return (
     <Box aria-hidden sx={{ height: '0.375rem', alignSelf: 'stretch', position: 'relative' }}>

@@ -21,7 +21,6 @@ import type { ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 
 import Box from '@mui/material/Box';
-import List from '@mui/material/List';
 import Skeleton from '@mui/material/Skeleton';
 
 import { ApplicationAnswer } from './ApplicationAnswer';
@@ -121,6 +120,13 @@ export interface ChatMessageListProps {
    * name to greet. Omitted, the plain fallback line below is used.
    */
   readonly emptyState?: ReactNode;
+  /**
+   * The answering participant's display name, captioned on every assistant
+   * row (`<mark> Elitea to Message`). Supplied by `ChatBox`, which resolves
+   * it from the conversation's active participant — `entities/message`'s
+   * assistant normaliser keeps no participant, so the row cannot find it.
+   */
+  readonly assistantName?: string | undefined;
 }
 
 /**
@@ -198,6 +204,7 @@ export function ChatMessageList({
   } = {},
   pagination: { isLoadingMore = false, onScrollToTop } = {},
   emptyState,
+  assistantName,
 }: ChatMessageListProps): ReactNode {
   const scrollRef = useRef<SimpleBarInstance | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -268,10 +275,24 @@ export function ChatMessageList({
 
   return (
     <ScrollableContainer ref={scrollRef}>
-      <List
+      {/*
+        * A plain `<ul>`, NOT MUI's `<List>`: `shared/brand/mui-overrides/
+        * MuiList.ts` styles the untagged `MuiList` variant as a MENU card
+        * (`background.secondary` + a `border.lines` hairline + the default
+        * shadow + `min-width: 12.5rem`), and that key is what `<List>`
+        * reads — so the whole transcript rendered inside a floating
+        * menu-shaped panel, which the production UI does not have. The
+        * override's own doc claims "`<List>` is not used unwrapped anywhere
+        * else in this app (grepped)"; this file was that use.
+        *
+        * Padding matches the baseline's `MessageList`
+        * (`components/Chat/StyledComponents.jsx:108-114`:
+        * `padding: 0 0.75rem 0.75rem`).
+        */}
+      <Box
+        component="ul"
         data-testid="chat-message-list"
-        disablePadding
-        sx={{ px: 2 }}
+        sx={{ width: '100%', flexGrow: 1, listStyle: 'none', margin: 0, padding: '0 0.75rem 0.75rem' }}
       >
         {isLoadingMore && (
           <Box component="li" sx={{ display: 'flex', flexDirection: 'column', gap: 1, pb: 1, listStyle: 'none' }}>
@@ -306,7 +327,7 @@ export function ChatMessageList({
               key={messageId}
               data-testid="chat-message-item"
               ref={setMessageRowRef(messageId)}
-              sx={{ mb: 1, listStyle: 'none' }}
+              sx={{ listStyle: 'none', width: '100%', mb: 1 }}
             >
               {isUser ? (
                 <UserMessage
@@ -322,6 +343,7 @@ export function ChatMessageList({
                   answer={message}
                   messageId={messageId}
                   isLastMessage={isLastMessage}
+                  author={{ participantName: assistantName }}
                   toolActions={message.toolActions}
                   status={{ isLoading: Boolean(message.isLoading), isStreaming: messageIsStreaming }}
                   actions={{
@@ -355,7 +377,7 @@ export function ChatMessageList({
           );
         })}
         <Box component="li" ref={messagesEndRef} sx={{ listStyle: 'none' }} />
-      </List>
+      </Box>
     </ScrollableContainer>
   );
 }
