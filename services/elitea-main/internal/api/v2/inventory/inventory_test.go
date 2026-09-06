@@ -25,6 +25,7 @@ import (
 	"time"
 
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/inventory"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/llmproxy"
@@ -135,15 +136,15 @@ func TestEachFacadePathMapsToItsProviderPath(t *testing.T) {
 	handler := route(t, cfg, inventory.ReadPermission, inventory.InvokePermission)
 
 	cases := []struct{ method, facadePath, providerPath string }{
-		{http.MethodGet, "/inventory/slots/7", "/slots"},
+		{http.MethodGet, "/api/v2/inventory/slots/7", "/slots"},
 		{
 			http.MethodGet,
-			"/inventory/invocations/7/inventory/get_stats/abc",
+			"/api/v2/inventory/invocations/7/inventory/get_stats/abc",
 			"/tools/inventory/get_stats/invocations/abc",
 		},
 		{
 			http.MethodDelete,
-			"/inventory/invocations/7/inventory/get_stats/abc",
+			"/api/v2/inventory/invocations/7/inventory/get_stats/abc",
 			"/tools/inventory/get_stats/invocations/abc",
 		},
 	}
@@ -163,7 +164,7 @@ func TestEachFacadePathMapsToItsProviderPath(t *testing.T) {
 	// A path the facade does not mount is a 404 here rather than a hop. The
 	// provider's own routes are not this facade's surface.
 	if response := request(t, handler, http.MethodGet,
-		"/inventory/descriptor"); response.Code != http.StatusNotFound {
+		"/api/v2/inventory/descriptor"); response.Code != http.StatusNotFound {
 		t.Fatalf("an unmounted path answered %d", response.Code)
 	}
 	if len(*seen) != len(cases) {
@@ -178,27 +179,27 @@ func TestReadingIsNotInvoking(t *testing.T) {
 
 	reader := route(t, cfg, inventory.ReadPermission)
 	if response := request(t, reader, http.MethodGet,
-		"/inventory/slots/7"); response.Code != http.StatusOK {
+		"/api/v2/inventory/slots/7"); response.Code != http.StatusOK {
 		t.Fatalf("a reader could not see capacity: %d %s", response.Code, response.Body.String())
 	}
 	if response := request(t, reader, http.MethodGet,
-		"/inventory/invocations/7/inventory/get_stats/abc"); response.Code != http.StatusOK {
+		"/api/v2/inventory/invocations/7/inventory/get_stats/abc"); response.Code != http.StatusOK {
 		t.Fatalf("a reader could not poll: %d", response.Code)
 	}
 	// The cancel is on the SAME path as the poll and takes the other grant.
 	if response := request(t, reader, http.MethodDelete,
-		"/inventory/invocations/7/inventory/get_stats/abc"); response.Code != http.StatusForbidden {
+		"/api/v2/inventory/invocations/7/inventory/get_stats/abc"); response.Code != http.StatusForbidden {
 		t.Fatalf("a reader cancelled an invocation: %d", response.Code)
 	}
 	before := len(*seen)
 
 	invoker := route(t, cfg, inventory.InvokePermission)
 	if response := request(t, invoker, http.MethodGet,
-		"/inventory/slots/7"); response.Code != http.StatusForbidden {
+		"/api/v2/inventory/slots/7"); response.Code != http.StatusForbidden {
 		t.Fatalf("the invoke grant alone read capacity: %d", response.Code)
 	}
 	if response := request(t, invoker, http.MethodDelete,
-		"/inventory/invocations/7/inventory/get_stats/abc"); response.Code != http.StatusOK {
+		"/api/v2/inventory/invocations/7/inventory/get_stats/abc"); response.Code != http.StatusOK {
 		t.Fatalf("the invoke grant could not cancel: %d", response.Code)
 	}
 	if len(*seen) != before+1 {
@@ -208,11 +209,48 @@ func TestReadingIsNotInvoking(t *testing.T) {
 	// No grant at all reaches nothing.
 	none := route(t, cfg)
 	for _, path := range []string{
-		"/inventory/slots/7", "/inventory/invocations/7/inventory/get_stats/abc",
+		"/api/v2/inventory/slots/7", "/api/v2/inventory/invocations/7/inventory/get_stats/abc",
 	} {
 		if response := request(t, none, http.MethodGet, path); response.Code != http.StatusForbidden {
 			t.Errorf("an ungranted caller reached %s: %d", path, response.Code)
 		}
+	}
+}
+
+// The three mounted paths carry the platform's API prefix.
+//
+// THIS IS A REGRESSION TEST FOR A LIVE DEFECT, not a style rule.
+// production_router.go mounts these constants on the router ROOT, so the
+// string IS the served path. They read `/inventory/...` until this commit,
+// while DeepWiki's read `/api/v2/deepwiki/...`. The platform edge forwards
+// `/api/v2` and nothing else, so the facade answered 200 to a request made
+// directly against elitea-main's port inside the compose network and 404 to
+// the identical request through traefik — measured on a running stack. Every
+// test in this package passed throughout, because they all drove the composed
+// handler directly and never asked where it was mounted.
+//
+// Compared against DeepWiki's constants rather than a literal, so a change to
+// the platform prefix moves both providers or fails here.
+func TestTheMountedPathsAreReachableThroughTheEdge(t *testing.T) {
+	prefix := deepwiki.SlotsPath[:strings.Index(deepwiki.SlotsPath, "/deepwiki/")]
+	if prefix == "" {
+		t.Fatal("could not read the API prefix out of DeepWiki's slots path")
+	}
+	for name, path := range map[string]string{
+		"SlotsPath":      inventory.SlotsPath,
+		"InvokePath":     inventory.InvokePath,
+		"InvocationPath": inventory.InvocationPath,
+	} {
+		if !strings.HasPrefix(path, prefix+"/inventory/") {
+			t.Errorf("%s is %q; production_router.go mounts it on the router root, "+
+				"so without the %q prefix the edge never forwards it and the route "+
+				"is reachable only from inside the pod", name, path, prefix)
+		}
+	}
+	// The two facades must not collide either: one provider's path must never
+	// match another's pattern.
+	if strings.HasPrefix(inventory.SlotsPath, prefix+"/deepwiki/") {
+		t.Error("the Inventory facade is mounted under DeepWiki's path space")
 	}
 }
 
@@ -239,7 +277,7 @@ func TestTheProviderReceivesASignedIdentityTheClientCannotInfluence(t *testing.T
 	seen, cfg := recordingProvider(t)
 	handler := route(t, cfg, inventory.ReadPermission)
 
-	r := httptest.NewRequest(http.MethodGet, "/inventory/slots/7", nil)
+	r := httptest.NewRequest(http.MethodGet, "/api/v2/inventory/slots/7", nil)
 	r.Header.Set("X-Auth-Type", "user")
 	r.Header.Set("X-Auth-ID", "11")
 	r.Header.Set(llmproxy.HeaderProjectID, "999")
@@ -269,7 +307,7 @@ func TestTheCallersCredentialsDoNotReachTheProvider(t *testing.T) {
 	seen, cfg := recordingProvider(t)
 	handler := route(t, cfg, inventory.ReadPermission)
 
-	r := httptest.NewRequest(http.MethodGet, "/inventory/slots/7", nil)
+	r := httptest.NewRequest(http.MethodGet, "/api/v2/inventory/slots/7", nil)
 	r.Header.Set("X-Auth-Type", "user")
 	r.Header.Set("X-Auth-ID", "11")
 	r.Header.Set("Authorization", "Bearer platform-token")
@@ -383,7 +421,7 @@ func TestAnUnmountedFacadeAnswers503RatherThanPanicking(t *testing.T) {
 	// A Route value with no handler is the same case: composed, and carrying
 	// nothing to serve.
 	response := httptest.NewRecorder()
-	(&inventory.Route{}).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/inventory/slots/7", nil))
+	(&inventory.Route{}).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v2/inventory/slots/7", nil))
 	if response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("an empty Route answered %d", response.Code)
 	}
@@ -438,9 +476,9 @@ func TestAdmissionGatesTheInvokeAndNotTheReads(t *testing.T) {
 	handler := route(t, cfg, inventory.ReadPermission, inventory.InvokePermission)
 
 	for _, testCase := range []struct{ method, path string }{
-		{http.MethodGet, "/inventory/slots/7"},
-		{http.MethodGet, "/inventory/invocations/7/inventory/get_stats/abc"},
-		{http.MethodDelete, "/inventory/invocations/7/inventory/get_stats/abc"},
+		{http.MethodGet, "/api/v2/inventory/slots/7"},
+		{http.MethodGet, "/api/v2/inventory/invocations/7/inventory/get_stats/abc"},
+		{http.MethodDelete, "/api/v2/inventory/invocations/7/inventory/get_stats/abc"},
 	} {
 		if response := request(t, handler, testCase.method, testCase.path); response.Code != http.StatusOK {
 			t.Errorf("%s %s was refused by the admission gate: %d",
@@ -450,7 +488,7 @@ func TestAdmissionGatesTheInvokeAndNotTheReads(t *testing.T) {
 	reached := len(*seen)
 
 	body := strings.NewReader(`{"parameters":{}}`)
-	r := httptest.NewRequest(http.MethodPost, "/inventory/tools/7/inventory/get_stats/invoke", body)
+	r := httptest.NewRequest(http.MethodPost, "/api/v2/inventory/tools/7/inventory/get_stats/invoke", body)
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("X-Auth-Type", "user")
 	r.Header.Set("X-Auth-ID", "11")

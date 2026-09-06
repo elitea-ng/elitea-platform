@@ -735,7 +735,7 @@ func invoke(
 		t.Fatalf("compose the Inventory route: %v", err)
 	}
 	request := httptest.NewRequest(http.MethodPost,
-		"/inventory/tools/42/inventory/"+tool+"/invoke", strings.NewReader(body))
+		"/api/v2/inventory/tools/42/inventory/"+tool+"/invoke", strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("X-Auth-Type", "user")
 	request.Header.Set("X-Auth-ID", "11")
