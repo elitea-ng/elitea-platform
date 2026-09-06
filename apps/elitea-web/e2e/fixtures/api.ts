@@ -744,16 +744,19 @@ export interface McpConnectionSettings {
  * a schema-driven form whose type tiles come from the project's toolkit-type
  * catalogue, filtered to the mcp-flavoured entries
  * (`src/features/toolkits/lib/hooks/useGetCurrentMCPSchemas.hooks.ts:54-56`).
- * This stack's catalogue publishes NO such entry — `GET /elitea_core/toolkits/
- * prompt_lib/{project}` answers with `application, artifact, custom, database,
- * datasource, github, jira, openapi` and nothing else — so the selector is
- * empty and the page shows its "Still no local MCP available" state, the same
- * one `e2e/visual/routes.visual.spec.ts:369-374` snapshots. There is no tile to
- * click and therefore no form to fill: a connection can only be authored
- * through this route today, which is also what `e2e/journeys/mcps/
- * mcps.oauth.spec.ts:229-232` does inline. Should the catalogue ever publish an
- * mcp type, a spec that wants the form should drive it and this helper should
- * stay for the setup-only callers.
+ * The catalogue now publishes ONE such entry. `GET /elitea_core/toolkits/
+ * prompt_lib/{project}` serves every type the pinned SDK snapshot holds, and
+ * `mcp` — "Remote MCP" — is one of them; `mcp_config` is served hidden, because
+ * it is the container the pre-built servers are declared in and the reference
+ * deployment shows no tile for it. So the MCP selector renders a Remote tile,
+ * and the LOCAL group is still empty, which keeps the page's "Still no local
+ * MCP available" state and the shot `e2e/visual/routes.visual.spec.ts` takes
+ * of it.
+ *
+ * A remote-MCP connection needs a URL and an authorization flow that this
+ * helper's callers do not want to drive, so setup still goes through this
+ * route, as `e2e/journeys/mcps/mcps.oauth.spec.ts` also does inline. A spec
+ * that wants to prove the FORM should now drive the Remote MCP tile.
  *
  * `settings` is returned as the SERVER stored it, not as the caller sent it, so
  * a test asserting on the endpoint asserts on the value the runtime will read.

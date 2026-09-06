@@ -1,0 +1,1 @@
+{"implementation":"python","schema_version":"elitea.worker-toolkit-capability.v1","sdk_revision":"b5113a129329b85d23c2d5c2bf55f18e307414ec","unsupported_import_keys":["aws","azure","azure_search","bigquery","delta_lake","gcp","google_places","k8s","localgit","rally","service_now","slack","yagmail"]}

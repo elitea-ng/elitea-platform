@@ -17,6 +17,14 @@ on:
       - "scripts/contract/**"
       - "services/elitea-main/internal/runtimecomposition/current_index_types_snapshot.json"
       - "services/elitea-main/internal/runtimecomposition/current_toolkit_schema_snapshot.json"
+      # The catalogue snapshot is the SECOND projection of the same registry
+      # read: sync_toolkit_schema_snapshot.py writes and checks both files in
+      # one run, so a change to either must start this workflow.
+      - "services/elitea-main/internal/runtimecomposition/current_toolkit_catalogue_snapshot.json"
+      # The Python worker toolkit capability snapshot records which SDK
+      # toolkits THIS image can import. Its gate is a worker unit test, which
+      # runs in the job below with the image's own extras installed.
+      - "services/elitea-main/internal/runtimecomposition/current_python_worker_toolkit_capability_snapshot.json"
       - "services/elitea-main/internal/api/v2/indextypes/testdata/current_index_types_ui_response.json"
       # Issue #424. sync_current_available_sdk.py --check and
       # sync_worker_sdk_catalog.py --check now run in the "Runtime worker" job.
@@ -59,6 +67,14 @@ on:
       - "scripts/contract/**"
       - "services/elitea-main/internal/runtimecomposition/current_index_types_snapshot.json"
       - "services/elitea-main/internal/runtimecomposition/current_toolkit_schema_snapshot.json"
+      # The catalogue snapshot is the SECOND projection of the same registry
+      # read: sync_toolkit_schema_snapshot.py writes and checks both files in
+      # one run, so a change to either must start this workflow.
+      - "services/elitea-main/internal/runtimecomposition/current_toolkit_catalogue_snapshot.json"
+      # The Python worker toolkit capability snapshot records which SDK
+      # toolkits THIS image can import. Its gate is a worker unit test, which
+      # runs in the job below with the image's own extras installed.
+      - "services/elitea-main/internal/runtimecomposition/current_python_worker_toolkit_capability_snapshot.json"
       - "services/elitea-main/internal/api/v2/indextypes/testdata/current_index_types_ui_response.json"
       - "services/elitea-main/internal/application/configurations/current_available_snapshot.json"
       - "services/elitea-main/internal/runtimecomposition/current_sdk_configuration_catalog_snapshot.json"

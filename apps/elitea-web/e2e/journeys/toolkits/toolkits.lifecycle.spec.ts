@@ -147,6 +147,21 @@ test('J17.2: the create page offers real, server-supplied toolkit types', async 
 
   await expect(page.getByRole('button', { name: 'GitHub', exact: true })).toBeVisible({ timeout: 15_000 });
 
+  // The catalogue is the SDK's, not a hand-written map of eight keys. These
+  // three tiles exist only because the server projects the pinned SDK snapshot,
+  // and each comes from a different category, so a catalogue that collapsed
+  // back to one group fails here as well.
+  await expect(page.getByRole('button', { name: 'Confluence', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'SharePoint', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'QTest', exact: true })).toBeVisible();
+  // And the headings the metadata groups them under.
+  await expect(page.getByText('Code Repositories', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText('Test Management', { exact: true }).first()).toBeVisible();
+  // Slack is served, and served HIDDEN: the admitted Python worker image
+  // cannot import it, so offering the tile would produce a toolkit that fails
+  // at its first tool call. Absence here is the capability projection working.
+  await expect(page.getByRole('button', { name: 'Slack', exact: true })).toHaveCount(0);
+
   // checkA11y earns its place here and has now caught TWO different causes of the
   // same critical `button-name` violation, which is why it stays unconditional:
   //   1. before #129, the page iterated the {rows,total} pagination envelope and
