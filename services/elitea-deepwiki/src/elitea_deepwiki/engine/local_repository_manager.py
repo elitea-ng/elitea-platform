@@ -115,6 +115,26 @@ class LocalRepositoryManager:
         Returns:
             Local path to repository root
         """
+        # An ARTIFACT FOLDER is a source too, and there is nothing to clone:
+        # elitea_deepwiki.artifact_source downloads the folder into the same
+        # cache directory a clone would have produced, and everything after
+        # this branch is unchanged. See that module for the identity, which
+        # is a sha256 over the listing where a clone has a commit sha.
+        from elitea_deepwiki.artifact_source import (
+            is_artifact_source,
+            materialise_artifact_source,
+        )
+
+        if is_artifact_source(repository_url):
+            local_path = materialise_artifact_source(
+                repository_url,
+                branch,
+                self.cache_dir,
+                force=force_reclone,
+            )
+            self.active_repos[f"{repository_url}:{branch}"] = local_path
+            return local_path
+
         # Build clone configuration using provider factory
         clone_config = self._get_clone_config(repository_url, branch, project)
         
@@ -323,6 +343,15 @@ class LocalRepositoryManager:
     
     def get_repository_info(self, local_path: str) -> Dict[str, Any]:
         """Get repository information from local clone"""
+        # A materialised artifact folder is not a git tree. Its identity was
+        # recorded beside it when it was downloaded; answering from that
+        # record is what keeps the commit-shaped cache key content-derived.
+        from elitea_deepwiki.artifact_source import artifact_repository_info
+
+        artifact_info = artifact_repository_info(local_path)
+        if artifact_info is not None:
+            return artifact_info
+
         try:
             # Get current commit hash
             commit_result = subprocess.run(

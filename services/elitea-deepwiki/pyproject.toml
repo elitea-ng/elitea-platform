@@ -57,7 +57,7 @@ storage-legacy = [
 # own. scripts/ci/check-engine-closures.sh refuses a tree where the two
 # disagree, and scripts/ci/refresh-engine-closure.py is what re-resolves the
 # closure as a SET and re-writes this line.
-# closure-stamp: COPY_MANIFEST.json sha256 2b37ed44f6b9adc318b9522f00f6fa8565f678a39fb19f7d646f83713dbc7418
+# closure-stamp: COPY_MANIFEST.json sha256 71b527a5ab79cbd4409f0e19d88f53ffe878f12a931bea9b8a47fdd0163e79d1
 engine = [
   "langchain-core==1.6.1",
   "langchain==1.4.0",

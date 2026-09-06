@@ -75,6 +75,11 @@ type ReferenceRewriter struct {
 	Owner *Owner
 	// Expand is the provider's own expansion.
 	Expand Expansion
+	// FolderSource lets the body name an ARTIFACT FOLDER instead of a
+	// reference: a bucket in the invoking project, and an optional prefix.
+	// Off by default, because most toolkits read a credentialed remote and a
+	// folder is not one.
+	FolderSource bool
 	// Refused wraps a refusal the caller can fix; Unavailable one they
 	// cannot.
 	Refused     error
@@ -102,11 +107,56 @@ func (rw ReferenceRewriter) Rewrite(
 		return nil, Grant{}, fmt.Errorf("%w: project %d is out of range", rw.Refused, projectID)
 	}
 	if rw.Field != "" {
-		if err := rw.expandInto(ctx, envelope, project); err != nil {
+		named, err := rw.folderInto(envelope)
+		if err != nil {
 			return nil, Grant{}, err
+		}
+		if !named {
+			if err := rw.expandInto(ctx, envelope, project); err != nil {
+				return nil, Grant{}, err
+			}
 		}
 	}
 	return Settle(ctx, envelope, rw.Minter, rw.Provider, rw.CallbackBase, rw.Lifetime, projectID, userID)
+}
+
+// folderInto handles a body that names an artifact folder rather than a
+// reference, and reports whether it did.
+//
+// THE SOURCE IS ONE OR THE OTHER. A body naming both is refused rather than
+// resolved by precedence: the two name different material, and picking one
+// silently is how a caller ends up with a wiki built from something they did
+// not choose. The reference field is deleted along the folder path so no
+// stale id travels beside the source the facade settled on.
+//
+// The repository is DERIVED from the validated source, never read from the
+// body: a client-supplied `artifact://…` beside a folder block would be a
+// second, unvalidated way to name a bucket.
+func (rw ReferenceRewriter) folderInto(envelope *Envelope) (bool, error) {
+	if !rw.FolderSource {
+		return false, nil
+	}
+	parameters := envelope.Parameters()
+	source, named, err := ArtifactSourceIn(parameters, rw.Refused)
+	if err != nil || !named {
+		return false, err
+	}
+	if encoded, ok := parameters[rw.Field]; ok && !IsNull(encoded) {
+		return false, fmt.Errorf(
+			"%w: the request names both a %s and an %s; a wiki has one source",
+			rw.Refused, rw.Field, ArtifactSourceField)
+	}
+	if err := envelope.Set(ArtifactSourceField, source.Block()); err != nil {
+		return false, err
+	}
+	if err := envelope.Set("repository", source.Repository()); err != nil {
+		return false, err
+	}
+	delete(parameters, rw.Field)
+	for _, alias := range rw.Aliases {
+		delete(parameters, alias)
+	}
+	return true, nil
 }
 
 func (rw ReferenceRewriter) expandInto(ctx context.Context, envelope *Envelope, project int32) error {

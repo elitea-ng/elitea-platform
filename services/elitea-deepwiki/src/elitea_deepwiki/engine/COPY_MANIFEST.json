@@ -2,8 +2,8 @@
   "source_repository": "deepwiki_plugin",
   "source_path": "plugin_implementation",
   "source_revision": "ce679f11dc31c209cc67f13565b286d5bb28ce58",
-  "file_count": 98,
-  "total_bytes": 3867642,
+  "file_count": 97,
+  "total_bytes": 3847885,
   "not_copied": [
     "COPY_MANIFEST.json",
     "__init__.py"
@@ -217,10 +217,6 @@
       "bytes": 45903,
       "sha256": "ee2ca9076dd753e711f060ae6d525fc5b787b1d86b061de747fd9d4832e1121a"
     },
-    "local_repository_manager.py": {
-      "bytes": 19757,
-      "sha256": "50d9cec487be23f94435a54ac6a4acd591a4c97b477749307b030bb75a331b94"
-    },
     "markdown_structure.py": {
       "bytes": 8249,
       "sha256": "57ee725f75e04e750ddc34a7efc0d22e9990def3a875a95d9b89fdb10c8fb030"
@@ -403,6 +399,22 @@
     }
   },
   "transformed_files": {
+    "plugin_implementation/local_repository_manager.py": {
+      "target": "src/elitea_deepwiki/engine/local_repository_manager.py",
+      "bytes": 21053,
+      "sha256": "41ff72ae8c5ff571c91856d5a4e83236e7c4a221f785555ddf7d3a09725df6e6",
+      "in_place": true,
+      "substitutions": [
+        {
+          "from": "        # Build clone configuration using provider factory\n        clone_config = self._get_clone_config(repository_url, branch, project)",
+          "to": "        # An ARTIFACT FOLDER is a source too, and there is nothing to clone:\n        # elitea_deepwiki.artifact_source downloads the folder into the same\n        # cache directory a clone would have produced, and everything after\n        # this branch is unchanged. See that module for the identity, which\n        # is a sha256 over the listing where a clone has a commit sha.\n        from elitea_deepwiki.artifact_source import (\n            is_artifact_source,\n            materialise_artifact_source,\n        )\n\n        if is_artifact_source(repository_url):\n            local_path = materialise_artifact_source(\n                repository_url,\n                branch,\n                self.cache_dir,\n                force=force_reclone,\n            )\n            self.active_repos[f\"{repository_url}:{branch}\"] = local_path\n            return local_path\n\n        # Build clone configuration using provider factory\n        clone_config = self._get_clone_config(repository_url, branch, project)"
+        },
+        {
+          "from": "    def get_repository_info(self, local_path: str) -> Dict[str, Any]:\n        \"\"\"Get repository information from local clone\"\"\"\n        try:",
+          "to": "    def get_repository_info(self, local_path: str) -> Dict[str, Any]:\n        \"\"\"Get repository information from local clone\"\"\"\n        # A materialised artifact folder is not a git tree. Its identity was\n        # recorded beside it when it was downloaded; answering from that\n        # record is what keeps the commit-shaped cache key content-derived.\n        from elitea_deepwiki.artifact_source import artifact_repository_info\n\n        artifact_info = artifact_repository_info(local_path)\n        if artifact_info is not None:\n            return artifact_info\n\n        try:"
+        }
+      ]
+    },
     "plugin_implementation/artifacts_platform_client.py": {
       "target": "src/elitea_deepwiki/engine/artifacts_platform_client.py",
       "bytes": 20716,
@@ -497,9 +509,13 @@
     },
     "methods/tool_operations.py": {
       "target": "src/elitea_deepwiki/tool_operations.py",
-      "bytes": 61056,
-      "sha256": "a98bf0c1bb6e4eff35fd1630661e8fe0e5d30e2f63490e524cde769ed0894a89",
+      "bytes": 61505,
+      "sha256": "1779355c2752752ab0b2f443c3309cf36eed8f768eccdc9b3b6bf77dfefd729b",
       "substitutions": [
+        {
+          "from": "        env = os.environ.copy()\n        env[\"PYTHONUNBUFFERED\"] = \"1\"",
+          "to": "        env = os.environ.copy()\n        env[\"PYTHONUNBUFFERED\"] = \"1\"\n        from .artifact_source import child_environment\n        env.update(child_environment(payload))"
+        },
         {
           "from": "from pylon.core.tools import log, web",
           "to": "import logging\n\nlog = logging.getLogger(__name__)"

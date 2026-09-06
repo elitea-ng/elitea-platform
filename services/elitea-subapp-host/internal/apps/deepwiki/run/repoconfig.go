@@ -18,6 +18,10 @@ var toolkitProviderKeys = []string{
 	"gitlab_configuration",
 	"bitbucket_configuration",
 	"ado_configuration",
+	// The fifth, listed here and not only in the branch below so that its
+	// prefixed and unprefixed spellings merge the way every other provider's
+	// do. The UI and the API disagree about the prefix for all of them.
+	"artifact_configuration",
 }
 
 // RepoConfig is the normalised repository configuration the engine's tools
@@ -190,6 +194,18 @@ func ExtractRepoConfig(params map[string]any) RepoConfig {
 		repoSettings = mergeProviderConfigs(params)
 	}
 	s := repoSettings
+	// The ARTIFACT source is tested first and returns early: it shares none of
+	// the four providers' key precedence, and a payload naming one names none
+	// of the others. Everything below this is the legacy chain, unchanged.
+	if source, ok := ArtifactSourceOf(s); ok {
+		return artifactRepoConfig(source, firstTruthy(
+			s["active_branch"], s["toolkit_configuration_active_branch"],
+			s["version_label"], s["branch"], "main"))
+	}
+	if source, ok := ArtifactSourceOf(params); ok {
+		return artifactRepoConfig(source, firstTruthy(
+			params["active_branch"], params["version_label"], params["branch"], "main"))
+	}
 	switch {
 	case hasAny(s, "github_configuration", "gitlab_configuration", "bitbucket_configuration", "ado_configuration",
 		"toolkit_configuration_github_configuration", "toolkit_configuration_gitlab_configuration",
@@ -270,6 +286,16 @@ func DestinationHost(config RepoConfig) string {
 // refusal is invalid_input, which the caller already knows how to read.
 func CheckEgress(policy spi.EgressPolicy, params map[string]any) (string, error) {
 	config := ExtractRepoConfig(params)
+	// An ARTIFACT FOLDER reaches no external host, so the allowlist has
+	// nothing to decide. This is NOT a hole where the check used to be: what
+	// the allowlist protects against is a clone from a host the deployment
+	// does not trust, and a folder is read from elitea-main over the callback
+	// grant this invocation was minted with. That grant carries the project,
+	// so the ONLY buckets reachable are the caller's own project's — the
+	// scoping the allowlist would otherwise have to stand in for.
+	if config.ProviderType == ArtifactProviderType {
+		return "", nil
+	}
 	if len(config.ProviderConfig) == 0 && !Truthy(config.Repository) {
 		return "", nil
 	}

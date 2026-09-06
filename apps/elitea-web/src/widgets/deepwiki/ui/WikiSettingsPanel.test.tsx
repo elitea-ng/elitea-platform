@@ -1,13 +1,14 @@
 import { ThemeProvider } from '@mui/material/styles';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { EditorView } from '@codemirror/view';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { DEFAULT_BRAND_PACK, DEFAULT_COLOR_SCHEME, buildEliteaTheme } from '@/shared/brand';
+import * as runtimeConfig from '@/shared/config';
 import { server } from '@/test/setup';
 
 const BASE = 'http://elitea.test/api/v2';
@@ -25,9 +26,32 @@ function show(ui: React.ReactElement) {
 beforeEach(() => {
   window.localStorage.clear();
   configureGeneratedClient({ baseUrl: BASE });
+  // The bucket list is fetched through the artifacts feature's own hook,
+  // which reads the runtime config for its base URL. Without this the query
+  // fails and the picker offers no bucket — a green test over a dead control.
+  vi.spyOn(runtimeConfig, 'getConfig').mockReturnValue({
+    status: 'ok',
+    config: {
+      vite_server_url: BASE,
+      vite_base_uri: '/',
+      vite_public_project_id: 'public',
+      allow_project_own_llms: false,
+    },
+  });
+  server.use(
+    http.get(`${BASE}/artifacts/buckets/:projectId`, () =>
+      HttpResponse.json({
+        buckets: [
+          { name: 'docs', is_pinned: false, created_at: '2026-01-01T00:00:00Z' },
+          { name: 'handbooks', is_pinned: false, created_at: '2026-01-01T00:00:00Z' },
+        ],
+      }),
+    ),
+  );
 });
 afterEach(() => {
   resetGeneratedClient();
+  vi.restoreAllMocks();
 });
 
 import { WikiSettingsPanel } from './WikiSettingsPanel';
@@ -164,6 +188,132 @@ describe('WikiSettingsPanel', () => {
     await replaceDraft(user, '{"repository": "acme/svc", "llm_model": "gpt-5"}');
     const hints = await screen.findAllByTestId('wiki-settings-hint');
     expect(hints.map((hint) => hint.getAttribute('data-field'))).toEqual(['embedding_model']);
+  });
+
+  describe('the source picker', () => {
+    // The picker writes into the SAME draft the JSON editor holds, so the
+    // Save button, the validator and the saved document are the ones a
+    // hand-typed `artifact_configuration` already goes through.
+    function editorText(): string {
+      return document.querySelector('.cm-content')?.textContent ?? '';
+    }
+
+    async function chooseBucket(user: ReturnType<typeof userEvent.setup>, name: string) {
+      await user.click(screen.getByTestId('wiki-source-kind-folder'));
+      const field = await screen.findByTestId('wiki-source-bucket');
+      await user.click(within(field).getByRole('combobox'));
+      await user.click(await screen.findByRole('option', { name }));
+    }
+
+    it('offers the project\'s own buckets', async () => {
+      const user = userEvent.setup();
+      show(<WikiSettingsPanel projectId="7" toolkitId="42" toolkit={TOOLKIT} settings={{ repository: 'acme/svc' }} />);
+      await user.click(screen.getByTestId('wiki-source-kind-folder'));
+      const field = await screen.findByTestId('wiki-source-bucket');
+      await user.click(within(field).getByRole('combobox'));
+      await waitFor(() => {
+        expect(screen.getAllByRole('option').map((option) => option.textContent)).toEqual(['docs', 'handbooks']);
+      });
+    });
+
+    it('writes the folder into the draft and removes the repository', async () => {
+      // Both sources cannot stand: the facade refuses the pair. A picker that
+      // added the folder and left the repository would produce exactly the
+      // document the validator then refuses.
+      const user = userEvent.setup();
+      let body: Record<string, unknown> | null = null;
+      server.use(
+        http.put(`${BASE}/elitea_core/tool/prompt_lib/:projectId/:toolkitId`, async ({ request }) => {
+          body = (await request.json()) as Record<string, unknown>;
+          return HttpResponse.json({ ...body, id: 42 });
+        }),
+      );
+      show(<WikiSettingsPanel projectId="7" toolkitId="42" toolkit={TOOLKIT} settings={{ github_repository: 'acme/svc', code_toolkit: 9 }} />);
+      await chooseBucket(user, 'docs');
+      await user.type(screen.getByTestId('wiki-source-prefix'), 'handbook');
+      await waitFor(() => {
+        expect(editorText()).toContain('handbook');
+      });
+      expect(editorText()).not.toContain('github_repository');
+      expect(editorText()).not.toContain('code_toolkit');
+      expect(screen.queryByTestId('wiki-settings-problem')).toBeNull();
+
+      await user.click(screen.getByTestId('wiki-settings-save'));
+      // The request first, the notice second. Eight keystrokes rewrote the
+      // CodeMirror document eight times, and waiting only for the notice put
+      // the whole of that work inside one findBy timeout.
+      await waitFor(() => { expect(body).not.toBeNull(); });
+      await screen.findByTestId('wiki-settings-saved');
+      // AND THE NOTICE STAYS. CodeMirror echoes a programmatic write back
+      // through its debounced onChange 30ms later; read as a fresh edit, that
+      // echo cleared the notice a moment after the save it belongs to.
+      await act(async () => { await new Promise((settle) => setTimeout(settle, 120)); });
+      expect(screen.getByTestId('wiki-settings-saved')).toBeVisible();
+      expect(body).toMatchObject({
+        settings: { artifact_configuration: { bucket: 'docs', prefix: 'handbook' } },
+      });
+      expect((body as unknown as { settings: Record<string, unknown> }).settings).not.toHaveProperty('code_toolkit');
+    });
+
+    it('writes nothing until a bucket is chosen', async () => {
+      // Half a choice is not a source, and it must not destroy one either:
+      // the configured repository stays until a bucket replaces it, so an
+      // operator who opens the folder side and changes their mind still has
+      // the toolkit they came in with.
+      const user = userEvent.setup();
+      show(<WikiSettingsPanel projectId="7" toolkitId="42" toolkit={TOOLKIT} settings={{ repository: 'acme/svc' }} />);
+      await user.click(screen.getByTestId('wiki-source-kind-folder'));
+      await screen.findByTestId('wiki-source-bucket');
+      expect(editorText()).not.toContain('artifact_configuration');
+      expect(editorText()).toContain('acme/svc');
+      expect(screen.queryByTestId('wiki-settings-problem')).toBeNull();
+      expect(screen.getByTestId('wiki-settings-save')).toBeEnabled();
+    });
+
+    it('choosing Repository takes the folder back out of the draft', async () => {
+      const user = userEvent.setup();
+      show(
+        <WikiSettingsPanel
+          projectId="7"
+          toolkitId="42"
+          toolkit={TOOLKIT}
+          settings={{ artifact_configuration: { bucket: 'docs', prefix: 'handbook' } }}
+        />,
+      );
+      expect(editorText()).toContain('artifact_configuration');
+      await user.click(screen.getByTestId('wiki-source-kind-repository'));
+      await waitFor(() => {
+        expect(editorText()).not.toContain('artifact_configuration');
+      });
+      // And the document is then a document with no source, which is refused.
+      const problem = await screen.findByTestId('wiki-settings-problem');
+      expect(problem).toHaveAttribute('data-field', 'repository');
+    });
+
+    it('opens on the folder side for a toolkit already configured with one', () => {
+      show(
+        <WikiSettingsPanel
+          projectId="7"
+          toolkitId="42"
+          toolkit={TOOLKIT}
+          settings={{ artifact_configuration: { bucket: 'docs', prefix: 'handbook' } }}
+        />,
+      );
+      expect(screen.getByTestId('wiki-source-kind-folder')).toHaveAttribute('aria-pressed', 'true');
+      expect(screen.getByTestId('wiki-source-prefix')).toHaveValue('handbook');
+    });
+
+    it('cannot rewrite a document it cannot read', async () => {
+      // The picker rewrites the JSON. While the draft does not parse there is
+      // nothing to rewrite, and a control that silently replaced the text with
+      // `{}` would discard whatever the operator was in the middle of typing.
+      const user = userEvent.setup();
+      show(<WikiSettingsPanel projectId="7" toolkitId="42" toolkit={TOOLKIT} settings={{ repository: 'acme/svc' }} />);
+      await replaceDraft(user, '{not json');
+      await screen.findByTestId('wiki-settings-problem');
+      expect(screen.getByTestId('wiki-source-kind-folder')).toBeDisabled();
+      expect(editorText()).toContain('{not json');
+    });
   });
 
   it('says nothing about models while the draft is not JSON', async () => {

@@ -45,6 +45,17 @@ def test_manifest_pins_a_revision_and_a_plausible_tree():
     # opposite of what it is for.
     in_place = sum(1 for entry in MANIFEST["transformed_files"].values() if entry.get("in_place"))
     assert MANIFEST["file_count"] + in_place >= 101
+    # The GUARDED SET is counted, not `file_count` alone: an in-place
+    # transform moves a file out of `files` and into `transformed_files`,
+    # where it is still digest-checked. Counting only `files` would let a
+    # declared transform lower this floor one file at a time, which is the
+    # erosion the assertion exists to stop.
+    in_place = [
+        entry
+        for entry in MANIFEST["transformed_files"].values()
+        if entry.get("in_place")
+    ]
+    assert MANIFEST["file_count"] + len(in_place) >= 101
     assert MANIFEST["total_bytes"] > 3_000_000
 
 

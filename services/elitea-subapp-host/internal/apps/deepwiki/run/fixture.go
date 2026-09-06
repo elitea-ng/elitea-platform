@@ -111,12 +111,13 @@ func AnswerFragments(answer string) []string {
 const BrokenMermaidPage = "# Request flow\n\nThe diagram below is deliberately broken: the fixture exists so the quick fix\nhas something to repair.\n\n```mermaid\ngraph TD\n  A[Client] -->\n```\n\nAfter the diagram.\n"
 
 // WikiIDFor is the canonical {owner}--{repo}--{branch} the engine derives.
+//
+// An ARTIFACT FOLDER is named by DisplayRepositoryFor, which drops the
+// `artifact://` scheme first. Feeding the raw string in would turn `//` into
+// four dashes and make the wiki id — which is also an object-key prefix and
+// the string the browser matches a manifest on — unreadable.
 func WikiIDFor(repoConfig map[string]any, branch string) string {
-	repository := str(repoConfig["repository"])
-	if repository == "" {
-		repository = str(object(repoConfig["provider_config"])["repository"])
-	}
-	repository = strings.Trim(strings.TrimSpace(repository), "/")
+	repository := DisplayRepositoryFor(repoConfig)
 	if repository == "" {
 		repository = "fixture/repository"
 	}
@@ -224,8 +225,16 @@ func fixtureResolveWiki(arguments map[string]any) map[string]any {
 func fixtureGenerateWiki(arguments map[string]any) map[string]any {
 	query := str(arguments["query"])
 	branch := str(firstTruthy(arguments["active_branch"], "main"))
-	wikiID := WikiIDFor(object(arguments["repo_config"]), branch)
-	repository := strings.ReplaceAll(wikiID[:strings.LastIndex(wikiID, "--")], "--", "/")
+	repoConfig := object(arguments["repo_config"])
+	wikiID := WikiIDFor(repoConfig, branch)
+	// Read from the repo_config, not reversed out of the wiki id: an artifact
+	// folder's name holds a `/` of its own, and reversing every `--` back to a
+	// `/` would rebuild a path that never existed.
+	repository := DisplayRepositoryFor(repoConfig)
+	if repository == "" {
+		repository = "fixture/repository"
+	}
+	providerType := str(firstTruthy(repoConfig["provider_type"], "github"))
 	pageKeys := []string{
 		"wiki_pages/overview/getting-started.md",
 		"wiki_pages/architecture/request-flow.md",
@@ -247,7 +256,7 @@ func fixtureGenerateWiki(arguments map[string]any) map[string]any {
 		"canonical_repo_identifier": repository,
 		"repository":                repository,
 		"branch":                    branch,
-		"provider_type":             "github",
+		"provider_type":             providerType,
 		"pages":                     pageKeys,
 	}, "", "  ")
 	structure, _ := json.MarshalIndent(map[string]any{

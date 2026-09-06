@@ -125,7 +125,8 @@ export const E2E_TIMEZONE = process.env['E2E_TZ'] ?? 'UTC';
  * project against the full standalone stack, which proves the same path
  * under production Form authentication.
  */
-const PROVIDER_BACKED_JOURNEYS = /journeys\/deepwiki\/deepwiki\.(generation|chat|admission|wiki-query)\.spec\.ts/;
+const PROVIDER_BACKED_JOURNEYS =
+  /journeys\/deepwiki\/deepwiki\.(generation|chat|admission|wiki-query|folder-source)\.spec\.ts/;
 
 /*
  * The admission journey (DWIKI-013) needs a stack that composes a PUBLIC
