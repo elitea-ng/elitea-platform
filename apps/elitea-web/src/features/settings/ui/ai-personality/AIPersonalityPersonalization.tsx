@@ -95,7 +95,8 @@ export const AIPersonalityPersonalization = memo(
                         'Custom instructions for the selected persona, applied to new conversations that use it. Each persona keeps its own instructions.',
                       )}
                       autoComplete="off"
-                      expand={{ minRows: 3, maxRows: 6 }}
+                      outlined
+                      expand={{ minRows: 5, maxRows: 8 }}
                       value={values.personality_instructions[persona] ?? ''}
                       onChange={handleInstructionsChange}
                       placeholder={personaInstructionsPlaceholder(persona)}

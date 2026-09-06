@@ -188,7 +188,7 @@ describe('AIConfiguration — the ModelConfiguration layer', () => {
 
     /* Wait for the panel, so the absence below is a settled answer and not a
        screen that has not rendered yet. */
-    expect(await screen.findByText('LLM Models')).toBeInTheDocument();
+    expect(await screen.findByText('LLMs')).toBeInTheDocument();
     expect(screen.queryByText('Model Capabilities')).not.toBeInTheDocument();
   });
 
@@ -233,7 +233,7 @@ describe('AIConfiguration — the ModelConfiguration layer', () => {
     });
   });
 
-  it('does not offer the model-connection request on the OpenAI-Template tab', async () => {
+  it('keeps the model-connection request in the page header on both tabs', async () => {
     setConfig();
     configureGeneratedClient({ baseUrl: BASE });
     mockBackend();
@@ -243,12 +243,14 @@ describe('AIConfiguration — the ModelConfiguration layer', () => {
     await screen.findByRole('button', { name: 'Request a model connection' });
     await userEvent.click(screen.getByRole('tab', { name: 'OpenAI Template' }));
 
-    /* That tab configures nothing and has its own chrome — an affordance for
-       requesting a configuration there names a panel the user is not looking
-       at. */
-    await waitFor(() =>
-      expect(screen.queryByRole('button', { name: 'Request a model connection' })).not.toBeInTheDocument(),
-    );
+    /* It used to be floated over the project-configuration card, so switching
+       tabs took it away with the card. It is now part of the page's own
+       `DrawerPageHeader` — the title row every other settings tab has and this
+       one was missing — which is chrome for the whole page, not for one tab.
+       Production keeps its equivalent (the rail's "+ AI Provider") visible the
+       same way. */
+    expect(screen.getByRole('button', { name: 'Request a model connection' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'OpenAI Template' })).toHaveAttribute('aria-selected', 'true');
   });
 
   it('shows no capability section on the OpenAI-Template tab', async () => {

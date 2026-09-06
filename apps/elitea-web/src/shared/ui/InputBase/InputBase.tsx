@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { useCallback, useState } from 'react';
+import { useCallback, useId, useState } from 'react';
 
 import Box from '@mui/material/Box';
 import type { SxProps, Theme } from '@mui/material/styles';
@@ -39,6 +39,19 @@ export interface InputBaseProps
   /** Presence alone makes the field multiline; omit for a single-line input. */
   expand?: InputBaseExpandOptions;
   /**
+   * Renders the OUTLINED shape — a bordered, rounded box with the label
+   * moved out above it — instead of the default underline.
+   *
+   * The baseline's `variantInput="outlined"`
+   * (`[fsd]/shared/ui/input/InputBase.jsx:186`). Two screens in Settings ask
+   * for it and neither could get it: Memory's "Summarization instructions"
+   * and AI Personality's "User instructions" are both large free-text areas
+   * that the production UI draws as a panel. With `variant` hard-coded to
+   * `"standard"` here they rendered as a bare underline under a floating
+   * label, so a three-row textarea read as an empty gap.
+   */
+  outlined?: boolean;
+  /**
    * Fires after the copy action's `navigator.clipboard.writeText` settles —
    * `error` is present only on rejection. Replaces the baseline's direct
    * `useToast()` call, which `shared/ui` cannot import (props/callbacks
@@ -54,6 +67,17 @@ const containerStyles = {
   position: 'relative' as const,
   display: 'flex',
   flexDirection: 'column' as const,
+};
+
+/** Baseline `styledInputBaseStyles.outlinedLabelRow`. */
+const outlinedLabelRowSx = {
+  display: 'flex',
+  justifyContent: 'space-between',
+  alignItems: 'center',
+  marginBottom: '0.25rem',
+  minHeight: '1.75rem',
+  width: '100%',
+  paddingLeft: '0.75rem',
 };
 
 function toolbarPositionSx(hasLabel: boolean) {
@@ -98,6 +122,12 @@ function resolveActions(actions: InputBaseActionsOptions | undefined, hasExpand:
   };
 }
 
+/** Whether the outlined layout has a label row to render above the field. */
+function hasOutlinedLabelRow(outlined: boolean, labelNode: ReactNode): boolean {
+  if (!outlined) return false;
+  return labelNode !== undefined && labelNode !== null && labelNode !== '';
+}
+
 function renderLabel(label: ReactNode, tooltipDescription: ReactNode | undefined): ReactNode {
   if (typeof label !== 'string' || tooltipDescription === undefined) return label;
   return (
@@ -134,6 +164,7 @@ export function InputBase({
   tooltipDescription,
   actions,
   expand,
+  outlined = false,
   onCopy,
   onFullScreen,
   containerSx,
@@ -141,6 +172,8 @@ export function InputBase({
   sx,
   ...rest
 }: InputBaseProps): ReactNode {
+  const generatedId = useId();
+  const outlinedLabelId = `input-base-${generatedId}-label`;
   const [isHovering, setIsHovering] = useState(false);
   const [rows, setRows] = useState<number | undefined>(() => initialRows(expand));
 
@@ -161,6 +194,7 @@ export function InputBase({
   const isExpanded = expand !== undefined && rows === expand.maxRows;
   const toolbarValue = typeof value === 'string' ? value : undefined;
   const minRows = expand !== undefined ? expand.minRows : undefined;
+  const labelNode = renderLabel(label, tooltipDescription);
 
   return (
     <Box
@@ -168,6 +202,16 @@ export function InputBase({
       onMouseLeave={() => setIsHovering(false)}
       sx={combineSx(containerStyles, containerSx)}
     >
+      {/* The label row carries an id and the field points at it with
+        * `aria-labelledby`. Moving the label OUT of the `TextField` (which is
+        * what the outlined shape is) otherwise leaves the textarea with no
+        * accessible name at all — `getByLabelText('Summarization
+        * instructions')` stops resolving, and so does a screen reader. */}
+      {hasOutlinedLabelRow(outlined, labelNode) && (
+        <Box id={outlinedLabelId} sx={outlinedLabelRowSx}>
+          {labelNode}
+        </Box>
+      )}
       {showToolbar && (
         <InputActionsToolbar
           value={toolbarValue}
@@ -182,14 +226,17 @@ export function InputBase({
         />
       )}
       <MuiTextField
-        variant="standard"
+        variant={outlined ? 'outlined' : 'standard'}
         fullWidth
         value={value}
-        label={renderLabel(label, tooltipDescription)}
+        label={outlined ? undefined : labelNode}
         multiline={expand !== undefined}
         minRows={minRows}
         maxRows={rows}
         sx={sx}
+        {...(hasOutlinedLabelRow(outlined, labelNode)
+          ? { slotProps: { htmlInput: { 'aria-labelledby': outlinedLabelId } } }
+          : {})}
         {...rest}
       />
     </Box>

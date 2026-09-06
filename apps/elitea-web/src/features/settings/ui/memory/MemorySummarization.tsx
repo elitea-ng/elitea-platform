@@ -79,7 +79,8 @@ export const MemorySummarization = memo(() => {
             'Custom instructions for how summaries should be generated',
           )}
           autoComplete="off"
-          expand={{ minRows: 3, maxRows: 6 }}
+          outlined
+          expand={{ minRows: 5, maxRows: 8 }}
           value={values.summary_llm_settings.instructions}
           onChange={handleInstructionsChange}
           error={Boolean(fieldErrors?.instructions)}

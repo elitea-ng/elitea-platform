@@ -39,9 +39,12 @@ const icons: IconEntry[] = Object.entries(modules).flatMap(([moduleId, mod]) =>
 );
 
 describe('shared/ui/icons — full-set smoke test', () => {
-  it('discovered the full ported set (194 icons, see final report for the merge/rename ledger)', () => {
-    // 193 ported + `LogoMarkIcon` (see this file's header).
-    expect(icons.length).toBe(194);
+  it('discovered the full ported set (196 icons, see final report for the merge/rename ledger)', () => {
+    // 193 ported + `LogoMarkIcon` (see this file's header) + two the settings
+    // port added because the baseline maps them and this set did not hold
+    // them: `BellIcon` (Settings › Notifications' nav item, which fell back to
+    // the generic gear) and `ContrastIcon` (the theme toggle's "System").
+    expect(icons.length).toBe(196);
   });
 
   it('every discovered export has a unique PascalCase "*Icon" name', () => {

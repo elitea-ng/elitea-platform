@@ -29,6 +29,7 @@ export type { SelectedProjectIcon } from './ui/project-context/ProjectIconDialog
 
 import { useDefaultModel } from './lib/profile/useDefaultModel';
 import { ProfileFormContent } from './ui/profile/ProfileFormContent';
+import { ProfileIdentity } from './ui/profile/ProfileIdentity';
 import { ProfileValidationSchema, deserializeProfileFormData, serializeProfileFormData } from './lib/profile/profileUtils';
 export type { ProfileFormValues } from './lib/profile/profileUtils';
 
@@ -71,8 +72,11 @@ export const secretsFeature = { SecretsTable, SecretValueCell, useSecretPermissi
 /** Project-context tab (`pages/settings/ProjectContext.tsx`). */
 export const projectContextFeature = { ProjectContextBody, ProjectContextToasts, projectContextStyles };
 
-/** Personalization tab (`pages/settings/Personalization.tsx`). */
-export const profileFeature = { useDefaultModel, ProfileFormContent, ProfileValidationSchema, deserializeProfileFormData, serializeProfileFormData };
+/**
+ * Profile + Personalization tabs (`pages/settings/Profile.tsx`,
+ * `pages/settings/Personalization.tsx`).
+ */
+export const profileFeature = { useDefaultModel, ProfileFormContent, ProfileIdentity, ProfileValidationSchema, deserializeProfileFormData, serializeProfileFormData };
 
 /** Preferences tab (`pages/settings/Preferences.tsx`). */
 export const preferencesFeature = { PreferencesFormContent };
