@@ -71,6 +71,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/scimdirectory"
 	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
 	"github.com/jackc/pgx/v5/pgxpool"
 	goredis "github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/otel"
@@ -1148,6 +1149,29 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		r.Use(apimw.Audit(auditRecorder))
 
 		r.Route("/api/v2", func(r chi.Router) {
+			// THE GROUP'S OWN "no such route" ANSWER (F3).
+			//
+			// Auth runs ABOVE this subrouter, so a path nobody registered is
+			// already authenticated by the time chi looks for it. That
+			// ordering is the contract: an unknown path answers 404 to a
+			// caller with a credential and 401 only to one without. A retired
+			// path that answers 401 to a logged-in browser is read by the SPA
+			// as an expired session, and it opens a fresh OIDC round-trip on
+			// every visit to the page that still calls it.
+			//
+			// What was missing is the BODY. chi's default fallback writes
+			// `404 page not found` as text/plain, so the one answer a client
+			// cannot parse is the answer it gets for a route that moved. These
+			// two make the group's misses typed, like every other error it
+			// returns, and chi propagates them into the subrouters mounted
+			// below that declare none of their own.
+			r.NotFound(func(w http.ResponseWriter, r *http.Request) {
+				apierr.WriteStatus(w, http.StatusNotFound, "not found")
+			})
+			r.MethodNotAllowed(func(w http.ResponseWriter, r *http.Request) {
+				apierr.WriteStatus(w, http.StatusMethodNotAllowed, "method not allowed")
+			})
+
 			mountRuntimeRoutes(r, cfg.RuntimeRoutes)
 
 			// The PRE-BUILT MCP server catalogue (shared migration 0094) and
@@ -1605,14 +1629,22 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// same permission resolved in administration mode
 				// (legacy/plugins/admin/api/v2/users.py maps BOTH modes to the
 				// same body, and its `recommended_roles` names `administration`).
+				//
+				// THEY TAKE THE `Administration…` HANDLERS, not the `{mode}`
+				// ones. A static segment binds no URL parameter, so the shared
+				// handler's `chi.URLParam(r, "mode")` was empty on every one of
+				// these requests and the dialog's submit answered
+				// `404 {"error":"unknown mode"}`. The GET above never showed it,
+				// because Handler.Users reads no mode. See the header of
+				// internal/api/v2/eliteacore/users_write.go.
 				r.With(apimw.RequireCentralPermissions(
 					permissionResolver, platformauth.PermissionModeAdministration,
 					"configuration.users.users.create",
-				)).Post("/users/administration/{projectID}", coreHandler.UsersCreate)
+				)).Post("/users/administration/{projectID}", coreHandler.AdministrationUsersCreate)
 				r.With(apimw.RequireCentralPermissions(
 					permissionResolver, platformauth.PermissionModeAdministration,
 					"configuration.users.users.edit",
-				)).Put("/users/administration/{projectID}", coreHandler.UsersUpdate)
+				)).Put("/users/administration/{projectID}", coreHandler.AdministrationUsersUpdate)
 				// The project ROLE listing, gated the same way and for the same
 				// reason as the member listing above: `coreHandler.Roles` reads
 				// auth_core__project_role for the named project, pylon declares

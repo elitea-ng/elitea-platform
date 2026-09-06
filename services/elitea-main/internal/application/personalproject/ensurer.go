@@ -240,11 +240,38 @@ func NewEnsurer(pool *pgxpool.Pool, provisioner Provisioner, options ...Option) 
 // A nil receiver, and an Ensurer built without NewEnsurer, are both no-ops, so
 // a composition that could not build one needs no branch at the call site.
 func (e *Ensurer) EnsureAsync(userID int64) {
+	_ = e.EnsureStarted(userID)
+}
+
+// EnsureStarted is EnsureAsync with a completion signal.
+//
+// It returns a channel that is CLOSED when the attempt THIS call started has
+// finished. It returns nil when no attempt started: a nil or unconfigured
+// ensurer, an in-flight marker another poll already holds, or a full slot
+// budget. A nil channel is the caller's instruction to fall back to "ask
+// again later", which is what every caller did before this method existed.
+//
+// THE CHANNEL BOUNDS THE WAIT, NEVER THE WORK. The goroutine keeps the
+// detached `context.Background()` deadline EnsureAsync always gave it, so a
+// caller that stops waiting does not cancel the provisioning. Cancelling it
+// would leave a `create_success = false` row for the next attempt's repair
+// branch to clean up, on every first login, which is worse than the wait it
+// saves.
+//
+// The close is the LAST deferred action, after the in-flight marker is
+// released and the slot is returned. A caller woken by this channel therefore
+// re-reads a world where nothing about this user is still pending.
+//
+// It exists for `GET /social/author`, which is both the endpoint that observes
+// a missing personal project and the answer the SPA routes on: answering ""
+// on the very request that provisions the project sends a first-time user to
+// the onboarding screen for a project that already exists.
+func (e *Ensurer) EnsureStarted(userID int64) <-chan struct{} {
 	if e == nil || e.slots == nil {
-		return
+		return nil
 	}
 	if _, running := e.inFlight.LoadOrStore(userID, struct{}{}); running {
-		return
+		return nil
 	}
 	select {
 	case e.slots <- struct{}{}:
@@ -253,9 +280,11 @@ func (e *Ensurer) EnsureAsync(userID int64) {
 		// poll is a fresh attempt rather than a no-op against a user nobody is
 		// provisioning.
 		e.inFlight.Delete(userID)
-		return
+		return nil
 	}
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		defer e.inFlight.Delete(userID)
 		defer func() { <-e.slots }()
 		// context.Background(), not the request's: the request that triggered
@@ -269,6 +298,7 @@ func (e *Ensurer) EnsureAsync(userID int64) {
 				"user_id", userID, "err", err)
 		}
 	}()
+	return done
 }
 
 // Ensure returns the id of the user's personal project, creating it if there is

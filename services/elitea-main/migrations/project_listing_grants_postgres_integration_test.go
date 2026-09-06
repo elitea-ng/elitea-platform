@@ -206,14 +206,24 @@ VALUES ($1, $2, 'Project-only caller')
 ON CONFLICT (id) DO NOTHING`, userID, email); err != nil {
 		t.Fatalf("seed the project-only caller: %v", err)
 	}
+	// The conflict target is (project_id, name), not (id): shared/0111 gives
+	// project 1 the four roles every provisioned project has, so `admin` is
+	// already there under an id this fixture did not choose. The membership is
+	// assigned against the row that exists.
 	if _, err := pool.Exec(ctx,
 		`INSERT INTO public.auth_core__project_role (id, project_id, name) VALUES ($1, 1, 'admin')
-ON CONFLICT (id) DO NOTHING`, roleID); err != nil {
+ON CONFLICT (project_id, name) DO NOTHING`, roleID); err != nil {
 		t.Fatalf("seed the project role: %v", err)
+	}
+	var adminRoleID int
+	if err := pool.QueryRow(ctx,
+		`SELECT id FROM public.auth_core__project_role WHERE project_id = 1 AND name = 'admin'`,
+	).Scan(&adminRoleID); err != nil {
+		t.Fatalf("resolve the project role: %v", err)
 	}
 	if _, err := pool.Exec(ctx,
 		`INSERT INTO public.auth_core__project_user_role (project_id, user_id, role_id) VALUES (1, $1, $2)
-ON CONFLICT DO NOTHING`, userID, roleID); err != nil {
+ON CONFLICT DO NOTHING`, userID, adminRoleID); err != nil {
 		t.Fatalf("assign the project role: %v", err)
 	}
 }

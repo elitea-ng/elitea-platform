@@ -354,6 +354,18 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// white-labeling is net-new, so the legacy catalogue has no string for
 	// it. A new file for 0082's reason — 0060 returns early on any configured
 	// deployment, and migrations are checksum-immutable.
+	// 111: shared/0111_default_project_roles_and_bootstrap_account.sql, two
+	// repairs to rows the BOOTSTRAP schema hand-writes and nothing else does.
+	// "Default Project" (id 1) got none of the four project roles every
+	// provisioned project gets, so nobody could be made a member of the
+	// shared/AI project and it appeared in no switcher. And the pre-seeded
+	// `dev@elitea.ai` account held `administration|admin` while holding no
+	// identity-provider link: it cannot sign in, but the OIDC path adopts an
+	// existing account BY E-MAIL, so anyone who obtained that address became a
+	// global administrator on first login. The revoke is fenced on the account
+	// still being the untouched seed, so an adopted one keeps its roles. It
+	// grants no permission string, so no grant ledger moves.
+	//
 	//
 	// 112: shared/0112_governance_config_egress_allowlist.sql, which widens
 	// 0093's `governance_config_type_known` CHECK with `egress_allowlist` — the
@@ -364,11 +376,10 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// value set is widened by REPLACING the constraint rather than by editing
 	// the file that added it.
 	//
-	// It was written as 0111 and renumbered. 0111 is claimed by
-	// shared/0111_mcp_prebuilt_parameter_schema.sql on its own branch, and both
-	// authors were correct against a main whose head was 0110. 111 stays free
-	// here for that file: LoadManifest sorts by version and Head() reads the
-	// last entry, so a gap costs nothing.
+	// It was written as 0111 and renumbered when 0111 was taken by the
+	// default-project repair above; both authors were correct against a main
+	// whose head was 0110. LoadManifest sorts by version and Head() reads the
+	// last entry.
 	require.EqualValues(t, 112, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)

@@ -63,11 +63,12 @@ const (
 	// provisioner_postgres_integration_test.go reads.
 	onboardingBootstrapSchema = "../../../infra/db/migrations/001_initial.sql"
 
-	// The account 001_initial.sql seeds. It holds the administration-mode
-	// `admin` role, and migration 0069 grants that role
-	// `projects.projects.project.create`. So the maker of every project below is
-	// the account a fresh deployment gives its first operator, not a fixture
-	// identity invented for the test.
+	// The account 001_initial.sql seeds. newOnboardingPool gives it the
+	// administration-mode `admin` role, which migration 0069 grants
+	// `projects.projects.project.create`. The role is granted by the fixture
+	// rather than inherited from the bootstrap seed: shared/0111 revokes the
+	// seed's copy, because an account nobody can sign in as must not carry a
+	// standing global-admin grant that an e-mail match could adopt.
 	onboardingMakerID    = 1
 	onboardingMakerEmail = "dev@elitea.ai"
 
@@ -615,6 +616,27 @@ func newOnboardingPool(t *testing.T) *pgxpool.Pool {
 	}
 	if err := runner.ApplyTenant(ctx, 1); err != nil {
 		t.Fatalf("apply tenant migrations to p_1: %v", err)
+	}
+
+	// THE MAKER'S ROLE IS STATED, NOT INHERITED.
+	//
+	// 001_initial.sql grants user 1 the administration-mode `admin` role, and
+	// shared/0111 takes it back: that account has no identity-provider link and
+	// cannot sign in, yet the OIDC path adopts an existing account BY E-MAIL, so
+	// the standing grant made anyone who obtained dev@elitea.ai a global
+	// administrator of a fresh install.
+	//
+	// This fixture needs an operator who can create a project, which is a
+	// different requirement from "the seed happens to leave one lying around".
+	// Granting it here says which privilege the test depends on, and leaves the
+	// bootstrap seed free to stop handing that privilege out.
+	if _, err := pool.Exec(ctx, `
+INSERT INTO public.auth_core__user_role (user_id, role_id)
+SELECT $1, role.id
+FROM public.auth_core__role AS role
+WHERE role.mode = 'administration' AND role.name = 'admin'
+ON CONFLICT (user_id, role_id) DO NOTHING`, onboardingMakerID); err != nil {
+		t.Fatalf("grant the project maker its administration role: %v", err)
 	}
 	return pool
 }
