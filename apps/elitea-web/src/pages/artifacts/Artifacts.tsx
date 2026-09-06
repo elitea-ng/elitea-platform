@@ -15,10 +15,12 @@ import { useNavigate, useSearch } from '@tanstack/react-router';
 
 import {
   ArtifactTable,
+  buildArtifactTree,
   BucketSidebar,
   DuplicateResolutionDialog,
   expandFoldersToArtifactKeys,
   FilePreviewCanvas,
+  getExpandedArtifactPaths,
   type ArtifactListItem,
   UploadPathDialog,
   useArtifactBuckets,
@@ -29,6 +31,7 @@ import {
   useZipDownload,
   ZipDownloadProgressDialog,
 } from '@/features/artifacts';
+import { formatArtifactSize } from '@/entities/artifact';
 import { fetchArtifactBlob } from '@/shared/api/artifacts';
 import { getConfig } from '@/shared/config';
 import { t } from '@/shared/i18n';
@@ -64,6 +67,7 @@ export function Artifacts(): ReactNode {
   const mutations = useArtifactMutations(projectId);
   const zip = useZipDownload();
   const [selectedStorage, setSelectedStorage] = useState<string>();
+  const [bucketsCollapsed, setBucketsCollapsed] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<readonly ArtifactListItem[]>([]);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [pendingNavigation, setPendingNavigation] = useState<(() => void)>();
@@ -85,6 +89,16 @@ export function Artifacts(): ReactNode {
       ...(artifact?.lastModified === undefined ? {} : { lastModified: artifact.lastModified }),
     };
   }, [files.data, search.file]);
+
+  const bucketTree = useMemo(() => buildArtifactTree(files.data ?? []), [files.data]);
+  const expandedPaths = useMemo(
+    () => getExpandedArtifactPaths(search.file ?? currentPrefix),
+    [currentPrefix, search.file],
+  );
+  const totalSize = useMemo(
+    () => formatArtifactSize((buckets.data ?? []).reduce((sum, bucket) => sum + bucket.sizeBytes, 0)),
+    [buckets.data],
+  );
 
   const setSearch = useCallback((next: { bucket?: string; file?: string; folder?: string }) => {
     void navigate({
@@ -177,12 +191,21 @@ export function Artifacts(): ReactNode {
 
   return (
     <Box sx={rootSx}>
+      <Box sx={sidebarSx(bucketsCollapsed)}>
       <BucketSidebar
         buckets={buckets.data ?? []}
         {...(selectedBucket === undefined ? {} : { selectedBucket: selectedBucket.name })}
         storageConfigurations={storage.data ?? []}
         {...(selectedStorage === undefined ? {} : { selectedStorage })}
         loading={buckets.isFetching}
+        collapsed={bucketsCollapsed}
+        tree={selectedBucket === undefined ? [] : bucketTree}
+        expandedPaths={expandedPaths}
+        {...(search.file ? { selectedKey: search.file } : currentPrefix === '' ? {} : { selectedKey: currentPrefix })}
+        totalSize={totalSize}
+        onToggleCollapsed={() => setBucketsCollapsed((current) => !current)}
+        onSelectFile={(item) => requestNavigation(() => setSearch({ bucket: selectedBucket?.name ?? '', file: item.key }))}
+        onSelectFolder={(key) => requestNavigation(() => setSearch({ bucket: selectedBucket?.name ?? '', folder: key.replace(/\/$/, '') }))}
         onStorageChange={(id) => {
           requestNavigation(() => {
             setSelectedStorage(id);
@@ -214,6 +237,7 @@ export function Artifacts(): ReactNode {
           }
         }}
       />
+      </Box>
       <Box sx={contentSx}>
         {(actionError ?? queryError ?? upload.error ?? zip.progress.error) !== undefined && (
           <Typography
@@ -249,6 +273,8 @@ export function Artifacts(): ReactNode {
           />
         ) : selectedBucket !== undefined ? (
           <ArtifactTable
+            bucket={selectedBucket.name}
+            retentionDays={selectedBucket.retentionDays}
             contents={files.data ?? []}
             currentPrefix={currentPrefix}
             loading={files.isFetching}
@@ -344,7 +370,22 @@ export function Artifacts(): ReactNode {
   );
 }
 
-const rootSx: SxProps<Theme> = { height: '100%', display: 'flex', overflow: 'hidden' };
+const rootSx: SxProps<Theme> = (theme) => ({
+  height: '100%',
+  display: 'flex',
+  overflow: 'hidden',
+  backgroundColor: theme.vars.palette.background.tabPanel,
+});
+/** `ARTIFACTS_PANEL_WIDTHS.DEFAULT_LEFT_PANEL` (300px) and the baseline's `3.75rem` collapsed rail (`Artifacts.jsx:809-817`) — measured 299px + a 1px rule on next.elitea.ai at 2000x1010. */
+const sidebarSx = (collapsed: boolean): SxProps<Theme> => (theme) => ({
+  width: collapsed ? '3.75rem' : '300px',
+  flexShrink: 0,
+  height: '100%',
+  overflow: 'hidden',
+  borderRight: `0.0625rem solid ${theme.vars.palette.border.lines}`,
+  backgroundColor: theme.vars.palette.background.default,
+  transition: 'width 0.2s ease-in-out',
+});
 const contentSx: SxProps<Theme> = { flex: 1, minWidth: 0, height: '100%', overflow: 'hidden' };
 const emptySx: SxProps<Theme> = (theme) => ({
   height: '100%',
@@ -354,3 +395,4 @@ const emptySx: SxProps<Theme> = (theme) => ({
   justifyContent: 'center',
   gap: theme.spacing(2),
 });
+

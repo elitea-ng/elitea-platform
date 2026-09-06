@@ -54,8 +54,8 @@ describe('artifacts API', () => {
       headers: new Headers(),
     });
     await expect(fetchArtifactBuckets('/api/v2', 'p1')).resolves.toEqual([
-      { id: 'alpha', name: 'alpha', isPinned: true, createdAt: '2026-02-01T00:00:00Z', retentionDays: null },
-      { id: 'zeta', name: 'zeta', isPinned: false, createdAt: '2026-01-01T00:00:00Z', retentionDays: null },
+      { id: 'alpha', name: 'alpha', isPinned: true, createdAt: '2026-02-01T00:00:00Z', retentionDays: null, sizeBytes: 0 },
+      { id: 'zeta', name: 'zeta', isPinned: false, createdAt: '2026-01-01T00:00:00Z', retentionDays: null, sizeBytes: 0 },
     ]);
     // The legacy `/artifacts/buckets/default/{projectId}` metadata fetch is gone (#138).
     expect(eliteaFetch).not.toHaveBeenCalled();
@@ -75,7 +75,7 @@ describe('artifacts API', () => {
       headers: new Headers(),
     });
     await expect(fetchArtifactBuckets('/api/v2', 'p1')).resolves.toEqual([
-      { id: 'docs', name: 'docs', isPinned: false, createdAt: '2026-01-01T00:00:00Z', retentionDays: null },
+      { id: 'docs', name: 'docs', isPinned: false, createdAt: '2026-01-01T00:00:00Z', retentionDays: null, sizeBytes: 0 },
     ]);
   });
 
