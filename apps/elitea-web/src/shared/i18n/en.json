@@ -3312,5 +3312,6 @@
   "pages.admin.branding.package.versions.restoring": "Restoring…",
   "pages.admin.branding.package.versions.table": "Kept branding packages",
   "pages.admin.branding.package.versions.title": "Previous packages",
-  "pages.admin.branding.package.versions.unnamed": "Unnamed"
+  "pages.admin.branding.package.versions.unnamed": "Unnamed",
+  "credentials.form.noLinkedConfiguration": "None"
 }

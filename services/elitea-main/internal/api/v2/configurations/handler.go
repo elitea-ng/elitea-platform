@@ -327,10 +327,22 @@ func (h *Handler) Available(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, newCurrentAvailableConfigurationTypesDTO(entries))
 }
 
+// Configuration is the compatibility write/read projection.
+//
+// `project_id` is a NUMBER, and that is not a free choice: the reviewed read
+// route serves the same field from CurrentConfigurationDTO, whose ProjectID is
+// an int32, so it emits `"project_id": 2`. This struct emitted the string
+// `"2"` for the same column. A client that reads both routes — the
+// AI-Configuration screen reads the list from one and a single row from the
+// other — then compared a number with a string, and every card reported "No
+// edit permissions" because the two never matched. `int` (not `int32`) keeps
+// the field consistent with `ID` and `AuthorID` in this same struct; the wire
+// type is what has to agree, and a Go `int` and an `int32` both marshal to a
+// JSON number. dto_test.go pins the agreement.
 type Configuration struct {
 	ID         int            `json:"id"`
 	UUID       string         `json:"uuid,omitempty"`
-	ProjectID  string         `json:"project_id"`
+	ProjectID  int            `json:"project_id"`
 	Label      string         `json:"label,omitempty"`
 	Name       string         `json:"name"`
 	Type       string         `json:"type"`
@@ -1060,7 +1072,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	c := Configuration{
 		ID:        id,
 		UUID:      uuid,
-		ProjectID: projectID,
+		ProjectID: pID,
 		Name:      title,
 		Type:      configType,
 		Section:   section,

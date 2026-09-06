@@ -679,6 +679,165 @@ describe('CredentialForm — configuration mode (ROUTE-063..065)', () => {
     expect(await screen.findByText('Configuration')).toBeInTheDocument();
     expect(screen.queryByText('Credential', { selector: 'h3, h4, h5, h6' })).not.toBeInTheDocument();
   });
+
+  /**
+   * The two BLOCKERS this screen shipped, asserted on the payload it sends.
+   *
+   * The schema below is the `data` half of the registry's real `llm_model`
+   * descriptor (`services/elitea-main/internal/application/configurations/
+   * current_available_snapshot.json`), which is what `/settings/create-
+   * configuration` renders.
+   *
+   *  1. `max_output_tokens` is a declared `type: 'integer'`. Its key contains
+   *     the substring `token`, so the old classifier masked it and the form
+   *     posted the STRING `"16000"`. `mapCurrentModelCandidate`
+   *     (services/elitea-main/internal/infra/db/repos/models.go) then skipped
+   *     the row, and the model was invisible in every model picker.
+   *  2. `ai_credentials` is a reference to another stored row. It fell through
+   *     to the free-text widget, so the form posted the bare string
+   *     `"vllm_creds"`. The gateway's `modelCredentialRef` wants
+   *     `{elitea_title, private}`.
+   */
+  const LLM_MODEL_TYPE = {
+    type: 'llm_model',
+    section: 'llm',
+    config_schema: {
+      title: 'LLM model',
+      properties: {
+        data: {
+          properties: {
+            // NOT titled "Name": the form's own always-present title box
+            // carries that label, and two controls with one accessible name
+            // make the query ambiguous. The real schema leaves this untitled.
+            name: { type: 'string', title: 'Model Name' },
+            ai_credentials: {
+              anyOf: [{ $ref: '#/$defs/AiCredentials' }, { type: 'null' }],
+              configuration_sections: ['ai_credentials'],
+              default: null,
+              title: 'Ai Credentials',
+            },
+            context_window: { type: 'integer', title: 'Context Window', default: 128000 },
+            max_output_tokens: { type: 'integer', title: 'Max Output Tokens', default: 16000 },
+          },
+          required: ['name', 'ai_credentials'],
+        },
+      },
+    },
+  };
+
+  function useLlmModelType(credentialTitles: readonly string[]): { readonly body: () => unknown } {
+    let captured: unknown;
+    server.use(http.get(`${BASE}/configurations/available/`, () => HttpResponse.json([LLM_MODEL_TYPE])));
+    server.use(
+      http.get(`${BASE}/configurations/configurations/7`, () =>
+        HttpResponse.json({
+          items: credentialTitles.map((title, index) => ({
+            id: index + 1,
+            type: 'vllm',
+            section: 'ai_credentials',
+            elitea_title: title,
+            label: title,
+          })),
+          total: credentialTitles.length,
+          limit: 200,
+          offset: 0,
+        }),
+      ),
+    );
+    server.use(
+      http.post(`${BASE}/configurations/configurations/7`, async ({ request }) => {
+        captured = await request.json();
+        return HttpResponse.json({ uid: 'new-1', type: 'llm_model' });
+      }),
+    );
+    return { body: () => captured };
+  }
+
+  it('renders max_output_tokens as a number input, not a masked one, and posts a NUMBER', async () => {
+    configureGeneratedClient({ baseUrl: BASE });
+    const captured = useLlmModelType(['vllm_creds']);
+    renderForm(
+      <CredentialForm
+        context={CONTEXT}
+        mode={{ kind: 'create', credentialType: 'llm_model', configurationMode: true }}
+        onSaved={vi.fn()}
+        onDiscarded={vi.fn()}
+      />,
+    );
+
+    const tokensInput = await screen.findByLabelText('Max Output Tokens');
+    // The blocker made this an `<input type="password">` seeded empty.
+    expect(tokensInput).not.toHaveAttribute('type', 'password');
+    expect(tokensInput).toHaveValue('16000');
+
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'qwen-local' } });
+    fireEvent.change(tokensInput, { target: { value: '32000' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(captured.body()).toBeDefined());
+    const data = (captured.body() as { data: Record<string, unknown> }).data;
+    expect(data['max_output_tokens']).toBe(32000);
+    expect(data['context_window']).toBe(128000);
+  });
+
+  it('picks ai_credentials from the project’s stored rows and posts the OBJECT shape', async () => {
+    configureGeneratedClient({ baseUrl: BASE });
+    const captured = useLlmModelType(['vllm_creds', 'azure_creds']);
+    renderForm(
+      <CredentialForm
+        context={CONTEXT}
+        mode={{ kind: 'create', credentialType: 'llm_model', configurationMode: true }}
+        onSaved={vi.fn()}
+        onDiscarded={vi.fn()}
+      />,
+    );
+
+    const picker = await screen.findByRole('combobox', { name: 'Ai Credentials' });
+    // A picker, not a text box: the blocker rendered a free-text input here.
+    expect(picker.tagName).not.toBe('INPUT');
+    fireEvent.mouseDown(picker);
+    expect(await screen.findByRole('option', { name: 'azure_creds' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('option', { name: 'vllm_creds' }));
+
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'qwen-local' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(captured.body()).toBeDefined());
+    const data = (captured.body() as { data: Record<string, unknown> }).data;
+    expect(data['ai_credentials']).toEqual({ elitea_title: 'vllm_creds', private: false });
+  });
+
+  it('shows the linked credential when an existing model is loaded', async () => {
+    configureGeneratedClient({ baseUrl: BASE });
+    useLlmModelType(['vllm_creds', 'azure_creds']);
+    server.use(
+      http.get(`${BASE}/configurations/configuration/7/abc`, () =>
+        HttpResponse.json({
+          uid: 'abc',
+          type: 'llm_model',
+          section: 'llm',
+          label: 'qwen-local',
+          elitea_title: 'qwen-local',
+          data: {
+            name: 'qwen3',
+            ai_credentials: { elitea_title: 'azure_creds', private: false },
+            max_output_tokens: 32000,
+          },
+        }),
+      ),
+    );
+    renderForm(
+      <CredentialForm
+        context={CONTEXT}
+        mode={{ kind: 'edit', configId: 'abc', configurationMode: true }}
+        onSaved={vi.fn()}
+        onDiscarded={vi.fn()}
+      />,
+    );
+
+    const picker = await screen.findByRole('combobox', { name: 'Ai Credentials' });
+    await waitFor(() => expect(picker).toHaveTextContent('azure_creds'));
+  });
 });
 
 /**

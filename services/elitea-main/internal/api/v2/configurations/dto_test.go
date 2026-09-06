@@ -61,6 +61,60 @@ func TestCurrentConfigurationDTOUsesNaivePythonMicrosecondTimestampContract(t *t
 	}
 }
 
+// The LIST route and the SINGLE-ROW route must describe `project_id` the same
+// way.
+//
+// They did not. The reviewed read route serves CurrentConfigurationDTO, whose
+// ProjectID is an int32, so it answered `"project_id": 2`. The compatibility
+// handler serves the Configuration struct, whose ProjectID was a `string`, so
+// it answered `"project_id": "2"` for the same column and the same row.
+//
+// One client reads both. apps/elitea-web's AI-Configuration screen lists
+// configurations through one route and opens a row through the other, and its
+// `isConfigurationEditable` compared the row's id with the selected project id
+// using `===`. A number never equals a string, so every card on that screen
+// reported "No edit permissions" and no configuration could be edited.
+//
+// The column is an INTEGER. Both projections now emit a JSON number. This test
+// marshals both and inspects the decoded type, so a change to either struct
+// that reintroduces the disagreement fails here rather than in a browser.
+func TestConfigurationProjectIDAgreesBetweenListAndSingleRow(t *testing.T) {
+	const projectID = 2
+
+	reviewed, err := json.Marshal(newCurrentConfigurationDTO(configurationapp.CurrentConfiguration{
+		ID: 9, ProjectID: projectID, EliteaTitle: "vllm_creds", Type: "vllm", Section: "ai_credentials",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	compatibility, err := json.Marshal(Configuration{
+		ID: 9, ProjectID: projectID, Name: "vllm_creds", Type: "vllm", Section: "ai_credentials",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for name, payload := range map[string][]byte{"reviewed": reviewed, "compatibility": compatibility} {
+		var decoded map[string]any
+		if err := json.Unmarshal(payload, &decoded); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		value, present := decoded["project_id"]
+		if !present {
+			t.Fatalf("%s payload has no project_id: %s", name, payload)
+		}
+		// A JSON number decodes into float64 here. A JSON string does not,
+		// which is exactly the difference that broke the client.
+		number, ok := value.(float64)
+		if !ok {
+			t.Fatalf("%s project_id is %T (%v), want a JSON number", name, value, value)
+		}
+		if int(number) != projectID {
+			t.Fatalf("%s project_id=%v, want %d", name, value, projectID)
+		}
+	}
+}
+
 func TestCurrentConfigurationDTOCanRepresentPresentEmptyOptions(t *testing.T) {
 	options := map[string]any{}
 	payload, err := json.Marshal(newCurrentConfigurationDTO(configurationapp.CurrentConfiguration{

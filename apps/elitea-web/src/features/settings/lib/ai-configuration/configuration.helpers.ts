@@ -175,12 +175,44 @@ export const getConfigurationStatus = (statusOk: boolean, isShared: boolean): st
   return `${status} \u2022 ${scope}`;
 };
 
+/**
+ * Normalises a project id for comparison.
+ *
+ * The two ends of this comparison have different JSON types, and both are
+ * correct in their own place: the row's `project_id` arrives from the server
+ * as a NUMBER on one route and as a STRING on another (the two Go DTOs in
+ * `services/elitea-main/internal/api/v2/configurations/` disagreed —
+ * `CurrentConfigurationDTO.ProjectID` is `int32`, the prototype
+ * `Configuration.ProjectID` was `string`), while the selected project id is
+ * always a string in this app. Normalising both sides to text is the only
+ * form that survives either.
+ *
+ * Only a string or a finite number is an id. Everything else — `null`,
+ * `undefined`, an object, `NaN` — normalises to `''`, and an empty id never
+ * matches, so an absent or malformed id stays non-editable rather than
+ * matching another absent one.
+ */
+const normaliseProjectId = (value: unknown): string => {
+  if (typeof value === 'string') return value.trim();
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  return '';
+};
+
+const sameProjectId = (left: unknown, right: unknown): boolean => {
+  const leftId = normaliseProjectId(left);
+  return leftId !== '' && leftId === normaliseProjectId(right);
+};
+
+/**
+ * DEFECT this fixes: the comparison was `configuration.project_id ===
+ * projectId` with the row's id cast to `string | undefined`. The cast was a
+ * lie — the list route answers `"project_id": 2`, a number — so `2 === '2'`
+ * was false for EVERY row, every card reported "No edit permissions", and no
+ * AI configuration in the project could be opened for editing.
+ */
 export const isConfigurationEditable = (configuration: Record<string, unknown>, projectId: string, canEdit: boolean): boolean => {
-  const configProjectId = configuration.project_id as string | undefined;
-  if (configProjectId === projectId) {
-    return canEdit;
-  }
-  return false;
+  if (!sameProjectId(configuration.project_id, projectId)) return false;
+  return canEdit;
 };
 
 export const getConfigurationGroup = (

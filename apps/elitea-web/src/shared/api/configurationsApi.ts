@@ -43,7 +43,15 @@ async function fetchData<T>(url: string, options?: RequestInit): Promise<T> {
 /** A single configuration item returned by the server. */
 export interface ConfigurationItem {
   readonly id: number;
-  readonly project_id: string;
+  /**
+   * A NUMBER on this route (`CurrentConfigurationDTO.ProjectID` is `int32`).
+   * It was declared `string` here, and nothing checks a declaration against
+   * the wire, so `configuration.project_id === projectId` silently compared a
+   * number with a string and every AI-configuration card reported "No edit
+   * permissions". Declared as the union it really is, so a caller has to
+   * normalise (`String()`) instead of assuming.
+   */
+  readonly project_id: string | number;
   readonly elitea_title: string;
   readonly label: string;
   readonly type: string;

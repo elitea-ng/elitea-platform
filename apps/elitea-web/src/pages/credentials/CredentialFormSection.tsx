@@ -19,6 +19,8 @@ export interface CredentialFormSectionProps {
   readonly schemaRequiredFields: readonly string[];
   readonly data: Readonly<Record<string, unknown>>;
   readonly fieldErrors: Readonly<Record<string, string>>;
+  /** Threaded to `CredentialSchemaField` for the `'configuration'` picker. */
+  readonly projectId: string;
   readonly onChange: (fieldKey: string, value: unknown) => void;
 }
 
@@ -97,6 +99,7 @@ export function CredentialFormSection({
   schemaRequiredFields,
   data,
   fieldErrors,
+  projectId,
   onChange,
 }: CredentialFormSectionProps): ReactNode {
   const subsections = section.subsections ?? EMPTY_SUBSECTIONS;
@@ -167,6 +170,7 @@ export function CredentialFormSection({
             value={data[fieldKey]}
             error={fieldErrors[fieldKey]}
             required={required}
+            projectId={projectId}
             onChange={onChange}
           />
         );
