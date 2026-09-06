@@ -7,6 +7,8 @@
  * the run-time cannot read, so every test below asserts the ROW the attach
  * produced (the exact body the server keys on) or the list the section shows.
  */
+import type { ReactElement } from 'react';
+
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
@@ -76,7 +78,7 @@ afterEach(() => {
   resetGeneratedClient();
 });
 
-function panel(props: Partial<Parameters<typeof AgentSkillsPanel>[0]> = {}): JSX.Element {
+function panel(props: Partial<Parameters<typeof AgentSkillsPanel>[0]> = {}): ReactElement {
   return (
     <AgentSkillsPanel
       projectId={PROJECT}
@@ -197,14 +199,14 @@ describe('AgentSkillsPanel', () => {
   // `entity_skill_mapping` is keyed by the VERSION id. Before the first save
   // there is no version, so there is no row to write — the section says so
   // rather than collecting a choice it cannot honour.
-  it('asks for a save before it offers a picker, and reads nothing', async () => {
+  it('asks for a save before it offers a picker, and reads nothing', () => {
     renderWithProviders(panel({ appVersionId: undefined }));
     expect(screen.getByText(/Save this agent once/)).toBeInTheDocument();
     expect(screen.queryByTestId('agent-add-skill-button')).not.toBeInTheDocument();
     expect(recorded).toHaveLength(0);
   });
 
-  it('treats an unparseable version id the same way', async () => {
+  it('treats an unparseable version id the same way', () => {
     renderWithProviders(panel({ appVersionId: 'not-a-number' }));
     expect(screen.getByText(/Save this agent once/)).toBeInTheDocument();
     expect(recorded).toHaveLength(0);

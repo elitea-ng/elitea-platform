@@ -33,6 +33,20 @@ import { PublishValidationReport } from './PublishValidationReport';
 
 type Step = 'preparation' | 'validation' | 'publishing';
 
+const STEPS: readonly Step[] = ['preparation', 'validation', 'publishing'];
+
+/** The step names, as production writes them. */
+function stepLabel(step: Step): string {
+  switch (step) {
+    case 'preparation':
+      return t('features.agentLifecycle.publish.stepPreparation', 'Preparation');
+    case 'validation':
+      return t('features.agentLifecycle.publish.stepValidation', 'Validation');
+    case 'publishing':
+      return t('features.agentLifecycle.publish.stepPublishing', 'Publishing');
+  }
+}
+
 export interface PublishVersionDialogProps {
   readonly open: boolean;
   readonly validation: NormalizedPublishValidation | undefined;
@@ -85,6 +99,16 @@ export function PublishVersionDialog({
 
   const nameValid = versionName !== '' && isValidPublishVersionName(versionName);
   const blocked = step === 'validation' && validation?.status === 'FAIL';
+  // The CATEGORY is required, and not for symmetry with production's wording
+  // ("Enter a version name, choose a category and accept the Publishing Terms
+  // to continue"). ELITEA Catalog buckets every published agent by
+  // `meta.category` (`pages/agents-hub/helpers.ts` getCategoryForApplication),
+  // and the category chips it renders come from the server's own list. An
+  // agent published without one lands in a bucket the hub does not show, so
+  // it would be published, listed under Published, served by
+  // `public_applications` — and invisible in the Catalog. That is the exact
+  // split this work exists to close, so the wizard refuses to create it.
+  const categoryChosen = category !== '';
 
   // The guard lives HERE and not on a disabled button: `BaseModal`'s action
   // bar has a `confirming` flag and no `disabled` one, so an unguarded confirm
@@ -94,7 +118,7 @@ export function PublishVersionDialog({
   // refuse it, and the reader is already looking at why.
   const handleConfirm = (): void => {
     if (step === 'preparation') {
-      if (!nameValid || !agreed || isValidating) return;
+      if (!nameValid || !categoryChosen || !agreed || isValidating) return;
       onValidate(versionName, category);
       return;
     }
@@ -116,12 +140,25 @@ export function PublishVersionDialog({
       }}
       content={
         <Box sx={contentSx}>
-          <Typography
-            variant="labelSmall"
-            data-testid="publish-step"
-          >
-            {step}
-          </Typography>
+          {/*
+            The three steps, named the way production names them. The current
+            step is also the element tests read, so it carries the testid; the
+            other two are rendered so a reader can see where they are in the
+            wizard rather than only which button is next.
+          */}
+          <Box sx={stepperSx}>
+            {STEPS.map((name) => (
+              <Typography
+                key={name}
+                component="span"
+                variant="labelSmall"
+                color={name === step ? 'text.primary' : 'text.secondary'}
+                {...(name === step ? { 'data-testid': 'publish-step' } : {})}
+              >
+                {stepLabel(name)}
+              </Typography>
+            ))}
+          </Box>
           {step === 'preparation' ? (
             <PublishPreparationStep
               versionName={versionName}
@@ -134,6 +171,14 @@ export function PublishVersionDialog({
             />
           ) : (
             validation !== undefined && <PublishValidationReport validation={validation} />
+          )}
+          {step === 'preparation' && !categoryChosen && (
+            <Typography variant="bodySmall">
+              {t(
+                'features.agentLifecycle.publish.categoryRequired',
+                'Choose a category. The Catalog groups published agents by it, and an agent with no category does not appear there.',
+              )}
+            </Typography>
           )}
           {blocked && (
             <Typography
@@ -166,3 +211,4 @@ function confirmLabel(step: Step): string {
 }
 
 const contentSx: SxProps<Theme> = { display: 'flex', flexDirection: 'column', gap: '0.75rem', minWidth: '24rem' };
+const stepperSx: SxProps<Theme> = { display: 'flex', gap: '1.5rem' };

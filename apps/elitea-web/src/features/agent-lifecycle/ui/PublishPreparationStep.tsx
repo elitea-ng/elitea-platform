@@ -76,10 +76,22 @@ export function PublishPreparationStep({
       <Box sx={termsSx}>
         {getPublishingTerms().map((term) => (
           <Box key={term.heading}>
-            <Typography variant="labelSmall">{term.heading}</Typography>
+            {/*
+              `component="div"` on every line. The `labelSmall` and `bodySmall`
+              variants map to <span> in this theme, so the heading and its
+              lines rendered as one run-on sentence — measured in the browser:
+              "1 - Exclusions NoticeWhen publishing, certain components…".
+            */}
+            <Typography
+              component="div"
+              variant="labelSmall"
+            >
+              {term.heading}
+            </Typography>
             {term.lines.map((line) => (
               <Typography
                 key={line}
+                component="div"
                 variant="bodySmall"
               >
                 {line}

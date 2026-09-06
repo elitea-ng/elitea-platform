@@ -10,8 +10,7 @@ import { waitFor } from '@testing-library/react';
 import { HttpResponse, http } from 'msw';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { EliteaApiError } from '@/shared/api/generated/mutator';
-import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
+import { EliteaApiError, configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { server } from '@/test/setup';
 
 import { lifecycleErrorMessage, useEntityLifecycle } from './useEntityLifecycle';

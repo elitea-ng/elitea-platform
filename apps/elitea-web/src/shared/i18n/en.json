@@ -3616,5 +3616,9 @@
   "features.agentSkills.pickerLabel": "Skills",
   "features.agentSkills.saveFirst": "Save this agent once before you attach a skill to it.",
   "features.agentSkills.search": "Search skills...",
-  "features.agentSkills.title": "SKILLS"
+  "features.agentSkills.title": "SKILLS",
+  "features.agentLifecycle.publish.categoryRequired": "Choose a category. The Catalog groups published agents by it, and an agent with no category does not appear there.",
+  "features.agentLifecycle.publish.stepPreparation": "Preparation",
+  "features.agentLifecycle.publish.stepPublishing": "Publishing",
+  "features.agentLifecycle.publish.stepValidation": "Validation"
 }

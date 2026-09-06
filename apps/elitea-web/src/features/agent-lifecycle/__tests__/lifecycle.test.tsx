@@ -8,6 +8,8 @@
  * the request that reached the server, or the answer the server's own reply
  * produced — never that a button exists.
  */
+import type { ReactElement } from 'react';
+
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
@@ -45,7 +47,7 @@ const passValidation = {
   validation_token: '0123456789abcdef',
 };
 
-function controls(overrides: Partial<Parameters<typeof EntityLifecycleControls>[0]> = {}): JSX.Element {
+function controls(overrides: Partial<Parameters<typeof EntityLifecycleControls>[0]> = {}): ReactElement {
   return (
     <EntityLifecycleControls
       entity="agents"
@@ -113,6 +115,16 @@ async function openMenu(user: ReturnType<typeof userEvent.setup>): Promise<void>
   await user.click(screen.getByTestId('agent-lifecycle-menu-button'));
 }
 
+/**
+ * Picks a category. It is REQUIRED by the wizard, because the Catalog buckets
+ * published agents by `meta.category` and renders no bucket for an agent that
+ * has none — a publish without one is published and invisible.
+ */
+async function chooseCategory(user: ReturnType<typeof userEvent.setup>, name = 'Development'): Promise<void> {
+  await user.click(screen.getByRole('combobox'));
+  await user.click(await screen.findByRole('option', { name }));
+}
+
 describe('publish', () => {
   it('validates first, then publishes with the token the validation returned', async () => {
     const user = userEvent.setup();
@@ -121,6 +133,7 @@ describe('publish', () => {
     await user.click(screen.getByTestId('agent-publish-menuitem'));
 
     await user.type(screen.getByTestId('publish-version-name'), 'v1');
+    await chooseCategory(user);
     await user.click(screen.getByTestId('publish-terms-agree'));
     await user.click(screen.getByRole('button', { name: 'Continue' }));
 
@@ -173,6 +186,7 @@ describe('publish', () => {
     await openMenu(user);
     await user.click(screen.getByTestId('agent-publish-menuitem'));
     await user.type(screen.getByTestId('publish-version-name'), 'v 1');
+    await chooseCategory(user);
     await user.click(screen.getByTestId('publish-terms-agree'));
     await user.click(screen.getByRole('button', { name: 'Continue' }));
     expect(recorded).toHaveLength(0);
@@ -199,6 +213,7 @@ describe('publish', () => {
     await openMenu(user);
     await user.click(screen.getByTestId('agent-publish-menuitem'));
     await user.type(screen.getByTestId('publish-version-name'), 'v1');
+    await chooseCategory(user);
     await user.click(screen.getByTestId('publish-terms-agree'));
     await user.click(screen.getByRole('button', { name: 'Continue' }));
 
@@ -221,6 +236,7 @@ describe('publish', () => {
     await openMenu(user);
     await user.click(screen.getByTestId('agent-publish-menuitem'));
     await user.type(screen.getByTestId('publish-version-name'), 'v1');
+    await chooseCategory(user);
     await user.click(screen.getByTestId('publish-terms-agree'));
     await user.click(screen.getByRole('button', { name: 'Continue' }));
     await screen.findByTestId('publish-validation-status');
@@ -237,6 +253,7 @@ describe('publish', () => {
     await openMenu(user);
     await user.click(screen.getByTestId('agent-publish-menuitem'));
     await user.type(screen.getByTestId('publish-version-name'), 'v1');
+    await chooseCategory(user);
     await user.click(screen.getByTestId('publish-terms-agree'));
     await user.click(screen.getByRole('button', { name: 'Continue' }));
     await screen.findByTestId('publish-validation-status');
@@ -256,6 +273,7 @@ describe('publish', () => {
     await openMenu(user);
     await user.click(screen.getByTestId('agent-publish-menuitem'));
     await user.type(screen.getByTestId('publish-version-name'), 'v1');
+    await chooseCategory(user);
     await user.click(screen.getByTestId('publish-terms-agree'));
     await user.click(screen.getByRole('button', { name: 'Continue' }));
     await screen.findByTestId('publish-validation-status');

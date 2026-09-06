@@ -174,12 +174,35 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 
 	selectArgs := append([]any{}, args...)
 	limitIdx := len(selectArgs) + 1
+	// The agent's PUBLISH state, computed per application.
+	//
+	// `Application.Status` was never selected, so every listed agent carried
+	// the empty string and `omitempty` dropped the key entirely. The web app's
+	// Drafts/Published/Moderation/Approval/Rejected tabs filter this exact
+	// field client-side (`pages/agents/PrivateAgentsList.tsx`), so all five
+	// were permanently empty and no publish could ever fill one.
+	//
+	// It is an EXISTS over the versions, not `av.status`: the row `DISTINCT ON
+	// (a.id)` keeps is whichever version the plan happens to reach first, so
+	// reading its status would make the tab an agent appears under depend on
+	// row order. An agent is published when ANY of its versions is, which is
+	// the same rule the editor's own publish/unpublish pair enforces.
+	//
+	// `embedded` is deliberately not published: those clones exist only to
+	// carry a PARENT agent's sub-agents through a publish, and listing them
+	// as published would put an agent in the Published tab because something
+	// else was published.
+	statusExpr := fmt.Sprintf(`CASE WHEN EXISTS (
+			SELECT 1 FROM %s.application_versions pv
+			WHERE pv.application_id = a.id AND pv.status = 'published'
+		) THEN 'published' ELSE 'draft' END`, s)
 	query := fmt.Sprintf(`
 		SELECT DISTINCT ON (a.id) a.id, a.name, COALESCE(a.description, ''), COALESCE(a.icon, ''),
 			a.owner_id, a.created_at, COALESCE(a.shared_id, 0),
 			COALESCE(a.meta, '{}'::jsonb)::text,
 			COALESCE(av.agent_type, '`+defaultAgentType+`'),
-			COALESCE(u.id, 0), COALESCE(u.email, ''), COALESCE(u.name, '')
+			COALESCE(u.id, 0), COALESCE(u.email, ''), COALESCE(u.name, ''),
+			`+statusExpr+`
 		FROM %s.applications a`, s) + join +
 		` LEFT JOIN public.auth_core__user u ON u.id = a.owner_id` + where +
 		fmt.Sprintf(` ORDER BY a.id DESC LIMIT $%d OFFSET $%d`, limitIdx, limitIdx+1)
@@ -206,6 +229,7 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 			&app.OwnerID, &app.CreatedAt, &sharedID,
 			&metaStr, &app.AgentType,
 			&authorID, &authorEmail, &authorName,
+			&app.Status,
 		); err != nil {
 			return empty, fmt.Errorf("applications: list scan: %w", err)
 		}
