@@ -169,8 +169,12 @@ func NewCurrentApplicationSkillsRoute(
 	authConfig apimw.AuthConfig,
 	permissions auth.PermissionResolver,
 ) (*CurrentApplicationSkillsRoute, error) {
-	if reader == nil || authConfig.PrincipalValidator == nil ||
-		authConfig.ForwardedIdentityVerifier == nil || permissions == nil {
+	// ForwardedIdentityVerifier is OPTIONAL, PrincipalValidator is not. See
+	// internal/api/v2/indextypes/handler.go for the full reason: only the Form
+	// plane builds a verifier, an OIDC or SAML install authenticates the same
+	// caller through a cookie or a bearer token, and this route is the ONLY
+	// handler for its path now that the prototype fallback is deleted (#395).
+	if reader == nil || authConfig.PrincipalValidator == nil || permissions == nil {
 		return nil, ErrInvalidCurrentApplicationSkillsRoute
 	}
 
@@ -242,9 +246,11 @@ const currentApplicationSkillType = "skill"
 
 // newCurrentApplicationSkillsResponse builds both halves from one row set.
 //
-// The pagination numbers copy SkillsRepo.ListForApplicationVersion, which
-// serves this path where the capability is off: one page, sized by the
-// attached set, so the SAME request gets the SAME body from either handler.
+// The pagination numbers are one page, sized by the attached set. They copied
+// SkillsRepo.ListForApplicationVersion, the prototype handler that served this
+// path where the capability was off, so the same request got the same body from
+// either handler. #395 deleted that handler; the numbers stay, because a client
+// that read them from the old route must keep reading the same values.
 //
 // Only the fields the published Skill schema requires, plus `description`, are
 // filled. `instructions`, `tags` and `versions` stay absent, because this read

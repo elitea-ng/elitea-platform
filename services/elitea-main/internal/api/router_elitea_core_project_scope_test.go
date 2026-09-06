@@ -132,7 +132,11 @@ var eliteaCoreProjectScopedRoutes = []eliteaCoreProjectScopedRoute{
 	{http.MethodPatch, "/api/v2/elitea_core/skill/prompt_lib/7/1", "/api/v2/elitea_core/skill/prompt_lib/8/1", "models.applications.skills.update"},
 	{http.MethodDelete, "/api/v2/elitea_core/skill/prompt_lib/7/1", "/api/v2/elitea_core/skill/prompt_lib/8/1", "models.applications.skills.delete"},
 	{http.MethodGet, "/api/v2/elitea_core/skill_export/prompt_lib/7/1", "/api/v2/elitea_core/skill_export/prompt_lib/8/1", "models.applications.skills.export"},
-	{http.MethodGet, "/api/v2/elitea_core/application_skills/prompt_lib/7/1", "/api/v2/elitea_core/application_skills/prompt_lib/8/1", "models.applications.applications.details"},
+	// NOTE(#395): GET /application_skills/... stood here. #395 deleted the
+	// prototype mount this table exercises; the reviewed route
+	// (internal/api/v2/applicationskills) answers the path now and brings its
+	// own cross-project and under-privileged cases in
+	// TestCurrentApplicationSkillsHTTPPostgresRBACAndTenantMatrix.
 	// Folders.
 	{http.MethodGet, "/api/v2/elitea_core/folder/prompt_lib/7", "/api/v2/elitea_core/folder/prompt_lib/8", "models.chat.folders.get"},
 	{http.MethodPost, "/api/v2/elitea_core/folder/prompt_lib/7", "/api/v2/elitea_core/folder/prompt_lib/8", "models.chat.folders.create"},
@@ -170,7 +174,9 @@ var eliteaCoreProjectScopedRoutes = []eliteaCoreProjectScopedRoute{
 	{http.MethodGet, "/api/v2/elitea_core/toolkits/prompt_lib/7", "/api/v2/elitea_core/toolkits/prompt_lib/8", "models.applications.toolkits.details"},
 	{http.MethodGet, "/api/v2/elitea_core/toolkit_validator/prompt_lib/7/1", "/api/v2/elitea_core/toolkit_validator/prompt_lib/8/1", "models.applications.toolkit_validator.check"},
 	{http.MethodGet, "/api/v2/elitea_core/export_toolkit/prompt_lib/7/1", "/api/v2/elitea_core/export_toolkit/prompt_lib/8/1", "models.applications.export_toolkit.export"},
-	{http.MethodGet, "/api/v2/elitea_core/index_types/prompt_lib/7", "/api/v2/elitea_core/index_types/prompt_lib/8", "models.applications.index_types.details"},
+	// NOTE(#394): GET /index_types/... stood here, for the same reason and with
+	// the same replacement: TestCurrentIndexTypesHTTPPostgresRBACAndTenantMatrix
+	// (internal/api/v2/indextypes).
 	{http.MethodGet, "/api/v2/elitea_core/index_meta/prompt_lib/7/1", "/api/v2/elitea_core/index_meta/prompt_lib/8/1", "models.applications.index_meta.details"},
 	{http.MethodPatch, "/api/v2/elitea_core/index_meta/prompt_lib/7/1/2", "/api/v2/elitea_core/index_meta/prompt_lib/8/1/2", "models.applications.index_meta.edit"},
 	{http.MethodDelete, "/api/v2/elitea_core/index_meta/prompt_lib/7/1/2", "/api/v2/elitea_core/index_meta/prompt_lib/8/1/2", "models.applications.index_meta.delete"},

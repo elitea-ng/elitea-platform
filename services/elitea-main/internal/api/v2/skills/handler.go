@@ -153,16 +153,15 @@ type SkillAttachment struct {
 
 type Repository interface {
 	List(ctx context.Context, projectID string, params ListParams) (ListResponse, error)
-	// ListForApplicationVersion returns only the skills attached to one agent
-	// version. It is part of this interface rather than a separate optional
-	// one that the router type-asserts for: an assertion that fails leaves the
-	// route unregistered, which is the silent gap #367 is about. Here a
-	// repository that cannot answer it does not compile.
-	ListForApplicationVersion(ctx context.Context, projectID, appVersionID string) (ListResponse, error)
-	// AttachSkill and DetachSkill own the entity_skill_mapping row that
-	// ListForApplicationVersion reads. They live on this interface for the same
-	// reason: a repository that cannot write the attachment does not compile,
-	// so the read can never be the only half that exists.
+	// NOTE(#395): ListForApplicationVersion was declared here. It served
+	// GET /application_skills/{mode}/{projectID}/{appVersionID}, the PROTOTYPE
+	// fallback for the attached-skills read, and #395 deleted that route.
+	// internal/api/v2/applicationskills owns the read now, through its own
+	// tenant-scoped repository.
+	//
+	// AttachSkill and DetachSkill own the entity_skill_mapping row that read
+	// looks at. They stay on this interface: a repository that cannot write the
+	// attachment does not compile.
 	AttachSkill(ctx context.Context, projectID, skillID string, relation SkillRelation) (SkillAttachment, error)
 	DetachSkill(ctx context.Context, projectID, skillID string, relation SkillRelation) error
 	Get(ctx context.Context, projectID, skillID string) (Skill, error)
@@ -217,50 +216,20 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// ListForApplication answers GET /application_skills/{mode}/{projectID}/{appVersionID}
-// with the skills attached to that agent version.
+// NOTE(#395): `func (h *Handler) ListForApplication` and its helper
+// `isPositiveInteger` stood here, mounted at
+// GET /application_skills/{mode}/{projectID}/{appVersionID}.
 //
-// The route used to point at List, which never reads {appVersionID} and so
-// returned every skill in the project (#367). Both handlers answer 200 and both
-// return the same envelope, so no caller could tell the two apart — the screen
-// simply showed the wrong skills.
+// It was the PROTOTYPE fallback for the attached-skills read. The route
+// pointed at List until #367; List never reads {appVersionID}, so opening any
+// agent version answered with every skill in the project, at 200, in the same
+// envelope. #393 pointed the mount at this handler, and #395 deletes the mount
+// and the handler.
 //
-// A malformed {appVersionID} is refused rather than coerced. Passing a
-// non-numeric segment through to the query would make the answer depend on how
-// PostgreSQL casts it, and the failure mode of the bug being fixed here is
-// exactly "answers confidently with the wrong set".
-func (h *Handler) ListForApplication(w http.ResponseWriter, r *http.Request) {
-	projectID := chi.URLParam(r, "projectID")
-	appVersionID := chi.URLParam(r, "appVersionID")
-
-	if !isPositiveInteger(appVersionID) {
-		apierr.Write(w, apierr.BadRequest("app version id must be a positive integer"))
-		return
-	}
-
-	resp, err := h.repo.ListForApplicationVersion(r.Context(), projectID, appVersionID)
-	if err != nil {
-		apierr.Write(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, resp)
-}
-
-// isPositiveInteger accepts decimal digits only, and rejects zero however it is
-// written. "0" and "000" are not version ids, and entity_version_id is never 0,
-// so accepting them would turn a malformed request into an empty list — an
-// answer indistinguishable from "this version has no skills".
-func isPositiveInteger(value string) bool {
-	if value == "" {
-		return false
-	}
-	for _, digit := range value {
-		if digit < '0' || digit > '9' {
-			return false
-		}
-	}
-	return strings.Trim(value, "0") != ""
-}
+// internal/api/v2/applicationskills answers this path now. It reads
+// entity_skill_mapping through a transaction-local tenant search_path and
+// carries the published SkillsList keys beside the Pylon ones, so both shipped
+// clients accept one body.
 
 func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectID")

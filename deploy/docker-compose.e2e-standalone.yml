@@ -200,6 +200,20 @@ services:
       S3_SECRET_KEY: "elitea-dev-secret"
       S3_REGION: "us-east-1"
       S3_FORCE_PATH_STYLE: "true"
+      # ── Current index types and attached skills (issues #394, #395) ─────
+      # ON, and this stack is where the widened gate is proved. Both routes
+      # used to demand a Form authentication document; this stack has none, so
+      # they could not be enabled here at all. #394 and #395 changed the gate
+      # to productionAuthenticationComposed — one reader of the caller's
+      # credential plus a PrincipalValidator — which the OIDC session plane
+      # above supplies.
+      #
+      # They are ON rather than OFF because each reviewed route is now the ONLY
+      # handler for its path: the prototype fallbacks are deleted from
+      # internal/api/router.go. With these off, the skill-mention dropdowns
+      # (src/features/chat-input/lib/hooks/useChatSkillMention.ts) read a 404.
+      ELITEA_INDEX_TYPES_ENABLED: "true"
+      ELITEA_APPLICATION_SKILLS_ENABLED: "true"
       # ── The DeepWiki facade, on the OIDC-only stack (ADR-0023 H0) ────────
       # The facade takes the API group's credential set, and under OIDC-only
       # auth that carries the LocalValidator for APPLICATION_SECRET_KEY-signed

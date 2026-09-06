@@ -283,13 +283,13 @@ func TestNilGatedRouterFieldsAreWiredOrDeclared(t *testing.T) {
 		// internal/api/v2/indextypes/testdata/current_index_types_ui_response.json.
 		// Deleting either file turns that gate red.
 		//
-		// A DEFAULT install still leaves the flag off, because the capability
-		// needs production authentication that install does not build. The
-		// toolkits handler answers the path there, and it now REFUSES — 501
-		// with `code: index_types_not_available`. It used to answer 200 with a
-		// prototype six-loader list whose names and `supported_extensions`
-		// nothing produced, which is a claim rather than a blank; the refusal
-		// is the honest OFF state, and it does not change the flag's default.
+		// The chart DERIVES the flag now (deploy/helm/elitea/values.yaml ships
+		// it empty, elitea-main.indexTypesEnabled fills it): on where the
+		// install authenticates, off where it does not. The prototype handler
+		// that used to answer the path with a 501 refusal is deleted with the
+		// route, so an install that turns the capability off has no handler
+		// for the path at all — which is a deliberate 404, stated in the
+		// chart, and not a silent second answer.
 		// ELITEA_APPLICATION_SKILLS_ENABLED was listed here, with the same
 		// conflict: the route it composes answered {skills, max_skills} and
 		// elitea-web reads the SkillsList envelope. #395 removed the conflict

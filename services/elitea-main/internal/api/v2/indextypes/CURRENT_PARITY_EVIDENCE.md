@@ -1,11 +1,21 @@
 # Current `index_types` parity evidence
 
 Status: source-complete, production-composed behind the explicit
-`ELITEA_INDEX_TYPES_ENABLED` gate, integration-tested, and DEPLOYED by
-`deploy/helm/elitea/values-standalone.yaml` since issue #394. A default install
-still leaves the flag off, because the capability needs production
-authentication that install does not build. The live browser checkpoint remains
-open.
+`ELITEA_INDEX_TYPES_ENABLED` gate, integration-tested, and DEPLOYED since issue
+#394 by `deploy/helm/elitea/values-standalone.yaml`,
+`deploy/docker-compose.standalone-full.yml` and
+`deploy/docker-compose.e2e-standalone.yml`.
+
+This route is the ONLY handler for its path. #394 deleted the prototype
+fallback from `internal/api/router.go` and the `Handler.IndexTypes` method from
+`internal/api/v2/toolkits`.
+
+`deploy/helm/elitea/values.yaml` ships the flag EMPTY, and the chart derives it
+(`elitea-main.indexTypesEnabled`): ON where the install authenticates — a Form
+authentication document or an OIDC issuer — and OFF where it does not. The
+composition root asks `productionAuthenticationComposed` for the same reason,
+so an OIDC-only install composes the route. An install with NO authentication
+still refuses the capability, in the chart and in the binary.
 
 ## What #394 changed
 

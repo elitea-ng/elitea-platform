@@ -678,9 +678,23 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if err != nil {
 		return fmt.Errorf("load current index-types settings: %w", err)
 	}
-	if currentIndexTypesSettings.Enabled &&
-		(formGraph == nil || principalValidator == nil || forwardedIdentityVerifier == nil) {
-		return errors.New("ELITEA_INDEX_TYPES_ENABLED requires production authentication")
+	// The gate is the credential plane, NOT the FormGraph — the same correction
+	// gap G2 made for ELITEA_CONFIGURATIONS_ENABLED below.
+	//
+	// This used to read `formGraph == nil || principalValidator == nil ||
+	// forwardedIdentityVerifier == nil`. All three are assigned only inside the
+	// `authEnabled` block, so ELITEA_AUTH_CONFIG_FILE was the ONLY way to
+	// satisfy it and an install with corporate single sign-on could not turn
+	// the capability on at all. That mattered more once the prototype fallback
+	// was deleted (#394): an OIDC install would answer 404 on a path the
+	// published contract declares.
+	//
+	// productionAuthenticationComposed asks what the route actually needs: one
+	// reader of the caller's credential plus a PrincipalValidator. A deployment
+	// with NO authentication still fails it, because apiGroupAuthConfig hands
+	// back the zero AuthConfig there.
+	if currentIndexTypesSettings.Enabled && !productionAuthenticationComposed(apiGroupAuth) {
+		return errors.New("ELITEA_INDEX_TYPES_ENABLED requires an authenticated deployment")
 	}
 	var currentIndexTypes *indextypesapi.CurrentIndexTypesRoute
 	if currentIndexTypesSettings.Enabled {
@@ -711,9 +725,12 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if err != nil {
 		return fmt.Errorf("load current application-skills settings: %w", err)
 	}
-	if currentApplicationSkillsSettings.Enabled &&
-		(formGraph == nil || principalValidator == nil || forwardedIdentityVerifier == nil) {
-		return errors.New("ELITEA_APPLICATION_SKILLS_ENABLED requires production authentication")
+	// Same correction, same reason, as the index-types gate above (#395). The
+	// attached-skills route is the ONLY handler for its path now that the
+	// prototype fallback is deleted, so a Form-only gate would leave an OIDC
+	// install with a 404 where the published contract declares a list.
+	if currentApplicationSkillsSettings.Enabled && !productionAuthenticationComposed(apiGroupAuth) {
+		return errors.New("ELITEA_APPLICATION_SKILLS_ENABLED requires an authenticated deployment")
 	}
 	var currentApplicationSkills *applicationskillsapi.CurrentApplicationSkillsRoute
 	if currentApplicationSkillsSettings.Enabled {

@@ -4,7 +4,6 @@ import (
 	"context"
 	"reflect"
 	"sort"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -285,110 +284,14 @@ func TestSkillsRepoPostgres_DeleteRefusesWhilePublished(t *testing.T) {
 	}
 }
 
-// TestSkillsRepoPostgres_ListForApplicationVersionScopesToTheVersion is the
-// acceptance test for #367.
+// NOTE(#395): TestSkillsRepoPostgres_ListForApplicationVersionScopesToTheVersion
+// stood here, together with its skillNames helper. It was the acceptance test
+// for #367 against SkillsRepo.ListForApplicationVersion, and #395 deleted that
+// method with the prototype route it served.
 //
-// It is written so that the OLD wiring cannot pass it. The project holds three
-// skills; version 4001 has two attached and version 4002 has one. A handler
-// that ignores {appVersionID} — which is what
-// GET /application_skills/{mode}/{projectID}/{appVersionID} did until #367,
-// because the route pointed at SkillsRepo.List — returns all three for both
-// versions, at 200, in the same envelope. So the assertion is on the returned
-// NAMES against the rows seeded in entity_skill_mapping, never on the count
-// alone and never on a status code: two of the three sets here have a
-// different length, but "Reviewer + Summarizer" and "Reviewer + Translator"
-// do not, and only a query that reads the mapping can tell those apart.
-func TestSkillsRepoPostgres_ListForApplicationVersionScopesToTheVersion(t *testing.T) {
-	pool := newSkillsTestPool(t)
-	repo := NewSkillsRepo(pool)
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-
-	const (
-		attachedVersion = 4001
-		otherVersion    = 4002
-	)
-
-	created := map[string]skills.Skill{}
-	for _, name := range []string{"Reviewer", "Summarizer", "Translator"} {
-		skill, err := repo.Create(ctx, "1", skills.Skill{
-			Name:         name,
-			Description:  name + " description",
-			Instructions: name + " instructions",
-			Tags:         []string{strings.ToLower(name)},
-		})
-		if err != nil {
-			t.Fatalf("create %s: %v", name, err)
-		}
-		created[name] = skill
-	}
-
-	// Seed the attachment rows directly. The write path that would create
-	// them belongs to #38 and is deliberately not exercised here.
-	attach := func(entityVersionID int, skillName, entityType string) {
-		t.Helper()
-		if _, err := pool.Exec(ctx, `
-INSERT INTO p_1.entity_skill_mapping (entity_version_id, entity_type, skill_id)
-VALUES ($1, $2, $3)`, entityVersionID, entityType, created[skillName].ID); err != nil {
-			t.Fatalf("attach %s to %d: %v", skillName, entityVersionID, err)
-		}
-	}
-	attach(attachedVersion, "Reviewer", "agent")
-	attach(attachedVersion, "Summarizer", "agent")
-	attach(otherVersion, "Translator", "agent")
-	// Same entity_version_id, different entity_type. The mapping table is
-	// shared, so a query that filters on the version alone would pull this
-	// row into the agent's answer.
-	attach(attachedVersion, "Translator", "pipeline")
-
-	got, err := repo.ListForApplicationVersion(ctx, "1", strconv.Itoa(attachedVersion))
-	if err != nil {
-		t.Fatalf("list for application version: %v", err)
-	}
-	gotNames := skillNames(got.Items)
-	wantNames := []string{"Reviewer", "Summarizer"}
-	if !reflect.DeepEqual(gotNames, wantNames) {
-		t.Errorf("version %d skills = %v, want %v", attachedVersion, gotNames, wantNames)
-	}
-	if got.Total != len(wantNames) {
-		t.Errorf("version %d total = %d, want %d", attachedVersion, got.Total, len(wantNames))
-	}
-	// The full record has to survive the mapping JOIN, not just the name.
-	// scanSkillRow aggregates tags with array_agg, and adding a JOIN to a
-	// GROUP BY query is exactly how that aggregation silently multiplies.
-	for _, item := range got.Items {
-		if item.Instructions != item.Name+" instructions" {
-			t.Errorf("%s instructions = %q", item.Name, item.Instructions)
-		}
-		if len(item.Tags) != 1 || item.Tags[0] != strings.ToLower(item.Name) {
-			t.Errorf("%s tags = %v, want exactly [%s]", item.Name, item.Tags, strings.ToLower(item.Name))
-		}
-	}
-
-	other, err := repo.ListForApplicationVersion(ctx, "1", strconv.Itoa(otherVersion))
-	if err != nil {
-		t.Fatalf("list for other application version: %v", err)
-	}
-	if gotOther := skillNames(other.Items); !reflect.DeepEqual(gotOther, []string{"Translator"}) {
-		t.Errorf("version %d skills = %v, want [Translator]", otherVersion, gotOther)
-	}
-
-	// A version with nothing attached answers with an empty list, not with
-	// the project's skills.
-	empty, err := repo.ListForApplicationVersion(ctx, "1", "999999")
-	if err != nil {
-		t.Fatalf("list for unattached version: %v", err)
-	}
-	if len(empty.Items) != 0 {
-		t.Errorf("unattached version returned %v, want no skills", skillNames(empty.Items))
-	}
-}
-
-func skillNames(items []skills.Skill) []string {
-	names := make([]string, 0, len(items))
-	for _, item := range items {
-		names = append(names, item.Name)
-	}
-	sort.Strings(names)
-	return names
-}
+// The guarantee it measured is still measured, on the read that answers now:
+// TestCurrentApplicationSkillsRoutePostgresContractAndTenantIsolation
+// (internal/api/v2/applicationskills/postgres_integration_test.go) seeds one
+// agent version, a second agent version and a `pipeline` row on the SAME
+// entity_version_id, then asserts the answer holds only the first version's
+// agent skills.

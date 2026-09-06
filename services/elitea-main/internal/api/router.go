@@ -2160,19 +2160,28 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						Delete("/skill/{mode}/{projectID}/{skillID}", skillHandler.Delete)
 					r.With(requireSkillUpdate).
 						Patch("/skill_default_version/{mode}/{projectID}/{skillID}", skillHandler.Update)
-					// application_skills.py declares the APPLICATION read, not
-					// the skill one: the resource is an agent's skill list.
+					// NOTE(#395): GET
+					// /application_skills/{mode}/{projectID}/{appVersionID}
+					// stood here, on skillHandler.ListForApplication. It was
+					// the PROTOTYPE fallback for the attached-skills read.
 					//
-					// This pointed at skillHandler.List until #367. List reads
-					// {projectID} and never looks at {appVersionID}, so opening
-					// any agent version answered with EVERY skill in the
-					// project — at 200, in the same envelope, so no caller
-					// could see it. The reviewed route that does read the
-					// attachment (internal/api/v2/applicationskills) is gated
-					// on a flag no deployment sets, so this handler is the one
-					// every deployment reaches.
-					r.With(projectPermission("models.applications.applications.details")).
-						Get("/application_skills/{mode}/{projectID}/{appVersionID}", skillHandler.ListForApplication)
+					// It is deleted, not moved. The reviewed route,
+					// internal/api/v2/applicationskills, is the only handler
+					// for this path now; production_router.go registers it at
+					// the exact contract path, and the chart and the compose
+					// stacks turn it on wherever the install authenticates.
+					// Two handlers for one path were never a fallback pair:
+					// chi resolved the explicitly registered path first, so
+					// this mount only ever answered where the reviewed route
+					// was absent, and there it answered a different envelope
+					// from a different read.
+					//
+					// The published contract fixes the mode segment to
+					// `prompt_lib` (getListApplicationSkillsUrl in
+					// apps/elitea-web/src/shared/api/generated/skills/skills.ts),
+					// and projectPermission resolved PermissionModeDefault for
+					// every value of {mode}, so the deleted wildcard carried no
+					// authorization meaning and no client used another mode.
 					r.With(requireSkillCreate).Post("/skill_import/{mode}/{projectID}", skillHandler.Import)
 					r.With(requireSkillExport).Get("/skill_export/{mode}/{projectID}/{skillID}", skillHandler.Export)
 					r.With(requireSkillExport).
@@ -2284,8 +2293,18 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					Post("/test_toolkit_tool/prompt_lib/{projectID}", toolkitHandler.TestToolkitTool)
 				r.With(toolkitGate("models.applications.export_toolkit.export")).
 					Get("/export_toolkit/prompt_lib/{projectID}/{toolkitID}", toolkitHandler.ExportToolkit)
-				r.With(toolkitGate("models.applications.index_types.details")).
-					Get("/index_types/prompt_lib/{projectID}", toolkitHandler.IndexTypes)
+				// NOTE(#394): GET /index_types/prompt_lib/{projectID} stood
+				// here, on toolkitHandler.IndexTypes. It was the PROTOTYPE
+				// fallback for the index-type catalogue: first a static
+				// six-loader list that no data backs, then a 501 refusal.
+				//
+				// It is deleted. internal/api/v2/indextypes answers this path
+				// from the snapshot pinned out of the SDK, production_router.go
+				// registers it at the exact contract path, and the chart and
+				// the compose stacks turn it on wherever the install
+				// authenticates. A second registration of the same path is not
+				// a fallback: chi resolved the explicit path first, so this
+				// mount only ever answered where the reviewed route was absent.
 				r.With(requireIndexMetaRead).
 					Get("/index_meta/prompt_lib/{projectID}/{toolkitID}", toolkitHandler.IndexMeta)
 				r.With(requireIndexMetaRead).
