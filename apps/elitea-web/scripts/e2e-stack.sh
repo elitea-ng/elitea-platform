@@ -1697,12 +1697,18 @@ ENDFIXTURE
 -- INSERT never mentioned, because the positional row it prints is the table's
 -- order and not the statement's.
 --
--- `max_tokens` is NOT seeded, and its absence is deliberate. The read endpoint
--- strips it: `isSensitiveSettingKey` matches the substring "token", so both
--- `max_tokens` and `toolkit_configuration_max_tokens` are redacted out of every
--- response (issue #705). Seeding it would put a value in the database that no
--- client can read back, and a fixture nothing can observe is a fixture that
--- teaches the next reader something false.
+-- `max_tokens` is NOT seeded. The reason recorded here before is no longer
+-- true and must not be copied: it said the read endpoint STRIPS the key,
+-- because `isSensitiveSettingKey` matched the substring "token". Issue #705
+-- replaced that substring rule with a whole-word rule
+-- (services/elitea-main/internal/api/v2/toolkits/secret_settings_key.go), so
+-- `max_tokens` and `toolkit_configuration_max_tokens` now survive every read
+-- and only a credential is removed.
+--
+-- The key stays out of this fixture for a different reason:
+-- src/widgets/deepwiki/api/wikiChatApi.ts reads it and puts it in
+-- `llm_settings.max_tokens`, so seeding it changes the request every DeepWiki
+-- journey sends. Seed it in a test that asserts that request, not here.
 INSERT INTO p_90200.elitea_tools (id, name, type, description, owner_id, author_id, settings)
 VALUES (
     9001,

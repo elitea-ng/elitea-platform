@@ -1362,11 +1362,12 @@ func redactSettings(value any) any {
 	}
 }
 
+// isSensitiveSettingKey delegates to the word-based classifier in
+// secret_settings_key.go. It used to match by SUBSTRING, which removed
+// `max_tokens` and `toolkit_configuration_max_tokens` from every toolkit read
+// (#705). Read that file before changing this rule.
 func isSensitiveSettingKey(key string) bool {
-	key = strings.ToLower(key)
-	return strings.Contains(key, "secret") || strings.Contains(key, "token") ||
-		strings.Contains(key, "password") || strings.Contains(key, "credential") ||
-		strings.Contains(key, "api_key") || strings.Contains(key, "apikey")
+	return IsSecretSettingKey(key)
 }
 
 // tenantOwnerID converts a tenant project id into the integer written to the
