@@ -268,7 +268,9 @@ tasks:
   images:gateway:
     desc: Build elitea-llm-gateway image
     cmds:
-      - podman build -t ghcr.io/eliteaai/elitea-llm-gateway:dev -f services/elitea-llm-gateway/Containerfile services/elitea-llm-gateway
+      # Repo root, not services/elitea-llm-gateway: the Containerfile COPYs
+      # libs/go/egresslib, the module's local `replace` target.
+      - podman build -t ghcr.io/eliteaai/elitea-llm-gateway:dev -f services/elitea-llm-gateway/Containerfile .
 
   images:ui:
     desc: Build UI image
