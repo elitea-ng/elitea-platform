@@ -94,17 +94,22 @@ const ThemeModeToggle = memo(() => {
       onChange={onChange}
       size="small"
       ariaLabel={t('shared.ui.themeModeToggle.ariaLabel', 'Theme')}
-      sx={themeModeToggleSx}
+      itemSx={themeModeToggleItemSx}
     />
   );
 });
 
-/** Production renders each of the three at a fixed 6.25rem so the group reads
- * as one segmented control rather than three differently-sized pills. */
-const themeModeToggleSx = {
-  // oxlint-disable-next-line elitea/no-mui-internal-selector -- this file is already scoped out of R-T6 in .oxlintrc.json for exactly this control.
-  '& .MuiToggleButton-root': { minWidth: '6.25rem' },
-};
+/**
+ * Production renders each of the three at a fixed 6.25rem so the group reads
+ * as one segmented control rather than three differently-sized pills.
+ *
+ * Passed through `TabGroupButton`'s `itemSx`, which puts the width on each
+ * button. The earlier form reached from the group's own `sx` into the buttons
+ * underneath it, which names a MUI internal class — banned by R-T6 outside
+ * `shared/brand/mui-overrides/`, and flagged by theme-gate check 4, which
+ * reads no lint waiver.
+ */
+const themeModeToggleItemSx = { minWidth: '6.25rem' };
 
 ThemeModeToggle.displayName = 'ThemeModeToggle';
 
