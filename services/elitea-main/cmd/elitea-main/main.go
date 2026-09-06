@@ -1154,21 +1154,18 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		if readerErr != nil {
 			return fmt.Errorf("compose ungated project-context reader: %w", readerErr)
 		}
-		// authsvc.NewPrincipalValidator(pool) is built here rather than reusing
-		// the `principalValidator` variable because that variable is nil in
-		// exactly the branch that needs it: it is only assigned inside the
-		// `authEnabled` block, which is also the only place formGraph is set.
-		// See chatConfigAuthConfig for why nil is not survivable (#301).
+		// apiGroupAuth, not a fresh composition from formGraph/
+		// principalValidator/forwardedIdentityVerifier: those are the SAME
+		// inputs apiGroupAuth was already built from above, and the gate on
+		// this block (formGraph != nil || oidcSessionHandler != nil) makes
+		// the two compositions identical in both branches. See
+		// chatConfigAuthConfig for why reusing the value, rather than
+		// recomposing it, is what keeps the OIDC-only branch from silently
+		// losing a validator again (#301, and the token validator this fixes).
 		currentPromptContextReads, err = promptcontextreadsapi.NewCurrentRoutes(
 			chatConfigReader,
 			projectContextReader,
-			chatConfigAuthConfig(
-				formGraph,
-				principalValidator,
-				forwardedIdentityVerifier,
-				authsvc.NewPrincipalValidator(pool),
-				os.Getenv("APPLICATION_SECRET_KEY"),
-			),
+			chatConfigAuthConfig(apiGroupAuth),
 			legacyrbac.NewPostgresResolver(pool),
 		)
 		if err != nil {
