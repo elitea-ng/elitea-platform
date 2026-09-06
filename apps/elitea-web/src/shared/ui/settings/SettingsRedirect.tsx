@@ -14,6 +14,10 @@ const VALID_TABS = [
   'analytics',
   'usage',
   'personalization',
+  'profile',
+  'preferences',
+  'ai-personality',
+  'memory',
   'tokens',
   'notifications',
 ] as const;

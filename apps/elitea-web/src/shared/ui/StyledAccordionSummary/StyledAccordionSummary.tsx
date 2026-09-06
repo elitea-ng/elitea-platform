@@ -36,11 +36,15 @@ export interface StyledAccordionSummaryProps extends Omit<AccordionSummaryProps,
  * `node_modules/@mui/material/AccordionSummary/AccordionSummary.js`:
  * `slotProps[name]` may be a function that receives the component's own
  * `ownerState`, which carries `expanded`). That is used here instead:
- *  - the expand-icon rotation reads `ownerState.expanded` directly, so no
- *    `.Mui-expanded` class match is needed;
- *  - the content margin is set once via `slotProps.content.sx`, which
- *    Emotion applies after the slot's own variant CSS — no `!important`
- *    required to win.
+ *  - the expand-icon rotation is a `&.Mui-expanded` rule on the slot;
+ *  - the content margin and the row's min-height are set through the same
+ *    self-scoped `&.Mui-expanded` form.
+ *
+ * SPECIFICITY IS THE WHOLE TRICK HERE, and getting it wrong is silent: MUI's
+ * own expanded-state rules are two-class selectors, so anything this file
+ * writes as a plain value (one generated class) loses to them and simply has
+ * no effect while the section is open. Each of the three properties below is
+ * therefore written behind `&.Mui-expanded` as well as bare.
  */
 export function StyledAccordionSummary({
   showMode = 'left',
@@ -56,16 +60,37 @@ export function StyledAccordionSummary({
         (theme: Theme) => ({
           flexDirection: isLeft ? 'row-reverse' : 'row',
           minHeight: '2.5rem',
+          // Repeated behind `&.Mui-expanded` for the same specificity reason
+          // as the content margin below: MUI ships
+          // `.MuiAccordionSummary-root.Mui-expanded { min-height: 64px }`.
+          // The baseline reaches the same result from the PARENT accordion
+          // (`& .MuiButtonBase-root.MuiAccordionSummary-root`, three classes),
+          // which R-T6 does not allow here.
+          '&.Mui-expanded': { minHeight: '2.5rem' },
           padding: isLeft ? theme.spacing(1) : `0 ${theme.spacing(1.5)}`,
         }),
         sx,
       )}
       expandIcon={expandIcon}
       slotProps={{
+        // The margin is written TWICE, the second time behind `&.Mui-expanded`,
+        // for the same specificity reason spelled out on `expandIconWrapper`
+        // below. MUI ships `.MuiAccordionSummary-content.Mui-expanded {
+        // margin: 20px 0 }` — specificity (0,2,0) — and a plain value in this
+        // callback lands in one generated class, (0,1,0). So the single-rule
+        // form here only ever applied while COLLAPSED: every expanded
+        // accordion in the app took MUI's 20px block margins (a 72px-tall
+        // header instead of 40px) and lost the 12px inline start that lines
+        // the title up with the body below it. Measured against the
+        // production UI, which renders `margin: 0 0 0 12px` in both states.
         content: {
           sx: (theme: Theme) => ({
             margin: 0,
             marginInlineStart: isLeft ? theme.spacing(1.5) : 0,
+            '&.Mui-expanded': {
+              margin: 0,
+              marginInlineStart: isLeft ? theme.spacing(1.5) : 0,
+            },
           }),
         },
         // The rotation is expressed as a `&.Mui-expanded` CLASS rule, not as a

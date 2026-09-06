@@ -74,7 +74,13 @@ describe('PreferencesFormContent', () => {
 
     expect(screen.getByTestId('preferences-general-section')).toBeInTheDocument();
     expect(screen.getByTestId('voice-personalization-section')).toBeInTheDocument();
-    expect(screen.getByText(/sound notifications/i)).toBeInTheDocument();
+    /*
+     * TWO nodes now read "Sound Notifications": the accordion's own header and
+     * the title of the toggle card inside it. That is what production renders
+     * (the card is the same `title + description + switch` shape Memory uses
+     * three times), so the assertion counts them instead of demanding one.
+     */
+    expect(screen.getAllByText(/^sound notifications$/i)).toHaveLength(2);
   });
 
   it('renders the theme toggle in the General section with no API call', () => {

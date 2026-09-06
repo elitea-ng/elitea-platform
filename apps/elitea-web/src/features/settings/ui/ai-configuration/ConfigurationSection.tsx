@@ -4,17 +4,15 @@
  * Ported from `apps/elitea-ui/src/[fsd]/features/settings/ui/ai-configuration/Configuration/ConfigurationSection.jsx`.
  */
 import { memo, useMemo } from 'react';
-import { useTheme, type Theme } from '@mui/material/styles';
+import { useTheme } from '@mui/material/styles';
 
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 
-import { SingleSelect } from '@/shared/ui/SingleSelect';
 import { t } from '@/shared/i18n';
 import { usePermissionList } from '@/shared/api/generated/auth/auth';
 import type { Permission } from '@/shared/api/generated/model';
 import { PERMISSIONS } from '@/shared/lib/permissions';
-import { useConfigurationNavigation } from '@/features/settings/lib/ai-configuration/useConfigurationNavigation';
 /*
  * [#71] These two replace this file's own former `getGroupLabel`/`sortByName`,
  * which were ad-hoc reimplementations of them. The baseline calls exactly these
@@ -31,22 +29,22 @@ import {
   getConfigurationGroup,
   sortConfigurationsByDisplayName,
 } from '@/features/settings/lib/ai-configuration/configuration.helpers';
-import { toConfigurationId, useStoredConnectionHealthContext } from '@/features/settings/lib/ai-configuration/useStoredConnectionHealth';
 
-import ConfigurationCard from './ConfigurationCard';
+import { AIProviderAccordion, type AIProviderAccordionMetaItem } from './AIProviderAccordion';
+import { ConfigCards } from './ConfigCards';
+import { getStyles } from './configurationSection.styles';
+import { DefaultSettingsSelects } from './DefaultSettingsSelects';
+import type { AdditionalDefaultSetting } from './configurationSection.types';
 
 const GROUP_ORDER = ['OpenAI', 'Anthropic', 'Other LLM Providers'];
 
-export interface AdditionalDefaultSetting {
-  key?: string;
-  label: React.ReactNode;
-  labelWidth?: string;
-  value: string;
-  options: Array<{ value: string; label: string }>;
-  onChange: (value: string) => void;
-  /** Message from the last failed save of this select's default model. */
-  error?: string | undefined;
+/** `label` of the option whose `value` matches — the collapsed summary shows
+ * the model's NAME, never the `name<<>>project_id` key the select carries. */
+function optionLabelOf(options: Array<{ value: string; label: string }> | undefined, value: string): string {
+  return options?.find((option) => option.value === value)?.label ?? '';
 }
+
+export type { AdditionalDefaultSetting } from './configurationSection.types';
 
 interface ConfigurationSectionProps {
   title: string;
@@ -66,7 +64,18 @@ interface ConfigurationSectionProps {
    * query data, so it silently returns to the previous default. */
   defaultSettingError?: string | undefined;
   additionalDefaultSettings?: AdditionalDefaultSetting[];
-  groupTheModelsByProvider?: boolean;
+  /**
+   * How the section PRESENTS its cards, grouped as one prop rather than
+   * three: `ConfigurationSection` sits exactly on the §3.5 12-prop budget,
+   * and the accordion needed two more (`defaultExpanded`, `testId`).
+   */
+  display?: {
+    /** Splits the cards under per-provider headings (LLMs only). */
+    groupByProvider?: boolean;
+    /** Only the first section (LLMs) opens on arrival, as in production. */
+    defaultExpanded?: boolean;
+    testId?: string;
+  };
 }
 
 /**
@@ -115,59 +124,6 @@ function useCanEditConfiguration(projectId: string): boolean {
   return permissions.has(PERMISSIONS.configuration.update);
 }
 
-/**
- * Renders ConfigurationCards for the given array of configurations.
- * Extracted to keep ConfigurationSection below the complexity budget.
- */
-function ConfigCards({
-  configurations,
-  projectId,
-  canEdit,
-  defaultSettingValue,
-  styles,
-}: {
-  configurations: readonly Record<string, unknown>[];
-  projectId: string;
-  canEdit: boolean;
-  defaultSettingValue: string;
-  styles: ReturnType<typeof getStyles>;
-}) {
-  // Old app: `ConfigurationCard.jsx`'s `handleCardClick` calls
-  // `navigateToConfiguration(configuration.id, locationState)` on click,
-  // routing into the configuration's edit view. Wired here (not passed
-  // down as a prop) since the hook must be called from a component body.
-  const { navigateToConfiguration } = useConfigurationNavigation();
-  // Read here, not threaded from the panel: `ConfigurationSection` already
-  // destructures 12 props, which IS the §3.5 component-props budget, and this
-  // component never reads the value — it only forwards it. See
-  // `StoredConnectionHealthView`'s own doc comment. The card boundary below
-  // stays explicit props.
-  const connectionHealth = useStoredConnectionHealthContext();
-
-  return (
-    <Box sx={styles.configurationsContainer}>
-      {configurations.map((configuration, index) => {
-        const cfg = configuration;
-        const d = cfg.data as Record<string, unknown> | undefined;
-        const configurationId = toConfigurationId(cfg.id);
-        return (
-          <ConfigurationCard
-            key={`${(cfg.id as string) || (cfg.name as string)}-${index}`}
-            configuration={configuration}
-            projectId={projectId}
-            canEdit={canEdit}
-            isDefault={defaultSettingValue === `${(d?.name as string) ?? ''}<<>>${(cfg.project_id as string) ?? ''}`}
-            onClick={navigateToConfiguration}
-            health={connectionHealth.health[configurationId]}
-            onRevalidate={connectionHealth.revalidate}
-            isRevalidating={connectionHealth.revalidatingId === configurationId}
-          />
-        );
-      })}
-    </Box>
-  );
-}
-
 export default memo(function ConfigurationSection({
   title,
   configurations,
@@ -180,8 +136,9 @@ export default memo(function ConfigurationSection({
   onChangeDefaultSetting,
   defaultSettingError,
   additionalDefaultSettings = [],
-  groupTheModelsByProvider = false,
+  display = {},
 }: ConfigurationSectionProps) {
+  const { groupByProvider: groupTheModelsByProvider = false, defaultExpanded = false, testId: sectionTestId } = display;
   const theme = useTheme();
   const styles = getStyles(theme);
   const canEdit = useCanEditConfiguration(projectId);
@@ -213,6 +170,9 @@ export default memo(function ConfigurationSection({
       styles={styles}
       projectId={projectId}
       canEdit={canEdit}
+      count={configurations.length}
+      defaultExpanded={defaultExpanded}
+      {...(sectionTestId === undefined ? {} : { sectionTestId })}
       defaultSetting={{
         has: hasDefaultSetting,
         value: defaultSettingValue,
@@ -248,134 +208,84 @@ interface ConfigurationSectionGrouping {
 }
 
 function ConfigurationSectionBody({
-  title, styles, projectId, canEdit, defaultSetting, grouping,
+  title, styles, projectId, canEdit, count, defaultExpanded, sectionTestId, defaultSetting, grouping,
 }: {
   title: string;
   styles: ReturnType<typeof getStyles>;
   projectId: string;
   canEdit: boolean;
+  count: number;
+  defaultExpanded: boolean;
+  sectionTestId?: string;
   defaultSetting: ConfigurationSectionDefaultSetting;
   grouping: ConfigurationSectionGrouping;
 }) {
+  /* The collapsed summary answers "what is this section set to?" without
+     opening it — the production page's `metaItems`. */
+  const metaItems: AIProviderAccordionMetaItem[] = defaultSetting.has
+    ? [
+        {
+          label: defaultSetting.label,
+          value: optionLabelOf(defaultSetting.options, defaultSetting.value),
+        },
+        ...(defaultSetting.additional ?? []).map((setting) => ({
+          label: setting.label,
+          value: optionLabelOf(setting.options, setting.value),
+        })),
+      ]
+    : [];
+
   return (
     <Box sx={styles.container}>
-      <Typography variant="headingSmall" sx={styles.title}>{title}</Typography>
-
-      {defaultSetting.has && (
-        <DefaultSettingsSelects
-          canEdit={canEdit}
-          defaultSettingValue={defaultSetting.value}
-          defaultSettingLabel={defaultSetting.label}
-          defaultSettingOptions={defaultSetting.options}
-          onChangeDefaultSetting={defaultSetting.onChange}
-          defaultSettingError={defaultSetting.error}
-          additionalDefaultSettings={defaultSetting.additional}
-        />
-      )}
-
-      {grouping.byProvider && grouping.grouped ? (
-        GROUP_ORDER.map((groupLabel) => {
-          const groupConfigs = grouping.grouped?.[groupLabel] ?? [];
-          if (groupConfigs.length === 0) return null;
-          return (
-            <Box key={groupLabel} sx={styles.groupContainer}>
-              <Typography variant="subtitle" color="text.primary">{groupLabel}</Typography>
-              <ConfigCards
-                configurations={groupConfigs}
-                projectId={projectId}
-                canEdit={canEdit}
-                defaultSettingValue={defaultSetting.value}
-                styles={styles}
-              />
-            </Box>
-          );
-        })
-      ) : (
-        <ConfigCards
-          configurations={grouping.sorted ?? []}
-          projectId={projectId}
-          canEdit={canEdit}
-          defaultSettingValue={defaultSetting.value}
-          styles={styles}
-        />
-      )}
-    </Box>
-  );
-}
-
-function DefaultSettingsSelects({
-  canEdit, defaultSettingValue, defaultSettingLabel, defaultSettingOptions,
-  onChangeDefaultSetting, defaultSettingError, additionalDefaultSettings,
-}: {
-  canEdit: boolean;
-  defaultSettingValue: string;
-  defaultSettingLabel?: React.ReactNode;
-  defaultSettingOptions?: Array<{ value: string; label: string }>;
-  onChangeDefaultSetting?: (value: string) => void;
-  defaultSettingError?: string;
-  additionalDefaultSettings?: AdditionalDefaultSetting[];
-}) {
-  return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', flexWrap: 'nowrap', alignItems: 'stretch', justifyContent: 'flex-start', gap: '1.5rem' }}>
-      <SingleSelect
-        label={typeof defaultSettingLabel === 'string' ? defaultSettingLabel : ''}
-        value={defaultSettingValue}
-        onChange={onChangeDefaultSetting || (() => {})}
-        options={defaultSettingOptions ?? []}
-        disabled={!canEdit}
-        error={defaultSettingError ?? ''}
-      />
-      {additionalDefaultSettings
-        ?.filter((s): s is NonNullable<typeof s> => Boolean(s))
-        .map((setting) => (
-          <SingleSelect
-            key={setting.key ?? String(setting.label as string ?? 'additional')}
-            label={typeof setting.label === 'string' ? setting.label : ''}
-            value={setting.value ?? ''}
-            onChange={setting.onChange ?? (() => {})}
-            options={setting.options ?? []}
-            disabled={!canEdit}
-            error={setting.error ?? ''}
+      <AIProviderAccordion
+        title={title}
+        count={count}
+        metaItems={metaItems}
+        defaultExpanded={defaultExpanded}
+        {...(sectionTestId === undefined ? {} : { 'data-testid': sectionTestId })}
+      >
+        {defaultSetting.has && (
+          <DefaultSettingsSelects
+            canEdit={canEdit}
+            defaultSettingValue={defaultSetting.value}
+            defaultSettingLabel={defaultSetting.label}
+            defaultSettingOptions={defaultSetting.options}
+            onChangeDefaultSetting={defaultSetting.onChange}
+            defaultSettingError={defaultSetting.error}
+            additionalDefaultSettings={defaultSetting.additional}
+            styles={styles}
           />
-        ))}
+        )}
+
+        {grouping.byProvider && grouping.grouped ? (
+          GROUP_ORDER.map((groupLabel, index) => {
+            const groupConfigs = grouping.grouped?.[groupLabel] ?? [];
+            if (groupConfigs.length === 0) return null;
+            return (
+              <Box key={groupLabel} sx={styles.groupContainer(index < GROUP_ORDER.length - 1)}>
+                <Typography variant="subtitle" color="text.primary" sx={styles.groupLabel}>
+                  {groupLabel}
+                </Typography>
+                <ConfigCards
+                  configurations={groupConfigs}
+                  projectId={projectId}
+                  canEdit={canEdit}
+                  defaultSettingValue={defaultSetting.value}
+                  styles={styles}
+                />
+              </Box>
+            );
+          })
+        ) : (
+          <ConfigCards
+            configurations={grouping.sorted ?? []}
+            projectId={projectId}
+            canEdit={canEdit}
+            defaultSettingValue={defaultSetting.value}
+            styles={styles}
+          />
+        )}
+      </AIProviderAccordion>
     </Box>
   );
-}
-
-function getStyles(theme: ReturnType<typeof useTheme>) {
-  const t = theme as Theme;
-  return {
-    container: {
-      padding: '1rem 1.5rem',
-      gap: '0.5rem',
-      display: 'flex',
-      flexDirection: 'column',
-      width: '100%',
-    },
-    title: {
-      color: t.vars.palette.text.secondary,
-    },
-    defaultSettingsContainer: {
-      display: 'flex',
-      flexDirection: 'column',
-      flexWrap: 'nowrap',
-      alignItems: 'stretch',
-      justifyContent: 'flex-start',
-      gap: '1.5rem',
-    },
-    configurationsContainer: {
-      display: 'flex',
-      flexDirection: 'row',
-      flexWrap: 'wrap',
-      gap: '0.75rem',
-      justifyContent: 'flex-start',
-    },
-    groupContainer: {
-      display: 'flex',
-      flexDirection: 'column',
-      paddingTop: '.5rem',
-      paddingBottom: '1rem',
-      borderBottom: `1px solid ${t.vars.palette.border.lines}`,
-    },
-  };
 }

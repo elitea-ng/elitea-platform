@@ -1,5 +1,11 @@
 /**
- * The settings drawer's PERSONAL → "Log out" item (issue #136 A).
+ * Settings › Profile's "Log out" button (issue #136 A).
+ *
+ * The control moved: it used to be a NAV ITEM in the drawer's PERSONAL group,
+ * which is not what production shows — the baseline
+ * (`[fsd]/features/settings/ui/profile/Profile.jsx`) puts it on the Profile
+ * page, under the identity rows. The behaviour asserted below is unchanged;
+ * only where the click lands moved.
  *
  * `SettingsLayout.handleItemClick` used to treat it as a tab like every other
  * item and do nothing but `window.history.replaceState()` to
@@ -79,9 +85,9 @@ afterEach(() => {
   window.sessionStorage.clear();
 });
 
-describe('settings drawer — Log out', () => {
+describe('settings profile — Log out', () => {
   it('sweeps the whole el. namespace in BOTH storage areas', async () => {
-    mountSettings('/settings/personalization');
+    mountSettings('/settings/profile');
 
     // A key the app really writes (`selectedProjectPersistence.ts`) and one
     // the auth popup really writes (`auth/constants.ts`), in both areas.
@@ -97,7 +103,7 @@ describe('settings drawer — Log out', () => {
   });
 
   it('leaves keys outside the el. namespace alone — it is a sweep, not a clear()', async () => {
-    mountSettings('/settings/personalization');
+    mountSettings('/settings/profile');
 
     window.localStorage.setItem('el.project.id', '1');
     // MUI's colour-scheme keys sit OUTSIDE the `el.` namespace

@@ -3,7 +3,6 @@ import { Outlet, useNavigate } from '@tanstack/react-router';
 import Box from '@mui/material/Box';
 import type { SxProps, Theme } from '@mui/material/styles';
 
-import { performLogout } from '@/shared/api/auth';
 import { t } from '@/shared/i18n';
 import { useIsAnalyticsVisible } from '@/shared/lib/hooks/useIsAnalyticsVisible';
 import { useIsUsageVisible } from '@/shared/lib/hooks/useIsUsageVisible';
@@ -21,9 +20,6 @@ import { SettingsRedirect } from '@/shared/ui/settings/SettingsRedirect';
  *
  * Ported from `apps/elitea-ui/src/[fsd]/pages/settings/index.jsx`.
  */
-/** The PERSONAL section's action item that is not a route (see `handleItemClick`). */
-const LOGOUT_TAB_ID = 'logout';
-
 export function SettingsLayout() {
   const navigate = useNavigate();
   // The admin Features page's Analytics switch (`analytics_enabled`) — see
@@ -41,9 +37,21 @@ export function SettingsLayout() {
     {
       section: 'PROJECT',
       tabs: [
+        // ORDER AND LABELS ARE THE PRODUCTION DRAWER'S, not this port's
+        // earlier guesses. The baseline
+        // (`[fsd]/pages/settings/index.jsx:53-101`) lists AI Providers,
+        // Project Context, Secrets, Users, Analytics, Usage in that order and
+        // under those names; "AI Configuration" and "Project Params" were
+        // labels no shipped build ever showed. The URL slugs stay as they are
+        // — they are the route files' own names, and renaming them would
+        // break every bookmark.
         {
           id: 'model-configuration',
-          label: 'AI Configuration',
+          label: 'AI Providers',
+        },
+        {
+          id: 'project-params',
+          label: 'Project Context',
         },
         {
           id: 'prompts',
@@ -54,10 +62,6 @@ export function SettingsLayout() {
           label: 'Environment',
         },
         {
-          id: 'project-params',
-          label: 'Project Params',
-        },
-        {
           id: 'secrets',
           label: 'Secrets',
         },
@@ -65,14 +69,6 @@ export function SettingsLayout() {
           id: 'users',
           label: 'Users',
         },
-        ...(usageVisible
-          ? [
-              {
-                id: 'usage',
-                label: 'Usage',
-              },
-            ]
-          : []),
         ...(analyticsVisible
           ? [
               {
@@ -81,23 +77,38 @@ export function SettingsLayout() {
               },
             ]
           : []),
+        ...(usageVisible
+          ? [
+              {
+                id: 'usage',
+                label: 'Usage',
+              },
+            ]
+          : []),
       ],
     },
     {
       section: 'PERSONAL',
       tabs: [
+        // Baseline order (`[fsd]/pages/settings/index.jsx:104-136`): Profile,
+        // Preferences, AI Personality, Memory, Personal Tokens,
+        // Notifications.
+        //
+        // Two rows that used to be here are gone.
+        //
+        // "Personalization" is the OLD combined screen — user info, persona,
+        // context management, voice and sound on one page. Production split
+        // it into the four tabs below it, all of which this app already has,
+        // so leaving it in the drawer offered every control twice, under a
+        // name the current UI does not use. `/settings/personalization` still
+        // resolves; it is simply not advertised.
+        //
+        // "Log out" was an ACTION pretending to be a tab. It now lives where
+        // the baseline puts it: a button on the Profile page.
         {
-          id: 'personalization',
-          label: 'Personalization',
+          id: 'profile',
+          label: 'Profile',
         },
-        // Baseline order (`[fsd]/pages/settings/index.jsx:112-141`):
-        // Profile, Preferences, AI Personality, Memory, Personal Tokens,
-        // Notifications. Preferences/AI Personality/Memory had no counterpart
-        // here at all — the pages existed in production and simply were not
-        // ported. `Profile` is still absent; its identity rows (full name,
-        // email, user id, last login) and the Log out button that lived with
-        // them have no home yet, which is why Log out is a nav item below
-        // rather than a control on a page.
         {
           id: 'preferences',
           label: 'Preferences',
@@ -118,26 +129,11 @@ export function SettingsLayout() {
           id: 'notifications',
           label: 'Notifications',
         },
-        {
-          id: LOGOUT_TAB_ID,
-          label: 'Log out',
-        },
       ],
     },
   ];
 
   const handleItemClick = (tabId: string) => {
-    // "Log out" is not a tab: there is no `routes/_shell/settings/logout.tsx`,
-    // so treating it like one only pushed a URL with no route behind it and
-    // `SettingsRedirect` bounced the user straight back into the app with
-    // every `el.*` key intact (issue #136 A). `performLogout()` is the real
-    // implementation — the `el.` namespace sweep in both storage areas plus
-    // the `/forward-auth/logout` handoff that clears the server session
-    // cookie — and this is its call site.
-    if (tabId === LOGOUT_TAB_ID) {
-      performLogout();
-      return;
-    }
     // NAVIGATE THROUGH THE ROUTER, NOT window.history.
     //
     // This used to be `window.history.replaceState(null, '', `/settings/${tabId}`)`,
