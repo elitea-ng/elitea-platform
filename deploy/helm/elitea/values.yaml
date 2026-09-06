@@ -1646,8 +1646,8 @@ scheduler:
   # Service: nothing calls in, the process polls and consumes.
   #
   # READ services/elitea-scheduler/RETIREMENT.md AND THIS CHART'S README BEFORE
-  # INSTALLING. In short: this binary carries THREE independent responsibilities
-  # and the two that matter are not the scheduler loop —
+  # INSTALLING. In short: this binary carries FOUR independent responsibilities
+  # and the three that matter are not the scheduler loop —
   #   1. the legacy centry.schedule poller (NOT the owner of product schedule
   #      occurrences; elitea-main's scheduling kernel is). It starts
   #      UNCONDITIONALLY — there is no env flag to turn it off (main.go always
@@ -1658,14 +1658,20 @@ scheduler:
   #   2. the price-catalog sync worker (PRICE_SYNC_ENABLED, off by default);
   #   3. the budget write-back consumer (BUDGET_WRITEBACK_ENABLED, off by
   #      default) that drains GATEWAY_BUDGET_DELTAS into
-  #      gateway.llm_budget_accumulators.
-  # (2) and (3) are the reason the image cannot simply be deleted; they have no
-  # relocation decision yet.
+  #      gateway.llm_budget_accumulators;
+  #   4. the audit-event retention sweep (AUDIT_RETENTION_DAYS, ON by default),
+  #      which is the ONLY bound on the growth of centry.audit_events. It is not
+  #      a centry.schedule row and cannot make a second clock — see
+  #      RETIREMENT.md.
+  # (2), (3) and (4) are the reason the image cannot simply be deleted; they
+  # have no relocation decision yet.
 
   # Single replica. The poller's mutual exclusion is a Redis tick lock, so extra
   # replicas are not incorrect, but they buy nothing: every tick is executed once
   # regardless, and the price-sync/write-back workers are likewise
-  # single-consumer shaped. Scale out only with a specific measured reason.
+  # single-consumer shaped. The retention sweep takes no lock at all — its
+  # batches use FOR UPDATE SKIP LOCKED, so two sweepers take disjoint rows.
+  # Scale out only with a specific measured reason.
   replicaCount: 1
 
   image:
@@ -1771,6 +1777,48 @@ scheduler:
     BUDGET_WRITEBACK_BATCH_SIZE: "500"
     BUDGET_WRITEBACK_ACK_WAIT: "30s"
     BUDGET_WRITEBACK_MAX_DELIVER: "10"
+
+    # Audit-event retention sweep (issue #619).
+    #
+    # `centry.audit_events` received its first product writer in issue #615 —
+    # an audit middleware that emits for administrative and security-relevant
+    # requests — and no bound on its growth. This is that bound: bounded,
+    # batched DELETEs of rows older than the window, run by
+    # services/elitea-scheduler/internal/auditretention.
+    #
+    # ON by default. A retention sweeper that ships disabled is a retention
+    # sweeper that does not exist, and this chart has carried flags no
+    # deployment sets before (issues #394 and #395).
+    #
+    # AUDIT_RETENTION_DAYS is the only knob most operators touch, and it is also
+    # the OFF switch: 0 or less disables the sweep, which the daemon reports at
+    # WARN so that "this table is unbounded" is a line in the log rather than an
+    # absence from it. There is no separate enable flag, because two settings
+    # that must agree are two settings that can disagree.
+    #
+    # 365 days, because the window has to outlast the longest question an
+    # operator asks of an audit trail. A shorter default would destroy evidence
+    # on the first upgrade in every deployment that did not read the release
+    # note.
+    #
+    # A POSITIVE window below 7 days is REFUSED, not applied: the sweeper logs
+    # at ERROR and does not start. A one-day window is far more likely to be a
+    # typo than a policy, and acting on the typo destroys a trail that no later
+    # edit of this file brings back.
+    AUDIT_RETENTION_DAYS: "365"
+    # How often a pass starts. One pass is bounded by the two settings below, so
+    # a shorter interval only means the bound is met sooner.
+    AUDIT_RETENTION_INTERVAL: "1h"
+    # Rows per DELETE statement, so no single statement locks an unbounded
+    # number of rows. `ix_audit_events_timestamp` supports the scan.
+    AUDIT_RETENTION_BATCH_SIZE: "1000"
+    # Statements per pass — 50 × 1000 = 50 000 rows per hour. The ceiling exists
+    # so the FIRST pass on a deployment that has never swept cannot spend hours
+    # inside the database; the remainder goes on the next pass, and the log says
+    # the pass did not drain. Raise it if that warning repeats for days. If it
+    # keeps repeating with the ceiling raised, the next step is monthly RANGE
+    # partitioning of the table on `timestamp` — not a bigger number here.
+    AUDIT_RETENTION_MAX_BATCHES: "50"
 
     # Tracing (issue #250): same OTLP collector endpoint and kill switch as
     # the `main.env` map — see that chart's values.yaml for the

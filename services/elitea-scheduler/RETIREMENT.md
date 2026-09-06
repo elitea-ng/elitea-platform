@@ -37,7 +37,21 @@ is at least 1 and the stamp happens as before. This note is not the guard; the
 guard is `internal/scheduler/dispatch_test.go`, which asserts the stored
 `last_run`, not that a publish happened.
 
-The price-catalog sync and budget write-back consumers currently sharing this
-binary are independent lifecycle responsibilities. They require an explicit
-relocation or retained-service decision before this image can be deleted. This
-note does not claim that work is complete.
+The price-catalog sync, budget write-back and audit-retention workers currently
+sharing this binary are independent lifecycle responsibilities. They require an
+explicit relocation or retained-service decision before this image can be
+deleted. This note does not claim that work is complete.
+
+## The audit-retention sweep is not a schedule
+
+`internal/auditretention` (issue #619) deletes rows of `centry.audit_events`
+that are older than a configured window. It is NOT a `centry.schedule` row and
+it is not registered with the `elitea-main` scheduling kernel, so the two-clocks
+prohibition above does not apply to it: there is no occurrence ledger to
+disagree about, no lease epoch and no cursor. The cutoff is recomputed from the
+clock on every pass, the DELETE is idempotent, and a pass that never runs costs
+only a later pass.
+
+It takes its own loop, started from `cmd/elitea-scheduler`, in the shape the
+price-sync and budget write-back workers already use. When this image is
+retired, the sweep moves with those two and needs the same explicit decision.

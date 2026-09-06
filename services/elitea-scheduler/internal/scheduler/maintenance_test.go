@@ -108,8 +108,8 @@ func TestMaintenanceActiveReadsTheSwitch(t *testing.T) {
 		"malformed on disk": {store: &switchStore{value: []byte("{oops")}, want: false},
 	} {
 		scheduler := newTestScheduler(testCase.store, &fixedDispatcher{receivers: 1})
-		if got := scheduler.maintenanceActive(context.Background()); got != testCase.want {
-			t.Errorf("%s: maintenanceActive = %v, want %v", name, got, testCase.want)
+		if got := scheduler.MaintenanceActive(context.Background()); got != testCase.want {
+			t.Errorf("%s: MaintenanceActive = %v, want %v", name, got, testCase.want)
 		}
 	}
 }
@@ -132,7 +132,7 @@ func TestEveryFailureModeKeepsDispatching(t *testing.T) {
 		"json null value": {value: []byte("null")},
 	} {
 		scheduler := newTestScheduler(store, &fixedDispatcher{receivers: 1})
-		if scheduler.maintenanceActive(context.Background()) {
+		if scheduler.MaintenanceActive(context.Background()) {
 			t.Errorf("%s: the scheduler stopped dispatching on a switch it could not trust", name)
 		}
 	}
@@ -155,7 +155,7 @@ func TestASuppressedTickWritesNothing(t *testing.T) {
 	dispatcher := &fixedDispatcher{receivers: 1}
 	scheduler := newTestScheduler(store, dispatcher)
 
-	if !scheduler.maintenanceActive(context.Background()) {
+	if !scheduler.MaintenanceActive(context.Background()) {
 		t.Fatal("the switch is on and was not read as on")
 	}
 	// tick() itself needs Redis for its lock, so the suppression is exercised at

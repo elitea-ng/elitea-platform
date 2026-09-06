@@ -22,8 +22,9 @@ package scheduler
 //
 // ## Which loops pause, and which deliberately do not
 //
-// Only SCHEDULE DISPATCH pauses. The daemon runs two other loops and both keep
-// running through a window, for reasons specific to what they do:
+// SCHEDULE DISPATCH pauses, and so does the AUDIT-EVENT RETENTION SWEEP
+// (internal/auditretention, issue #619). The daemon runs two other loops and
+// both keep running through a window, for reasons specific to what they do:
 //
 //   - **Budget write-back** drains billing events for requests that have
 //     ALREADY been served. Pausing it would not prevent any work; it would
@@ -35,6 +36,22 @@ package scheduler
 //
 // "Maintenance" here means "stop STARTING new work", which is what an operator
 // closing the platform is asking for. It does not mean "stop the process".
+//
+// The retention sweep is on the pausing side because it DESTROYS rows. An
+// operator who closes the platform is usually about to migrate, back up or
+// restore it, and a bulk DELETE running against the table at that moment is
+// the one background job that can make such a window worse. Suppression costs
+// nothing here: the rows the pass would have removed are removed by the next
+// pass after the window closes, and no state is stamped meanwhile (there is no
+// cursor to consume — the cutoff is recomputed from the clock every pass).
+//
+// ## Why this method is exported
+//
+// The gate is asked by two loops in two packages now. It is exported rather
+// than copied because the section and key below are a DATABASE contract with
+// no compiler behind them: a second transcription of those strings is a second
+// thing that can drift out of step with the admin surface, and the drift would
+// be silent in both copies.
 //
 // ## A suppressed tick does not stamp `last_run`
 //
@@ -95,11 +112,11 @@ const maintenanceEnabledSQL = `
 	 WHERE section = $1 AND key = $2
 	 LIMIT 1`
 
-// maintenanceActive reports whether an operator has closed the platform.
+// MaintenanceActive reports whether an operator has closed the platform.
 //
 // An absent row means no window — the switch has never been written, which is
 // the state of every deployment that has not used the feature.
-func (s *Scheduler) maintenanceActive(ctx context.Context) bool {
+func (s *Scheduler) MaintenanceActive(ctx context.Context) bool {
 	rows, err := s.pool.Query(ctx, maintenanceEnabledSQL, maintenanceSection, maintenanceEnabledKey)
 	if err != nil {
 		slog.Error("scheduler: maintenance switch unreadable; continuing to dispatch", "err", err)
