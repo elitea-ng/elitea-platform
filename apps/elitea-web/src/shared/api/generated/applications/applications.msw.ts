@@ -69,6 +69,8 @@ import type {
   ExportConverterResponse,
   ForkResponse,
   GroupsListResponse,
+  IconGalleryPage,
+  IconMeta,
   IconUploadResponse,
   ImportWizardResponse,
   OkResponse,
@@ -5337,6 +5339,31 @@ export const getUpdateProjectInfoResponseMock = (
   ...overrideResponse,
 });
 
+export const getListProjectIconsResponseMock = (
+  overrideResponse: Partial<Extract<IconGalleryPage, object>> = {},
+): IconGalleryPage => ({
+  rows: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    url: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  })),
+  total: faker.number.int(),
+  ...overrideResponse,
+});
+
+export const getUploadProjectIconResponseMock = (
+  overrideResponse: Partial<Extract<IconMeta, object>> = {},
+): IconMeta => ({
+  name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  url: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  size: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  initial_file_size: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  resulting_file_size: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  ...overrideResponse,
+});
+
 export const getGetPipelineInboundTriggerResponseMock = (
   overrideResponse: Partial<Extract<PipelineInboundTrigger, object>> = {},
 ): PipelineInboundTrigger => ({
@@ -7290,6 +7317,80 @@ export const getUpdateProjectInfoMockHandler = (
   );
 };
 
+export const getListProjectIconsMockHandler = (
+  overrideResponse?:
+    | IconGalleryPage
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<IconGalleryPage> | IconGalleryPage),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/project_icon/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListProjectIconsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getUploadProjectIconMockHandler = (
+  overrideResponse?:
+    | IconMeta
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<IconMeta> | IconMeta),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/project_icon/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getUploadProjectIconResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getDeleteProjectIconMockHandler = (
+  overrideResponse?:
+    | void
+    | ((
+        info: Parameters<Parameters<typeof http.delete>[1]>[0],
+      ) => Promise<void> | void),
+  options?: RequestHandlerOptions,
+) => {
+  return http.delete(
+    "*/elitea_core/project_icon/prompt_lib/:projectId/:name",
+    async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
+      await delay(0);
+      if (typeof overrideResponse === "function") {
+        await overrideResponse(info);
+      }
+
+      return new HttpResponse(null, { status: 204 });
+    },
+    options,
+  );
+};
+
 export const getGetPipelineInboundTriggerMockHandler = (
   overrideResponse?:
     | PipelineInboundTrigger
@@ -7563,6 +7664,9 @@ export const getApplicationsMock = () => [
   getUpdateProjectContextMockHandler(),
   getGetProjectInfoMockHandler(),
   getUpdateProjectInfoMockHandler(),
+  getListProjectIconsMockHandler(),
+  getUploadProjectIconMockHandler(),
+  getDeleteProjectIconMockHandler(),
   getGetPipelineInboundTriggerMockHandler(),
   getRotatePipelineInboundTriggerMockHandler(),
   getRevokePipelineInboundTriggerMockHandler(),

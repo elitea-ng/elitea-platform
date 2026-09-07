@@ -41,32 +41,25 @@
  */
 import * as zod from "zod";
 
-export const CapabilityUnavailableResponse = zod
+export const IconUploadForm = zod
   .object({
-    error: zod.string().describe("Human-readable refusal message."),
-    code: zod
-      .enum([
-        "project_info_not_available",
-        "index_types_not_available",
-        "icon_storage_not_configured",
-      ])
-      .describe(
-        "The machine-readable reason. One value per capability, stable across deployments, so a client branches on this and never on the message text.\n",
-      ),
-    detail: zod
-      .string()
+    file: zod
+      .instanceof(File)
+      .describe("The image. 512 KB is the cap for both families."),
+    width: zod
+      .int()
       .optional()
       .describe(
-        "The operator-facing half: it names the environment variable that turns the capability on.\n",
+        "The requested box width. 64 by default. It is clamped to 64 for skill icons and to 512 for project icons — project_icon.py's MAX_DIMENSION really is different from upload_skill_icon.py's.\n",
       ),
+    height: zod
+      .int()
+      .optional()
+      .describe("The requested box height. Same defaults and clamps as width."),
   })
   .describe(
-    'NOTE(W2): the 501 body issue 615 gave the two capability-gated compatibility handlers — internal\/api\/v2\/eliteacore\/handler.go (ProjectInfo) and internal\/api\/v2\/toolkits\/handler.go (IndexTypes). Both write `{error, code, detail}`, which is WIDER than ErrorResponse: a client that must tell \"this deployment does not run the capability\" from \"the request failed\" reads `code`, and ErrorResponse carries no such field.\nWHY 501 AND NOT 500. An absent producer is the server\'s final answer, and it will be the final answer to the next identical request. See internal\/api\/v2\/analytics\/handler.go for the argument in full.\n',
+    "NOTE(W2): the multipart form both upload routes read — internal\/api\/v2\/eliteacore\/skill_icon.go:245-283 and internal\/api\/v2\/eliteacore\/handler.go (CreateProjectIcon). The file part is named `file`; a request without it is a 400 and stores nothing.\n",
   );
 
-export type CapabilityUnavailableResponse = zod.input<
-  typeof CapabilityUnavailableResponse
->;
-export type CapabilityUnavailableResponseOutput = zod.output<
-  typeof CapabilityUnavailableResponse
->;
+export type IconUploadForm = zod.input<typeof IconUploadForm>;
+export type IconUploadFormOutput = zod.output<typeof IconUploadForm>;

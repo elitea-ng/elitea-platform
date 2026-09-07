@@ -39,34 +39,40 @@
  *
  * OpenAPI spec version: 2.0.0
  */
-import * as zod from "zod";
+import { HttpResponse, delay, http } from "msw";
+import type { RequestHandlerOptions } from "msw";
 
-export const CapabilityUnavailableResponse = zod
-  .object({
-    error: zod.string().describe("Human-readable refusal message."),
-    code: zod
-      .enum([
-        "project_info_not_available",
-        "index_types_not_available",
-        "icon_storage_not_configured",
-      ])
-      .describe(
-        "The machine-readable reason. One value per capability, stable across deployments, so a client branches on this and never on the message text.\n",
-      ),
-    detail: zod
-      .string()
-      .optional()
-      .describe(
-        "The operator-facing half: it names the environment variable that turns the capability on.\n",
-      ),
-  })
-  .describe(
-    'NOTE(W2): the 501 body issue 615 gave the two capability-gated compatibility handlers — internal\/api\/v2\/eliteacore\/handler.go (ProjectInfo) and internal\/api\/v2\/toolkits\/handler.go (IndexTypes). Both write `{error, code, detail}`, which is WIDER than ErrorResponse: a client that must tell \"this deployment does not run the capability\" from \"the request failed\" reads `code`, and ErrorResponse carries no such field.\nWHY 501 AND NOT 500. An absent producer is the server\'s final answer, and it will be the final answer to the next identical request. See internal\/api\/v2\/analytics\/handler.go for the argument in full.\n',
+import type { PublicConfigValues } from "../model";
+
+export const getGetResourcesConfigValuesResponseMock = (
+  overrideResponse: Partial<Extract<PublicConfigValues, object>> = {},
+): PublicConfigValues => ({ values: {}, ...overrideResponse });
+
+export const getGetResourcesConfigValuesMockHandler = (
+  overrideResponse?:
+    | PublicConfigValues
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<PublicConfigValues> | PublicConfigValues),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/admin/plugin_config_values/prompt_lib/resources",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetResourcesConfigValuesResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
   );
-
-export type CapabilityUnavailableResponse = zod.input<
-  typeof CapabilityUnavailableResponse
->;
-export type CapabilityUnavailableResponseOutput = zod.output<
-  typeof CapabilityUnavailableResponse
->;
+};
+export const getResourcesMock = () => [
+  getGetResourcesConfigValuesMockHandler(),
+];

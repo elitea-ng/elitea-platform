@@ -96,13 +96,17 @@ import type {
   GetProjectQuotaParams,
   GetRecommendationsParams,
   GroupsListResponse,
+  IconGalleryPage,
+  IconMeta,
   IconMetaRequest,
+  IconUploadForm,
   IconUploadResponse,
   ImportWizardRequest,
   ImportWizardResponse,
   ListApplicationsParams,
   ListEvalDatasetsParams,
   ListEvalRunsParams,
+  ListProjectIconsParams,
   ListProjectsParams,
   ListPublicApplicationsParams,
   N400Response,
@@ -15968,6 +15972,814 @@ export function useUpdateProjectInfo<
   const queryOptions = getUpdateProjectInfoQueryOptions(
     projectId,
     projectInfoUpdateRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listProjectIconsResponse200 = {
+  data: IconGalleryPage;
+  status: 200;
+};
+
+export type listProjectIconsResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type listProjectIconsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listProjectIconsResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listProjectIconsResponse500 = {
+  data: ErrorResponse;
+  status: 500;
+};
+
+export type listProjectIconsResponse501 = {
+  data: CapabilityUnavailableResponse;
+  status: 501;
+};
+
+export type listProjectIconsResponseSuccess = listProjectIconsResponse200 & {
+  headers: Headers;
+};
+export type listProjectIconsResponseError = (
+  | listProjectIconsResponse400
+  | listProjectIconsResponse401
+  | listProjectIconsResponse403
+  | listProjectIconsResponse500
+  | listProjectIconsResponse501
+) & {
+  headers: Headers;
+};
+
+export type listProjectIconsResponse =
+  listProjectIconsResponseSuccess | listProjectIconsResponseError;
+
+export const getListProjectIconsUrl = (
+  projectId: string,
+  params?: ListProjectIconsParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/elitea_core/project_icon/prompt_lib/${projectId}?${stringifiedParams}`
+    : `/elitea_core/project_icon/prompt_lib/${projectId}`;
+};
+
+/**
+ * NOTE(W2): internal/api/v2/eliteacore/handler.go (ListProjectIcons).
+ *
+ * `total` counts every uploaded icon, not the rows on this page. The rows
+ * are sorted by name before the slice, so a page is stable between two
+ * calls.
+ *
+ * Both parameters used to be accepted and DISCARDED, so a project with
+ * more icons than one backend page could never reach the rest of them:
+ * every request answered page one and reported it as the whole set.
+ * @summary List the icons uploaded to a project
+ */
+export const listProjectIcons = async (
+  projectId: string,
+  params?: ListProjectIconsParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listProjectIconsResponse> => {
+  return eliteaFetch<listProjectIconsResponse>(
+    getListProjectIconsUrl(projectId, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListProjectIconsQueryKey = (
+  projectId: string,
+  params?: ListProjectIconsParams,
+) => {
+  return [
+    `/elitea_core/project_icon/prompt_lib/${projectId}`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getListProjectIconsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listProjectIcons>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ErrorResponse
+    | CapabilityUnavailableResponse,
+>(
+  projectId: string,
+  params?: ListProjectIconsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listProjectIcons>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListProjectIconsQueryKey(projectId, params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listProjectIcons>>
+  > = ({ signal }) =>
+    listProjectIcons(projectId, params, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listProjectIcons>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListProjectIconsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listProjectIcons>>
+>;
+export type ListProjectIconsQueryError =
+  | N400Response
+  | N401Response
+  | N403Response
+  | ErrorResponse
+  | CapabilityUnavailableResponse;
+
+export function useListProjectIcons<
+  TData = Awaited<ReturnType<typeof listProjectIcons>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ErrorResponse
+    | CapabilityUnavailableResponse,
+>(
+  projectId: string,
+  params: undefined | ListProjectIconsParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listProjectIcons>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listProjectIcons>>,
+          TError,
+          Awaited<ReturnType<typeof listProjectIcons>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListProjectIcons<
+  TData = Awaited<ReturnType<typeof listProjectIcons>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ErrorResponse
+    | CapabilityUnavailableResponse,
+>(
+  projectId: string,
+  params?: ListProjectIconsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listProjectIcons>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listProjectIcons>>,
+          TError,
+          Awaited<ReturnType<typeof listProjectIcons>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListProjectIcons<
+  TData = Awaited<ReturnType<typeof listProjectIcons>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ErrorResponse
+    | CapabilityUnavailableResponse,
+>(
+  projectId: string,
+  params?: ListProjectIconsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listProjectIcons>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List the icons uploaded to a project
+ */
+
+export function useListProjectIcons<
+  TData = Awaited<ReturnType<typeof listProjectIcons>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ErrorResponse
+    | CapabilityUnavailableResponse,
+>(
+  projectId: string,
+  params?: ListProjectIconsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listProjectIcons>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListProjectIconsQueryOptions(
+    projectId,
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type uploadProjectIconResponse200 = {
+  data: IconMeta;
+  status: 200;
+};
+
+export type uploadProjectIconResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type uploadProjectIconResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type uploadProjectIconResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type uploadProjectIconResponse500 = {
+  data: ErrorResponse;
+  status: 500;
+};
+
+export type uploadProjectIconResponse501 = {
+  data: CapabilityUnavailableResponse;
+  status: 501;
+};
+
+export type uploadProjectIconResponseSuccess = uploadProjectIconResponse200 & {
+  headers: Headers;
+};
+export type uploadProjectIconResponseError = (
+  | uploadProjectIconResponse400
+  | uploadProjectIconResponse401
+  | uploadProjectIconResponse403
+  | uploadProjectIconResponse500
+  | uploadProjectIconResponse501
+) & {
+  headers: Headers;
+};
+
+export type uploadProjectIconResponse =
+  uploadProjectIconResponseSuccess | uploadProjectIconResponseError;
+
+export const getUploadProjectIconUrl = (projectId: string) => {
+  return `/elitea_core/project_icon/prompt_lib/${projectId}`;
+};
+
+/**
+ * NOTE(W2): internal/api/v2/eliteacore/handler.go (CreateProjectIcon).
+ *
+ * The multipart field is `file`; `width` and `height` are optional and
+ * are clamped to project_icon.py's MAX_DIMENSION of 512 — NOT the 64 the
+ * agent and skill icons use, because a project icon is rendered larger.
+ *
+ * The response is the whole icon_meta object. It used to carry `name` and
+ * `url` only, and the project-info PUT stores whatever the picker hands
+ * back, so the stored icon_meta stopped describing the file.
+ *
+ * The stored name is GENERATED, never taken from the upload: it becomes a
+ * path segment of a public, unauthenticated URL, and the extension
+ * allowlist is what keeps that route from serving attacker-chosen content
+ * types from the app's own origin.
+ * @summary Store a project icon
+ */
+export const uploadProjectIcon = async (
+  projectId: string,
+  iconUploadForm: IconUploadForm,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<uploadProjectIconResponse> => {
+  const formData = new FormData();
+  formData.append(`file`, iconUploadForm.file);
+  if (iconUploadForm.width !== undefined) {
+    formData.append(`width`, iconUploadForm.width.toString());
+  }
+  if (iconUploadForm.height !== undefined) {
+    formData.append(`height`, iconUploadForm.height.toString());
+  }
+
+  return eliteaFetch<uploadProjectIconResponse>(
+    getUploadProjectIconUrl(projectId),
+    {
+      ...options,
+      method: "POST",
+      body: formData,
+    },
+  );
+};
+
+export const getUploadProjectIconQueryKey = (
+  projectId: string,
+  iconUploadForm?: IconUploadForm,
+) => {
+  return [
+    "POST",
+    `/elitea_core/project_icon/prompt_lib/${projectId}`,
+    iconUploadForm,
+  ] as const;
+};
+
+export const getUploadProjectIconQueryOptions = <
+  TData = Awaited<ReturnType<typeof uploadProjectIcon>>,
+  TError =
+    ErrorResponse | N401Response | N403Response | CapabilityUnavailableResponse,
+>(
+  projectId: string,
+  iconUploadForm: IconUploadForm,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof uploadProjectIcon>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getUploadProjectIconQueryKey(projectId, iconUploadForm);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof uploadProjectIcon>>
+  > = ({ signal }) =>
+    uploadProjectIcon(projectId, iconUploadForm, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof uploadProjectIcon>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type UploadProjectIconQueryResult = NonNullable<
+  Awaited<ReturnType<typeof uploadProjectIcon>>
+>;
+export type UploadProjectIconQueryError =
+  ErrorResponse | N401Response | N403Response | CapabilityUnavailableResponse;
+
+export function useUploadProjectIcon<
+  TData = Awaited<ReturnType<typeof uploadProjectIcon>>,
+  TError =
+    ErrorResponse | N401Response | N403Response | CapabilityUnavailableResponse,
+>(
+  projectId: string,
+  iconUploadForm: IconUploadForm,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof uploadProjectIcon>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof uploadProjectIcon>>,
+          TError,
+          Awaited<ReturnType<typeof uploadProjectIcon>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUploadProjectIcon<
+  TData = Awaited<ReturnType<typeof uploadProjectIcon>>,
+  TError =
+    ErrorResponse | N401Response | N403Response | CapabilityUnavailableResponse,
+>(
+  projectId: string,
+  iconUploadForm: IconUploadForm,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof uploadProjectIcon>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof uploadProjectIcon>>,
+          TError,
+          Awaited<ReturnType<typeof uploadProjectIcon>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUploadProjectIcon<
+  TData = Awaited<ReturnType<typeof uploadProjectIcon>>,
+  TError =
+    ErrorResponse | N401Response | N403Response | CapabilityUnavailableResponse,
+>(
+  projectId: string,
+  iconUploadForm: IconUploadForm,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof uploadProjectIcon>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Store a project icon
+ */
+
+export function useUploadProjectIcon<
+  TData = Awaited<ReturnType<typeof uploadProjectIcon>>,
+  TError =
+    ErrorResponse | N401Response | N403Response | CapabilityUnavailableResponse,
+>(
+  projectId: string,
+  iconUploadForm: IconUploadForm,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof uploadProjectIcon>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getUploadProjectIconQueryOptions(
+    projectId,
+    iconUploadForm,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type deleteProjectIconResponse204 = {
+  data: void;
+  status: 204;
+};
+
+export type deleteProjectIconResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type deleteProjectIconResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type deleteProjectIconResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type deleteProjectIconResponse500 = {
+  data: ErrorResponse;
+  status: 500;
+};
+
+export type deleteProjectIconResponse501 = {
+  data: CapabilityUnavailableResponse;
+  status: 501;
+};
+
+export type deleteProjectIconResponseSuccess = deleteProjectIconResponse204 & {
+  headers: Headers;
+};
+export type deleteProjectIconResponseError = (
+  | deleteProjectIconResponse400
+  | deleteProjectIconResponse401
+  | deleteProjectIconResponse403
+  | deleteProjectIconResponse500
+  | deleteProjectIconResponse501
+) & {
+  headers: Headers;
+};
+
+export type deleteProjectIconResponse =
+  deleteProjectIconResponseSuccess | deleteProjectIconResponseError;
+
+export const getDeleteProjectIconUrl = (projectId: string, name: string) => {
+  return `/elitea_core/project_icon/prompt_lib/${projectId}/${name}`;
+};
+
+/**
+ * NOTE(W2): internal/api/v2/eliteacore/handler.go (DeleteProjectIcon).
+ *
+ * 204 for an object that was already absent is deliberate — the object
+ * store's delete is documented idempotent — but a store that could not be
+ * reached is reported, because "gone" and "we could not tell" are
+ * different answers. This route used to answer 204 and do nothing at all,
+ * so a deleted icon reappeared on the next listing.
+ * @summary Remove a project icon
+ */
+export const deleteProjectIcon = async (
+  projectId: string,
+  name: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<deleteProjectIconResponse> => {
+  return eliteaFetch<deleteProjectIconResponse>(
+    getDeleteProjectIconUrl(projectId, name),
+    {
+      ...options,
+      method: "DELETE",
+    },
+  );
+};
+
+export const getDeleteProjectIconQueryKey = (
+  projectId: string,
+  name: string,
+) => {
+  return [
+    "DELETE",
+    `/elitea_core/project_icon/prompt_lib/${projectId}/${name}`,
+  ] as const;
+};
+
+export const getDeleteProjectIconQueryOptions = <
+  TData = Awaited<ReturnType<typeof deleteProjectIcon>>,
+  TError =
+    ErrorResponse | N401Response | N403Response | CapabilityUnavailableResponse,
+>(
+  projectId: string,
+  name: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteProjectIcon>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getDeleteProjectIconQueryKey(projectId, name);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof deleteProjectIcon>>
+  > = ({ signal }) =>
+    deleteProjectIcon(projectId, name, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      name !== null &&
+      name !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof deleteProjectIcon>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type DeleteProjectIconQueryResult = NonNullable<
+  Awaited<ReturnType<typeof deleteProjectIcon>>
+>;
+export type DeleteProjectIconQueryError =
+  ErrorResponse | N401Response | N403Response | CapabilityUnavailableResponse;
+
+export function useDeleteProjectIcon<
+  TData = Awaited<ReturnType<typeof deleteProjectIcon>>,
+  TError =
+    ErrorResponse | N401Response | N403Response | CapabilityUnavailableResponse,
+>(
+  projectId: string,
+  name: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteProjectIcon>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof deleteProjectIcon>>,
+          TError,
+          Awaited<ReturnType<typeof deleteProjectIcon>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDeleteProjectIcon<
+  TData = Awaited<ReturnType<typeof deleteProjectIcon>>,
+  TError =
+    ErrorResponse | N401Response | N403Response | CapabilityUnavailableResponse,
+>(
+  projectId: string,
+  name: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteProjectIcon>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof deleteProjectIcon>>,
+          TError,
+          Awaited<ReturnType<typeof deleteProjectIcon>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDeleteProjectIcon<
+  TData = Awaited<ReturnType<typeof deleteProjectIcon>>,
+  TError =
+    ErrorResponse | N401Response | N403Response | CapabilityUnavailableResponse,
+>(
+  projectId: string,
+  name: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteProjectIcon>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Remove a project icon
+ */
+
+export function useDeleteProjectIcon<
+  TData = Awaited<ReturnType<typeof deleteProjectIcon>>,
+  TError =
+    ErrorResponse | N401Response | N403Response | CapabilityUnavailableResponse,
+>(
+  projectId: string,
+  name: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteProjectIcon>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getDeleteProjectIconQueryOptions(
+    projectId,
+    name,
     options,
   );
 

@@ -41,32 +41,31 @@
  */
 import * as zod from "zod";
 
-export const CapabilityUnavailableResponse = zod
+export const IconMeta = zod
   .object({
-    error: zod.string().describe("Human-readable refusal message."),
-    code: zod
-      .enum([
-        "project_info_not_available",
-        "index_types_not_available",
-        "icon_storage_not_configured",
-      ])
-      .describe(
-        "The machine-readable reason. One value per capability, stable across deployments, so a client branches on this and never on the message text.\n",
-      ),
-    detail: zod
+    name: zod
       .string()
-      .optional()
       .describe(
-        "The operator-facing half: it names the environment variable that turns the capability on.\n",
+        "The GENERATED file name, never the uploaded one. It becomes a path segment of a public URL, so its extension comes from an allowlist.\n",
       ),
+    url: zod.string(),
+    size: zod
+      .string()
+      .describe(
+        "The requested thumbnail box as `WxH`. It is what the CLIENT asked for, clamped — this service re-encodes nothing, so it is not a promise about the stored pixels.\n",
+      ),
+    initial_file_size: zod
+      .string()
+      .describe(
+        "The uploaded size, formatted by social\/utils\/image_utils.py's sizeof_fmt.",
+      ),
+    resulting_file_size: zod
+      .string()
+      .describe("The stored size, in the same format."),
   })
   .describe(
-    'NOTE(W2): the 501 body issue 615 gave the two capability-gated compatibility handlers — internal\/api\/v2\/eliteacore\/handler.go (ProjectInfo) and internal\/api\/v2\/toolkits\/handler.go (IndexTypes). Both write `{error, code, detail}`, which is WIDER than ErrorResponse: a client that must tell \"this deployment does not run the capability\" from \"the request failed\" reads `code`, and ErrorResponse carries no such field.\nWHY 501 AND NOT 500. An absent producer is the server\'s final answer, and it will be the final answer to the next identical request. See internal\/api\/v2\/analytics\/handler.go for the argument in full.\n',
+    "NOTE(W2): the object social\/rpc\/process_image.py:save_image returns and both upload routes answer — internal\/api\/v2\/eliteacore\/skill_icon.go:311-317 and internal\/api\/v2\/eliteacore\/handler.go (CreateProjectIcon). A caller PUTs this back, unchanged, to bind the icon to an entity.\n",
   );
 
-export type CapabilityUnavailableResponse = zod.input<
-  typeof CapabilityUnavailableResponse
->;
-export type CapabilityUnavailableResponseOutput = zod.output<
-  typeof CapabilityUnavailableResponse
->;
+export type IconMeta = zod.input<typeof IconMeta>;
+export type IconMetaOutput = zod.output<typeof IconMeta>;

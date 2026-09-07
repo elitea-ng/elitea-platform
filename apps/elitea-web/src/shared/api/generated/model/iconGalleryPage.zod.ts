@@ -40,33 +40,20 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { IconRef } from "./iconRef.zod";
 
-export const CapabilityUnavailableResponse = zod
+export const IconGalleryPage = zod
   .object({
-    error: zod.string().describe("Human-readable refusal message."),
-    code: zod
-      .enum([
-        "project_info_not_available",
-        "index_types_not_available",
-        "icon_storage_not_configured",
-      ])
+    rows: zod.array(IconRef),
+    total: zod
+      .int()
       .describe(
-        "The machine-readable reason. One value per capability, stable across deployments, so a client branches on this and never on the message text.\n",
-      ),
-    detail: zod
-      .string()
-      .optional()
-      .describe(
-        "The operator-facing half: it names the environment variable that turns the capability on.\n",
+        "Every icon in the project, NOT the length of this page. social\/rpc\/icons.py:get_icons_list computes it before it slices, and a client paging on it needs the full figure.\n",
       ),
   })
   .describe(
-    'NOTE(W2): the 501 body issue 615 gave the two capability-gated compatibility handlers — internal\/api\/v2\/eliteacore\/handler.go (ProjectInfo) and internal\/api\/v2\/toolkits\/handler.go (IndexTypes). Both write `{error, code, detail}`, which is WIDER than ErrorResponse: a client that must tell \"this deployment does not run the capability\" from \"the request failed\" reads `code`, and ErrorResponse carries no such field.\nWHY 501 AND NOT 500. An absent producer is the server\'s final answer, and it will be the final answer to the next identical request. See internal\/api\/v2\/analytics\/handler.go for the argument in full.\n',
+    "NOTE(W2): the `{rows, total}` shape both galleries answer — internal\/api\/v2\/eliteacore\/skill_icon.go:168-171 and internal\/api\/v2\/eliteacore\/handler.go (ListProjectIcons). It is `rows` and not `items`: an `items` key is a 200 that renders an empty gallery, which this family has already shipped once.\n",
   );
 
-export type CapabilityUnavailableResponse = zod.input<
-  typeof CapabilityUnavailableResponse
->;
-export type CapabilityUnavailableResponseOutput = zod.output<
-  typeof CapabilityUnavailableResponse
->;
+export type IconGalleryPage = zod.input<typeof IconGalleryPage>;
+export type IconGalleryPageOutput = zod.output<typeof IconGalleryPage>;

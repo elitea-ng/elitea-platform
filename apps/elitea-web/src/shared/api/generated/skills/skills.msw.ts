@@ -47,9 +47,12 @@ import type { RequestHandlerOptions } from "msw";
 import type {
   ApplicationSkillsList,
   AttachPublicSkill200,
+  IconGalleryPage,
+  IconMeta,
   ListAgentsWithSkill200,
   ListPublicSkills200,
   ListSkillCategories200,
+  OkResponse,
   PublicSkillDetail,
   PublishSkill200,
   SetSkillRelation200,
@@ -60,6 +63,7 @@ import type {
   SkillValidationResult,
   SkillsList,
   UnpublishSkill200,
+  UpdatedResponse,
 } from "../model";
 
 export const getGenerateSkillDraftResponseMock = (
@@ -328,6 +332,53 @@ export const getCreateSkillResponseMock = (
   updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
   ...overrideResponse,
 });
+
+export const getListSkillIconsResponseMock = (
+  overrideResponse: Partial<Extract<IconGalleryPage, object>> = {},
+): IconGalleryPage => ({
+  rows: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    url: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  })),
+  total: faker.number.int(),
+  ...overrideResponse,
+});
+
+export const getUploadSkillIconResponseMock = (
+  overrideResponse: Partial<Extract<IconMeta, object>> = {},
+): IconMeta => ({
+  name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  url: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  size: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  initial_file_size: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  resulting_file_size: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  ...overrideResponse,
+});
+
+export const getUploadSkillIconForVersionResponseMock = (
+  overrideResponse: Partial<Extract<IconMeta, object>> = {},
+): IconMeta => ({
+  name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  url: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  size: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  initial_file_size: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  resulting_file_size: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  ...overrideResponse,
+});
+
+export const getBindSkillIconResponseMock = (
+  overrideResponse: Partial<Extract<UpdatedResponse, object>> = {},
+): UpdatedResponse => ({
+  updated: faker.datatype.boolean(),
+  ...overrideResponse,
+});
+
+export const getDeleteSkillIconResponseMock = (
+  overrideResponse: Partial<Extract<OkResponse, object>> = {},
+): OkResponse => ({ ok: faker.datatype.boolean(), ...overrideResponse });
 
 export const getPublishSkillResponseMock = (
   overrideResponse: Partial<Extract<PublishSkill200, object>> = {},
@@ -1012,6 +1063,136 @@ export const getCreateSkillMockHandler = (
   );
 };
 
+export const getListSkillIconsMockHandler = (
+  overrideResponse?:
+    | IconGalleryPage
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<IconGalleryPage> | IconGalleryPage),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/upload_skill_icon/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListSkillIconsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getUploadSkillIconMockHandler = (
+  overrideResponse?:
+    | IconMeta
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<IconMeta> | IconMeta),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/upload_skill_icon/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getUploadSkillIconResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getUploadSkillIconForVersionMockHandler = (
+  overrideResponse?:
+    | IconMeta
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<IconMeta> | IconMeta),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/upload_skill_icon/prompt_lib/:projectId/:versionId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getUploadSkillIconForVersionResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getBindSkillIconMockHandler = (
+  overrideResponse?:
+    | UpdatedResponse
+    | ((
+        info: Parameters<Parameters<typeof http.put>[1]>[0],
+      ) => Promise<UpdatedResponse> | UpdatedResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.put(
+    "*/elitea_core/upload_skill_icon/prompt_lib/:projectId/:versionId",
+    async (info: Parameters<Parameters<typeof http.put>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getBindSkillIconResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getDeleteSkillIconMockHandler = (
+  overrideResponse?:
+    | OkResponse
+    | ((
+        info: Parameters<Parameters<typeof http.delete>[1]>[0],
+      ) => Promise<OkResponse> | OkResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.delete(
+    "*/elitea_core/upload_skill_icon/prompt_lib/:projectId/:name",
+    async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getDeleteSkillIconResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getPublishSkillMockHandler = (
   overrideResponse?:
     | PublishSkill200
@@ -1332,6 +1513,11 @@ export const getSkillsMock = () => [
   getListApplicationSkillsMockHandler(),
   getListSkillsMockHandler(),
   getCreateSkillMockHandler(),
+  getListSkillIconsMockHandler(),
+  getUploadSkillIconMockHandler(),
+  getUploadSkillIconForVersionMockHandler(),
+  getBindSkillIconMockHandler(),
+  getDeleteSkillIconMockHandler(),
   getPublishSkillMockHandler(),
   getUnpublishSkillMockHandler(),
   getValidateSkillForPublishMockHandler(),

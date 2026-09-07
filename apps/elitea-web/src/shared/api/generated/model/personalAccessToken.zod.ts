@@ -41,32 +41,39 @@
  */
 import * as zod from "zod";
 
-export const CapabilityUnavailableResponse = zod
+export const PersonalAccessToken = zod
   .object({
-    error: zod.string().describe("Human-readable refusal message."),
-    code: zod
-      .enum([
-        "project_info_not_available",
-        "index_types_not_available",
-        "icon_storage_not_configured",
-      ])
-      .describe(
-        "The machine-readable reason. One value per capability, stable across deployments, so a client branches on this and never on the message text.\n",
-      ),
-    detail: zod
+    id: zod.int(),
+    uuid: zod
       .string()
-      .optional()
+      .nullable()
+      .describe("The identifier the GET and the DELETE address the token by."),
+    expires: zod.iso
+      .datetime({ offset: true })
+      .nullable()
+      .describe("Null means the key never expires."),
+    user_id: zod.int(),
+    name: zod
+      .string()
+      .nullable()
       .describe(
-        "The operator-facing half: it names the environment variable that turns the capability on.\n",
+        "Null is a real stored value here, distinct from an absent key: the create refuses a body with no `name` and accepts an explicit null.\n",
+      ),
+    project_id: zod
+      .int()
+      .nullable()
+      .describe(
+        'The project this key bills, or null when the key is unbound. It is reported WITHOUT omitempty so a client can tell \"unbound\" from \"a server that does not know about bindings\".\n',
+      ),
+    token: zod
+      .string()
+      .describe(
+        'THE FULL SIGNED VALUE ON THE CREATE RESPONSE, AND ONLY THERE. Every read masks it to `\"...\"` plus the last seven characters, which is a display hint and not a credential.\n',
       ),
   })
   .describe(
-    'NOTE(W2): the 501 body issue 615 gave the two capability-gated compatibility handlers — internal\/api\/v2\/eliteacore\/handler.go (ProjectInfo) and internal\/api\/v2\/toolkits\/handler.go (IndexTypes). Both write `{error, code, detail}`, which is WIDER than ErrorResponse: a client that must tell \"this deployment does not run the capability\" from \"the request failed\" reads `code`, and ErrorResponse carries no such field.\nWHY 501 AND NOT 500. An absent producer is the server\'s final answer, and it will be the final answer to the next identical request. See internal\/api\/v2\/analytics\/handler.go for the argument in full.\n',
+    "NOTE(W2): internal\/api\/v2\/auth\/tokens.go:41-52 (the `Token` struct) and :575-600 (presentToken, which decides whether `token` is revealed).\n",
   );
 
-export type CapabilityUnavailableResponse = zod.input<
-  typeof CapabilityUnavailableResponse
->;
-export type CapabilityUnavailableResponseOutput = zod.output<
-  typeof CapabilityUnavailableResponse
->;
+export type PersonalAccessToken = zod.input<typeof PersonalAccessToken>;
+export type PersonalAccessTokenOutput = zod.output<typeof PersonalAccessToken>;

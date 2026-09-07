@@ -496,7 +496,43 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
  * described in api/openapi/v2.yaml AND both are called from the Admin › Tasks
  * page that ships with them.
  */
-const GENERATED_OPERATION_COUNT = 217;
+/*
+ * 217 -> 231 and 233 -> 247, when the four undescribed route families of issue
+ * 36 items 1, 5, 6 and 7 were described: the skill icon gallery (five
+ * operations), the project icon gallery (three), personal access tokens (four)
+ * and the two Help Center reads (`getResourcesConfigValues`, `getSystemInfo`).
+ *
+ * THE TWO NUMBERS MOVE BY DIFFERENT AMOUNTS, and both differences are facts
+ * about callers rather than rounding.
+ *
+ * Fourteen operations are described, so GENERATED_OPERATION_COUNT moves by
+ * fourteen. Only TWELVE of them have a first-party caller, and the two that do
+ * not get no manifest entry:
+ *
+ *   - `getSystemInfo` answers 501 in every deployment and always will while
+ *     this service loads no plugins. `pages/help-center`'s useResourcesConfig
+ *     deliberately does not call it, because a request whose only possible
+ *     answer is a refusal buys nothing and puts a 501 in the network log of
+ *     every visit. It is described so a generated client carries the refusal
+ *     instead of inventing a shape.
+ *   - `getPersonalToken` (the single-token read) is served and has no screen:
+ *     the settings page lists and creates and revokes, and never reads one
+ *     token by uuid.
+ *
+ * MANIFEST_ENTRY_COUNT nevertheless moves by FOURTEEN, not twelve, because two
+ * entries arrive that are not new operations at all: `projectInfo.get` and
+ * `projectInfo.update` were described back in issue 621 and had no manifest
+ * entry, because the app still called them through a hand-written module. It
+ * calls them through the generated client now, so the entries land with the
+ * migration rather than with the description.
+ *
+ * None of the fourteen appears in
+ * internal/api/oapiserver/testdata/reverse_check_allowlist.txt, so that list is
+ * unchanged: it holds ids the manifest carries and the spec does not describe,
+ * and these four families were absent from the manifest entirely rather than
+ * excused on it.
+ */
+const GENERATED_OPERATION_COUNT = 231;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -572,7 +608,12 @@ const GENERATED_OPERATION_COUNT = 217;
  * "199 -> 202" Inventory entries above are for.
  */
 // See the note above GENERATED_OPERATION_COUNT: both numbers moved together.
-const MANIFEST_ENTRY_COUNT = 233;
+/*
+ * 233 -> 247: the fourteen entries of issue 36 items 1, 5, 6 and 7. See the
+ * note above GENERATED_OPERATION_COUNT for why this number and that one move
+ * by the same amount for different reasons.
+ */
+const MANIFEST_ENTRY_COUNT = 247;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

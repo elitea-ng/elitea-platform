@@ -1533,6 +1533,28 @@ export const getListAdminPublishedAgentsMockHandler = (
     options,
   );
 };
+
+export const getGetSystemInfoMockHandler = (
+  overrideResponse?:
+    | unknown
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<unknown> | unknown),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/admin/system_info/prompt_lib",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+      if (typeof overrideResponse === "function") {
+        await overrideResponse(info);
+      }
+
+      return new HttpResponse(null, { status: 200 });
+    },
+    options,
+  );
+};
 export const getAdminMock = () => [
   getUserListMockHandler(),
   getUserCreateMockHandler(),
@@ -1560,4 +1582,5 @@ export const getAdminMock = () => [
   getGetPlatformSettingsMockHandler(),
   getGetBrandingAssetMockHandler(),
   getListAdminPublishedAgentsMockHandler(),
+  getGetSystemInfoMockHandler(),
 ];

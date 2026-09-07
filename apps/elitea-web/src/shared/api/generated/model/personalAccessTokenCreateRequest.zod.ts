@@ -40,33 +40,34 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { TokenExpiration } from "./tokenExpiration.zod";
 
-export const CapabilityUnavailableResponse = zod
+export const PersonalAccessTokenCreateRequest = zod
   .object({
-    error: zod.string().describe("Human-readable refusal message."),
-    code: zod
-      .enum([
-        "project_info_not_available",
-        "index_types_not_available",
-        "icon_storage_not_configured",
-      ])
-      .describe(
-        "The machine-readable reason. One value per capability, stable across deployments, so a client branches on this and never on the message text.\n",
-      ),
-    detail: zod
+    name: zod
       .string()
-      .optional()
+      .nullable()
       .describe(
-        "The operator-facing half: it names the environment variable that turns the capability on.\n",
+        "Required as a KEY. An absent `name` is a 400; an explicit null is stored and read back as null. Longer than 768 bytes is a 400.\n",
+      ),
+    expires: zod
+      .union([TokenExpiration, zod.null()])
+      .optional()
+      .describe("Absent or null mints a key that never expires."),
+    project_id: zod
+      .int()
+      .nullish()
+      .describe(
+        "Absent or null mints an UNBOUND key, which is the default. Every other shape — a JSON string, a float, a boolean, zero, a negative number, a value the integer column cannot hold — is refused rather than falling back to unbound, because a caller that typed a project must not receive a key that bills somewhere else.\n",
       ),
   })
   .describe(
-    'NOTE(W2): the 501 body issue 615 gave the two capability-gated compatibility handlers — internal\/api\/v2\/eliteacore\/handler.go (ProjectInfo) and internal\/api\/v2\/toolkits\/handler.go (IndexTypes). Both write `{error, code, detail}`, which is WIDER than ErrorResponse: a client that must tell \"this deployment does not run the capability\" from \"the request failed\" reads `code`, and ErrorResponse carries no such field.\nWHY 501 AND NOT 500. An absent producer is the server\'s final answer, and it will be the final answer to the next identical request. See internal\/api\/v2\/analytics\/handler.go for the argument in full.\n',
+    "NOTE(W2): internal\/api\/v2\/auth\/tokens.go:360-368 (tokenCreateRequest) and :375-400 (resolveTokenProjectID).\n",
   );
 
-export type CapabilityUnavailableResponse = zod.input<
-  typeof CapabilityUnavailableResponse
+export type PersonalAccessTokenCreateRequest = zod.input<
+  typeof PersonalAccessTokenCreateRequest
 >;
-export type CapabilityUnavailableResponseOutput = zod.output<
-  typeof CapabilityUnavailableResponse
+export type PersonalAccessTokenCreateRequestOutput = zod.output<
+  typeof PersonalAccessTokenCreateRequest
 >;
