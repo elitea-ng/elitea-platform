@@ -364,6 +364,14 @@ func (productionProjectPermissionResolver) ResolvePermissions(
 	return auth.PermissionResolution{}, nil
 }
 
+func (productionProjectPermissionResolver) ResolveMembershipPermissions(
+	context.Context,
+	auth.User,
+	string,
+) (auth.PermissionResolution, error) {
+	return auth.PermissionResolution{}, nil
+}
+
 func TestProductionRouterMountsOnlyExactCurrentProjectListPath(t *testing.T) {
 	projectList, err := v2projects.NewCurrentProjectListRoute(
 		productionProjectStore{},

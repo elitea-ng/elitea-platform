@@ -41,6 +41,19 @@ func (p *grantingPermissions) ResolvePermissions(
 	return auth.PermissionResolution{UserID: 42, Permissions: []string{p.permission}}, nil
 }
 
+// ResolveMembershipPermissions answers the same way, so the project-list
+// route's membership gate (#830) grants exactly as freely here as the
+// project-scoped gate did. The refusal these tests observe still can only come
+// from the principal validator.
+func (p *grantingPermissions) ResolveMembershipPermissions(
+	_ context.Context,
+	_ auth.User,
+	_ string,
+) (auth.PermissionResolution, error) {
+	p.calls++
+	return auth.PermissionResolution{UserID: 42, Permissions: []string{p.permission}}, nil
+}
+
 // listerStub and eventReaderStub stand in for the PostgreSQL repositories. Both
 // count their calls, so a test can prove the refusal happened before the
 // handler read anything.

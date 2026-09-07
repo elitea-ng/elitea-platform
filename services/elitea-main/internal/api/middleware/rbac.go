@@ -90,6 +90,57 @@ func RequireCentralPermissions(
 	)
 }
 
+// RequireResolvedMembershipPermissions gates a route on the caller holding one
+// of `required` in AT LEAST ONE project they are a member of.
+//
+// Use it only where the handler's own answer is already scoped to those
+// memberships. The project list is such a route: it returns the caller's
+// projects and nothing else, so resolving its gate against one project in the
+// URL asked a question the answer does not depend on — and refused every
+// account that is not a member of that one project (#830).
+//
+// It is not a weaker gate than RequireResolvedPermissions. A caller with no
+// membership resolves to an empty set and gets 403, and a caller whose roles
+// grant nothing gets 403 as well.
+func RequireResolvedMembershipPermissions(
+	resolver auth.MembershipPermissionResolver,
+	mode string,
+	required ...string,
+) func(http.Handler) http.Handler {
+	requiredSet := permissionSet(required)
+
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			user, ok := auth.UserFromContext(r.Context())
+			if !ok {
+				apierr.WriteStatus(w, http.StatusUnauthorized, "authentication required")
+				return
+			}
+			// Fail closed, exactly as RequireResolvedPermissionsForProject
+			// does: a route composed without a resolver refuses everyone
+			// rather than running ungated.
+			if resolver == nil {
+				apierr.WriteStatus(w, http.StatusForbidden, "insufficient permissions")
+				return
+			}
+
+			resolution, err := resolver.ResolveMembershipPermissions(r.Context(), user, mode)
+			if err != nil {
+				writeResolverError(w, r, err)
+				return
+			}
+			if !hasIntersection(requiredSet, permissionSet(resolution.Permissions)) {
+				apierr.WriteStatus(w, http.StatusForbidden, "insufficient permissions")
+				return
+			}
+
+			user.UserID = strconv.FormatInt(resolution.UserID, 10)
+			ctx := auth.ContextWithUser(r.Context(), user)
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
 type ProjectIDExtractor func(*http.Request) (string, bool)
 
 func ProjectIDFromQuery(parameter string) ProjectIDExtractor {
