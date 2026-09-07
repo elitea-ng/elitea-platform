@@ -429,7 +429,36 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// single toolkit tool can run on the existing runtime plane. The producer
 	// in elitea-main is a follow-up; the acceptance lands first so the
 	// worker's manifest and the kernel agree on the capability name.
-	require.EqualValues(t, 115, Head(shared))
+	//
+	// 116: shared/0116_evaluation_dataset_run_permissions.sql, the six
+	// default-mode grants Agent Evaluation slice 2 needs — the dataset CRUD
+	// four plus `run.read` and `run.create`. It is the RBAC half of the slice;
+	// the tables are tenant/0132.
+	//
+	// It is the SECOND file here, after 0104, to seed permissions the pylon
+	// catalogue does not declare, and for the same verified reason: Agent
+	// Evaluation is not in the plugin corpus this repository carries. The
+	// search was repeated for this slice rather than inherited — `eval_dataset`,
+	// `eval_run`, `eval_result`, `eval_suite` and `eval_dimension` across
+	// legacy/plugins/* and legacy/centry/*/plugins/* return only three vestiges
+	// of a feature that was planned and never built. So the names come from the
+	// product's own UI constants and the routes gate through exported
+	// constants rather than router.go's `projectPermission` helper. The grant
+	// gate still binds; only the pylon-provenance assertion, which would be
+	// false, does not.
+	//
+	// `run.delete`, `suite.*` and `human_score.*` are declared by the reference
+	// and NOT granted here, because this slice serves no route for them: a
+	// grant nothing gates is a string nothing would notice was misspelled.
+	//
+	// A new file for 0110's reason: 0060 returns early on any configured
+	// deployment, and migrations are checksum-immutable.
+	//
+	// RENUMBERED from 0115 at merge — 0115 was free when it was written and the
+	// toolkit call-tool capability above claimed it first. 0102, 0103 and 0104
+	// carry the same note for the same reason: two streams each correctly claim
+	// the next free number, and only the merge can see the collision.
+	require.EqualValues(t, 116, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
@@ -492,7 +521,25 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// deliberately left blank, and it replaces the NO ACTION foreign key that
 	// 0130 put on eval_dimensions.application_id with the same key ON DELETE
 	// CASCADE, so an agent with a dimension can still be deleted.
-	require.EqualValues(t, 131, Head(tenant))
+	//
+	// 132: tenant/0132_eval_datasets_runs.sql, Agent Evaluation slice 2 — the
+	// four tables the smallest end-to-end slice needs: eval_datasets,
+	// eval_dataset_cases, eval_runs and eval_results. 0130's header listed all
+	// seven remaining tables as "must arrive with the code that reads them";
+	// this file brings four of them with that code. eval_suites, eval_bindings
+	// and eval_human_scores stay absent, and the run carries a per-run
+	// `snapshot` instead of a suite: a dimension is editable, so a scorecard
+	// that re-read the live library would silently re-scale a finished run
+	// (the normalisation divides by the scale range and flips on polarity).
+	//
+	// Every foreign key to `applications` is ON DELETE CASCADE from the start,
+	// which is 0131's decision applied rather than re-litigated: 0130's NO
+	// ACTION key made an agent carrying an evaluation row undeletable and
+	// stopped a project delete on the same row, and 0131 had to repair it.
+	// `ON DELETE SET NULL` is not the alternative here, because a NULL
+	// application_id means "a project-wide dataset" — SET NULL would promote
+	// one agent's dataset into the whole project's library.
+	require.EqualValues(t, 132, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own
