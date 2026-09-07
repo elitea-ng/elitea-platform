@@ -707,7 +707,13 @@ func TestScheduleTickDispatchesAndStampsOnlyOnDispatch(t *testing.T) {
 	versionID := seedPipeline(t, h.pool, homeSchema, "Nightly report", ownerUserID)
 	h.saveSchedule(t, versionID, "* * * * *", true)
 
-	now := time.Now().UTC()
+	// FIVE SECONDS PAST A MINUTE BOUNDARY, not `time.Now()`.
+	//
+	// The "not due" step below asks one second later, and `next(last_run)` for
+	// a per-minute cron is the NEXT minute boundary. A run started at
+	// HH:MM:59.5 would therefore be due again one second later, and this test
+	// would fail about once every sixty runs — on the clock, not on the code.
+	now := time.Now().UTC().Truncate(time.Minute).Add(5 * time.Second)
 	result, err := h.handler.RunDueSchedules(context.Background(), now)
 	if err != nil {
 		t.Fatalf("tick: %v", err)
@@ -770,7 +776,7 @@ func TestMaintenanceSuppressesDispatchAndStampsNothing(t *testing.T) {
 	h.saveSchedule(t, versionID, "* * * * *", true)
 	setMaintenance(t, h.pool, true)
 
-	now := time.Now().UTC()
+	now := time.Now().UTC().Truncate(time.Minute).Add(5 * time.Second)
 	result, err := h.handler.RunDueSchedules(context.Background(), now)
 	if err != nil {
 		t.Fatalf("tick: %v", err)
@@ -808,7 +814,7 @@ func TestOverlapIsSkippedAndReported(t *testing.T) {
 	versionID := seedPipeline(t, h.pool, homeSchema, "Nightly report", ownerUserID)
 	h.saveSchedule(t, versionID, "* * * * *", true)
 
-	now := time.Now().UTC()
+	now := time.Now().UTC().Truncate(time.Minute).Add(5 * time.Second)
 	if _, err := h.handler.RunDueSchedules(context.Background(), now); err != nil {
 		t.Fatalf("first tick: %v", err)
 	}
