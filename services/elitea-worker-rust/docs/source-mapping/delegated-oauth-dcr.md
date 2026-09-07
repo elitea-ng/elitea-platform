@@ -499,17 +499,243 @@ The resource request in the Main test uses a test client. The Rust test uses the
 Compatibility still permits an omitted `token_type`, form token responses, and partial legacy registration metadata.
 This slice does not prove `client_secret_basic`, private-key JWT, registration management, provider consent, discovery interoperability, or concurrent-tab logout.
 
+### Session reuse across execution requests
+
+The current UI baseline is checked at revision `8fc59c63a5409060db4208454f87bd9c620ff56d`.
+`src/common/messagePayloadUtils.js` includes session token maps for ordinary and application messages.
+`mcpAuth.helpers.js` retains credential-scoped tokens until expiry or toolkit logout.
+`mcpAuthFlow.helpers.js` keeps DCR-issued credentials separate from stored toolkit credentials during refresh.
+The replatform preserves these outcomes without copying the background timer design.
+
+Three boundaries previously prevented reuse:
+
+- The UI omitted session tokens from new turns and sent an empty map during regeneration.
+- Main rejected non-empty session token maps on both routes.
+- Rust treated any non-empty token map as an interrupt continuation.
+
+| Current-platform evidence | Replatform source | Behavior |
+| --- | --- | --- |
+| `messagePayloadUtils.js` | UI `executionTokens.ts`, `useChatBoxSend.ts`, and `useChatBoxSend.helpers.ts` | Await refresh before submission. Include only current-project access tokens and session identifiers. |
+| Browser token lifecycle | UI `refreshOwnership.ts` and `tokenLifecycle.ts` | Share one active refresh grant per credential key within a tab. Preserve rotation. Reject stale refresh writes after logout or later authorization. |
+| Toolkit logout and cross-tab markers | UI `storage.ts` and `logoutSync.ts` | Keep the token-store logout operation. A remote logout marker invalidates an in-flight refresh result. The new OpenAPI toolkit form still lacks its logout control. |
+| Current message input contract | Main `agentexecution/route.go`, `start.go`, `adhoc.go`, `regenerate.go`, and `mcp_tokens.go` | Accept bounded token objects after route authorization. Place them in the existing encrypted execution input, not chat history or Redis fields. |
+| SDK session-token input | Rust `agents/runtime.rs` and `agents/assembly.rs` | Distinguish session credentials from explicit resume actions. Permit reuse on fresh turns and regeneration. Keep output-continuation authority closed. |
+
+Toolkit admission and credential matching remain mandatory before resource calls.
+The UI does not send refresh tokens or client secrets in execution requests.
+The shared tab refresh owner prevents duplicate rotation within that tab.
+It does not prove concurrent refresh coordination between separate browser tabs.
+
+The isolated fixture is documented in `deploy/oauth-emulator/README.md`.
+Its stored OpenAPI mode supports delegated authorization and client credentials, not DCR.
+Its separate MCP modes support public and confidential DCR protocol tests.
+
+The initial browser proof uses rehearsal toolkit 27 and chat 535.
+After consent, execution `5909dfba363e061df56ce8557c0ff2be` calls the protected echo operation and settles.
+The result contains marker `RUST_OAUTH_FIXED_20260907` and grant generation 1.
+This proves the initial code grant and protected resource call.
+
+The fixture initially returned `invalid_grant` after consent.
+Chrome blocked the callback redirect because the form policy allowed only the fixture origin.
+The corrected policy includes only the configured callback origin.
+The fixture test pins this behavior without weakening grant validation.
+
+Verification for session reuse includes 339 UI tests and the focused Main route and application suites under the race detector.
+Rust passes 276 agent tests and strict all-target Clippy.
+The tests cover fresh and regenerated agents and pipelines, exact resume separation, rotation, project filtering, and logout races.
+Direct-node authorization sequencing requires separate deployed evidence.
+
+### Ordinary turns after a completed guard
+
+The first ordinary turn after a completed guard exposed another history defect.
+ADK persists both the original tool call and its replay, but only one result.
+The previous projection normalized explicit resume requests, not later ordinary turns.
+A regression test reproduced two copies of one call and one result in the next provider request.
+
+`agents/replay_history.rs::provider_model` now applies the same projection at the shared provider boundary.
+`agents/session.rs`, `agents/pipeline.rs`, and `agents/application_tools.rs` use this boundary.
+Replay adapters remain outside it because they need the original pending batch.
+Durable events stay unchanged. The projection does not execute tools or grant authorization.
+Conflicting calls and duplicate results remain invalid.
+
+The sensitive-tool test now checks the next ordinary turn after approval.
+The delegated tests check the next ordinary turn after authorization for application and ad-hoc runs.
+Each provider request retains one complete call/result pair per identifier.
+The next turn uses its new user input and new tool-call identifiers.
+
+### Deployed code grant, refresh, and first-turn reuse
+
+The deployed browser uses the same Private-project conversation 535.
+Execution `83d44878f068e732e42d8de12de8b3d6` reaches a new authorization guard after an earlier Skip.
+The browser completes the emulator consent and authorization-code exchange with S256 PKCE.
+Resume `3a55bf5830094a373af52244746c1a71` calls the protected resource and returns `RUST_OAUTH_AFTER_SKIP_E`.
+
+The next ordinary turn runs as `de31106bb1393d2a1d762824bcc430ca`.
+It returns `RUST_OAUTH_FIRST_TURN_F` with grant generation 2, without regeneration or another consent prompt.
+The network sequence shows a successful refresh grant before the execution request.
+That request contains only `access_token` and `session_id` in its credential entry.
+It contains no refresh token or client secret.
+
+Earlier executions `d8daf28888599921cccc0739f2570a5d` and `62d1bf826b4130148bd207e7ebc60ad7` prove regenerated and ordinary protected calls with refreshed credentials.
+These are browser-to-Main-to-Rust emulator proofs, not real-provider interoperability or production activation.
+
+Manual removal of this tab's test token exposes a separate stream failure before the next guard.
+Executions `ef1981035ddc7172b345bc38eaffbaec` and `9171b068431fb977a8aa4426132642fd` fail after the gateway accepts the request.
+Regeneration later reaches a guard. The token-removal failure remains under investigation.
+The lifecycle now logs the static upstream error code without provider messages, bodies, or credentials.
+The new UI still lacks the OpenAPI toolkit logout control present in the current application.
+Manual token removal does not prove toolkit logout or cross-tab invalidation.
+
+A later token-removal check runs as `1931d9ed98711e49e3a37dfb304151a8`.
+It settles and displays a confirmation instruction as text, without an actionable authorization card.
+This does not close the token-removal recovery gate.
+
+### Token-removal recovery and historical control messages
+
+Execution `119ca8f9999196ba1d48e6d66ecb91b4` identifies the rejected operation through the worker's static error code.
+Its code is `model_gateway.tool_call`. The model selects a tool outside the current declaration list.
+The facade rejects that call before tool dispatch. HTTP 200 from the gateway does not imply a valid model response.
+
+The repair keeps this admission boundary intact.
+Both model facades now report `model_facade.tool_not_admitted` for this exact failure.
+`agents/replay_history/recovery.rs` permits one corrective model request before any semantic output leaves the facade.
+It retains the current tool declarations and original user task.
+It does not synthesize authorization, execute the rejected call, or retry other errors.
+The extra request consumes the existing invocation model-turn budget.
+Partial text, reasoning, tool calls, or terminal output disable repair to prevent duplicate output or dispatch.
+Dropping the stream cancels owned work. No detached retry task exists.
+
+ADK 2.2.0 `adk-runner/src/context.rs::conversation_history_for_agent_impl` includes saved confirmation text in later model history.
+The regression reproduces this behavior after a completed sensitive-tool guard.
+`agents/runner_history.rs` removes confirmation content from the Runner's loaded view, using the typed event action.
+It preserves stored events, confirmation identities, actions, state, and branch metadata.
+`agents/session.rs::RunnerSessionService` applies this view to ordinary, resumed, and pipeline Runners.
+
+The current SDK `runtime/toolkits/tools.py::_build_deferred_mcp_auth_tools` scopes Skip to the current run.
+Rust's Skip result now names that scope and returns `use_other_tools_or_report`.
+It omits discovery URLs, challenges, client settings, and authorization context.
+Those fields remain on the durable guard, where the browser needs them.
+The authorization tool description tells the model to serve the current task without asking users to name internal tools.
+The provider-history projection corrects only the exact retired Rust Skip directive; it does not rewrite stored records.
+
+Tests cover later-turn guards after Skip, repeated same-run calls, exact call/result history, and minimal decision payloads.
+Recovery tests cover one repair, repeated rejection, unrelated errors, partial output, and cancellation before and during repair.
+The PostgreSQL-backed test run passes 883 library tests and 83 integration or contract tests, with no ignored tests.
+Formatting and strict Clippy checks pass. The release image builds successfully.
+
+### Deployed token-removal recovery
+
+The rehearsal worker uses image configuration `sha256:85722825e1236f694807887484ea07c40a77f7a15c3da108aa830fc82c1e2df7`.
+The test retains conversation 535 and its earlier failed and declined turns.
+No test clears chat history, resets the emulator, or changes another toolkit's token.
+
+| Browser action | Execution | Result |
+| --- | --- | --- |
+| Request the protected operation with no token | `6bea7bd26842fdb01bc3fb44b7df0772` | One actionable authorization guard. No protected dispatch before consent. |
+| Complete stored-client consent | `c0cac6a01806b65642d48db3f2179d32` | Authorization resumes. `echo_marker` returns marker `RUST_OAUTH_RECOVERY_I`, mode `stored`, generation 1. |
+| Submit the next ordinary request | `a3f3085aff33b942048c3faaa1defd01` | Refresh completes before dispatch. The protected call returns `RUST_OAUTH_REUSE_J`, generation 2, without another consent prompt. |
+| Regenerate that request | `2c24be587e95c35ec126f6d68738656b` | HTTP 200. The protected call returns the same marker with generation 3. The answer survives reload. |
+| Remove only the fixture token and submit a normal task | `5fea061dbeec625540b5d7002b1488ed` | The first attempt raises one enabled authorization guard, without regeneration. |
+| Skip the current run | `432a910cb17596d84b73fcff09c862a9` | The minimal result contains `scope: current_run`, without authorization context or discovery settings. No protected call occurs. |
+| Request the toolkit again in ordinary language | `681b485b33b37f8394821af5a6b84a94` | A new actionable guard appears. The user does not name the internal authorization tool. |
+| Authorize that later request | `df3280b9c641a7f6490a27d61c4c5e6e` | The protected call returns `RUST_OAUTH_AFTER_SKIP_L`, mode `stored`, generation 1. |
+
+The execution request after refresh carries the access token and session identifier, without refresh tokens or client secrets.
+Database event metadata confirms authorization precedes protected dispatch and the regenerated turn executes `echo_marker`.
+These live runs do not trigger the corrective model retry. Deterministic component tests prove that branch.
+An earlier marker-only answer does not count as tool execution proof.
+This closes the reproduced between-turn token-removal path, not mid-stream token expiry, real-provider interoperability, or cross-tab logout.
+DCR browser verification remains a separate gate.
+
+### Remote MCP catalogue contract
+
+The DCR browser check finds no Remote MCP option in the create form.
+Main's type catalogue contains eight built-in types, without `mcp`.
+The web menu already supports this key and labels it Remote MCP.
+
+SDK revision `da1d9e4db920170ba0f2765a4aede5c015f145a8` supplies the connection-field baseline in `runtime/toolkits/mcp.py::McpToolkit.toolkit_config_schema`.
+Main `internal/api/v2/toolkits/handler.go` now supplies those connection fields and retains runtime discovery for operation schemas.
+Only the server URL is required. DCR does not require a stored client identifier or secret.
+Client secrets use the existing password field. Native execution still requires verified TLS and its existing credential admission rules.
+The change does not activate effectful operations or remote servers by itself.
+
+The catalogue tests fail before the change and pass after it.
+The affected toolkit and agent-execution packages pass race tests and vet.
+The deployed form creates Private-project MCP fixture 28 through the browser.
+This creation result does not prove a successful DCR grant or Rust resume.
+
+### Configured MCP consent scopes
+
+The first launch of MCP fixture 28 fails as execution `1caea520377a2a7899f2b8c7e1f0ef66`.
+Rust rejects its configured scope list as unowned credentials before the authorization guard.
+The toolkit has no inline client identifier or secret.
+
+`toolkits/mcp.rs` now validates scopes as bounded consent inputs, not credentials.
+It accepts at most 64 scope tokens and 4,096 bytes in total.
+Each token must use the OAuth scope-token character set.
+The guard supplies these consent defaults and retains the discovered authorization-server metadata, including DCR registration.
+Inline client identifiers and secrets remain rejected at this native configuration boundary.
+Scope settings do not authorize a toolkit or unlock protected operations.
+
+The scoped-guard test fails before the change and passes after it.
+Negative cases reject malformed scope types, invalid characters, oversized lists, and unowned clients before connecting.
+The PostgreSQL-backed suite passes 884 library tests and 83 integration or contract tests, with no ignored tests.
+Strict all-target Clippy passes.
+
+### DCR browser blockers after scope validation
+
+The deployed worker uses image configuration `sha256:52bb266ac6d01fc0362ca73d2517f7997b92b6f75b71bad398b273806374467a`.
+The deployment preserves the worker's environment, trust mounts, and durable state.
+Fixture 28 retains its original URL, scopes, and empty operation selection.
+
+Regeneration before reload sends temporary answer ID `1d6a7d9b-ec6d-473a-9002-be8ff74fd256` and receives HTTP 422.
+The legacy fallback then receives HTTP 400.
+The original admission returns persisted answer ID `b8e3b11f-a88b-5dde-a45a-cbf3b64777f7`.
+Reload uses that persisted ID, and regeneration returns HTTP 200.
+No data is cleared during this check.
+
+`useChatStreamTransport.ts` now retains the accepted answer identity when recording an early failure.
+`chatStreamSettle.ts` uses that identity instead of creating a temporary identifier.
+The regression test fails before the change and passes after it.
+All 634 focused chat and MCP UI tests pass. TypeScript checking and targeted lint also pass.
+
+The deployed UI uses image configuration `sha256:9ce95e019b48df6ffcf47b808a7d0554f92ff7b302999750481a39e1cc3c1afd`.
+A new ordinary turn fails as execution `bd630544a1e849a13ca1cccd194cd268` before any progress frame.
+Without a page reload, Regenerate sends persisted answer ID `72248a56-12a6-56a4-9a62-d730b139f5cd` and receives HTTP 200.
+Execution `84b9a66f4636b1f8d8dd03ac12085430` starts through the current route, without the legacy fallback.
+The separate MCP bootstrap failure remains visible. This check proves regeneration identity, not successful DCR.
+
+Execution `7c20139bc33f0adcbd9069ce8b1e50d4` reaches Rust and fails with `native_agent.authorization_failed` during toolset assembly.
+The remote server requires authorization before discovery. The saved operation selection is empty.
+`materialize_mcp_toolsets` currently creates authorization placeholders only for known selected names.
+Without those names, it returns the authorization error instead of creating a toolkit-level guard.
+This is an open runtime bootstrap gap, not a failed code grant.
+
+The browser's MCP editor shows Load Tools, but clicking it sends no request.
+The shared toolkit form accepts discovery callbacks, but `ConfigurationTab.tsx::formSlots` supplies no MCP discovery integration.
+That launcher gap also remains open.
+No DCR registration, consent, token exchange, or protected resource call occurs in these checks.
+
+Additional direct-node cases remain explicit:
+
+- Reuse a valid toolkit authorization from a prior node without another guard.
+- Preserve separate interrupt identities when parallel branches reach an unauthorized toolkit before either decision completes.
+- Resume the owning child after each decision. Do not wake the parent before its required children complete.
+- Keep authorization and Skip scoped to the bound toolkit and run contract.
+
 ## Remaining gates
 
 ### Open verification
 
 - Prove one configured remote MCP DCR flow through the browser and Rust resume.
   Local public and confidential DCR grant components pass. They do not close the browser-to-Rust gate.
-- Prove one stored SharePoint or OpenAPI delegated flow through both grants.
-- Prove the configured authorization-code and refresh grants through the deployed dialog.
-  The verified dialog and Skip path do not prove either grant.
+  Wire editor discovery and support toolkit authorization before operation names are known.
+- Repeat stored delegated code and refresh grants against a real provider.
+  The deployed OpenAPI emulator proves both grants and first-turn session reuse.
 - Extend the deployed authorization-tool proof to a real provider grant.
-  Local tests cover operation unlocking and repeated parallel Skip calls. Browser proofs currently cover Skip.
+  Local tests cover operation unlocking and repeated parallel Skip calls. Browser proofs cover Skip and the emulator's stored-client grant.
+- Extend token-removal recovery to expiry or revocation during an active tool-calling run.
+  The existing-conversation, between-turn removal path passes the deployed proof above.
 - Prove logout and concurrent-tab behavior against the replatform stack.
   A second tab on conversation 533 temporarily retained active guard controls after the deciding tab completed.
   The controls later cleared; immediate collaborator synchronization is not proven.
@@ -517,3 +743,9 @@ This slice does not prove `client_secret_basic`, private-key JWT, registration m
   The latest direct-agent and pipeline proofs complete after one Skip without a repeated guard.
 - Publish both proxy schemas in Main's OpenAPI document.
 - Add load and Kubernetes evidence before production capability registration.
+
+### Deferred diagnostic follow-up
+
+Return to [OBS-RUST-01](agent-runtime.md#obs-rust-01-detailed-runtime-diagnostics) after the current functional compatibility gaps close.
+It tracks richer errors, async span traces, stack backtraces, safe UI correlation, and bounded operator diagnostics.
+The current static upstream error code does not complete that follow-up.
