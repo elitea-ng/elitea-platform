@@ -372,7 +372,24 @@ func (h *Handler) resolveProviderRefs(ctx context.Context, user auth.User) []str
 //     tree, also implemented as the `ResolveCurrentPersonalProjectID` query.
 //  2. The system-user email fallback `system_user_<n>@centry.user` → <n>,
 //     the second branch of that same pylon tree.
-//  3. The lowest-id project the user actually holds a role in.
+//
+// AND NOTHING ELSE. There used to be a third branch — "the lowest-id project
+// the user actually holds a role in" — and it is the defect issue 843 reports.
+// It answered an ORDINARY SHARED PROJECT as the caller's personal one, so the
+// switcher labelled a team project "Private", chat and `/llm` scoped private
+// work into it, and, worse, the answer was not "": provisioning re-arms only
+// when this function answers "", so an account that got a shared project here
+// was never given a personal project at all. An account that is a member of
+// nothing was answered "" and recovered on its next request; a member of a
+// shared project never did.
+//
+// THE RULE THE REST OF THE PRODUCT ALREADY USES is the NAME:
+// apps/elitea-web's `isPersonalProjectName` accepts `project_user_<uid>` and
+// nothing else, because "is this my private project?" written as an id
+// comparison answered yes for a shared project. A membership-only project is
+// therefore accepted here only when it carries the caller's own personal
+// name — which is exactly branch 1, so there is no branch to add: what
+// branch 3 could legitimately have answered, branch 1 already answers.
 //
 // Every branch is membership-checked, which is the point: this value is used
 // as an authorization scope by the caller, so returning a project the user is
@@ -397,7 +414,7 @@ func (h *Handler) resolvePersonalProjectID(ctx context.Context, userID string) s
 		return ""
 	}
 
-	// One ranked candidate list rather than three sequential queries: the
+	// One ranked candidate list rather than two sequential queries: the
 	// `priority` column makes the precedence explicit and total, so the result
 	// does not depend on UNION ALL branch ordering (which Postgres does not
 	// guarantee), and `id IS NOT NULL` keeps a non-matching branch from
@@ -431,11 +448,6 @@ func (h *Handler) resolvePersonalProjectID(ctx context.Context, userID string) s
 		    WHERE user_account.id = $1::integer
 		      AND user_account.email ~ '^system_user_[0-9]+@centry[.]user$'
 
-		    UNION ALL
-
-		    SELECT 3, assignment.project_id::integer
-		    FROM public.auth_core__project_user_role AS assignment
-		    WHERE assignment.user_id = $1::integer
 		) AS candidate
 		WHERE candidate.id IS NOT NULL
 		ORDER BY candidate.priority, candidate.id
