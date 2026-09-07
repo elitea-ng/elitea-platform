@@ -699,6 +699,16 @@
     },
     {
       "file": null,
+      "route": "/admin/app/toolkits",
+      "targetComponent": "src/pages/admin/ToolkitTypes.tsx",
+      "theme": "dark",
+      "wiringStatus": "wired",
+      "notes": "Every served toolkit type at its DEFAULT availability, which is what a deployment with no rows in centry.toolkit_type_policy must show. A baseline that ever renders these as Disabled is the absence-reads-as-unavailability regression migration 0114 exists to prevent.",
+      "surface": "admin",
+      "baseline": "e2e/snapshots/visual/admin.visual.spec.ts-snapshots/admin-toolkit-types-visual-linux.png"
+    },
+    {
+      "file": null,
       "route": "/admin/app/audit",
       "targetComponent": "src/pages/admin/AuditTrail.tsx",
       "theme": "dark",
@@ -770,7 +780,7 @@
     }
   },
   "coverage": {
-    "shots": 81,
+    "shots": 83,
     "routes": 39,
     "bothSchemes": true,
     "listAndGridModes": true,

@@ -57,6 +57,7 @@ import type { ComponentType } from 'react';
 
 import AccountBalanceWalletOutlinedIcon from '@mui/icons-material/AccountBalanceWalletOutlined';
 import AssignmentOutlinedIcon from '@mui/icons-material/AssignmentOutlined';
+import BuildOutlinedIcon from '@mui/icons-material/BuildOutlined';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import PaletteOutlinedIcon from '@mui/icons-material/PaletteOutlined';
 import HistoryOutlinedIcon from '@mui/icons-material/HistoryOutlined';
@@ -249,6 +250,22 @@ function navGroups(): readonly AdminNavGroup[] {
           // administration-mode admin roles. Keep both: the section name still
           // reaches a pylon-backed deployment.
           anyPermission: ['configuration.service_descriptors', 'runtime.airun.serviceproviders'],
+        },
+        {
+          id: 'toolkit-types',
+          path: '/toolkits',
+          label: t('pages.admin.nav.toolkitTypes', 'Toolkits'),
+          icon: BuildOutlinedIcon,
+          // The permission every toolkit-type route is gated on server-side
+          // (`internal/api/router.go`, `central(admin.ToolkitTypeManagePermission)`),
+          // and one this platform ISSUES: shared migration 0114 grants
+          // `toolkit_catalogue.type.manage` to the administration-mode
+          // super_admin, admin and system. No pylon SECTION name is listed
+          // beside it because pylon has no counterpart surface — its only
+          // toolkit control is the guardrails deny-list on the Configuration
+          // page. See this module's header on why a gate whose permission no
+          // seed grants is a nav item that disappears for good.
+          anyPermission: ['toolkit_catalogue.type.manage'],
         },
         {
           id: 'governance',

@@ -51,6 +51,12 @@ type Handler struct {
 	// WithSCIMGroupBindings is applied, and those routes answer 503 while it
 	// is — never an empty list, which would read as "no group is bound".
 	scimGroupBindings SCIMGroupBindingStore
+	// The toolkit TYPE availability policy behind `Admin › Toolkits`
+	// (toolkit_types.go, shared migration 0114). Nil unless
+	// WithToolkitTypePolicy is applied, and those routes answer 503 while it
+	// is. It never degrades to an in-memory decision: a control that accepts a
+	// decision and forgets it leaves the operator believing a type is off.
+	toolkitTypePolicy ToolkitTypePolicyStore
 }
 
 // Option configures a Handler at construction time.

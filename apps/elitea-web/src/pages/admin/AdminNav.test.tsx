@@ -205,6 +205,11 @@ const PLATFORM_ISSUED_PERMISSIONS = new Set([
   'configuration.secrets.secret.delete',
   'configuration.secrets.secret.edit',
   'configuration.secrets.secret.view',
+  // migrations/shared/0114_toolkit_type_policy.sql, administration mode,
+  // super_admin, admin and system. It stands alone in its nav item: the legacy
+  // platform has no toolkit-catalogue surface, so there is no pylon section
+  // name to list beside it.
+  'toolkit_catalogue.type.manage',
 ]);
 
 /**

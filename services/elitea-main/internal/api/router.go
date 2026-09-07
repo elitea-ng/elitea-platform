@@ -58,6 +58,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/artifactbootstrap"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/personalproject"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcatalogue"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
 	platformauth "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/cutover"
@@ -1215,6 +1216,12 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			// database holds the credential.
 			identityProviderStore := identityproviders.NewStore(cfg.Pool)
 
+			// The toolkit TYPE availability policy (shared migration 0114) —
+			// the store behind `Admin › Toolkits` AND behind the served
+			// catalogue's project filter. ONE store for both, so the page and
+			// the catalogue cannot disagree about which types a project gets.
+			toolkitTypePolicyStore := toolkitcatalogue.NewStore(cfg.Pool)
+
 			// Outbound e-mail settings (gap G7). The SAME vault handler again,
 			// for the reason stated above: the SMTP password is sealed into the
 			// hidden bucket, and a second handler on a second pool is how the
@@ -1289,6 +1296,8 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// the screen and a group push can never disagree about which
 				// project a binding names.
 				admin.WithSCIMGroupBindings(scimdirectory.NewStore(cfg.Pool)),
+				// The toolkit type policy the served catalogue also reads.
+				admin.WithToolkitTypePolicy(toolkitTypePolicyStore),
 			)
 			moderationHandler := v2moderation.NewHandler(cfg.Pool, v2moderation.WithMailer(decisionMailer))
 			// The admin panel's surface. Every route below is gated on the same
@@ -1542,6 +1551,47 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					Put("/identity_providers/administration/{key}", adminHandler.IdentityProviderSave)
 				r.With(requireRuntimePlugins).
 					Delete("/identity_providers/administration/{key}", adminHandler.IdentityProviderDelete)
+				// The TOOLKIT TYPE catalogue policy — `Admin › Toolkits`
+				// (shared migration 0114). Five routes: the listing, one
+				// decision, the two per-project exception verbs, and a bulk
+				// apply.
+				//
+				// ITS OWN PERMISSION, and not `runtime.plugins` above. That
+				// grant already reaches the guardrails deny-list editor, which
+				// stops a toolkit type WORKING. This surface decides what the
+				// product OFFERS, and to which projects, which is a different
+				// authority: an operator trusted to edit a plugin's
+				// configuration values is not automatically the operator who
+				// decides which clients may build a Salesforce toolkit. The two
+				// must be separately grantable, and a reuse cannot be undone
+				// later without breaking every deployment that relied on it.
+				// Shared migration 0114 grants the string, so the grant gate in
+				// router_permission_grant_gate_test.go stays green.
+				//
+				// The mode segment is static `administration`: the catalogue
+				// decision is a platform fact and there is no project-scoped
+				// view of it. The per-project EXCEPTION is a path parameter on
+				// the two grant routes, which is a different thing from a
+				// project-scoped copy of the whole surface.
+				//
+				// `bulk` is a POST on a STATIC segment, and chi's trie prefers
+				// it over `{type}`. It is a POST rather than a second PUT
+				// because it is not idempotent in the useful sense: it reports
+				// which types landed, and a partial result is a real outcome
+				// this surface returns rather than hides.
+				requireToolkitCatalogue := central(admin.ToolkitTypeManagePermission)
+				r.With(requireToolkitCatalogue).
+					Get("/toolkit_types/administration", adminHandler.ToolkitTypeList)
+				r.With(requireToolkitCatalogue).
+					Post("/toolkit_types/administration/bulk", adminHandler.ToolkitTypeBulk)
+				r.With(requireToolkitCatalogue).
+					Put("/toolkit_types/administration/{type}", adminHandler.ToolkitTypeSave)
+				r.With(requireToolkitCatalogue).
+					Put("/toolkit_types/administration/{type}/projects/{projectID}",
+						adminHandler.ToolkitTypeGrantSave)
+				r.With(requireToolkitCatalogue).
+					Delete("/toolkit_types/administration/{type}/projects/{projectID}",
+						adminHandler.ToolkitTypeGrantDelete)
 				// The brand pack's database layer (ADR-0024 decision 5). Its own
 				// permission, granted by shared migration 0109: a rebrand
 				// changes what every user sees, and `runtime.plugins` is
@@ -2242,6 +2292,11 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				if guardrailPolicies, err := platformconfig.NewGuardrailPolicyAdapter(cfg.Pool); err == nil {
 					toolkitOptions = append(toolkitOptions, v2toolkits.WithGuardrails(guardrailPolicies))
 				}
+				// The SAME store the admin page writes (shared migration 0114).
+				// One store for the decision and for the served catalogue, so
+				// the two cannot disagree about which types a project gets.
+				toolkitOptions = append(toolkitOptions,
+					v2toolkits.WithTypePolicy(toolkitTypePolicyStore))
 				toolkitHandler := v2toolkits.NewHandler(cfg.Pool, toolkitOptions...)
 				// /tool(s)/ and /toolkits/ paths route to toolkitHandler (toolkit instances, not skills).
 				//

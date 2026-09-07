@@ -100,6 +100,11 @@ type Handler struct {
 	// Nil restores the pre-#613 behaviour: every save accepted unresolved. See
 	// settings_validation.go.
 	settingsValidator ToolkitSettingsValidator
+	// typePolicy is the operator's per-project toolkit TYPE policy (shared
+	// migration 0114). Nil serves every type, which is what every deployment
+	// did before the policy existed. See type_policy.go for the composition
+	// contract this handler's catalogue path must keep.
+	typePolicy ToolkitTypePolicySource
 }
 
 // Option configures a Handler at construction, matching the pattern
@@ -184,8 +189,12 @@ func (h *Handler) ListTypes(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Guardrails last, over the merged list, so a blocked type cannot re-enter
-	// through the tenant read after being filtered out of the static one.
+	// The operator's type policy, then guardrails. Both run over the MERGED
+	// list, and in this order: see type_policy.go's contract. Guardrails stay
+	// last so a blocked type cannot re-enter through the tenant read or through
+	// a policy row.
+	merged = filterTypesByPolicy(
+		h.typePolicyFilter(r.Context(), "toolkit_types", projectID), merged)
 	merged = filterBlockedToolkitTypes(h.guardrailPolicy(r.Context(), "toolkit_types"), merged)
 
 	writeJSON(w, http.StatusOK, map[string]any{"rows": merged, "total": len(merged)})
@@ -460,6 +469,13 @@ func (h *Handler) ListTypeSchemas(w http.ResponseWriter, r *http.Request) {
 			"failed to build the toolkit type catalogue", err)
 		return
 	}
+	// The catalogue's RETURN SITE. `toolkitTypeCatalogue` decides which types
+	// exist; these two steps decide who may see them, in this order and no
+	// other — type_policy.go states the contract and why each rule is there.
+	catalogue = applyTypePolicyToCatalogue(
+		h.typePolicyFilter(r.Context(), "list_type_schemas", chi.URLParam(r, "projectID")),
+		catalogue,
+	)
 	catalogue = applyGuardrailsToCatalogue(
 		h.guardrailPolicy(r.Context(), "list_type_schemas"), catalogue,
 	)
