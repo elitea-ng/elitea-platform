@@ -31,8 +31,7 @@ func formShapeAuth(principals apimw.PrincipalValidator) apimw.AuthConfig {
 		nil,
 		nil,
 		browserSessionTestSecret,
-		false,
-	)
+		false, nil)
 }
 
 // browserSessionRequest builds a GET carrying a valid `elitea_session` cookie

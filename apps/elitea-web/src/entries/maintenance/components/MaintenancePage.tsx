@@ -1,18 +1,46 @@
 import { Box, Typography } from '@mui/material';
-import { memo } from 'react';
+import { memo, useEffect, useState } from 'react';
 
 import MaintenanceTips from './MaintenanceTips';
 
 import MaintenanceLogo from '@/entries/maintenance/assets/maintenance-logo.svg?react';
 import ChatWelcomeImage from '@/entries/maintenance/assets/chat-welcome.png';
 import { t } from '@/shared/i18n';
+import { sanitizeSplashHtml } from '@/shared/ui/lib/sanitizeSplashHtml';
 
 import { VITE_MAINTENANCE_START, VITE_MAINTENANCE_END, VITE_MAINTENANCE_MESSAGE } from '../constants';
+import {
+  fetchPublishedCopy,
+  NO_PUBLISHED_COPY,
+  type PublishedMaintenanceCopy,
+} from '../lib/publishedCopy';
 
 const maintenanceHeadline = t('entries.maintenance.page.headline', 'Elitea is under maintenance!');
 const maintenanceLogoAlt = t('entries.maintenance.page.logoAlt', 'EliteA');
 
+/**
+ * The operator's copy, when the platform is up enough to publish it.
+ *
+ * Starts as nothing and stays nothing on any failure, so the first paint and
+ * the offline case are both the page this entry has always rendered. See
+ * `lib/publishedCopy.ts` for why this page asks at all.
+ */
+function usePublishedCopy(): PublishedMaintenanceCopy {
+  const [copy, setCopy] = useState<PublishedMaintenanceCopy>(NO_PUBLISHED_COPY);
+  useEffect(() => {
+    let live = true;
+    void fetchPublishedCopy().then((next) => {
+      if (live) setCopy(next);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+  return copy;
+}
+
 const MaintenancePage = memo(() => {
+  const published = usePublishedCopy();
   return (
     <Box
       sx={(theme) => ({
@@ -102,8 +130,37 @@ const MaintenancePage = memo(() => {
                 variant="headingLarge"
                 sx={(theme) => ({ color: theme.vars.palette.text.secondary })}
               >
-                {maintenanceHeadline}
+                {published.title || maintenanceHeadline}
               </Typography>
+              {published.html !== '' && (
+                <Box
+                  data-testid="maintenance-published-html"
+                  sx={(theme) => ({
+                    width: '100%',
+                    color: theme.vars.palette.text.secondary,
+                    textAlign: 'center',
+                    overflowX: 'auto',
+                  })}
+                  // Sanitised on this line, by the same function the admin
+                  // editor previews through and the in-app splash renders
+                  // through. The server also refuses executable markup on the
+                  // way in; neither check makes the other redundant.
+                  dangerouslySetInnerHTML={{ __html: sanitizeSplashHtml(published.html) }}
+                />
+              )}
+              {published.html === '' && published.message !== '' && (
+                <Typography
+                  component="div"
+                  data-testid="maintenance-published-message"
+                  sx={(theme) => ({
+                    width: '100%',
+                    color: theme.vars.palette.text.secondary,
+                    textAlign: 'center',
+                  })}
+                >
+                  {published.message}
+                </Typography>
+              )}
               {VITE_MAINTENANCE_START && VITE_MAINTENANCE_END && (
                 <>
                   <Typography

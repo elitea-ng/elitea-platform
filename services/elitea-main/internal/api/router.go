@@ -95,6 +95,14 @@ type AuthDeps struct {
 	OIDCHandler               *v2auth.OIDCHandler
 	SAMLHandler               *v2auth.SAMLHandler
 	SessionSecret             string
+	// SessionStore validates the server-side browser session an
+	// `elitea_session` cookie names (migrations/shared/0117). It reaches every
+	// apimw.AuthConfig this file builds, and it must: a group that dropped it
+	// would read a server-side identifier with the legacy HMAC reader and
+	// refuse every browser holding one.
+	SessionStore apimw.BrowserSessionValidator
+	// RejectLegacySessionCookies ends the pre-0117 signed-cookie window.
+	RejectLegacySessionCookies bool
 }
 
 // NOTE(#126): IndexerDeps and its six fields — Predictor, LLMService,
@@ -433,6 +441,21 @@ func notImplementedArtifact(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(`{"error":{"code":"NotImplemented","message":"pending S8/S9"}}`))
 }
 
+// adminEvalRunCanceller adapts the evaluation repository to
+// admin.EvalRunCanceller: the same CancelRun, with the updated row dropped.
+//
+// The adapter exists so the admin package holds no dependency on the
+// evaluation model for a value it never reads — and so the admin Tasks page's
+// cancel and the evaluation page's own cancel remain ONE implementation.
+type adminEvalRunCanceller struct {
+	runs *dbrepos.EvalRunsRepo
+}
+
+func (c adminEvalRunCanceller) CancelRun(ctx context.Context, projectID, runID string) error {
+	_, err := c.runs.CancelRun(ctx, projectID, runID)
+	return err
+}
+
 // artifactRepoAdapter satisfies v2artifacts.Repository by embedding both S6
 // repositories — they share no method names, so Go's method promotion does
 // the rest. Neither constructor accepts a nil pool without erroring, unlike
@@ -442,6 +465,7 @@ type artifactRepoAdapter struct {
 	*dbrepos.ArtifactBucketsRepository
 	*dbrepos.ArtifactObjectsRepository
 	*dbrepos.ArtifactTransferGrantsRepository
+	*dbrepos.ArtifactBucketPermissionsRepository
 }
 
 // newArtifactHandler builds the S6/S1-backed artifacts.Handler when
@@ -466,7 +490,14 @@ func newArtifactHandler(cfg RouterConfig) (h *v2artifacts.Handler, ok bool) {
 	if err != nil {
 		return nil, false
 	}
-	return v2artifacts.NewHandler(artifactRepoAdapter{bucketsRepo, objectsRepo, grantsRepo}, cfg.ObjectStore), true
+	permissionsRepo, err := dbrepos.NewArtifactBucketPermissionsRepository(cfg.Pool)
+	if err != nil {
+		return nil, false
+	}
+	return v2artifacts.NewHandler(
+		artifactRepoAdapter{bucketsRepo, objectsRepo, grantsRepo, permissionsRepo},
+		cfg.ObjectStore,
+	), true
 }
 
 // bucketBootstrapRepoAdapter satisfies artifactbootstrap.Repository the same
@@ -567,6 +598,13 @@ const (
 	artifactPermissionCreate = "configuration.artifacts.artifacts.create"
 	artifactPermissionEdit   = "configuration.artifacts.artifacts.edit"
 	artifactPermissionDelete = "configuration.artifacts.artifacts.delete"
+	// The per-bucket ACL routes. legacy/plugins/artifacts declares these two
+	// on api/v2/bucket_permissions.py (:36 for the GET, :69 and :123 for the
+	// writes) — DISTINCT strings from the four above, because in pylon the
+	// access list lives inside an s3_api_credentials row. Shared migration
+	// 0118 grants them.
+	artifactPermissionACLView = "configuration.artifacts.s3_credentials.view"
+	artifactPermissionACLEdit = "configuration.artifacts.s3_credentials.edit"
 )
 
 // ArtifactDeps is mountArtifactRoutes' dependency bundle. Handler nil means
@@ -579,7 +617,7 @@ type ArtifactDeps struct {
 	Resolver     platformauth.PermissionResolver
 }
 
-// mountArtifactRoutes registers all 21 artifact routes (13 from S7, plus
+// mountArtifactRoutes registers all 24 artifact routes (13 from S7, plus
 // S16's 3 native-multipart continuation routes, plus the 5 S3-shaped ones
 // the Python SDK speaks: list, download, upload, delete, stat) on r, wrapped in
 // deps.Authenticate and per-route RBAC (S11). Called once, from
@@ -591,6 +629,8 @@ type ArtifactDeps struct {
 // (S12).
 func mountArtifactRoutes(r chi.Router, deps ArtifactDeps) {
 	view := apimw.RequireResolvedPermissions(deps.Resolver, platformauth.PermissionModeDefault, artifactPermissionView)
+	aclView := apimw.RequireResolvedPermissions(deps.Resolver, platformauth.PermissionModeDefault, artifactPermissionACLView)
+	aclEdit := apimw.RequireResolvedPermissions(deps.Resolver, platformauth.PermissionModeDefault, artifactPermissionACLEdit)
 	create := apimw.RequireResolvedPermissions(deps.Resolver, platformauth.PermissionModeDefault, artifactPermissionCreate)
 	edit := apimw.RequireResolvedPermissions(deps.Resolver, platformauth.PermissionModeDefault, artifactPermissionEdit)
 	del := apimw.RequireResolvedPermissions(deps.Resolver, platformauth.PermissionModeDefault, artifactPermissionDelete)
@@ -629,6 +669,7 @@ func mountArtifactRoutes(r chi.Router, deps ArtifactDeps) {
 	presignUploadPart, completeMultipartUpload, abortMultipartUpload := notImplementedArtifact, notImplementedArtifact, notImplementedArtifact
 	listObjectsS3, downloadObjectS3 := notImplementedArtifact, notImplementedArtifact
 	uploadObjectS3, deleteObjectS3, statObjectS3 := notImplementedArtifact, notImplementedArtifact, notImplementedArtifact
+	listBucketPermissions, setBucketPermissions, deleteBucketPermission := notImplementedArtifact, notImplementedArtifact, notImplementedArtifact
 	if deps.Handler != nil {
 		listBuckets, createBucket, getBucket, updateBucket, deleteBucket =
 			deps.Handler.ListBuckets, deps.Handler.CreateBucket, deps.Handler.GetBucket, deps.Handler.UpdateBucket, deps.Handler.DeleteBucket
@@ -640,6 +681,8 @@ func mountArtifactRoutes(r chi.Router, deps ArtifactDeps) {
 		listObjectsS3, downloadObjectS3 = deps.Handler.ListObjectsS3, deps.Handler.DownloadObjectS3
 		uploadObjectS3, deleteObjectS3, statObjectS3 =
 			deps.Handler.UploadObjectS3, deps.Handler.DeleteObjectS3, deps.Handler.StatObjectS3
+		listBucketPermissions, setBucketPermissions, deleteBucketPermission =
+			deps.Handler.ListBucketPermissions, deps.Handler.SetBucketPermissions, deps.Handler.DeleteBucketPermission
 	}
 
 	r.Group(func(r chi.Router) {
@@ -675,6 +718,16 @@ func mountArtifactRoutes(r chi.Router, deps ArtifactDeps) {
 			r.With(create).Post("/grants/{projectID}/{grantID}/parts/{partNumber}", presignUploadPart)
 			r.With(create).Post("/grants/{projectID}/{grantID}:completeMultipart", completeMultipartUpload)
 			r.With(create).Post("/grants/{projectID}/{grantID}:abortMultipart", abortMultipartUpload)
+
+			// Per-bucket access lists — the legacy `bucket_permissions`
+			// resource module. The MODE segment legacy carries
+			// (`/bucket_permissions/default/{pid}`) is dropped here, as it is
+			// on every other artifact route above: this surface resolves
+			// PermissionModeDefault unconditionally, so a mode in the path
+			// would name something the router does not read.
+			r.With(aclView).Get("/bucket_permissions/{projectID}", listBucketPermissions)
+			r.With(aclEdit).Put("/bucket_permissions/{projectID}", setBucketPermissions)
+			r.With(aclEdit).Delete("/bucket_permissions/{projectID}", deleteBucketPermission)
 		})
 
 		// S3-shaped bucket listing and object read — the two calls the SDK's
@@ -752,9 +805,18 @@ func mountMCPServerRoutes(
 	authenticate func(http.Handler) http.Handler,
 	agentStart v2mcp.AgentStartUseCase,
 	toolkitRun v2mcp.ToolkitRunUseCase,
+	personalProjects personalproject.AsyncEnsurer,
 ) {
+	// The resolver ASKS for the personal project it could not find, for the
+	// reason stated at `withPersonalProjects`: an MCP client authenticates
+	// with a personal access token and never calls `/social/author`, so this
+	// was one more reader that answered "no personal project" forever.
+	resolver := apimw.NewDBPersonalProjectResolver(pool)
+	if personalProjects != nil {
+		resolver = resolver.WithPersonalProjectEnsurer(personalProjects)
+	}
 	handler := v2mcp.NewHandlerWithToolkitRuns(
-		pool, apimw.NewDBPersonalProjectResolver(pool), agentStart, toolkitRun,
+		pool, resolver, agentStart, toolkitRun,
 		legacyrbac.NewPostgresResolver(pool),
 	)
 	r.Group(func(r chi.Router) {
@@ -854,6 +916,27 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	}
 	if cfg.SessionSecret == "" {
 		cfg.SessionSecret = cfg.Auth.SessionSecret
+	}
+
+	// THE PERSONAL PROJECT IS ASKED FOR AT SIGN-IN, not only when a screen
+	// happens to read it.
+	//
+	// `GET /social/author` and the `/llm` project resolver already ask, and
+	// both are lazy: a new user whose first screen calls neither is left with
+	// no personal project and parks on `/onboarding`. A login is the one
+	// moment every account passes through exactly once, so both federation
+	// planes ask here as well. The call is idempotent and off the request
+	// path, so a login that follows a hundred others costs two reads.
+	//
+	// It is attached HERE and not in cmd/elitea-main/main.go because the one
+	// shared *personalproject.Ensurer is built in this file, from the one
+	// project provisioner. A second ensurer composed in main.go would be a
+	// second provisioner, which is the shape newProjectProvisioner warns about.
+	if personalProjects != nil {
+		cfg.OIDCHandler.WithPersonalProjectEnsurer(personalProjects)
+		cfg.SAMLHandler.WithPersonalProjectEnsurer(personalProjects)
+		cfg.Auth.OIDCHandler.WithPersonalProjectEnsurer(personalProjects)
+		cfg.Auth.SAMLHandler.WithPersonalProjectEnsurer(personalProjects)
 	}
 
 	r := chi.NewRouter()
@@ -1156,11 +1239,13 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// AddAttachments code, not a second implementation of any of them.
 	var convHandler *v2convs.Handler
 	authenticate := apimw.Auth(apimw.AuthConfig{
-		Client:                    cfg.AuthClient,
-		Validator:                 cfg.AuthValidator,
-		PrincipalValidator:        cfg.PrincipalValidator,
-		ForwardedIdentityVerifier: cfg.Auth.ForwardedIdentityVerifier,
-		SessionSecret:             cfg.SessionSecret,
+		Client:                     cfg.AuthClient,
+		Validator:                  cfg.AuthValidator,
+		PrincipalValidator:         cfg.PrincipalValidator,
+		ForwardedIdentityVerifier:  cfg.Auth.ForwardedIdentityVerifier,
+		SessionSecret:              cfg.SessionSecret,
+		SessionStore:               cfg.Auth.SessionStore,
+		RejectLegacySessionCookies: cfg.Auth.RejectLegacySessionCookies,
 	})
 	mountArtifactRoutes(r, ArtifactDeps{
 		Handler:      artifactHandler,
@@ -1170,7 +1255,8 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 
 	// The MCP server (issue 252). Outside the /api/v2 group for the reasons in
 	// mountMCPServerRoutes.
-	mountMCPServerRoutes(r, cfg.Pool, authenticate, cfg.MCPAgentStart, cfg.MCPToolkitRun)
+	mountMCPServerRoutes(r, cfg.Pool, authenticate, cfg.MCPAgentStart, cfg.MCPToolkitRun,
+		personalProjects)
 
 	// This group holds the whole JSON API — the `/api/v2` route below is its
 	// only member. Compression sits at the top of it, ABOVE the shadow
@@ -1180,11 +1266,13 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	r.Group(func(r chi.Router) {
 		r.Use(compressJSONResponses())
 		r.Use(apimw.Auth(apimw.AuthConfig{
-			Client:                    cfg.AuthClient,
-			Validator:                 cfg.AuthValidator,
-			PrincipalValidator:        cfg.PrincipalValidator,
-			ForwardedIdentityVerifier: cfg.Auth.ForwardedIdentityVerifier,
-			SessionSecret:             cfg.SessionSecret,
+			Client:                     cfg.AuthClient,
+			Validator:                  cfg.AuthValidator,
+			PrincipalValidator:         cfg.PrincipalValidator,
+			ForwardedIdentityVerifier:  cfg.Auth.ForwardedIdentityVerifier,
+			SessionSecret:              cfg.SessionSecret,
+			SessionStore:               cfg.Auth.SessionStore,
+			RejectLegacySessionCookies: cfg.Auth.RejectLegacySessionCookies,
 		}))
 
 		// Maintenance mode, immediately AFTER authentication and before
@@ -1348,23 +1436,49 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			r.Mount("/projects", v2projects.NewHandler(cfg.Pool, projectOptions...).Routes())
 
 			// === Admin endpoints ===
+			//
+			// The Tasks page's job store and its evaluation-run cancel. Both
+			// are built here rather than inside the handler for the reason
+			// every other store is: a nil pool means the option is skipped and
+			// the routes answer 503, instead of the handler discovering it has
+			// no database at request time.
+			var backgroundJobsStore *dbrepos.AdminBackgroundJobsRepository
+			if cfg.Pool != nil {
+				if store, err := dbrepos.NewAdminBackgroundJobsRepository(cfg.Pool); err == nil {
+					backgroundJobsStore = store
+				}
+			}
+			adminOptions := []admin.Option{}
+			if backgroundJobsStore != nil {
+				adminOptions = append(adminOptions,
+					admin.WithBackgroundJobs(backgroundJobsStore),
+					// The SAME repository method the evaluation API's own
+					// cancel route calls, adapted only to drop the row this
+					// page does not read — see admin.EvalRunCanceller.
+					admin.WithEvalRunCancel(adminEvalRunCanceller{
+						runs: dbrepos.NewEvalRunsRepo(cfg.Pool),
+					}),
+				)
+			}
 			adminHandler := admin.NewHandler(
 				cfg.Pool,
-				admin.WithPermissionResolver(permissionResolver),
-				admin.WithToolkitRegistry(cfg.ToolkitRegistry),
-				admin.WithPrebuiltMCPCatalogue(prebuiltMCPStore, prebuiltMCPVault),
-				admin.WithIdentityProviders(identityProviderStore, prebuiltMCPVault),
-				admin.WithBranding(brandingResolver),
-				admin.WithBrandingAssets(brandingAssets),
-				admin.WithMailer(adminMailer),
-				admin.WithEmailSettings(emailResolver.Store(), emailResolver),
-				admin.WithBrandingPackages(brandingPackages),
-				// The same store the SCIM tree writes through. One store, so
-				// the screen and a group push can never disagree about which
-				// project a binding names.
-				admin.WithSCIMGroupBindings(scimdirectory.NewStore(cfg.Pool)),
-				// The toolkit type policy the served catalogue also reads.
-				admin.WithToolkitTypePolicy(toolkitTypePolicyStore),
+				append([]admin.Option{
+					admin.WithPermissionResolver(permissionResolver),
+					admin.WithToolkitRegistry(cfg.ToolkitRegistry),
+					admin.WithPrebuiltMCPCatalogue(prebuiltMCPStore, prebuiltMCPVault),
+					admin.WithIdentityProviders(identityProviderStore, prebuiltMCPVault),
+					admin.WithBranding(brandingResolver),
+					admin.WithBrandingAssets(brandingAssets),
+					admin.WithMailer(adminMailer),
+					admin.WithEmailSettings(emailResolver.Store(), emailResolver),
+					admin.WithBrandingPackages(brandingPackages),
+					// The same store the SCIM tree writes through. One store, so
+					// the screen and a group push can never disagree about which
+					// project a binding names.
+					admin.WithSCIMGroupBindings(scimdirectory.NewStore(cfg.Pool)),
+					// The toolkit type policy the served catalogue also reads.
+					admin.WithToolkitTypePolicy(toolkitTypePolicyStore),
+				}, adminOptions...)...,
 			)
 			moderationHandler := v2moderation.NewHandler(cfg.Pool, v2moderation.WithMailer(decisionMailer))
 			// The admin panel's surface. Every route below is gated on the same
@@ -1717,6 +1831,26 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				r.With(requireRuntimePlugins).Get("/tasks/{mode}/", adminHandler.Tasks)
 				r.With(requireRuntimePlugins).Get("/tasks/{mode}", adminHandler.Tasks)
 				r.With(requireRuntimePlugins).Get("/active_tasks/{mode}", adminHandler.ActiveTasks)
+				// Admin › Tasks — the PLATFORM's own background jobs, not
+				// pylon's Arbiter task node. The two routes above keep
+				// answering 501 (arbiterTaskNodeUnavailable); these two answer
+				// the question that page asked, from this platform's tables.
+				//
+				// Same `runtime.plugins` gate in administration mode, because
+				// that is what the legacy Tasks page declares
+				// (legacy/plugins/admin/api/v2/tasks.py:43). No new permission
+				// string arrives, so the grant gate stays untripped and every
+				// operator who could open the legacy page can open this one.
+				//
+				// A STATIC `administration` segment, not `{mode}`: pylon reaches
+				// this surface only through its administration AdminAPI, so a
+				// mode variable would name a resolution this router does not
+				// perform — the same argument the moderation routes below make.
+				r.With(requireRuntimePlugins).Get("/background_jobs/administration", adminHandler.BackgroundJobs)
+				r.With(requireRuntimePlugins).Post(
+					"/background_jobs/administration/{kind}/{jobID}:cancel",
+					adminHandler.CancelBackgroundJob,
+				)
 
 				// Regular app admin endpoints (with projectID)
 				//
@@ -3251,7 +3385,13 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// internal/api/v2/mcp/registry.go. It is registered rather than
 				// left off so the refusal is explicit and pinned by a test: a
 				// 404 leaves the next person free to wire a stub up.
-				mcpHandler := v2mcp.NewHandlerWithToolkitRuns(cfg.Pool, apimw.NewDBPersonalProjectResolver(cfg.Pool), cfg.MCPAgentStart, cfg.MCPToolkitRun, permissionResolver)
+				// The resolver asks for the personal project it could not
+				// find, exactly as the MCP server route above does.
+				mcpResolver := apimw.NewDBPersonalProjectResolver(cfg.Pool)
+				if personalProjects != nil {
+					mcpResolver = mcpResolver.WithPersonalProjectEnsurer(personalProjects)
+				}
+				mcpHandler := v2mcp.NewHandlerWithToolkitRuns(cfg.Pool, mcpResolver, cfg.MCPAgentStart, cfg.MCPToolkitRun, permissionResolver)
 				r.Group(func(r chi.Router) {
 					r.Use(projectScoped)
 					r.Get("/tools_list/{projectID}", mcpHandler.ToolsList)
@@ -3752,11 +3892,13 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	mountLLM := func(proxy http.Handler, resolver apimw.PersonalProjectResolver) {
 		r.Group(func(r chi.Router) {
 			r.Use(apimw.Auth(apimw.AuthConfig{
-				Client:                    cfg.AuthClient,
-				Validator:                 cfg.AuthValidator,
-				PrincipalValidator:        cfg.PrincipalValidator,
-				ForwardedIdentityVerifier: cfg.Auth.ForwardedIdentityVerifier,
-				SessionSecret:             cfg.SessionSecret,
+				Client:                     cfg.AuthClient,
+				Validator:                  cfg.AuthValidator,
+				PrincipalValidator:         cfg.PrincipalValidator,
+				ForwardedIdentityVerifier:  cfg.Auth.ForwardedIdentityVerifier,
+				SessionSecret:              cfg.SessionSecret,
+				SessionStore:               cfg.Auth.SessionStore,
+				RejectLegacySessionCookies: cfg.Auth.RejectLegacySessionCookies,
 			}))
 			// Membership admits the caller-supplied project selector header
 			// (issue #318). Without it the edge admits no selector that names

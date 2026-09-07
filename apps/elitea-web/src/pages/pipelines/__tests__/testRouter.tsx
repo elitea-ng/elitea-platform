@@ -38,6 +38,18 @@ import { NavBlockerDialog } from '@/widgets/app-shell';
  * armed. A test that wants to prove a navigation SURVIVES the guard has to
  * mount the thing that would block it.
  */
+/**
+ * `tags[]` as the REAL shell route parses it (`src/routes/-search/params.ts`
+ * `list()` → `toStringArray`): always a string array, even when the URL
+ * carries exactly one value. A fixture that returned the raw value handed
+ * the page a bare string, which is a shape the real app never produces.
+ */
+function tagList(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map(String);
+  if (typeof value === 'string' && value !== '') return [value];
+  return [];
+}
+
 function buildTestRouter(
   initialPath: string,
   content: ReactElement,
@@ -77,9 +89,15 @@ function buildTestRouter(
   const tabRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: '/pipelines/$tab',
+    // `tags[]`/`author_id` are shell-wide in the real tree
+    // (`src/routes/-search/common.ts`, mounted on `_shell/route.tsx`), so a
+    // fixture that omitted them would silently DROP whatever the right-hand
+    // rail writes and make a passing tag-selection test meaningless.
     validateSearch: (search: Record<string, unknown>) => ({
       sort_by: typeof search.sort_by === 'string' ? search.sort_by : undefined,
       sort_order: typeof search.sort_order === 'string' ? search.sort_order : undefined,
+      author_id: typeof search.author_id === 'string' ? search.author_id : undefined,
+      'tags[]': tagList(search['tags[]']),
     }),
     component: () => content,
   });

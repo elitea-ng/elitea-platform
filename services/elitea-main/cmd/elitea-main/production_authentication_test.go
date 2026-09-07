@@ -53,8 +53,7 @@ func TestConfigurationsGateAcceptsAnOIDCOnlyCredentialPlane(t *testing.T) {
 				&countingPrincipals{inner: activePrincipals{}},
 				&countingTokens{},
 				apiGroupTestSecret,
-				false,
-			),
+				false, nil),
 			want: true,
 		},
 		{
@@ -64,8 +63,7 @@ func TestConfigurationsGateAcceptsAnOIDCOnlyCredentialPlane(t *testing.T) {
 				&countingPrincipals{inner: activePrincipals{}},
 				&countingTokens{},
 				apiGroupTestSecret,
-				true,
-			),
+				true, nil),
 			want: true,
 		},
 		{
@@ -75,8 +73,7 @@ func TestConfigurationsGateAcceptsAnOIDCOnlyCredentialPlane(t *testing.T) {
 				&countingPrincipals{inner: activePrincipals{}},
 				&countingTokens{},
 				apiGroupTestSecret,
-				false,
-			),
+				false, nil),
 			want: false,
 		},
 		{
@@ -111,8 +108,7 @@ func TestConfigurationsGateAcceptsAnOIDCOnlyCredentialPlane(t *testing.T) {
 func TestConfigurationsWriteRouteIsRegisteredAndGatedOnOIDCOnly(t *testing.T) {
 	// formGraph nil and oidcSessionEnabled true == the OIDC-only deployment.
 	config := apiGroupAuthConfig(
-		nil, nil, nil, &countingPrincipals{inner: activePrincipals{}}, nil, apiGroupTestSecret, true,
-	)
+		nil, nil, nil, &countingPrincipals{inner: activePrincipals{}}, nil, apiGroupTestSecret, true, nil)
 	if !productionAuthenticationComposed(config) {
 		t.Fatal("the OIDC-only credential plane no longer satisfies the " +
 			"Configurations gate; this deployment composes no configuration " +

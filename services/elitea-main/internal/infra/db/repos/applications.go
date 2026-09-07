@@ -140,6 +140,20 @@ func encodeJSONArray(v []any) (string, error) {
 	return string(b), nil
 }
 
+// splitTagFilter reads the `tags` query parameter, which is a comma-separated
+// list. It removes the empty and blank entries, so `tags=` and `tags=,,` mean
+// "no tag filter" and do not produce a condition that matches nothing.
+func splitTagFilter(raw string) []string {
+	out := []string{}
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
 func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListRequest) (applications.ListResponse, error) {
 	s, err := tenantSchema(req.ProjectID)
 	if err != nil {
@@ -160,11 +174,33 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 	join := fmt.Sprintf(` JOIN %s.application_versions av ON av.application_id = a.id AND av.agent_type %s 'pipeline'`,
 		s, map[bool]string{true: "=", false: "!="}[req.AgentsType == "pipeline"])
 
-	where := ""
 	args := []any{}
+	conditions := []string{}
 	if req.Search != "" {
-		where = ` WHERE (a.name ILIKE $1 OR a.description ILIKE $1)`
 		args = append(args, "%"+req.Search+"%")
+		conditions = append(conditions, fmt.Sprintf(`(a.name ILIKE $%d OR a.description ILIKE $%d)`, len(args), len(args)))
+	}
+	// One condition per requested tag, so the filter is AND and not OR: an
+	// application must carry EVERY tag the caller named. That is the rule
+	// legacy applies (`get_application_by_tags` counts the distinct matched
+	// tags and compares the count to the request, and the list filter appends
+	// one `versions.any(tags.any(...))` per tag).
+	//
+	// A token matches the tag NAME or the tag ID. Legacy accepts ids only
+	// (`[int(tag) for tag in tags.split(',')]`), but the web app's tag rail
+	// writes NAMES into its `tags[]` search param, and a name is what the row
+	// carries back. Both are accepted so neither caller needs a lookup.
+	for _, tag := range splitTagFilter(req.Tags) {
+		args = append(args, tag)
+		conditions = append(conditions, fmt.Sprintf(`EXISTS (
+			SELECT 1 FROM %[1]s.application_versions ftv
+			JOIN %[1]s.application_version_tag_association fta ON fta.version_id = ftv.id
+			JOIN %[1]s.tags ft ON ft.id = fta.tag_id
+			WHERE ftv.application_id = a.id AND (ft.name = $%[2]d OR ft.id::text = $%[2]d))`, s, len(args)))
+	}
+	where := ""
+	if len(conditions) > 0 {
+		where = " WHERE " + strings.Join(conditions, " AND ")
 	}
 
 	var total int
@@ -197,13 +233,31 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 			SELECT 1 FROM %s.application_versions pv
 			WHERE pv.application_id = a.id AND pv.status = 'published'
 		) THEN 'published' ELSE 'draft' END`, s)
+	// Every tag of every version of the application, by name, deduplicated
+	// and sorted.
+	//
+	// It is a correlated subquery and not a join, for two reasons. `DISTINCT
+	// ON (a.id)` keeps ONE version row per application, so a joined
+	// aggregate would only ever describe that one version; and legacy takes
+	// the UNION of the tags of all versions, keyed by name
+	// (`ApplicationListModel.parse_versions_data`).
+	//
+	// It answers `{}` and never NULL, so a row with no tags carries an empty
+	// array rather than a null (#841).
+	tagsExpr := fmt.Sprintf(`COALESCE((
+			SELECT array_agg(DISTINCT t.name ORDER BY t.name)
+			FROM %[1]s.application_versions tv
+			JOIN %[1]s.application_version_tag_association ta ON ta.version_id = tv.id
+			JOIN %[1]s.tags t ON t.id = ta.tag_id
+			WHERE tv.application_id = a.id), '{}')`, s)
 	query := fmt.Sprintf(`
 		SELECT DISTINCT ON (a.id) a.id, a.name, COALESCE(a.description, ''), COALESCE(a.icon, ''),
 			a.owner_id, a.created_at, COALESCE(a.shared_id, 0),
 			COALESCE(a.meta, '{}'::jsonb)::text,
 			COALESCE(av.agent_type, '`+defaultAgentType+`'),
 			COALESCE(u.id, 0), COALESCE(u.email, ''), COALESCE(u.name, ''),
-			`+statusExpr+`
+			`+statusExpr+`,
+			`+tagsExpr+`
 		FROM %s.applications a`, s) + join +
 		// The author join reads `av.author_id`, the USER that wrote the
 		// version, and not `a.owner_id`, which is the owning PROJECT (#533).
@@ -238,9 +292,12 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 			&app.OwnerID, &app.CreatedAt, &sharedID,
 			&metaStr, &app.AgentType,
 			&authorID, &authorEmail, &authorName,
-			&app.Status,
+			&app.Status, &app.Tags,
 		); err != nil {
 			return empty, fmt.Errorf("applications: list scan: %w", err)
+		}
+		if app.Tags == nil {
+			app.Tags = []string{}
 		}
 		app.ProjectID = req.ProjectID
 		app.IsForked = sharedID > 0
@@ -596,16 +653,21 @@ func (r *ApplicationsRepo) UpdateVersion(ctx context.Context, projectID, applica
 		args = append(args, value)
 		setClauses = append(setClauses, fmt.Sprintf(clause, len(args)))
 	}
-	if v.Name != "" {
+	// Presence, not emptiness, decides whether a string column joins the SET
+	// list. The `|| value != ""` half keeps every caller that fills the value
+	// without setting the flag; the flag half is what lets an explicit ""
+	// CLEAR the column. Before #824 the test was emptiness alone, so clearing
+	// a welcome message answered 201 and read the old text back.
+	if v.Present.Name || v.Name != "" {
 		appendSet("name = $%d", v.Name)
 	}
-	if v.AgentType != "" {
+	if v.Present.AgentType || v.AgentType != "" {
 		appendSet("agent_type = $%d", v.AgentType)
 	}
-	if v.Instructions != "" {
+	if v.Present.Instructions || v.Instructions != "" {
 		appendSet("instructions = $%d", v.Instructions)
 	}
-	if v.WelcomeMessage != "" {
+	if v.Present.WelcomeMessage || v.WelcomeMessage != "" {
 		appendSet("welcome_message = $%d", v.WelcomeMessage)
 	}
 	if v.LLMSettings != nil {

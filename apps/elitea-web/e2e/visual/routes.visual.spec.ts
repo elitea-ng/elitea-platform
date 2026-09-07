@@ -479,8 +479,8 @@ const ROUTES: readonly VisualRoute[] = [
     // The wiki's own project, not the persona's. The seeded wiki cannot live in
     // the shared project 1 — a permanent toolkit there makes J17.1's empty-list
     // premise unreachable — so this shot switches to the project the fixture is
-    // in. Without it the baseline photographs a project with no wiki toolkit,
-    // and `selectProject` below returns early with the default name.
+    // in. Without it the baseline photographs the persona's own project, which
+    // has no wiki toolkit.
     project: { id: '90200', name: 'e2e-deepwiki' },
     // THE SEEDED WIKI'S TITLE, which lives only in a manifest object in the
     // artifact store. Every other candidate on this screen fails the rule:

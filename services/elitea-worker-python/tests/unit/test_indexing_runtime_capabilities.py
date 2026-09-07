@@ -186,7 +186,7 @@ def test_required_sdk_indexing_tool_failure_fails_closed_without_error_text() ->
                     RuntimeError("probe failed")
                 )
             },
-            "ocr-runtime:RuntimeError",
+            "ocr-runtime:RuntimeError:probe failed",
         ),
         (
             {

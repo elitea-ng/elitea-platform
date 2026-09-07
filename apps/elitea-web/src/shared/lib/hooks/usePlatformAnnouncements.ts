@@ -74,6 +74,13 @@ export interface PlatformMaintenance {
   readonly enabled: boolean;
   readonly title: string;
   readonly message: string;
+  /**
+   * The operator's own splash body — the port of pylon's `splash_template`.
+   * HTML, sanitised before it is rendered, and EMPTY unless one was authored.
+   * When it is empty the splash falls back to `message`, which always resolves
+   * to something because the server fills a default for it.
+   */
+  readonly html: string;
   /** Whether THIS caller keeps working access. Resolved by the server. */
   readonly bypass: boolean;
 }
@@ -95,6 +102,7 @@ const NO_MAINTENANCE: PlatformMaintenance = {
   enabled: false,
   title: '',
   message: '',
+  html: '',
   bypass: false,
 };
 
@@ -144,6 +152,7 @@ export function usePlatformAnnouncements(): PlatformAnnouncements {
             enabled: true,
             title: textOf(maintenanceRaw.title),
             message: textOf(maintenanceRaw.message),
+            html: textOf(maintenanceRaw.html),
             bypass: maintenanceRaw.bypass === true,
           }
         : NO_MAINTENANCE,

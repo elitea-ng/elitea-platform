@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"strconv"
 	"strings"
@@ -33,6 +34,10 @@ const (
 
 	pollInitialInterval = 200 * time.Millisecond
 	pollMaxInterval     = 2 * time.Second
+
+	// recordTimeout bounds the analytics write. It is short: the row is a
+	// statistic and the caller is holding a finished tool result.
+	recordTimeout = 5 * time.Second
 
 	// MaxToolArgumentsBytes is this boundary's bound on caller content. It is
 	// the input-entry bound, applied here so an oversized body is refused where
@@ -147,6 +152,51 @@ type admissionSubmitter interface {
 	Submit(context.Context, SubmitRequest) (AdmittedRun, error)
 }
 
+// ToolRunRecord is one settled — or still-running — explicit tool run, in the
+// shape the analytics TOOL dimension needs (issue 618).
+//
+// It is a SEPARATE type from RunOutcome because the two answer different
+// questions. RunOutcome is what the caller gets back and carries the tool's
+// return value; this carries the identity and the clock, and never the payload:
+// a durable analytics record must not become a second copy of a tool result
+// nobody deleted.
+type ToolRunRecord struct {
+	ProjectID   int64
+	ActorUserID int64
+	ToolkitID   int64
+	ToolkitType string
+	ToolName    string
+	ExecutionID string
+	StartedAt   time.Time
+	// FinishedAt is the zero time when the bounded wait expired before the run
+	// settled. The run is still going and the record says so, rather than
+	// claiming a duration it does not have.
+	FinishedAt time.Time
+	IsError    bool
+}
+
+// RunRecorder is the durable per-tool-call record this service writes on its way
+// out. It is OPTIONAL: a deployment composed without one runs tools exactly as
+// before and reports no tool analytics, which is the state every deployment was
+// in before shared migration 0119.
+//
+// A recorder failure never fails the run. The tool has already executed and its
+// result is in hand; refusing to hand it back because a statistics row did not
+// commit would turn a reporting gap into an outage. It is LOGGED rather than
+// swallowed, because a producer that silently stops writing is the failure the
+// analytics dimension exists to avoid.
+type RunRecorder interface {
+	RecordToolRun(ctx context.Context, record ToolRunRecord) error
+}
+
+// RunOption configures optional collaborators. The required five stay positional
+// so a deployment cannot compose a RunService that quietly cannot run a tool.
+type RunOption func(*RunService)
+
+func WithRunRecorder(recorder RunRecorder) RunOption {
+	return func(s *RunService) { s.recorder = recorder }
+}
+
 type runDispatcher interface {
 	Dispatch(context.Context, Dispatch) error
 }
@@ -181,6 +231,8 @@ type RunService struct {
 	policy      DispatchPolicy
 	newID       executionapp.IDGenerator
 	deadline    time.Duration
+	recorder    RunRecorder
+	now         func() time.Time
 }
 
 func NewRunService(
@@ -192,6 +244,7 @@ func NewRunService(
 	policy DispatchPolicy,
 	newID executionapp.IDGenerator,
 	deadline time.Duration,
+	options ...RunOption,
 ) (*RunService, error) {
 	if resolver == nil || verdict == nil || admissions == nil ||
 		dispatcher == nil || settlements == nil || newID == nil {
@@ -203,7 +256,7 @@ func NewRunService(
 	if deadline <= 0 {
 		deadline = DefaultRunDeadline
 	}
-	return &RunService{
+	service := &RunService{
 		resolver:    resolver,
 		verdict:     verdict,
 		admissions:  admissions,
@@ -212,7 +265,14 @@ func NewRunService(
 		policy:      policy,
 		newID:       newID,
 		deadline:    deadline,
-	}, nil
+		now:         time.Now,
+	}
+	for _, option := range options {
+		if option != nil {
+			option(service)
+		}
+	}
+	return service, nil
 }
 
 // PendingRun is what a caller is told when the bounded wait expires. The run is
@@ -314,7 +374,95 @@ func (s *RunService) RunTool(ctx context.Context, request RunRequest) (RunOutcom
 		}
 	}
 
-	return s.await(ctx, admitted)
+	outcome, err := s.await(ctx, admitted)
+	s.record(ctx, request, inputs, admitted, outcome, err)
+	return outcome, err
+}
+
+// record writes the durable per-tool-call row the analytics TOOL dimension is
+// built on (issue 618).
+//
+// It runs for a SETTLED run and for one whose bounded wait expired, and for
+// nothing else. Every earlier return in RunTool happens before the command is
+// dispatched — an unrunnable toolkit type, a refused admission — so the tool
+// never ran and there is no call to record. A wait that expired DID dispatch,
+// so the call exists; it is recorded with no finish time rather than dropped,
+// because dropping it would make a hanging tool disappear from the tab that
+// should show it.
+//
+// The identity comes from the ADMISSION, not from the request: admitted.Binding
+// is what the runtime was actually told to run, and an idempotent re-admission
+// returns the same execution id, so a replay updates one row instead of adding
+// a second.
+func (s *RunService) record(
+	ctx context.Context,
+	request RunRequest,
+	inputs AuthoritativeInputs,
+	admitted AdmittedRun,
+	outcome RunOutcome,
+	runErr error,
+) {
+	if s.recorder == nil {
+		return
+	}
+	pending := errors.Is(runErr, ErrToolRunDeadlineExceeded)
+	if runErr != nil && !pending {
+		return
+	}
+
+	toolkitType := admitted.Binding.ToolkitType
+	if toolkitType == "" {
+		toolkitType = inputs.ToolkitType
+	}
+	toolName := admitted.Binding.ToolName
+	if toolName == "" {
+		toolName = request.ToolName
+	}
+	record := ToolRunRecord{
+		ProjectID:   request.ProjectID,
+		ActorUserID: request.ActorUserID,
+		ToolkitID:   admitted.Binding.ToolkitID,
+		ToolkitType: toolkitType,
+		ToolName:    toolName,
+		ExecutionID: admitted.Outcome.ExecutionID,
+		StartedAt:   admitted.Outcome.AdmittedAt,
+		IsError:     outcome.Status != RunStatusOK,
+	}
+	if record.ToolkitID <= 0 {
+		record.ToolkitID = request.ToolkitID
+	}
+	if record.StartedAt.IsZero() {
+		record.StartedAt = s.clock()
+	}
+	if !pending {
+		record.FinishedAt = s.clock()
+		if record.FinishedAt.Before(record.StartedAt) {
+			// clock_timestamp on the admitting database and this process's own
+			// clock are two clocks. A finish before the start is a skew, not a
+			// negative duration, so the record reports the call as instantaneous
+			// rather than storing a value the CHECK constraint would refuse.
+			record.FinishedAt = record.StartedAt
+		}
+	} else {
+		record.IsError = false
+	}
+
+	// A fresh, bounded context: ctx may already be done — a pending run's
+	// caller has given up waiting — and the record must still commit.
+	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), recordTimeout)
+	defer cancel()
+	if err := s.recorder.RecordToolRun(writeCtx, record); err != nil {
+		slog.ErrorContext(writeCtx, "tool run was not recorded for analytics",
+			"execution_id", record.ExecutionID, "project_id", record.ProjectID,
+			"tool_name", record.ToolName, "err", err)
+	}
+}
+
+func (s *RunService) clock() time.Time {
+	if s.now == nil {
+		return time.Now()
+	}
+	return s.now()
 }
 
 // await polls the durable output inbox. There is no notification channel this

@@ -15,6 +15,7 @@ import { t } from '@/shared/i18n';
 
 import type { ArtifactStorageConfiguration, ArtifactTreeItem } from '../model/types';
 import { BucketFooter } from './BucketFooter';
+import { BucketAccessPanel } from './BucketAccessPanel';
 import { BucketList } from './BucketList';
 import { BucketPanelHeader } from './BucketPanelHeader';
 import { BucketStorageSelector } from './BucketStorageSelector';
@@ -38,6 +39,12 @@ interface BucketSidebarProps {
   readonly onCreate: () => void;
   /** Bucket EDIT — retention, the one mutable property the API exposes. See `pages/artifacts/CreateBucket.tsx`. */
   readonly onEdit: (bucket: Bucket) => void;
+  /**
+   * The project whose members can be named in a bucket exception. Absent
+   * while no project is selected, in which case the "Manage access" dialog
+   * cannot open — the same state in which the bucket list itself is empty.
+   */
+  readonly projectId?: string | undefined;
   readonly onPin: (bucket: Bucket) => Promise<unknown>;
   readonly onDelete: (bucket: Bucket) => Promise<unknown>;
   readonly onSelectFile: (item: ArtifactTreeItem) => void;
@@ -61,6 +68,11 @@ export function BucketSidebar(props: BucketSidebarProps): ReactNode {
   const [query, setQuery] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
   const [deleting, setDeleting] = useState<Bucket>();
+  // The bucket whose access exceptions are on screen, held HERE for the same
+  // reason `deleting` is: it is dialog state belonging to a row of this list,
+  // and the page above owns URL state only. A NAME rather than the Bucket
+  // object, so a refetch that replaces the objects cannot close the dialog.
+  const [accessBucket, setAccessBucket] = useState<string>();
   const visibleBuckets = useMemo(() => filterBucketsByQuery(props.buckets, query), [props.buckets, query]);
 
   return (
@@ -104,6 +116,7 @@ export function BucketSidebar(props: BucketSidebarProps): ReactNode {
             {...(props.selectedKey === undefined ? {} : { selectedKey: props.selectedKey })}
             onSelect={props.onSelect}
             onEdit={props.onEdit}
+            onManageAccess={(bucket) => setAccessBucket(bucket.name)}
             onPin={(bucket) => void props.onPin(bucket).catch(() => undefined)}
             onDelete={setDeleting}
             onSelectFile={props.onSelectFile}
@@ -117,6 +130,11 @@ export function BucketSidebar(props: BucketSidebarProps): ReactNode {
           totalSize={props.totalSize}
         />
       )}
+      <BucketAccessPanel
+        projectId={props.projectId}
+        {...(accessBucket === undefined ? {} : { bucket: accessBucket })}
+        onClose={() => setAccessBucket(undefined)}
+      />
       <Dialog
         open={deleting !== undefined}
         onClose={() => setDeleting(undefined)}

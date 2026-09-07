@@ -44,9 +44,27 @@ import { ToolAnalytics } from "./toolAnalytics.zod";
 
 export const AnalyticsToolsList = zod
   .object({
-    items: zod.array(ToolAnalytics),
+    tool_dimension_available: zod
+      .boolean()
+      .describe(
+        'Whether this deployment was recording tool calls for the WHOLE of the requested window. False for a window that ends before shared migration 0119 created elitea_runtime.tool_call_records, and for a database that has not run it. It does NOT mean \"no tool ran\".\n',
+      ),
+    items: zod
+      .array(ToolAnalytics)
+      .optional()
+      .describe(
+        "ABSENT — not empty — when tool_dimension_available is false. Nothing written before the producer existed identifies a tool call, so there is no backfill and none is invented; answering `[]` would report a month of constant tool use as zero, with nothing on screen able to tell the difference. PRESENT AND EMPTY is a different and real state: the deployment was recording and no tool ran.\n",
+      ),
+    truncated: zod
+      .boolean()
+      .optional()
+      .describe(
+        "True when the list was cut to the busiest N tools. Present only beside items, and stated rather than implied because the client normalises its share column by summing what it received.\n",
+      ),
   })
-  .describe("NOTE(W2) internal\/api\/v2\/analytics\/handler.go:114.");
+  .describe(
+    "The Tools tab's list. Source — internal\/api\/v2\/analytics\/handler.go's Tools. The availability flag decides the SHAPE, the way AnalyticsAgentsList's does and budgets' usage dimensions do.\n",
+  );
 
 export type AnalyticsToolsList = zod.input<typeof AnalyticsToolsList>;
 export type AnalyticsToolsListOutput = zod.output<typeof AnalyticsToolsList>;

@@ -61,6 +61,7 @@ const APP: ApplicationList['rows'][number] = {
   is_forked: false,
   meta: null,
   has_interrupt: false,
+  tags: [],
   agent_type: 'classic',
 };
 const PIPELINE: ApplicationList['rows'][number] = {
@@ -72,6 +73,7 @@ const PIPELINE: ApplicationList['rows'][number] = {
   is_forked: false,
   meta: null,
   has_interrupt: false,
+  tags: [],
   agent_type: 'pipeline',
 };
 

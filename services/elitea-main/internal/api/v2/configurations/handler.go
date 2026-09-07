@@ -1639,52 +1639,235 @@ func (h *Handler) ListTypes(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, descriptors)
 }
 
-// ttsVoicesUnavailable is what GET /configurations/tts_voices/{projectID}
-// answers, and why (#466).
+// TTSVoices serves GET /configurations/tts_voices/{projectID} — the voices a
+// TTS model can be asked for (issue 323).
 //
-// The reference resolves a voice list from two sources, and both of them are
-// provider audio calls (legacy/plugins/configurations/api/v2/tts_voices.py,
-// `_resolve_voices`):
+// # What this replaces
 //
-//   - `meta.voices` on the project's tts configuration row. The reference fills
-//     that cache with a provider round trip when the configuration is saved.
-//   - the provider itself, on `refresh=true`.
+// It answered 501 for every project, and the reason was true when it was
+// written: nothing anywhere could ask a provider which voices it has, and no
+// code path ever wrote the `meta.voices` cache the reference falls back on, so
+// both of the reference's two sources were empty by construction. Answering 200
+// with an empty list would have been worse than a refusal, because a caller
+// cannot tell an empty cache from a route that does no work.
 //
-// Neither source has anything in it, and the reason is no longer "there is no
-// audio at all". Issue #323 landed: the gateway now serves synthesis and
-// transcription (`POST /llm/v1/audio/speech`, `/audio/transcriptions`,
-// `/audio/translations` — services/elitea-llm-gateway/internal/api/router.go,
-// with model mapping and budget gating). What it does NOT serve, in any
-// dialect, is a voice-LISTING route: nothing here can ask a provider "which
-// voices do you have". And no code path writes `meta.voices` — the create path
-// stores only the `meta` object the client sends — so the cache the reference
-// falls back on is empty by construction, for every project.
+// Both sources exist now. The gateway serves the listing
+// (elitea-llm-gateway internal/llmproxy/listprovidervoices.go) and this handler
+// fills the cache from its answer, so an empty list here is a REAL answer about
+// a provider and no longer a statement about this platform.
 //
-// Reading that cache anyway would restore the same defect in a longer form: the
-// answer would still be an empty list, and the caller still could not tell an
-// empty cache from a route that does no work. So the route reports the missing
-// capability instead.
+// # The resolution order is the reference's
 //
-// Do not restore the 200 with an empty list. When a voice-listing route exists
-// upstream — or something starts filling `meta.voices` from one — this handler
-// serves the real voices and this constant goes with the stub.
-const ttsVoicesUnavailable = "the TTS voice list is not available in this platform. The reference reads voices " +
-	"from the TTS provider, and caches them on the configuration row from the same provider call. This platform " +
-	"serves audio synthesis and transcription (issue #323) but no voice-listing audio route to any provider, and " +
-	"nothing fills that cache, so neither source holds data. This route reports the missing capability rather " +
-	"than answering an empty list, which a caller cannot tell from a project that has no voices."
+// legacy/plugins/configurations/api/v2/tts_voices.py's `_resolve_voices`:
+//
+//  1. `refresh=true` asks the provider first and takes what it says.
+//  2. Otherwise `meta.voices` on the project's tts configuration row.
+//  3. Otherwise the provider, as an automatic fallback, and the answer is
+//     cached on the row.
+//
+// # Why the provider TYPE is followed through the credential link
+//
+// A `tts_model` row does not name a provider; it links one, through
+// `data.ai_credentials`, and the credential row's `type` is the dialect that
+// decides the voice set. The reference resolves the same link
+// (`expand_configuration` then `ai_credentials.configuration_type`). Only the
+// TYPE is read here — no secret is redeemed, because the listing is a property
+// of the dialect and not of the key.
+//
+// # Failure never becomes an empty list
+//
+// A gateway that cannot be reached is reported as a failure, not as a project
+// with no voices: the second reads as a correct answer and would leave an
+// operator looking for a provider problem that is not there.
+func (h *Handler) TTSVoices(w http.ResponseWriter, r *http.Request) {
+	projectID := chi.URLParam(r, "projectID")
+	schema, schemaOK := tenantSchema(w, projectID)
+	if !schemaOK {
+		return
+	}
+	modelName := strings.TrimSpace(r.URL.Query().Get("model_name"))
+	refresh := strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("refresh")), "true")
 
-// TTSVoices refuses. It answered 200 with `{"voices": []}` for every project
-// until #466 — see ttsVoicesUnavailable for why that answer was worse than a
-// refusal, and why a real list has nothing behind it today.
+	// No model, no voices. The reference logs and answers an empty list; a 400
+	// would break the picker's own first render, which asks before a model is
+	// chosen.
+	if modelName == "" || h.pool == nil {
+		writeTTSVoices(w, modelName, nil)
+		return
+	}
+
+	row, found, err := h.ttsConfigurationRow(r.Context(), schema, modelName)
+	if err != nil {
+		writeConfigurationQueryFailure(r.Context(), w, "tts voice lookup failed", projectID, err)
+		return
+	}
+	if !found {
+		// A model name the project does not have is not an error: the picker
+		// asks with whatever model is selected, and a stale selection is a
+		// normal state.
+		writeTTSVoices(w, modelName, nil)
+		return
+	}
+
+	if !refresh && len(row.voices) > 0 {
+		writeTTSVoices(w, modelName, row.voices)
+		return
+	}
+
+	lister := h.providerVoiceLister()
+	if lister == nil {
+		// No gateway composed. Serve the cache if there is one — it is what
+		// this deployment knows — and say nothing false about the provider.
+		writeTTSVoices(w, modelName, row.voices)
+		return
+	}
+
+	listing, err := lister.ListProviderVoices(r.Context(), row.providerType, modelName)
+	if err != nil {
+		slog.ErrorContext(r.Context(), "tts voice listing failed", "project_id", projectID, "err", err)
+		if len(row.voices) > 0 {
+			// A cached list is better than nothing while the gateway is down,
+			// and it is what the operator saw a moment ago.
+			writeTTSVoices(w, modelName, row.voices)
+			return
+		}
+		apierr.WriteStatus(w, http.StatusBadGateway, "the voice listing is unavailable")
+		return
+	}
+
+	if len(listing.Voices) == 0 {
+		// The provider publishes no catalogue this build knows. The caller
+		// keeps its own default voice; nothing is cached, because there is
+		// nothing to cache and a stored empty list would look like a hit.
+		writeTTSVoices(w, modelName, row.voices)
+		return
+	}
+
+	h.cacheTTSVoices(r.Context(), schema, row.id, listing.Voices)
+	writeTTSVoices(w, modelName, listing.Voices)
+}
+
+// ttsConfigurationRow is the project's tts row for one model name, plus the two
+// things the listing needs from it.
+type ttsConfigurationRow struct {
+	id           int
+	providerType string
+	voices       []ProviderVoice
+}
+
+// ttsConfigurationRow reads the row and resolves the provider dialect.
+func (h *Handler) ttsConfigurationRow(
+	ctx context.Context, schema, modelName string,
+) (ttsConfigurationRow, bool, error) {
+	var (
+		row       ttsConfigurationRow
+		dataBytes []byte
+		metaBytes []byte
+	)
+	query := fmt.Sprintf(`
+		SELECT id, type, data, meta
+		FROM %s.configuration
+		WHERE elitea_title = $1 AND section = 'tts'
+		ORDER BY id
+		LIMIT 1
+	`, schema)
+	err := h.pool.QueryRow(ctx, query, modelName).Scan(&row.id, &row.providerType, &dataBytes, &metaBytes)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) || configurationSchemaMissing(err) {
+			return ttsConfigurationRow{}, false, nil
+		}
+		return ttsConfigurationRow{}, false, err
+	}
+
+	var data map[string]any
+	if len(dataBytes) > 0 {
+		_ = json.Unmarshal(dataBytes, &data)
+	}
+	var meta map[string]any
+	if len(metaBytes) > 0 {
+		_ = json.Unmarshal(metaBytes, &meta)
+	}
+	row.voices = cachedVoicesFrom(meta)
+
+	// A generic `tts_model` row names no dialect; the linked credential does.
+	if strings.EqualFold(row.providerType, "tts_model") {
+		if linked := h.credentialTypeFor(ctx, schema, credentialTitleOf(data)); linked != "" {
+			row.providerType = linked
+		}
+	}
+	return row, true, nil
+}
+
+// credentialTypeFor reads the TYPE of a linked ai_credentials row. No secret is
+// read: the dialect decides the voice set, the key does not.
+func (h *Handler) credentialTypeFor(ctx context.Context, schema, title string) string {
+	if title == "" {
+		return ""
+	}
+	var credentialType string
+	query := fmt.Sprintf(`
+		SELECT type FROM %s.configuration
+		WHERE elitea_title = $1 AND section = 'ai_credentials'
+		ORDER BY id
+		LIMIT 1
+	`, schema)
+	if err := h.pool.QueryRow(ctx, query, title).Scan(&credentialType); err != nil {
+		return ""
+	}
+	return credentialType
+}
+
+// cachedVoicesFrom reads `meta.voices`, dropping anything that is not a usable
+// voice. A malformed cache is treated as no cache rather than as an error: the
+// provider is asked again and the row is rewritten.
+func cachedVoicesFrom(meta map[string]any) []ProviderVoice {
+	raw, ok := meta["voices"].([]any)
+	if !ok {
+		return nil
+	}
+	voices := make([]ProviderVoice, 0, len(raw))
+	for _, entry := range raw {
+		item, isObject := entry.(map[string]any)
+		if !isObject {
+			continue
+		}
+		id, _ := item["id"].(string)
+		name, _ := item["name"].(string)
+		voices = append(voices, ProviderVoice{ID: id, Name: name})
+	}
+	return boundProviderVoices(voices)
+}
+
+// cacheTTSVoices writes the answer onto `meta.voices` — the cache the reference
+// reads and that nothing in this platform used to fill.
 //
-// Both web callers already treat a failed query as an empty option list
-// (apps/elitea-web features/chat-input/lib/hooks/useReadAloud.hooks.ts and
-// features/settings/ui/profile/voice-config/VoicePersonalizationSection.tsx), so
-// the page shows what it showed before. The difference is that the API now says
-// which of the two states it is in.
-func (h *Handler) TTSVoices(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusNotImplemented, map[string]any{"error": ttsVoicesUnavailable})
+// The write MERGES into the existing meta object rather than replacing it, so
+// per-type bookkeeping another path stored there survives. A failure is logged
+// and swallowed: the caller already has the voices, and refusing the read
+// because the cache could not be written would turn a working listing into an
+// error.
+func (h *Handler) cacheTTSVoices(ctx context.Context, schema string, id int, voices []ProviderVoice) {
+	encoded, err := json.Marshal(voices)
+	if err != nil {
+		return
+	}
+	query := fmt.Sprintf(`
+		UPDATE %s.configuration
+		SET meta = COALESCE(meta, '{}'::jsonb) || jsonb_build_object('voices', $1::jsonb)
+		WHERE id = $2
+	`, schema)
+	if _, err := h.pool.Exec(ctx, query, string(encoded), id); err != nil {
+		slog.WarnContext(ctx, "tts voice cache write failed", "configuration_id", id, "err", err)
+	}
+}
+
+// writeTTSVoices answers in the reference's exact shape: the voice array and
+// the model name it was resolved for, always both, never null.
+func writeTTSVoices(w http.ResponseWriter, modelName string, voices []ProviderVoice) {
+	if voices == nil {
+		voices = []ProviderVoice{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"voices": voices, "model_name": modelName})
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

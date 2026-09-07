@@ -103,4 +103,19 @@ describe('Applications', () => {
 
     expect(await screen.findByText('Latest (3)')).toBeInTheDocument();
   });
+
+  /**
+   * COMPOSITION ROOT — the header is `widgets/page-header` now, and not this
+   * page's own tab bar (issue 841). The tab test ids, the tablist aria label
+   * and the import control must survive the move, because the journeys and
+   * the visual baselines pin them.
+   */
+  it('renders its tabs and its import control inside the shared page header', async () => {
+    renderAgentsRoute(<Applications />, '/agents/all', { projectId: '9' });
+
+    const header = await screen.findByTestId('page-header');
+    expect(header).toContainElement(await screen.findByTestId('agents-tab-all'));
+    expect(header).toContainElement(screen.getByRole('tablist', { name: 'Agents' }));
+    expect(header).toContainElement(screen.getByTestId('agents-import-button'));
+  });
 });

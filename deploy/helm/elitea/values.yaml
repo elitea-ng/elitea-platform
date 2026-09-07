@@ -853,6 +853,34 @@ main:
     # Turn it on when your provider always sends the claim.
     OIDC_REQUIRE_EMAIL_VERIFIED: ""
 
+    # --- Browser session lifetimes (shared migration 0117) ----------------------
+    # The `elitea_session` cookie now carries an opaque identifier and nothing
+    # else. The SESSION is a row in `elitea_auth.browser_sessions`, so a logout
+    # revokes it, an operator can end it, and it has two deadlines instead of
+    # one. See services/elitea-main/docs/browser-sessions.md.
+    #
+    # ELITEA_SESSION_IDLE_TIMEOUT is measured from the last request. A browser
+    # left alone for longer must sign in again. Empty means 8h. "0" turns the
+    # idle deadline off and leaves only the absolute one.
+    ELITEA_SESSION_IDLE_TIMEOUT: ""
+
+    # ELITEA_SESSION_ABSOLUTE_LIFETIME is measured from the sign-in and never
+    # moves, whatever the user does. Empty means 168h (7 days). It must be at
+    # least 1m and at least as long as the idle timeout; a value that fails
+    # either rule stops the boot with a message that names the variable.
+    ELITEA_SESSION_ABSOLUTE_LIFETIME: ""
+
+    # ELITEA_SESSION_REJECT_LEGACY_COOKIES ends the upgrade window.
+    #
+    # A deployment that upgrades to this release holds signed, self-contained
+    # `elitea_session` cookies that were issued by the previous one. They stay
+    # readable so the upgrade does not sign every active user out at the moment
+    # the new pods start. They cannot be revoked and they carry no idle
+    # deadline, so an operator who would rather force one re-login than keep
+    # them alive sets this to "true". The longest such a cookie survives on its
+    # own is 24 hours.
+    ELITEA_SESSION_REJECT_LEGACY_COOKIES: ""
+
     # --- The first administrator, on a single-sign-on-only deployment -----------
     # Comma-separated provider references that are granted the administration
     # super_admin role the first time they sign in

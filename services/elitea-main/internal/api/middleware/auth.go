@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browsersession"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/authsvc"
 )
 
@@ -37,12 +38,36 @@ type ForwardedIdentityPeerVerifier interface {
 	VerifyForwardedIdentityPeer(*http.Request) error
 }
 
+// BrowserSessionValidator resolves the SERVER-SIDE browser session a cookie
+// names, and refuses one that is revoked, expired or idle.
+//
+// It is declared at the consumer because this is the only thing the middleware
+// needs from *browsersession.Manager: one read that either yields a principal
+// or names why it did not. A nil value keeps the pre-0117 behaviour, where the
+// cookie was the whole credential.
+type BrowserSessionValidator interface {
+	Validate(ctx context.Context, cookieValue string) (browsersession.Session, error)
+}
+
 type AuthConfig struct {
 	Client                    *authsvc.Client // Legacy RPC validator used only when Validator is nil.
 	Validator                 TokenValidator  // Local validator (used if non-nil, falls back to Client)
 	PrincipalValidator        PrincipalValidator
 	ForwardedIdentityVerifier ForwardedIdentityPeerVerifier
 	SessionSecret             string // HMAC key for session cookies
+	// SessionStore validates the server-side session an `elitea_session`
+	// cookie names (migrations/shared/0117). Nil means this deployment issues
+	// only the legacy signed cookie, which is what every deployment did before
+	// this field existed.
+	SessionStore BrowserSessionValidator
+	// RejectLegacySessionCookies refuses the pre-0117 signed cookie outright.
+	//
+	// The default is FALSE, and it has to be: an upgrade that rejected them
+	// would sign out every browser holding an unexpired one at the moment the
+	// new binary starts. An operator who would rather force one re-login than
+	// keep a stateless credential alive for a day sets
+	// ELITEA_SESSION_REJECT_LEGACY_COOKIES=true.
+	RejectLegacySessionCookies bool
 }
 
 // Auth authenticates every request against exactly four credential sources:
@@ -121,6 +146,42 @@ func Auth(cfg AuthConfig) func(http.Handler) http.Handler {
 					// No header and no cookie of ours. `cookie_count` below
 					// says whether the browser sent any cookie at all.
 					refusal = reasonNoCredential
+				case cfg.SessionStore != nil && browsersession.LooksServerSide(cookie.Value):
+					// A server-side session identifier. The prefix decides
+					// which reader runs, and the two formats cannot collide:
+					// see browsersession.LooksServerSide.
+					session, sessionErr := cfg.SessionStore.Validate(r.Context(), cookie.Value)
+					if sessionErr == nil {
+						user, validationErr := validatePrincipal(r.Context(), cfg, session.User())
+						if validationErr != nil {
+							writePrincipalRefusal(w, r, sourceSession, validationErr)
+							return
+						}
+						serveAuthenticated(next, w, r, user, auth.AuthenticationSourceSession)
+						return
+					}
+					reason, classified := serverSessionRefusal(sessionErr)
+					if !classified {
+						// The store did not ANSWER. Nothing about this session
+						// was read, so this is a dependency fault and not a
+						// statement that the caller is signed out. A 401 here
+						// signs out every browser for as long as the database
+						// is unreachable, which is the failure shape the
+						// principal-validation path already refuses to repeat.
+						logCredentialRefusal(r, sourceSession, reason)
+						slog.ErrorContext(r.Context(),
+							"the browser session store could not be read", "err", sessionErr)
+						w.Header().Set("Retry-After", "5")
+						writeJSONError(w, http.StatusServiceUnavailable,
+							"server_error", "session_store_unavailable", "session store unavailable")
+						return
+					}
+					refusal = reason
+				case cfg.RejectLegacySessionCookies:
+					// The operator chose to end the legacy window. The cookie
+					// is a shape this deployment no longer accepts, not a
+					// missing credential, so it gets its own reason.
+					refusal = reasonLegacySessionRejected
 				case cfg.SessionSecret == "":
 					refusal = reasonSessionSecretAbsent
 				default:
@@ -349,6 +410,20 @@ const (
 	reasonSessionBadSignature = "session_cookie_signature_mismatch"
 	reasonSessionExpired      = "session_cookie_expired"
 	reasonSessionSubject      = "session_cookie_subject_invalid"
+	// The refusals a SERVER-SIDE session names. They are separate from the
+	// four above because they are answers about a ROW, not about a signature:
+	// an operator reading "session_revoked" knows somebody signed out, and
+	// reading "session_idle" knows a browser was left alone too long.
+	reasonServerSessionUnknown = "session_unknown"
+	reasonServerSessionRevoked = "session_revoked"
+	reasonServerSessionExpired = "session_expired"
+	reasonServerSessionIdle    = "session_idle"
+	// reasonServerSessionUnreadable — the store did not answer. It is the one
+	// reason in this list that is NOT a statement about the caller.
+	reasonServerSessionUnreadable = "session_store_unavailable"
+	// reasonLegacySessionRejected — the cookie is the pre-0117 signed form and
+	// ELITEA_SESSION_REJECT_LEGACY_COOKIES closed that window.
+	reasonLegacySessionRejected = "legacy_session_cookie_rejected"
 	// reasonAuthorizationHeaderMalformed — a Basic header that is not base64.
 	reasonAuthorizationHeaderMalformed = "authorization_header_malformed"
 	// reasonAuthorizationSchemeUnsupported — an Authorization header that is
@@ -523,6 +598,28 @@ func verifySessionCookie(token, secret string) (auth.User, string, bool) {
 		Email:    email,
 		AuthType: "session",
 	}, "", true
+}
+
+// serverSessionRefusal names the refusal a browsersession error is, and says
+// whether the store ANSWERED at all.
+//
+// The second return is the whole point. Four of these errors are answers about
+// the session; anything else is a store that failed, and the two must not
+// produce the same status. See the caller.
+func serverSessionRefusal(err error) (string, bool) {
+	switch {
+	case errors.Is(err, browsersession.ErrNotFound),
+		errors.Is(err, browsersession.ErrMalformedCookie):
+		return reasonServerSessionUnknown, true
+	case errors.Is(err, browsersession.ErrRevoked):
+		return reasonServerSessionRevoked, true
+	case errors.Is(err, browsersession.ErrExpired):
+		return reasonServerSessionExpired, true
+	case errors.Is(err, browsersession.ErrIdle):
+		return reasonServerSessionIdle, true
+	default:
+		return reasonServerSessionUnreadable, false
+	}
 }
 
 func positiveSessionUserID(value string) (int64, bool) {

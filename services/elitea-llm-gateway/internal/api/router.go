@@ -108,6 +108,15 @@ func NewRouterWithLog(h *llmproxy.Handler, recorder *requestlog.Recorder) http.H
 		// dialer; the difference is that the provider's listing is parsed and
 		// its model ids are returned. See llmproxy/listprovidermodels.go.
 		r.Post("/list_provider_models", h.ListProviderModels)
+
+		// Voice-discovery surface (issue 323). Unlike the two routes above it
+		// dials nothing: for every provider this gateway speaks, the voice set
+		// is what the dialect publishes, not what an endpoint answers. It is
+		// mounted here anyway, and behind the same signature, because provider
+		// knowledge is what decides it — so a provider that DOES enumerate
+		// becomes a lister in that file and no caller changes. See
+		// llmproxy/listprovidervoices.go.
+		r.Post("/list_provider_voices", h.ListProviderVoices)
 	})
 
 	return r

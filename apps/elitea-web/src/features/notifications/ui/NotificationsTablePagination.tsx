@@ -73,6 +73,7 @@ export const NotificationsTablePagination = memo(function NotificationsTablePagi
             onClick={handlePrev}
             disabled={isFirstPage}
             size="small"
+            data-testid="notifications-pagination-previous-button"
             aria-label={t('routes.settings.notifications.previousPage', 'Previous page')}
           >
             <SvgIcon component={ArrowLeftIcon} inheritViewBox sx={arrowIconSx} />
@@ -81,6 +82,7 @@ export const NotificationsTablePagination = memo(function NotificationsTablePagi
             onClick={handleNext}
             disabled={isLastPage}
             size="small"
+            data-testid="notifications-pagination-next-button"
             aria-label={t('routes.settings.notifications.nextPage', 'Next page')}
           >
             <SvgIcon component={ArrowRightIcon} inheritViewBox sx={arrowIconSx} />

@@ -57,6 +57,15 @@ type Handler struct {
 	// is. It never degrades to an in-memory decision: a control that accepts a
 	// decision and forgets it leaves the operator believing a type is off.
 	toolkitTypePolicy ToolkitTypePolicyStore
+	// The platform's own background jobs behind `Admin › Tasks`
+	// (background_jobs.go). Nil unless WithBackgroundJobs is applied, and the
+	// routes answer 503 while it is — never an empty list, for the reason
+	// arbiterTaskNodeUnavailable states below.
+	backgroundJobs BackgroundJobsStore
+	// The evaluation-run half of the Tasks page's cancel (background_jobs.go).
+	// Nil unless WithEvalRunCancel is applied; an eval row's cancel then
+	// answers 503 while every other kind still stops.
+	evalRunCancel EvalRunCanceller
 }
 
 // Option configures a Handler at construction time.
@@ -255,10 +264,13 @@ func (h *Handler) RuntimeRemote(w http.ResponseWriter, _ *http.Request) {
 // The state is AUTHORED on the admin Configuration page's Maintenance section,
 // which stores it in `centry.platform_config` like every other section on that
 // page, and this endpoint reads the same rows the middleware reads. A second
-// write path for one boolean is how a switch acquires two sources of truth that
-// disagree — and the parity argument for keeping the PUT is weak, because
-// pylon's PUT took `splash_template` HTML, which this port deliberately does not
-// have (see maintenanceSection).
+// write path is how a switch acquires two sources of truth that disagree.
+//
+// pylon's PUT took `splash_template` HTML, and that capability IS ported — as
+// the `maintenance_html` field of the same Configuration section, validated on
+// the way in (config_values.go's validateSplashHTML). The GET below reports it
+// under pylon's own key so a reference-shaped client reads what it expects; the
+// WRITE stays on the one path.
 //
 // The route therefore answers 405 on PUT rather than 501: the capability exists,
 // this is not where it is exercised, and the reason names where it is.
@@ -290,6 +302,9 @@ func (h *Handler) Maintenance(w http.ResponseWriter, r *http.Request) {
 		"enabled": state.Enabled,
 		"title":   state.Title,
 		"message": state.Message,
+		// pylon's own key for the same value, so a reference-shaped client
+		// reads the splash body without knowing this platform's field name.
+		"splash_template": state.HTML,
 	})
 }
 

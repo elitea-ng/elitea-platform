@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 
 import DeleteOutlinedIcon from '@mui/icons-material/DeleteOutlined';
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
+import GroupsOutlinedIcon from '@mui/icons-material/GroupsOutlined';
 import PushPinIcon from '@mui/icons-material/PushPin';
 import PushPinOutlinedIcon from '@mui/icons-material/PushPinOutlined';
 import Box from '@mui/material/Box';
@@ -26,6 +27,13 @@ interface BucketListProps {
   readonly selectedKey?: string;
   readonly onSelect: (bucket: Bucket) => void;
   readonly onEdit: (bucket: Bucket) => void;
+  /**
+   * "Manage access" — the per-bucket exception list. The reference puts it in
+   * the row's kebab menu with a `GroupsIcon`
+   * (`pages/Artifacts/Components/BucketItem.jsx:195-199`); this row keeps its
+   * actions as icon buttons, so it takes the same icon and the same label.
+   */
+  readonly onManageAccess: (bucket: Bucket) => void;
   readonly onPin: (bucket: Bucket) => void;
   readonly onDelete: (bucket: Bucket) => void;
   readonly onSelectFile: (item: ArtifactTreeItem) => void;
@@ -85,6 +93,16 @@ export function BucketList(props: BucketListProps): ReactNode {
                     onClick={() => props.onEdit(bucket)}
                   >
                     <EditOutlinedIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+                <Tooltip title={t('artifacts.buckets.manageAccess', 'Manage access')}>
+                  <IconButton
+                    size="small"
+                    color="tertiary"
+                    aria-label={`Manage access to ${bucket.name}`}
+                    onClick={() => props.onManageAccess(bucket)}
+                  >
+                    <GroupsOutlinedIcon fontSize="small" />
                   </IconButton>
                 </Tooltip>
                 <Tooltip title={t('artifacts.buckets.delete', 'Delete bucket')}>

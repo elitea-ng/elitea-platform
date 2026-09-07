@@ -76,6 +76,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	saml2 "github.com/russellhaering/gosaml2"
 
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/personalproject"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browsersession"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/identityproviders"
 )
 
@@ -116,8 +118,38 @@ type SAMLHandler struct {
 	providers    IdentityProviderSource
 	secretSource IdentitySecretSource
 
+	// sessions and personalProjects are the two things router.go attaches
+	// after construction. See OIDCHandler.WithSessionManager for why they are
+	// setters.
+	sessions         *browsersession.Manager
+	personalProjects personalproject.AsyncEnsurer
+
 	runtimeMu    sync.Mutex
 	runtimeCache map[string]*samlRuntime
+}
+
+// WithSessionManager gives this plane the server-side session store.
+//
+// SAML is the plane that needs it most: a LogoutRequest names the assertion's
+// SessionIndex, and until the row existed there was nowhere to keep one. The
+// row now carries it, which is what makes single logout buildable at all —
+// router.go still mounts `/auth_saml/logout` as a local clear, and that is the
+// remaining half of the work.
+func (h *SAMLHandler) WithSessionManager(manager *browsersession.Manager) *SAMLHandler {
+	if h == nil || manager == nil {
+		return h
+	}
+	h.sessions = manager
+	return h
+}
+
+// WithPersonalProjectEnsurer is the sign-in half of the personal-project fix.
+func (h *SAMLHandler) WithPersonalProjectEnsurer(ensurer personalproject.AsyncEnsurer) *SAMLHandler {
+	if h == nil || ensurer == nil {
+		return h
+	}
+	h.personalProjects = ensurer
+	return h
 }
 
 // NewSAMLHandler builds the handler.
@@ -297,15 +329,24 @@ func (h *SAMLHandler) ACS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	http.SetCookie(w, &http.Cookie{
-		Name:     "elitea_session",
-		Value:    makeSessionToken(h.secretKey, userID, email),
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   h.secureCookies,
-		SameSite: http.SameSiteLaxMode,
-		MaxAge:   86400,
-	})
+	numericUserID, ok := sessionUserID(userID)
+	if !ok {
+		slog.Error("SAML: provisioning returned an unusable user id", "user_id", userID)
+		http.Error(w, "user provisioning failed", http.StatusInternalServerError)
+		return
+	}
+	if !issueBrowserSession(w, h.sessions, h.secretKey, h.secureCookies, browsersession.NewSession{
+		UserID:   numericUserID,
+		Email:    email,
+		Provider: browsersession.ProviderSAML,
+		// The value a LogoutRequest must name. Empty when the identity
+		// provider sent no SessionIndex, which is legal and only means single
+		// logout cannot address this session.
+		ProviderSessionIndex: assertion.SessionIndex,
+	}, r) {
+		return
+	}
+	ensurePersonalProject(h.personalProjects, userID)
 	slog.Info("SAML login successful", "email", email, "user_id", userID, "provider", runtime.origin)
 	http.Redirect(w, r, target, http.StatusFound)
 }

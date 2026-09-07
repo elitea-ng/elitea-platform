@@ -79,8 +79,30 @@ export function useReadAloud(params: UseReadAloudParams): UseReadAloudResult {
   const hasModelTTS = !!(ttsModel && socket);
 
   const { config: voiceConfig, setConfig: setVoiceConfig, browserVoices, resolvedBrowserVoice } = useVoiceConfig({ persist: false });
-  const { data: ttsVoicesData } = useTtsVoices({ projectId: ttsModel?.project_id ?? projectId, modelName: ttsModel?.name }, { enabled: !!ttsModel });
-  const displayVoices: readonly (TtsVoice | SpeechSynthesisVoice)[] = hasModelTTS ? (ttsVoicesData?.voices ?? []) : browserVoices;
+  const ttsVoicesQuery = useTtsVoices(
+    { projectId: ttsModel?.project_id ?? projectId, modelName: ttsModel?.name },
+    { enabled: !!ttsModel },
+  );
+  /**
+   * The voice list the picker offers.
+   *
+   * In model mode this was permanently EMPTY: `GET /configurations/tts_voices`
+   * answered 501 for every project (issue 323), so a user with a TTS model
+   * configured saw no voice control at all — `VoiceConfigControls` renders no
+   * picker when its option list is empty — while a user without one saw the
+   * browser's. The route serves the provider's real catalogue now.
+   *
+   * An empty answer STILL leaves the picker hidden, and that is deliberate
+   * rather than a leftover. It means the provider publishes no catalogue this
+   * platform knows, so the model speaks with its own default voice; offering
+   * the BROWSER's voices instead would let a user choose one that this mode
+   * writes to `voiceId` and sends to a model that has never heard of it. The
+   * settings panel makes the opposite choice because its picker also drives a
+   * browser-synthesised preview; this one drives the model.
+   */
+  const displayVoices: readonly (TtsVoice | SpeechSynthesisVoice)[] = hasModelTTS
+    ? (ttsVoicesQuery.data?.voices ?? [])
+    : browserVoices;
 
   const {
     speak,

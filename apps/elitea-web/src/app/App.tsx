@@ -14,6 +14,14 @@ import { createAppRouter } from './router';
 import { sessionAuthContext, useSessionStore } from './session-store';
 
 /**
+ * The smallest gap between two primary session probes.
+ *
+ * `visibilitychange` and `focus` both fire on an ordinary tab switch, so an
+ * unthrottled re-check would issue a burst on every window change.
+ */
+const SESSION_RECHECK_INTERVAL_MS = 60_000;
+
+/**
  * App shell (spec §9.3 units F1/F3/R1/R2).
  *
  * Unit F3 wired the runtime-config gate: when any of the three required
@@ -111,6 +119,38 @@ export function App() {
     if (!useSessionStore.getState().loaded) return;
     void refreshPermissions().then(() => router.invalidate());
   }, [selectedProjectId, refreshPermissions, router]);
+
+  /**
+   * Re-run the PRIMARY session check when the tab comes back into view.
+   *
+   * The boot probe answers once. A session that expires while the page is
+   * open is never noticed by it, which is the state the 1.60.0 smoke run
+   * recorded: the user came back to a tab whose every request failed and
+   * nothing moved the browser. The probe is the one call that can say
+   * "expired" rather than "this request failed", and the session store
+   * navigates on that answer.
+   *
+   * ONE PROBE PER MINUTE AT MOST. `visibilitychange` and `focus` both fire on
+   * an ordinary tab switch, and a user moving between windows would otherwise
+   * issue a burst.
+   */
+  useEffect(() => {
+    let lastProbe = 0;
+    const recheck = (): void => {
+      if (document.visibilityState !== 'visible') return;
+      if (!useSessionStore.getState().loaded) return;
+      const now = Date.now();
+      if (now - lastProbe < SESSION_RECHECK_INTERVAL_MS) return;
+      lastProbe = now;
+      void fetchSession();
+    };
+    window.addEventListener('focus', recheck);
+    document.addEventListener('visibilitychange', recheck);
+    return () => {
+      window.removeEventListener('focus', recheck);
+      document.removeEventListener('visibilitychange', recheck);
+    };
+  }, [fetchSession]);
 
   useEffect(() => {
     void fetchSession().then(() => {

@@ -15,6 +15,8 @@ import (
 
 	"errors"
 
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/personalproject"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browsersession"
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -56,6 +58,14 @@ type OIDCHandler struct {
 	pool          *pgxpool.Pool
 	secretKey     string
 	secureCookies bool
+
+	// sessions is the server-side session store. Nil keeps the legacy signed
+	// cookie; see issueBrowserSession.
+	sessions *browsersession.Manager
+
+	// personalProjects asks for the caller's personal project at sign-in. Nil
+	// is a working no-op, so a composition with no provisioner needs no branch.
+	personalProjects personalproject.AsyncEnsurer
 
 	// firstLogin is operator configuration applied after an assertion resolves
 	// to an account. Empty unless WithFirstLoginPolicy was applied, in which
@@ -101,6 +111,30 @@ func NewOIDCHandler(ctx context.Context, cfg *OIDCConfig, pool *pgxpool.Pool, se
 		handler.envRuntime = environment
 	}
 	return handler, nil
+}
+
+// WithSessionManager gives this plane the server-side session store, and
+// WithPersonalProjectEnsurer the personal-project provisioner.
+//
+// Both are setters rather than constructor parameters, and both are called
+// from internal/api/router.go: that is where the pool-backed manager and the
+// one shared *personalproject.Ensurer exist, while this handler is built in
+// cmd/elitea-main/main.go before either does.
+func (h *OIDCHandler) WithSessionManager(manager *browsersession.Manager) *OIDCHandler {
+	if h == nil || manager == nil {
+		return h
+	}
+	h.sessions = manager
+	return h
+}
+
+// WithPersonalProjectEnsurer is the sign-in half of the personal-project fix.
+func (h *OIDCHandler) WithPersonalProjectEnsurer(ensurer personalproject.AsyncEnsurer) *OIDCHandler {
+	if h == nil || ensurer == nil {
+		return h
+	}
+	h.personalProjects = ensurer
+	return h
 }
 
 func (h *OIDCHandler) Login(w http.ResponseWriter, r *http.Request) {
@@ -417,16 +451,22 @@ func (h *OIDCHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sessionToken := makeSessionToken(h.secretKey, userID, claims.Email)
-	http.SetCookie(w, &http.Cookie{
-		Name:     "elitea_session",
-		Value:    sessionToken,
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   h.secureCookies,
-		SameSite: http.SameSiteLaxMode,
-		MaxAge:   86400,
-	})
+	numericUserID, ok := sessionUserID(userID)
+	if !ok {
+		slog.Error("OIDC: provisioning returned an unusable user id", "user_id", userID)
+		http.Error(w, "user provisioning failed", http.StatusInternalServerError)
+		return
+	}
+	if !issueBrowserSession(w, h.sessions, h.secretKey, h.secureCookies, browsersession.NewSession{
+		UserID:   numericUserID,
+		Email:    claims.Email,
+		Provider: browsersession.ProviderOIDC,
+	}, r) {
+		return
+	}
+	// The personal project this account needs before the product is usable.
+	// Off the request path; see ensurePersonalProject.
+	ensurePersonalProject(h.personalProjects, userID)
 
 	slog.Info("OIDC login successful",
 		"email", claims.Email, "user_id", userID, "provider", runtime.origin)

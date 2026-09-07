@@ -348,4 +348,36 @@ describe('MuiChip — slot-to-token wiring', () => {
     const covered = [...new Set(CHIP_CASES.map((c) => c.slot))];
     expect(covered.sort()).toEqual([...wired].sort());
   });
+
+  /**
+   * The chip radius is a TOKEN, not MUI's `32 / 2` library constant.
+   *
+   * The baseline's own `MuiChip` override (`apps/elitea-ui/src/
+   * MainTheme.js:144-155`) sets no `borderRadius`, so its chips render 16px.
+   * `shape.radiusLg` is 16, which states the same number where a brand pack
+   * can see it (issue 841).
+   */
+  it('pins the chip radius on shape.radiusLg, the token that equals the measured 16px', () => {
+    const rootStyle = muiChip.styleOverrides?.root;
+    if (typeof rootStyle !== 'function') {
+      throw new Error('MuiChip.styleOverrides.root is not a function');
+    }
+    const resolved = rootStyle({ theme } as never) as StyleObject;
+    expect(resolved.borderRadius).toBe(theme.vars?.shape.radiusLg);
+    expect(theme.shape.radiusLg).toBe(16);
+  });
+
+  /**
+   * The radius must NOT be lifted with `&&`. Two ported components carry the
+   * baseline's own per-chip radius in their `sx`, and `sx` loses to a
+   * doubled-class selector — the `.Mui-*` specificity trap.
+   */
+  it('does not raise its own specificity over a call site sx', () => {
+    const rootStyle = muiChip.styleOverrides?.root;
+    if (typeof rootStyle !== 'function') {
+      throw new Error('MuiChip.styleOverrides.root is not a function');
+    }
+    const resolved = rootStyle({ theme } as never) as StyleObject;
+    expect(Object.keys(resolved).filter((key) => key.includes('&'))).toEqual([]);
+  });
 });

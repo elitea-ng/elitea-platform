@@ -102,7 +102,16 @@ export const NotificationsTable = memo(function NotificationsTable(props: Notifi
           </Box>
         </Box>
 
-        <Box component="tbody" sx={sectionSx}>
+        {/* The reference's own body, per-row checkbox and message test ids
+          * (`NotificationTable.jsx:190-224`, `GridTableBody`/`GridTableRow`).
+          * A spec could reach the header checkbox and the row, and nothing
+          * else: no test id addressed ONE row's checkbox or ONE row's
+          * message, so "select the second row" and "read what row 3 says"
+          * were unwritable (issue 841). The row keeps this port's own
+          * `notifications-table-row` name, which the baseline calls
+          * `notification-row`; renaming it would buy nothing and break the
+          * specs that already use it. */}
+        <Box component="tbody" sx={sectionSx} data-testid="notification-table-body">
           {rows.map((row) => (
             <Box
               component="tr"
@@ -114,13 +123,14 @@ export const NotificationsTable = memo(function NotificationsTable(props: Notifi
                 <BaseCheckbox
                   checked={selectedIds.has(row.id)}
                   onChange={() => onSelectRow(row.id)}
+                  data-testid={`notification-checkbox-${row.id}`}
                   aria-label={t('routes.settings.notifications.selectRow', 'Select notification')}
                 />
               </Box>
               <Box component="td" sx={typeCellSx}>
                 <NotificationIcon eventType={row.eventType} meta={row.meta} theme={theme} />
               </Box>
-              <Box component="td" sx={messageCellSx}>
+              <Box component="td" sx={messageCellSx} data-testid="notification-message-text">
                 <NotificationListItem
                   notification={row}
                   projectId={personalProjectId}

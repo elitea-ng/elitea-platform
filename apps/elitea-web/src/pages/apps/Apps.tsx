@@ -15,10 +15,9 @@ import {
   useHasApplications,
 } from '@/features/apps';
 import { t } from '@/shared/i18n';
-import { BaseTab } from '@/shared/ui/BaseTab';
-import { BaseTabs } from '@/shared/ui/BaseTabs';
 import { AppCatalogIcon } from '@/shared/ui/icons/app-catalog-icon';
 import { ApplicationsIcon } from '@/shared/ui/icons/applications-icon';
+import { PageHeader } from '@/widgets/page-header';
 
 const pageSx = {
   height: '100%',
@@ -26,12 +25,6 @@ const pageSx = {
   flexDirection: 'column' as const,
 };
 
-const tabBarSx = {
-  flexShrink: 0,
-  borderBottom: 1,
-  borderColor: 'divider',
-  padding: '0 1.5rem',
-};
 
 const tabPanelSx = {
   flex: 1,
@@ -126,22 +119,17 @@ export function Apps() {
 
   return (
     <Box sx={pageSx}>
-      <Box sx={tabBarSx}>
-        <BaseTabs
-          value={selectedIndex}
-          onChange={handleChangeTab}
-          aria-label={t('apps.tabs.ariaLabel', 'Apps')}
-        >
-          <BaseTab
-            label={t('apps.tabs.applications', 'Applications')}
-            icon={<ApplicationsIcon />}
-          />
-          <BaseTab
-            label={t('apps.tabs.catalog', 'App Catalog')}
-            icon={<AppCatalogIcon />}
-          />
-        </BaseTabs>
-      </Box>
+      <PageHeader
+        tabs={{
+          items: [
+            { value: 'configured', label: t('apps.tabs.applications', 'Applications'), icon: <ApplicationsIcon /> },
+            { value: 'catalog', label: t('apps.tabs.catalog', 'App Catalog'), icon: <AppCatalogIcon /> },
+          ],
+          selectedIndex,
+          onChange: handleChangeTab,
+          ariaLabel: t('apps.tabs.ariaLabel', 'Apps'),
+        }}
+      />
 
       <Box
         sx={tabPanelSx}

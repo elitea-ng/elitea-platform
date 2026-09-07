@@ -54,7 +54,8 @@ export function ChipWithCheckIcon({
 function chipLabelSx(warning: boolean, isSelected: boolean, disabled: boolean) {
   return (theme: Theme) => ({
     gap: '0.5rem',
-    borderRadius: theme.vars.shape.radiusMd ?? '0.625rem',
+    // oxlint-disable-next-line elitea/ad-hoc-radius -- baseline literal (10px): `apps/elitea-ui/src/components/ChipWithCheckIcon.jsx:29` pins `borderRadius: '10px'` on this one component, and no radius token is 10 (they are 4/8/16). This read `theme.vars.shape.radiusMd ?? '0.625rem'`, where the fallback was dead because `radiusMd` is defined, so the chip rendered 8px.
+    borderRadius: '0.625rem',
     px: '1rem',
     py: '0.5rem',
     display: 'flex',

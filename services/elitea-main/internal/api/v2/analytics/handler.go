@@ -17,7 +17,7 @@ import (
 type Repository interface {
 	GetUsageSummary(ctx context.Context, params analytics.QueryParams) (analytics.UsageSummary, error)
 	GetAgentAnalytics(ctx context.Context, params analytics.QueryParams) (analytics.AgentBreakdown, error)
-	GetToolAnalytics(ctx context.Context, params analytics.QueryParams) ([]analytics.ToolAnalytics, error)
+	GetToolAnalytics(ctx context.Context, params analytics.QueryParams) (analytics.ToolBreakdown, error)
 	// GetUserActivity also reports whether it had to cut the list. See the
 	// repository's cap constants for why a silent cut is worse here than
 	// elsewhere: the client paginates over what it receives.
@@ -251,20 +251,38 @@ func (h *Handler) Agents(w http.ResponseWriter, r *http.Request) {
 		body["truncated"] = breakdown.Truncated
 	}
 
-	// The DETAIL view is still a stub, and it is now a stub for ONE reason
-	// rather than two. Its shape is { entity_name, users, tools, daily_usage },
-	// and `tools` is the dimension this platform still has no producer for —
-	// see GetToolAnalytics. Rather than answer with four empty lists, which
-	// would report an agent that did nothing, the detail branch reports the
-	// same availability flag: the agent half is answerable and the tool half is
-	// not, and the two must not render alike.
+	// The DETAIL view is still a stub for its `users` and `daily_usage` halves.
+	// Its shape is { entity_name, users, tools, daily_usage }, and `tools` used
+	// to be the dimension this platform had no producer for at all — see
+	// GetToolAnalytics, which now has one (shared migration 0119).
+	//
+	// The flag is therefore READ rather than hardcoded false. It still decides
+	// the SHAPE: no `tools` key at all for a window the deployment cannot speak
+	// for, so the tab renders the absence instead of "this agent used no
+	// tools".
+	//
+	// WHAT THIS DETAIL BRANCH DOES NOT DO is narrow the tools to the requested
+	// agent. tool_call_records carries the project and the producing row, not
+	// the agent that composed the turn, so a per-agent tool list would need a
+	// correlation this table does not hold. The project-wide list is published
+	// with the flag that says which window it covers, and the per-agent split
+	// stays unclaimed rather than faked from a join that does not exist.
 	if r.URL.Query().Get("application_id") != "" || r.URL.Query().Get("agent_id") != "" {
-		writeJSON(w, http.StatusOK, map[string]any{
+		tools, toolErr := h.repo.GetToolAnalytics(r.Context(), h.parseParams(r))
+		if toolErr != nil && !errors.Is(toolErr, analytics.ErrNoSource) {
+			writeRepoFailure(w, toolErr)
+			return
+		}
+		detail := map[string]any{
 			"agent_dimension_available": breakdown.Available,
-			"tool_dimension_available":  false,
+			"tool_dimension_available":  tools.Available,
 			"entity_name":               agentName(breakdown, r),
 			"daily_usage":               []any{},
-		})
+		}
+		if tools.Available {
+			detail["tools"] = nonNil(tools.Tools)
+		}
+		writeJSON(w, http.StatusOK, detail)
 		return
 	}
 	writeJSON(w, http.StatusOK, body)
@@ -287,6 +305,24 @@ func agentName(breakdown analytics.AgentBreakdown, r *http.Request) string {
 	return ""
 }
 
+// Tools is the Tools tab: which tools ran in the window and how they behaved.
+//
+// # `items` is ABSENT, not empty, when the dimension is unavailable
+//
+// The record this reads — elitea_runtime.tool_call_records — arrived in shared
+// migration 0119. Nothing written before it identifies a tool call: the
+// explicit run's execution_jobs row carries no toolkit id and no tool name, and
+// the agent turn's trace step is per-tenant, covers chat turns only, and
+// carries no toolkit id either. A backfill is impossible rather than merely
+// unwritten, so a window that ends before the migration has no tool data at
+// all.
+//
+// Emitting `items: []` for that window would say "no tool ran", which for a
+// month of constant tool use is a false measurement served with a 200 — the
+// fallback-body failure this codebase keeps meeting. So the flag decides the
+// SHAPE: with tool_dimension_available false there is no items key for a client
+// to map over. The precedent is the Agents tab above, and behind it
+// usageDimensions.Available (internal/api/v2/budgets/usage_dimensions.go).
 func (h *Handler) Tools(w http.ResponseWriter, r *http.Request) {
 	tools, err := h.repo.GetToolAnalytics(r.Context(), h.parseParams(r))
 	if err != nil {
@@ -294,17 +330,45 @@ func (h *Handler) Tools(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Detail view expects { entity_name, users, agents, daily_usage }
+	// Detail view expects { entity_name, users, agents, daily_usage }. It stays
+	// a stub: the record carries the project, the toolkit and the tool, not the
+	// users or agents that reached for it. It reports the availability flag so
+	// the tab can tell "this deployment records nothing" from "this tool has no
+	// detail yet", and answers no kpis block rather than zeros.
 	if r.URL.Query().Get("tool_id") != "" || r.URL.Query().Get("toolkit_id") != "" {
 		writeJSON(w, http.StatusOK, map[string]any{
-			"entity_name": "",
-			"users":       []any{},
-			"agents":      []any{},
-			"daily_usage": []any{},
+			"tool_dimension_available": tools.Available,
+			"entity_name":              toolName(tools, r),
+			"users":                    []any{},
+			"agents":                   []any{},
+			"daily_usage":              []any{},
 		})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": nonNil(tools)})
+
+	body := map[string]any{"tool_dimension_available": tools.Available}
+	if tools.Available {
+		body["items"] = nonNil(tools.Tools)
+		body["truncated"] = tools.Truncated
+	}
+	writeJSON(w, http.StatusOK, body)
+}
+
+// toolName resolves the requested tool's display name out of the breakdown the
+// list read already produced, so the detail header needs no second query. Empty
+// when the tool ran nothing in the window, which is a true statement about it
+// rather than a missing lookup — the same rule agentName follows.
+func toolName(tools analytics.ToolBreakdown, r *http.Request) string {
+	wanted := r.URL.Query().Get("tool_id")
+	if wanted == "" {
+		wanted = r.URL.Query().Get("toolkit_id")
+	}
+	for _, tool := range tools.Tools {
+		if tool.ToolName == wanted || tool.ToolkitID == wanted {
+			return tool.ToolName
+		}
+	}
+	return ""
 }
 
 // Users is the Users tab: every member who called a model in the window.
