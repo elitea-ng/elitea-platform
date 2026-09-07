@@ -7507,6 +7507,10 @@ components:
         variables:
           type: object
           additionalProperties: true
+          x-elitea-passthrough: >-
+            NOTE(W2): the case's template variables, an arbitrary string-keyed
+            map the author writes and the judge prompt reads verbatim
+            (internal/api/v2/evaluation/dataset.go:116, Variables map[string]any).
           description: >
             Substituted into `input` as `{{name}}`. Never null: the client
             spreads this object.
@@ -7547,6 +7551,10 @@ components:
         variables:
           type: object
           additionalProperties: true
+          x-elitea-passthrough: >-
+            NOTE(W2): the case's template variables, an arbitrary string-keyed
+            map the author writes and the judge prompt reads verbatim
+            (internal/api/v2/evaluation/dataset.go:116, Variables map[string]any).
         expected_output: { type: string, nullable: true }
       required: [input]
       additionalProperties: false
@@ -7701,6 +7709,10 @@ components:
         verdict:
           type: object
           additionalProperties: true
+          x-elitea-passthrough: >-
+            NOTE(W2): the judge's parsed JSON object stored as returned
+            (internal/api/v2/evaluation/run.go:181, Verdict map[string]any);
+            the dimension prompt owns its shape.
           description: >
             `{score, reason}` on success; `{error, raw}` when the judge did not
             answer in schema. The RAW model text is kept because a judge failure
@@ -7709,6 +7721,9 @@ components:
         evidence:
           type: object
           additionalProperties: true
+          x-elitea-passthrough: >-
+            NOTE(W2): engine evidence for the score, free-form per engine
+            (internal/api/v2/evaluation/run.go:182, Evidence map[string]any).
           description: '`{input, output, expected_output}` — what was scored.'
         created_at: { type: string }
       required: [id, run_id, dataset_case_id, dimension_id, status, native_score, normalized_score]
