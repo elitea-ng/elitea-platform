@@ -397,8 +397,17 @@ const GENERATED_OPERATION_COUNT = 182;
  * getProjectUsage. All eight are described in v2.yaml, so the generated
  * count moved by the two DELETE ops only (176 -> 178 above); the other six
  * already existed in the contract with no caller.
+ *
+ * 199 -> 202. The native Inventory screens call the Inventory facade's three
+ * routes — invokeInventoryTool, getInventoryInvocation and
+ * cancelInventoryInvocation. NONE of the three is in v2.yaml: the facade
+ * mounts them by hand on the router root
+ * (internal/api/v2/inventory/inventory.go's SlotsPath/InvokePath/
+ * InvocationPath), so orval generates no client for them and the GENERATED
+ * count is unchanged. `entities/inventory/api` calls `eliteaFetch` directly,
+ * which is exactly the `source: 'handwritten'` case these entries are for.
  */
-const MANIFEST_ENTRY_COUNT = 199;
+const MANIFEST_ENTRY_COUNT = 202;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {
