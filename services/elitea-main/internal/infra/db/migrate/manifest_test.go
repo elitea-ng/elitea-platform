@@ -458,7 +458,18 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// toolkit call-tool capability above claimed it first. 0102, 0103 and 0104
 	// carry the same note for the same reason: two streams each correctly claim
 	// the next free number, and only the merge can see the collision.
-	require.EqualValues(t, 116, Head(shared))
+	// 117: shared/0117_browser_sessions.sql, the server-side browser session
+	// table. The `elitea_session` cookie used to be a self-contained signed
+	// token, so nothing on the server knew a session existed: logout only
+	// deleted the browser's copy, there was no idle deadline, and SAML single
+	// logout had no session index to name. The row is now the session and the
+	// cookie carries only its opaque id.
+	//
+	// It lives in `elitea_auth`, beside 0095's identity providers and 0096's
+	// SCIM tables, and it takes NO foreign key to `auth_core__user`: that table
+	// belongs to the legacy runtime, and a shared migration that claims it
+	// breaks the repository seeds.
+	require.EqualValues(t, 117, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

@@ -60,6 +60,7 @@ import (
 	schedulingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/scheduling"
 	socialapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/social"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browsersession"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/authcomposition"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
@@ -420,6 +421,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// there before assuming any second browser-auth plane can simply be added.
 	var oidcSessionHandler *v2auth.SessionHandler
 	var oidcOIDCHandler *v2auth.OIDCHandler
+	// sessionManager is declared out here because apiGroupAuthConfig below
+	// needs it and the block that builds it is conditional. Nil is the
+	// "no server-side sessions" value every consumer accepts.
+	var sessionManager *browsersession.Manager
 	oidcCfg, err := v2auth.OIDCConfigFromEnv()
 	if err != nil {
 		return fmt.Errorf("load OIDC configuration: %w", err)
@@ -473,11 +478,43 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		if len(firstLoginPolicy.InitialGlobalAdmins) == 0 {
 			firstLoginPolicy.InitialGlobalAdmins = v2auth.InitialGlobalAdminsFromEnv()
 		}
-		oidcSessionHandler = v2auth.NewSessionHandler(pool, appSecretKey)
+		// The server-side browser session (migrations/shared/0117).
+		//
+		// ONE manager for every plane. The session handler, the OIDC plane, the
+		// SAML plane and apimw.Auth all reach the same rows, so a second
+		// manager built anywhere would give one of them a different policy and
+		// a different clock. The policy is read here because a bad duration
+		// must stop the boot, not be defaulted away hours later.
+		//
+		// A deployment with no pool composes no manager and keeps the legacy
+		// signed cookie. Every consumer treats nil that way on purpose; see
+		// internal/auth/browsersession.
+		sessionPolicy, policyErr := browsersession.PolicyFromEnv()
+		if policyErr != nil {
+			return fmt.Errorf("read the browser session policy: %w", policyErr)
+		}
+		if pool != nil {
+			store, storeErr := browsersession.NewPostgresStore(pool)
+			if storeErr != nil {
+				return fmt.Errorf("compose the browser session store: %w", storeErr)
+			}
+			browserSessions, managerErr := browsersession.NewManager(store, sessionPolicy)
+			if managerErr != nil {
+				return fmt.Errorf("compose the browser session manager: %w", managerErr)
+			}
+			sessionManager = browserSessions
+			logger.Info("server-side browser sessions are enabled",
+				"idle_timeout", sessionPolicy.IdleTimeout,
+				"absolute_lifetime", sessionPolicy.AbsoluteLifetime,
+				"reject_legacy_cookies", sessionPolicy.RejectLegacyCookies)
+		}
+		oidcSessionHandler = v2auth.NewSessionHandler(pool, appSecretKey).
+			WithSessionManager(sessionManager)
 		oidcOIDCHandler, err = v2auth.NewOIDCHandler(ctx, oidcCfg, pool, appSecretKey)
 		if err != nil {
 			return fmt.Errorf("initialize OIDC handler: %w", err)
 		}
+		oidcOIDCHandler = oidcOIDCHandler.WithSessionManager(sessionManager)
 		vault := v2secrets.NewHandler(pool)
 		oidcOIDCHandler = oidcOIDCHandler.
 			WithProviderStore(identityProviderStore, vault).
@@ -499,7 +536,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		oidcSAMLHandler = v2auth.NewSAMLHandler(
 			pool, appSecretKey, identityProviderStore, vault,
 			os.Getenv("COOKIE_SECURE") != "false",
-		).WithFirstLoginPolicy(firstLoginPolicy)
+		).WithFirstLoginPolicy(firstLoginPolicy).WithSessionManager(sessionManager)
 		if storedSAMLProvider {
 			logger.Info("SAML authentication enabled from an authored identity provider")
 		}
@@ -563,6 +600,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		sessionTokens,
 		os.Getenv("APPLICATION_SECRET_KEY"),
 		oidcSessionHandler != nil,
+		sessionManager,
 	)
 
 	// The browser-only routes: the project switcher, the notification list and
@@ -1956,10 +1994,12 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		SessionSecret:      apiGroupAuth.SessionSecret,
 		PATSigner:          patSigner,
 		Auth: api.AuthDeps{
-			ForwardedIdentityVerifier: apiGroupAuth.ForwardedIdentityVerifier,
-			SessionHandler:            oidcSessionHandler,
-			OIDCHandler:               oidcOIDCHandler,
-			SAMLHandler:               oidcSAMLHandler,
+			ForwardedIdentityVerifier:  apiGroupAuth.ForwardedIdentityVerifier,
+			SessionStore:               apiGroupAuth.SessionStore,
+			RejectLegacySessionCookies: apiGroupAuth.RejectLegacySessionCookies,
+			SessionHandler:             oidcSessionHandler,
+			OIDCHandler:                oidcOIDCHandler,
+			SAMLHandler:                oidcSAMLHandler,
 		},
 		ProductionAuth:                productionAuth,
 		ProductionRuntime:             productionRuntime,

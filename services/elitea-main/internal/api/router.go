@@ -95,6 +95,14 @@ type AuthDeps struct {
 	OIDCHandler               *v2auth.OIDCHandler
 	SAMLHandler               *v2auth.SAMLHandler
 	SessionSecret             string
+	// SessionStore validates the server-side browser session an
+	// `elitea_session` cookie names (migrations/shared/0117). It reaches every
+	// apimw.AuthConfig this file builds, and it must: a group that dropped it
+	// would read a server-side identifier with the legacy HMAC reader and
+	// refuse every browser holding one.
+	SessionStore apimw.BrowserSessionValidator
+	// RejectLegacySessionCookies ends the pre-0117 signed-cookie window.
+	RejectLegacySessionCookies bool
 }
 
 // NOTE(#126): IndexerDeps and its six fields — Predictor, LLMService,
@@ -752,9 +760,18 @@ func mountMCPServerRoutes(
 	authenticate func(http.Handler) http.Handler,
 	agentStart v2mcp.AgentStartUseCase,
 	toolkitRun v2mcp.ToolkitRunUseCase,
+	personalProjects personalproject.AsyncEnsurer,
 ) {
+	// The resolver ASKS for the personal project it could not find, for the
+	// reason stated at `withPersonalProjects`: an MCP client authenticates
+	// with a personal access token and never calls `/social/author`, so this
+	// was one more reader that answered "no personal project" forever.
+	resolver := apimw.NewDBPersonalProjectResolver(pool)
+	if personalProjects != nil {
+		resolver = resolver.WithPersonalProjectEnsurer(personalProjects)
+	}
 	handler := v2mcp.NewHandlerWithToolkitRuns(
-		pool, apimw.NewDBPersonalProjectResolver(pool), agentStart, toolkitRun,
+		pool, resolver, agentStart, toolkitRun,
 		legacyrbac.NewPostgresResolver(pool),
 	)
 	r.Group(func(r chi.Router) {
@@ -854,6 +871,27 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	}
 	if cfg.SessionSecret == "" {
 		cfg.SessionSecret = cfg.Auth.SessionSecret
+	}
+
+	// THE PERSONAL PROJECT IS ASKED FOR AT SIGN-IN, not only when a screen
+	// happens to read it.
+	//
+	// `GET /social/author` and the `/llm` project resolver already ask, and
+	// both are lazy: a new user whose first screen calls neither is left with
+	// no personal project and parks on `/onboarding`. A login is the one
+	// moment every account passes through exactly once, so both federation
+	// planes ask here as well. The call is idempotent and off the request
+	// path, so a login that follows a hundred others costs two reads.
+	//
+	// It is attached HERE and not in cmd/elitea-main/main.go because the one
+	// shared *personalproject.Ensurer is built in this file, from the one
+	// project provisioner. A second ensurer composed in main.go would be a
+	// second provisioner, which is the shape newProjectProvisioner warns about.
+	if personalProjects != nil {
+		cfg.OIDCHandler.WithPersonalProjectEnsurer(personalProjects)
+		cfg.SAMLHandler.WithPersonalProjectEnsurer(personalProjects)
+		cfg.Auth.OIDCHandler.WithPersonalProjectEnsurer(personalProjects)
+		cfg.Auth.SAMLHandler.WithPersonalProjectEnsurer(personalProjects)
 	}
 
 	r := chi.NewRouter()
@@ -1156,11 +1194,13 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// AddAttachments code, not a second implementation of any of them.
 	var convHandler *v2convs.Handler
 	authenticate := apimw.Auth(apimw.AuthConfig{
-		Client:                    cfg.AuthClient,
-		Validator:                 cfg.AuthValidator,
-		PrincipalValidator:        cfg.PrincipalValidator,
-		ForwardedIdentityVerifier: cfg.Auth.ForwardedIdentityVerifier,
-		SessionSecret:             cfg.SessionSecret,
+		Client:                     cfg.AuthClient,
+		Validator:                  cfg.AuthValidator,
+		PrincipalValidator:         cfg.PrincipalValidator,
+		ForwardedIdentityVerifier:  cfg.Auth.ForwardedIdentityVerifier,
+		SessionSecret:              cfg.SessionSecret,
+		SessionStore:               cfg.Auth.SessionStore,
+		RejectLegacySessionCookies: cfg.Auth.RejectLegacySessionCookies,
 	})
 	mountArtifactRoutes(r, ArtifactDeps{
 		Handler:      artifactHandler,
@@ -1170,7 +1210,8 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 
 	// The MCP server (issue 252). Outside the /api/v2 group for the reasons in
 	// mountMCPServerRoutes.
-	mountMCPServerRoutes(r, cfg.Pool, authenticate, cfg.MCPAgentStart, cfg.MCPToolkitRun)
+	mountMCPServerRoutes(r, cfg.Pool, authenticate, cfg.MCPAgentStart, cfg.MCPToolkitRun,
+		personalProjects)
 
 	// This group holds the whole JSON API — the `/api/v2` route below is its
 	// only member. Compression sits at the top of it, ABOVE the shadow
@@ -1180,11 +1221,13 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	r.Group(func(r chi.Router) {
 		r.Use(compressJSONResponses())
 		r.Use(apimw.Auth(apimw.AuthConfig{
-			Client:                    cfg.AuthClient,
-			Validator:                 cfg.AuthValidator,
-			PrincipalValidator:        cfg.PrincipalValidator,
-			ForwardedIdentityVerifier: cfg.Auth.ForwardedIdentityVerifier,
-			SessionSecret:             cfg.SessionSecret,
+			Client:                     cfg.AuthClient,
+			Validator:                  cfg.AuthValidator,
+			PrincipalValidator:         cfg.PrincipalValidator,
+			ForwardedIdentityVerifier:  cfg.Auth.ForwardedIdentityVerifier,
+			SessionSecret:              cfg.SessionSecret,
+			SessionStore:               cfg.Auth.SessionStore,
+			RejectLegacySessionCookies: cfg.Auth.RejectLegacySessionCookies,
 		}))
 
 		// Maintenance mode, immediately AFTER authentication and before
@@ -3251,7 +3294,13 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// internal/api/v2/mcp/registry.go. It is registered rather than
 				// left off so the refusal is explicit and pinned by a test: a
 				// 404 leaves the next person free to wire a stub up.
-				mcpHandler := v2mcp.NewHandlerWithToolkitRuns(cfg.Pool, apimw.NewDBPersonalProjectResolver(cfg.Pool), cfg.MCPAgentStart, cfg.MCPToolkitRun, permissionResolver)
+				// The resolver asks for the personal project it could not
+				// find, exactly as the MCP server route above does.
+				mcpResolver := apimw.NewDBPersonalProjectResolver(cfg.Pool)
+				if personalProjects != nil {
+					mcpResolver = mcpResolver.WithPersonalProjectEnsurer(personalProjects)
+				}
+				mcpHandler := v2mcp.NewHandlerWithToolkitRuns(cfg.Pool, mcpResolver, cfg.MCPAgentStart, cfg.MCPToolkitRun, permissionResolver)
 				r.Group(func(r chi.Router) {
 					r.Use(projectScoped)
 					r.Get("/tools_list/{projectID}", mcpHandler.ToolsList)
@@ -3752,11 +3801,13 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	mountLLM := func(proxy http.Handler, resolver apimw.PersonalProjectResolver) {
 		r.Group(func(r chi.Router) {
 			r.Use(apimw.Auth(apimw.AuthConfig{
-				Client:                    cfg.AuthClient,
-				Validator:                 cfg.AuthValidator,
-				PrincipalValidator:        cfg.PrincipalValidator,
-				ForwardedIdentityVerifier: cfg.Auth.ForwardedIdentityVerifier,
-				SessionSecret:             cfg.SessionSecret,
+				Client:                     cfg.AuthClient,
+				Validator:                  cfg.AuthValidator,
+				PrincipalValidator:         cfg.PrincipalValidator,
+				ForwardedIdentityVerifier:  cfg.Auth.ForwardedIdentityVerifier,
+				SessionSecret:              cfg.SessionSecret,
+				SessionStore:               cfg.Auth.SessionStore,
+				RejectLegacySessionCookies: cfg.Auth.RejectLegacySessionCookies,
 			}))
 			// Membership admits the caller-supplied project selector header
 			// (issue #318). Without it the edge admits no selector that names
