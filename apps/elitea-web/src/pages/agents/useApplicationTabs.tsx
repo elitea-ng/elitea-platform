@@ -55,6 +55,26 @@ function usePublicApplicationTabs(totals: ApplicationsTabTotals, hasAdminPermiss
   );
 }
 
+/**
+ * The six private tabs, and what each of them can actually hold.
+ *
+ * `Drafts` and `Published` are REAL as of the lifecycle change: the list route
+ * now reports each agent's publish state
+ * (`internal/infra/db/repos/applications.go` `List`), so publishing a version
+ * moves the agent from one tab to the other. Before that the field was never
+ * selected and every one of these tabs was empty whatever the user did.
+ *
+ * `Moderation`, `Approval` and `Rejected` are still empty, and that is a
+ * property of the SERVER, not of this file. `application_versions.status`
+ * takes three values in the Go service — `draft`, `published`, `embedded` —
+ * and there is no `on_moderation`, no `user_approval` and no `rejected`
+ * anywhere in it: publishing is immediate, with a validation step and no
+ * review step. (`centry.moderation_state` is a different feature — a request
+ * to access a catalogue entry — and `internal/api/v2/moderation/requests.go`
+ * says so in its own header.) The tabs are kept because the reference has
+ * them and because a moderation plane would fill them without a UI change;
+ * they are not wired to anything that could fill them today.
+ */
 function usePrivateApplicationTabs(totals: ApplicationsTabTotals): ApplicationTab[] {
   return useMemo(
     () => [

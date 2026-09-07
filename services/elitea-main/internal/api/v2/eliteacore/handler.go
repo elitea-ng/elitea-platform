@@ -1179,6 +1179,31 @@ func (h *Handler) Publish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The catalogue twin, in the SAME transaction as the clone.
+	//
+	// Without it a publish from any project other than the public one wrote a
+	// `published` row into a schema ELITEA Catalog never reads: the Published
+	// tab listed the agent and the catalogue stayed empty, with no error on
+	// either side. See catalog_mirror.go for why the twin carries no tool or
+	// skill attachments.
+	twin, mirrorErr := mirrorPublishedVersion(ctx, tx, s, projectID, appID, cloneID, body.VersionName, body.Category)
+	if mirrorErr != nil {
+		if errors.Is(mirrorErr, errCatalogVersionNameTaken) {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
+				"error": "validation_failed",
+				"validation_result": map[string]any{
+					"issues": []map[string]any{
+						{"rule": "version_name_exists_in_catalog", "field": "version_name", "issue": "version name already published to the catalog", "source": "deterministic"},
+					},
+				},
+			})
+			return
+		}
+		slog.ErrorContext(ctx, "publish: catalog mirror failed", "schema", s, "version_id", cloneID, "error", mirrorErr)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to publish agent to the catalog"})
+		return
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to publish agent"})
 		return
@@ -1187,12 +1212,27 @@ func (h *Handler) Publish(w http.ResponseWriter, r *http.Request) {
 	// Embed sub-agents: clone application_tools of type 'application' recursively
 	h.embedSubAgents(ctx, s, projectID, versionID, cloneID)
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	// `public_agent_id` and `public_version_id` name the rows in the AUTHOR's
+	// schema, which is what they have always named and what
+	// publish_tool_copy_postgres_integration_test.go and
+	// publish_skill_copy_postgres_integration_test.go read them for. The
+	// catalogue rows are a different pair, so they get their own two keys
+	// rather than a changed meaning of these.
+	//
+	// The catalogue keys are OMITTED when there is no twin — that is, when the
+	// author already stands in the public project and the clone above IS the
+	// catalogue row. A zero would read as "the catalogue has row 0".
+	response := map[string]any{
 		"public_agent_id":   strconv.Itoa(appID),
 		"public_version_id": strconv.Itoa(cloneID),
 		"version_name":      body.VersionName,
 		"source_version_id": strconv.Itoa(cloneID),
-	})
+	}
+	if twin.VersionID != 0 {
+		response["catalog_agent_id"] = strconv.Itoa(twin.ApplicationID)
+		response["catalog_version_id"] = strconv.Itoa(twin.VersionID)
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 // deleteEmbeddedSubAgents removes embedded sub-agent applications referenced by application_tools on versionID.
@@ -1414,6 +1454,13 @@ func (h *Handler) Unpublish(w http.ResponseWriter, r *http.Request) {
 	var meta map[string]any
 	_ = json.Unmarshal([]byte(metaStr), &meta) // DB jsonb column; malformed means nil meta
 
+	// The catalogue rows this unpublish must also take down. Collected per
+	// branch below and removed once, after the source revert, so that a
+	// failure to reach the catalogue is reported rather than swallowed: an
+	// agent that stays in ELITEA Catalog after its author unpublished it is
+	// the one outcome this route may not answer 200 for.
+	var revertedVersionIDs []int
+
 	switch status {
 	case "published", "embedded":
 		h.deleteEmbeddedSubAgents(ctx, s, versionID)
@@ -1421,6 +1468,9 @@ func (h *Handler) Unpublish(w http.ResponseWriter, r *http.Request) {
 		// Revert to draft
 		_, _ = h.pool.Exec(ctx, fmt.Sprintf(
 			`UPDATE %s.application_versions SET status = 'draft' WHERE id = $1`, s), versionID) // best-effort revert
+		if numericVersionID, convErr := strconv.Atoi(versionID); convErr == nil {
+			revertedVersionIDs = append(revertedVersionIDs, numericVersionID)
+		}
 	case "draft":
 		// Unpublish via the source draft version: find all published clones and delete them
 		var appID int
@@ -1447,12 +1497,21 @@ func (h *Handler) Unpublish(w http.ResponseWriter, r *http.Request) {
 			pubRows.Close()
 			for _, pvid := range pubVerIDs {
 				h.deleteEmbeddedSubAgents(ctx, s, pvid)
+				if numericVersionID, convErr := strconv.Atoi(pvid); convErr == nil {
+					revertedVersionIDs = append(revertedVersionIDs, numericVersionID)
+				}
 			}
 		}
 		_, _ = h.pool.Exec(ctx, fmt.Sprintf(
 			`UPDATE %s.application_versions SET status = 'draft' WHERE application_id = $1 AND status IN ('published', 'embedded')`, s), appID) // best-effort revert
 	default:
 		writeJSON(w, http.StatusConflict, map[string]any{"error": "version is not published"})
+		return
+	}
+
+	if err := removeCatalogTwins(ctx, h.pool, projectID, revertedVersionIDs); err != nil {
+		slog.ErrorContext(ctx, "unpublish: catalog twin removal failed", "project_id", projectID, "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to remove the agent from the catalog"})
 		return
 	}
 

@@ -349,6 +349,7 @@ export function EditPipeline(): ReactNode {
                 detail={detail}
                 activeVersion={activeVersion}
                 projectId={projectId}
+                tab={params.tab}
               />
               <EditPipelineSaveBar
                 onSave={handleSave}

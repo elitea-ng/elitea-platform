@@ -10,6 +10,7 @@ import type { ReactNode } from 'react';
 
 import Box from '@mui/material/Box';
 
+import { AgentSkillsPanel } from '@/features/agent-skills';
 import { AgentTagEditor, CreateAgentForm } from '@/features/agents';
 import type { AgentLlmSettings } from '@/shared/api/agentLlmSettings';
 import type { ApplicationVersionDetail } from '@/shared/api/generated/model';
@@ -92,6 +93,23 @@ export function EditApplicationConfigurationPanel(props: EditApplicationConfigur
         versionFields={versionFields}
         isDirty={isDirty}
         isReadOnly={isReadOnly}
+      />
+      {/*
+       * The SKILLS section (gap 11). Skills could be created, versioned,
+       * published and exported in this app and attached to NOTHING — the
+       * agent editor had no section for them, so the whole feature was
+       * write-only. `entity_skill_mapping` is keyed by the VERSION id, which
+       * is why the panel takes `activeVersion.id` and not the agent id, and
+       * why it says so rather than rendering a picker when there is no saved
+       * version yet.
+       *
+       * Placed after the tools panel, which is where production puts it
+       * (SKILLS follows TOOLS/MODULES and precedes CHAT STARTERS).
+       */}
+      <AgentSkillsPanel
+        projectId={projectId}
+        appVersionId={activeVersion?.id}
+        disabled={isReadOnly}
       />
     </Box>
   );
