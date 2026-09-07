@@ -77,7 +77,10 @@ async function openAgentEditor(page: Page, agentId: string): Promise<void> {
  * without a category is published and invisible.
  */
 async function chooseCategory(page: Page, name = 'Development'): Promise<void> {
-  await page.getByTestId('publish-category').click();
+  // The combobox ROLE, not the testid: MUI puts the testid on the Select root
+  // and the click target is the inner element that carries the role. This is
+  // the same interaction the unit tests drive.
+  await page.getByTestId('publish-version-dialog').getByRole('combobox').click();
   await page.getByRole('option', { name, exact: true }).click();
 }
 
