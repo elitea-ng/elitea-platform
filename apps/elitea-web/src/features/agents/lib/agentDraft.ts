@@ -1,3 +1,5 @@
+import type { ApplicationDraft } from '@/shared/api/generated/model';
+
 /**
  * `AgentDraft` — the shape `GenerateAgentReviewForm`/`GenerateAgentModal`
  * edit and submit, ported from the field set the baseline's
@@ -7,47 +9,24 @@
  * `conversation_starters`, `suggested_toolkits`, `suggested_mcp`,
  * `suggested_pipelines`, `suggested_agents`, `suggested_skills`).
  *
- * **REAL, CONFIRMED BACKEND GAP — read before wiring `onGenerate`.** The
- * baseline's `useGenerateAgentDraftMutation` (`apps/elitea-ui/src/[fsd]/
- * features/agent/api/generateAgentDraftApi.js:5-11`) posts
- * `{ projectId, user_description }` to
- * `/elitea_core/generate_application_draft/prompt_lib/{projectId}` and
- * (per every call site reading `draftData.name`/`.suggested_toolkits`/etc.)
- * expects a STRUCTURED draft object back. This app's generated client
- * exposes the SAME URL as `useGenerateAgentDraft`
- * (`shared/api/generated/applications/applications.ts:9163-9362`), but its
- * response type is `PredictResponse`
- * (`shared/api/generated/model/predictResponse.zod.ts`:
- * `{message_group_uid, content?, is_streaming, usage?, tool_calls?,
- * child_messages?}`) — a generic chat-completion envelope with NO `name`/
- * `description`/`instructions`/`welcome_message`/`suggested_*` fields at
- * all. Traced to the Go source, not assumed from the generated comment:
- * `services/elitea-main/internal/api/router.go:481-486` routes
- * `generate_application_draft`, `generate_skill_draft`, and
- * `generate_project_context_draft` to the exact SAME
- * `predictHandler.Predict` used for `webchat` (line 476); `internal/api/v2/
- * predict/handler.go:41-61`'s `Predict` decodes a generic
- * `predict.Request{input, variables, stream, mode}` and returns
- * `predictor.Predict(...)`'s generic `predict.Response` — there is no
- * per-route branching anywhere in that handler that would let the same
- * function return a bespoke "agent draft" shape for one route and a
- * generic chat completion for another. The Go-side "AI-assisted agent
- * scaffolding" feature has not been (re)implemented against the new
- * backend; only a same-URL generic predictor stub exists.
+ * **THE BACKEND GAP THIS FILE USED TO DOCUMENT IS CLOSED (#254 P1).**
+ * `POST /elitea_core/generate_application_draft/prompt_lib/{projectId}` is
+ * served by `services/elitea-main/internal/api/v2/drafts` and described in
+ * `api/openapi/v2.yaml` as `generateApplicationDraft`. It answers with the
+ * generated `ApplicationDraft` — `{name, description, instructions,
+ * welcome_message, conversation_starters}` — so `mapApplicationDraft` below
+ * carries the real fields across instead of dropping a chat completion into
+ * `instructions` and blanking the rest.
  *
- * `mapPredictResponseToAgentDraft` below is the DISCLOSED, minimal,
- * non-inventive response to that gap: since there is no structured
- * contract to decode, `suggested_toolkits`/`suggested_mcp`/
- * `suggested_pipelines`/`suggested_agents`/`suggested_skills` are always
- * empty (there is nothing to honestly populate them from — `ResourceSuggestions`
- * already renders `null` for an empty list, so this degrades gracefully,
- * it does not crash or fabricate suggestions) and `name`/`description`/
- * `welcome_message` are left blank for the user to fill in. The ONE
- * defensible, non-arbitrary mapping is `content` (the model's raw
- * generated text) into `instructions` — "whatever text came back becomes
- * the editable starting point for Instructions" is the same interpretation
- * a human pasting a completion into that field would make, not a
- * fabricated parse of fields that were never in the response.
+ * WHAT IS STILL EMPTY, and why it is the contract's answer rather than this
+ * mapper's guess: the endpoint returns NO `suggested_toolkits` /
+ * `suggested_mcp` / `suggested_pipelines` / `suggested_agents` /
+ * `suggested_skills`. Legacy builds those by reading the project's toolkit
+ * instances, agents, pipelines and skills and offering them to the model as
+ * candidates; elitea-main composes no reader for toolkit instances, and a
+ * model asked for suggestions without candidates invents ids that resolve to
+ * nothing. `ResourceSuggestions` renders `null` for an empty list, so the
+ * review form degrades to "no suggestions" rather than to wrong ones.
  */
 
 /** One AI-suggested resource the review form can offer to attach post-create. */
@@ -100,13 +79,22 @@ export function filterEmptyStrings(values: readonly string[]): string[] {
 }
 
 /**
- * See the module doc comment above for why this cannot honestly recover
- * `name`/`description`/`welcome_message`/`suggested_*` from a
- * `PredictResponse` — only `content` (if present) seeds `instructions`.
+ * `mapApplicationDraft` carries the served contract into the shape the review
+ * form edits. Every field is copied, not derived: the endpoint validates and
+ * caps each one server-side (name at 32 characters, welcome message at 768,
+ * four conversation starters at most), so there is nothing left here to
+ * repair. `filterEmptyStrings` still runs over the starters because the form
+ * lets the user empty one before submitting.
+ *
+ * The five `suggested_*` lists stay empty — see the module doc comment.
  */
-export function mapPredictResponseToAgentDraft(content: string | undefined): AgentDraft {
+export function mapApplicationDraft(draft: ApplicationDraft): AgentDraft {
   return {
     ...EMPTY_AGENT_DRAFT,
-    instructions: content ?? '',
+    name: draft.name,
+    description: draft.description,
+    instructions: draft.instructions,
+    welcome_message: draft.welcome_message,
+    conversation_starters: filterEmptyStrings(draft.conversation_starters),
   };
 }

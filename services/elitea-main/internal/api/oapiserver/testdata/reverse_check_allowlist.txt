@@ -23,7 +23,6 @@
 #   fail the gate. maxAllowlistEntries in conformance_test.go pins the size.
 #
 # One id per line. `#` starts a comment.
-applications.generateAgentDraft
 applications.getPipelineTrigger
 applications.updatePipelineTrigger
 artifacts.artifactList
@@ -88,7 +87,6 @@ skills.deleteSkill
 skills.deleteSkillVersion
 skills.export
 skills.exportVersion
-skills.generateDraft
 skills.getSkill
 skills.getSkillVersion
 skills.import

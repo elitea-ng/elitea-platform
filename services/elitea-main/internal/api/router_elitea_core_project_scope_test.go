@@ -211,6 +211,16 @@ var eliteaCoreProjectScopedRoutes = []eliteaCoreProjectScopedRoute{
 	{http.MethodGet, "/api/v2/elitea_core/search_options/prompt_lib/7", "/api/v2/elitea_core/search_options/prompt_lib/8", "models.promptlib_shared.search"},
 	// Batch version replacement and the two attachment-storage writes.
 	{http.MethodPost, "/api/v2/elitea_core/batch_replace_version/prompt_lib/7/1/2", "/api/v2/elitea_core/batch_replace_version/prompt_lib/8/1/2", "models.applications.version.update"},
+	// The three AI-draft routes (#254 P1). They spend the PROJECT's provider
+	// budget on a model call keyed to the {projectID} segment, so they belong
+	// in this table for the same reason every write above does: the path
+	// segment must not be the authorization claim. The project-context row
+	// names `.edit` rather than legacy's `models.project_context.generate` —
+	// see the registration in router.go for why that substitution is the safe
+	// direction.
+	{http.MethodPost, "/api/v2/elitea_core/generate_application_draft/prompt_lib/7", "/api/v2/elitea_core/generate_application_draft/prompt_lib/8", "models.applications.applications.create"},
+	{http.MethodPost, "/api/v2/elitea_core/generate_skill_draft/prompt_lib/7", "/api/v2/elitea_core/generate_skill_draft/prompt_lib/8", "models.applications.skills.create"},
+	{http.MethodPost, "/api/v2/elitea_core/generate_project_context_draft/prompt_lib/7", "/api/v2/elitea_core/generate_project_context_draft/prompt_lib/8", "models.project_context.edit"},
 
 	// ── The three SIBLING groups #313 left behind ───────────────────────────
 	//

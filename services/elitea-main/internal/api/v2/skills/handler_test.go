@@ -15,7 +15,6 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/skills"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/predict"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
@@ -152,28 +151,6 @@ func setupSkillsRouter(repo handler.Repository) *chi.Mux {
 		r.Mount("/", h.Routes())
 		r.Post("/import", h.Import)
 		r.Get("/export/{skillID}", h.Export)
-	})
-	return r
-}
-
-// mockPredictor implements skills.Predictor.
-type mockPredictor struct {
-	content string
-	err     error
-}
-
-func (m *mockPredictor) Predict(_ context.Context, _ predict.Request) (predict.Response, error) {
-	if m.err != nil {
-		return predict.Response{}, m.err
-	}
-	return predict.Response{Content: m.content}, nil
-}
-
-func setupDraftRouter(predictor handler.Predictor) *chi.Mux {
-	r := chi.NewRouter()
-	h := handler.NewDraftHandler(predictor)
-	r.Route("/api/v2/projects/{projectID}/generate_skill_draft", func(r chi.Router) {
-		r.Post("/", h.GenerateDraft)
 	})
 	return r
 }
@@ -731,91 +708,6 @@ func TestSkillExport_NotFound(t *testing.T) {
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d; body: %s", rec.Code, rec.Body.String())
-	}
-}
-
-// ---- Generate draft -------------------------------------------------------------
-
-func TestGenerateSkillDraft_Success(t *testing.T) {
-	predictor := &mockPredictor{content: `{"name":"Reviewer","description":"Reviews PRs","instructions":"Be thorough","tags":["quality"]}`}
-	r := setupDraftRouter(predictor)
-
-	payload, _ := json.Marshal(map[string]string{"user_description": "a skill that reviews pull requests"})
-	req := httptest.NewRequest(http.MethodPost, "/api/v2/projects/proj-1/generate_skill_draft/", bytes.NewReader(payload))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
-	}
-
-	var draft handler.SkillDraft
-	if err := json.NewDecoder(rec.Body).Decode(&draft); err != nil {
-		t.Fatalf("failed to decode response: %v", err)
-	}
-	if draft.Name != "Reviewer" || draft.Description != "Reviews PRs" || draft.Instructions != "Be thorough" {
-		t.Errorf("unexpected draft: %+v", draft)
-	}
-	if len(draft.Tags) != 1 || draft.Tags[0] != "quality" {
-		t.Errorf("unexpected tags: %v", draft.Tags)
-	}
-}
-
-func TestGenerateSkillDraft_TolerantOfCodeFencedResponse(t *testing.T) {
-	predictor := &mockPredictor{content: "```json\n{\"name\":\"X\",\"description\":\"Y\",\"instructions\":\"Z\",\"tags\":[]}\n```"}
-	r := setupDraftRouter(predictor)
-
-	payload, _ := json.Marshal(map[string]string{"user_description": "anything"})
-	req := httptest.NewRequest(http.MethodPost, "/api/v2/projects/proj-1/generate_skill_draft/", bytes.NewReader(payload))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
-	}
-}
-
-func TestGenerateSkillDraft_MissingUserDescription(t *testing.T) {
-	r := setupDraftRouter(&mockPredictor{})
-
-	payload, _ := json.Marshal(map[string]string{"user_description": "  "})
-	req := httptest.NewRequest(http.MethodPost, "/api/v2/projects/proj-1/generate_skill_draft/", bytes.NewReader(payload))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
-	}
-}
-
-func TestGenerateSkillDraft_NotConfigured(t *testing.T) {
-	r := setupDraftRouter(nil)
-
-	payload, _ := json.Marshal(map[string]string{"user_description": "anything"})
-	req := httptest.NewRequest(http.MethodPost, "/api/v2/projects/proj-1/generate_skill_draft/", bytes.NewReader(payload))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("expected 500, got %d; body: %s", rec.Code, rec.Body.String())
-	}
-}
-
-func TestGenerateSkillDraft_PredictorError(t *testing.T) {
-	r := setupDraftRouter(&mockPredictor{err: errors.New("llm unavailable")})
-
-	payload, _ := json.Marshal(map[string]string{"user_description": "anything"})
-	req := httptest.NewRequest(http.MethodPost, "/api/v2/projects/proj-1/generate_skill_draft/", bytes.NewReader(payload))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("expected 500, got %d; body: %s", rec.Code, rec.Body.String())
 	}
 }
 

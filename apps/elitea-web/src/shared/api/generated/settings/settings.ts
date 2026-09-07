@@ -55,11 +55,15 @@ import type {
 import type {
   BatchEntitySettingsRequest,
   EntitySettingsUpdateResponse,
+  ErrorResponse,
+  GenerateProjectContextDraftRequest,
   N400Response,
   N401Response,
   N403Response,
   OkResponse,
   ParticipantSettingsRequest,
+  PredictLLMUnavailableResponse,
+  ProjectContextDraft,
 } from "../model";
 
 import { eliteaFetch } from ".././mutator";
@@ -83,6 +87,322 @@ const withQueryKey = <T extends object, K>(
   }
   return result;
 };
+
+export type generateProjectContextDraftResponse200 = {
+  data: ProjectContextDraft;
+  status: 200;
+};
+
+export type generateProjectContextDraftResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type generateProjectContextDraftResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type generateProjectContextDraftResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type generateProjectContextDraftResponse413 = {
+  data: ErrorResponse;
+  status: 413;
+};
+
+export type generateProjectContextDraftResponse422 = {
+  data: ErrorResponse;
+  status: 422;
+};
+
+export type generateProjectContextDraftResponse502 = {
+  data: ErrorResponse;
+  status: 502;
+};
+
+export type generateProjectContextDraftResponse503 = {
+  data: PredictLLMUnavailableResponse;
+  status: 503;
+};
+
+export type generateProjectContextDraftResponseSuccess =
+  generateProjectContextDraftResponse200 & {
+    headers: Headers;
+  };
+export type generateProjectContextDraftResponseError = (
+  | generateProjectContextDraftResponse400
+  | generateProjectContextDraftResponse401
+  | generateProjectContextDraftResponse403
+  | generateProjectContextDraftResponse413
+  | generateProjectContextDraftResponse422
+  | generateProjectContextDraftResponse502
+  | generateProjectContextDraftResponse503
+) & {
+  headers: Headers;
+};
+
+export type generateProjectContextDraftResponse =
+  | generateProjectContextDraftResponseSuccess
+  | generateProjectContextDraftResponseError;
+
+export const getGenerateProjectContextDraftUrl = (projectId: string) => {
+  return `/elitea_core/generate_project_context_draft/prompt_lib/${projectId}`;
+};
+
+/**
+ * These three draft routes stood in router.go's NOTE(#126) tombstone —
+ * registered behind a `RouterConfig.Predictor` nothing ever assigned, so
+ * they answered 404 in every deployment. They are pure LLM plays: one
+ * blocking turn through the same gateway hop `predict_llm` uses, no
+ * runtime and no task. The system prompt is in the Go source rather than
+ * in the service-prompt configuration store legacy read it from, so a
+ * deployment that has never seeded a service prompt still generates
+ * drafts.
+ *
+ * NOTE(#254): internal/api/v2/drafts/drafts.go
+ * GenerateProjectContextDraft. Gated on `models.project_context.edit`,
+ * NOT on legacy's `models.project_context.generate`: nothing in this
+ * repository's migration history grants that string, so gating on it
+ * would ship a permanent 403 nobody can clear (#313). 0068 grants
+ * `.edit` to exactly the roles legacy gives `.generate` — admin and
+ * editor, never viewer — and saving the draft needs it anyway.
+ * @summary Draft a Project Background from a plain-text description
+ */
+export const generateProjectContextDraft = async (
+  projectId: string,
+  generateProjectContextDraftRequest: GenerateProjectContextDraftRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<generateProjectContextDraftResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+  return eliteaFetch<generateProjectContextDraftResponse>(
+    getGenerateProjectContextDraftUrl(projectId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(generateProjectContextDraftRequest),
+    },
+  );
+};
+
+export const getGenerateProjectContextDraftQueryKey = (
+  projectId: string,
+  generateProjectContextDraftRequest?: GenerateProjectContextDraftRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/generate_project_context_draft/prompt_lib/${projectId}`,
+    generateProjectContextDraftRequest,
+  ] as const;
+};
+
+export const getGenerateProjectContextDraftQueryOptions = <
+  TData = Awaited<ReturnType<typeof generateProjectContextDraft>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ErrorResponse
+    | PredictLLMUnavailableResponse,
+>(
+  projectId: string,
+  generateProjectContextDraftRequest: GenerateProjectContextDraftRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof generateProjectContextDraft>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGenerateProjectContextDraftQueryKey(
+      projectId,
+      generateProjectContextDraftRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof generateProjectContextDraft>>
+  > = ({ signal }) =>
+    generateProjectContextDraft(projectId, generateProjectContextDraftRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof generateProjectContextDraft>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GenerateProjectContextDraftQueryResult = NonNullable<
+  Awaited<ReturnType<typeof generateProjectContextDraft>>
+>;
+export type GenerateProjectContextDraftQueryError =
+  | N400Response
+  | N401Response
+  | N403Response
+  | ErrorResponse
+  | PredictLLMUnavailableResponse;
+
+export function useGenerateProjectContextDraft<
+  TData = Awaited<ReturnType<typeof generateProjectContextDraft>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ErrorResponse
+    | PredictLLMUnavailableResponse,
+>(
+  projectId: string,
+  generateProjectContextDraftRequest: GenerateProjectContextDraftRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof generateProjectContextDraft>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof generateProjectContextDraft>>,
+          TError,
+          Awaited<ReturnType<typeof generateProjectContextDraft>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGenerateProjectContextDraft<
+  TData = Awaited<ReturnType<typeof generateProjectContextDraft>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ErrorResponse
+    | PredictLLMUnavailableResponse,
+>(
+  projectId: string,
+  generateProjectContextDraftRequest: GenerateProjectContextDraftRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof generateProjectContextDraft>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof generateProjectContextDraft>>,
+          TError,
+          Awaited<ReturnType<typeof generateProjectContextDraft>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGenerateProjectContextDraft<
+  TData = Awaited<ReturnType<typeof generateProjectContextDraft>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ErrorResponse
+    | PredictLLMUnavailableResponse,
+>(
+  projectId: string,
+  generateProjectContextDraftRequest: GenerateProjectContextDraftRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof generateProjectContextDraft>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Draft a Project Background from a plain-text description
+ */
+
+export function useGenerateProjectContextDraft<
+  TData = Awaited<ReturnType<typeof generateProjectContextDraft>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ErrorResponse
+    | PredictLLMUnavailableResponse,
+>(
+  projectId: string,
+  generateProjectContextDraftRequest: GenerateProjectContextDraftRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof generateProjectContextDraft>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGenerateProjectContextDraftQueryOptions(
+    projectId,
+    generateProjectContextDraftRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
 
 export type patchEntitySettingsResponse200 = {
   data: OkResponse;

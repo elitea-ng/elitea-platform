@@ -48,6 +48,7 @@ import type {
   AgentCategoriesResponse,
   ApplicationCreatedResponse,
   ApplicationDetail,
+  ApplicationDraft,
   ApplicationExportResponse,
   ApplicationList,
   ApplicationRelationList,
@@ -103,6 +104,20 @@ export const getPredictLLMResponseMock = (
     })),
     undefined,
   ]),
+  ...overrideResponse,
+});
+
+export const getGenerateApplicationDraftResponseMock = (
+  overrideResponse: Partial<Extract<ApplicationDraft, object>> = {},
+): ApplicationDraft => ({
+  name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  description: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  instructions: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  welcome_message: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  conversation_starters: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
   ...overrideResponse,
 });
 
@@ -4321,6 +4336,32 @@ export const getPredictLLMMockHandler = (
   );
 };
 
+export const getGenerateApplicationDraftMockHandler = (
+  overrideResponse?:
+    | ApplicationDraft
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<ApplicationDraft> | ApplicationDraft),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/generate_application_draft/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGenerateApplicationDraftResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getListApplicationsMockHandler = (
   overrideResponse?:
     | ApplicationList
@@ -5555,6 +5596,7 @@ export const getUpdateProjectInfoMockHandler = (
 };
 export const getApplicationsMock = () => [
   getPredictLLMMockHandler(),
+  getGenerateApplicationDraftMockHandler(),
   getListApplicationsMockHandler(),
   getCreateApplicationMockHandler(),
   getListPublicApplicationsMockHandler(),

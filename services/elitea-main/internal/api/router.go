@@ -30,6 +30,7 @@ import (
 	v2contextmgr "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/contextmgr"
 	v2convs "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
 	v2deepwiki "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
+	v2drafts "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/drafts"
 	v2core "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
 	v2evaluation "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/evaluation"
 	v2events "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/events"
@@ -2671,16 +2672,39 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				r.With(projectPermission("models.applications.version.update")).
 					Put("/application_attachment_storage/prompt_lib/{projectID}/{applicationID}/{versionID}", coreHandler.UpdateAttachmentStorage)
 
-				// NOTE(#126): webchat and the three AI-draft-generation routes
-				// stood here behind the same nil gate on RouterConfig.Predictor,
-				// and were never registered either:
-				//   POST /webchat/prompt_lib/{projectID}/{versionID}
-				//   POST /generate_application_draft/prompt_lib/{projectID}
-				//   POST /generate_project_context_draft/prompt_lib/{projectID}
-				//   POST /generate_skill_draft/prompt_lib/{projectID}
-				// v2skills.DraftHandler survives the deletion — it depends only
-				// on a narrow Predictor interface the current runtime could
-				// supply — but it now has no caller. #194 records that.
+				// The three AI-draft routes (#254 P1). They stood in the
+				// NOTE(#126) tombstone here with webchat, behind the same nil
+				// gate on RouterConfig.Predictor, and answered 404 in every
+				// deployment. They are pure LLM plays — one blocking turn each,
+				// no runtime, no task — so they take the same PredictCompleter
+				// predict_llm above takes, and are registered UNCONDITIONALLY
+				// for the same reason it is: the handler answers 503 naming
+				// LLM_GATEWAY_URL when no LLM plane is composed, so an
+				// unconfigured deployment stays distinguishable from a missing
+				// route. Gating the registration on the dependency is exactly
+				// what produced #126.
+				//
+				// The permissions are legacy's own check_api declarations, with
+				// ONE deliberate substitution. generate_project_context_draft
+				// declares `models.project_context.generate`, a string this
+				// repository's migration history does not grant and legacy's
+				// own catalogue reaches only through that one module; gating on
+				// it would ship a permanent 403 nobody can clear (#313).
+				// `models.project_context.edit` is granted by 0068 to exactly
+				// the roles legacy's recommended_roles gives .generate — admin
+				// and editor, never viewer — and it is the permission the
+				// caller needs anyway, since the only thing to do with a
+				// generated Project Background is save it.
+				//
+				// NOT restored here: webchat. It needs the runtime task plane
+				// and is #254's P2 batch.
+				draftHandler := v2drafts.NewHandler(cfg.PredictCompleter)
+				r.With(projectPermission("models.applications.applications.create")).
+					Post("/generate_application_draft/prompt_lib/{projectID}", draftHandler.GenerateApplicationDraft)
+				r.With(projectPermission("models.applications.skills.create")).
+					Post("/generate_skill_draft/prompt_lib/{projectID}", draftHandler.GenerateSkillDraft)
+				r.With(projectPermission("models.project_context.edit")).
+					Post("/generate_project_context_draft/prompt_lib/{projectID}", draftHandler.GenerateProjectContextDraft)
 
 				// Fork, and the application publish plane. These are the
 				// routes #302 names explicitly: publish writes a catalogue row

@@ -101,7 +101,11 @@ const (
 	// no manifest entry carries, so the path arm of the reverse check never
 	// matched and this list could never shrink. Fifteen ids the document
 	// already described came off it in one step. See pathCoveredBySpec.
-	maxAllowlistEntries = 78
+	//
+	// 78 -> 76 (#254 P1), when the three AI-draft routes were served and
+	// described. Two ids came off: applications.generateAgentDraft and
+	// skills.generateDraft, the two manifest entries on those paths.
+	maxAllowlistEntries = 76
 )
 
 // buildFullSurfaceConfig returns a RouterConfig for the real production

@@ -4,26 +4,29 @@ import { HttpResponse, http } from 'msw';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import type { PredictResponse } from '@/shared/api/generated/model';
+import type { ApplicationDraft } from '@/shared/api/generated/model';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { server } from '@/test/setup';
 
 import { useGenerateAgentDraftMutation } from './generateAgentDraft';
 
 /**
- * NOTE(#126): orval's `getGenerateAgentDraftMockHandler` disappeared when the
- * `generateAgentDraft` operation was removed from `api/openapi/v2.yaml` — its
- * route was gated on a `RouterConfig.Predictor` nothing ever assigned and
- * answered 404 in every deployment. This local factory stands in for it and
- * matches the same URL and response shape, so the assertions below are
- * unchanged.
+ * The endpoint is served (#254 P1). This local factory keeps the default draft
+ * in one place so each test names only what it asserts on.
  */
-function generateAgentDraftHandler(body?: PredictResponse) {
+const DEFAULT_DRAFT: ApplicationDraft = {
+  name: 'Support Bot',
+  description: 'Answers support questions',
+  instructions: 'draft',
+  welcome_message: '',
+  conversation_starters: [],
+};
+
+function generateAgentDraftHandler(body?: Partial<ApplicationDraft>) {
   return http.post('*/elitea_core/generate_application_draft/prompt_lib/:projectId', () =>
-    HttpResponse.json(body ?? { message_group_uid: 'mg-default', content: 'draft', is_streaming: false }),
+    HttpResponse.json({ ...DEFAULT_DRAFT, ...body }),
   );
 }
-
 
 function createWrapper(): ({ children }: { children: ReactNode }) => ReactNode {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
@@ -41,15 +44,21 @@ afterEach(() => {
 });
 
 describe('useGenerateAgentDraftMutation', () => {
-  it('maps user_description -> the real PredictRequest.input field and returns the raw PredictResponse envelope', async () => {
+  it('sends user_description and returns the structured draft', async () => {
+    // The `user_description -> input` mapping this hook used to make existed
+    // only because the URL reached the GENERIC predictor, which has no
+    // user_description field. The served endpoint reads user_description, so
+    // sending `input` would now be a request the handler refuses with 400.
     let capturedBody: unknown;
     server.use(
       http.post('*/elitea_core/generate_application_draft/prompt_lib/:projectId', async ({ request }) => {
         capturedBody = await request.json();
         return HttpResponse.json({
-          message_group_uid: 'mg-1',
-          content: '{"name":"Support Bot"}',
-          is_streaming: false,
+          name: 'Support Bot',
+          description: 'Answers support questions',
+          instructions: 'Be brief.',
+          welcome_message: 'How can I help?',
+          conversation_starters: ['Where are my orders?'],
         });
       }),
     );
@@ -61,11 +70,13 @@ describe('useGenerateAgentDraftMutation', () => {
       response = await result.current.generateDraft({ projectId: 'proj-1', user_description: 'a support bot' });
     });
 
-    expect(capturedBody).toStrictEqual({ input: 'a support bot' });
+    expect(capturedBody).toStrictEqual({ user_description: 'a support bot' });
     expect(response).toStrictEqual({
-      message_group_uid: 'mg-1',
-      content: '{"name":"Support Bot"}',
-      is_streaming: false,
+      name: 'Support Bot',
+      description: 'Answers support questions',
+      instructions: 'Be brief.',
+      welcome_message: 'How can I help?',
+      conversation_starters: ['Where are my orders?'],
     });
     expect(result.current.isLoading).toBe(false);
     expect(result.current.error).toBeUndefined();

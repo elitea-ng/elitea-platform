@@ -53,11 +53,25 @@ import type {
   PublicSkillDetail,
   PublishSkill200,
   Skill,
+  SkillDraft,
   SkillForkPayload,
   SkillValidationResult,
   SkillsList,
   UnpublishSkill200,
 } from "../model";
+
+export const getGenerateSkillDraftResponseMock = (
+  overrideResponse: Partial<Extract<SkillDraft, object>> = {},
+): SkillDraft => ({
+  name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  description: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  instructions: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  tags: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  ...overrideResponse,
+});
 
 export const getListApplicationSkillsResponseMock =
   (): ApplicationSkillsList => ({
@@ -879,6 +893,32 @@ export const getListAgentsWithSkillResponseMock = (
   ...overrideResponse,
 });
 
+export const getGenerateSkillDraftMockHandler = (
+  overrideResponse?:
+    | SkillDraft
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<SkillDraft> | SkillDraft),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/generate_skill_draft/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGenerateSkillDraftResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getListApplicationSkillsMockHandler = (
   overrideResponse?:
     | ApplicationSkillsList
@@ -1243,6 +1283,7 @@ export const getListAgentsWithSkillMockHandler = (
   );
 };
 export const getSkillsMock = () => [
+  getGenerateSkillDraftMockHandler(),
   getListApplicationSkillsMockHandler(),
   getListSkillsMockHandler(),
   getCreateSkillMockHandler(),

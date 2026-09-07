@@ -388,7 +388,26 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
  * MANIFEST_ENTRY_COUNT is unchanged. The tripwire was left at 182 by that
  * fix and read RED on the wave head — the same late reading as the #440 case.
  */
-const GENERATED_OPERATION_COUNT = 185;
+
+/*
+ * 185 -> 188, when the three AI-draft endpoints were routed (#254 P1):
+ * generateApplicationDraft, generateSkillDraft and generateProjectContextDraft.
+ * They are the last three routes of router.go's NOTE(#126) tombstone, now
+ * served by internal/api/v2/drafts and described in v2.yaml, so orval
+ * generates a hook and a zod model for each.
+ *
+ * Worth recording beside the number, because it is what this ledger exists to
+ * make somebody justify: the three MANIFEST entries do not move by three. Two
+ * already existed as `handwritten` with `operationId: null`
+ * (applications.generateAgentDraft, skills.generateDraft) and only gain the
+ * operationId elitea-main's TestSpecRouterConformance/manifest_reverse_check
+ * matches on — which is what lets both ids be DELETED from
+ * internal/api/oapiserver/testdata/reverse_check_allowlist.txt, 78 -> 76. The
+ * app keeps calling all three through its hand-written modules, because orval
+ * shapes every write endpoint as a `useQuery` gated by `enabled` and these are
+ * click-to-generate buttons.
+ */
+const GENERATED_OPERATION_COUNT = 188;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -421,8 +440,16 @@ const GENERATED_OPERATION_COUNT = 185;
  * 202 -> 203 at the wave merge: the agent-skills entries (lifecycle unit) and
  * the three Inventory invoke/poll/cancel entries (Inventory UI unit) were
  * counted from different bases; the union holds one more than either side.
+ *
+ * 203 -> 204, when the AI-draft endpoints were routed (#254 P1). ONE entry,
+ * not three: `draft.generate`, the project-context draft. Its call site
+ * (entities/project/api/projectContextApi.ts) already carried the
+ * `manifest: draft.generate` comment R-A5 requires and the file it names
+ * never had the entry — an omission this count could not see, because a
+ * MISSING entry lowers the number rather than raising it. The other two draft
+ * call sites were already counted here; they change source, not existence.
  */
-const MANIFEST_ENTRY_COUNT = 203;
+const MANIFEST_ENTRY_COUNT = 204;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

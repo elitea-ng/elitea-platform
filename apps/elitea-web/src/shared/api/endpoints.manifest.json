@@ -299,9 +299,9 @@
             "id": "applications.generateAgentDraft",
             "method": "POST",
             "path": "/elitea_core/generate_application_draft/prompt_lib/{project_id}",
-            "operationId": null,
+            "operationId": "generateApplicationDraft",
             "source": "handwritten",
-            "responseSchema": "PredictResponse",
+            "responseSchema": "ApplicationDraft",
             "fixture": null,
             "usedBy": [
                 "features/agents"
@@ -908,7 +908,7 @@
             "id": "skills.generateDraft",
             "method": "POST",
             "path": "/elitea_core/generate_skill_draft/prompt_lib/{projectId}",
-            "operationId": null,
+            "operationId": "generateSkillDraft",
             "source": "handwritten",
             "responseSchema": "SkillDraft",
             "fixture": null,
@@ -1903,6 +1903,19 @@
             "fixture": null,
             "usedBy": [
                 "entities/folder"
+            ]
+        },
+        {
+            "id": "draft.generate",
+            "method": "POST",
+            "path": "/elitea_core/generate_project_context_draft/prompt_lib/{projectId}",
+            "operationId": "generateProjectContextDraft",
+            "source": "handwritten",
+            "responseSchema": "ProjectContextDraft",
+            "fixture": null,
+            "usedBy": [
+                "entities/project",
+                "features/settings"
             ]
         },
         {

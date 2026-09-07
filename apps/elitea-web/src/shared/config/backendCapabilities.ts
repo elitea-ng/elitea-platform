@@ -1,23 +1,21 @@
 /**
  * Which optional backend surfaces this platform serves.
  *
- * The Go router registers no handler for four endpoints this SPA can build a
- * request for, and `api/openapi/v2.yaml` declares none of them either:
+ * The Go router registers no handler for one endpoint this SPA can build a
+ * request for, and `api/openapi/v2.yaml` does not declare it either:
  *
- *   POST /elitea_core/generate_application_draft/prompt_lib/{projectId}
- *   POST /elitea_core/generate_project_context_draft/prompt_lib/{projectId}
- *   POST /elitea_core/generate_skill_draft/prompt_lib/{projectId}
  *   GET  /elitea_core/pipeline_trigger/prompt_lib/{projectId}/pipeline/{v}/trigger
  *
- * chi answers `404 page not found` for every one of them, in every profile.
- * The route groups were gated on `RouterConfig` fields nothing ever assigned,
- * so they answered 404 before #126 removed them as well. The affordances that
- * call them can therefore never succeed, and the user reads a failure that no
- * setting can repair.
+ * chi answers `404 page not found` for it, in every profile. Its route group
+ * was gated on a `RouterConfig` field nothing ever assigned, so it answered
+ * 404 before #126 removed it as well. The affordance that calls it can
+ * therefore never succeed, and the user reads a failure that no setting can
+ * repair.
  *
- * `predict_llm` USED to be the fifth entry on that list. It is now served, but
- * only in its blocking mode — which is why the single `aiGeneration` flag that
- * once covered it had to be split (see the three capabilities below).
+ * Two entries have LEFT that list. `predict_llm` is served, but only in its
+ * blocking mode — which is why the single `aiGeneration` flag that once
+ * covered it had to be split (see the three capabilities below). The three
+ * DRAFT endpoints are served too, as of #254 P1.
  *
  * The ported hooks, modals and API modules STAY. The backend gap is tracked
  * (#192 webhook trigger, #193 scheduled execution, #194 AI draft generation).
@@ -38,7 +36,17 @@ export type BackendCapability =
  * What this build serves.
  *
  * `aiGeneration` covers the three DRAFT endpoints only — the agent draft, the
- * project-context draft and the skill draft. None is routed.
+ * project-context draft and the skill draft. All three are served by
+ * `services/elitea-main/internal/api/v2/drafts` and described in v2.yaml
+ * (`generateApplicationDraft`, `generateProjectContextDraft`,
+ * `generateSkillDraft`), so the flag is ON.
+ *
+ * It stays a capability rather than becoming an unconditional affordance for
+ * the same reason `llmPredictBlocking` does: the routes need an LLM gateway.
+ * Without one they answer 503 naming LLM_GATEWAY_URL — which the user reads
+ * as a deployment fact they can escalate, not as a broken button. That is a
+ * deployment condition, not a missing surface, so it does not turn the flag
+ * back off.
  *
  * The other two both name `POST /elitea_core/predict_llm/prompt_lib/{id}`, and
  * they are separate flags because the backend serves ONE of its two modes:
@@ -92,7 +100,7 @@ export type BackendCapability =
  * why — the failure this module exists to prevent, in the other direction.
  */
 const SERVED: Readonly<Record<BackendCapability, boolean>> = {
-  aiGeneration: false,
+  aiGeneration: true,
   deepwiki: true,
   inventory: true,
   llmPredictBlocking: true,

@@ -56,6 +56,8 @@ import type {
   ApplicationSkillsList,
   AttachPublicSkill200,
   AttachPublicSkillBody,
+  ErrorResponse,
+  GenerateSkillDraftRequest,
   ListAgentsWithSkill200,
   ListPublicSkills200,
   ListPublicSkillsParams,
@@ -67,6 +69,7 @@ import type {
   N404Response,
   N409Response,
   N500Response,
+  PredictLLMUnavailableResponse,
   PublicSkillDetail,
   PublishSkill200,
   PublishSkill400,
@@ -74,6 +77,7 @@ import type {
   PublishSkillBody,
   Skill,
   SkillCreateRequest,
+  SkillDraft,
   SkillForkPayload,
   SkillValidationResult,
   SkillsList,
@@ -103,6 +107,314 @@ const withQueryKey = <T extends object, K>(
   }
   return result;
 };
+
+export type generateSkillDraftResponse200 = {
+  data: SkillDraft;
+  status: 200;
+};
+
+export type generateSkillDraftResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type generateSkillDraftResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type generateSkillDraftResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type generateSkillDraftResponse413 = {
+  data: ErrorResponse;
+  status: 413;
+};
+
+export type generateSkillDraftResponse422 = {
+  data: ErrorResponse;
+  status: 422;
+};
+
+export type generateSkillDraftResponse502 = {
+  data: ErrorResponse;
+  status: 502;
+};
+
+export type generateSkillDraftResponse503 = {
+  data: PredictLLMUnavailableResponse;
+  status: 503;
+};
+
+export type generateSkillDraftResponseSuccess =
+  generateSkillDraftResponse200 & {
+    headers: Headers;
+  };
+export type generateSkillDraftResponseError = (
+  | generateSkillDraftResponse400
+  | generateSkillDraftResponse401
+  | generateSkillDraftResponse403
+  | generateSkillDraftResponse413
+  | generateSkillDraftResponse422
+  | generateSkillDraftResponse502
+  | generateSkillDraftResponse503
+) & {
+  headers: Headers;
+};
+
+export type generateSkillDraftResponse =
+  generateSkillDraftResponseSuccess | generateSkillDraftResponseError;
+
+export const getGenerateSkillDraftUrl = (projectId: string) => {
+  return `/elitea_core/generate_skill_draft/prompt_lib/${projectId}`;
+};
+
+/**
+ * These three draft routes stood in router.go's NOTE(#126) tombstone —
+ * registered behind a `RouterConfig.Predictor` nothing ever assigned, so
+ * they answered 404 in every deployment. They are pure LLM plays: one
+ * blocking turn through the same gateway hop `predict_llm` uses, no
+ * runtime and no task. The system prompt is in the Go source rather than
+ * in the service-prompt configuration store legacy read it from, so a
+ * deployment that has never seeded a service prompt still generates
+ * drafts.
+ *
+ * NOTE(#254): internal/api/v2/drafts/drafts.go GenerateSkillDraft.
+ * Gated on `models.applications.skills.create`, the permission legacy's
+ * own generate_skill_draft.py declares.
+ * @summary Draft a skill from a plain-text description
+ */
+export const generateSkillDraft = async (
+  projectId: string,
+  generateSkillDraftRequest: GenerateSkillDraftRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<generateSkillDraftResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+  return eliteaFetch<generateSkillDraftResponse>(
+    getGenerateSkillDraftUrl(projectId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(generateSkillDraftRequest),
+    },
+  );
+};
+
+export const getGenerateSkillDraftQueryKey = (
+  projectId: string,
+  generateSkillDraftRequest?: GenerateSkillDraftRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/generate_skill_draft/prompt_lib/${projectId}`,
+    generateSkillDraftRequest,
+  ] as const;
+};
+
+export const getGenerateSkillDraftQueryOptions = <
+  TData = Awaited<ReturnType<typeof generateSkillDraft>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ErrorResponse
+    | PredictLLMUnavailableResponse,
+>(
+  projectId: string,
+  generateSkillDraftRequest: GenerateSkillDraftRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof generateSkillDraft>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGenerateSkillDraftQueryKey(projectId, generateSkillDraftRequest);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof generateSkillDraft>>
+  > = ({ signal }) =>
+    generateSkillDraft(projectId, generateSkillDraftRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof generateSkillDraft>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GenerateSkillDraftQueryResult = NonNullable<
+  Awaited<ReturnType<typeof generateSkillDraft>>
+>;
+export type GenerateSkillDraftQueryError =
+  | N400Response
+  | N401Response
+  | N403Response
+  | ErrorResponse
+  | PredictLLMUnavailableResponse;
+
+export function useGenerateSkillDraft<
+  TData = Awaited<ReturnType<typeof generateSkillDraft>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ErrorResponse
+    | PredictLLMUnavailableResponse,
+>(
+  projectId: string,
+  generateSkillDraftRequest: GenerateSkillDraftRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof generateSkillDraft>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof generateSkillDraft>>,
+          TError,
+          Awaited<ReturnType<typeof generateSkillDraft>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGenerateSkillDraft<
+  TData = Awaited<ReturnType<typeof generateSkillDraft>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ErrorResponse
+    | PredictLLMUnavailableResponse,
+>(
+  projectId: string,
+  generateSkillDraftRequest: GenerateSkillDraftRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof generateSkillDraft>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof generateSkillDraft>>,
+          TError,
+          Awaited<ReturnType<typeof generateSkillDraft>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGenerateSkillDraft<
+  TData = Awaited<ReturnType<typeof generateSkillDraft>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ErrorResponse
+    | PredictLLMUnavailableResponse,
+>(
+  projectId: string,
+  generateSkillDraftRequest: GenerateSkillDraftRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof generateSkillDraft>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Draft a skill from a plain-text description
+ */
+
+export function useGenerateSkillDraft<
+  TData = Awaited<ReturnType<typeof generateSkillDraft>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ErrorResponse
+    | PredictLLMUnavailableResponse,
+>(
+  projectId: string,
+  generateSkillDraftRequest: GenerateSkillDraftRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof generateSkillDraft>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGenerateSkillDraftQueryOptions(
+    projectId,
+    generateSkillDraftRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
 
 export type listApplicationSkillsResponse200 = {
   data: ApplicationSkillsList;

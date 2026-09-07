@@ -1799,6 +1799,145 @@ components:
             from any upstream failure, so an operator can tell an unconfigured
             deployment from a broken one.
 
+    # ------------------------------------------------------------------------
+    # AI DRAFTS (#254 P1)
+    # ------------------------------------------------------------------------
+
+    DraftLlmSettings:
+      type: object
+      description: >
+        The model override, the same subset predict_llm honours. When it is
+        absent the gateway answers with its own model-resolution error rather
+        than this service guessing a model on the caller's behalf.
+      properties:
+        model_name: { type: string }
+        temperature: { type: number }
+        max_tokens: { type: integer }
+        reasoning_effort:
+          type: string
+          description: One of low, medium or high, for reasoning models.
+
+    GenerateSkillDraftRequest:
+      type: object
+      required: [user_description]
+      properties:
+        user_description:
+          type: string
+          description: What the skill should do, in plain text. Required and non-blank.
+        llm_settings:
+          $ref: '#/components/schemas/DraftLlmSettings'
+        skill_id:
+          type: integer
+          nullable: true
+          description: >
+            NOT SERVED. In legacy this selects edit mode, which rewrites a
+            stored skill. A request carrying it is refused with 400 rather than
+            silently answered with a from-scratch draft the caller would apply
+            over their existing skill. An explicit null is not edit intent.
+        version_id:
+          type: integer
+          nullable: true
+          description: NOT SERVED. See skill_id.
+
+    SkillDraft:
+      type: object
+      required: [name, description, instructions, tags]
+      properties:
+        name:
+          type: string
+          description: >
+            Slugified to lowercase letters, digits and hyphens, at most 64
+            characters. A model answer that cannot be salvaged into a valid
+            slug - or that contains a reserved word - is a 422.
+        description: { type: string }
+        instructions: { type: string }
+        tags:
+          type: array
+          description: Never null. An empty list when the model suggested none.
+          items: { type: string }
+
+    GenerateApplicationDraftRequest:
+      type: object
+      required: [user_description]
+      properties:
+        user_description:
+          type: string
+          description: What the agent should do, in plain text. Required and non-blank.
+        llm_settings:
+          $ref: '#/components/schemas/DraftLlmSettings'
+        application_id:
+          type: integer
+          nullable: true
+          description: >
+            NOT SERVED, for the same reason as skill_id on the skill draft: it
+            selects legacy's edit mode, which rewrites a stored agent version.
+            A request carrying it is refused with 400.
+        version_id:
+          type: integer
+          nullable: true
+          description: NOT SERVED. See application_id.
+
+    ApplicationDraft:
+      type: object
+      required: [name, description, instructions, welcome_message, conversation_starters]
+      description: >
+        The content half of legacy's draft. It deliberately does NOT carry
+        suggested_toolkits / suggested_mcp / suggested_agents /
+        suggested_pipelines / suggested_skills: legacy builds those by first
+        reading the project's toolkit instances, agents, pipelines and skills
+        and offering them to the model as candidates, and elitea-main composes
+        no reader for toolkit instances. A model asked for suggestions with no
+        candidate list invents ids that resolve to nothing, so the fields are
+        absent rather than present and always empty.
+      properties:
+        name:
+          type: string
+          description: At most 32 characters.
+        description:
+          type: string
+          description: At most 2304 characters.
+        instructions:
+          type: string
+          description: The agent's system prompt, in Markdown.
+        welcome_message:
+          type: string
+          description: At most 768 characters. Empty when the model suggested none.
+        conversation_starters:
+          type: array
+          description: >
+            At most four, each at most 768 characters. Blank entries are
+            dropped rather than returned as empty chips.
+          items: { type: string }
+
+    GenerateProjectContextDraftRequest:
+      type: object
+      required: [user_description]
+      properties:
+        user_description:
+          type: string
+          description: What the project is, in plain text. Required and non-blank.
+        current_project_background:
+          type: string
+          description: >
+            The Project Background as it stands. When present the draft is
+            generated in EDIT mode - the model refines this content instead of
+            writing from nothing. This is the one edit mode that is served,
+            because it carries its own prior content and needs no repository
+            read.
+        llm_settings:
+          $ref: '#/components/schemas/DraftLlmSettings'
+
+    ProjectContextDraft:
+      type: object
+      required: [project_background]
+      properties:
+        project_background:
+          type: string
+          description: >
+            Markdown, truncated to 2500 characters - the cap on
+            project_context.content, so a draft this route returns can always
+            be saved.
+
     LlmSettings:
       type: object
       properties:
@@ -8760,6 +8899,227 @@ paths:
         '403': { $ref: '#/components/responses/403' }
         '413':
           description: The request body is above the 4 MiB bound.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: >
+            The LLM gateway is configured and did not complete the request.
+            Distinct from 503, which means no gateway is configured at all.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: >
+            No completion backend is composed because LLM_GATEWAY_URL is empty.
+            The route is still registered on purpose, so an unconfigured
+            deployment is distinguishable from a missing route.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PredictLLMUnavailableResponse'
+
+  # ==========================================================================
+  # AI DRAFTS (#254 P1) — turn a plain-text description into a draft the
+  # review form edits and submits.
+  # ==========================================================================
+  /elitea_core/generate_skill_draft/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+
+    post:
+      operationId: generateSkillDraft
+      summary: Draft a skill from a plain-text description
+      description: |
+        These three draft routes stood in router.go's NOTE(#126) tombstone —
+        registered behind a `RouterConfig.Predictor` nothing ever assigned, so
+        they answered 404 in every deployment. They are pure LLM plays: one
+        blocking turn through the same gateway hop `predict_llm` uses, no
+        runtime and no task. The system prompt is in the Go source rather than
+        in the service-prompt configuration store legacy read it from, so a
+        deployment that has never seeded a service prompt still generates
+        drafts.
+
+        NOTE(#254): internal/api/v2/drafts/drafts.go GenerateSkillDraft.
+        Gated on `models.applications.skills.create`, the permission legacy's
+        own generate_skill_draft.py declares.
+      tags: [skills]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GenerateSkillDraftRequest'
+      responses:
+        '200':
+          description: The generated skill draft
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SkillDraft'
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '413':
+          description: The request body is above the 1 MiB bound.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: >
+            The gateway hop worked and the generation is unusable — the model
+            did not answer with JSON, was cut off mid-answer, or returned a
+            draft that cannot be saved. Distinct from 502, which means the hop
+            itself failed, and from 500, which would say this service is broken.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: >
+            The LLM gateway is configured and did not complete the request.
+            Distinct from 503, which means no gateway is configured at all.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: >
+            No completion backend is composed because LLM_GATEWAY_URL is empty.
+            The route is still registered on purpose, so an unconfigured
+            deployment is distinguishable from a missing route.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PredictLLMUnavailableResponse'
+
+  /elitea_core/generate_application_draft/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+
+    post:
+      operationId: generateApplicationDraft
+      summary: Draft an agent from a plain-text description
+      description: |
+        These three draft routes stood in router.go's NOTE(#126) tombstone —
+        registered behind a `RouterConfig.Predictor` nothing ever assigned, so
+        they answered 404 in every deployment. They are pure LLM plays: one
+        blocking turn through the same gateway hop `predict_llm` uses, no
+        runtime and no task. The system prompt is in the Go source rather than
+        in the service-prompt configuration store legacy read it from, so a
+        deployment that has never seeded a service prompt still generates
+        drafts.
+
+        NOTE(#254): internal/api/v2/drafts/drafts.go GenerateApplicationDraft.
+        Gated on `models.applications.applications.create`, the permission
+        legacy's own generate_application_draft.py declares.
+      tags: [applications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GenerateApplicationDraftRequest'
+      responses:
+        '200':
+          description: The generated agent draft
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApplicationDraft'
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '413':
+          description: The request body is above the 1 MiB bound.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: >
+            The gateway hop worked and the generation is unusable — the model
+            did not answer with JSON, was cut off mid-answer, or returned a
+            draft that cannot be saved. Distinct from 502, which means the hop
+            itself failed, and from 500, which would say this service is broken.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: >
+            The LLM gateway is configured and did not complete the request.
+            Distinct from 503, which means no gateway is configured at all.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: >
+            No completion backend is composed because LLM_GATEWAY_URL is empty.
+            The route is still registered on purpose, so an unconfigured
+            deployment is distinguishable from a missing route.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PredictLLMUnavailableResponse'
+
+  /elitea_core/generate_project_context_draft/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+
+    post:
+      operationId: generateProjectContextDraft
+      summary: Draft a Project Background from a plain-text description
+      description: |
+        These three draft routes stood in router.go's NOTE(#126) tombstone —
+        registered behind a `RouterConfig.Predictor` nothing ever assigned, so
+        they answered 404 in every deployment. They are pure LLM plays: one
+        blocking turn through the same gateway hop `predict_llm` uses, no
+        runtime and no task. The system prompt is in the Go source rather than
+        in the service-prompt configuration store legacy read it from, so a
+        deployment that has never seeded a service prompt still generates
+        drafts.
+
+        NOTE(#254): internal/api/v2/drafts/drafts.go
+        GenerateProjectContextDraft. Gated on `models.project_context.edit`,
+        NOT on legacy's `models.project_context.generate`: nothing in this
+        repository's migration history grants that string, so gating on it
+        would ship a permanent 403 nobody can clear (#313). 0068 grants
+        `.edit` to exactly the roles legacy gives `.generate` — admin and
+        editor, never viewer — and saving the draft needs it anyway.
+      tags: [settings]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GenerateProjectContextDraftRequest'
+      responses:
+        '200':
+          description: The generated Project Background draft
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectContextDraft'
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '413':
+          description: The request body is above the 1 MiB bound.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: >
+            The gateway hop worked and the generation is unusable — the model
+            did not answer with JSON, was cut off mid-answer, or returned a
+            draft that cannot be saved. Distinct from 502, which means the hop
+            itself failed, and from 500, which would say this service is broken.
           content:
             application/json:
               schema:

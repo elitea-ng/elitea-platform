@@ -57,6 +57,7 @@ import type {
   ApplicationCreateRequest,
   ApplicationCreatedResponse,
   ApplicationDetail,
+  ApplicationDraft,
   ApplicationExportResponse,
   ApplicationList,
   ApplicationRelationList,
@@ -78,6 +79,7 @@ import type {
   ExportConverterResponse,
   ForkRequest,
   ForkResponse,
+  GenerateApplicationDraftRequest,
   GetApplicationIconsParams,
   GetProjectQuotaParams,
   GetRecommendationsParams,
@@ -423,6 +425,318 @@ export function usePredictLLM<
   const queryOptions = getPredictLLMQueryOptions(
     projectId,
     predictLLMRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type generateApplicationDraftResponse200 = {
+  data: ApplicationDraft;
+  status: 200;
+};
+
+export type generateApplicationDraftResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type generateApplicationDraftResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type generateApplicationDraftResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type generateApplicationDraftResponse413 = {
+  data: ErrorResponse;
+  status: 413;
+};
+
+export type generateApplicationDraftResponse422 = {
+  data: ErrorResponse;
+  status: 422;
+};
+
+export type generateApplicationDraftResponse502 = {
+  data: ErrorResponse;
+  status: 502;
+};
+
+export type generateApplicationDraftResponse503 = {
+  data: PredictLLMUnavailableResponse;
+  status: 503;
+};
+
+export type generateApplicationDraftResponseSuccess =
+  generateApplicationDraftResponse200 & {
+    headers: Headers;
+  };
+export type generateApplicationDraftResponseError = (
+  | generateApplicationDraftResponse400
+  | generateApplicationDraftResponse401
+  | generateApplicationDraftResponse403
+  | generateApplicationDraftResponse413
+  | generateApplicationDraftResponse422
+  | generateApplicationDraftResponse502
+  | generateApplicationDraftResponse503
+) & {
+  headers: Headers;
+};
+
+export type generateApplicationDraftResponse =
+  | generateApplicationDraftResponseSuccess
+  | generateApplicationDraftResponseError;
+
+export const getGenerateApplicationDraftUrl = (projectId: string) => {
+  return `/elitea_core/generate_application_draft/prompt_lib/${projectId}`;
+};
+
+/**
+ * These three draft routes stood in router.go's NOTE(#126) tombstone —
+ * registered behind a `RouterConfig.Predictor` nothing ever assigned, so
+ * they answered 404 in every deployment. They are pure LLM plays: one
+ * blocking turn through the same gateway hop `predict_llm` uses, no
+ * runtime and no task. The system prompt is in the Go source rather than
+ * in the service-prompt configuration store legacy read it from, so a
+ * deployment that has never seeded a service prompt still generates
+ * drafts.
+ *
+ * NOTE(#254): internal/api/v2/drafts/drafts.go GenerateApplicationDraft.
+ * Gated on `models.applications.applications.create`, the permission
+ * legacy's own generate_application_draft.py declares.
+ * @summary Draft an agent from a plain-text description
+ */
+export const generateApplicationDraft = async (
+  projectId: string,
+  generateApplicationDraftRequest: GenerateApplicationDraftRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<generateApplicationDraftResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+  return eliteaFetch<generateApplicationDraftResponse>(
+    getGenerateApplicationDraftUrl(projectId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(generateApplicationDraftRequest),
+    },
+  );
+};
+
+export const getGenerateApplicationDraftQueryKey = (
+  projectId: string,
+  generateApplicationDraftRequest?: GenerateApplicationDraftRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/generate_application_draft/prompt_lib/${projectId}`,
+    generateApplicationDraftRequest,
+  ] as const;
+};
+
+export const getGenerateApplicationDraftQueryOptions = <
+  TData = Awaited<ReturnType<typeof generateApplicationDraft>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ErrorResponse
+    | PredictLLMUnavailableResponse,
+>(
+  projectId: string,
+  generateApplicationDraftRequest: GenerateApplicationDraftRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof generateApplicationDraft>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGenerateApplicationDraftQueryKey(
+      projectId,
+      generateApplicationDraftRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof generateApplicationDraft>>
+  > = ({ signal }) =>
+    generateApplicationDraft(projectId, generateApplicationDraftRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof generateApplicationDraft>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GenerateApplicationDraftQueryResult = NonNullable<
+  Awaited<ReturnType<typeof generateApplicationDraft>>
+>;
+export type GenerateApplicationDraftQueryError =
+  | N400Response
+  | N401Response
+  | N403Response
+  | ErrorResponse
+  | PredictLLMUnavailableResponse;
+
+export function useGenerateApplicationDraft<
+  TData = Awaited<ReturnType<typeof generateApplicationDraft>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ErrorResponse
+    | PredictLLMUnavailableResponse,
+>(
+  projectId: string,
+  generateApplicationDraftRequest: GenerateApplicationDraftRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof generateApplicationDraft>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof generateApplicationDraft>>,
+          TError,
+          Awaited<ReturnType<typeof generateApplicationDraft>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGenerateApplicationDraft<
+  TData = Awaited<ReturnType<typeof generateApplicationDraft>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ErrorResponse
+    | PredictLLMUnavailableResponse,
+>(
+  projectId: string,
+  generateApplicationDraftRequest: GenerateApplicationDraftRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof generateApplicationDraft>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof generateApplicationDraft>>,
+          TError,
+          Awaited<ReturnType<typeof generateApplicationDraft>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGenerateApplicationDraft<
+  TData = Awaited<ReturnType<typeof generateApplicationDraft>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ErrorResponse
+    | PredictLLMUnavailableResponse,
+>(
+  projectId: string,
+  generateApplicationDraftRequest: GenerateApplicationDraftRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof generateApplicationDraft>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Draft an agent from a plain-text description
+ */
+
+export function useGenerateApplicationDraft<
+  TData = Awaited<ReturnType<typeof generateApplicationDraft>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ErrorResponse
+    | PredictLLMUnavailableResponse,
+>(
+  projectId: string,
+  generateApplicationDraftRequest: GenerateApplicationDraftRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof generateApplicationDraft>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGenerateApplicationDraftQueryOptions(
+    projectId,
+    generateApplicationDraftRequest,
     options,
   );
 
