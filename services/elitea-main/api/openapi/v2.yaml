@@ -1980,7 +1980,7 @@ components:
         There is NO project or canvas field, deliberately. Both come from the
         gated mount pattern. The deleted socket prototype read
         `data["user_id"]` and a client-supplied room name off the wire, which is
-        the defect #622 exists to not repeat.
+        the defect issue 622 exists to not repeat.
       properties:
         state:
           type: string
@@ -8867,7 +8867,7 @@ paths:
       operationId: heartbeatCanvasPresence
       summary: Announce that this caller has a canvas open, and read the roster
       description: |
-        Canvas editor presence WITHOUT a socket server (#622, decided in #615).
+        Canvas editor presence WITHOUT a socket server (issue 622, decided in issue 615).
         Two people editing one canvas was last-write-wins and silent.
 
         This is a HEARTBEAT. The SPA calls it on mount, on a timer at a third of
@@ -8888,7 +8888,7 @@ paths:
         `schema({project_id})` before anything is published; a canvas that does
         not live in this project is a 404 and publishes nothing.
 
-        NOTE(#622): internal/api/v2/canvaspresence. Gated on
+        NOTE(issue 622): internal/api/v2/canvaspresence. Gated on
         `models.chat.canvas.details` — the string the canvas READ already takes,
         because announcing presence on a canvas is not a wider claim than
         opening it, and reusing it means this route needs no migration and 403s
@@ -13233,7 +13233,7 @@ paths:
                 type: object
                 additionalProperties: true
                 x-elitea-passthrough: >-
-                  The attachment row as the repository returns it
+                  NOTE(W2): the attachment row as the repository returns it
                   (internal/api/v2/skills/handler.go updateSkillRelation); the
                   writer owns the shape.
         '400': { $ref: '#/components/responses/400' }

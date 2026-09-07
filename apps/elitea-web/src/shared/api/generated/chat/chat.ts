@@ -1270,7 +1270,7 @@ export const getHeartbeatCanvasPresenceUrl = (
 };
 
 /**
- * Canvas editor presence WITHOUT a socket server (#622, decided in #615).
+ * Canvas editor presence WITHOUT a socket server (issue 622, decided in issue 615).
  * Two people editing one canvas was last-write-wins and silent.
  *
  * This is a HEARTBEAT. The SPA calls it on mount, on a timer at a third of
@@ -1291,7 +1291,7 @@ export const getHeartbeatCanvasPresenceUrl = (
  * `schema({project_id})` before anything is published; a canvas that does
  * not live in this project is a 404 and publishes nothing.
  *
- * NOTE(#622): internal/api/v2/canvaspresence. Gated on
+ * NOTE(issue 622): internal/api/v2/canvaspresence. Gated on
  * `models.chat.canvas.details` — the string the canvas READ already takes,
  * because announcing presence on a canvas is not a wider claim than
  * opening it, and reusing it means this route needs no migration and 403s

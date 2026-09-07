@@ -59,7 +59,7 @@ export const CanvasPresenceRequest = zod
       ),
   })
   .describe(
-    'The heartbeat body. Every field is optional; an empty body is a `viewing` beat.\nThere is NO project or canvas field, deliberately. Both come from the gated mount pattern. The deleted socket prototype read `data[\"user_id\"]` and a client-supplied room name off the wire, which is the defect #622 exists to not repeat.\n',
+    'The heartbeat body. Every field is optional; an empty body is a `viewing` beat.\nThere is NO project or canvas field, deliberately. Both come from the gated mount pattern. The deleted socket prototype read `data[\"user_id\"]` and a client-supplied room name off the wire, which is the defect issue 622 exists to not repeat.\n',
   );
 
 export type CanvasPresenceRequest = zod.input<typeof CanvasPresenceRequest>;
