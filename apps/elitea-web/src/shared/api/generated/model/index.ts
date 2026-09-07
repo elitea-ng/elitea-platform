@@ -281,6 +281,7 @@ export * from "./projectWithGroups.zod";
 export * from "./publicApplicationDetail.zod";
 export * from "./publicApplicationList.zod";
 export * from "./publicApplicationSummary.zod";
+export * from "./publicApplicationTag.zod";
 export * from "./publicSkillDetail.zod";
 export * from "./publicSkillListItem.zod";
 export * from "./publicSkillVersion.zod";

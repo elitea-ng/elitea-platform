@@ -1258,9 +1258,20 @@ export const getListPublicApplicationsUrl = (
 };
 
 /**
- * NOTE(W2): internal/api/v2/eliteacore/handler.go:1251-1317 — {rows,
- * total}; limit/offset are accepted but not read (hard LIMIT 50); the
- * handler reads ?category=.
+ * The public catalogue. Answers `{rows, total}` where `total` counts the
+ * FILTERED set, not the whole catalogue, so a client can page through it.
+ *
+ * Every parameter below is read by
+ * internal/api/v2/eliteacore/public_applications.go. A `sort_by`,
+ * `sort_order`, `agents_type` or `statuses` value outside its allowlist,
+ * or a `limit`/`offset` outside its range, is refused with 400 and a body
+ * naming the parameter — it is never silently ignored. The 400 is NOT
+ * declared as a response here: `eliteaFetch` throws on every non-2xx, so
+ * this codebase keeps generated response types 200-only (see
+ * apps/elitea-web/src/pages/agents/Latest.tsx).
+ *
+ * Trending (`trend_start_period`/`trend_end_period`) is the one pylon
+ * parameter still missing here.
  * @summary List published applications visible without project membership
  */
 export const listPublicApplications = async (

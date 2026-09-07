@@ -24,6 +24,9 @@ const AGENT: ApplicationData = {
   version_name: 'v1',
   agent_type: 'agent',
   meta: null,
+  tags: [],
+  likes: 0,
+  is_liked: false,
 };
 
 /**

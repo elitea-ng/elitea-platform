@@ -29,3 +29,40 @@ export const LikeUpdateStrategy = {
   OPTIMISTIC_DECREMENT: 'OPTIMISTIC_DECREMENT' as const,
 } as const;
 
+
+/**
+ * How long the search box waits after the last keystroke before the query
+ * reaches the server. The catalogue filter is a real request now, so a
+ * per-keystroke send would be a request per character.
+ */
+export const SEARCH_DEBOUNCE_MS = 300;
+
+/**
+ * The sort choices offered in the hub. `sortBy`/`sortOrder` are the values the
+ * catalogue handler accepts — anything outside its allowlist is a 400, so this
+ * list and the server's allowlist must stay in step
+ * (`services/elitea-main/internal/api/v2/eliteacore/public_applications.go`).
+ */
+export const SORT_OPTIONS = [
+  {
+    key: 'newest',
+    labelKey: 'agentsHub.sort.newest',
+    labelFallback: 'Newest first',
+    sortBy: 'created_at',
+    sortOrder: 'desc',
+  },
+  {
+    key: 'name',
+    labelKey: 'agentsHub.sort.name',
+    labelFallback: 'Name A-Z',
+    sortBy: 'name',
+    sortOrder: 'asc',
+  },
+  {
+    key: 'likes',
+    labelKey: 'agentsHub.sort.likes',
+    labelFallback: 'Most liked',
+    sortBy: 'likes',
+    sortOrder: 'desc',
+  },
+] as const;

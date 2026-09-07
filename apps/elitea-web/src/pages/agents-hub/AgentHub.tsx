@@ -23,6 +23,13 @@
  *    backend's hardcoded 50-row cap — see `useAgentHubData.ts`'s own doc
  *    comment on findings 5/6), the modal simply never opens; there is no
  *    other agent-by-id lookup in this API surface to fall back to.
+ *  - Issue #36 item 8: the search box and the sort control now drive the
+ *    SERVER's own parameters (`?query=`, `?sort_by=`, `?sort_order=`) rather
+ *    than a client-side filter over whatever page happened to be in memory.
+ *    The catalogue handler reads them, counts `total` over the filtered set,
+ *    and pages with `limit`/`offset`, so a match on page two is found and
+ *    "Show more" can reach it. A client-side name filter over a truncated
+ *    page silently answered "No agents found" for anything past the cap.
  *  - Finding 9: the search box + category-filter chips (dropped entirely
  *    in the port) are restored using `shared/ui/CategoryFilter` — the same
  *    chrome component `pages/credentials/CredentialsTypesPanel.tsx` and
@@ -46,7 +53,9 @@
 import { memo, useCallback, useEffect, useMemo, useState, type ChangeEvent } from 'react';
 
 import Box from '@mui/material/Box';
+import MenuItem from '@mui/material/MenuItem';
 import type { SxProps, Theme } from '@mui/material/styles';
+import TextField from '@mui/material/TextField';
 
 import { useSearch } from '@tanstack/react-router';
 
@@ -57,8 +66,13 @@ import { NoResultsMessage } from '@/shared/ui/NoResultsMessage';
 
 import { useAgentHubData } from './useAgentHubData';
 import { AgentCategorySection, AgentModal } from './ui';
-import { filterApplicationsByQuery } from './helpers';
-import { OTHER_CATEGORY } from './constants';
+import {
+  MY_LIKED_CATEGORY,
+  OTHER_CATEGORY,
+  SEARCH_DEBOUNCE_MS,
+  SORT_OPTIONS,
+  TRENDING_CATEGORY,
+} from './constants';
 import type { ApplicationData } from './types';
 
 export interface AgentHubProps {
@@ -80,9 +94,26 @@ const AgentHub = memo(() => {
   const search = useSearch({ strict: false }) as AgentHubSearch;
   const [selectedTagNames, setSelectedTagNames] = useState<string[]>([]);
   const [query, setQuery] = useState('');
+  /**
+   * The text actually sent to the server. `query` is what the box shows; this
+   * trails it by `SEARCH_DEBOUNCE_MS` so a typed word is one request, not one
+   * request per keystroke.
+   */
+  const [submittedQuery, setSubmittedQuery] = useState('');
+  const [sortKey, setSortKey] = useState<string>(SORT_OPTIONS[0].key);
   const [selectedApplication, setSelectedApplication] = useState<ApplicationData | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [hasOpenedDeepLink, setHasOpenedDeepLink] = useState(false);
+
+  useEffect(() => {
+    const timer = setTimeout(() => { setSubmittedQuery(query); }, SEARCH_DEBOUNCE_MS);
+    return () => { clearTimeout(timer); };
+  }, [query]);
+
+  const sortOption = useMemo(
+    () => SORT_OPTIONS.find(option => option.key === sortKey) ?? SORT_OPTIONS[0],
+    [sortKey],
+  );
 
   const {
     allCategories,
@@ -91,8 +122,14 @@ const AgentHub = memo(() => {
     loadingTags,
     refreshingTags,
     error,
+    hasMore,
+    loadMore,
     onRefresh,
-  } = useAgentHubData(selectedTagNames);
+  } = useAgentHubData(selectedTagNames, {
+    query: submittedQuery,
+    sortBy: sortOption.sortBy,
+    sortOrder: sortOption.sortOrder,
+  });
 
   const handleApplicationSelect = useCallback((app: ApplicationData) => {
     setSelectedApplication(app);
@@ -104,11 +141,18 @@ const AgentHub = memo(() => {
     setSelectedApplication(null);
   }, []);
 
+  /**
+   * "Show more" on an ordinary category asks the SERVER for the next page.
+   * Trending and My Liked are their own single-page queries, so there is
+   * nothing further to ask for there.
+   */
   const handleLoadMore = useCallback(
-    (_category: string) => {
-      // All data is fetched upfront — no-op for pagination.
+    (category: string) => {
+      if (category === TRENDING_CATEGORY || category === MY_LIKED_CATEGORY) return;
+      if (!hasMore) return;
+      void loadMore();
     },
-    [],
+    [hasMore, loadMore],
   );
 
   const handleSelectCategory = useCallback((category: string) => {
@@ -119,6 +163,10 @@ const AgentHub = memo(() => {
 
   const handleSearchChange = useCallback((event: ChangeEvent<HTMLInputElement>) => {
     setQuery(event.target.value);
+  }, []);
+
+  const handleSortChange = useCallback((event: ChangeEvent<HTMLInputElement>) => {
+    setSortKey(event.target.value);
   }, []);
 
   // Finding 8: auto-open the deep-linked agent's modal once it shows up in
@@ -139,16 +187,18 @@ const AgentHub = memo(() => {
     [allCategories],
   );
 
-  // Finding 9: search-box text filtering, applied client-side on top of
-  // whatever `useAgentHubData`'s own tag-selection filtering already
-  // returned in `applicationsByTag`.
+  /**
+   * The rows come back already filtered by the server's `?query=`, so nothing
+   * is filtered again here. A second client-side pass over the page in hand
+   * is what made the search look broken for anything outside it.
+   */
   const visibleItemsByCategory = useMemo(() => {
     const result: Record<string, ApplicationData[]> = {};
     visibleCategories.forEach(category => {
-      result[category] = filterApplicationsByQuery(applicationsByTag[category] || [], query);
+      result[category] = applicationsByTag[category] || [];
     });
     return result;
-  }, [visibleCategories, applicationsByTag, query]);
+  }, [visibleCategories, applicationsByTag]);
 
   const hasAnyVisibleItems = useMemo(
     () => Object.values(visibleItemsByCategory).some(items => items.length > 0),
@@ -195,6 +245,15 @@ const AgentHub = memo(() => {
       gap: '2rem',
       width: '100%',
     },
+    sortRow: {
+      display: 'flex',
+      justifyContent: 'flex-end',
+      width: '100%',
+      paddingBottom: '1rem',
+    },
+    sortField: {
+      minWidth: '12rem',
+    },
   };
 
   return (
@@ -208,6 +267,26 @@ const AgentHub = memo(() => {
         selectedCategories={selectedTagNames}
         onSelectCategory={handleSelectCategory}
       >
+        <Box sx={styles.sortRow}>
+          <TextField
+            select
+            size="small"
+            value={sortKey}
+            onChange={handleSortChange}
+            label={t('agentsHub.sortBy', 'Sort by')}
+            sx={styles.sortField}
+            slotProps={{ htmlInput: { 'aria-label': t('agentsHub.sortBy', 'Sort by') } }}
+          >
+            {SORT_OPTIONS.map(option => (
+              <MenuItem
+                key={option.key}
+                value={option.key}
+              >
+                {t(option.labelKey, option.labelFallback)}
+              </MenuItem>
+            ))}
+          </TextField>
+        </Box>
         {error !== null && (
           <BannerMessage
             variant="error"
