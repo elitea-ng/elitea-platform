@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -14,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	toolkitrun "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkitrun"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 )
@@ -109,6 +109,17 @@ type Handler struct {
 	// pre-built MCP servers an operator registered, and the toolkits an
 	// admitted provider publishes. See projection.go for the merge contract.
 	projections []ToolkitTypeProjection
+	// toolRuns runs one toolkit tool synchronously (#340). Nil restores the
+	// `503 indexer service not available` both test routes answered before a
+	// producer existed, which is the honest answer where no runtime is
+	// composed.
+	toolRuns toolkitrun.UseCase
+}
+
+// WithToolRuns supplies the synchronous tool-run use case. Without it the two
+// test routes keep their 503.
+func WithToolRuns(runs toolkitrun.UseCase) Option {
+	return func(h *Handler) { h.toolRuns = runs }
 }
 
 // Option configures a Handler at construction, matching the pattern
@@ -693,30 +704,78 @@ func (h *Handler) ForkToolkit(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, tool)
 }
 
-// TestTool reports that running a single tool has no backend in this stack.
-// See the NOTE(#126) above the Handler declaration; the 503 body is unchanged
-// from what every deployment already returned.
+// TestTool runs ONE tool of ONE saved toolkit and answers with what it
+// returned (#340).
+//
+// It answered `503 indexer service not available` until the producer in
+// internal/application/toolkitcalltool existed. It still does where no runtime
+// is composed, because a deployment with no worker genuinely cannot run a tool
+// — see toolkitrun.WriteUnavailable for why that sentence is unchanged.
+//
+// This route, `POST /test_tool/prompt_lib/{projectID}/{toolID}`, is shadowed by
+// nothing and is reachable in EVERY deployment. Its sibling below shares a path
+// with the index-start route and is reachable only where the runtime is absent;
+// the route decision is recorded in internal/application/toolkitcalltool/doc.go.
 func (h *Handler) TestTool(w http.ResponseWriter, r *http.Request) {
-	var body map[string]any
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && err != io.EOF {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request body"})
-		return
-	}
-
-	writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "error": "indexer service not available"})
+	h.runToolkitTool(w, r, chi.URLParam(r, "toolID"))
 }
 
-// TestToolkitTool reports that running a toolkit's tool has no backend in this
-// stack. See the NOTE(#126) above the Handler declaration; the 503 body is
-// unchanged from what every deployment already returned.
+// TestToolkitTool is the same run reached through pylon's own path,
+// `POST /test_toolkit_tool/prompt_lib/{projectID}`, which names the toolkit in
+// the body rather than the route.
+//
+// NOTE(#340): where the runtime IS composed this handler is unreachable —
+// indexingapi.CurrentIndexStartPath is the same string and chi resolves the
+// explicit registration before the subrouter's wildcard. It is not deleted,
+// because it is the only handler on that path in a runtime-less deployment, and
+// no test asserts it is dead. See the package doc named above.
 func (h *Handler) TestToolkitTool(w http.ResponseWriter, r *http.Request) {
-	var body map[string]any
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && err != io.EOF {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request body"})
+	h.runToolkitTool(w, r, "")
+}
+
+// runToolkitTool is the body both routes share, so the two cannot drift apart
+// on what a tool error looks like.
+func (h *Handler) runToolkitTool(w http.ResponseWriter, r *http.Request, routeToolkitID string) {
+	if h == nil || h.toolRuns == nil {
+		// Drain nothing and decide nothing: with no use case there is no run to
+		// describe, and the answer is the same absence it always was.
+		toolkitrun.WriteUnavailable(w)
 		return
 	}
-
-	writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "error": "indexer service not available"})
+	projectID, err := strconv.ParseInt(chi.URLParam(r, "projectID"), 10, 64)
+	if err != nil || projectID <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "invalid project id"})
+		return
+	}
+	user, found := auth.UserFromContext(r.Context())
+	if !found {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"ok": false, "error": "authentication required"})
+		return
+	}
+	actorUserID, ok := user.OwningUserID()
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"ok": false, "error": "authentication required"})
+		return
+	}
+	toolkitID := int64(0)
+	if routeToolkitID != "" {
+		if toolkitID, err = strconv.ParseInt(routeToolkitID, 10, 64); err != nil || toolkitID <= 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "invalid toolkit id"})
+			return
+		}
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, toolkitrun.MaxRequestBodyBytes)
+	request, err := toolkitrun.DecodeRequest(r, projectID, actorUserID, toolkitID)
+	if err != nil {
+		toolkitrun.WriteInvalidRequest(w)
+		return
+	}
+	outcome, err := h.toolRuns.RunTool(r.Context(), request)
+	if err != nil {
+		toolkitrun.WriteError(w, err)
+		return
+	}
+	toolkitrun.WriteOutcome(w, outcome)
 }
 
 func (h *Handler) ExportToolkit(w http.ResponseWriter, r *http.Request) {
