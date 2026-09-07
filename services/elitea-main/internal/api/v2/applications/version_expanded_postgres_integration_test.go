@@ -83,10 +83,14 @@ func newExpandedFixtureWithHeaderValue(t *testing.T, agentType, headerValue stri
 	}
 	seedHandlerUser(t, pool, 7, "expanded@example.com")
 
+	// `applications.owner_id` is the owning PROJECT and this row lives in p_1,
+	// so it holds 1 (#533). User 7 is the version AUTHOR, below. The seed used
+	// to put the user in both columns, which tenant/0131 refuses with a foreign
+	// key to centry.project.
 	var applicationID, versionID int64
 	if err := pool.QueryRow(ctx, `
 		INSERT INTO p_1.applications (name, description, owner_id)
-		VALUES ('expanded-fixture', '', 7) RETURNING id`).Scan(&applicationID); err != nil {
+		VALUES ('expanded-fixture', '', 1) RETURNING id`).Scan(&applicationID); err != nil {
 		t.Fatalf("insert fixture application: %v", err)
 	}
 	// meta carries BOTH fork markers (is_forked must be true) and an icon.

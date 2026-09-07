@@ -451,7 +451,18 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// `eval_bindings`, `eval_datasets`, `eval_dataset_cases`, `eval_runs`,
 	// `eval_results` and `eval_human_scores` are deliberately absent and must
 	// arrive with the code that reads them.
-	require.EqualValues(t, 130, Head(tenant))
+	//
+	// 131: tenant/0131_owner_id_meanings_and_guards.sql, the second half of
+	// issue #533. 0128 wrote the meanings onto the columns and added no
+	// constraint, so `applications.owner_id` stayed DISPUTED: the legacy
+	// runtime reads it as a project and every writer here stored a user. 0131
+	// settles it as the PROJECT, repairs the rows that hold a user id, and
+	// gives the PROJECT-kind columns a FOREIGN KEY to centry.project(id). It
+	// also states the meaning of both `prompt_collections` columns, which 0128
+	// deliberately left blank, and it replaces the NO ACTION foreign key that
+	// 0130 put on eval_dimensions.application_id with the same key ON DELETE
+	// CASCADE, so an agent with a dimension can still be deleted.
+	require.EqualValues(t, 131, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own

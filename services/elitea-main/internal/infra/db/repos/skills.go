@@ -419,7 +419,7 @@ func (r *SkillsRepo) Create(ctx context.Context, projectID string, skill skills.
 
 	var sk skills.Skill
 	err = tx.QueryRow(ctx, createSkillSQL(s),
-		skill.Name, skill.Description, ownerID).Scan(&sk.ID, &sk.Name, &sk.Description, &sk.CreatedAt)
+		skill.Name, skill.Description, ownerID.Int64()).Scan(&sk.ID, &sk.Name, &sk.Description, &sk.CreatedAt)
 	if err != nil {
 		return skills.Skill{}, fmt.Errorf("skills: create: %w", err)
 	}

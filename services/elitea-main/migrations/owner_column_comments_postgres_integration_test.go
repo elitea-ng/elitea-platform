@@ -73,6 +73,7 @@ func TestTenantOwnerColumnsCarryTheirMeaningInTheDatabase(t *testing.T) {
 	for column, kind := range map[string]string{
 		"elitea_tools.owner_id":              "PROJECT",
 		"skills.owner_id":                    "PROJECT",
+		"applications.owner_id":              "PROJECT",
 		"chat_conversation_folders.owner_id": "USER",
 		"elitea_tools.author_id":             "USER",
 	} {
@@ -87,12 +88,21 @@ func TestTenantOwnerColumnsCarryTheirMeaningInTheDatabase(t *testing.T) {
 		}
 	}
 
-	// applications.owner_id is the disputed one: the legacy runtime and this
-	// service's Fork path read it as a project, and every writer here stores a
-	// user. The comment has to carry the dispute, because a reader who sees
-	// only "PROJECT" would write the join that the writers make wrong.
-	if description := comments["applications.owner_id"]; !strings.Contains(description, "DISPUTED") {
-		t.Errorf("applications.owner_id says %q; it must record that the writers disagree with the meaning (#533)",
-			description)
+	// applications.owner_id WAS the disputed one: the legacy runtime and this
+	// service's Fork path read it as a project, and every writer here stored a
+	// user. tenant/0131 settled it. The writers now store the project, the
+	// existing rows were repaired, and the column carries a foreign key to
+	// centry.project.
+	//
+	// So the comment must no longer say DISPUTED. A stale dispute is worse than
+	// no record: it tells the next reader to distrust a column that is now
+	// constrained, and it invites a second "correction" of writers that are
+	// already correct.
+	description := comments["applications.owner_id"]
+	if strings.Contains(description, "DISPUTED") {
+		t.Errorf("applications.owner_id still says %q; tenant/0131 settled the dispute (#533)", description)
+	}
+	if !strings.Contains(description, "0131") {
+		t.Errorf("applications.owner_id says %q; it must name the migration that settled it (#533)", description)
 	}
 }
