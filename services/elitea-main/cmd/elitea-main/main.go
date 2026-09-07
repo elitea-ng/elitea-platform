@@ -2468,7 +2468,12 @@ func startPipelineScheduleRunner(
 		return fmt.Errorf("parse pipeline schedule cadence: %w", err)
 	}
 	config := schedulingapp.Config{
-		InstanceID:      instanceID,
+		// Not `instanceID` directly: the caller passes
+		// runtimeConfig.SchedulerInstanceID, which is EMPTY unless
+		// ELITEA_RUNTIME_INDEX_SCHEDULING_ENABLED is on, and an empty name
+		// makes NewRunner below refuse — which used to stop the whole process.
+		// See pipeline_schedule_instance.go.
+		InstanceID:      pipelineScheduleInstanceID(instanceID),
 		LeaseDuration:   2 * time.Minute,
 		MaxParallel:     1,
 		PageSize:        1,
