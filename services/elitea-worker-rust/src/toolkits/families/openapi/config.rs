@@ -132,6 +132,13 @@ impl OpenApiToolkitConfig {
             additional_headers: self.additional_headers,
         }
     }
+
+    pub(crate) fn with_toolkit_id(mut self, id: Option<u64>) -> Self {
+        if let OpenApiAuth::Delegated { requirement, .. } = &mut self.auth {
+            *requirement = requirement.clone().with_toolkit_id(id);
+        }
+        self
+    }
 }
 
 pub(crate) enum OpenApiAuth {
@@ -239,7 +246,7 @@ fn parse_auth(
             &mut resource_metadata_url,
             "/.well-known/openid-configuration",
         )?;
-        let mut authorization_url = discovery;
+        let mut authorization_url = discovery.clone();
         append_path(&mut authorization_url, "/oauth2/v2.0/authorize")?;
         let server_url = canonical_url(base_url);
         let requirement = DelegatedAuthorizationRequirement::new(
@@ -251,8 +258,9 @@ fn parse_auth(
                 "Bearer error=\"unauthorized_client\", resource_metadata=\"{resource_metadata_url}\", authorization_uri=\"{authorization_url}\""
             )),
         )
+        .and_then(|requirement| requirement.with_configured_oauth(discovery.as_str(), settings))
         .ok_or_else(invalid_configuration)?;
-        let access_token = resolve_access_token(delegated_tokens, &server_url)?;
+        let access_token = resolve_access_token(delegated_tokens, &requirement)?;
         return Ok(OpenApiAuth::Delegated {
             access_token,
             requirement,
@@ -308,9 +316,17 @@ fn parse_auth(
 
 fn resolve_access_token(
     tokens: &Map<String, Value>,
-    server_url: &str,
+    requirement: &DelegatedAuthorizationRequirement,
 ) -> Result<Option<Zeroizing<String>>, OpenApiConfigError> {
-    let Some(value) = tokens.get(server_url) else {
+    // Prefer the exact configuration identity over the legacy resource URL.
+    let value = tokens
+        .iter()
+        .find(|(key, _)| {
+            key.as_str() != requirement.server_url() && requirement.matches_token_key(key)
+        })
+        .map(|(_, value)| value)
+        .or_else(|| tokens.get(requirement.server_url()));
+    let Some(value) = value else {
         return Ok(None);
     };
     let token = match value {

@@ -111,6 +111,8 @@ impl OrdinaryNoToolProfile {
     ) -> Result<Self, NativeAgentAssemblyError> {
         let mode = if resume {
             CommonProfileMode::Continuation
+        } else if request.payload.is_regenerate {
+            CommonProfileMode::Regenerate
         } else {
             CommonProfileMode::Fresh
         };

@@ -131,7 +131,8 @@ fn materialize(
     }
     if reference.tool_type() == "openapi" {
         let config = openapi::config::OpenApiToolkitConfig::parse(name, settings, delegated_tokens)
-            .map_err(|error| openapi_materialization_error(error.code()))?;
+            .map_err(|error| openapi_materialization_error(error.code()))?
+            .with_toolkit_id(reference.tool_id());
         let materialized = openapi::tools::build_openapi_toolset(name, config, policy)
             .map_err(|error| openapi_toolset_materialization_error(error.code()))?;
         return Ok((
@@ -142,7 +143,8 @@ fn materialize(
     if reference.tool_type() == "sharepoint" {
         let config =
             sharepoint::config::SharePointToolkitConfig::parse(name, settings, delegated_tokens)
-                .map_err(|error| sharepoint_materialization_error(error.code()))?;
+                .map_err(|error| sharepoint_materialization_error(error.code()))?
+                .with_toolkit_id(reference.tool_id());
         let materialized = sharepoint::tools::build_sharepoint_toolset(name, config, policy)
             .map_err(|error| sharepoint_toolset_materialization_error(error.code()))?;
         return Ok((

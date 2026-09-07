@@ -33,7 +33,9 @@ function sanitized(value: unknown, depth = 0): unknown {
   if (typeof value !== 'object' || value === null) return value;
   const result: Record<string, unknown> = {};
   for (const [key, child] of Object.entries(value)) {
-    if (!privateKey(key)) result[key] = sanitized(child, depth + 1);
+    // This constant is a backend credential reference, never a secret value.
+    if (key === 'mcp_client_secret' && child === '********') result[key] = child;
+    else if (!privateKey(key)) result[key] = sanitized(child, depth + 1);
   }
   return result;
 }
@@ -80,6 +82,42 @@ function authorizationSources(metadata: Record<string, unknown>): readonly Recor
   return metadata['guardrail_type'] === 'mcp_auth' || requestId(metadata) ? [metadata] : [];
 }
 
+function authorizationContent(
+  source: Record<string, unknown>,
+  servers: readonly string[],
+  fallbackContent: string,
+): string {
+  if (servers.length === 0) {
+    if (hasDurableSkip(source)) return 'Authorization details are unavailable. The tool has not run.';
+    const status = typeof source['status'] === 'number' ? source['status'] : 401;
+    const toolName = stringValue(source, 'tool_name') ?? 'MCP toolkit';
+    const serverUrl = stringValue(source, 'server_url') ?? 'MCP server';
+    return `${status}: Authorization error in "${toolName}" toolkit.\n\n` +
+      `The toolkit server at ${serverUrl} requires OAuth authorization, but did not provide authorization server configuration.`;
+  }
+  const message = (stringValue(source, 'message') ?? fallbackContent) || 'Authorization required.';
+  const metadataUrl = stringValue(source, 'resource_metadata_url');
+  const discovery = metadataUrl
+    ? `Resource metadata: ${metadataUrl}`
+    : `Authorization servers: ${servers.join(', ')}`;
+  return `${message}\n\n${discovery}`;
+}
+
+function hasDurableSkip(source: Record<string, unknown>): boolean {
+  return source['guardrail_type'] === 'mcp_auth'
+    && Boolean(stringValue(source, 'interrupt_id'))
+    && stringList(source['available_actions']).includes('skip');
+}
+
+function authorizationHierarchy(source: Record<string, unknown>) {
+  const nested = record(source['metadata']);
+  return {
+    parent_agent_path: source['parent_agent_path'] ?? nested['parent_agent_path'] ?? [],
+    parent_agent_name: stringValue(source, 'parent_agent_name') ?? stringValue(nested, 'parent_agent_name'),
+    parent_agent_call_id: stringValue(source, 'parent_agent_call_id') ?? stringValue(nested, 'parent_agent_call_id'),
+  };
+}
+
 function buildAuthorizationAction(
   source: Record<string, unknown>,
   fallbackContent: string,
@@ -90,26 +128,19 @@ function buildAuthorizationAction(
   const safeMetadata = sanitized(source) as Record<string, unknown>;
   delete safeMetadata['authorization_requests'];
   const servers = authorizationServers(safeMetadata);
-  const nestedMetadata = record(safeMetadata['metadata']);
-  const parentPath = safeMetadata['parent_agent_path'] ?? nestedMetadata['parent_agent_path'] ?? [];
-  const parentName = stringValue(safeMetadata, 'parent_agent_name') ?? stringValue(nestedMetadata, 'parent_agent_name');
-  const parentCallId = stringValue(safeMetadata, 'parent_agent_call_id') ?? stringValue(nestedMetadata, 'parent_agent_call_id');
   const toolName = stringValue(safeMetadata, 'tool_name') ?? 'MCP toolkit';
   const serverUrl = stringValue(safeMetadata, 'server_url') ?? servers[0] ?? 'MCP server';
-  const statusCode = safeMetadata['status'] ?? 401;
   const canAuthorize = servers.length > 0;
-  const message = (stringValue(safeMetadata, 'message') ?? fallbackContent) || 'Authorization required.';
-  const discovery = safeMetadata['resource_metadata_url']
-    ? `Resource metadata: ${String(safeMetadata['resource_metadata_url'])}`
-    : `Authorization servers: ${servers.join(', ')}`;
+  // Discovery failure must not hide a checkpoint-owned Skip decision.
+  const isPending = canAuthorize || hasDurableSkip(safeMetadata);
   return {
     id: exactId,
     authorizationRequestId: exactId,
     name: toolName,
-    status: canAuthorize ? ToolActionStatus.actionRequired : ToolActionStatus.error,
+    status: isPending ? ToolActionStatus.actionRequired : ToolActionStatus.error,
     type: TOOL_ACTION_TYPES.Toolkit,
     toolInputs: undefined,
-    toolOutputs: canAuthorize
+    toolOutputs: isPending
       ? {
           resource_metadata_url: safeMetadata['resource_metadata_url'] ?? null,
           authorization_servers: servers,
@@ -118,19 +149,14 @@ function buildAuthorizationAction(
       : undefined,
     toolMeta: safeMetadata,
     response_metadata: safeMetadata,
-    parent_agent_path: parentPath,
-    parent_agent_name: parentName,
-    parent_agent_call_id: parentCallId,
+    ...authorizationHierarchy(safeMetadata),
     created_at: createdAt,
     ended_at: createdAt,
     timestamp: createdAt,
     markdown: false,
     renderHtml: false,
-    isError: !canAuthorize,
-    content: canAuthorize
-      ? `${message}\n\n${discovery}`
-      : `${String(statusCode)}: Authorization error in "${toolName}" toolkit.\n\n` +
-        `The toolkit server at ${serverUrl} requires OAuth authorization, but did not provide authorization server configuration.`,
+    isError: !isPending,
+    content: authorizationContent(safeMetadata, servers, fallbackContent),
   };
 }
 

@@ -327,6 +327,21 @@ fn mcp_tool_call_response() -> Response<Body> {
     test_model_gateway_response(Body::new(Full::<Bytes>::from(raw)))
 }
 
+fn mcp_tool_batch_response(count: usize) -> Response<Body> {
+    let calls: Vec<_> = (0..count).map(|index| serde_json::json!({
+        "index": index,
+        "id": if index == 0 { "call_mcp".to_owned() } else { format!("call_mcp_{index}") },
+        "type": "function",
+        "function": {"name": "lookup_release", "arguments": format!("{{\"release\":\"1.{index}\"}}")}
+    })).collect();
+    let frame =
+        serde_json::json!({"choices":[{"delta":{"tool_calls":calls},"finish_reason":null}]});
+    let raw = format!(
+        "data: {frame}\n\ndata: {{\"choices\":[{{\"delta\":{{}},\"finish_reason\":\"tool_calls\"}}]}}\n\ndata: [DONE]\n\n"
+    );
+    test_model_gateway_response(Body::new(Full::<Bytes>::from(raw)))
+}
+
 fn colliding_mcp_tool_call_response() -> Response<Body> {
     let raw = concat!(
         "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_release\",\"type\":\"function\",\"function\":{\"name\":\"release_intelligence__lookup_release\",\"arguments\":\"{\\\"release\\\":\\\"1.2\\\"}\"}},{\"index\":1,\"id\":\"call_audit\",\"type\":\"function\",\"function\":{\"name\":\"audit_intelligence__lookup_release\",\"arguments\":\"{\\\"release\\\":\\\"1.2\\\"}\"}}]},\"finish_reason\":null}]}\n\n",
@@ -421,9 +436,18 @@ fn parallel_resolver_call_response() -> Response<Body> {
 }
 
 fn text_response(text: &str) -> Response<Body> {
-    let raw = format!(
-        "data: {{\"choices\":[{{\"delta\":{{\"role\":\"assistant\",\"content\":{text:?}}},\"finish_reason\":null}}]}}\n\ndata: {{\"choices\":[{{\"delta\":{{}},\"finish_reason\":\"stop\"}}]}}\n\ndata: {{\"choices\":[],\"usage\":{{\"prompt_tokens\":3,\"completion_tokens\":2}}}}\n\ndata: [DONE]\n\n"
-    );
+    // Exercise real delta collection, not a single chunk that masks truncation.
+    use std::fmt::Write as _;
+    let mut raw = String::new();
+    for chunk in text.chars() {
+        write!(
+            &mut raw,
+            "data: {{\"choices\":[{{\"delta\":{{\"content\":{:?}}},\"finish_reason\":null}}]}}\n\n",
+            chunk.to_string()
+        )
+        .expect("SSE fixture");
+    }
+    raw.push_str("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2}}\n\ndata: [DONE]\n\n");
     test_model_gateway_response(Body::new(Full::<Bytes>::from(raw)))
 }
 
@@ -1379,17 +1403,24 @@ async fn application_and_adhoc_bind_same_named_tools_to_exact_toolkit_implementa
 #[tokio::test(flavor = "current_thread")]
 async fn application_and_adhoc_resume_model_owned_delegated_authorization() {
     for kind in [AgentExecutionKind::Application, AgentExecutionKind::Adhoc] {
-        run_delegated_authorization_resume(kind, true).await;
-        run_delegated_authorization_resume(kind, false).await;
+        for count in [1, 3] {
+            run_delegated_authorization_resume(kind, true, count).await;
+            run_delegated_authorization_resume(kind, false, count).await;
+        }
     }
 }
 
 #[allow(clippy::too_many_lines)] // One initial pause and exact resume form one behavioral proof.
-async fn run_delegated_authorization_resume(kind: AgentExecutionKind, authorize: bool) {
-    let (runtime_context, context_calls) = runtime_context_client_for_redemptions(2);
+async fn run_delegated_authorization_resume(
+    kind: AgentExecutionKind,
+    authorize: bool,
+    count: usize,
+) {
+    let attempts = if authorize { 1 } else { count };
+    let (runtime_context, context_calls) = runtime_context_client_for_redemptions(attempts + 1);
     let (model_gateway, captured) = test_model_gateway_client(
         vec![
-            TestModelGatewayOutcome::Response(mcp_tool_call_response()),
+            TestModelGatewayOutcome::Response(mcp_tool_batch_response(count)),
             TestModelGatewayOutcome::Response(model_response()),
         ],
         test_model_gateway_config(),
@@ -1466,31 +1497,49 @@ async fn run_delegated_authorization_resume(kind: AgentExecutionKind, authorize:
                 "server_url": "https://mcp.example.invalid/v1/mcp"
             }));
     }
-    let resume = AuthorizedNativeAssembly::new(
-        &resume_request,
-        test_runtime_context_authority(),
-        AuthorizedNativeCommandBinding::fixture(),
+    for attempt in 0..attempts {
+        let resume = AuthorizedNativeAssembly::new(
+            &resume_request,
+            test_runtime_context_authority(),
+            AuthorizedNativeCommandBinding::fixture(),
+        );
+        let mut resumed = assembler
+            .assemble(resume)
+            .await
+            .expect("delegated authorization continuation");
+        resumed
+            .project_start(chrono::Utc::now())
+            .expect("resume start projection");
+        let (mut run, mut projector, completion) = resumed.start().expect("resumed native start");
+        while let Some(event) = run.next_event().await.expect("resumed authorization event") {
+            projector
+                .project(&event)
+                .expect("resumed authorization projection");
+        }
+        if attempt + 1 == attempts {
+            let _completed = completion.select().await.unwrap_or_else(|error| {
+                panic!("resumed completion: {error:?}; authorize={authorize}, count={count}, attempt={attempt}")
+            });
+            assert!(!projector.is_paused());
+        } else {
+            assert!(
+                projector.is_paused(),
+                "a distinct pending call retains its guard"
+            );
+        }
+    }
+    assert_eq!(context_calls.load(Ordering::Acquire), attempts + 1);
+    assert_eq!(connector.calls.load(Ordering::Acquire), attempts + 1);
+    assert_eq!(
+        tool_calls.load(Ordering::Acquire),
+        if authorize { count } else { 0 }
     );
-    let resumed = assembler
-        .assemble(resume)
-        .await
-        .expect("delegated authorization continuation");
-    let (mut run, _projector, completion) = resumed.start().expect("resumed native start");
-    while run
-        .next_event()
-        .await
-        .expect("resumed authorization event")
-        .is_some()
-    {}
-    let _completed = completion.select().await.expect("resumed completion");
-    assert_eq!(context_calls.load(Ordering::Acquire), 2);
-    assert_eq!(connector.calls.load(Ordering::Acquire), 2);
-    assert_eq!(tool_calls.load(Ordering::Acquire), usize::from(authorize));
 
     let captured = captured.lock().expect("captured model requests");
     assert_eq!(captured.len(), 2, "resume must not replan the pending call");
     let resumed: serde_json::Value =
         serde_json::from_slice(&captured[1].body).expect("resumed model request");
+    assert_complete_tool_history(&resumed);
     let tool_message = resumed["messages"]
         .as_array()
         .expect("resumed messages")
@@ -1513,6 +1562,33 @@ async fn run_delegated_authorization_resume(kind: AgentExecutionKind, authorize:
         assert_eq!(declined["type"], "mcp_auth_decision");
         assert_eq!(declined["status"], "declined");
     }
+}
+
+pub(super) fn assert_complete_tool_history(request: &serde_json::Value) {
+    let mut pending = HashSet::new();
+    for message in request["messages"].as_array().expect("messages") {
+        if message["role"] == "tool" {
+            let id = message["tool_call_id"].as_str().expect("result call ID");
+            assert!(
+                pending.remove(id),
+                "result must match one pending call: {id}"
+            );
+        } else {
+            assert!(
+                pending.is_empty(),
+                "unanswered calls before next model message: {pending:?}"
+            );
+            if let Some(calls) = message["tool_calls"].as_array() {
+                for call in calls {
+                    assert!(pending.insert(call["id"].as_str().expect("call ID").to_owned()));
+                }
+            }
+        }
+    }
+    assert!(
+        pending.is_empty(),
+        "provider request has unanswered calls: {pending:?}"
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -2261,6 +2337,43 @@ async fn run_parallel_nested_authorization_resume(authorize: bool) {
     assert_eq!(context_calls.load(Ordering::Acquire), 6);
     let captured = captured.lock().expect("captured model requests");
     assert_eq!(captured.len(), 6, "resume must not replan child calls");
+    let parent: serde_json::Value = serde_json::from_slice(&captured[5].body).unwrap();
+    let child_results = parent["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|message| message["role"] == "tool")
+        .map(|message| {
+            serde_json::from_str::<serde_json::Value>(message["content"].as_str().unwrap()).unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        child_results,
+        vec![serde_json::json!({"response": "resolved child"}); 2]
+    );
+    let mut resumed_tasks = captured[3..5]
+        .iter()
+        .map(|request| {
+            let body: serde_json::Value =
+                serde_json::from_slice(&request.body).expect("resumed child request");
+            body["messages"]
+                .as_array()
+                .expect("model messages")
+                .iter()
+                .filter(|message| message["role"] == "user")
+                .map(|message| message["content"].clone())
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    resumed_tasks.sort_by_cached_key(|task| serde_json::to_string(task).expect("user contents"));
+    assert_eq!(
+        resumed_tasks,
+        vec![
+            vec![serde_json::json!([{"type": "text", "text": "Resolve Olivia Lovelace"}])],
+            vec![serde_json::json!([{"type": "text", "text": "Resolve Sasha Grey"}])],
+        ],
+        "resume must retain each child's original task and hide control markers"
+    );
     if !authorize {
         assert_eq!(
             captured

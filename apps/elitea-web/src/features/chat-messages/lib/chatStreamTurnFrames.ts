@@ -13,6 +13,7 @@ import { convertJsonToString } from '@/shared/lib/json';
 import { ToolActionStatus } from '@/shared/lib/chat';
 
 import { applyThinkingStep, isEmptyTransition } from './chatStreamThinkingFrames';
+import { normalizeExecutionHierarchy } from './executionHierarchy';
 import { applyReasoningDelta, settleReasoning, splitWholeResponse } from './chatStreamReasoning';
 import {
   createAssistantMessage,
@@ -41,6 +42,17 @@ function isFinalResponse(frame: ChatStreamFrame): boolean {
   return Boolean(frame.response_metadata?.finish_reason);
 }
 
+const ANSWER_LIFECYCLE_FRAMES = new Set<string>([
+  SocketMessageType.StartTask,
+  SocketMessageType.AgentStart,
+  SocketMessageType.AgentLlmStart,
+  SocketMessageType.AgentLlmChunk,
+  SocketMessageType.Chunk,
+  SocketMessageType.AIMessageChunk,
+  SocketMessageType.AgentResponse,
+  SocketMessageType.PipelineFinish,
+]);
+
 /**
  * Reduce one turn-lifecycle frame, or return `undefined` for a frame this
  * family does not own so the dispatcher can offer it to the next one.
@@ -52,6 +64,15 @@ export function reduceTurnFrame(
   context: ChatStreamContext,
   index: number,
 ): readonly ChatMessage[] | undefined {
+  const hierarchy = normalizeExecutionHierarchy(
+    frame.response_metadata,
+    frame.response_metadata?.metadata,
+    frame.response_metadata?.tool_meta?.metadata,
+  );
+  const childOutput = hierarchy.parent_agent_path.length > 0 || Boolean(hierarchy.parent_agent_name);
+  // Child model output belongs to its execution steps, not the parent answer.
+  // A child's finish reason must not settle a parent that still waits for siblings.
+  if (childOutput && ANSWER_LIFECYCLE_FRAMES.has(type)) return history;
   switch (type) {
     // The turn begins. The baseline resets content here unless it is resuming a
     // continuation, so a regenerate does not append to the previous answer.
@@ -199,6 +220,10 @@ export function reduceTurnFrame(
       }
 
       if (removed.size > 0) next = next.filter((action) => !removed.has(action.id));
+
+      if (childOutput) {
+        return next === actions ? history : replaceAt(history, index, { toolActions: next });
+      }
 
       // The token stream is over, so a reasoning block still open here is never
       // going to close. `settleReasoning` hands its text back to an empty

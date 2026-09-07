@@ -1057,7 +1057,7 @@ async fn ask_user_pauses_and_resumes_as_the_original_correlated_tool_result() {
     let requests = captured.lock().expect("ask_user provider requests");
     assert_eq!(requests.len(), 1);
     let (calls, results) = count_call_parts(&requests[0], "ask-call-1");
-    assert_eq!((calls, results), (2, 1));
+    assert_eq!((calls, results), (1, 1));
     assert!(
         requests[0]
             .contents
@@ -1383,7 +1383,7 @@ async fn persisted_read_only_result_continues_after_restart_without_tool_reexecu
     assert_eq!(second_provider_calls.load(Ordering::SeqCst), 1);
     let requests = captured.lock().expect("captured resumed request");
     assert_eq!(requests.len(), 1);
-    assert_eq!(count_call_parts(&requests[0], "call-1"), (3, 1));
+    assert_eq!(count_call_parts(&requests[0], "call-1"), (1, 1));
 }
 
 async fn interrupt_replay_before_tool_result(
@@ -1647,7 +1647,7 @@ fn assert_replay_provider_transcript(request: &LlmRequest) {
         })
         .count();
     assert_eq!(approval_messages, 0);
-    assert_eq!(replayed_calls, 2);
+    assert_eq!(replayed_calls, 1);
     assert_eq!(results, 1);
 }
 

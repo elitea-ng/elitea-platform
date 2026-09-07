@@ -357,7 +357,8 @@ impl Agent for DelegatedAuthorizationEventAgent {
                 if let Some(request) = event.actions.tool_confirmation.as_ref()
                     && let Some(requirement) = authorization.requirement_for(&request.tool_name)
                 {
-                    let Some(encoded) = encode_delegated_authorization_requirement(requirement) else {
+                    let requirement = requirement.resolve_public_metadata().await;
+                    let Some(encoded) = encode_delegated_authorization_requirement(&requirement) else {
                         yield Err(AdkError::agent("delegated authorization metadata could not be encoded"));
                         return;
                     };
@@ -439,6 +440,14 @@ impl AuthorizedNativeCommandBinding {
             client_stream_id: "conversation-1".to_owned(),
             client_message_id: "message-1".to_owned(),
             sio_event: "chat_predict".to_owned(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn fixture_for_execution(execution_id: &str) -> Self {
+        Self {
+            execution_id: execution_id.to_owned(),
+            ..Self::fixture()
         }
     }
 }
@@ -1157,13 +1166,14 @@ pub(crate) async fn assemble_pipeline_native(
     )
     .await?;
     let is_resume = resume.is_some();
+    let turn_checkpointer = Arc::new(super::graph::turn_checkpointer::TurnCheckpointer::new(
+        Arc::clone(&state.checkpointer),
+        &plan.execution_id,
+        plan.generation,
+        is_resume,
+    ));
     let graph = definition
-        .compile_with_runtime(
-            ROOT_AGENT_NAME,
-            Arc::clone(&state.checkpointer),
-            resume,
-            &node_runtimes,
-        )
+        .compile_with_runtime(ROOT_AGENT_NAME, turn_checkpointer, resume, &node_runtimes)
         .map_err(|error| pipeline_configuration_error(error.code()))?;
     let OrdinaryNativeAgentPlan {
         user_id,
@@ -1236,8 +1246,20 @@ async fn resolve_pipeline_start(
     application_tools: &ApplicationToolPresentationCatalog,
     application_resume: Option<&ApplicationResumeCoordinator>,
 ) -> Result<Option<super::graph::resume::PipelineResume>, NativeAgentAssemblyError> {
+    if matches!(start, PipelineNativeStart::Regenerate) {
+        // ADK loads the latest checkpoint even without an explicit resume ID.
+        // Regeneration must remove that frontier before the graph starts again.
+        // Both services bind deletion to this exact claim, thread and definition.
+        state
+            .checkpointer
+            .delete(plan.session_id.as_ref())
+            .await
+            .map_err(|_| dependency_unavailable())?;
+        reset_session_for_regeneration(state.sessions.as_ref(), &plan.user_id, &plan.session_id)
+            .await?;
+    }
     Ok(match start {
-        PipelineNativeStart::Fresh => {
+        PipelineNativeStart::Fresh | PipelineNativeStart::Regenerate => {
             let (session, created) =
                 restore_or_create_session(state.sessions.as_ref(), &plan.user_id, &plan.session_id)
                     .await?;

@@ -271,7 +271,8 @@ async fn decision_reuses_claim_bound_model_without_tools_and_selects_exact_route
         captured.history,
         [
             ("user".to_owned(), "earlier".to_owned()),
-            ("model".to_owned(), "prior answer".to_owned())
+            ("model".to_owned(), "prior answer".to_owned()),
+            ("user".to_owned(), captured.prompt.clone())
         ]
     );
 }

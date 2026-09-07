@@ -699,7 +699,7 @@ impl Llm for ApplicationReplayModel {
                 }
                 self.delegate
                     .generate_content(
-                        without_application_replay_marker(request, &self.replay_marker),
+                        super::replay_history::model_continuation(request, &self.replay_marker)?,
                         stream_response,
                     )
                     .await
@@ -707,7 +707,7 @@ impl Llm for ApplicationReplayModel {
             Err(_) => {
                 self.delegate
                     .generate_content(
-                        without_application_replay_marker(request, &self.replay_marker),
+                        super::replay_history::model_continuation(request, &self.replay_marker)?,
                         stream_response,
                     )
                     .await
@@ -785,13 +785,6 @@ fn application_replay_state(
         }
         _ => ApplicationReplayState::Pending,
     }
-}
-
-fn without_application_replay_marker(mut request: LlmRequest, marker: &Content) -> LlmRequest {
-    request
-        .contents
-        .retain(|content| content.role != marker.role || content.parts != marker.parts);
-    request
 }
 
 pub(crate) struct ApplicationToolDependencies<'a> {
@@ -2332,10 +2325,18 @@ impl ApplicationToolInvocationContext {
         parent_ctx: Arc<dyn ToolContext>,
         agent: Arc<dyn Agent>,
         user_content: Content,
-        run_config: RunConfig,
-        history: Vec<Content>,
+        mut run_config: RunConfig,
+        mut history: Vec<Content>,
     ) -> Self {
         static NEXT_INVOCATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        // Match Runner's current-input history boundary. LlmAgent replaces the last
+        // user entry with user_content; on resume that entry must be the private
+        // replay marker, not the original child task which the model still needs.
+        history.push(user_content.clone());
+        // The tool returns one complete child result. A direct replay supplies an
+        // SSE config for root callers; retain its decisions but use the same
+        // accumulated-event contract as a fresh child, not its final token delta.
+        run_config.streaming_mode = StreamingMode::None;
         let ordinal = NEXT_INVOCATION.fetch_add(1, Ordering::Relaxed);
         let invocation_id = format!("elitea-child-{ordinal}");
         let parent_branch = if parent_ctx.branch().is_empty() {

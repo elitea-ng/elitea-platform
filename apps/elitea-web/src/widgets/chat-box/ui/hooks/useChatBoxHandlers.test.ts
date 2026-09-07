@@ -923,24 +923,28 @@ describe("continueTokenLimit / resumeMcpFlow transport", () => {
       setChatHistory: history.setChatHistory,
       chatHistory: [message],
       emitSocket,
-      getMcpTokens: () => ({ "cfg-1:https://login.example.test": { access_token: "runtime-token" } }),
+      getMcpTokens: () => ({
+        "cfg-1:https://login.example.test": { access_token: "runtime-token" },
+        "unrelated:https://login.example.test": { access_token: "unrelated-token" },
+      }),
       continueStreamedExecution: seen.continueStreamedExecution,
     }));
 
     await handlers.resumeMcpFlow("answer-1", false, "auth-1");
 
     expect(emitSocket).not.toHaveBeenCalled();
-    expect(seen.calls).toEqual([{
+    expect(seen.calls).toHaveLength(1);
+    expect(seen.calls[0]).toMatchObject({
       conversationUuid: "conv-uuid-1",
       contract: "agent.continue.authorization.v1",
-      body: expect.objectContaining({
+      body: {
         project_id: 1,
         authorization_request_id: "auth-1",
         authorization_action: "authorize",
         hitl_resume: false,
         mcp_tokens: { "cfg-1:https://login.example.test": { access_token: "runtime-token" } },
-      }),
-    }]);
+      },
+    });
   });
 
   it("applies one authorization to parallel requests sharing the same credential", async () => {

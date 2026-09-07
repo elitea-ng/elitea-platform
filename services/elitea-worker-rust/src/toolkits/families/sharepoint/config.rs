@@ -122,7 +122,7 @@ impl SharePointToolkitConfig {
 
         let resource_metadata_url =
             format!("{discovery_key}/v2.0/.well-known/openid-configuration");
-        let authorization_url = format!("{discovery_key}/v2.0/oauth2/authorize");
+        let authorization_url = format!("{discovery_key}/oauth2/v2.0/authorize");
         if resource_metadata_url.len() > MAX_URL_BYTES || authorization_url.len() > MAX_URL_BYTES {
             return Err(resource_exhausted());
         }
@@ -135,6 +135,7 @@ impl SharePointToolkitConfig {
                 "Bearer error=\"unauthorized_client\", resource_metadata=\"{resource_metadata_url}\", authorization_uri=\"{authorization_url}\""
             )),
         )
+        .and_then(|requirement| requirement.with_configured_oauth(&discovery_key, configuration))
         .ok_or_else(invalid_configuration)?;
 
         Ok(Self {
@@ -150,6 +151,11 @@ impl SharePointToolkitConfig {
     #[must_use]
     pub(crate) fn site_url(&self) -> &Url {
         &self.site_url
+    }
+
+    pub(crate) fn with_toolkit_id(mut self, id: Option<u64>) -> Self {
+        self.authorization = self.authorization.with_toolkit_id(id);
+        self
     }
 
     #[must_use]

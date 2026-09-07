@@ -650,6 +650,12 @@ fn recursive_sensitive_pipeline_runtime() -> PipelineChildRuntime {
 
 fn recursive_sensitive_pipeline_runtime_with_capture()
 -> (PipelineChildRuntime, CapturedModelRequests) {
+    recursive_pipeline_runtime_with_capture(None)
+}
+
+fn recursive_pipeline_runtime_with_capture(
+    completed_child: Option<usize>,
+) -> (PipelineChildRuntime, CapturedModelRequests) {
     let calls = Arc::new(AtomicUsize::new(0));
     let paths = Arc::new(Mutex::new(Vec::new()));
     let responses = (0..3)
@@ -717,17 +723,40 @@ fn recursive_sensitive_pipeline_runtime_with_capture()
             ]
         })
         .collect::<VecDeque<_>>();
-    let outcomes = vec![
+    let outcomes = recursive_pipeline_outcomes(completed_child);
+    pipeline_runtime_from_responses_with_capture(responses, outcomes, calls, paths)
+}
+
+fn recursive_pipeline_outcomes(completed_child: Option<usize>) -> Vec<TestModelGatewayOutcome> {
+    let mut outcomes = vec![
         model_response_for(
             "orchestrator-model",
             pipeline_parallel_saved_agent_call_response(),
         ),
-        model_response_for("resolver-model", pipeline_mcp_tool_call_response()),
-        model_response_for("resolver-model", pipeline_mcp_tool_call_response()),
         model_response_for(
             "resolver-model",
-            pipeline_text_response("first resolved leaf"),
+            if completed_child == Some(0) {
+                pipeline_text_response("first resolved leaf")
+            } else {
+                pipeline_mcp_tool_call_response()
+            },
         ),
+        model_response_for(
+            "resolver-model",
+            if completed_child == Some(1) {
+                pipeline_text_response("first resolved leaf")
+            } else {
+                pipeline_mcp_tool_call_response()
+            },
+        ),
+    ];
+    if completed_child.is_none() {
+        outcomes.push(model_response_for(
+            "resolver-model",
+            pipeline_text_response("first resolved leaf"),
+        ));
+    }
+    outcomes.extend([
         model_response_for(
             "resolver-model",
             pipeline_text_response("second resolved leaf"),
@@ -736,8 +765,8 @@ fn recursive_sensitive_pipeline_runtime_with_capture()
             "orchestrator-model",
             pipeline_text_response("parallel orchestrator summary"),
         ),
-    ];
-    pipeline_runtime_from_responses_with_capture(responses, outcomes, calls, paths)
+    ]);
+    outcomes
 }
 
 fn mixed_guardrail_pipeline_runtime_with_capture() -> (PipelineChildRuntime, CapturedModelRequests)
@@ -1133,9 +1162,17 @@ fn sensitive_pipeline_mcp_policy() -> Arc<ToolAdmissionPolicy> {
 }
 
 fn pipeline_text_response(text: &str) -> Response<Body> {
-    let raw = format!(
-        "data: {{\"choices\":[{{\"delta\":{{\"role\":\"assistant\",\"content\":{text:?}}},\"finish_reason\":null}}]}}\n\ndata: {{\"choices\":[{{\"delta\":{{}},\"finish_reason\":\"stop\"}}]}}\n\ndata: {{\"choices\":[],\"usage\":{{\"prompt_tokens\":3,\"completion_tokens\":2}}}}\n\ndata: [DONE]\n\n"
-    );
+    use std::fmt::Write as _;
+    let mut raw = String::new();
+    for chunk in text.chars() {
+        write!(
+            &mut raw,
+            "data: {{\"choices\":[{{\"delta\":{{\"content\":{:?}}},\"finish_reason\":null}}]}}\n\n",
+            chunk.to_string()
+        )
+        .expect("SSE fixture");
+    }
+    raw.push_str("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2}}\n\ndata: [DONE]\n\n");
     test_model_gateway_response(Body::new(Full::<Bytes>::from(raw)))
 }
 
@@ -1149,6 +1186,19 @@ fn authorized(request: &super::request::AgentExecutionRequest) -> AuthorizedNati
         request,
         test_runtime_context_authority(),
         AuthorizedNativeCommandBinding::fixture(),
+    )
+}
+
+fn authorized_execution<'a>(
+    request: &'a super::request::AgentExecutionRequest,
+    execution_id: &str,
+) -> AuthorizedNativeAssembly<'a> {
+    AuthorizedNativeAssembly::from_authorized(
+        request,
+        test_runtime_context_authority(),
+        crate::protocol::control::test_session_authority_for(execution_id, 3),
+        Arc::new(crate::state::TestStateWriterLease::current()),
+        AuthorizedNativeCommandBinding::fixture_for_execution(execution_id),
     )
 }
 
@@ -1785,6 +1835,120 @@ async fn pipeline_agent_node_resumes_parallel_nested_authorization_for_authorize
     run_pipeline_agent_node_nested_authorization(false).await;
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn pipeline_parent_waits_for_single_child_authorization_before_final_answer() {
+    for (completed_child, action) in [(0, "authorize"), (1, "authorize"), (0, "skip"), (1, "skip")]
+    {
+        let ((platform, model_facade, _, _), captured) =
+            recursive_pipeline_runtime_with_capture(Some(completed_child));
+        let tool_calls = Arc::new(AtomicUsize::new(0));
+        let assembler = PipelineNativeAgentAssembler::with_state(
+            Arc::new(InMemorySessionService::new()),
+            Arc::new(MemoryCheckpointer::new()),
+        )
+        .with_runtime_clients(platform, model_facade)
+        .with_mcp_connector(Arc::new(DelegatedAuthorizationPipelineMcpConnector {
+            connections: Arc::new(AtomicUsize::new(0)),
+            tool_calls: Arc::clone(&tool_calls),
+        }));
+        let request = agent_pipeline_request("release-agent", "agent");
+        let invocation = assembler
+            .assemble(authorized(&request))
+            .await
+            .expect("assemble");
+        let (paused, _) = collect_pipeline_pause_events(invocation).await;
+        let cards = paused
+            .iter()
+            .filter(|event| event["type"] == "mcp_authorization_required")
+            .collect::<Vec<_>>();
+        assert_eq!(
+            cards.len(),
+            1,
+            "only the unfinished child needs authorization"
+        );
+        assert!(
+            !paused
+                .iter()
+                .any(|event| event["content"] == "parallel orchestrator summary")
+        );
+        assert_eq!(
+            captured.lock().expect("requests").len(),
+            3,
+            "the parent must wait after dispatching both children"
+        );
+        assert_eq!(tool_calls.load(Ordering::Acquire), 0);
+        let interrupt_id = cards[0]["response_metadata"]["interrupt_id"]
+            .as_str()
+            .expect("interrupt")
+            .to_owned();
+        let resume =
+            pipeline_application_authorization_resume_request(vec![interrupt_id], action, [19; 32]);
+        let invocation = assembler
+            .assemble(authorized(&resume))
+            .await
+            .expect("single nested authorization resume");
+        let completed = collect_pipeline_completion(invocation).await;
+        assert!(
+            completed
+                .iter()
+                .any(|event| event["content"] == "parallel orchestrator summary")
+        );
+        assert_eq!(
+            tool_calls.load(Ordering::Acquire),
+            usize::from(action == "authorize")
+        );
+        assert_eq!(
+            captured.lock().expect("requests").len(),
+            5,
+            "resume must not rerun the already completed child"
+        );
+        let captured = captured.lock().expect("requests");
+        let child_request: Value =
+            serde_json::from_slice(&captured[3].body).expect("resumed child request JSON");
+        assert_model_user_task(
+            &child_request,
+            if completed_child == 0 {
+                "Resolve second release"
+            } else {
+                "Resolve first release"
+            },
+        );
+        let final_request: Value =
+            serde_json::from_slice(&captured.last().expect("parent request").body)
+                .expect("model request JSON");
+        assert_model_user_task(&final_request, "Summarize the release");
+        let results = final_request["messages"]
+            .as_array()
+            .expect("model messages")
+            .iter()
+            .filter(|message| message["role"] == "tool")
+            .map(|message| message["content"].as_str().expect("tool result"))
+            .collect::<Vec<_>>();
+        assert_eq!(results.len(), 2);
+        assert!(
+            results
+                .iter()
+                .any(|result| result.contains("first resolved leaf"))
+        );
+        assert!(
+            results
+                .iter()
+                .any(|result| result.contains("second resolved leaf"))
+        );
+    }
+}
+
+fn assert_model_user_task(request: &Value, task: &str) {
+    let user_messages = request["messages"]
+        .as_array()
+        .expect("model messages")
+        .iter()
+        .filter(|message| message["role"] == "user")
+        .map(|message| message["content"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(user_messages, vec![json!([{"type": "text", "text": task}])]);
+}
+
 #[allow(clippy::too_many_lines)] // Pause, fail-closed partial set, and exact replay are one proof.
 async fn run_pipeline_agent_node_nested_authorization(authorize: bool) {
     let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
@@ -1869,6 +2033,10 @@ async fn run_pipeline_agent_node_nested_authorization(authorize: bool) {
     };
     assert_eq!(partial.code(), NativeAgentAssemblyErrorCode::InvalidInput);
     assert_eq!(tool_calls.load(Ordering::Acquire), 0);
+    assert_eq!(captured.lock().expect("requests").len(), 3);
+    // Catalog reconstruction precedes exact checkpoint validation. It must not dispatch work.
+    assert_eq!(connections.load(Ordering::Acquire), 2);
+    assert_eq!(context_calls.load(Ordering::Acquire), 6);
 
     let resume = pipeline_application_authorization_resume_request(
         interrupt_ids,
@@ -1890,14 +2058,18 @@ async fn run_pipeline_agent_node_nested_authorization(authorize: bool) {
         tool_calls.load(Ordering::Acquire),
         usize::from(authorize) * 2
     );
-    assert_eq!(connections.load(Ordering::Acquire), 2);
-    assert_eq!(context_calls.load(Ordering::Acquire), 6);
+    assert_eq!(connections.load(Ordering::Acquire), 3);
+    assert_eq!(context_calls.load(Ordering::Acquire), 9);
     let captured = captured.lock().expect("captured model requests");
     assert_eq!(
         captured.len(),
         6,
         "resume must not replan saved-agent calls"
     );
+    for request in captured.iter() {
+        let request = serde_json::from_slice(&request.body).expect("provider request fixture");
+        super::ordinary_tests::assert_complete_tool_history(&request);
+    }
     if !authorize {
         assert_eq!(
             captured
@@ -3550,6 +3722,152 @@ async fn node_toolset_exposes_only_exact_selected_names_in_declared_order() {
         &["not_available".to_owned()],
     );
     assert!(missing.tools(context).await.is_err());
+}
+
+#[tokio::test]
+async fn pipeline_new_turn_executes_nodes_instead_of_reusing_completed_output() {
+    let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+    let checkpointer = Arc::new(MemoryCheckpointer::new());
+    let assembler = PipelineNativeAgentAssembler::with_state(sessions, checkpointer.clone());
+    let mut request = pipeline_request();
+    request.payload.application["version_details"]["instructions"] = json!(STATE_MODIFIER_PIPELINE);
+    let private_thread = private_pipeline_session_id(&request);
+    for (execution, input) in [("execution/first", "FIRST"), ("execution/second", "SECOND")] {
+        request.payload.user_input = super::request::UserInput::Text(input.to_owned());
+        let invocation = assembler
+            .assemble(authorized_execution(&request, execution))
+            .await
+            .expect("turn assembly");
+        let (mut run, _, _) = invocation.start().expect("turn start");
+        let event = run.next_event().await.expect("turn event").expect("result");
+        assert_eq!(
+            event.content().expect("content").parts,
+            adk_rust::Content::new("assistant")
+                .with_text(format!("Hello, {input}"))
+                .parts,
+            "a new turn must execute its nodes with the new input"
+        );
+        assert!(run.next_event().await.expect("turn EOS").is_none());
+    }
+    let checkpoints = checkpointer
+        .list(&private_thread)
+        .await
+        .expect("retained checkpoints");
+    assert!(
+        checkpoints
+            .iter()
+            .any(|checkpoint| checkpoint.state.get("final_text") == Some(&json!("Hello, FIRST")))
+    );
+    assert_eq!(
+        checkpoints.last().expect("new checkpoint").state["final_text"],
+        json!("Hello, SECOND")
+    );
+}
+
+#[tokio::test]
+async fn pipeline_regeneration_restarts_paused_and_completed_graphs() {
+    for complete_first in [false, true] {
+        let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+        let checkpointer = Arc::new(MemoryCheckpointer::new());
+        let assembler =
+            PipelineNativeAgentAssembler::with_state(Arc::clone(&sessions), checkpointer.clone());
+        let mut request = pipeline_request();
+        let private_thread = private_pipeline_session_id(&request);
+        let first = assembler
+            .assemble(authorized(&request))
+            .await
+            .expect("first assembly");
+        let (mut run, _, _) = first.start().expect("first start");
+        let first_event = run
+            .next_event()
+            .await
+            .expect("first event")
+            .expect("first pause");
+        let old_binding =
+            pipeline_hitl_event_binding(&first_event, "elitea-agent", &private_thread)
+                .expect("first checkpoint binding");
+        let old_resume = resume_request(old_binding.interrupt_id());
+        assert!(run.next_event().await.expect("first EOS").is_none());
+        if complete_first {
+            let resumed = assembler
+                .assemble(authorized(&old_resume))
+                .await
+                .expect("resume assembly");
+            let (mut run, _, _) = resumed.start().expect("resume start");
+            while run.next_event().await.expect("resume event").is_some() {}
+        }
+        let old_checkpoint = checkpointer
+            .load(&private_thread)
+            .await
+            .expect("load")
+            .expect("checkpoint");
+        let mut unrelated = old_checkpoint.clone();
+        unrelated.thread_id = "unrelated-thread".to_owned();
+        unrelated.checkpoint_id = "unrelated-checkpoint".to_owned();
+        checkpointer
+            .save(&unrelated)
+            .await
+            .expect("unrelated checkpoint");
+
+        request.payload.is_regenerate = true;
+        let regenerated = assembler
+            .assemble(authorized(&request))
+            .await
+            .expect("regeneration assembly");
+        assert!(
+            checkpointer
+                .load(&private_thread)
+                .await
+                .expect("reset graph")
+                .is_none()
+        );
+        assert!(
+            checkpointer
+                .load("unrelated-thread")
+                .await
+                .expect("unrelated graph")
+                .is_some()
+        );
+        let (mut run, _, _) = regenerated.start().expect("regeneration start");
+        let event = run
+            .next_event()
+            .await
+            .expect("regeneration event")
+            .expect("new pause");
+        let new_binding = pipeline_hitl_event_binding(&event, "elitea-agent", &private_thread)
+            .expect("new checkpoint binding");
+        assert_ne!(new_binding.interrupt_id(), old_binding.interrupt_id());
+        assert!(run.next_event().await.expect("regeneration EOS").is_none());
+
+        let stale = assembler.assemble(authorized(&old_resume)).await;
+        assert!(
+            stale.is_err(),
+            "a regenerated graph must reject its old interrupt"
+        );
+        let resume = resume_request(new_binding.interrupt_id());
+        let resumed = assembler
+            .assemble(authorized(&resume))
+            .await
+            .expect("new resume assembly");
+        let (mut run, _, _) = resumed.start().expect("new resume start");
+        while run.next_event().await.expect("new resume event").is_some() {}
+        assert!(
+            checkpointer
+                .load(&private_thread)
+                .await
+                .expect("load final")
+                .expect("final checkpoint")
+                .pending_nodes
+                .is_empty()
+        );
+    }
+}
+
+#[test]
+fn pipeline_regeneration_refuses_interrupt_resume_flags() {
+    let mut request = resume_request("stale-interrupt");
+    request.payload.is_regenerate = true;
+    assert!(authorized(&request).admit_pipeline().is_err());
 }
 
 #[tokio::test]

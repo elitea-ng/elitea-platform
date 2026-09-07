@@ -97,6 +97,26 @@ function optimisticAuthorizationUpdate(
   }));
 }
 
+function decidedCredentialKeys(
+  message: ChatMessage,
+  decisions: readonly McpAuthorizationDecision[],
+): { readonly tokenKeys: ReadonlySet<string>; readonly declinedUrls: ReadonlySet<string> } {
+  const selected = new Map(decisions.map((decision) => [decision.interruptId, decision.action]));
+  const tokenKeys = new Set<string>();
+  const declinedUrls = new Set<string>();
+  for (const action of pendingActions(message)) {
+    const decision = selected.get(exactRequestId(action) ?? '');
+    const key = readServerUrl(action);
+    if (decision === 'authorize' && key) tokenKeys.add(key);
+    if (decision === 'skip') {
+      const actualUrl = action.toolMeta?.['server_url'];
+      const url = typeof actualUrl === 'string' && actualUrl ? actualUrl : key;
+      if (url) declinedUrls.add(url);
+    }
+  }
+  return { tokenKeys, declinedUrls };
+}
+
 function continuationBody(
   deps: ChatBoxHandlerDeps,
   message: ChatMessage,
@@ -104,14 +124,20 @@ function continuationBody(
 ): Record<string, unknown> | undefined {
   const projectId = Number(deps.projectId);
   if (!Number.isSafeInteger(projectId) || projectId <= 0 || !deps.conversationUuid) return undefined;
+  const { tokenKeys, declinedUrls } = decidedCredentialKeys(message, decisions);
+  // A continuation carries only the credentials for its exact decided cards.
+  // Unrelated browser tokens and prior declines are not authority for this run.
+  const tokens = Object.fromEntries(Object.entries(deps.getMcpTokens?.() ?? {})
+    .filter(([key]) => tokenKeys.has(key)));
   const common = {
     project_id: projectId,
     conversation_uuid: deps.conversationUuid,
     message_id: message.id,
     thread_id: message.threadId ?? '',
-    mcp_tokens: deps.getMcpTokens?.() ?? {},
+    mcp_tokens: tokens,
     ignored_mcp_servers: [],
-    user_declined_mcp_servers: buildDeclinedServersList(deps.sessionDeclinedMcpServersRef),
+    user_declined_mcp_servers: buildDeclinedServersList(deps.sessionDeclinedMcpServersRef)
+      .filter((entry) => typeof entry['server_url'] === 'string' && declinedUrls.has(entry['server_url'])),
   };
   const first = decisions[0];
   if (decisions.length === 1 && first) {
@@ -137,6 +163,26 @@ function continuationBody(
   };
 }
 
+/** Collect decisions without granting authority to unrelated cards or tokens. */
+function collectAuthorizationBatch(
+  deps: ChatBoxHandlerDeps,
+  message: ChatMessage,
+  decision: McpAuthorizationAction,
+  selectedRequestId?: string,
+): McpAuthorizationBatch | undefined {
+  const actions = pendingActions(message);
+  const selected = findSelectedAction(actions, selectedRequestId);
+  if (!selected) return;
+
+  const batches = deps.sessionMcpAuthorizationBatchesRef?.current;
+  const batch: McpAuthorizationBatch = batches?.get(message.id) ?? { original: message, decisions: new Map() };
+  batches?.set(message.id, batch);
+  for (const action of actions.filter((item) => sameAuthorizationGroup(item, selected))) {
+    applyDecision(deps, batch, action, decision);
+  }
+  return batch;
+}
+
 /** Record one card decision and resume only after every parallel request has a decision. */
 export async function resumeMcpAuthorization(
   deps: ChatBoxHandlerDeps,
@@ -146,16 +192,9 @@ export async function resumeMcpAuthorization(
 ): Promise<void> {
   const message = deps.chatHistory.find((item) => item.id === messageId);
   if (!message) return;
-  const actions = pendingActions(message);
-  const selected = findSelectedAction(actions, selectedRequestId);
-  if (!selected) return;
-
+  const batch = collectAuthorizationBatch(deps, message, decision, selectedRequestId);
+  if (!batch) return;
   const batches = deps.sessionMcpAuthorizationBatchesRef?.current;
-  const batch = batches?.get(messageId) ?? { original: message, decisions: new Map() };
-  batches?.set(messageId, batch);
-  for (const action of actions.filter((item) => sameAuthorizationGroup(item, selected))) {
-    applyDecision(deps, batch, action, decision);
-  }
 
   const originalActions = pendingActions(batch.original);
   const unresolved = originalActions.filter((action) => !batch.decisions.has(exactRequestId(action) ?? ''));
@@ -166,8 +205,8 @@ export async function resumeMcpAuthorization(
     .map((action) => batch.decisions.get(exactRequestId(action) ?? ''))
     .filter((item): item is McpAuthorizationDecision => item !== undefined);
   const body = continuationBody(deps, batch.original, decisions);
+  batches?.delete(messageId);
   if (!body || !deps.continueStreamedExecution || !deps.conversationUuid) {
-    batches?.delete(messageId);
     revertContinuation(deps.setChatHistory, batch.original, undeliveredText());
     return;
   }
@@ -177,7 +216,6 @@ export async function resumeMcpAuthorization(
     contract: conversationApi.contracts.continueAuthorization,
     body,
   });
-  batches?.delete(messageId);
   if (outcome.started) return;
   revertContinuation(
     deps.setChatHistory,

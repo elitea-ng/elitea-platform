@@ -225,6 +225,26 @@ export function ApplicationAnswer({
         </Typography>
       )}
 
+      {authRequiredActions.map((action, index) => {
+        const requestId = authorizationRequestId(action);
+        const owner = asDraft(action).parent_agent_name || asDraft(action).name || 'Toolkit';
+        return (
+          <Box key={requestId ?? `authorization-${index}`} component="section"
+            aria-label={`${owner} authorization`} sx={{ p: 1.5, border: 1, borderColor: 'warning.main' }}>
+            <Typography variant="subtitle2">{owner} — Authorization required</Typography>
+            <Typography variant="body2">Execution is paused. The protected tool has not run.</Typography>
+            <ChatContinue
+              authRequired
+              disabled={!onContinueMcpExecution || !requestId}
+              onContinueWithoutAuth={() => { onContinueMcpExecution?.(messageId, true, requestId); }}
+              onAuthSuccess={() => { onContinueMcpExecution?.(messageId, false, requestId); }}
+              authRequiredAction={action as unknown as McpAuthRequiredAction}
+              renderAuthModal={renderAuthModal}
+            />
+          </Box>
+        );
+      })}
+
       {nonSwarmChildActions.length > 0 && <ApplicationAnswerThinking actions={nonSwarmChildActions} />}
 
       {!isProcessing && swarmChildActions.length > 0 && (
@@ -259,21 +279,6 @@ export function ApplicationAnswer({
           {canRenderContent && textItems.map((item) => <Markdown key={item.key}>{item.content}</Markdown>)}
 
           {!!exception && <ErrorTrace error={exception} />}
-
-          {authRequiredActions.map((action, index) => {
-            const requestId = authorizationRequestId(action);
-            return (
-              <ChatContinue
-                key={requestId ?? `authorization-${index}`}
-                authRequired
-                disabled={!onContinueMcpExecution || !requestId}
-                onContinueWithoutAuth={() => { onContinueMcpExecution?.(messageId, true, requestId); }}
-                onAuthSuccess={() => { onContinueMcpExecution?.(messageId, false, requestId); }}
-                authRequiredAction={action as unknown as McpAuthRequiredAction}
-                renderAuthModal={renderAuthModal}
-              />
-            );
-          })}
 
           {!hideContinueButton && !!requiresConfirmationSignal && (
             <ChatContinue

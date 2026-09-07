@@ -231,6 +231,40 @@ fn direct_decision_resolves_only_the_exact_latest_persisted_call() {
 }
 
 #[test]
+fn delegated_authorization_accepts_only_the_frozen_configuration_token_key() {
+    let arguments = json!({});
+    let (interrupt_id, _) =
+        sensitive_call_identity("invocation-1", "call-1", "double", &arguments).unwrap();
+    let mut events = pending_authorization_events(arguments);
+    let requirement = authorization_requirement()
+        .with_configured_oauth(
+            "https://login.example.test",
+            json!({"client_id":"public-id", "configuration_uuid":"config-1"})
+                .as_object()
+                .unwrap(),
+        )
+        .unwrap();
+    events[1].provider_metadata.insert(
+        DELEGATED_AUTHORIZATION_METADATA_KEY.into(),
+        encode_delegated_authorization_requirement(&requirement).unwrap(),
+    );
+    for (key, accepted) in [
+        ("config-1:https://login.example.test", true),
+        ("config-2:https://login.example.test", false),
+    ] {
+        let mut payload = authorization_payload("authorize", &interrupt_id);
+        payload.mcp_tokens.clear();
+        payload
+            .mcp_tokens
+            .insert(key.into(), json!({"access_token":"runtime-secret"}));
+        let result = DirectHitlDecisionSet::from_payload(&payload)
+            .unwrap()
+            .resolve(&session(events.clone()));
+        assert_eq!(result.is_ok(), accepted);
+    }
+}
+
+#[test]
 fn delegated_authorization_decision_is_bound_to_interrupt_action_and_server_authority() {
     let arguments = json!({});
     let events = pending_authorization_events(arguments.clone());

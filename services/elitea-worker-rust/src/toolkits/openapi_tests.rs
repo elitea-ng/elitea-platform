@@ -207,6 +207,25 @@ fn oauth_expires_in_accepts_numeric_provider_strings_and_defaults_safely() {
 }
 
 #[tokio::test]
+async fn delegated_openapi_rebuild_uses_only_its_configuration_scoped_token() {
+    let settings = settings(
+        &json!({
+            "client_id":"client-id", "client_secret":"stored-secret", "configuration_uuid":"config-1",
+            "oauth_discovery_endpoint":"https://login.example.test/tenant", "scope":"records.read"
+        }),
+        &["get_users_by_id"],
+    );
+    for (key, authorized) in [
+        ("config-1:https://login.example.test/tenant", true),
+        ("config-2:https://login.example.test/tenant", false),
+    ] {
+        let tokens = Map::from_iter([(key.into(), json!({"access_token":"claim-fetched-token"}))]);
+        let config = OpenApiToolkitConfig::parse("Customer API", &settings, &tokens).unwrap();
+        assert_eq!(config.auth().delegated_requirement().is_none(), authorized);
+    }
+}
+
+#[tokio::test]
 async fn delegated_openapi_materializes_original_guarded_tools_and_exact_token_rebuild() {
     let settings = settings(
         &json!({

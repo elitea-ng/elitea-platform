@@ -12,6 +12,7 @@ pub(crate) mod native_runtime;
 pub(crate) mod ordinary;
 pub(crate) mod pipeline;
 pub mod protocol;
+mod replay_history;
 pub mod request;
 pub mod result;
 pub(crate) mod runtime;

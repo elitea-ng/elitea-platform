@@ -93,7 +93,11 @@ impl PipelineMcpAuthorizationContinuation {
         } else {
             return Err(PipelineResumeError::invalid());
         };
-        if server_urls.is_empty() || server_urls.iter().any(|value| !valid_server_url(value)) {
+        if server_urls.is_empty()
+            || server_urls
+                .iter()
+                .any(|value| !DelegatedAuthorizationRequirement::valid_token_key(value))
+        {
             return Err(PipelineResumeError::invalid());
         }
         Ok(Self {
@@ -120,7 +124,12 @@ impl PipelineMcpAuthorizationContinuation {
         let binding =
             pipeline_mcp_auth_event_binding(&events[interrupt_index], root_agent_name, thread_id)
                 .map_err(|_| PipelineResumeError::corrupt())?;
-        if !self.server_urls.contains(binding.server_url()) {
+        let requirement = delegated_requirement(&binding)?;
+        if self
+            .server_urls
+            .iter()
+            .any(|key| !requirement.matches_token_key(key))
+        {
             return Err(PipelineResumeError::stale());
         }
         let checkpoint = checkpointer
@@ -227,17 +236,6 @@ fn declined_server_url(value: &Value) -> Option<&str> {
         Value::Object(value) => value.get("server_url").and_then(Value::as_str),
         _ => None,
     }
-}
-
-fn valid_server_url(value: &str) -> bool {
-    reqwest::Url::parse(value).is_ok_and(|url| {
-        url.scheme() == "https"
-            && url.host_str().is_some()
-            && url.username().is_empty()
-            && url.password().is_none()
-            && url.query().is_none()
-            && url.fragment().is_none()
-    })
 }
 
 pub(crate) struct PrinterResumeContext<'a> {
@@ -433,9 +431,12 @@ impl PipelineContinuationDecision {
         } else {
             let application = DirectHitlDecisionSet::from_payload(payload)
                 .map_err(|error| direct_hitl_resume_error(&error))?;
-            let tool = (payload.hitl_decisions.len() == 1)
-                .then(|| PipelineToolDecision::from_payload(payload))
-                .transpose()?;
+            // An authorization action belongs to the nested application replay.
+            // The direct sensitive-tool parser does not accept authorize/skip.
+            let tool = (payload.hitl_decisions.len() == 1
+                && !application.has_delegated_authorization_actions())
+            .then(|| PipelineToolDecision::from_payload(payload))
+            .transpose()?;
             Ok(Self::Sensitive { application, tool })
         }
     }

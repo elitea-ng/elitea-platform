@@ -64,6 +64,8 @@ Detailed ledgers:
   clients and the durable direct execution path.
 - `delegated-oauth-dcr.md` maps the shared UI, Main, and Rust ownership for
   delegated OAuth, DCR, token refresh, and durable authorization resume.
+- `runtime-limits.md` separates event, request, loop, nesting, and session limits.
+  It records the fragment-count fix and the remaining long-running execution gates.
 - `indexing.md` maps indexing behavior and its later Rust capability.
 
 Maintained Rust runtime ownership registry:

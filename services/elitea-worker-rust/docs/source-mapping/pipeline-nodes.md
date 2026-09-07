@@ -2,7 +2,7 @@
 
 This ledger maps the current `elitea-sdk` pipeline compiler and worker runtime
 evidence to the Rust files that replace it. It is traceability, not a plan to
-copy Python's class structure. Rust uses ADK-Rust 2.0.0 where it preserves the
+copy Python's class structure. Rust uses ADK-Rust 2.2.0 where it preserves the
 admitted behavior and adds small Elitea boundaries for YAML compatibility,
 authority, durability and policy.
 
@@ -19,6 +19,35 @@ authority for the migration blocker, not every historical branch still
 accepted by `create_graph`.
 
 ## Active UI contract
+
+### Fresh-turn checkpoint boundary: 2026-09-07
+
+SDK evidence is `runtime/langchain/langraph_agent.py::LangGraphAgentRunnable.invoke` at `4b7691c7ddc4bc2a8e4f1b5f7da620d845b55b0e`.
+Its completed-run branch starts a new turn with new input.
+Its interrupted-run branch distinguishes explicit continuation from a new request.
+
+ADK-Rust 2.2.0 loads the latest graph checkpoint without an explicit resume identifier.
+A terminal checkpoint has no pending nodes. Loading it for a new turn bypasses node execution.
+This explains the repeated pipeline answer observed in conversation 530.
+
+Rust maps this boundary to `src/agents/session.rs` and `src/agents/graph/turn_checkpointer.rs`.
+Each checkpoint stores its authenticated execution identifier and generation in private metadata.
+A fresh execution loads only its own frontier. Claim replacement retains that frontier for the same execution and generation.
+Explicit continuation still resolves the exact stored interrupt before the graph can load the previous frontier.
+Fresh turns do not delete historical checkpoints or clear conversation history.
+Regeneration retains its separate, claim-fenced reset contract.
+Legacy checkpoints remain readable for explicit continuation. Fresh executions do not load unmarked legacy frontiers.
+
+The two-turn component test fails before this change and passes after it.
+Tests also cover completed and pending frontiers, generation replacement, same-execution replay, and legacy continuation.
+All 35 pipeline tests pass, including nested parallel authorization and regeneration.
+The full suite passes 866 library tests and 83 integration or contract tests with PostgreSQL available.
+No Rust test is ignored. Live authorization grants and repeated child requests after Skip remain separate gates.
+
+Live conversation 532 executes both successive user tasks through the saved pipeline.
+The second task returns `PIPELINE_SECOND_TURN`, not the previous answer.
+See [delegated authorization](delegated-oauth-dcr.md#complete-child-results-and-logical-event-limits)
+for the subsequent fixes to child-task preservation, fragmented node output, and logical-part limits.
 
 | Active designer node | Business contract and Rust disposition |
 | --- | --- |
@@ -94,6 +123,33 @@ settles and releases its claim after Main returns the authorization pause.
 
 Live authorization resume and final pipeline completion remain separate
 gates. See [the external MCP ledger](external-elitea-mcp.md).
+
+## Saved-pipeline regeneration
+
+The current Indexer deletes the requested pipeline checkpoint before regeneration.
+The source is `indexer_worker/methods/indexer_agent.py`, in the `is_regenerate` branch.
+Core prepares the earlier message history in `elitea_core/api/v2/regenerate.py`.
+These sources define behavior, not the Rust implementation structure.
+
+Rust accepts the existing regeneration flag through
+`src/agents/assembly.rs` and `src/agents/runtime.rs`.
+`src/agents/session.rs` resets the exact pipeline checkpoint and session.
+The existing PostgreSQL services enforce claim, thread, and definition ownership.
+The new session receives Main's frozen history. Other pipeline threads remain unchanged.
+
+This reset is necessary because ADK Graph loads the latest checkpoint without an explicit resume identifier.
+Regeneration must not reuse an old pause or a completed graph frontier.
+The operation invalidates old interrupt identifiers for that pipeline thread.
+It does not authorize or resume a protected tool.
+
+Component tests cover paused and completed graphs, unrelated checkpoint preservation,
+fresh interrupt identity, stale resume rejection, and successful resume of the new graph.
+Another test rejects requests that combine regeneration and interrupt resume flags.
+
+The live regression first failed during profile validation, before any model call.
+Execution `5a6c3bd33a5e9135863791271af44825` provides this evidence.
+Its accepted Main request contained the regeneration flag and a saved pipeline version.
+This failure differs from a browser request rejected with HTTP 400.
 
 ## ADK action reuse boundary
 

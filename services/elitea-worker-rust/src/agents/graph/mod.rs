@@ -35,6 +35,7 @@ mod routing_tests;
 mod state_modifier;
 #[cfg(test)]
 mod state_modifier_tests;
+pub(crate) mod turn_checkpointer;
 mod yaml;
 
 pub(crate) use agent::{

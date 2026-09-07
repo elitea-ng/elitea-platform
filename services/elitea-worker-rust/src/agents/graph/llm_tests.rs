@@ -335,7 +335,8 @@ async fn native_llm_node_maps_utf8_prompt_history_and_structured_state() {
         captured.history,
         [
             ("user".to_owned(), "earlier".to_owned()),
-            ("model".to_owned(), "prior answer".to_owned())
+            ("model".to_owned(), "prior answer".to_owned()),
+            ("user".to_owned(), "Summarize Київ".to_owned())
         ]
     );
     assert_eq!(
@@ -391,7 +392,10 @@ async fn legacy_messages_mapping_preserves_bounded_text_content_blocks() {
     assert_eq!(captured.task, "Привіт, світ");
     assert_eq!(
         captured.history,
-        [("model".to_owned(), "earlier".to_owned())]
+        [
+            ("model".to_owned(), "earlier".to_owned()),
+            ("user".to_owned(), "Привіт, світ".to_owned()),
+        ]
     );
 }
 

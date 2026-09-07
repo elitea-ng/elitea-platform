@@ -1,6 +1,7 @@
 package repos
 
 import (
+	"encoding/json"
 	"fmt"
 	"testing"
 
@@ -42,7 +43,7 @@ func TestPostgresCurrentAgentTextSurvivesAWorkerFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	projector := postgresCurrentAgentTextProjector{}
-	for _, content := range []string{"durable ", "partial answer"} {
+	for _, content := range []string{"durable ", "child result", "partial answer"} {
 		frame := currentAgentTextFrame(
 			admitted.ExecutionID,
 			conversationID,
@@ -50,6 +51,20 @@ func TestPostgresCurrentAgentTextSurvivesAWorkerFailure(t *testing.T) {
 			clientGeneration,
 			content,
 		)
+		if content == "child result" {
+			var event map[string]any
+			if err := json.Unmarshal(frame.BrowserData, &event); err != nil {
+				t.Fatal(err)
+			}
+			event["response_metadata"] = map[string]any{
+				"parent_agent_name": "Name Resolver",
+				"parent_agent_path": []any{map[string]any{"name": "Name Resolver", "call_id": "name-call"}},
+			}
+			frame.BrowserData, err = json.Marshal(event)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
 		if err := store.WithinTx(
 			t.Context(),
 			pgx.TxOptions{IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadWrite},

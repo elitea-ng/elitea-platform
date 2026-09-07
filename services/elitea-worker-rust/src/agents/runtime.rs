@@ -332,6 +332,8 @@ impl<'a> AuthorizedNativeAssembly<'a> {
                     .map(PipelineNativeStart::Hitl)
                     .map_err(|error| pipeline_hitl_admission_error(&error))?
             }
+        } else if self.request.payload.is_regenerate {
+            PipelineNativeStart::Regenerate
         } else {
             PipelineNativeStart::Fresh
         };
@@ -391,6 +393,7 @@ impl<'a> AuthorizedNativeAssembly<'a> {
 
 pub(crate) enum PipelineNativeStart {
     Fresh,
+    Regenerate,
     Hitl(PipelineContinuationDecision),
     McpAuthorization(PipelineMcpAuthorizationContinuation),
     Printer(PrinterContinuation),
@@ -399,7 +402,7 @@ pub(crate) enum PipelineNativeStart {
 impl PipelineNativeStart {
     #[must_use]
     pub(crate) const fn is_resume(&self) -> bool {
-        !matches!(self, Self::Fresh)
+        !matches!(self, Self::Fresh | Self::Regenerate)
     }
 
     #[must_use]

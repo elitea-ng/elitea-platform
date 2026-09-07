@@ -1276,16 +1276,28 @@ async fn run_model_agent(
         if !event.llm_response.partial
             && let Some(event_content) = event.llm_response.content.as_mut()
         {
-            if event_content
+            let has_calls = event_content
                 .parts
                 .iter()
-                .any(|part| matches!(part, Part::FunctionCall { .. }))
-            {
+                .any(|part| matches!(part, Part::FunctionCall { .. }));
+            if has_calls {
                 normalize_replay_call_ids(event_content, &event.invocation_id)?;
-                pending_prefix = Some(transcript.clone());
-                pending_content = Some(event_content.clone());
             }
-            transcript.push(event_content.clone());
+            // Replay needs the whole model turn, not just the terminal delta.
+            // Do not change the event forwarded to the live browser stream.
+            let mut completed_content = event_content.clone();
+            completed_content.parts = events
+                .iter()
+                .filter(|previous: &&adk_rust::Event| previous.id == event.id)
+                .filter_map(adk_rust::Event::content)
+                .flat_map(|content| content.parts.iter().cloned())
+                .chain(event_content.parts.iter().cloned())
+                .collect();
+            if has_calls {
+                pending_prefix = Some(transcript.clone());
+                pending_content = Some(completed_content.clone());
+            }
+            transcript.push(completed_content);
         }
         if event.tool_progress_stream().is_none()
             && let Some(sender) = factory.event_sender()
@@ -1310,16 +1322,27 @@ fn node_failure(node: &str) -> GraphError {
 }
 
 fn last_model_text(events: &[adk_rust::Event]) -> Option<String> {
-    events.iter().rev().find_map(|event| {
-        let content = event.content()?;
-        let text = content
-            .parts
+    let last = events.iter().rev().find(|event| {
+        event.tool_progress_stream().is_none()
+            && event.content().is_some_and(|content| {
+                matches!(content.role.as_str(), "model" | "assistant")
+                    && content
+                        .parts
+                        .iter()
+                        .any(|part| part.text().is_some_and(|text| !text.is_empty()))
+            })
+    })?;
+    // SSE events carry deltas with a stable model-turn ID. Keep streaming to
+    // the browser, but return the whole final turn as the node's state output.
+    Some(
+        events
             .iter()
+            .filter(|event| event.id == last.id)
+            .filter_map(adk_rust::Event::content)
+            .flat_map(|content| &content.parts)
             .filter_map(Part::text)
-            .collect::<Vec<_>>()
-            .join("");
-        (!text.is_empty()).then_some(text)
-    })
+            .collect(),
+    )
 }
 
 fn normalize_replay_call_ids(
@@ -1764,7 +1787,7 @@ struct PipelineLlmInvocationContext {
 impl PipelineLlmInvocationContext {
     fn new(
         session_id: &str,
-        input: LlmExecutionInput,
+        mut input: LlmExecutionInput,
         agent: Arc<dyn Agent>,
         parent: Option<Arc<dyn InvocationContext>>,
         replay: Option<&PipelineLlmReplayEnvelope>,
@@ -1793,6 +1816,11 @@ impl PipelineLlmInvocationContext {
         );
         if let Some(replay) = replay {
             replay.apply_run_config(&mut run_config);
+        } else {
+            // LlmAgent replaces the last user entry with the current input.
+            // A fresh node must append it first, preserving previous user turns.
+            // A replay transcript already contains this exact original task.
+            input.history.push(input.task.clone());
         }
         Self {
             invocation_id: format!(

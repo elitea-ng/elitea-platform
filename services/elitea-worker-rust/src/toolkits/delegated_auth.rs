@@ -15,6 +15,8 @@ use serde_json::{Value, json};
 
 use super::tool_binding::ToolBindingPlan;
 
+mod discovery;
+
 const MAX_AUTH_CHALLENGE_BYTES: usize = 16 * 1_024;
 const MAX_AUTH_METADATA_BYTES: usize = 64 * 1_024;
 const MAX_AUTH_METADATA_LIST_ITEMS: usize = 64;
@@ -151,6 +153,38 @@ pub(crate) struct DelegatedAuthorizationRequirement {
 }
 
 impl DelegatedAuthorizationRequirement {
+    /// Admit a storage identity, not an egress URL. Resolution binds it exactly.
+    pub(crate) fn valid_token_key(value: &str) -> bool {
+        !value.is_empty()
+            && value.len() <= MAX_AUTH_METADATA_STRING_BYTES
+            && !value.chars().any(char::is_control)
+    }
+
+    /// Match the UI's configuration-scoped key against this frozen requirement.
+    pub(crate) fn matches_token_key(&self, key: &str) -> bool {
+        if key == self.server_url {
+            return true;
+        }
+        let Some(metadata) = self.resource_metadata.as_ref() else {
+            return false;
+        };
+        let Some(issuer) = metadata["authorization_servers"]
+            .as_array()
+            .and_then(|servers| servers.first())
+            .and_then(Value::as_str)
+        else {
+            return false;
+        };
+        match metadata["configuration_uuid"].as_str() {
+            Some(uuid) => {
+                key.strip_prefix(uuid)
+                    .and_then(|rest| rest.strip_prefix(':'))
+                    == Some(issuer)
+            }
+            None => metadata.get("provided_settings").is_some() && key == issuer,
+        }
+    }
+
     pub(crate) fn new(
         toolkit_name: String,
         toolkit_type: String,
@@ -172,6 +206,29 @@ impl DelegatedAuthorizationRequirement {
     pub(crate) fn with_resource_metadata(mut self, resource_metadata: Value) -> Option<Self> {
         self.resource_metadata = Some(resource_metadata);
         valid_requirement(&self).then_some(self)
+    }
+
+    /// Compare the frozen authority, not the optional discovered display data.
+    pub(crate) fn same_authority(&self, other: &Self) -> bool {
+        self.toolkit_name == other.toolkit_name
+            && self.toolkit_type == other.toolkit_type
+            && self.server_url == other.server_url
+            && self.resource_metadata_url == other.resource_metadata_url
+            && self.www_authenticate == other.www_authenticate
+            && discovery::configured_metadata(self.resource_metadata.as_ref())
+                == discovery::configured_metadata(other.resource_metadata.as_ref())
+    }
+
+    pub(crate) fn with_toolkit_id(mut self, id: Option<u64>) -> Self {
+        if let Some(id) = id
+            && let Some(metadata) = self
+                .resource_metadata
+                .as_mut()
+                .and_then(Value::as_object_mut)
+        {
+            metadata.insert("toolkit_id".to_owned(), Value::String(id.to_string()));
+        }
+        self
     }
 
     pub(crate) fn toolkit_name(&self) -> &str {
@@ -213,7 +270,7 @@ impl DelegatedAuthorizationRequirement {
             "toolkit"
         };
         format!(
-            "Authorization is required to use the {} {family}. Choose Authorize to sign in, or Skip to stop this pipeline safely.",
+            "Authorization is required to use the {} {family}. Choose Authorize to sign in, or Skip to leave this tool unused.",
             self.toolkit_name
         )
     }
@@ -332,7 +389,13 @@ fn valid_resource_metadata(value: &Value) -> bool {
     if metadata.keys().any(|key| {
         !matches!(
             key.as_str(),
-            "authorization_servers" | "oauth_authorization_server" | "scopes_supported"
+            "authorization_servers"
+                | "oauth_authorization_server"
+                | "scopes_supported"
+                | "resource_name"
+                | "configuration_uuid"
+                | "toolkit_id"
+                | "provided_settings"
         )
     }) {
         return false;
@@ -347,18 +410,26 @@ fn valid_resource_metadata(value: &Value) -> bool {
     if !valid_url_list(servers) {
         return false;
     }
+    if !discovery::valid_configured_metadata(metadata) {
+        return false;
+    }
     if metadata
         .get("scopes_supported")
         .is_some_and(|scopes| !valid_string_list(scopes))
     {
         return false;
     }
-    let Some(server) = metadata
-        .get("oauth_authorization_server")
-        .and_then(Value::as_object)
-    else {
+    let Some(server) = metadata.get("oauth_authorization_server") else {
+        // A configured toolkit can defer public discovery until its guard runs.
+        return metadata.contains_key("provided_settings");
+    };
+    let Some(server) = server.as_object() else {
         return false;
     };
+    valid_authorization_server(server)
+}
+
+fn valid_authorization_server(server: &serde_json::Map<String, Value>) -> bool {
     if server.keys().any(|key| {
         !matches!(
             key.as_str(),

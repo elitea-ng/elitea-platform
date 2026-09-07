@@ -221,7 +221,11 @@ impl DirectDelegatedAuthorizationContinuation {
         } else {
             return Err(DirectHitlError::new(DirectHitlErrorCode::InvalidInput));
         };
-        if server_urls.len() != 1 || server_urls.iter().any(|url| !valid_server_url(url)) {
+        if server_urls.len() != 1
+            || server_urls
+                .iter()
+                .any(|url| !DelegatedAuthorizationRequirement::valid_token_key(url))
+        {
             return Err(DirectHitlError::new(
                 DirectHitlErrorCode::UnsupportedCapability,
             ));
@@ -259,7 +263,7 @@ impl DirectDelegatedAuthorizationContinuation {
             .provider_metadata
             .get(DELEGATED_AUTHORIZATION_METADATA_KEY)
             .and_then(|value| decode_delegated_authorization_requirement(value))
-            .filter(|requirement| requirement.server_url() == self.server_url)
+            .filter(|requirement| requirement.matches_token_key(&self.server_url))
             .ok_or_else(|| DirectHitlError::new(DirectHitlErrorCode::StaleDecision))?;
         let request = confirmation_event
             .actions
@@ -481,7 +485,7 @@ impl DelegatedAuthorizationAuthority {
             .mcp_tokens
             .keys()
             .map(|server| {
-                valid_server_url(server)
+                DelegatedAuthorizationRequirement::valid_token_key(server)
                     .then(|| server.to_owned())
                     .ok_or_else(|| DirectHitlError::new(DirectHitlErrorCode::InvalidInput))
             })
@@ -515,12 +519,20 @@ impl DelegatedAuthorizationAuthority {
             let Some(requirement) = decision.delegated_authorization.as_ref() else {
                 continue;
             };
-            let target = if decision.decision == ToolConfirmationDecision::Approve {
-                &mut authorized
+            if decision.decision == ToolConfirmationDecision::Approve {
+                let keys: Vec<_> = self
+                    .authorized_servers
+                    .iter()
+                    .filter(|key| requirement.matches_token_key(key))
+                    .cloned()
+                    .collect();
+                if keys.is_empty() {
+                    return Err(DirectHitlError::new(DirectHitlErrorCode::StaleDecision));
+                }
+                authorized.extend(keys);
             } else {
-                &mut declined
-            };
-            target.insert(requirement.server_url().to_owned());
+                declined.insert(requirement.server_url().to_owned());
+            }
         }
         if authorized != self.authorized_servers || declined != self.declined_servers {
             return Err(DirectHitlError::new(DirectHitlErrorCode::StaleDecision));
@@ -1006,7 +1018,7 @@ impl ResolvedDirectHitlDecision {
         let blocked_result = if self.decision == ToolConfirmationDecision::Deny {
             let materialized = authorization
                 .requirement_for(&self.tool_name)
-                .filter(|materialized| *materialized == requirement)
+                .filter(|materialized| materialized.same_authority(requirement))
                 .ok_or_else(|| DirectHitlError::new(DirectHitlErrorCode::StaleDecision))?;
             Some(delegated_authorization_declined_result(
                 materialized,
@@ -1242,7 +1254,7 @@ impl Tool for BlockedTool {
         if context.function_call_id() != self.blocked.call_id || arguments != self.blocked.arguments
         {
             return Err(AdkError::agent(
-                "the blocked direct tool call does not match its authorized replay",
+                "the blocked result does not match this exact tool call",
             ));
         }
         let mut actions = context.actions();
@@ -1307,9 +1319,9 @@ impl Llm for DirectHitlReplayModel {
                     content: Some(Content {
                         role: "model".to_owned(),
                         parts: vec![Part::FunctionCall {
+                            id: Some(self.call_id.clone()),
                             name: self.tool_name.clone(),
                             args: self.arguments.clone(),
-                            id: Some(self.call_id.clone()),
                             thought_signature: None,
                         }],
                     }),
@@ -1320,6 +1332,23 @@ impl Llm for DirectHitlReplayModel {
                 Ok(Box::pin(stream::once(async move { Ok(response) })))
             }
             Err(REPLAY_EMITTED) => {
+                self.validate_completed_replay(&request)?;
+                let pending = self.pending_batch(&request)?;
+                if !pending.is_empty() {
+                    // ADK checks the whole batch before executing any call.
+                    // Persist the decided result first, then admit pending calls
+                    // through their normal confirmation policies.
+                    let response = LlmResponse {
+                        content: Some(Content {
+                            role: "model".to_owned(),
+                            parts: pending,
+                        }),
+                        finish_reason: Some(FinishReason::Stop),
+                        turn_complete: true,
+                        ..LlmResponse::default()
+                    };
+                    return Ok(Box::pin(stream::once(async move { Ok(response) })));
+                }
                 if self
                     .state
                     .compare_exchange(
@@ -1337,13 +1366,15 @@ impl Llm for DirectHitlReplayModel {
                         "validated the replayed tool result before provider continuation"
                     );
                 }
-                let request = without_replay_marker(request, &self.replay_marker);
+                let request =
+                    super::replay_history::model_continuation(request, &self.replay_marker)?;
                 self.delegate
                     .generate_content(request, stream_response)
                     .await
             }
             Err(_) => {
-                let request = without_replay_marker(request, &self.replay_marker);
+                let request =
+                    super::replay_history::model_continuation(request, &self.replay_marker)?;
                 self.delegate
                     .generate_content(request, stream_response)
                     .await
@@ -1352,14 +1383,33 @@ impl Llm for DirectHitlReplayModel {
     }
 }
 
-fn without_replay_marker(mut request: LlmRequest, replay_marker: &Content) -> LlmRequest {
-    request.contents.retain(|content| {
-        content.role != replay_marker.role || content.parts != replay_marker.parts
-    });
-    request
-}
-
 impl DirectHitlReplayModel {
+    fn pending_batch(&self, request: &LlmRequest) -> adk_rust::Result<Vec<Part>> {
+        let batch = request
+            .contents
+            .iter()
+            .find(|content| {
+                content.parts.iter().any(|part| {
+            matches!(part, Part::FunctionCall { id: Some(id), .. } if id == &self.call_id)
+        })
+            })
+            .ok_or_else(|| AdkError::agent("the interrupted tool batch is unavailable"))?;
+        Ok(batch
+            .parts
+            .iter()
+            .filter(|part| match part {
+                Part::FunctionCall {
+                    id: Some(id),
+                    name,
+                    args,
+                    ..
+                } => latest_call_state(request, id, name, args) == LatestCallState::Pending,
+                _ => false,
+            })
+            .cloned()
+            .collect())
+    }
+
     fn validate_pending_request(&self, request: &LlmRequest) -> adk_rust::Result<()> {
         let state = latest_call_state(request, &self.call_id, &self.tool_name, &self.arguments);
         if !request.tools.contains_key(&self.tool_name) || state != LatestCallState::Pending {

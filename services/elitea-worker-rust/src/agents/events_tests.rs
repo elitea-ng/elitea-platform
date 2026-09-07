@@ -427,6 +427,67 @@ fn ordinary_stream_matches_current_text_lifecycle_without_a_heap_event_queue() {
 }
 
 #[test]
+fn completed_text_projection_is_independent_of_provider_chunk_count() {
+    for fragments in [1, 255, 256, 257, 285, 2048] {
+        let mut projector =
+            AgentEventProjector::new(AgentEventProjectionContext::fixture(json!({})))
+                .expect("projector");
+        projector.start(timestamp(0)).unwrap();
+        let text = "é".repeat(fragments);
+        let parts = text
+            .chars()
+            .map(|c| Part::Text {
+                text: c.to_string(),
+            })
+            .collect();
+        let projected = projector
+            .project(&event("fragmented", 1, false, true, parts))
+            .expect("bounded text must not fail due to provider fragmentation");
+        assert!(
+            projected
+                .into_iter()
+                .map(|e| current(&e))
+                .any(|e| e["response_metadata"]["thinking_steps"][0]["text"] == text)
+        );
+    }
+}
+
+#[test]
+fn fragmented_projection_retains_byte_logical_part_and_work_bounds() {
+    let oversized = vec![Part::Text {
+        text: "x".repeat(60 * 1024 + 1),
+    }];
+    let empty_flood = vec![
+        Part::Text {
+            text: String::new()
+        };
+        60 * 1024 + 1
+    ];
+    let distinct_blocks = (0..257)
+        .map(|i| {
+            if i % 2 == 0 {
+                Part::Text { text: "x".into() }
+            } else {
+                Part::Thinking {
+                    thinking: "y".into(),
+                    signature: None,
+                }
+            }
+        })
+        .collect();
+    for parts in [oversized, empty_flood, distinct_blocks] {
+        let mut projector =
+            AgentEventProjector::new(AgentEventProjectionContext::fixture(json!({})))
+                .expect("projector");
+        projector.start(timestamp(0)).unwrap();
+        assert_eq!(
+            projection_error(projector.project(&event("bounded", 1, false, true, parts))).code(),
+            AgentEventProjectionErrorCode::ResourceExhausted
+        );
+    }
+}
+
+#[test]
 fn delta_streaming_content_is_accumulated_without_assuming_cumulative_chunks() {
     let mut projector = AgentEventProjector::new(AgentEventProjectionContext::fixture(json!({})))
         .expect("projector");

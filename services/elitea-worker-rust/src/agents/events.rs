@@ -1271,7 +1271,7 @@ impl AgentEventProjector {
         if self
             .delegated_authorization
             .requirement_for(&request.tool_name)
-            != Some(&requirement)
+            .is_none_or(|expected| !expected.same_authority(&requirement))
         {
             return Err(AgentEventProjectionError::invalid_state());
         }
@@ -3906,7 +3906,7 @@ fn ordinary_model_event(
     if content.role != "model" && content.role != "assistant" {
         return Err(AgentEventProjectionError::unsupported());
     }
-    if content.parts.len() > MAX_ADK_PARTS_PER_EVENT {
+    if !bounded_logical_parts(&content.parts) {
         return Err(AgentEventProjectionError {
             code: AgentEventProjectionErrorCode::ResourceExhausted,
             protocol: None,
@@ -3928,6 +3928,26 @@ fn ordinary_model_event(
             .timestamp
             .to_rfc3339_opts(SecondsFormat::AutoSi, false),
     }))
+}
+
+fn bounded_logical_parts(parts: &[Part]) -> bool {
+    // ADK's non-streaming result keeps one text/thinking part per provider
+    // delta. Count adjacent fragments as one logical block, without modifying
+    // durable content or signatures. Also bound empty-fragment scanning.
+    if parts.len() > MAX_CURRENT_NODE_EVENT_JSON_BYTES {
+        return false;
+    }
+    let adjacent_fragments = parts
+        .windows(2)
+        .filter(|pair| {
+            matches!(
+                pair,
+                [Part::Text { .. }, Part::Text { .. }]
+                    | [Part::Thinking { .. }, Part::Thinking { .. }]
+            )
+        })
+        .count();
+    parts.len() - adjacent_fragments <= MAX_ADK_PARTS_PER_EVENT
 }
 
 fn output_limited(event: &Event) -> Result<bool, AgentEventProjectionError> {

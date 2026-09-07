@@ -1,6 +1,7 @@
 package repos
 
 import (
+	"fmt"
 	"testing"
 )
 
@@ -16,6 +17,24 @@ func TestDecodeCurrentAgentTextDeltaAcceptsVisibleModelChunk(t *testing.T) {
 	if err != nil || !recognized || delta.content != "partial answer" ||
 		delta.streamID != "conversation-1" || delta.messageID != "message-1" {
 		t.Fatalf("decoded text delta = %+v recognized=%t error=%v", delta, recognized, err)
+	}
+}
+
+func TestDecodeCurrentAgentTextDeltaDoesNotPublishChildTextAsParentAnswer(t *testing.T) {
+	for name, metadata := range map[string]string{
+		"path":            `{"parent_agent_path":[{"name":"Name Resolver","call_id":"name-call"}]}`,
+		"name":            `{"parent_agent_name":"Name Resolver"}`,
+		"nested metadata": `{"metadata":{"parent_agent_path":[{"name":"Name Resolver","call_id":"name-call"}]}}`,
+		"tool metadata":   `{"tool_meta":{"metadata":{"parent_agent_name":"Name Resolver"}}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			event := fmt.Sprintf(`{"type":"agent_llm_chunk","stream_id":"conversation-1",
+"message_id":"message-1","execution_generation":"generation-1","sio_event":"chat_predict",
+"content":"child result","response_metadata":%s}`, metadata)
+			if _, recognized, err := decodeCurrentAgentTextDelta([]byte(event)); err != nil || recognized {
+				t.Fatalf("child text recognized=%t error=%v", recognized, err)
+			}
+		})
 	}
 }
 
