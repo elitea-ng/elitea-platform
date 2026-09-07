@@ -187,8 +187,25 @@ COMMENT ON COLUMN pipeline_triggers.revoked_at IS
     'Set instead of deleting the row: a revoked trigger is evidence, and the inbound path refuses any row where this is not NULL.';
 COMMENT ON TABLE pipeline_schedules IS
     'One cron expression per pipeline VERSION (issue 193). The run executes as author_id, whose permission is re-validated at fire time.';
-COMMENT ON COLUMN pipeline_schedules.author_id IS
-    'Who a scheduled run executes as. Re-validated at every fire: an author who loses the project permission stops firing, with last_result = skipped_unauthorized.';
+-- pipeline_schedules.author_id is written in the form 0128 records owner and
+-- author meanings (a VALUES row of table, column, meaning), because
+-- migrations/owner_column_meanings_test.go reads that form and nothing else:
+-- one place holds the table, and a free-text comment does not count.
+DO $$
+DECLARE
+    entry record;
+BEGIN
+    FOR entry IN
+        SELECT *
+          FROM (VALUES
+            ('pipeline_schedules', 'author_id',
+             'USER id, not project id. Who a scheduled run executes as (issue 193). Re-validated at every fire: an author who loses the project permission stops firing, with last_result = skipped_unauthorized.')
+          ) AS t(table_name, column_name, meaning)
+    LOOP
+        EXECUTE format('COMMENT ON COLUMN %I.%I IS %L',
+                       entry.table_name, entry.column_name, entry.meaning);
+    END LOOP;
+END $$;
 COMMENT ON COLUMN pipeline_schedules.last_run IS
     'Stamped ONLY on a real dispatch. A maintenance window or a skipped overlap leaves it alone, so the row is due once when the reason clears rather than once per missed minute.';
 COMMENT ON COLUMN pipeline_schedules.last_result IS
