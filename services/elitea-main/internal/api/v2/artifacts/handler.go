@@ -79,6 +79,20 @@ type Repository interface {
 	// multipart continuation endpoints need an unscoped lookup that
 	// GetTransferGrant's project-scoped query cannot provide.
 	GetTransferGrantByID(ctx context.Context, id string) (repos.TransferGrantRow, error)
+	// The per-bucket access list (bucket_permissions.go). These six methods
+	// are part of THIS interface, rather than an optional dependency the
+	// handler may or may not hold, on purpose: an access check that a
+	// composition root can forget to wire is an access check that is off in
+	// production and green in every unit test. Putting them here makes the
+	// omission a compile error — internal/api/router.go's artifactRepoAdapter
+	// cannot satisfy Repository without embedding the repository that answers
+	// them.
+	ListBucketPermissions(ctx context.Context, projectID int64) ([]repos.BucketPermissionRow, error)
+	GetBucketPermission(ctx context.Context, projectID, userID int64, bucket string) ([]string, bool, error)
+	ListUserBucketPermissions(ctx context.Context, projectID, userID int64) (map[string][]string, error)
+	ReplaceUserBucketPermissions(ctx context.Context, projectID, userID int64, permissions map[string][]string) error
+	DeleteUserBucketPermission(ctx context.Context, projectID, userID int64, bucket string) (bool, error)
+	IsProjectAdmin(ctx context.Context, projectID, userID int64) (bool, error)
 }
 
 type Handler struct {
@@ -237,6 +251,13 @@ func (h *Handler) ListBuckets(w http.ResponseWriter, r *http.Request) {
 		h.writeInternal(w, r, "list buckets", err)
 		return
 	}
+	// Hide the buckets this caller is explicitly blocked on. See
+	// bucket_permissions.go on why the filter is a blacklist.
+	rows, err = h.visibleBuckets(r.Context(), projectID, rows)
+	if err != nil {
+		h.writeInternal(w, r, "list buckets", err)
+		return
+	}
 
 	buckets := make([]Bucket, 0, len(rows))
 	for _, row := range rows {
@@ -258,13 +279,8 @@ func (h *Handler) GetBucket(w http.ResponseWriter, r *http.Request) {
 	}
 	name := chi.URLParam(r, "bucket")
 
-	row, err := h.repo.GetBucket(r.Context(), projectID, name)
-	if errors.Is(err, storage.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "NotFound", "bucket not found")
-		return
-	}
-	if err != nil {
-		h.writeInternal(w, r, "get bucket", err)
+	row, ok := h.requireBucket(w, r, projectID, name, accessRead)
+	if !ok {
 		return
 	}
 
@@ -412,15 +428,13 @@ func (h *Handler) UpdateBucket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	row, err := h.repo.GetBucket(r.Context(), projectID, name)
-	if errors.Is(err, storage.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "NotFound", "bucket not found")
+	// accessWrite: legacy gates its PUT (retention) and PATCH (pin) on the
+	// write half of the access list too (api/v2/buckets.py:211, :318).
+	row, ok := h.requireBucket(w, r, projectID, name, accessWrite)
+	if !ok {
 		return
 	}
-	if err != nil {
-		h.writeInternal(w, r, "update bucket", err)
-		return
-	}
+	var err error
 
 	if rawPinned, present := raw["is_pinned"]; present {
 		var pinned bool
@@ -553,13 +567,11 @@ func (h *Handler) DeleteBucket(w http.ResponseWriter, r *http.Request) {
 	}
 	name := chi.URLParam(r, "bucket")
 
-	row, err := h.repo.GetBucket(r.Context(), projectID, name)
-	if errors.Is(err, storage.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "NotFound", "bucket not found")
-		return
-	}
-	if err != nil {
-		h.writeInternal(w, r, "delete bucket", err)
+	// accessWrite. Legacy's own DELETE carries NO access-list check, which
+	// lets a member blocked on a bucket delete that bucket — see
+	// bucket_permissions.go, difference 2.
+	row, ok := h.requireBucket(w, r, projectID, name, accessWrite)
+	if !ok {
 		return
 	}
 

@@ -185,16 +185,14 @@ export function Artifacts(): ReactNode {
   };
 
   const missingBucket = search.bucket !== undefined && search.bucket !== '' && !buckets.isFetching && selectedBucket === undefined;
-  const queryError = buckets.isError
-    ? 'Failed to load buckets.'
-    : files.isError
-      ? 'Failed to load artifacts.'
-      : undefined;
+  const queryError = buckets.isError ? 'Failed to load buckets.'
+    : files.isError ? 'Failed to load artifacts.' : undefined;
 
   return (
     <Box sx={rootSx}>
       <Box sx={sidebarSx(bucketsCollapsed)}>
       <BucketSidebar
+        projectId={projectId}
         buckets={buckets.data ?? []}
         {...(selectedBucket === undefined ? {} : { selectedBucket: selectedBucket.name })}
         storageConfigurations={storage.data ?? []}

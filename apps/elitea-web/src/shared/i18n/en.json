@@ -3967,5 +3967,20 @@
   "shared.ui.settings.users.outcome.invited": "Invited",
   "pages.admin.configuration.html.previewEmpty": "Nothing to preview. Left empty, the platform shows its own splash screen.",
   "pages.admin.configuration.html.previewLabel": "Preview",
-  "pages.admin.configuration.html.previewStripped": "The preview above is what users will see. Some markup was removed because it cannot run on the splash screen."
+  "pages.admin.configuration.html.previewStripped": "The preview above is what users will see. Some markup was removed because it cannot run on the splash screen.",
+  "artifacts.bucketAccess.add": "Add exception",
+  "artifacts.bucketAccess.close": "Close",
+  "artifacts.bucketAccess.default": "All users have read/write permissions by default.",
+  "artifacts.bucketAccess.empty": "No exceptions added yet.",
+  "artifacts.bucketAccess.error.load": "Failed to load the bucket exceptions.",
+  "artifacts.bucketAccess.error.remove": "Failed to remove the bucket exception.",
+  "artifacts.bucketAccess.error.save": "Failed to save the bucket exception.",
+  "artifacts.bucketAccess.exceptions": "Exceptions",
+  "artifacts.bucketAccess.loading": "Loading exceptions…",
+  "artifacts.bucketAccess.option.noAccess": "No access",
+  "artifacts.bucketAccess.option.read": "Read-only",
+  "artifacts.bucketAccess.option.readWrite": "Read/write (default)",
+  "artifacts.bucketAccess.title": "Manage Permissions",
+  "artifacts.bucketAccess.users": "Users",
+  "artifacts.buckets.manageAccess": "Manage access"
 }

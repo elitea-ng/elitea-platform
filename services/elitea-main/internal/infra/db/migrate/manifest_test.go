@@ -469,7 +469,22 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// SCIM tables, and it takes NO foreign key to `auth_core__user`: that table
 	// belongs to the legacy runtime, and a shared migration that claims it
 	// breaks the repository seeds.
-	require.EqualValues(t, 117, Head(shared))
+	//
+	// 118: shared/0118_artifact_bucket_permissions.sql, the per-bucket access
+	// list the artifacts plugin calls `bucket_permissions`, plus the two
+	// default-mode grants its routes gate on
+	// (`configuration.artifacts.s3_credentials.view` and `.edit`).
+	//
+	// TWO CONCERNS IN ONE FILE, like 0072. The table and the grants are one
+	// feature: the routes that read and write the table are gated on strings no
+	// file in this corpus grants, so shipping the table without the grants
+	// leaves every ACL route answering 403 on a clean database — the class
+	// internal/api/router_permission_grant_gate_test.go names. Splitting them
+	// would take two numbers for one indivisible change.
+	//
+	// A new file for 0110's reason: 0060 returns early on any configured
+	// deployment, and migrations are checksum-immutable.
+	require.EqualValues(t, 118, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

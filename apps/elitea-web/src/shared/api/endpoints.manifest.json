@@ -2018,6 +2018,42 @@
             ]
         },
         {
+            "id": "artifacts.listBucketPermissions",
+            "method": "GET",
+            "path": "/artifacts/bucket_permissions/{projectID}",
+            "operationId": "listBucketPermissions",
+            "source": "generated",
+            "responseSchema": "BucketPermissionListResponse",
+            "fixture": null,
+            "usedBy": [
+                "features/artifacts"
+            ]
+        },
+        {
+            "id": "artifacts.setBucketPermissions",
+            "method": "PUT",
+            "path": "/artifacts/bucket_permissions/{projectID}",
+            "operationId": "setBucketPermissions",
+            "source": "generated",
+            "responseSchema": "BucketPermissionRow",
+            "fixture": null,
+            "usedBy": [
+                "features/artifacts"
+            ]
+        },
+        {
+            "id": "artifacts.deleteBucketPermission",
+            "method": "DELETE",
+            "path": "/artifacts/bucket_permissions/{projectID}",
+            "operationId": "deleteBucketPermission",
+            "source": "generated",
+            "responseSchema": null,
+            "fixture": null,
+            "usedBy": [
+                "features/artifacts"
+            ]
+        },
+        {
             "id": "secrets.list",
             "method": "GET",
             "path": "/secrets/secrets/{mode}/{projectID}",

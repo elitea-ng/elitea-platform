@@ -4803,6 +4803,74 @@ components:
           items:
             $ref: '#/components/schemas/Bucket'
 
+    BucketPermissionMap:
+      type: object
+      description: >
+        The per-bucket exception map, keyed by BUCKET NAME. An absent key
+        means no exception, so the member keeps full access to that bucket. A
+        key whose value is an empty array means no access. The two are not
+        interchangeable.
+      additionalProperties:
+        type: array
+        items:
+          type: string
+          enum: [read, write]
+      x-elitea-passthrough: >-
+        NOTE(W2): the KEYS are bucket names an operator chose, so the map
+        cannot be a closed shape; the VALUES are constrained to the two verbs
+        the reference accepts (legacy/plugins/artifacts
+        api/v2/bucket_permissions.py:96-99). Naming each bucket here would
+        make the contract depend on one tenant's data
+        (internal/api/v2/artifacts/bucket_permissions.go:1).
+
+    BucketPermissionRow:
+      type: object
+      required: [user_id, bucket_permissions]
+      properties:
+        user_id:
+          type: integer
+          format: int64
+          description: The project member the exceptions apply to.
+        name:
+          type: string
+          description: The member's display name, empty when the user row is gone.
+        email:
+          type: string
+          description: The member's e-mail, empty when the user row is gone.
+        bucket_permissions:
+          $ref: '#/components/schemas/BucketPermissionMap'
+
+    BucketPermissionListResponse:
+      type: object
+      required: [total, rows]
+      properties:
+        total:
+          type: integer
+        rows:
+          type: array
+          items:
+            $ref: '#/components/schemas/BucketPermissionRow'
+
+    SetBucketPermissionsRequest:
+      type: object
+      required: [user_id, bucket_permissions]
+      properties:
+        user_id:
+          type: integer
+          format: int64
+        bucket_permissions:
+          $ref: '#/components/schemas/BucketPermissionMap'
+
+    DeleteBucketPermissionRequest:
+      type: object
+      required: [user_id, bucket]
+      properties:
+        user_id:
+          type: integer
+          format: int64
+        bucket:
+          type: string
+
     CreateBucketRequest:
       type: object
       required: [name]
@@ -13394,6 +13462,95 @@ paths:
               schema: { $ref: '#/components/schemas/Error' }
         '409':
           description: The grant was already committed or aborted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /artifacts/bucket_permissions/{projectID}:
+    parameters:
+      - name: projectID
+        in: path
+        required: true
+        schema: { type: integer }
+
+    get:
+      operationId: listBucketPermissions
+      summary: List the per-bucket access exceptions in a project
+      description: >
+        The access model is EXCEPTIONS to a default of full access, which is
+        legacy's own model (legacy/plugins/artifacts utils/utils.py:99-132):
+        a member with no entry for a bucket may read and write it. An entry
+        with an empty permission list means no access. The route answers every
+        exception in the project, per member, not the exceptions for one
+        bucket.
+      tags: [artifacts]
+      responses:
+        '200':
+          description: The project's exceptions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BucketPermissionListResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+
+    put:
+      operationId: setBucketPermissions
+      summary: Replace one member's bucket access exceptions
+      description: >
+        REPLACES the member's whole map, which is what the reference does
+        (rpc/s3_credentials.py:362). Removing one exception means sending the
+        map without that key.
+      tags: [artifacts]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetBucketPermissionsRequest'
+      responses:
+        '200':
+          description: The stored exceptions for that member
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BucketPermissionRow'
+        '400':
+          description: >
+            user_id or bucket_permissions is missing, a bucket name is
+            invalid, or a permission is not read or write
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+
+    delete:
+      operationId: deleteBucketPermission
+      summary: Remove one member's exception for one bucket
+      description: >
+        The subject travels in the body, as it does in the reference
+        (api/v2/bucket_permissions.py:130-163). 404 when there was no
+        exception to remove.
+      tags: [artifacts]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeleteBucketPermissionRequest'
+      responses:
+        '204':
+          description: Removed (no content)
+        '400':
+          description: user_id or bucket is missing
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No exception for this member and bucket
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }

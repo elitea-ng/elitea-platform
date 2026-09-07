@@ -560,12 +560,13 @@ func (a *testAttachmentStore) DeleteAttachmentChunks(ctx context.Context, projec
 var _ conversations.AttachmentStore = (*testAttachmentStore)(nil)
 
 // testArtifactRepo bridges v2artifacts.Repository the same way
-// router.go's own artifactRepoAdapter does — three repositories that share no
+// router.go's own artifactRepoAdapter does — four repositories that share no
 // method names, so embedding does the rest.
 type testArtifactRepo struct {
 	*repos.ArtifactBucketsRepository
 	*repos.ArtifactObjectsRepository
 	*repos.ArtifactTransferGrantsRepository
+	*repos.ArtifactBucketPermissionsRepository
 }
 
 func newTestArtifactRepo(t *testing.T, pool *pgxpool.Pool) v2artifacts.Repository {
@@ -582,7 +583,11 @@ func newTestArtifactRepo(t *testing.T, pool *pgxpool.Pool) v2artifacts.Repositor
 	if err != nil {
 		t.Fatalf("build the artifact transfer grants repository: %v", err)
 	}
-	return testArtifactRepo{buckets, objects, grants}
+	permissions, err := repos.NewArtifactBucketPermissionsRepository(pool)
+	if err != nil {
+		t.Fatalf("build the artifact bucket permissions repository: %v", err)
+	}
+	return testArtifactRepo{buckets, objects, grants, permissions}
 }
 
 // fakeObjectStore is a minimal in-memory storage.ObjectStore double with a

@@ -450,6 +450,7 @@ type artifactRepoAdapter struct {
 	*dbrepos.ArtifactBucketsRepository
 	*dbrepos.ArtifactObjectsRepository
 	*dbrepos.ArtifactTransferGrantsRepository
+	*dbrepos.ArtifactBucketPermissionsRepository
 }
 
 // newArtifactHandler builds the S6/S1-backed artifacts.Handler when
@@ -474,7 +475,14 @@ func newArtifactHandler(cfg RouterConfig) (h *v2artifacts.Handler, ok bool) {
 	if err != nil {
 		return nil, false
 	}
-	return v2artifacts.NewHandler(artifactRepoAdapter{bucketsRepo, objectsRepo, grantsRepo}, cfg.ObjectStore), true
+	permissionsRepo, err := dbrepos.NewArtifactBucketPermissionsRepository(cfg.Pool)
+	if err != nil {
+		return nil, false
+	}
+	return v2artifacts.NewHandler(
+		artifactRepoAdapter{bucketsRepo, objectsRepo, grantsRepo, permissionsRepo},
+		cfg.ObjectStore,
+	), true
 }
 
 // bucketBootstrapRepoAdapter satisfies artifactbootstrap.Repository the same
@@ -575,6 +583,13 @@ const (
 	artifactPermissionCreate = "configuration.artifacts.artifacts.create"
 	artifactPermissionEdit   = "configuration.artifacts.artifacts.edit"
 	artifactPermissionDelete = "configuration.artifacts.artifacts.delete"
+	// The per-bucket ACL routes. legacy/plugins/artifacts declares these two
+	// on api/v2/bucket_permissions.py (:36 for the GET, :69 and :123 for the
+	// writes) — DISTINCT strings from the four above, because in pylon the
+	// access list lives inside an s3_api_credentials row. Shared migration
+	// 0118 grants them.
+	artifactPermissionACLView = "configuration.artifacts.s3_credentials.view"
+	artifactPermissionACLEdit = "configuration.artifacts.s3_credentials.edit"
 )
 
 // ArtifactDeps is mountArtifactRoutes' dependency bundle. Handler nil means
@@ -587,7 +602,7 @@ type ArtifactDeps struct {
 	Resolver     platformauth.PermissionResolver
 }
 
-// mountArtifactRoutes registers all 21 artifact routes (13 from S7, plus
+// mountArtifactRoutes registers all 24 artifact routes (13 from S7, plus
 // S16's 3 native-multipart continuation routes, plus the 5 S3-shaped ones
 // the Python SDK speaks: list, download, upload, delete, stat) on r, wrapped in
 // deps.Authenticate and per-route RBAC (S11). Called once, from
@@ -599,6 +614,8 @@ type ArtifactDeps struct {
 // (S12).
 func mountArtifactRoutes(r chi.Router, deps ArtifactDeps) {
 	view := apimw.RequireResolvedPermissions(deps.Resolver, platformauth.PermissionModeDefault, artifactPermissionView)
+	aclView := apimw.RequireResolvedPermissions(deps.Resolver, platformauth.PermissionModeDefault, artifactPermissionACLView)
+	aclEdit := apimw.RequireResolvedPermissions(deps.Resolver, platformauth.PermissionModeDefault, artifactPermissionACLEdit)
 	create := apimw.RequireResolvedPermissions(deps.Resolver, platformauth.PermissionModeDefault, artifactPermissionCreate)
 	edit := apimw.RequireResolvedPermissions(deps.Resolver, platformauth.PermissionModeDefault, artifactPermissionEdit)
 	del := apimw.RequireResolvedPermissions(deps.Resolver, platformauth.PermissionModeDefault, artifactPermissionDelete)
@@ -637,6 +654,7 @@ func mountArtifactRoutes(r chi.Router, deps ArtifactDeps) {
 	presignUploadPart, completeMultipartUpload, abortMultipartUpload := notImplementedArtifact, notImplementedArtifact, notImplementedArtifact
 	listObjectsS3, downloadObjectS3 := notImplementedArtifact, notImplementedArtifact
 	uploadObjectS3, deleteObjectS3, statObjectS3 := notImplementedArtifact, notImplementedArtifact, notImplementedArtifact
+	listBucketPermissions, setBucketPermissions, deleteBucketPermission := notImplementedArtifact, notImplementedArtifact, notImplementedArtifact
 	if deps.Handler != nil {
 		listBuckets, createBucket, getBucket, updateBucket, deleteBucket =
 			deps.Handler.ListBuckets, deps.Handler.CreateBucket, deps.Handler.GetBucket, deps.Handler.UpdateBucket, deps.Handler.DeleteBucket
@@ -648,6 +666,8 @@ func mountArtifactRoutes(r chi.Router, deps ArtifactDeps) {
 		listObjectsS3, downloadObjectS3 = deps.Handler.ListObjectsS3, deps.Handler.DownloadObjectS3
 		uploadObjectS3, deleteObjectS3, statObjectS3 =
 			deps.Handler.UploadObjectS3, deps.Handler.DeleteObjectS3, deps.Handler.StatObjectS3
+		listBucketPermissions, setBucketPermissions, deleteBucketPermission =
+			deps.Handler.ListBucketPermissions, deps.Handler.SetBucketPermissions, deps.Handler.DeleteBucketPermission
 	}
 
 	r.Group(func(r chi.Router) {
@@ -683,6 +703,16 @@ func mountArtifactRoutes(r chi.Router, deps ArtifactDeps) {
 			r.With(create).Post("/grants/{projectID}/{grantID}/parts/{partNumber}", presignUploadPart)
 			r.With(create).Post("/grants/{projectID}/{grantID}:completeMultipart", completeMultipartUpload)
 			r.With(create).Post("/grants/{projectID}/{grantID}:abortMultipart", abortMultipartUpload)
+
+			// Per-bucket access lists — the legacy `bucket_permissions`
+			// resource module. The MODE segment legacy carries
+			// (`/bucket_permissions/default/{pid}`) is dropped here, as it is
+			// on every other artifact route above: this surface resolves
+			// PermissionModeDefault unconditionally, so a mode in the path
+			// would name something the router does not read.
+			r.With(aclView).Get("/bucket_permissions/{projectID}", listBucketPermissions)
+			r.With(aclEdit).Put("/bucket_permissions/{projectID}", setBucketPermissions)
+			r.With(aclEdit).Delete("/bucket_permissions/{projectID}", deleteBucketPermission)
 		})
 
 		// S3-shaped bucket listing and object read — the two calls the SDK's

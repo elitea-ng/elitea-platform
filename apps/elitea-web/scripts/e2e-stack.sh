@@ -661,6 +661,15 @@ CROSS JOIN (VALUES
     ('configuration.artifacts.buckets.view'),
     ('configuration.artifacts.buckets.edit'),
     ('configuration.artifacts.buckets.delete'),
+    -- The per-bucket ACCESS LIST routes (`/api/v2/artifacts/bucket_permissions/
+    -- {projectID}`) are gated on the two strings the artifacts plugin declares
+    -- for them, which are DISTINCT from the four above: pylon keeps the access
+    -- map inside an `s3_api_credentials` row, so it gates it on that resource.
+    -- Shared migration 0118 grants both centrally; project 1 carries
+    -- per-project rows, which SUPPRESS that central fallback, so they have to
+    -- be listed here as well or the "Manage access" dialog 403s.
+    ('configuration.artifacts.s3_credentials.view'),
+    ('configuration.artifacts.s3_credentials.edit'),
     -- #496 gated the whole /api/v2/configurations mount, which until then
     -- applied no permission of any kind. Project 1 carries per-project rows,
     -- so the central default-mode fallback shared/0072 seeds is SUPPRESSED

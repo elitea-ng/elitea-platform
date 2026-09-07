@@ -478,7 +478,17 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
  * error instead, so switching to it would move that mapping into every call
  * site rather than delete it.
  */
-const GENERATED_OPERATION_COUNT = 212;
+/*
+ * 212 -> 215 and 228 -> 231, when a bucket got a per-bucket ACCESS LIST — the
+ * surface the artifacts plugin calls `bucket_permissions`.
+ *
+ * BOTH NUMBERS MOVE BY THREE, which is the simple case: the three operations
+ * (list, replace one member's map, remove one entry) are described in
+ * api/openapi/v2.yaml AND all three are called from the Artifacts page's
+ * "Manage access" dialog that ships with them, so each produces a generated
+ * operation and a manifest entry.
+ */
+const GENERATED_OPERATION_COUNT = 215;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -553,7 +563,8 @@ const GENERATED_OPERATION_COUNT = 212;
  * generates no client for it — the same `source: 'handwritten'` case the
  * "199 -> 202" Inventory entries above are for.
  */
-const MANIFEST_ENTRY_COUNT = 228;
+// See the note above GENERATED_OPERATION_COUNT: both numbers moved together.
+const MANIFEST_ENTRY_COUNT = 231;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {
