@@ -96,6 +96,42 @@ type PredictRequest struct {
 	// on, which project and entity they are looking at, which model is selected.
 	// It is `SupportAssistantContext` in `models/pd/support.py`.
 	Context *AssistantContext `json:"support_assistant_context,omitempty"`
+	// Attachments carries the files UploadAttachment (attachments.go) already
+	// stored for this conversation — the SAME shape the main chat composer's
+	// `payload.attachments` sends (internal/api/v2/agentexecution/route.go's
+	// `currentStartAttachment`), because it reaches the identical parse
+	// (`agentexecutionapp.ParseAttachmentFilepath`) and the identical
+	// admission-time authorization (`currentTurnAttachments`'s conversation-
+	// UUID prefix check). `name` is accepted and ignored for the same reason
+	// route.go's is: the object key IS `filepath`, not the display name.
+	Attachments []PredictAttachment `json:"attachments,omitempty"`
+}
+
+// PredictAttachment is one entry of PredictRequest.Attachments.
+type PredictAttachment struct {
+	Filepath string `json:"filepath"`
+	Name     string `json:"name"`
+}
+
+// parseSupportAttachments splits every filepath into the (bucket, name) pair
+// `agentexecutionapp.CurrentTurnAttachment` is keyed by, refusing the whole
+// turn if any one is malformed — the same all-or-nothing rule route.go's
+// `parseStartAttachments` applies to the main chat composer's uploads, and
+// for the identical reason: a silently dropped attachment produces an
+// admitted turn the user believes carried their file.
+func parseSupportAttachments(entries []PredictAttachment) ([]agentexecutionapp.CurrentTurnAttachmentRef, bool) {
+	if len(entries) == 0 {
+		return nil, true
+	}
+	refs := make([]agentexecutionapp.CurrentTurnAttachmentRef, 0, len(entries))
+	for _, entry := range entries {
+		ref, ok := agentexecutionapp.ParseAttachmentFilepath(entry.Filepath)
+		if !ok {
+			return nil, false
+		}
+		refs = append(refs, ref)
+	}
+	return refs, true
 }
 
 // AssistantContext is `models/pd/support.py`'s `SupportAssistantContext`,
@@ -184,6 +220,14 @@ func (h *Handler) Predict(w http.ResponseWriter, r *http.Request) {
 		apierr.WriteStatus(w, http.StatusBadRequest, "message must be valid UTF-8 text")
 		return
 	}
+	// A filepath that does not split into a non-empty bucket and a non-empty
+	// name is malformed input, not an unsupported feature — refusing the
+	// whole turn rather than dropping the offending entry, same as route.go.
+	attachments, ok := parseSupportAttachments(body.Attachments)
+	if !ok {
+		apierr.WriteStatus(w, http.StatusBadRequest, "invalid attachment filepath")
+		return
+	}
 
 	conversationUUID := chi.URLParam(r, "conversationUUID")
 	conversationID, err := h.store.conversationOwnedByCaller(r.Context(), projectID, userID, conversationUUID)
@@ -215,6 +259,7 @@ func (h *Handler) Predict(w http.ResponseWriter, r *http.Request) {
 			TargetParticipantID: participantID,
 			QuestionID:          body.QuestionID,
 			UserInput:           userInput,
+			Attachments:         attachments,
 		})
 	if err != nil {
 		// `err` now NAMES the precondition the resolver objected to

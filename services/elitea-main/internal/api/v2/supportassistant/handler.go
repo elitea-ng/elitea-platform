@@ -98,6 +98,17 @@ const (
 	PermissionConversationsCreate = "models.chat.conversations.create"
 	PermissionConversationRead    = "models.chat.conversation.details"
 	PermissionMessagesCreate      = "models.chat.messages.create"
+	// PermissionAttachmentsCreate gates the upload route (attachments.go).
+	// Same string the main chat route's Post .../attachments/... uses
+	// (router.go), granted by the SAME 0068 block as every permission above.
+	PermissionAttachmentsCreate = "models.chat.attachments.create"
+	// PermissionArtifactsView gates the read-back route (attachments.go).
+	// NOT a `models.chat.*` string — attachment bytes are served by
+	// internal/api/v2/artifacts' generic object-download route, gated on
+	// its own catalogue (migrations/shared/0074_artifact_permissions.sql),
+	// which grants this same string to admin, editor AND viewer too, so
+	// reusing it needs no new grant either.
+	PermissionArtifactsView = "configuration.artifacts.artifacts.view"
 )
 
 // StartUseCase is the agent-execution entry point the predict route delegates
@@ -114,11 +125,13 @@ type StartUseCase interface {
 
 // Handler serves the support assistant surface.
 type Handler struct {
-	store     *store
-	resolver  auth.PermissionResolver
-	startCase StartUseCase
-	chat      ChatStore
-	logger    *slog.Logger
+	store                *store
+	resolver             auth.PermissionResolver
+	startCase            StartUseCase
+	chat                 ChatStore
+	attachmentUploader   AttachmentUploader
+	attachmentDownloader AttachmentDownloader
+	logger               *slog.Logger
 }
 
 // Option configures a Handler at construction.
@@ -205,6 +218,12 @@ func (h *Handler) Routes() chi.Router {
 
 	r.Method(http.MethodGet, "/conversation/{conversationUUID}", gated(PermissionConversationRead, h.GetConversation))
 	r.Method(http.MethodPost, "/predict/{conversationUUID}", gated(PermissionMessagesCreate, h.Predict))
+
+	// Attachments (issue #625 item 2) — see attachments.go for why these two
+	// delegate to the SAME handlers the main chat surface's own attachment
+	// routes use, rather than a second read/write path.
+	r.Method(http.MethodPost, "/attachments/{conversationID}", gated(PermissionAttachmentsCreate, h.UploadAttachment))
+	r.Method(http.MethodGet, "/attachments/{bucket}/*", gated(PermissionArtifactsView, h.GetAttachment))
 
 	return r
 }

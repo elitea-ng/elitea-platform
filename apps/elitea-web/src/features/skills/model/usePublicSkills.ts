@@ -8,18 +8,39 @@
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
-import { attachPublicSkill, fetchPublicSkills, type PublicSkillQuery } from '../api/skillPublishApi';
+import {
+  attachPublicSkill,
+  fetchAgentsWithSkill,
+  fetchPublicSkills,
+  type PublicSkillQuery,
+} from '../api/skillPublishApi';
 import { skillQueryKeys } from './useSkills';
 
 const publicSkillQueryKeys = {
   list: (request: PublicSkillQuery) =>
     ['public-skills', request.query ?? '', request.category ?? ''] as const,
+  agentsWithSkill: (projectId: string | undefined, publicSkillId: number | undefined) =>
+    ['public-skills', 'agents-with-skill', projectId ?? '', publicSkillId ?? ''] as const,
 };
 
 export function usePublicSkills(request: PublicSkillQuery) {
   return useQuery({
     queryKey: publicSkillQueryKeys.list(request),
     queryFn: () => fetchPublicSkills(request),
+  });
+}
+
+/**
+ * The agent versions in this project that already carry this public skill —
+ * the attach dialog's "already added" state (issue #625 item 3). Disabled
+ * until both ids are known, so the dialog does not fire a request for
+ * `undefined`/`skill?.id` while it is still resolving which skill was opened.
+ */
+export function useAgentsWithSkill(projectId: string | undefined, publicSkillId: number | undefined, enabled = true) {
+  return useQuery({
+    queryKey: publicSkillQueryKeys.agentsWithSkill(projectId, publicSkillId),
+    queryFn: () => fetchAgentsWithSkill(projectId ?? '', publicSkillId),
+    enabled: enabled && projectId !== undefined && publicSkillId !== undefined,
   });
 }
 

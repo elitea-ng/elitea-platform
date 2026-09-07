@@ -1089,6 +1089,12 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	if artifactHandler == nil {
 		artifactHandler, _ = newArtifactHandler(cfg)
 	}
+	// Declared at function scope (not inside the "Conversations" block below,
+	// where it used to live) so the Support Assistant mount can reuse this
+	// EXACT instance for its own attachment routes (issue #625 item 2) —
+	// the same object store, the same attachment metadata tables, the same
+	// AddAttachments code, not a second implementation of any of them.
+	var convHandler *v2convs.Handler
 	authenticate := apimw.Auth(apimw.AuthConfig{
 		Client:                    cfg.AuthClient,
 		Validator:                 cfg.AuthValidator,
@@ -2502,7 +2508,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					// cfg.ObjectStore are unset, so AddAttachments' JSON-metadata
 					// branch keeps working exactly as before wherever storage isn't
 					// wired (matching newArtifactHandler's own degrade convention).
-					convHandler := v2convs.NewHandler(cfg.ConvsRepo).
+					convHandler = v2convs.NewHandler(cfg.ConvsRepo).
 						WithPool(cfg.Pool).
 						WithObjectStore(cfg.ObjectStore).
 						WithAttachmentStore(newAttachmentStore(cfg.Pool)).
@@ -3437,6 +3443,21 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				if projectProvisionerOK {
 					supportOptions = append(supportOptions,
 						v2support.WithProvisioner(supportProjectProvisioner{projectProvisioner}))
+				}
+				// Attachments (issue #625 item 2): the SAME artifact path chat
+				// itself uses, not a second store — `convHandler` (this
+				// function's one instance, S20a-wired above) writes the bytes
+				// exactly as `POST .../attachments/prompt_lib/{p}/{c}` does, and
+				// `artifactHandler` (also this function's one instance) serves
+				// them back exactly as the generic `GET .../artifacts/objects/
+				// {p}/{bucket}/*` route does. Both are nil-guarded the same way
+				// every other optional dependency here is: absent storage means
+				// the support routes answer 503, not a panic.
+				if convHandler != nil {
+					supportOptions = append(supportOptions, v2support.WithAttachmentUploader(convHandler))
+				}
+				if artifactHandler != nil {
+					supportOptions = append(supportOptions, v2support.WithAttachmentDownloader(artifactHandler))
 				}
 				r.Mount("/support_assistant", v2support.NewHandler(cfg.Pool, supportOptions...).Routes())
 			}

@@ -4,6 +4,7 @@ import { useApi } from './api.hook';
 import { useSupportAssistantContext } from './supportContext.hook';
 import { useSupportStream } from './stream.hook';
 import type { TConversationListItem, TMessage, TRawConversation, TSocketMessage } from '../types';
+import type { TSupportAttachmentRef } from '../../api';
 import { applyPredictFrame, generateUUID, parseConversationMessages } from '../utils';
 
 type TUseChatProps = {
@@ -156,7 +157,7 @@ export const useChat = (props: TUseChatProps) => {
   });
 
   const handleSend = useCallback(
-    async (text: string) => {
+    async (text: string, file?: File) => {
       let activeConversationId = currentConversationId;
 
       // Create conversation if needed
@@ -189,17 +190,31 @@ export const useChat = (props: TUseChatProps) => {
       if (!activeConversationId) return;
 
       /*
+       * ATTACHMENTS (issue #625 item 2): uploaded BEFORE the turn starts,
+       * over the SAME artifact path the main chat composer uses server-side
+       * (internal/api/v2/supportassistant/attachments.go). A failed upload
+       * reports failure and STOPS here — it must not start a turn the user
+       * believes carried their file. See `../../components/chat/
+       * MessageInput.tsx` for why a ported paperclip is safe here now.
+       */
+      let attachments: TSupportAttachmentRef[] | undefined;
+      if (file) {
+        try {
+          const uploaded = await api.uploadAttachment(activeConversationId, file);
+          attachments = [{ filepath: uploaded.filepath, name: file.name }];
+        } catch {
+          handleError({ error: 'Failed to attach the file. Please try again.', code: 'ATTACHMENT_UPLOAD_FAILED' });
+          return;
+        }
+      }
+
+      /*
        * START THE TURN, then subscribe.
        *
        * `question_id` is generated HERE, once, and is the turn's idempotency
        * key: the server derives the turn's message identifiers from it, so a
        * retried POST resumes the same run rather than billing a second one. It
        * is why the endpoint requires it instead of minting one itself.
-       *
-       * NO ATTACHMENTS TRAVEL WITH A TURN. The start contract has no field for
-       * them and the route refuses a non-empty `attachments_info`, so the whole
-       * attachment surface is unported rather than half-wired — see
-       * `../../components/chat/MessageInput.tsx`.
        */
       try {
         const started = await api.startTurn(activeConversationId, {
@@ -208,6 +223,7 @@ export const useChat = (props: TUseChatProps) => {
           support_assistant_context: supportAssistantContext
             ? (supportAssistantContext as unknown as Record<string, unknown>)
             : undefined,
+          attachments,
         });
         if (started.events_url) {
           stream.open(started.events_url);

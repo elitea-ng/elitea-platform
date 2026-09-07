@@ -69,4 +69,42 @@ describe('Markdown', () => {
     );
     expect(getByTestId('md-root')).toBeInTheDocument();
   });
+
+  // Issue #625 item 1: per-word TTS highlight sync.
+  describe('spokenRange', () => {
+    it('is a no-op when TTS is idle (spokenRange omitted)', () => {
+      const { container } = renderWithTheme(<Markdown>{'the quick brown fox'}</Markdown>);
+      expect(container.querySelector('mark')).toBeNull();
+    });
+
+    it('highlights exactly the word the range names, across a paragraph boundary', () => {
+      const source = 'First paragraph here.\n\nSecond paragraph word.';
+      // "paragraph" inside the SECOND block — proves the offset is resolved
+      // against the token it actually falls in, not always the first one.
+      const start = source.indexOf('paragraph', source.indexOf('Second'));
+      const { container } = renderWithTheme(
+        <Markdown spokenRange={{ start, end: start + 'paragraph'.length }}>{source}</Markdown>,
+      );
+      const marks = container.querySelectorAll('mark');
+      expect(marks).toHaveLength(1);
+      expect(marks[0]?.textContent).toBe('paragraph');
+    });
+
+    it('does not highlight a token with inline formatting (bold) rather than risk splitting a tag', () => {
+      const source = 'Hello **bold** world.';
+      const start = source.indexOf('bold');
+      const { container } = renderWithTheme(
+        <Markdown spokenRange={{ start, end: start + 'bold'.length }}>{source}</Markdown>,
+      );
+      expect(container.querySelector('mark')).toBeNull();
+      expect(container.querySelector('strong')?.textContent).toBe('bold');
+    });
+
+    it('highlights nothing when the range falls outside every token (idle-shaped range)', () => {
+      const { container } = renderWithTheme(
+        <Markdown spokenRange={{ start: 9999, end: 10005 }}>{'short text'}</Markdown>,
+      );
+      expect(container.querySelector('mark')).toBeNull();
+    });
+  });
 });

@@ -155,3 +155,47 @@ describe('ApplicationAnswer caption line and reasoning summary', () => {
     expect(screen.getByText('The user is greeting me.')).toBeVisible();
   });
 });
+
+// Issue #625 item 1: per-word TTS highlight sync. `spokenRange` is one GLOBAL
+// range (`useReadAloud`'s state, not per-message), so this row must gate it
+// on `speakingMessageId` itself rather than trust the caller never to pass it
+// for a row TTS is not reading.
+describe('ApplicationAnswer TTS highlight gating', () => {
+  const answer = {
+    id: 'answer-tts',
+    role: 'assistant',
+    content: 'the quick brown fox',
+  } as ChatMessage;
+
+  it('highlights the spoken word when this row is the one speakingMessageId names', () => {
+    const start = answer.content.indexOf('quick');
+    renderWithTheme(
+      <ApplicationAnswer
+        answer={answer}
+        messageId={answer.id}
+        tts={{ speakingMessageId: answer.id, spokenRange: { start, end: start + 'quick'.length } }}
+      />,
+    );
+
+    expect(screen.getByTestId('spoken-highlight')).toHaveTextContent('quick');
+  });
+
+  it('does not highlight when speakingMessageId names a DIFFERENT row', () => {
+    const start = answer.content.indexOf('quick');
+    renderWithTheme(
+      <ApplicationAnswer
+        answer={answer}
+        messageId={answer.id}
+        tts={{ speakingMessageId: 'some-other-message', spokenRange: { start, end: start + 'quick'.length } }}
+      />,
+    );
+
+    expect(screen.queryByTestId('spoken-highlight')).not.toBeInTheDocument();
+  });
+
+  it('does not highlight while TTS is idle (no speakingMessageId, no spokenRange)', () => {
+    renderWithTheme(<ApplicationAnswer answer={answer} messageId={answer.id} />);
+
+    expect(screen.queryByTestId('spoken-highlight')).not.toBeInTheDocument();
+  });
+});
