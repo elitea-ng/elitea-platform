@@ -98,6 +98,7 @@ func Auth(cfg AuthConfig) func(http.Handler) http.Handler {
 			if apiKey := r.Header.Get("X-API-Key"); apiKey != "" {
 				user, err := validateToken(r.Context(), cfg, apiKey)
 				if err != nil {
+					logCredentialRefusal(r, sourceAPIKey, reasonTokenRejected)
 					writeJSONError(w, http.StatusUnauthorized, "authentication_error", "unauthenticated", "invalid api key")
 					return
 				}
@@ -113,8 +114,18 @@ func Auth(cfg AuthConfig) func(http.Handler) http.Handler {
 			authHeader := r.Header.Get("Authorization")
 			if authHeader == "" {
 				// Try session cookie (set by OIDC/form login)
-				if cookie, err := r.Cookie("elitea_session"); err == nil && cfg.SessionSecret != "" {
-					if user, ok := verifySessionCookie(cookie.Value, cfg.SessionSecret); ok {
+				var refusal string
+				cookie, cookieErr := r.Cookie("elitea_session")
+				switch {
+				case cookieErr != nil:
+					// No header and no cookie of ours. `cookie_count` below
+					// says whether the browser sent any cookie at all.
+					refusal = reasonNoCredential
+				case cfg.SessionSecret == "":
+					refusal = reasonSessionSecretAbsent
+				default:
+					user, cookieRefusal, ok := verifySessionCookie(cookie.Value, cfg.SessionSecret)
+					if ok {
 						user, validationErr := validatePrincipal(r.Context(), cfg, user)
 						if validationErr != nil {
 							writePrincipalRefusal(w, r, sourceSession, validationErr)
@@ -123,7 +134,9 @@ func Auth(cfg AuthConfig) func(http.Handler) http.Handler {
 						serveAuthenticated(next, w, r, user, auth.AuthenticationSourceSession)
 						return
 					}
+					refusal = cookieRefusal
 				}
+				logCredentialRefusal(r, sourceSession, refusal)
 				writeJSONError(w, http.StatusUnauthorized, "authentication_error", "unauthenticated", "missing authorization header")
 				return
 			}
@@ -134,18 +147,21 @@ func Auth(cfg AuthConfig) func(http.Handler) http.Handler {
 			} else if strings.HasPrefix(authHeader, "Basic ") {
 				decoded, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(authHeader, "Basic "))
 				if err != nil {
+					logCredentialRefusal(r, sourceToken, reasonAuthorizationHeaderMalformed)
 					writeJSONError(w, http.StatusUnauthorized, "authentication_error", "unauthenticated", "invalid basic auth encoding")
 					return
 				}
 				parts := strings.SplitN(string(decoded), ":", 2)
 				token = parts[0]
 			} else {
+				logCredentialRefusal(r, sourceToken, reasonAuthorizationSchemeUnsupported)
 				writeJSONError(w, http.StatusUnauthorized, "authentication_error", "unauthenticated", "unsupported authorization scheme")
 				return
 			}
 
 			user, err := validateToken(r.Context(), cfg, token)
 			if err != nil {
+				logCredentialRefusal(r, sourceToken, reasonTokenRejected)
 				writeJSONError(w, http.StatusUnauthorized, "authentication_error", "unauthenticated", "token validation failed")
 				return
 			}
@@ -307,6 +323,63 @@ const (
 	sourceToken     = "bearer_token"
 )
 
+// The reason a CREDENTIAL refusal names — the vocabulary of the 401 that is
+// written before any principal is read.
+//
+// It exists because the "missing authorization header" body is written on
+// four different findings and says the same thing about all of them (#537,
+// #538). A browser holding a valid session got that body on one route in one
+// run of three, and after the fact nobody could say whether the browser sent
+// no cookie, sent one this deployment could not verify, or sent one that had
+// expired: the branch wrote no log line at all. These reasons separate them.
+const (
+	// reasonNoCredential — no Authorization header, no X-API-Key, no
+	// forwarded identity and no `elitea_session` cookie on the request.
+	// `cookie_count` on the same line says whether the browser sent ANY
+	// cookie, which is what tells "this client is not signed in" apart from
+	// "this client's cookie jar lost exactly ours".
+	reasonNoCredential = "no_credential"
+	// reasonSessionSecretAbsent — the cookie arrived and this AuthConfig
+	// carries no SessionSecret, so the cookie branch could not run. A
+	// composition defect, and the class PR #819 removed by collapsing the
+	// per-route literals into one apiGroupAuthConfig.
+	reasonSessionSecretAbsent = "session_secret_not_configured"
+	// The four ways verifySessionCookie refuses a cookie it did receive.
+	reasonSessionMalformed    = "session_cookie_malformed"
+	reasonSessionBadSignature = "session_cookie_signature_mismatch"
+	reasonSessionExpired      = "session_cookie_expired"
+	reasonSessionSubject      = "session_cookie_subject_invalid"
+	// reasonAuthorizationHeaderMalformed — a Basic header that is not base64.
+	reasonAuthorizationHeaderMalformed = "authorization_header_malformed"
+	// reasonAuthorizationSchemeUnsupported — an Authorization header that is
+	// neither Bearer nor Basic.
+	reasonAuthorizationSchemeUnsupported = "authorization_scheme_unsupported"
+	// reasonTokenRejected — the validator refused the bearer token or the
+	// API key. It does NOT distinguish an unknown token from a store that
+	// could not answer; validateToken returns one error for both.
+	reasonTokenRejected = "token_rejected"
+)
+
+// logCredentialRefusal writes the one line the credential branches had none
+// of, and it is the whole of this change: no status, body or branch moves.
+//
+// It carries no principal identity and no credential material — not the
+// cookie value, not the token, not the cookie NAMES. The caller is
+// unauthenticated, so anything it supplied is attacker-controlled text in the
+// operator's log. `cookie_count` is a count, which is the one fact about the
+// request's cookies that is safe to keep and is also the discriminator #538
+// needs.
+func logCredentialRefusal(r *http.Request, source, reason string) {
+	slog.WarnContext(r.Context(), "authentication refused the request",
+		"source", source,
+		"reason", reason,
+		"method", r.Method,
+		"path", r.URL.Path,
+		"cookie_count", len(r.Cookies()),
+		"has_cookie_header", r.Header.Get("Cookie") != "",
+	)
+}
+
 // The reason each refusal names. The three are the whole vocabulary, and they
 // exist to keep one distinction readable in the log: the principal store READ
 // the principal and REFUSED it, or the store failed EARLY and read nothing.
@@ -389,32 +462,46 @@ func logPrincipalRefusal(r *http.Request, source, reason string, err error) {
 	slog.WarnContext(r.Context(), "principal validation refused the request", attributes...)
 }
 
-func verifySessionCookie(token, secret string) (auth.User, bool) {
+// verifySessionCookie checks the HMAC session cookie and, when it refuses
+// one, NAMES the check that refused it.
+//
+// The reason is returned rather than logged here so this function stays a
+// pure check with no I/O, and so the caller decides whether a refusal is
+// worth a line. It is "" on success. The four reasons are the four failing
+// checks, in the order they run: the shape, the signature, the expiry and
+// the subject. Splitting the shape and the signature apart matters for #538 —
+// a truncated or re-encoded cookie fails the FIRST, and a cookie signed with
+// another deployment's secret fails the SECOND, and those are different
+// operator problems.
+func verifySessionCookie(token, secret string) (auth.User, string, bool) {
 	parts := strings.SplitN(token, ".", 2)
 	if len(parts) != 2 {
-		return auth.User{}, false
+		return auth.User{}, reasonSessionMalformed, false
 	}
 
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write([]byte(parts[0]))
 	expectedSig := hex.EncodeToString(mac.Sum(nil))
 	if !hmac.Equal([]byte(parts[1]), []byte(expectedSig)) {
-		return auth.User{}, false
+		return auth.User{}, reasonSessionBadSignature, false
 	}
 
 	payloadBytes, err := base64.RawURLEncoding.DecodeString(parts[0])
 	if err != nil {
-		return auth.User{}, false
+		return auth.User{}, reasonSessionMalformed, false
 	}
 
 	var claims map[string]any
 	if err := json.Unmarshal(payloadBytes, &claims); err != nil {
-		return auth.User{}, false
+		return auth.User{}, reasonSessionMalformed, false
 	}
 
 	exp, ok := claims["exp"].(float64)
-	if !ok || exp != float64(int64(exp)) || time.Now().Unix() > int64(exp) {
-		return auth.User{}, false
+	if !ok || exp != float64(int64(exp)) {
+		return auth.User{}, reasonSessionMalformed, false
+	}
+	if time.Now().Unix() > int64(exp) {
+		return auth.User{}, reasonSessionExpired, false
 	}
 
 	var uid string
@@ -425,7 +512,7 @@ func verifySessionCookie(token, secret string) (auth.User, bool) {
 		uid = fmt.Sprintf("%d", int64(v))
 	}
 	if _, ok := positiveSessionUserID(uid); !ok {
-		return auth.User{}, false
+		return auth.User{}, reasonSessionSubject, false
 	}
 
 	email, _ := claims["email"].(string)
@@ -435,7 +522,7 @@ func verifySessionCookie(token, secret string) (auth.User, bool) {
 		UserID:   uid,
 		Email:    email,
 		AuthType: "session",
-	}, true
+	}, "", true
 }
 
 func positiveSessionUserID(value string) (int64, bool) {

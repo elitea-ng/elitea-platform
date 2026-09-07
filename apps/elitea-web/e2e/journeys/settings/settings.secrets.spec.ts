@@ -242,11 +242,28 @@ test('J21: settings: create secret', async ({ page }, testInfo) => {
   await expect(valueInput).toBeVisible({ timeout: 2_000 });
   await valueInput.fill(value, { timeout: 3_000 });
 
+  //
+  // The WRITE is waited for by response (#545). `onSave` fires the create
+  // mutation and does not await it (`entities/secret/model/hooks.ts` — the
+  // new row is dropped from local state on the same tick), so everything
+  // after the click races the POST, and the list read at the end of this test
+  // is the read half of that race. It is this journey's recorded webkit
+  // flake: the secret was created and the list read straight after did not
+  // carry it.
+  //
+  // Armed immediately before the click that causes it, per the wall-clock
+  // budget rule.
+  const created = page.waitForResponse(
+    (res) => res.request().method() === 'POST' && res.url().includes('/secrets/secrets/default/'),
+    { timeout: 20_000 },
+  );
   await grid.getByRole('button', { name: 'Save', exact: true }).click({ timeout: 3_000 });
+  const write = await created;
+  expect(write.status(), await write.text()).toBeLessThan(300);
 
   /* ── clause 1: it appears in the list with its value hidden ─────────── */
   const row = page.getByRole('row').filter({ hasText: name });
-  await expect(row).toHaveCount(1, { timeout: 5_000 });
+  await expect(row).toHaveCount(1, { timeout: 15_000 });
   // The list endpoint returns only `{{secret.<name>}}` placeholders
   // (handler.go's SecretListItem), never the plaintext.
   await expect(row.getByText(`{{secret.${name}}}`, { exact: true })).toBeVisible({ timeout: 2_000 });
