@@ -122,6 +122,7 @@ describe('MaintenanceSplash', () => {
           enabled: true,
           title: 'Scheduled upgrade',
           message: 'Back at **14:00 UTC**.',
+          html: '',
           bypass: false,
         }}
       />,
@@ -130,6 +131,50 @@ describe('MaintenanceSplash', () => {
     expect(await screen.findByRole('heading', { name: 'Scheduled upgrade' })).toBeVisible();
     expect(screen.getByTestId('maintenance-splash')).toHaveTextContent('Back at 14:00 UTC.');
   });
+
+  it('renders the operator HTML body instead of the markdown message, sanitised', async () => {
+    await renderWithNavigation(
+      <MaintenanceSplash
+        maintenance={{
+          enabled: true,
+          title: 'Scheduled upgrade',
+          message: 'This markdown must NOT be shown.',
+          html: '<p>Watch the <a href="https://status.example.com">status page</a>.</p>'
+            + '<script>window.pwned = true</script>',
+          bypass: false,
+        }}
+      />,
+    );
+
+    const body = await screen.findByTestId('maintenance-splash-html');
+    expect(body).toHaveTextContent('Watch the status page.');
+    // The script is stripped, not merely inert: it must not be in the DOM at
+    // all. `dangerouslySetInnerHTML` does not execute a `<script>` React
+    // inserts, which is exactly why an un-sanitised body would pass a test
+    // that only asserted "nothing ran".
+    expect(body.querySelector('script')).toBeNull();
+    expect(body.innerHTML).not.toContain('pwned');
+    // The markdown message is the FALLBACK and loses to a non-empty body.
+    expect(screen.queryByText('This markdown must NOT be shown.')).toBeNull();
+  });
+
+  it('falls back to the markdown message when the HTML body is blank', async () => {
+    await renderWithNavigation(
+      <MaintenanceSplash
+        maintenance={{
+          enabled: true,
+          title: 'Scheduled upgrade',
+          message: 'Back at 14:00 UTC.',
+          html: '   ',
+          bypass: false,
+        }}
+      />,
+    );
+
+    expect(await screen.findByText('Back at 14:00 UTC.')).toBeVisible();
+    expect(screen.queryByTestId('maintenance-splash-html')).toBeNull();
+  });
+
 });
 
 describe('usePlatformAnnouncements', () => {

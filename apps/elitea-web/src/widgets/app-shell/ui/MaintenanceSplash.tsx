@@ -2,18 +2,30 @@
  * The maintenance splash — what a user without administration access sees while
  * a maintenance window is open.
  *
- * ## Why this is a rendered page and not a server-side HTML document
+ * ## Why this is a rendered page and not a served HTML document
  *
- * pylon served a stored `splash_template` because its hook sat in front of
- * everything, including the SPA's own assets, so there was no app left to render
- * anything. Here the API is what closes; the SPA still loads. That buys three
- * things the template could not have: the splash is themed and translated like
- * the rest of the product, an operator authors WORDS rather than markup, and the
- * deployment does not carry an HTML document — editable from an admin form and
- * served to every user — as a permanent stored-XSS surface.
+ * pylon served a stored `splash_template` VERBATIM, with no sanitisation,
+ * because its hook sat in front of everything including the SPA's own assets —
+ * there was no app left to render anything. Here the API is what closes; the
+ * SPA still loads. That buys two things the served template could not have: the
+ * splash is themed and translated like the rest of the product, and the
+ * operator's markup is a BODY inside this page rather than the whole document.
  *
- * The operator's copy is markdown with raw HTML disabled, for the same reason
- * `PlatformBanner`'s message is.
+ * ## Two fields, because an operator needs both registers
+ *
+ * `message` is markdown with raw HTML disabled, for the same reason
+ * `PlatformBanner`'s message is — and it always resolves to something, because
+ * the server fills a default.
+ *
+ * `html` is the port of `splash_template`: markup for the things a sentence
+ * cannot carry, a status-page link or a table of windows. It WINS when it is
+ * not empty. It is a stored-XSS surface and is treated as one at both ends —
+ * elitea-main refuses executable markup on the way in
+ * (`internal/api/v2/admin/config_values.go`'s `validateSplashHTML`) and
+ * `sanitizeSplashHtml` runs here on the way out. The earlier decision recorded
+ * in this comment was to have no such field at all; the risk that motivated it
+ * is real and is why both checks exist, but declining the capability left
+ * operators unable to say things the reference let them say.
  *
  * ## What it replaces on screen
  *
@@ -47,6 +59,7 @@ import Paper from '@mui/material/Paper';
 import Typography from '@mui/material/Typography';
 
 import { DefaultMarkdown } from '@/shared/ui/DefaultMarkdown';
+import { sanitizeSplashHtml } from '@/shared/ui/lib/sanitizeSplashHtml';
 import type { PlatformMaintenance } from '@/shared/lib/hooks/usePlatformAnnouncements';
 
 export interface MaintenanceSplashProps {
@@ -90,7 +103,16 @@ export function MaintenanceSplash({ maintenance }: MaintenanceSplashProps): Reac
           {maintenance.title}
         </Typography>
         <Typography variant="bodyMedium" color="text.secondary" component="div">
-          <DefaultMarkdown markdown={maintenance.message} renderHtml={false} />
+          {maintenance.html.trim() === '' ? (
+            <DefaultMarkdown markdown={maintenance.message} renderHtml={false} />
+          ) : (
+            <div
+              data-testid="maintenance-splash-html"
+              // Sanitised on this line by the same function the admin editor
+              // previews through, so what an operator saw is what ships.
+              dangerouslySetInnerHTML={{ __html: sanitizeSplashHtml(maintenance.html) }}
+            />
+          )}
         </Typography>
       </Paper>
     </Box>

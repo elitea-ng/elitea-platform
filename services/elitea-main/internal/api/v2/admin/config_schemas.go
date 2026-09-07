@@ -1535,14 +1535,24 @@ func voiceFeaturesSection() map[string]any {
 //
 // The port is deliberately NOT a byte-for-byte one, in two places:
 //
-//   - The splash is JSON and a client-side page, not `splash_template` HTML. The
-//     pylon hook returned a WSGI app serving a stored HTML document because it
-//     sat in front of everything, including the SPA's own assets. This
+//   - The splash is JSON and a client-side page, not a served
+//     `splash_template` document. The pylon hook returned a WSGI app serving a
+//     stored HTML document VERBATIM, with 503 and no sanitisation, because it
+//     sat in front of everything including the SPA's own assets. This
 //     middleware sits on the JSON API only — the SPA still loads — so the
-//     product can render its own splash in its own theme, and an operator
-//     authors words rather than markup. A stored HTML template editable from an
-//     admin form is also an XSS surface aimed at every user of the platform, and
-//     declining to build one is not a gap.
+//     product renders its own splash in its own theme.
+//
+//     `maintenance_html` below is the port of that tunable, and it is NOT the
+//     pylon mechanism: the field carries a BODY that the product's splash
+//     renders inside its own page, the server refuses executable markup on the
+//     way in (validateSplashHTML), and every renderer sanitises on the way out.
+//     The earlier decision here was to have no such field at all, on the
+//     grounds that an operator-authored HTML document is a stored-XSS surface
+//     aimed at every user. That risk is real and is why the two checks exist;
+//     what it did not justify was dropping the capability, because operators
+//     use it to say things — a status-page link, a contact address, a table of
+//     windows — that a plain sentence cannot carry.
+//
 //   - There is no bypass cookie. `splash_bypass_cookie`/`splash_bypass_token`
 //     were a shared static secret in plugin config that granted full access to
 //     anyone who had ever seen it. The admin permission is the bypass.
@@ -1590,6 +1600,18 @@ func maintenanceSection() map[string]any {
 				"title":  "Splash Message",
 				"description": "Body text shown on the splash screen — say what is happening and when it " +
 					"ends. Supports Markdown formatting. Left empty, a default is used.",
+				"section": "maintenance",
+				"default": "",
+			},
+			{
+				"key":    "maintenance_html",
+				"type":   "string",
+				"format": "html",
+				"title":  "Splash HTML",
+				"description": "Optional HTML body for the splash screen, for a link or a table the " +
+					"message above cannot carry. It REPLACES the message when it is not empty. " +
+					"Script, style and frame markup is refused when you save, and what does save is " +
+					"sanitised again before it is shown. Left empty, the message above is used.",
 				"section": "maintenance",
 				"default": "",
 			},

@@ -88,6 +88,7 @@ const (
 	KeyMaintenanceEnabled = "maintenance_enabled"
 	KeyMaintenanceTitle   = "maintenance_title"
 	KeyMaintenanceMessage = "maintenance_message"
+	KeyMaintenanceHTML    = "maintenance_html"
 
 	KeySupportAssistantEnabled = "support_assistant_enabled"
 	KeySupportProjectID        = "support_project_id"

@@ -3964,5 +3964,8 @@
   "shared.ui.settings.users.outcome.alreadyMember": "Already a member",
   "shared.ui.settings.users.outcome.failed": "Not added",
   "shared.ui.settings.users.outcome.invalidEmail": "Invalid address",
-  "shared.ui.settings.users.outcome.invited": "Invited"
+  "shared.ui.settings.users.outcome.invited": "Invited",
+  "pages.admin.configuration.html.previewEmpty": "Nothing to preview. Left empty, the platform shows its own splash screen.",
+  "pages.admin.configuration.html.previewLabel": "Preview",
+  "pages.admin.configuration.html.previewStripped": "The preview above is what users will see. Some markup was removed because it cannot run on the splash screen."
 }
