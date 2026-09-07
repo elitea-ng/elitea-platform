@@ -82,59 +82,24 @@ function typeSearchBox(page: Page) {
   return page.getByPlaceholder('Search toolkits');
 }
 
-test('J17.1: an empty toolkit list redirects to the create page', async ({ page }) => {
-  // Behaviour under test: Toolkits.tsx's shouldRedirectToCreatePage gate
-  // (pages/toolkits/Toolkits.tsx:57-67) driven by the REAL list response
-  // (GET /elitea_core/tools/prompt_lib/{id} -> total 0). A stub page cannot
-  // redirect, because the redirect is a function of server data.
-  /*
-   * THE EMPTY LIST IS NOT THIS TEST'S TO ASSUME (issue #519).
-   *
-   * The subject is the redirect, and its input is the SERVER's row count for
-   * project 1. That project is shared: J17.3 below and the MCP journeys create
-   * a toolkit in it and delete it again, and `fullyParallel` runs all of them
-   * at once. So "the list is empty" is a condition of the platform at one
-   * moment, not a property of this test — and when the sample was taken while
-   * a sibling's fixture existed, this test reported `expect(0) received 1` and
-   * read as a broken redirect. Measured locally: 1 failure in 10 runs of the
-   * three files together.
-   *
-   * The load is therefore repeated until the response it is judged on really
-   * carries `total: 0`. Nothing is asserted more weakly: the count still comes
-   * from the product's own GET, the redirect is still driven by that response,
-   * and a platform that never empties fails this test by timeout rather than
-   * passing. What is removed is the comparison of a redirect against a list
-   * state that a different journey owned.
-   */
-  let listTotal = -1;
-  await expect
-    .poll(
-      async () => {
-        const listResponse = page.waitForResponse(
-          (r) =>
-            r.request().method() === 'GET' && /\/elitea_core\/tools\/prompt_lib\//.test(r.url()),
-          { timeout: 20_000 },
-        );
-        await page.goto(BASE_URL + '/app/toolkits/all');
-        const resp = await listResponse;
-        expect(resp.status()).toBe(200);
-        listTotal = ((await resp.json()) as { rows: unknown[]; total: number }).total;
-        return listTotal;
-      },
-      { timeout: 30_000, intervals: [500, 1_000, 2_000] },
-    )
-    .toBe(0);
-  expect(listTotal, 'the redirect below is judged on THIS response').toBe(0);
-
-  await page.waitForURL(/\/app\/toolkits\/create/, { timeout: 20_000 });
-  // The create screen really mounted — a form control, not a heading.
-  await expect(typeSearchBox(page)).toBeVisible({ timeout: 15_000 });
-
-  // This used to fail on defect A's fallout — two nameless ghost tiles tripping
-  // axe's `button-name` rule. Both causes are fixed (see the file header and
-  // J17.2's note), so checkA11y is now a clean, unconditional assertion.
-  await checkA11y(page);
-});
+/*
+ * J17.1 — "an empty toolkit list redirects to the create page" — LIVES IN
+ * `toolkits.emptyList.spec.ts`, and the move is the fix for its failures, not
+ * tidying.
+ *
+ * Its subject is the redirect, and the redirect's input is the SERVER's row
+ * count for the shared project. This file, `toolkits.catalogue.spec.ts` and
+ * the MCP journeys all create toolkits in that project, and `fullyParallel`
+ * runs them together — J17C.1 alone holds one toolkit per served category
+ * (eight or more) for the length of an eleven-minute test. Measured on this
+ * tree: `expect(received).toBe(0)` received 8.
+ *
+ * A lock cannot fix that, and the poll below could not either: there is no
+ * window in the run where the shared project is empty. What makes the
+ * precondition true is ORDER — the journey now runs in its own Playwright
+ * project, which every engine project depends on, so it is judged before the
+ * first sibling has created anything.
+ */
 
 test('J17.2: the create page offers real, server-supplied toolkit types', async ({ page }) => {
   // PASSES as of the #129 route fix. The tile label "GitHub" is derivable ONLY

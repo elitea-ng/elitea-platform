@@ -167,6 +167,20 @@ const REAL_ENGINE_JOURNEY = /journeys\/deepwiki\/deepwiki\.real-engine\.spec\.ts
  * (`scripts/support-e2e.sh`).
  */
 const SUPPORT_JOURNEY = /journeys\/support\/support\.spec\.ts/;
+
+/*
+ * The one journey that needs the shared project to hold NO toolkits: J17.1,
+ * the empty-list redirect (`journeys/toolkits/toolkits.emptyList.spec.ts`).
+ *
+ * `fullyParallel` and a shared project 1 mean that emptiness is not a state
+ * this journey can wait for — `toolkits.catalogue.spec.ts` alone holds one
+ * toolkit per served category for the length of an eleven-minute test, and
+ * the journey reported `expect(received).toBe(0)` received 8. It is ORDER
+ * that makes the precondition true, so the file runs in its own project and
+ * both engine projects depend on it: after `setup`, before the first journey
+ * that can create a toolkit. See the file's own header.
+ */
+const EMPTY_TOOLKIT_LIST_JOURNEY = /journeys\/toolkits\/toolkits\.emptyList\.spec\.ts/;
 /*
  * THE INVENTORY JOURNEYS (journeys/inventory, INV-001..010) HAVE NO CONSTANT
  * HERE, AND THAT IS THE DECISION.
@@ -223,28 +237,53 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'], launchOptions: CHROMIUM_LAUNCH_OPTIONS },
     },
 
-    // ── chromium ──────────────────────────────────────────────────────────
+    /*
+     * ── toolkits-empty — the empty-list redirect, before anything seeds ────
+     *
+     * Ordering IS this journey's fixture: it asserts that the shared project
+     * holds no toolkits and that the app redirects because of it, and every
+     * other toolkit/MCP journey creates rows in that project. Running it as a
+     * dependency of both engine projects is what gives it the state it is
+     * about — it runs after `setup` and before the first sibling starts, and
+     * it creates nothing, so the stack it hands on is the one it found.
+     *
+     * Chromium only: a redirect driven by a JSON count is not a rasteriser
+     * question, and a second engine would only widen the serial section every
+     * other journey waits behind.
+     */
     {
-      name: 'chromium',
-      testIgnore: [ADMISSION_JOURNEY, REAL_ENGINE_JOURNEY, WIKI_QUERY_JOURNEY, SUPPORT_JOURNEY],
+      name: 'toolkits-empty',
       use: {
         ...devices['Desktop Chrome'],
         storageState: STORAGE_STATE.member,
         launchOptions: CHROMIUM_LAUNCH_OPTIONS,
       },
       dependencies: ['setup'],
+      testMatch: EMPTY_TOOLKIT_LIST_JOURNEY,
+    },
+
+    // ── chromium ──────────────────────────────────────────────────────────
+    {
+      name: 'chromium',
+      testIgnore: [ADMISSION_JOURNEY, REAL_ENGINE_JOURNEY, WIKI_QUERY_JOURNEY, SUPPORT_JOURNEY, EMPTY_TOOLKIT_LIST_JOURNEY],
+      use: {
+        ...devices['Desktop Chrome'],
+        storageState: STORAGE_STATE.member,
+        launchOptions: CHROMIUM_LAUNCH_OPTIONS,
+      },
+      dependencies: ['setup', 'toolkits-empty'],
       testMatch: /journeys\/.+\.spec\.ts/,
     },
 
     // ── webkit (spec §6.2: "chromium + webkit") ───────────────────────────
     {
       name: 'webkit',
-      testIgnore: [ADMISSION_JOURNEY, REAL_ENGINE_JOURNEY, WIKI_QUERY_JOURNEY, SUPPORT_JOURNEY],
+      testIgnore: [ADMISSION_JOURNEY, REAL_ENGINE_JOURNEY, WIKI_QUERY_JOURNEY, SUPPORT_JOURNEY, EMPTY_TOOLKIT_LIST_JOURNEY],
       use: {
         ...devices['Desktop Safari'],
         storageState: STORAGE_STATE.member,
       },
-      dependencies: ['setup'],
+      dependencies: ['setup', 'toolkits-empty'],
       testMatch: /journeys\/.+\.spec\.ts/,
     },
 
