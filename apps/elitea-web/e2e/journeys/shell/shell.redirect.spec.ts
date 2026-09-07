@@ -8,6 +8,7 @@
 import { test, expect } from '@playwright/test';
 
 import { checkA11y } from '../../fixtures/axe';
+import { signInThroughOidc } from '../../fixtures/session';
 import { BASE_URL } from '../../../playwright.config';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -130,7 +131,20 @@ test('J2: OIDC login honours target_to deep link', async ({ browser }) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // Journey 4: Logout → all el.* storage cleared
 // ─────────────────────────────────────────────────────────────────────────────
-test('J4: logout clears user state and el.* storage', async ({ page }) => {
+test('J4: logout clears user state and el.* storage', async ({ browser }) => {
+  // THIS JOURNEY OWNS THE SESSION IT DESTROYS — read this before replacing the
+  // context below with the shared `page` fixture it used to take.
+  //
+  // Since shared migration 0117 the `elitea_session` cookie names a ROW and
+  // `/forward-auth/logout` REVOKES it (`internal/api/v2/auth/session.go`).
+  // `auth.setup.ts` mints one session per persona and all four workers replay
+  // its cookie, so a logout driven on the shared state signs out the whole
+  // suite: every later API helper gets `401 missing authorization header` and
+  // every later page load is navigated to the identity provider by the shell's
+  // session probe. Measured on the 1.60.0 smoke run — 21 chromium journeys
+  // failed downstream of this one test, none of them for a reason of their
+  // own. See `e2e/fixtures/session.ts`.
+  //
   // JRNY-004's three acceptance lines, each asserted separately below:
   // the user state is cleared, the login screen is reached, and all
   // application storage keys are removed.
@@ -170,6 +184,10 @@ test('J4: logout clears user state and el.* storage', async ({ page }) => {
   // covers the storage sweep in jsdom and names THIS journey as the half that
   // proves the browser really leaves the app, so the page it opens has to be
   // the page the control is on.
+  const context = await browser.newContext({ storageState: undefined });
+  const page = await context.newPage();
+  await signInThroughOidc(page, 'e2e-member@autotest.local');
+
   await page.goto(BASE_URL + '/app/settings/profile', { waitUntil: 'domcontentloaded' });
 
   // Wait for the logout control to be interactive before touching storage.
@@ -312,4 +330,6 @@ test('J4: logout clears user state and el.* storage', async ({ page }) => {
   expect(probe.control).toHaveLength(2);
   // ...and no key of the namespace survived the logout.
   expect(probe.surviving).toEqual([]);
+
+  await context.close();
 });
