@@ -46,6 +46,42 @@ export const UNAVAILABLE_METRIC = '–';
  * timestamp, which a malformed row could produce. Rendering `Invalid Date` is
  * the thing being avoided.
  */
+/**
+ * Formats a USD amount for a tile or a table cell.
+ *
+ * Two fraction digits are not enough here. A cost estimate over a short window
+ * is routinely below one cent — the reference deployment shows `$0.000189` for
+ * three calls — and two digits render every such figure as `$0.00`, which reads
+ * as "this project spent nothing". So an amount below one cent keeps six
+ * digits, which is the precision the reference screen shows.
+ *
+ * This is a DISPLAY conversion and the only place a cost becomes a float. The
+ * exact decimal stays on the wire: the server computes every figure in
+ * PostgreSQL NUMERIC and publishes it unrounded.
+ */
+export function fmtUsd(value: number | null | undefined): string {
+  if (value == null) return '$0.00';
+  const digits = value !== 0 && Math.abs(value) < 0.01 ? 6 : 2;
+  return new Intl.NumberFormat(undefined, {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: digits,
+  }).format(value);
+}
+
+/**
+ * Formats one row's contribution as a percentage of a total.
+ *
+ * A total of zero yields `UNAVAILABLE_METRIC` rather than `0.0%`: a share of
+ * nothing is not zero percent, and printing one invites the reader to compare
+ * rows that have no denominator between them.
+ */
+export function fmtShare(value: number, total: number): string {
+  if (total <= 0) return UNAVAILABLE_METRIC;
+  return `${((value / total) * 100).toFixed(1)}%`;
+}
+
 export function fmtTimestamp(value: unknown): string {
   if (typeof value !== 'string' || value === '') return '—';
   const parsed = new Date(value);
