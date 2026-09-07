@@ -439,7 +439,7 @@ func assertOIDCSessionOutcome(t *testing.T, outcome oidcSessionOutcome) {
 // /api/v2 route accepted answered 401 here. Driving the tests through the
 // shared composition is what keeps that from returning.
 func oidcOnlySessionAuth(principals apimw.PrincipalValidator) apimw.AuthConfig {
-	return apiGroupAuthConfig(nil, nil, nil, principals, nil, oidcSessionTestSecret, true)
+	return apiGroupAuthConfig(nil, nil, nil, principals, nil, oidcSessionTestSecret, true, nil)
 }
 
 // TestOIDCOnlyRoutesUseTheSharedAuthComposition guards the call sites. The
