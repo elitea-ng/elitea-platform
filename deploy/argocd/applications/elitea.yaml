@@ -2,7 +2,8 @@
 #
 # This replaces the six Applications that used to sync the platform's component
 # charts (elitea-main, elitea-web, elitea-scheduler, elitea-llm-gateway,
-# otel-collector, pylon-indexer). They synced independently, which meant nothing
+# otel-collector, and pylon-indexer, since deleted by #339). They synced
+# independently, which meant nothing
 # ordered them against each other and nothing made them agree: each carried its
 # own copy of the database secret name, the NATS URL and the Redis address, and
 # they had already drifted apart. One chart, one Application, one values file.

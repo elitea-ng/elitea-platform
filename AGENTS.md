@@ -23,7 +23,6 @@ prototype shortcuts into new code merely to preserve current behavior.
 | Path | Ownership |
 | --- | --- |
 | `services/elitea-main/` | Go API, auth, control plane, persistence, and browser streaming |
-| `services/pylon-indexer/` | Transitional Pylon runtime; target replacement is a standalone Python worker CLI |
 | `apps/elitea-ui/` | EliteaUI Git submodule; make UI changes in its owning repository |
 | `libs/go/` | Shared Go libraries; keep dependencies narrow and consumer-driven |
 | `libs/proto/` | Versioned cross-language contracts and generated-code inputs |

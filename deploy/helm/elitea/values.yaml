@@ -45,11 +45,11 @@
 # even when it can read/write objects. Whichever way it is created, it must be
 # named by `main.env.STORAGE_CONTAINER` before the first sync.
 #
-# NOT REQUIRED, and deleted: pylon-indexer. Index ingest is served by the Go
-# runtime plane through the agent worker, on the same command stream and
+# GONE, and not only from this chart: pylon-indexer. Index ingest is served by
+# the Go runtime plane through the agent worker, on the same command stream and
 # consumer group as agent execution, so one worker serves both capabilities.
-# The Python indexer appears in no pylon-free stack. It does still run in the
-# LEGACY deploy/docker-compose.yml, which is why its image is still published.
+# Issue #339 deleted the service, its Containerfile, its bake target and its
+# publish entry, so there is no longer an image to deploy anywhere.
 
 # ── Images ──────────────────────────────────────────────────────────────────
 #
@@ -2055,8 +2055,9 @@ llmGateway:
     # origin check any page could open this route with the user's ambient
     # credentials. Empty admits only a handshake whose Origin matches the
     # gateway's own host, or one with no Origin at all — which is every
-    # non-browser client, including the pylon-indexer relay this route exists
-    # for. Name a browser origin only on purpose; the startup log states which
+    # non-browser client, including the SDK worker this route exists for
+    # (pylon-indexer was that client until #339 deleted it). Name a browser
+    # origin only on purpose; the startup log states which
     # mode is armed.
     LLM_REALTIME_ALLOWED_ORIGINS: ""
     # scale-1 default; HA operators MUST override to the real replica count.

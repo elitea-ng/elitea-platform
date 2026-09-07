@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "description": "Model and data bundles for pylon_indexer init container",
+  "description": "Model and data bundles for an indexing init container (pylon_indexer was its consumer until #339 deleted that service)",
   "models": [
     {
       "name": "nltk-data-all",

@@ -157,7 +157,6 @@ validate_model() {
     --arg main_database_config "$runtime_root/runtime/pylon-main-shared.yml" \
     --arg auth_database_config "$runtime_root/runtime/pylon-auth-core.yml" \
     --arg interface "$script_dir/runtime-interface-litellm.yml" \
-    --arg engine "$script_dir/runtime-engine-litellm.yml" \
     '
       .services["elitea-main"].environment.ELITEA_RUNTIME_INDEX_INGEST_COMMAND_STREAM
       == "commands.v1.index.ingest.indexing.shared.2.0"
@@ -205,8 +204,7 @@ validate_model() {
         .source == $main_database_config and .target == "/data/configs/shared.yml")
       and any(.services.pylon_auth.volumes[];
         .source == $auth_database_config and .target == "/data/configs/auth_core.yml")
-      and any(.services.pylon_indexer.volumes[];
-        .source == $engine and .target == "/data/configs/runtime_engine_litellm.yml")
+      and (.services.pylon_indexer == null)
       and (.services["elitea-litellm"].build.context | endswith("/hybrid_auth"))
       and .services["runtime-index-v2-bootstrap"] != null
       and .services["index-v1-cutover-preflight"] != null

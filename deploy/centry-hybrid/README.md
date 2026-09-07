@@ -8,8 +8,15 @@ This directory has two mixed-deployment checkpoints:
   `index.ingest.v1` proof used by the integration PR.
 
 Both keep the current Centry stack as the compatibility baseline. PostgreSQL,
-Redis, `pylon_auth`, `pylon_main`, `pylon_indexer` and the current UI continue
-to own every capability that has not passed an explicit Go/worker cutover gate.
+Redis, `pylon_auth`, `pylon_main` and the current UI continue to own every
+capability that has not passed an explicit Go/worker cutover gate.
+
+`pylon_indexer` no longer does. Issue #339 retired it: the index plane runs on
+the Go runtime plane and the Python agent worker, `pov-compose.yml` puts the
+service in the `index-v1` profile so Compose does not start it, and
+`rollback/index-v1.yml` restores it if the cutover has to be reversed before
+version-2 admission reopens. Read `deploy/INDEX_V2_CUTOVER.md` before doing
+either.
 
 The small foundation overlay adds:
 
@@ -131,9 +138,9 @@ The command merges the current Centry Compose model with this overlay and runs
 task hybrid:up
 ```
 
-This is deliberately a mixed deployment. Do not remove `pylon_auth`,
-`pylon_main` or `pylon_indexer`, and do not add a product route to
-`traefik/base.yml` merely because a prototype handler exists. A selected route
+This is deliberately a mixed deployment. Do not remove `pylon_auth` or
+`pylon_main`, and do not add a product route to `traefik/base.yml` merely
+because a prototype handler exists. A selected route
 must carry its current HTTP/DTO behavior, exact permission/project policy,
 tenant derivation, database effects, browser evidence and rollback gate.
 
@@ -235,10 +242,12 @@ ELITEA_WORKER_IMAGE=elitea-ng/elitea-worker-python:my-tag \
 
 ### LiteLLM and dependency posture
 
-LiteLLM is externalized from `pylon_indexer` for this checkpoint, but its
-compatibility implementation is still Centry-owned. `pylon_main`,
-`pylon_indexer`, Go Main and the independent worker all use the same standalone
-service and master-key contract. Bifrost replacement is intentionally outside
+LiteLLM is externalized for this checkpoint, but its compatibility
+implementation is still Centry-owned. `pylon_main`, Go Main and the independent
+worker all use the same standalone service and master-key contract. It was
+externalized from `pylon_indexer` first; that service is retired now (#339), and
+the configuration it read is kept beside the rollback overlay that would need
+it. Bifrost replacement is intentionally outside
 this PR.
 
 The branch builds pinned inputs and does not upgrade dependencies as a

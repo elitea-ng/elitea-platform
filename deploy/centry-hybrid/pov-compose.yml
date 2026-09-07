@@ -17,20 +17,43 @@ services:
       elitea-litellm:
         condition: service_healthy
 
+  # ── pylon_indexer is retired (#339) ────────────────────────────────────────
+  #
+  # The index plane runs on the Go runtime plane and the Python agent worker,
+  # on the version-2 command stream and consumer group configured on
+  # elitea-main below. That path is proven with no pylon in the stack: the
+  # index DoD journey runs it in CI, and `standalone-stack.sh seed-index`
+  # records a run that indexes real documents.
+  #
+  # THE SERVICE IS DECLARED AND NOT STARTED, which is deliberate. Centry's own
+  # Compose model declares pylon_indexer and that model is not in this
+  # repository, so this overlay cannot delete the service — Compose has no
+  # directive for that. A profile is Compose's own mechanism for "declared,
+  # not started": `compose.sh` renders and starts with `--profile runtime`
+  # only, so this service is absent from the model it renders and from the
+  # stack it brings up. `compose.sh config` asserts that absence.
+  #
+  # Its four plugins are covered or dropped, and neither is a guess:
+  #   indexer_worker        -> services/elitea-worker-python (the agent worker
+  #                            serves index ingest on the same stream)
+  #   provider_worker       -> ADR-0012 P3; the Go successor owns provider
+  #                            descriptors, and no hybrid route reaches this
+  #   worker_core           -> the worker's own runtime, replaced with it
+  #   runtime_engine_litellm-> DROPPED for this checkpoint already (#323). The
+  #                            configuration it read now lives beside the
+  #                            rollback overlay that would need it.
+  #
+  # ROLLBACK: apply deploy/centry-hybrid/rollback/index-v1.yml as a further
+  # overlay and add `--profile index-v1`. It is a tracked file carrying the
+  # exact mounts, health check and dependency this service had, so a reversal
+  # is one command and not git archaeology.
+  #
+  # ORDER MATTERS. deploy/INDEX_V2_CUTOVER.md holds the drain rule and the
+  # preflight. Stopping this service before the version-1 drain completes
+  # strands work that no version-2 process will accept, and that document says
+  # binary rollback is prohibited once a version-2 command has been admitted.
   pylon_indexer:
-    volumes:
-      - ${ELITEA_PLATFORM_DIR:?set ELITEA_PLATFORM_DIR}/deploy/centry-hybrid/runtime-engine-litellm.yml:/data/configs/runtime_engine_litellm.yml:ro
-    healthcheck:
-      test:
-        - CMD-SHELL
-        - curl -fsS --max-time 2 http://elitea-litellm:8081/health/liveness >/dev/null
-      interval: 3s
-      timeout: 3s
-      retries: 60
-      start_period: 15s
-    depends_on:
-      elitea-litellm:
-        condition: service_healthy
+    profiles: [index-v1]
 
   elitea-main:
     build:
