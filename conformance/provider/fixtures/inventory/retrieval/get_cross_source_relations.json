@@ -1,0 +1,12 @@
+{
+  "_comment": "get_cross_source_relations — only the two 'documents' edges that cross the code/docs boundary; the three code-internal edges (defines/returns/calls) are excluded.",
+  "tool": "get_cross_source_relations",
+  "params": { "output_format": "json" },
+  "expected": {
+    "relations": [
+      { "source": "docs:checkout-guide", "target": "code:checkout-service", "relation_type": "documents", "from_source": "docs", "to_source": "code" },
+      { "source": "docs:payments-guide", "target": "code:payment-client", "relation_type": "documents", "from_source": "docs", "to_source": "code" }
+    ],
+    "total": 2
+  }
+}

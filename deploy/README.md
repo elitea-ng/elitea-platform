@@ -109,6 +109,36 @@ through `RUNTIME_WORKER_SESSION_ID`, `RUNTIME_WORKER_PRODUCER_ID`,
 database restored from a backup that predates this row, or a worker brought
 up with `--no-deps` — but a normal `up` no longer needs it.
 
+### DeepWiki and Inventory — canned data with no engine closure
+
+Both sub-applications run their Go host (`elitea-subapp-host`) with
+`RUNNER=legacy`, reaching an engine SIDECAR (`elitea-deepwiki`,
+`elitea-inventory`) over a shared Unix socket — the socket hop this stack
+exists to exercise, not just the Go half. Neither sidecar carries the real
+analysis engine's dependency closure here; both serve their `fixture`
+runner instead, so `up` shows a populated wiki and a populated Inventory
+graph with no repository, no model and no ~1 GB+ engine image.
+
+Inventory's fixture graph (six entities, two source toolkits, five
+relations) is the SAME one the Go sub-application host's own fixture runner
+serves on the E2E stack
+(`conformance/provider/fixtures/inventory/spi/graph.json` — see
+`services/elitea-inventory/README.md`'s "Fixture mode" section for how the
+two are kept from drifting). `INVENTORY_FIXTURES=/fixtures/inventory`
+points the `elitea-inventory-engine` service at the bind-mounted copy of
+that directory instead of the image's packaged one, for iterating on the
+fixture data without a rebuild:
+
+```bash
+INVENTORY_FIXTURES=/fixtures/inventory deploy/scripts/standalone-stack.sh up
+```
+
+`INVENTORY_RUNNER=fixture` is a separate switch on the Go host itself
+(`elitea-inventory`, not the engine sidecar): it bypasses the sidecar
+entirely and serves the Go runner's own copy of the same graph. Useful for
+isolating which half of the hop you are looking at; not needed for a normal
+demo now that the sidecar's fixture is populated by default.
+
 ## Composition decision (issue #240)
 
 `deploy/helm/elitea-platform/` used to be an empty `.gitkeep` — an umbrella

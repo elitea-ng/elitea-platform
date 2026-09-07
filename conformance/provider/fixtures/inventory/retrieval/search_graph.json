@@ -1,0 +1,15 @@
+{
+  "_comment": "search_graph, substring match over id/name/file_path, query 'checkout'. Order matters: it is the order spi/graph.json's entities array is walked in.",
+  "tool": "search_graph",
+  "params": { "query": "checkout", "output_format": "json" },
+  "expected": {
+    "query": "checkout",
+    "results": [
+      { "id": "code:checkout-service", "name": "CheckoutService", "type": "class", "layer": "application", "source_toolkit": "code", "file_path": "src/checkout/service.py" },
+      { "id": "code:place-order", "name": "place_order", "type": "function", "layer": "application", "source_toolkit": "code", "file_path": "src/checkout/service.py" },
+      { "id": "code:order-model", "name": "Order", "type": "class", "layer": "domain", "source_toolkit": "code", "file_path": "src/checkout/models.py" },
+      { "id": "docs:checkout-guide", "name": "Checkout guide", "type": "document", "layer": "documentation", "source_toolkit": "docs", "file_path": "docs/checkout.md" }
+    ],
+    "total": 4
+  }
+}

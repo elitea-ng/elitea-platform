@@ -1,0 +1,11 @@
+{
+  "_comment": "get_sources_status, JSON output form, over the canned graph.",
+  "tool": "get_sources_status",
+  "params": { "output_format": "json" },
+  "expected": {
+    "sources": [
+      { "source": "code", "status": "completed", "entity_count": 4 },
+      { "source": "docs", "status": "completed", "entity_count": 2 }
+    ]
+  }
+}
