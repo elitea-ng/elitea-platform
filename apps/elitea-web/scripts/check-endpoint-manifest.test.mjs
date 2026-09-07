@@ -470,7 +470,15 @@ const GENERATED_OPERATION_COUNT = 189;
  * endpoint the manifest describes — no manifest entry has ever covered a
  * `useEventSource` url, including the notifications stream that predates this.
  */
-const MANIFEST_ENTRY_COUNT = 205;
+/*
+ * 205 -> 206: not a new entry. The wave merge that recorded "202 -> 203" had
+ * fused two objects — agentSkills.setSkillRelation's closing brace was lost,
+ * so inventory.invokeTool's keys landed inside it and JSON.parse kept the
+ * later duplicates: setSkillRelation was effectively missing from the
+ * manifest while its file still claimed it. Splitting them back restores the
+ * entry the lifecycle unit added.
+ */
+const MANIFEST_ENTRY_COUNT = 206;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

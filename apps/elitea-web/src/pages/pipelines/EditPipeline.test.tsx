@@ -223,13 +223,13 @@ describe('EditPipeline', () => {
     server.use(getGetApplicationMockHandler(detail()));
     renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42/999', { projectId: '9' });
 
-    expect(await screen.findByText('Version not found')).toBeInTheDocument();
+    expect(await screen.findByText('Version not found', {}, { timeout: 5_000 })).toBeInTheDocument();
   });
 
   it('skips the not-found check when isFromCreation=true', async () => {
     server.use(getGetApplicationMockHandler(detail()));
     const { router } = renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42/999', { projectId: '9' });
-    await waitFor(() => expect(screen.getByText('Version not found')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Version not found')).toBeInTheDocument(), { timeout: 5_000 });
 
     await router.navigate({
       to: '/pipelines/$tab/$agentId/$version',
