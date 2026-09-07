@@ -53,6 +53,7 @@ function getRedirectUri(): string {
 }
 
 interface AuthorizationUrlOptions {
+  resource?: string | undefined;
   authorizationEndpoint: string;
   clientId: string;
   redirectUri: string;
@@ -77,6 +78,7 @@ function buildAuthorizationUrl(options: AuthorizationUrlOptions): string {
   if (isOIDC) params.set('nonce', nonce);
   if (scope) params.set('scope', scope);
   if (prompt) params.set('prompt', prompt);
+  if (options.resource) params.set('resource', options.resource);
 
   return `${authorizationEndpoint}?${params.toString()}`;
 }
@@ -177,6 +179,7 @@ async function awaitAuthorizationCode(authWindow: Window, authUrl: string, state
 }
 
 interface ExchangeAuthorizationCodeParams {
+  resource: string | undefined;
   projectId: string | number | undefined;
   tokenEndpoint: string | undefined;
   code: string;
@@ -212,6 +215,7 @@ async function exchangeAuthorizationCode(params: ExchangeAuthorizationCodeParams
       client_secret: shouldSendCredentials ? params.clientSecret : undefined,
       code_verifier: params.usePKCE ? params.codeVerifier : undefined,
       scope: params.normalizedScope || undefined,
+      resource: params.resource,
       toolkit_id: params.toolkitId,
       toolkit_type: params.isPrebuildMcp ? params.toolkitType : undefined,
       // MUST be sent, not merely persisted locally — corrects a prior pass
@@ -252,6 +256,7 @@ async function exchangeAuthorizationCode(params: ExchangeAuthorizationCodeParams
 }
 
 interface TokenPersistenceMetadataParams {
+  resource: string | undefined;
   tokenEndpoint: string | undefined;
   clientId: string | undefined;
   clientSecret: string | undefined;
@@ -264,29 +269,14 @@ interface TokenPersistenceMetadataParams {
 /** The extra fields `setAccessToken` persists alongside the token itself, so a later proactive refresh (`tokenLifecycle.ts`) has everything it needs without re-discovering the server. */
 function buildTokenPersistenceMetadata(params: TokenPersistenceMetadataParams) {
   return {
+    resource: params.resource,
     token_endpoint: params.tokenEndpoint,
     client_id: params.clientId,
     client_secret: params.clientSecret,
     project_id: params.projectId === undefined ? undefined : String(params.projectId),
     toolkit_id: params.toolkitId,
-    // NOT a baseline field — `mcpAuthFlow.helpers.js`'s own `setAccessToken`
-    // call site (lines 464-490) persists only `token_endpoint`/`client_id`/
-    // `client_secret`/`project_id`/`toolkit_id` (+ the spread OAuth
-    // metadata); it never persists `used_dcr`, and the file is 499 lines
-    // total, so a prior pass's `mcpAuthFlow.helpers.js:536` citation for
-    // this line was fabricated.
-    //
-    // Kept anyway as a DISCLOSED, deliberate deviation (not a silent one):
-    // `tokenLifecycle.ts`'s `applyToolkitCredentialFallback` reads
-    // `tokenInfo.used_dcr` as a gate so a later proactive refresh never lets
-    // the toolkit-DB-configured OAuth client silently replace a DCR-issued
-    // client_id/secret with an unrelated client (see that function's own
-    // comment and `tokenLifecycle.test.ts`'s "used_dcr gate" regression
-    // test, which asserts exactly this). Removing this field would silently
-    // reintroduce that credential mixup for DCR-registered clients — do not
-    // delete it without also removing/replacing `tokenLifecycle.ts`'s gate
-    // and its test (out of this file's scope; see the A5-oauth-discovery
-    // fix report for the precise follow-up).
+    // Retain the issued client's ownership. A later refresh must not replace
+    // DCR credentials with the toolkit's unrelated stored OAuth client.
     used_dcr: params.usedDCR || undefined,
     ...(params.providedOauthMetadata
       ? {
@@ -303,6 +293,8 @@ function buildTokenPersistenceMetadata(params: TokenPersistenceMetadataParams) {
 
 export interface StartMcpAuthFlowOptions {
   serverUrl?: string | undefined;
+  /** Protected MCP resource, independent of the credential-scoped storage key. */
+  resourceUrl?: string | undefined;
   resourceMetadata: { authorization_servers?: readonly string[] | undefined; oauth_authorization_server?: OAuthServerMetadata | undefined };
   oauthMetadata?: Partial<OAuthServerMetadata> | null | undefined;
   clientId?: string | undefined;
@@ -338,6 +330,7 @@ export async function startMcpAuthFlow(options: StartMcpAuthFlowOptions): Promis
 
   const { clientId, clientSecret: dcrClientSecret, usedDCR } = await resolveClientCredentials(registrationEndpoint, initialClientId, projectId);
   const effectiveClientSecret = resolveEffectiveClientSecret(usedDCR, dcrClientSecret, clientSecret);
+  const resource = options.resourceUrl ?? (usedDCR ? serverUrl : undefined);
 
   const state = randomString(32);
   const nonce = randomString(32);
@@ -353,6 +346,7 @@ export async function startMcpAuthFlow(options: StartMcpAuthFlowOptions): Promis
   const normalizedScope = normalizeScope(scope, isOIDC);
 
   const authUrl = buildAuthorizationUrl({
+    resource,
     authorizationEndpoint: authorizationEndpoint as string,
     clientId,
     redirectUri,
@@ -368,6 +362,7 @@ export async function startMcpAuthFlow(options: StartMcpAuthFlowOptions): Promis
   const code = await awaitAuthorizationCode(authWindow, authUrl, state);
 
   const tokenJson = await exchangeAuthorizationCode({
+    resource,
     projectId,
     tokenEndpoint,
     code,
@@ -392,7 +387,7 @@ export async function startMcpAuthFlow(options: StartMcpAuthFlowOptions): Promis
     sessionId,
     tokenJson.id_token,
     tokenJson.refresh_token,
-    buildTokenPersistenceMetadata({ tokenEndpoint, clientId, clientSecret: effectiveClientSecret, projectId, toolkitId, providedOauthMetadata, usedDCR }),
+    buildTokenPersistenceMetadata({ resource, tokenEndpoint, clientId, clientSecret: effectiveClientSecret, projectId, toolkitId, providedOauthMetadata, usedDCR }),
     toolkitType,
   );
 

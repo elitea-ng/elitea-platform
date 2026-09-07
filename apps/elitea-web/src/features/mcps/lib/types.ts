@@ -20,6 +20,7 @@
  * `undefined` (`exactOptionalPropertyTypes`).
  */
 export interface StoredMcpToken {
+  resource?: string | undefined;
   access_token: string;
   issued_at: number;
   expires_at: number | null;
@@ -72,6 +73,7 @@ export type StoredMcpTokenMap = Record<string, StoredMcpToken>;
  * `clientSecretVault.ts` (issue #177).
  */
 export interface SetAccessTokenOAuthMeta {
+  resource?: string | undefined;
   issued_at?: number | undefined;
   token_endpoint?: string | undefined;
   client_id?: string | undefined;

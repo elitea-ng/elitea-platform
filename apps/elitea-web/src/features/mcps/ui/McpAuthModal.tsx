@@ -171,7 +171,7 @@ export function McpAuthModal(props: McpAuthModalProps): ReactNode {
     () => ({ clientId: client_id.trim() || clientId, clientSecret: client_secret.trim() || clientSecret }),
     [client_id, client_secret, clientId, clientSecret],
   );
-  const flowContext = useMemo(() => ({ toolkitId, toolkitType, projectId }), [toolkitId, toolkitType, projectId]);
+  const flowContext = useMemo(() => ({ toolkitId, toolkitType, projectId, serverUrl }), [toolkitId, toolkitType, projectId, serverUrl]);
 
   const isAuthorizeDisabled = useMemo(() => {
     if (isAuthLifecycleActive) return true;

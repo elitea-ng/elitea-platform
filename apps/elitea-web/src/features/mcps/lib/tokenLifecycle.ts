@@ -121,12 +121,11 @@ async function performProactiveRefresh(serverUrl: string, tokenInfo: StoredMcpTo
     const tokenJson = await refreshMcpOAuthToken({
       projectId: tokenInfo.project_id ?? 1,
       refresh_token: tokenInfo.refresh_token as string,
+      ...grantContext(tokenInfo),
       token_endpoint: credentials.tokenEndpoint ?? undefined,
       client_id: credentials.clientId ?? undefined,
       client_secret: credentials.clientSecret ?? undefined,
       toolkit_id: tokenInfo.toolkit_id,
-      // DCR credentials belong to this grant, not to the stored toolkit client.
-      used_dcr: tokenInfo.used_dcr || undefined,
     });
 
     applyRefreshedTokenResult(serverUrl, tokenInfo, credentials, tokenJson);
@@ -176,9 +175,9 @@ export interface McpOAuthTokenResult {
   refresh_token?: string;
 }
 
-/** `true || undefined` normalization for a wire field, split out purely to keep `refreshAccessToken`'s own cyclomatic-complexity count under the §3.5 budget (12) — same tiny helper as `oauthFlow.ts`'s `toWireFlag`, duplicated locally rather than shared (too small to be worth a cross-file import for a single extra branch). */
-function toWireFlag(used: boolean | undefined): boolean | undefined {
-  return used || undefined;
+/** Both refresh paths retain the original grant's audience and client ownership. */
+function grantContext(token: StoredMcpToken | null) {
+  return { resource: token?.resource, used_dcr: token?.used_dcr || undefined };
 }
 
 function clearFailedRefresh(serverUrl: string, token: StoredMcpToken | null): void {
@@ -214,10 +213,10 @@ async function refreshOwnedAccessToken(options: RefreshAccessTokenOptions): Prom
       projectId: projectId ?? 1,
       token_endpoint: tokenEndpoint,
       refresh_token: refreshToken,
+      ...grantContext(existingTokenInfo),
       client_id: clientId,
       client_secret: clientSecret,
       toolkit_id: toolkitId,
-      used_dcr: toWireFlag(existingTokenInfo?.used_dcr),
     });
   } catch (error) {
     clearFailedRefresh(serverUrl, existingTokenInfo);

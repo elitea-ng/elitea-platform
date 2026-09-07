@@ -59,6 +59,49 @@ func oauthResponse(request *http.Request, status int, body string) *http.Respons
 	}
 }
 
+func TestMCPOAuthProxyPreservesResourceOnBothGrants(t *testing.T) {
+	for _, grant := range []string{"authorization_code", "refresh_token"} {
+		t.Run(grant, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				if err := request.ParseForm(); err != nil {
+					t.Fatal(err)
+				}
+				if request.Form.Get("resource") != "https://resource.example/mcp" {
+					t.Fatal("the resource audience was not forwarded")
+				}
+				return oauthResponse(request, http.StatusOK, `{"access_token":"fixture"}`), nil
+			})}
+			handler := eliteacore.NewHandler(nil, eliteacore.WithHTTPClient(client))
+			request := authenticatedOAuthRequest(t, `{"token_endpoint":"https://issuer.example/token", "code":"code", "redirect_uri":"https://elitea.example/callback", "refresh_token":"refresh", "client_id":"client", "used_dcr":true, "resource":"https://resource.example/mcp", "grant_type":"`+grant+`"}`)
+			recorder := httptest.NewRecorder()
+			handler.MCPOAuthProxy(recorder, request)
+			assertStatus(t, recorder, http.StatusOK)
+		})
+	}
+}
+
+func TestMCPOAuthProxyRejectsInvalidResourcesBeforeTransport(t *testing.T) {
+	for _, resource := range []string{"https://resource.example/mcp#fragment", "https://user:secret@resource.example/mcp", "http://resource.example/mcp", "not-a-resource"} {
+		t.Run(resource, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+				t.Fatal("invalid resource reached transport")
+				return nil, nil
+			})}
+			handler := eliteacore.NewHandler(nil, eliteacore.WithHTTPClient(client))
+			body, err := json.Marshal(map[string]any{"token_endpoint": "https://issuer.example/token", "code": "code", "redirect_uri": "https://elitea.example/callback", "client_id": "client", "used_dcr": true, "resource": resource})
+			if err != nil {
+				t.Fatal(err)
+			}
+			recorder := httptest.NewRecorder()
+			handler.MCPOAuthProxy(recorder, authenticatedOAuthRequest(t, string(body)))
+			assertStatus(t, recorder, http.StatusBadRequest)
+			if decodeObj(t, recorder)["error"] != "invalid_resource" {
+				t.Fatal("missing resource error")
+			}
+		})
+	}
+}
+
 func TestMCPOAuthProxyResolvesStoredOpenAPISettingsAtBoundEndpoint(t *testing.T) {
 	resolver := &delegatedAuthSettingsStub{
 		found: true,

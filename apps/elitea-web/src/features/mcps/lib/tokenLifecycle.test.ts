@@ -5,7 +5,7 @@ import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/gen
 
 import { server } from '../../../test/setup';
 
-import { getAccessToken, getRefreshToken, setAccessToken } from './storage';
+import { getAccessToken, getRefreshToken, getTokenInfo, setAccessToken } from './storage';
 import { getValidAccessToken, refreshAccessToken, triggerProactiveRefresh } from './tokenLifecycle';
 
 afterEach(() => {
@@ -76,7 +76,7 @@ describe('refreshAccessToken', () => {
       undefined,
       undefined,
       'refresh-dcr',
-      { client_id: 'dcr-client', used_dcr: true },
+      { client_id: 'dcr-client', used_dcr: true, resource: 'https://protected.example/mcp' },
     );
 
     let refreshBody: unknown;
@@ -88,7 +88,8 @@ describe('refreshAccessToken', () => {
     );
 
     await refreshAccessToken({ serverUrl: 'https://refresh-dcr.example.com' });
-    expect(refreshBody).toMatchObject({ used_dcr: true });
+    expect(refreshBody).toMatchObject({ used_dcr: true, resource: 'https://protected.example/mcp' });
+    expect(getTokenInfo('https://refresh-dcr.example.com')?.resource).toBe('https://protected.example/mcp');
   });
 });
 
@@ -148,8 +149,8 @@ describe('triggerProactiveRefresh', () => {
       http.post('*/api/v2/elitea_core/mcp_oauth_proxy/1', () => HttpResponse.json({ access_token: 'refreshed-proactively', expires_in: 3600 })),
     );
 
-    triggerProactiveRefresh('https://proactive.example.com');
-    // Fire-and-forget: poll until the refresh lands.
+    await triggerProactiveRefresh('https://proactive.example.com');
+    // The refresh must persist the new access token.
     await vi.waitFor(() =>
       expect(getAccessToken('https://proactive.example.com')).toBe('refreshed-proactively'));
   });
@@ -163,7 +164,7 @@ describe('triggerProactiveRefresh', () => {
       undefined,
       undefined,
       'refresh-proactive-dcr',
-      { token_endpoint: 'https://as.example.com/token', client_id: 'dcr-client', project_id: '1', toolkit_id: 'tk-1', used_dcr: true },
+      { token_endpoint: 'https://as.example.com/token', client_id: 'dcr-client', project_id: '1', toolkit_id: 'tk-1', used_dcr: true, resource: 'https://protected.example/mcp' },
     );
 
     let refreshBody: unknown;
@@ -174,9 +175,10 @@ describe('triggerProactiveRefresh', () => {
       }),
     );
 
-    triggerProactiveRefresh('https://proactive-dcr.example.com');
-    // Fire-and-forget: poll until the proxy has actually been called.
-    await vi.waitFor(() => expect(refreshBody).toMatchObject({ used_dcr: true }));
+    await triggerProactiveRefresh('https://proactive-dcr.example.com');
+    // The proxy receives the original protected resource audience.
+    await vi.waitFor(() => expect(refreshBody).toMatchObject({ used_dcr: true, resource: 'https://protected.example/mcp' }));
+    expect(getTokenInfo('https://proactive-dcr.example.com')?.resource).toBe('https://protected.example/mcp');
   });
 
   it('does not log the user out on a failed proactive refresh (best-effort only)', async () => {
@@ -192,7 +194,7 @@ describe('triggerProactiveRefresh', () => {
     );
     server.use(http.post('*/api/v2/elitea_core/mcp_oauth_proxy/1', () => HttpResponse.json({ error: 'nope' }, { status: 400 })));
 
-    triggerProactiveRefresh('https://proactive-fail.example.com');
+    await triggerProactiveRefresh('https://proactive-fail.example.com');
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(getAccessToken('https://proactive-fail.example.com')).toBe('still-here');
@@ -251,7 +253,7 @@ describe('triggerProactiveRefresh', () => {
       }),
     );
 
-    triggerProactiveRefresh('https://dcr-proactive.example.com');
+    await triggerProactiveRefresh('https://dcr-proactive.example.com');
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(getAccessToken('https://dcr-proactive.example.com')).toBe('refreshed-after-dcr');

@@ -271,6 +271,7 @@ export function setAccessToken(
     grant_types_supported: getOrExisting('grant_types_supported'),
     code_challenge_methods_supported: getOrExisting('code_challenge_methods_supported'),
     used_dcr: getOrExisting('used_dcr'),
+    resource: getOrExisting('resource'),
   };
 
   saveTokens(tokens);

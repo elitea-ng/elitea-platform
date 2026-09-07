@@ -149,6 +149,9 @@ describe('startMcpAuthFlow', () => {
     expect(dcrBody).toMatchObject({ registration_endpoint: 'https://as.example.com/register' });
     expect(exchangeBody).toMatchObject({ grant_type: 'authorization_code', code: 'auth-code-1', client_id: 'dcr-issued-client' });
     expect(exchangeBody).toHaveProperty('code_verifier'); // PKCE used (no client_secret supplied)
+    expect(new URL(popup.location.href).searchParams.get('resource')).toBe('https://mcp.example.com');
+    expect(exchangeBody).toHaveProperty('resource', 'https://mcp.example.com');
+    expect(getTokenInfo('https://mcp.example.com')?.resource).toBe('https://mcp.example.com');
     expect(getAccessToken('https://mcp.example.com')).toBe('issued-access-token');
   });
 

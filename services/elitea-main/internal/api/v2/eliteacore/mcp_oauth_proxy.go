@@ -30,6 +30,7 @@ const (
 var errMCPProxyInvalidRequest = errors.New("invalid MCP proxy request")
 
 type mcpOAuthProxyRequest struct {
+	Resource        string          `json:"resource,omitempty"`
 	TokenEndpoint   string          `json:"token_endpoint"`
 	Code            string          `json:"code,omitempty"`
 	RedirectURI     string          `json:"redirect_uri,omitempty"`
@@ -106,6 +107,9 @@ func (h *Handler) mcpOAuthProxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	form := url.Values{"grant_type": {grantType}}
+	if body.Resource != "" {
+		form.Set("resource", body.Resource)
+	}
 	if credentials.clientID != "" {
 		form.Set("client_id", credentials.clientID)
 	}
@@ -304,6 +308,12 @@ func decodeMCPProxyRequest(w http.ResponseWriter, r *http.Request, destination a
 }
 
 func validateMCPGrantRequest(w http.ResponseWriter, body mcpOAuthProxyRequest, grantType string) bool {
+	if body.Resource != "" {
+		if _, err := validateMCPProxyURL(body.Resource); err != nil || len(body.Resource) > 4096 || strings.Contains(body.Resource, "#") {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_resource"})
+			return false
+		}
+	}
 	switch grantType {
 	case "authorization_code":
 		if body.Code == "" {

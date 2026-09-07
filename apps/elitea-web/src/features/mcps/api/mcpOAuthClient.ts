@@ -81,6 +81,7 @@ export interface McpOAuthTokenResponse {
 }
 
 export interface ExchangeMcpOAuthTokenParams {
+  resource?: string | undefined;
   projectId: string | number;
   token_endpoint?: string | undefined;
   code: string;
@@ -109,6 +110,7 @@ export function exchangeMcpOAuthToken({ projectId, ...body }: ExchangeMcpOAuthTo
 }
 
 export interface RefreshMcpOAuthTokenParams {
+  resource?: string | undefined;
   projectId: string | number;
   token_endpoint?: string | undefined;
   refresh_token: string;
