@@ -74,6 +74,42 @@ const globalThresholds = {
 // The list must never be empty again: enforceLayerThresholds() fails on an
 // empty list, and fails on any rule whose glob matches no file in the merged
 // coverage map (#426 — a check with no subject must fail, not pass).
+//
+// THE THREE TOOLKIT SLICES, added 2026-09-06 at 85/85/85/80.
+//
+// They are the first rules here that are NARROWER than a layer, and they are
+// narrower on purpose. `src/features/**` cannot express "the toolkit surface
+// stays covered": that layer aggregates 1,113 files, and the 157 under
+// `features/toolkits` could fall twenty points without moving it. A percentage
+// is also not by itself the thing being asked for — "every toolkit type is
+// covered" is a per-TYPE property, and the tests that state it are the
+// table-driven ones that enumerate the served catalogue
+// (`features/toolkits/__tests__/servedCatalogue.perType.test.tsx` in this app,
+// and its Go and worker siblings). These floors are the second half: they stop
+// the percentage sliding back once those tests exist.
+//
+// Measured on this branch with the full non-sharded `node` project, before and
+// after the per-type suites landed:
+//
+//    slice                       lines  stmts  fns    branch
+//    features/toolkits  before    95.50  93.63  92.10  85.38
+//                       after     95.50  93.70  92.25  85.56
+//    pages/toolkits     before    89.97  84.52  81.34  71.66
+//                       after     93.04  89.52  86.57  83.39
+//    routes/_shell/toolkits before 66.67 66.67  25.00  100.00
+//                       after    100.00 100.00 100.00 100.00
+//
+// `routes/_shell/toolkits` read 25% FUNCTIONS before: the three route
+// components that mount the toolkit pages were executed by nothing at all.
+// `allRoutesSmoke.test.tsx` mounts the whole generated tree and never reached
+// them, which is the failure mode this per-slice floor now catches — a whole
+// directory at zero, inside a layer that has no rule of its own.
+//
+// The branch floor is 80 rather than 85 for the same reason every branch floor
+// above sits under its siblings: a branch counted by v8 includes every optional
+// chain and default parameter, and holding those to the statement number costs
+// tests that assert nothing. 80 is under the measured 83.39/85.56/100 by a
+// margin, and above the 71.66 `pages/toolkits` sat at before this change.
 const layerThresholdRules = [
   { pattern: 'src/shared/api/**', thresholds: { lines: 93, statements: 92, functions: 84, branches: 90 } },
   { pattern: 'src/shared/config/**', thresholds: { lines: 93, statements: 93, functions: 81, branches: 92 } },
@@ -84,6 +120,10 @@ const layerThresholdRules = [
   { pattern: 'src/processes/**', thresholds: { lines: 86, statements: 84, functions: 75, branches: 76 } },
   { pattern: 'src/widgets/**', thresholds: { lines: 47, statements: 46, functions: 47, branches: 42 } },
   { pattern: 'src/pages/**', thresholds: { lines: 79, statements: 77, functions: 74, branches: 70 } },
+  // The toolkit surface, per slice. See the note above the list.
+  { pattern: 'src/features/toolkits/**', thresholds: { lines: 85, statements: 85, functions: 85, branches: 80 } },
+  { pattern: 'src/pages/toolkits/**', thresholds: { lines: 85, statements: 85, functions: 85, branches: 80 } },
+  { pattern: 'src/routes/_shell/toolkits/**', thresholds: { lines: 85, statements: 85, functions: 85, branches: 80 } },
 ];
 
 async function main() {

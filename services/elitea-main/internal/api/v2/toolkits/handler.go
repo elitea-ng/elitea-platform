@@ -1371,11 +1371,26 @@ func redactSettings(value any) any {
 	}
 }
 
+// isSensitiveSettingKey names the settings fields the toolkit list must not
+// serve.
+//
+// The list matches SUBSTRINGS of the field name because the field names are the
+// SDK's, not ours, and it has to hold for a type nobody here has read. It is
+// compared with the schemas themselves by
+// TestEverySchemaDeclaredSecretIsRedactedFromTheToolkitList, which fails when a
+// property the pinned catalogue marks `secret: true` or
+// `format: "password"` survives this rule.
+//
+// "access_key" is listed separately from "api_key" and is not covered by it:
+// zephyr_squad declares `access_key` beside `secret_key`, and until that test
+// was written the first of the pair was served in clear by every toolkit list
+// while the second was redacted.
 func isSensitiveSettingKey(key string) bool {
 	key = strings.ToLower(key)
 	return strings.Contains(key, "secret") || strings.Contains(key, "token") ||
 		strings.Contains(key, "password") || strings.Contains(key, "credential") ||
-		strings.Contains(key, "api_key") || strings.Contains(key, "apikey")
+		strings.Contains(key, "api_key") || strings.Contains(key, "apikey") ||
+		strings.Contains(key, "access_key") || strings.Contains(key, "accesskey")
 }
 
 // tenantOwnerID converts a tenant project id into the integer written to the
