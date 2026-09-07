@@ -28,6 +28,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"reflect"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -122,16 +123,38 @@ func NewPlatformHandler(
 		WithAuditRecorder(recorder),
 		WithLogger(logger),
 	}
-	// The two nil checks are not ceremony. Go boxes a typed nil into a non-nil
-	// interface, so passing an absent dependency straight through would make
-	// every `if h.start == nil` downstream read as "configured" and turn an
-	// honest 503 into a nil dereference. This is the #86 trap, which this
-	// repository has now met at four composition roots.
-	if start != nil {
+	// The two checks are not ceremony, and neither is REFLECTION here. Go boxes
+	// a typed nil pointer into a NON-NIL interface, so `start != nil` is true
+	// for an absent dependency that arrived as `(*T)(nil)` — and every
+	// `if h.start == nil` downstream would then read as "configured" and turn
+	// an honest 503 into a nil dereference. This is the #86 trap, which this
+	// repository has now met at four composition roots, and a plain nil check
+	// is exactly the version of it that does not work.
+	if present(start) {
 		options = append(options, WithAgentStart(start))
 	}
-	if vault != nil {
+	if present(vault) {
 		options = append(options, WithVault(vault))
 	}
 	return NewHandler(pool, options...)
+}
+
+// present reports whether an interface value holds something usable.
+//
+// It answers false for a nil interface AND for an interface holding a nil
+// pointer, map, slice, channel or function. Only the pointer case is reachable
+// from this package's own call sites today; the rest are covered because the
+// question this function answers is "is there something behind this", and a
+// partial answer to that is how the trap gets back in.
+func present(value any) bool {
+	if value == nil {
+		return false
+	}
+	reflected := reflect.ValueOf(value)
+	switch reflected.Kind() {
+	case reflect.Ptr, reflect.Map, reflect.Slice, reflect.Chan, reflect.Func, reflect.Interface:
+		return !reflected.IsNil()
+	default:
+		return true
+	}
 }

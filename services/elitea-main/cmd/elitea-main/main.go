@@ -67,7 +67,6 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/identityproviders"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/authsvc"
 	infradb "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	dbrepos "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
@@ -2486,7 +2485,7 @@ func startPipelineScheduleRunner(
 	if err != nil {
 		return fmt.Errorf("register pipeline schedule job: %w", err)
 	}
-	occurrences, err := repos.NewScheduleOccurrenceRepository(pool)
+	occurrences, err := dbrepos.NewScheduleOccurrenceRepository(pool)
 	if err != nil {
 		return fmt.Errorf("construct pipeline schedule occurrence repository: %w", err)
 	}
@@ -2494,6 +2493,13 @@ func startPipelineScheduleRunner(
 	if err != nil {
 		return fmt.Errorf("construct pipeline schedule runner: %w", err)
 	}
-	go runner.Run(ctx)
+	// Run returns only when ctx is cancelled, which is process shutdown. The
+	// error is logged rather than dropped: a runner that stopped early would
+	// otherwise take every tenant's schedules with it, silently.
+	go func() {
+		if err := runner.Run(ctx); err != nil && ctx.Err() == nil {
+			logger.Error("the pipeline schedule runner stopped", "err", err)
+		}
+	}()
 	return nil
 }

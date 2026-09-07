@@ -91,6 +91,7 @@ const (
 // constraint on the secret, and a secret derived from the id would be no secret
 // at all.
 func newCredential() (tokenID, secret string, hash []byte, err error) {
+	var encoded string
 	idBytes := make([]byte, tokenIDBytes)
 	if _, err = rand.Read(idBytes); err != nil {
 		return "", "", nil, fmt.Errorf("pipelinetriggers: mint token id: %w", err)
@@ -99,11 +100,15 @@ func newCredential() (tokenID, secret string, hash []byte, err error) {
 	if _, err = rand.Read(secretBytes); err != nil {
 		return "", "", nil, fmt.Errorf("pipelinetriggers: mint token secret: %w", err)
 	}
-	digest := sha256.Sum256(secretBytes)
-	return hex.EncodeToString(idBytes),
-		base64.RawURLEncoding.EncodeToString(secretBytes),
-		digest[:],
-		nil
+	// The digest is of the TEXT the holder will send, not of the bytes behind
+	// it. Both are 32 bytes of entropy, so nothing is lost — but `secretDigest`
+	// hashes the raw request string, and hashing the pre-encoding bytes here
+	// would make every correct credential compare false. That defect passes a
+	// unit test of either function on its own; it is the pairing that catches
+	// it, which is why both call sites go through these two functions and
+	// neither hashes anything itself.
+	encoded = base64.RawURLEncoding.EncodeToString(secretBytes)
+	return hex.EncodeToString(idBytes), encoded, secretDigest(encoded), nil
 }
 
 // secretDigest is the one place a presented secret becomes a comparable value.
