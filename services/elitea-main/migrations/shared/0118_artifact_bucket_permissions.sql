@@ -119,5 +119,34 @@ CROSS JOIN (VALUES
 WHERE role.mode = 'default' AND role.name IN ('admin', 'editor')
 ON CONFLICT (role_id, permission) DO NOTHING;
 
+-- The override delivery (the rule 0090 established and
+-- migrations/project_override_reconciliation_test.go enforces for every later
+-- grant). Only projects that ALREADY carry per-project rows are touched: a
+-- project role with no override rows still falls back to the central matrix
+-- above, and handing it a snapshot it never had would freeze it out of every
+-- future central grant.
+IF to_regclass('public.auth_core__project_role') IS NULL
+   OR to_regclass('public.auth_core__project_role_permission') IS NULL THEN
+    RAISE NOTICE '0118: no per-project permission tables, central grants are the whole story here';
+    RETURN;
+END IF;
+
+INSERT INTO public.auth_core__project_role_permission (project_id, role_id, permission)
+SELECT DISTINCT overridden.project_id, overridden.role_id, grant_row.permission
+FROM (
+    SELECT DISTINCT project_id, role_id
+    FROM public.auth_core__project_role_permission
+    WHERE role_id IS NOT NULL
+) AS overridden
+JOIN public.auth_core__project_role AS project_role
+  ON project_role.id = overridden.role_id
+ AND project_role.project_id = overridden.project_id
+CROSS JOIN (VALUES
+    ('configuration.artifacts.s3_credentials.view', ARRAY['admin', 'editor', 'viewer']),
+    ('configuration.artifacts.s3_credentials.edit', ARRAY['admin', 'editor'])
+) AS grant_row(permission, roles)
+WHERE project_role.name = ANY (grant_row.roles)
+ON CONFLICT (project_id, role_id, permission) DO NOTHING;
+
 END
 $$;
