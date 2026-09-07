@@ -7428,6 +7428,317 @@ components:
         - $ref: '#/components/schemas/ErrorResponse'
         - $ref: '#/components/schemas/AdminMessageResponse'
 
+    # -----------------------------------------------------------------------
+    # Agent Evaluation slice 2 — dataset, run, result (#617).
+    #
+    # The vocabulary is the reference UI's, not this repository's usual one:
+    # the run status set is `created | running | finished | errored |
+    # cancelled` rather than queued/done/failed, because `isRunTerminal` and
+    # `isRunActive` in the reference's own helpers switch on those exact five
+    # strings and a status the client does not know renders as a blank chip.
+    # -----------------------------------------------------------------------
+    EvalDataset:
+      type: object
+      description: >
+        A named set of evaluation cases. `case_count` is the STORED count and
+        never the length of a page: the detail read is paged, so a client that
+        counted the page would report a dataset of 900 cases as having 200.
+      properties:
+        id: { type: string }
+        uuid: { type: string }
+        name: { type: string }
+        description: { type: string }
+        application_id:
+          type: integer
+          nullable: true
+          description: >
+            The agent this dataset was authored for. `null` is a project-wide
+            dataset. It is `application_id` and not the reference's `agent_id`
+            because every agent reference in this schema is an `applications`
+            row; the QUERY PARAMETER stays `agent_id`.
+        is_shared: { type: boolean }
+        case_count: { type: integer }
+        created_at: { type: string }
+        updated_at: { type: string }
+      required: [id, name, description, application_id, is_shared, case_count]
+
+    EvalDatasetDetail:
+      description: >
+        One dataset plus a page of its cases. `cases` is ALWAYS present, empty
+        or not: a missing key reads as "not loaded yet" and a client waits for
+        a load that already happened. The LIST answers `EvalDataset`, which
+        carries no `cases` key at all, because `cases: []` on every row of a
+        listing tells a client that a dataset with ten cases has none.
+      allOf:
+        - $ref: '#/components/schemas/EvalDataset'
+        - type: object
+          properties:
+            cases:
+              type: array
+              items: { $ref: '#/components/schemas/EvalDatasetCase' }
+            cases_truncated:
+              type: boolean
+              description: >
+                The page is short of the dataset. Computed from the stored count
+                and the window, NOT from `len(cases) == limit` — the two differ
+                on the exact boundary.
+          required: [cases, cases_truncated]
+
+    EvalDatasetList:
+      type: object
+      description: >
+        The `{rows,total}` envelope every /elitea_core project listing uses.
+      properties:
+        rows:
+          type: array
+          items: { $ref: '#/components/schemas/EvalDataset' }
+        total: { type: integer }
+      required: [rows, total]
+
+    EvalDatasetCase:
+      type: object
+      description: >
+        One evaluation case: what the agent is asked, the template variables it
+        is asked with, and the answer the author expected if they stated one.
+      properties:
+        id: { type: string }
+        dataset_id: { type: string }
+        input: { type: string }
+        variables:
+          type: object
+          additionalProperties: true
+          description: >
+            Substituted into `input` as `{{name}}`. Never null: the client
+            spreads this object.
+        expected_output:
+          type: string
+          nullable: true
+          description: >
+            `null` means the author stated no expected answer, which is NOT the
+            same as an expected answer of "". A judge told to compare against
+            "" marks every non-empty answer wrong.
+        source_type:
+          type: string
+          enum: [manual, import, conversation]
+        order_index: { type: integer }
+        created_at: { type: string }
+        updated_at: { type: string }
+      required: [id, dataset_id, input, variables, expected_output, source_type, order_index]
+
+    EvalDatasetWriteRequest:
+      type: object
+      description: >
+        Unknown fields are REFUSED, not dropped. The reference's own dataset
+        body carries `isShared` in camelCase while this API is snake_case
+        throughout, and a lenient decoder would answer 201 for a setting it
+        never stored.
+      properties:
+        name: { type: string, maxLength: 128 }
+        description: { type: string }
+        application_id: { type: integer, nullable: true }
+        is_shared: { type: boolean }
+      required: [name]
+      additionalProperties: false
+
+    EvalDatasetCaseWriteRequest:
+      type: object
+      properties:
+        input: { type: string }
+        variables:
+          type: object
+          additionalProperties: true
+        expected_output: { type: string, nullable: true }
+      required: [input]
+      additionalProperties: false
+
+    EvalRunSnapshotDimension:
+      type: object
+      description: >
+        One dimension AS IT WAS when the run started. The scorecard normalises
+        against these numbers and not against the library row: a dimension is
+        editable, and the normalisation divides by the scale range and flips on
+        polarity, so an edit would re-scale a finished run with no record.
+      properties:
+        name: { type: string }
+        description:
+          type: string
+          description: The rubric, which is also the AI judge's prompt.
+        scale_type: { type: string, enum: [binary, ordinal, continuous] }
+        scale_min: { type: number }
+        scale_max: { type: number }
+        polarity: { type: string, enum: [higher_better, lower_better] }
+
+    EvalRunSnapshotBinding:
+      type: object
+      description: >
+        What a suite table will hold when one exists. This release builds one
+        per requested dimension from that dimension's own defaults, which is
+        why no binding table is needed yet.
+      properties:
+        dimension_id: { type: string }
+        engine:
+          type: string
+          enum: [ai, human, code]
+          description: >
+            Always `ai` in this release. Stored rather than implied, so a later
+            `code` or `human` binding is distinguishable from these instead of
+            every historical row claiming the newest default.
+        weight: { type: number }
+        target: { type: number, nullable: true }
+        target_operator: { type: string }
+        order_index: { type: integer }
+
+    EvalRunSnapshot:
+      type: object
+      properties:
+        cases:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              order_index: { type: integer }
+        dimensions:
+          type: object
+          additionalProperties: { $ref: '#/components/schemas/EvalRunSnapshotDimension' }
+        bindings:
+          type: array
+          items: { $ref: '#/components/schemas/EvalRunSnapshotBinding' }
+
+    EvalRun:
+      type: object
+      properties:
+        id: { type: string }
+        uuid: { type: string }
+        dataset_id: { type: string }
+        application_id: { type: integer, nullable: true }
+        application_version_id: { type: integer, nullable: true }
+        trigger_type: { type: string, enum: [on_demand, offline_batch] }
+        created_by: { type: integer, nullable: true }
+        status:
+          type: string
+          enum: [created, running, finished, errored, cancelled]
+        execution_mode:
+          type: string
+          enum: [predict_blocking, runtime_plane]
+          description: >
+            WHAT ACTUALLY RAN. `predict_blocking` is ONE blocking LLM turn per
+            case, built from the agent version's instructions and the case
+            input: no tools, no toolkits, no conversation memory. It is
+            returned on every read so a score cannot claim to have measured
+            what it did not, and so a later runtime-plane run is distinguishable
+            from these rather than silently re-labelling them.
+        snapshot: { $ref: '#/components/schemas/EvalRunSnapshot' }
+        progress:
+          type: object
+          properties:
+            done: { type: integer }
+            total: { type: integer }
+          required: [done, total]
+        headline_score:
+          type: number
+          nullable: true
+          description: >
+            The mean of the run's `ok` normalised scores, or `null` when
+            nothing was scored. NOT zero — zero is a real and very bad score.
+        error: { type: string }
+        created_at: { type: string }
+        started_at: { type: string }
+        finished_at: { type: string }
+      required: [id, dataset_id, status, execution_mode, progress, headline_score]
+
+    EvalRunList:
+      type: object
+      properties:
+        rows:
+          type: array
+          items: { $ref: '#/components/schemas/EvalRun' }
+        total: { type: integer }
+      required: [rows, total]
+
+    EvalRunStartRequest:
+      type: object
+      description: >
+        No `suite_id`: there is no suite table in this release, so the
+        dimensions are named directly and the server freezes their own defaults
+        into the run's snapshot.
+      properties:
+        dataset_id: { type: string }
+        application_id: { type: integer, nullable: true }
+        application_version_id:
+          type: integer
+          description: >
+            Required. The version carries the instructions the agent turn is
+            built from, and defaulting to "the latest" would make a run's
+            meaning depend on when it was read.
+        dimension_ids:
+          type: array
+          items: { type: string }
+          minItems: 1
+          maxItems: 5
+        trigger_type: { type: string, enum: [on_demand, offline_batch] }
+      required: [dataset_id, application_version_id, dimension_ids]
+      additionalProperties: false
+
+    EvalRunResult:
+      type: object
+      description: >
+        One score per (run, dataset case, dimension). `error` is what a judge
+        that did not answer in the score schema produces — never `ok` with a
+        score of 0, which would drag a headline down with a number nobody
+        measured.
+      properties:
+        id: { type: string }
+        run_id: { type: string }
+        dataset_case_id: { type: string }
+        dimension_id: { type: string }
+        status:
+          type: string
+          enum: [ok, error, pending_human, skipped]
+        native_score: { type: number, nullable: true }
+        normalized_score: { type: number, nullable: true }
+        target_met: { type: boolean, nullable: true }
+        verdict:
+          type: object
+          additionalProperties: true
+          description: >
+            `{score, reason}` on success; `{error, raw}` when the judge did not
+            answer in schema. The RAW model text is kept because a judge failure
+            is a prompt problem, and a prompt problem cannot be diagnosed from
+            the word "error".
+        evidence:
+          type: object
+          additionalProperties: true
+          description: '`{input, output, expected_output}` — what was scored.'
+        created_at: { type: string }
+      required: [id, run_id, dataset_case_id, dimension_id, status, native_score, normalized_score]
+
+    EvalScorecard:
+      type: object
+      description: >
+        The READ-ONLY scorecard. `human_scores` is DELIBERATELY ABSENT: this
+        release has no human-score surface, and answering `[]` would tell a
+        client "there are none" where the truth is "this deployment cannot have
+        any". `unavailable` names each omission with its reason — the shape
+        internal/api/v2/budgets/usage_dimensions.go established.
+      properties:
+        run: { $ref: '#/components/schemas/EvalRun' }
+        results:
+          type: array
+          items: { $ref: '#/components/schemas/EvalRunResult' }
+        headline_score: { type: number, nullable: true }
+        total: { type: integer }
+        offset: { type: integer }
+        unavailable:
+          type: array
+          items:
+            type: object
+            properties:
+              key: { type: string }
+              reason: { type: string }
+            required: [key, reason]
+      required: [run, results, headline_score, total, offset, unavailable]
+
   responses:
     400:
       description: Bad request
@@ -8923,6 +9234,491 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '500': { $ref: '#/components/responses/500' }
+
+
+  # -------------------------------------------------------------------------
+  # Agent Evaluation slice 2 (#617): the dataset, the run and the read-only
+  # scorecard. Thirteen operations.
+  #
+  # The DIMENSION LIBRARY (slice 1) is deliberately NOT described here. Its four
+  # routes are served (internal/api/v2/evaluation/dimension.go) and its client
+  # is hand-written; describing them is a separate, purely additive change and
+  # belongs with whoever moves that client onto the generated one.
+  #
+  # STILL UNBUILT AND THEREFORE ABSENT — not stubbed, not 200-with-nothing: the
+  # suite and binding families, the dataset import, the conversation promote,
+  # the human-score writes, the platform dimension catalogue and
+  # `generate_eval_dimensions`. Twelve of the reference's thirty-eight
+  # operations are here plus the run cancel; the rest answer 404, which is what
+  # an unbuilt route should answer.
+  # -------------------------------------------------------------------------
+  /elitea_core/eval_datasets/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+
+    get:
+      operationId: listEvalDatasets
+      summary: List this project's evaluation datasets
+      description: |
+        "Project-wide datasets, plus this agent's" when `agent_id` is sent, and
+        the project-wide ones alone when it is not. It is NOT "everything in the
+        schema": a dataset authored on another agent is that agent's, and
+        listing it here would put every agent's evaluation cases in every other
+        agent's editor.
+
+        NOTE(#617): internal/api/v2/evaluation. Gated on
+        `models.applications.evaluation.dataset.read`, granted by
+        migrations/shared/0116_evaluation_dataset_run_permissions.sql.
+      tags: [applications]
+      parameters:
+        - name: agent_id
+          in: query
+          required: false
+          schema: { type: integer }
+      responses:
+        '200':
+          description: The dataset listing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvalDatasetList'
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500': { $ref: '#/components/responses/500' }
+
+    post:
+      operationId: createEvalDataset
+      summary: Create an evaluation dataset
+      description: |
+        Answers the row that was STORED, including every server-applied
+        default, so a client's cache after a create is what a reload would show.
+        A create that echoed the request body back would report success for
+        whatever the database silently altered.
+      tags: [applications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EvalDatasetWriteRequest'
+      responses:
+        '201':
+          description: The stored dataset
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvalDataset'
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/eval_dataset/prompt_lib/{project_id}/{dataset_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: dataset_id
+        in: path
+        required: true
+        schema: { type: string }
+
+    get:
+      operationId: getEvalDataset
+      summary: Read one dataset with a page of its cases
+      description: |
+        An out-of-range `limit` is REFUSED and not clamped: a silent clamp
+        answers 200 with a page the caller did not ask for, and a client paging
+        by `offset += limit` would then skip rows it never saw.
+      tags: [applications]
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 200 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        '200':
+          description: The dataset and one page of its cases
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvalDatasetDetail'
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: >
+            No dataset with this id inside this project's tenant schema. This is
+            the cross-project refusal, not only a typo path.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500': { $ref: '#/components/responses/500' }
+
+    put:
+      operationId: updateEvalDataset
+      summary: Rename or re-describe a dataset
+      description: |
+        `application_id` is NOT writable. Scope is set once, at authoring:
+        moving a dataset between agents after runs have been scored against it
+        would re-file that history under an agent it never ran on.
+      tags: [applications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EvalDatasetWriteRequest'
+      responses:
+        '200':
+          description: The stored dataset
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvalDataset'
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '500': { $ref: '#/components/responses/500' }
+
+    delete:
+      operationId: deleteEvalDataset
+      summary: Delete a dataset and its cases
+      description: |
+        REFUSES with 409 while a run references the dataset. The table gives
+        `eval_runs.dataset_id` an ON DELETE CASCADE — it has to, or an agent
+        carrying an evaluated dataset becomes undeletable — so this refusal is
+        the only thing between a casual tidy-up and the loss of every score.
+      tags: [applications]
+      responses:
+        '204':
+          description: Deleted
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '409':
+          description: >
+            A run is scored against this dataset. The body names the count.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/eval_dataset_cases/prompt_lib/{project_id}/{dataset_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: dataset_id
+        in: path
+        required: true
+        schema: { type: string }
+
+    post:
+      operationId: addEvalDatasetCase
+      summary: Append one case to a dataset
+      description: |
+        A dataset holds at most ten cases, and the count and the insert are ONE
+        statement so two concurrent writers cannot both see room. The cap is not
+        cosmetic: a run performs two model calls per case, so it is what stands
+        between a large paste and a bill nobody authorised. The refusal is a 409
+        naming the limit, never a silent truncation — a dataset that reads as
+        complete and is not would score an agent on a question it never saw.
+
+        A CASE WRITE takes the dataset UPDATE permission, not one of its own.
+        The reference declares no case permission, and a caller who may not edit
+        a dataset must not be able to change what it asks.
+      tags: [applications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EvalDatasetCaseWriteRequest'
+      responses:
+        '201':
+          description: The stored case
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvalDatasetCase'
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No dataset with this id in this project.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: The dataset is at its case cap.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/eval_dataset_case/prompt_lib/{project_id}/{dataset_id}/{case_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: dataset_id
+        in: path
+        required: true
+        schema: { type: string }
+      - name: case_id
+        in: path
+        required: true
+        schema: { type: string }
+
+    put:
+      operationId: updateEvalDatasetCase
+      summary: Rewrite one case
+      description: |
+        `dataset_id` is in the storage predicate and not only in the path.
+        Without it, a caller who knows any case id could edit it through any
+        dataset's path and the 404 would never fire.
+      tags: [applications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EvalDatasetCaseWriteRequest'
+      responses:
+        '200':
+          description: The stored case
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvalDatasetCase'
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '500': { $ref: '#/components/responses/500' }
+
+    delete:
+      operationId: deleteEvalDatasetCase
+      summary: Remove one case from a dataset
+      tags: [applications]
+      responses:
+        '204':
+          description: Deleted
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/eval_runs/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+
+    get:
+      operationId: listEvalRuns
+      summary: List evaluation runs, newest first
+      description: |
+        Newest first is not cosmetic: the reference's run-history panel computes
+        a delta against the nearest OLDER scored run, so the order is what makes
+        "the previous run" mean the same thing to the client and to a reader.
+      tags: [applications]
+      parameters:
+        - name: application_id
+          in: query
+          required: false
+          schema: { type: integer }
+        - name: dataset_id
+          in: query
+          required: false
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+      responses:
+        '200':
+          description: The run listing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvalRunList'
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500': { $ref: '#/components/responses/500' }
+
+    post:
+      operationId: startEvalRun
+      summary: Start an evaluation run over one dataset
+      description: |
+        Freezes a SNAPSHOT of the named dimensions onto the run and queues a
+        bounded background job inside elitea-main. The row is written FIRST and
+        queued second: if the process dies between the two, the recovery sweep
+        finds a `created` row and runs it, where queueing first would leave a
+        job with no row for a worker to claim.
+
+        THE SNAPSHOT IS NOT A CACHE. A dimension is editable, and the score
+        normalisation divides by the scale range and flips on polarity, so a
+        scorecard that re-read the live library would silently re-scale a
+        finished run.
+
+        ENGINES ARE RESTRICTED TO `ai`. A dimension that allows only `code` or
+        `human` is refused with 501 and a named reason: there is no code sandbox
+        in elitea-main, and a code validation that silently passed would be the
+        most dangerous fallback in the feature.
+
+        NOTE(#617): gated on `models.applications.evaluation.run.create`. There
+        is no `run.cancel` string in the product's vocabulary, so the cancel
+        route takes this same permission — the right that started a run is the
+        right that stops it.
+      tags: [applications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EvalRunStartRequest'
+      responses:
+        '201':
+          description: The queued run
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvalRun'
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '501':
+          description: >
+            A named dimension cannot be scored by this release. The body says
+            which engine it needs and why this release does not serve it.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/eval_run/prompt_lib/{project_id}/{run_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: run_id
+        in: path
+        required: true
+        schema: { type: string }
+
+    get:
+      operationId: getEvalRun
+      summary: Read one run, with its progress
+      description: |
+        THIS IS THE PROGRESS FEED. The reference follows a run over a socket
+        namespace; there is no socket server here (#126 deleted it and #615
+        recorded the decision), so the client POLLS this route. `progress`
+        carries `{done, total}` and the status vocabulary tells it when to stop.
+      tags: [applications]
+      responses:
+        '200':
+          description: The run
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvalRun'
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/eval_run_cancel/prompt_lib/{project_id}/{run_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: run_id
+        in: path
+        required: true
+        schema: { type: string }
+
+    post:
+      operationId: cancelEvalRun
+      summary: Stop a run
+      description: |
+        The ROW is written first and the in-process goroutine is signalled
+        second. The write is what makes the cancel durable: a signal reaches
+        only the replica executing the run, and a queued run has no goroutine at
+        all. The worker's own finish refuses to move a row that is already
+        terminal, so a cancellation cannot be overwritten by the walk that was
+        already in flight.
+
+        A run that has already finished answers 409, not 404: the run exists,
+        and telling the caller it does not sends them looking for a missing row.
+      tags: [applications]
+      responses:
+        '200':
+          description: The cancelled run
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvalRun'
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '409':
+          description: The run is already finished, errored or cancelled.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/eval_results/prompt_lib/{project_id}/{run_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: run_id
+        in: path
+        required: true
+        schema: { type: string }
+
+    get:
+      operationId: getEvalScorecard
+      summary: Read a run's scorecard
+      description: |
+        READ-ONLY. There is no human-score write in this release, and the
+        response OMITS `human_scores` rather than answering `[]` — an empty
+        array tells a client "there are none" where the truth is "this
+        deployment cannot have any". `unavailable` names each omission with its
+        reason.
+
+        `total` is a separate count and never `results.length`. The reference's
+        pager uses `total`, `offset` and the page length together to decide
+        whether it has covered every case, so a total that was really the page
+        size would make a truncated scorecard claim to be complete.
+      tags: [applications]
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 2000, default: 500 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        '200':
+          description: The run, its results and what this release cannot serve
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvalScorecard'
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
         '500': { $ref: '#/components/responses/500' }
 
   /elitea_core/message_traces/prompt_lib/{project_id}/{conversation_id}:

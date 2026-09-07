@@ -421,7 +421,28 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
  * entry again, and the allowlist may only shrink, so the operation is now
  * described. MANIFEST_ENTRY_COUNT is unchanged: the entry existed.
  */
-const GENERATED_OPERATION_COUNT = 190;
+/*
+ * 190 -> 203 and 206 -> 219, when Agent Evaluation slice 2 landed (#617): the
+ * dataset, the run and the read-only scorecard.
+ *
+ * BOTH NUMBERS MOVE TOGETHER, which most entries above this one do not, and the
+ * reason is worth the line. The thirteen operations are described in
+ * api/openapi/v2.yaml AND called from a UI that ships in the same change, so
+ * each one produces a generated operation and a manifest entry.
+ *
+ * The four DIMENSION routes of slice 1 move neither number, and still do not.
+ * They are served, and their client is hand-written, and they are absent from
+ * the manifest on purpose: elitea-main's
+ * TestSpecRouterConformance/manifest_reverse_check refuses a manifest entry the
+ * spec does not describe, and the allowlist that would excuse one is at its cap
+ * and may only shrink. Describing them is additive and separate; when it
+ * happens, both numbers move by four.
+ *
+ * WRITTEN AS 189 -> 202 AND REBASED. The setSkillRelation entry above landed
+ * first and moved the base to 190; both streams counted correctly from where
+ * they stood, and only the merge can add them up.
+ */
+const GENERATED_OPERATION_COUNT = 203;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -485,7 +506,7 @@ const GENERATED_OPERATION_COUNT = 190;
  * manifest while its file still claimed it. Splitting them back restores the
  * entry the lifecycle unit added.
  */
-const MANIFEST_ENTRY_COUNT = 206;
+const MANIFEST_ENTRY_COUNT = 219;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

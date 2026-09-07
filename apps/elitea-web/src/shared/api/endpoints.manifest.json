@@ -2397,6 +2397,165 @@
             "usedBy": [
                 "features/chat-messages"
             ]
+        },
+        {
+            "$comment": "Agent Evaluation slice 2 (#617). GENERATED, unlike the four dimension entries that are NOT in this manifest at all: slice 1 withdrew those because a manifest entry for an endpoint v2.yaml does not describe fails elitea-main's TestSpecRouterConformance/manifest_reverse_check, and the allowlist that would excuse it may only shrink. Slice 2 describes its thirteen operations in the spec, so they carry real generated functions and real entries. The dimension four stay hand-written and unlisted until somebody describes them - an additive spec change, and a separate one.",
+            "id": "evaluation.listDatasets",
+            "method": "GET",
+            "path": "/elitea_core/eval_datasets/prompt_lib/{projectId}",
+            "operationId": "listEvalDatasets",
+            "source": "generated",
+            "responseSchema": "EvalDatasetList",
+            "fixture": null,
+            "usedBy": [
+                "features/agent-evaluation"
+            ]
+        },
+        {
+            "id": "evaluation.createDataset",
+            "method": "POST",
+            "path": "/elitea_core/eval_datasets/prompt_lib/{projectId}",
+            "operationId": "createEvalDataset",
+            "source": "generated",
+            "responseSchema": "EvalDataset",
+            "fixture": null,
+            "usedBy": [
+                "features/agent-evaluation"
+            ]
+        },
+        {
+            "id": "evaluation.getDataset",
+            "method": "GET",
+            "path": "/elitea_core/eval_dataset/prompt_lib/{projectId}/{datasetId}",
+            "operationId": "getEvalDataset",
+            "source": "generated",
+            "responseSchema": "EvalDatasetDetail",
+            "fixture": null,
+            "usedBy": [
+                "features/agent-evaluation"
+            ]
+        },
+        {
+            "id": "evaluation.updateDataset",
+            "method": "PUT",
+            "path": "/elitea_core/eval_dataset/prompt_lib/{projectId}/{datasetId}",
+            "operationId": "updateEvalDataset",
+            "source": "generated",
+            "responseSchema": "EvalDataset",
+            "fixture": null,
+            "usedBy": [
+                "features/agent-evaluation"
+            ]
+        },
+        {
+            "id": "evaluation.deleteDataset",
+            "method": "DELETE",
+            "path": "/elitea_core/eval_dataset/prompt_lib/{projectId}/{datasetId}",
+            "operationId": "deleteEvalDataset",
+            "source": "generated",
+            "responseSchema": "EvalDataset",
+            "fixture": null,
+            "usedBy": [
+                "features/agent-evaluation"
+            ]
+        },
+        {
+            "id": "evaluation.addDatasetCase",
+            "method": "POST",
+            "path": "/elitea_core/eval_dataset_cases/prompt_lib/{projectId}/{datasetId}",
+            "operationId": "addEvalDatasetCase",
+            "source": "generated",
+            "responseSchema": "EvalDatasetCase",
+            "fixture": null,
+            "usedBy": [
+                "features/agent-evaluation"
+            ]
+        },
+        {
+            "id": "evaluation.updateDatasetCase",
+            "method": "PUT",
+            "path": "/elitea_core/eval_dataset_case/prompt_lib/{projectId}/{datasetId}/{caseId}",
+            "operationId": "updateEvalDatasetCase",
+            "source": "generated",
+            "responseSchema": "EvalDatasetCase",
+            "fixture": null,
+            "usedBy": [
+                "features/agent-evaluation"
+            ]
+        },
+        {
+            "id": "evaluation.deleteDatasetCase",
+            "method": "DELETE",
+            "path": "/elitea_core/eval_dataset_case/prompt_lib/{projectId}/{datasetId}/{caseId}",
+            "operationId": "deleteEvalDatasetCase",
+            "source": "generated",
+            "responseSchema": "EvalDatasetCase",
+            "fixture": null,
+            "usedBy": [
+                "features/agent-evaluation"
+            ]
+        },
+        {
+            "id": "evaluation.listRuns",
+            "method": "GET",
+            "path": "/elitea_core/eval_runs/prompt_lib/{projectId}",
+            "operationId": "listEvalRuns",
+            "source": "generated",
+            "responseSchema": "EvalRunList",
+            "fixture": null,
+            "usedBy": [
+                "features/agent-evaluation"
+            ]
+        },
+        {
+            "id": "evaluation.startRun",
+            "method": "POST",
+            "path": "/elitea_core/eval_runs/prompt_lib/{projectId}",
+            "operationId": "startEvalRun",
+            "source": "generated",
+            "responseSchema": "EvalRun",
+            "fixture": null,
+            "usedBy": [
+                "features/agent-evaluation"
+            ]
+        },
+        {
+            "$comment": "The PROGRESS FEED. There is no socket server in this platform (#126 deleted internal/api/socketio, #615 recorded the decision), so features/agent-evaluation polls this route while a run is active and stops at a terminal status. The reference's own hook documents the same fallback.",
+            "id": "evaluation.getRun",
+            "method": "GET",
+            "path": "/elitea_core/eval_run/prompt_lib/{projectId}/{runId}",
+            "operationId": "getEvalRun",
+            "source": "generated",
+            "responseSchema": "EvalRun",
+            "fixture": null,
+            "usedBy": [
+                "features/agent-evaluation"
+            ]
+        },
+        {
+            "id": "evaluation.cancelRun",
+            "method": "POST",
+            "path": "/elitea_core/eval_run_cancel/prompt_lib/{projectId}/{runId}",
+            "operationId": "cancelEvalRun",
+            "source": "generated",
+            "responseSchema": "EvalRun",
+            "fixture": null,
+            "usedBy": [
+                "features/agent-evaluation"
+            ]
+        },
+        {
+            "$comment": "READ-ONLY. The response OMITS `human_scores` and names the omission in `unavailable`, because this release has no human-score surface and `[]` would tell a client there are none where the truth is that this deployment cannot have any.",
+            "id": "evaluation.getScorecard",
+            "method": "GET",
+            "path": "/elitea_core/eval_results/prompt_lib/{projectId}/{runId}",
+            "operationId": "getEvalScorecard",
+            "source": "generated",
+            "responseSchema": "EvalScorecard",
+            "fixture": null,
+            "usedBy": [
+                "features/agent-evaluation"
+            ]
         }
     ]
 }

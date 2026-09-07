@@ -59,6 +59,13 @@ import type {
   AuthorDetail,
   DefaultIcon,
   DocumentLoadersResponse,
+  EvalDataset,
+  EvalDatasetCase,
+  EvalDatasetDetail,
+  EvalDatasetList,
+  EvalRun,
+  EvalRunList,
+  EvalScorecard,
   ExportConverterResponse,
   ForkResponse,
   GroupsListResponse,
@@ -82,6 +89,1017 @@ import type {
   UploadedIconsList,
   VersionValidatorResponse,
 } from "../model";
+
+export const getListEvalDatasetsResponseMock = (
+  overrideResponse: Partial<Extract<EvalDatasetList, object>> = {},
+): EvalDatasetList => ({
+  rows: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    uuid: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    description: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    application_id: faker.helpers.arrayElement([faker.number.int(), null]),
+    is_shared: faker.datatype.boolean(),
+    case_count: faker.number.int(),
+    created_at: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    updated_at: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+  })),
+  total: faker.number.int(),
+  ...overrideResponse,
+});
+
+export const getCreateEvalDatasetResponseMock = (
+  overrideResponse: Partial<Extract<EvalDataset, object>> = {},
+): EvalDataset => ({
+  id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  uuid: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  description: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  application_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  is_shared: faker.datatype.boolean(),
+  case_count: faker.number.int(),
+  created_at: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  updated_at: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  ...overrideResponse,
+});
+
+export const getGetEvalDatasetResponseMock = (): EvalDatasetDetail => ({
+  ...{
+    id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    uuid: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    description: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    application_id: faker.helpers.arrayElement([faker.number.int(), null]),
+    is_shared: faker.datatype.boolean(),
+    case_count: faker.number.int(),
+    created_at: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    updated_at: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+  },
+  ...{
+    cases: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      dataset_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      input: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      variables: {},
+      expected_output: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        null,
+      ]),
+      source_type: faker.helpers.arrayElement([
+        "manual",
+        "import",
+        "conversation",
+      ] as const),
+      order_index: faker.number.int(),
+      created_at: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      updated_at: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+    })),
+    cases_truncated: faker.datatype.boolean(),
+  },
+});
+
+export const getUpdateEvalDatasetResponseMock = (
+  overrideResponse: Partial<Extract<EvalDataset, object>> = {},
+): EvalDataset => ({
+  id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  uuid: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  description: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  application_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  is_shared: faker.datatype.boolean(),
+  case_count: faker.number.int(),
+  created_at: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  updated_at: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  ...overrideResponse,
+});
+
+export const getAddEvalDatasetCaseResponseMock = (
+  overrideResponse: Partial<Extract<EvalDatasetCase, object>> = {},
+): EvalDatasetCase => ({
+  id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  dataset_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  input: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  variables: {},
+  expected_output: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  source_type: faker.helpers.arrayElement([
+    "manual",
+    "import",
+    "conversation",
+  ] as const),
+  order_index: faker.number.int(),
+  created_at: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  updated_at: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  ...overrideResponse,
+});
+
+export const getUpdateEvalDatasetCaseResponseMock = (
+  overrideResponse: Partial<Extract<EvalDatasetCase, object>> = {},
+): EvalDatasetCase => ({
+  id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  dataset_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  input: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  variables: {},
+  expected_output: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  source_type: faker.helpers.arrayElement([
+    "manual",
+    "import",
+    "conversation",
+  ] as const),
+  order_index: faker.number.int(),
+  created_at: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  updated_at: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  ...overrideResponse,
+});
+
+export const getListEvalRunsResponseMock = (
+  overrideResponse: Partial<Extract<EvalRunList, object>> = {},
+): EvalRunList => ({
+  rows: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    uuid: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    dataset_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    application_id: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([faker.number.int(), null]),
+      undefined,
+    ]),
+    application_version_id: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([faker.number.int(), null]),
+      undefined,
+    ]),
+    trigger_type: faker.helpers.arrayElement([
+      faker.helpers.arrayElement(["on_demand", "offline_batch"] as const),
+      undefined,
+    ]),
+    created_by: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([faker.number.int(), null]),
+      undefined,
+    ]),
+    status: faker.helpers.arrayElement([
+      "created",
+      "running",
+      "finished",
+      "errored",
+      "cancelled",
+    ] as const),
+    execution_mode: faker.helpers.arrayElement([
+      "predict_blocking",
+      "runtime_plane",
+    ] as const),
+    snapshot: faker.helpers.arrayElement([
+      {
+        cases: faker.helpers.arrayElement([
+          Array.from(
+            { length: faker.number.int({ min: 1, max: 10 }) },
+            (_, i) => i + 1,
+          ).map(() => ({
+            id: faker.helpers.arrayElement([
+              faker.string.alpha({ length: { min: 10, max: 20 } }),
+              undefined,
+            ]),
+            order_index: faker.helpers.arrayElement([
+              faker.number.int(),
+              undefined,
+            ]),
+          })),
+          undefined,
+        ]),
+        dimensions: faker.helpers.arrayElement([
+          {
+            [faker.string.alphanumeric(5)]: {
+              name: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 20 } }),
+                undefined,
+              ]),
+              description: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 20 } }),
+                undefined,
+              ]),
+              scale_type: faker.helpers.arrayElement([
+                faker.helpers.arrayElement([
+                  "binary",
+                  "ordinal",
+                  "continuous",
+                ] as const),
+                undefined,
+              ]),
+              scale_min: faker.helpers.arrayElement([
+                faker.number.float({ fractionDigits: 2 }),
+                undefined,
+              ]),
+              scale_max: faker.helpers.arrayElement([
+                faker.number.float({ fractionDigits: 2 }),
+                undefined,
+              ]),
+              polarity: faker.helpers.arrayElement([
+                faker.helpers.arrayElement([
+                  "higher_better",
+                  "lower_better",
+                ] as const),
+                undefined,
+              ]),
+            },
+          },
+          undefined,
+        ]),
+        bindings: faker.helpers.arrayElement([
+          Array.from(
+            { length: faker.number.int({ min: 1, max: 10 }) },
+            (_, i) => i + 1,
+          ).map(() => ({
+            dimension_id: faker.helpers.arrayElement([
+              faker.string.alpha({ length: { min: 10, max: 20 } }),
+              undefined,
+            ]),
+            engine: faker.helpers.arrayElement([
+              faker.helpers.arrayElement(["ai", "human", "code"] as const),
+              undefined,
+            ]),
+            weight: faker.helpers.arrayElement([
+              faker.number.float({ fractionDigits: 2 }),
+              undefined,
+            ]),
+            target: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                faker.number.float({ fractionDigits: 2 }),
+                null,
+              ]),
+              undefined,
+            ]),
+            target_operator: faker.helpers.arrayElement([
+              faker.string.alpha({ length: { min: 10, max: 20 } }),
+              undefined,
+            ]),
+            order_index: faker.helpers.arrayElement([
+              faker.number.int(),
+              undefined,
+            ]),
+          })),
+          undefined,
+        ]),
+      },
+      undefined,
+    ]),
+    progress: { done: faker.number.int(), total: faker.number.int() },
+    headline_score: faker.helpers.arrayElement([
+      faker.number.float({ fractionDigits: 2 }),
+      null,
+    ]),
+    error: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    created_at: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    started_at: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    finished_at: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+  })),
+  total: faker.number.int(),
+  ...overrideResponse,
+});
+
+export const getStartEvalRunResponseMock = (
+  overrideResponse: Partial<Extract<EvalRun, object>> = {},
+): EvalRun => ({
+  id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  uuid: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  dataset_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  application_id: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([faker.number.int(), null]),
+    undefined,
+  ]),
+  application_version_id: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([faker.number.int(), null]),
+    undefined,
+  ]),
+  trigger_type: faker.helpers.arrayElement([
+    faker.helpers.arrayElement(["on_demand", "offline_batch"] as const),
+    undefined,
+  ]),
+  created_by: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([faker.number.int(), null]),
+    undefined,
+  ]),
+  status: faker.helpers.arrayElement([
+    "created",
+    "running",
+    "finished",
+    "errored",
+    "cancelled",
+  ] as const),
+  execution_mode: faker.helpers.arrayElement([
+    "predict_blocking",
+    "runtime_plane",
+  ] as const),
+  snapshot: faker.helpers.arrayElement([
+    {
+      cases: faker.helpers.arrayElement([
+        Array.from(
+          { length: faker.number.int({ min: 1, max: 10 }) },
+          (_, i) => i + 1,
+        ).map(() => ({
+          id: faker.helpers.arrayElement([
+            faker.string.alpha({ length: { min: 10, max: 20 } }),
+            undefined,
+          ]),
+          order_index: faker.helpers.arrayElement([
+            faker.number.int(),
+            undefined,
+          ]),
+        })),
+        undefined,
+      ]),
+      dimensions: faker.helpers.arrayElement([
+        {
+          [faker.string.alphanumeric(5)]: {
+            name: faker.helpers.arrayElement([
+              faker.string.alpha({ length: { min: 10, max: 20 } }),
+              undefined,
+            ]),
+            description: faker.helpers.arrayElement([
+              faker.string.alpha({ length: { min: 10, max: 20 } }),
+              undefined,
+            ]),
+            scale_type: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                "binary",
+                "ordinal",
+                "continuous",
+              ] as const),
+              undefined,
+            ]),
+            scale_min: faker.helpers.arrayElement([
+              faker.number.float({ fractionDigits: 2 }),
+              undefined,
+            ]),
+            scale_max: faker.helpers.arrayElement([
+              faker.number.float({ fractionDigits: 2 }),
+              undefined,
+            ]),
+            polarity: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                "higher_better",
+                "lower_better",
+              ] as const),
+              undefined,
+            ]),
+          },
+        },
+        undefined,
+      ]),
+      bindings: faker.helpers.arrayElement([
+        Array.from(
+          { length: faker.number.int({ min: 1, max: 10 }) },
+          (_, i) => i + 1,
+        ).map(() => ({
+          dimension_id: faker.helpers.arrayElement([
+            faker.string.alpha({ length: { min: 10, max: 20 } }),
+            undefined,
+          ]),
+          engine: faker.helpers.arrayElement([
+            faker.helpers.arrayElement(["ai", "human", "code"] as const),
+            undefined,
+          ]),
+          weight: faker.helpers.arrayElement([
+            faker.number.float({ fractionDigits: 2 }),
+            undefined,
+          ]),
+          target: faker.helpers.arrayElement([
+            faker.helpers.arrayElement([
+              faker.number.float({ fractionDigits: 2 }),
+              null,
+            ]),
+            undefined,
+          ]),
+          target_operator: faker.helpers.arrayElement([
+            faker.string.alpha({ length: { min: 10, max: 20 } }),
+            undefined,
+          ]),
+          order_index: faker.helpers.arrayElement([
+            faker.number.int(),
+            undefined,
+          ]),
+        })),
+        undefined,
+      ]),
+    },
+    undefined,
+  ]),
+  progress: { done: faker.number.int(), total: faker.number.int() },
+  headline_score: faker.helpers.arrayElement([
+    faker.number.float({ fractionDigits: 2 }),
+    null,
+  ]),
+  error: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  created_at: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  started_at: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  finished_at: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  ...overrideResponse,
+});
+
+export const getGetEvalRunResponseMock = (
+  overrideResponse: Partial<Extract<EvalRun, object>> = {},
+): EvalRun => ({
+  id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  uuid: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  dataset_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  application_id: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([faker.number.int(), null]),
+    undefined,
+  ]),
+  application_version_id: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([faker.number.int(), null]),
+    undefined,
+  ]),
+  trigger_type: faker.helpers.arrayElement([
+    faker.helpers.arrayElement(["on_demand", "offline_batch"] as const),
+    undefined,
+  ]),
+  created_by: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([faker.number.int(), null]),
+    undefined,
+  ]),
+  status: faker.helpers.arrayElement([
+    "created",
+    "running",
+    "finished",
+    "errored",
+    "cancelled",
+  ] as const),
+  execution_mode: faker.helpers.arrayElement([
+    "predict_blocking",
+    "runtime_plane",
+  ] as const),
+  snapshot: faker.helpers.arrayElement([
+    {
+      cases: faker.helpers.arrayElement([
+        Array.from(
+          { length: faker.number.int({ min: 1, max: 10 }) },
+          (_, i) => i + 1,
+        ).map(() => ({
+          id: faker.helpers.arrayElement([
+            faker.string.alpha({ length: { min: 10, max: 20 } }),
+            undefined,
+          ]),
+          order_index: faker.helpers.arrayElement([
+            faker.number.int(),
+            undefined,
+          ]),
+        })),
+        undefined,
+      ]),
+      dimensions: faker.helpers.arrayElement([
+        {
+          [faker.string.alphanumeric(5)]: {
+            name: faker.helpers.arrayElement([
+              faker.string.alpha({ length: { min: 10, max: 20 } }),
+              undefined,
+            ]),
+            description: faker.helpers.arrayElement([
+              faker.string.alpha({ length: { min: 10, max: 20 } }),
+              undefined,
+            ]),
+            scale_type: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                "binary",
+                "ordinal",
+                "continuous",
+              ] as const),
+              undefined,
+            ]),
+            scale_min: faker.helpers.arrayElement([
+              faker.number.float({ fractionDigits: 2 }),
+              undefined,
+            ]),
+            scale_max: faker.helpers.arrayElement([
+              faker.number.float({ fractionDigits: 2 }),
+              undefined,
+            ]),
+            polarity: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                "higher_better",
+                "lower_better",
+              ] as const),
+              undefined,
+            ]),
+          },
+        },
+        undefined,
+      ]),
+      bindings: faker.helpers.arrayElement([
+        Array.from(
+          { length: faker.number.int({ min: 1, max: 10 }) },
+          (_, i) => i + 1,
+        ).map(() => ({
+          dimension_id: faker.helpers.arrayElement([
+            faker.string.alpha({ length: { min: 10, max: 20 } }),
+            undefined,
+          ]),
+          engine: faker.helpers.arrayElement([
+            faker.helpers.arrayElement(["ai", "human", "code"] as const),
+            undefined,
+          ]),
+          weight: faker.helpers.arrayElement([
+            faker.number.float({ fractionDigits: 2 }),
+            undefined,
+          ]),
+          target: faker.helpers.arrayElement([
+            faker.helpers.arrayElement([
+              faker.number.float({ fractionDigits: 2 }),
+              null,
+            ]),
+            undefined,
+          ]),
+          target_operator: faker.helpers.arrayElement([
+            faker.string.alpha({ length: { min: 10, max: 20 } }),
+            undefined,
+          ]),
+          order_index: faker.helpers.arrayElement([
+            faker.number.int(),
+            undefined,
+          ]),
+        })),
+        undefined,
+      ]),
+    },
+    undefined,
+  ]),
+  progress: { done: faker.number.int(), total: faker.number.int() },
+  headline_score: faker.helpers.arrayElement([
+    faker.number.float({ fractionDigits: 2 }),
+    null,
+  ]),
+  error: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  created_at: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  started_at: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  finished_at: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  ...overrideResponse,
+});
+
+export const getCancelEvalRunResponseMock = (
+  overrideResponse: Partial<Extract<EvalRun, object>> = {},
+): EvalRun => ({
+  id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  uuid: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  dataset_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  application_id: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([faker.number.int(), null]),
+    undefined,
+  ]),
+  application_version_id: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([faker.number.int(), null]),
+    undefined,
+  ]),
+  trigger_type: faker.helpers.arrayElement([
+    faker.helpers.arrayElement(["on_demand", "offline_batch"] as const),
+    undefined,
+  ]),
+  created_by: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([faker.number.int(), null]),
+    undefined,
+  ]),
+  status: faker.helpers.arrayElement([
+    "created",
+    "running",
+    "finished",
+    "errored",
+    "cancelled",
+  ] as const),
+  execution_mode: faker.helpers.arrayElement([
+    "predict_blocking",
+    "runtime_plane",
+  ] as const),
+  snapshot: faker.helpers.arrayElement([
+    {
+      cases: faker.helpers.arrayElement([
+        Array.from(
+          { length: faker.number.int({ min: 1, max: 10 }) },
+          (_, i) => i + 1,
+        ).map(() => ({
+          id: faker.helpers.arrayElement([
+            faker.string.alpha({ length: { min: 10, max: 20 } }),
+            undefined,
+          ]),
+          order_index: faker.helpers.arrayElement([
+            faker.number.int(),
+            undefined,
+          ]),
+        })),
+        undefined,
+      ]),
+      dimensions: faker.helpers.arrayElement([
+        {
+          [faker.string.alphanumeric(5)]: {
+            name: faker.helpers.arrayElement([
+              faker.string.alpha({ length: { min: 10, max: 20 } }),
+              undefined,
+            ]),
+            description: faker.helpers.arrayElement([
+              faker.string.alpha({ length: { min: 10, max: 20 } }),
+              undefined,
+            ]),
+            scale_type: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                "binary",
+                "ordinal",
+                "continuous",
+              ] as const),
+              undefined,
+            ]),
+            scale_min: faker.helpers.arrayElement([
+              faker.number.float({ fractionDigits: 2 }),
+              undefined,
+            ]),
+            scale_max: faker.helpers.arrayElement([
+              faker.number.float({ fractionDigits: 2 }),
+              undefined,
+            ]),
+            polarity: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                "higher_better",
+                "lower_better",
+              ] as const),
+              undefined,
+            ]),
+          },
+        },
+        undefined,
+      ]),
+      bindings: faker.helpers.arrayElement([
+        Array.from(
+          { length: faker.number.int({ min: 1, max: 10 }) },
+          (_, i) => i + 1,
+        ).map(() => ({
+          dimension_id: faker.helpers.arrayElement([
+            faker.string.alpha({ length: { min: 10, max: 20 } }),
+            undefined,
+          ]),
+          engine: faker.helpers.arrayElement([
+            faker.helpers.arrayElement(["ai", "human", "code"] as const),
+            undefined,
+          ]),
+          weight: faker.helpers.arrayElement([
+            faker.number.float({ fractionDigits: 2 }),
+            undefined,
+          ]),
+          target: faker.helpers.arrayElement([
+            faker.helpers.arrayElement([
+              faker.number.float({ fractionDigits: 2 }),
+              null,
+            ]),
+            undefined,
+          ]),
+          target_operator: faker.helpers.arrayElement([
+            faker.string.alpha({ length: { min: 10, max: 20 } }),
+            undefined,
+          ]),
+          order_index: faker.helpers.arrayElement([
+            faker.number.int(),
+            undefined,
+          ]),
+        })),
+        undefined,
+      ]),
+    },
+    undefined,
+  ]),
+  progress: { done: faker.number.int(), total: faker.number.int() },
+  headline_score: faker.helpers.arrayElement([
+    faker.number.float({ fractionDigits: 2 }),
+    null,
+  ]),
+  error: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  created_at: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  started_at: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  finished_at: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  ...overrideResponse,
+});
+
+export const getGetEvalScorecardResponseMock = (
+  overrideResponse: Partial<Extract<EvalScorecard, object>> = {},
+): EvalScorecard => ({
+  run: {
+    id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    uuid: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    dataset_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    application_id: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([faker.number.int(), null]),
+      undefined,
+    ]),
+    application_version_id: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([faker.number.int(), null]),
+      undefined,
+    ]),
+    trigger_type: faker.helpers.arrayElement([
+      faker.helpers.arrayElement(["on_demand", "offline_batch"] as const),
+      undefined,
+    ]),
+    created_by: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([faker.number.int(), null]),
+      undefined,
+    ]),
+    status: faker.helpers.arrayElement([
+      "created",
+      "running",
+      "finished",
+      "errored",
+      "cancelled",
+    ] as const),
+    execution_mode: faker.helpers.arrayElement([
+      "predict_blocking",
+      "runtime_plane",
+    ] as const),
+    snapshot: faker.helpers.arrayElement([
+      {
+        cases: faker.helpers.arrayElement([
+          Array.from(
+            { length: faker.number.int({ min: 1, max: 10 }) },
+            (_, i) => i + 1,
+          ).map(() => ({
+            id: faker.helpers.arrayElement([
+              faker.string.alpha({ length: { min: 10, max: 20 } }),
+              undefined,
+            ]),
+            order_index: faker.helpers.arrayElement([
+              faker.number.int(),
+              undefined,
+            ]),
+          })),
+          undefined,
+        ]),
+        dimensions: faker.helpers.arrayElement([
+          {
+            [faker.string.alphanumeric(5)]: {
+              name: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 20 } }),
+                undefined,
+              ]),
+              description: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 20 } }),
+                undefined,
+              ]),
+              scale_type: faker.helpers.arrayElement([
+                faker.helpers.arrayElement([
+                  "binary",
+                  "ordinal",
+                  "continuous",
+                ] as const),
+                undefined,
+              ]),
+              scale_min: faker.helpers.arrayElement([
+                faker.number.float({ fractionDigits: 2 }),
+                undefined,
+              ]),
+              scale_max: faker.helpers.arrayElement([
+                faker.number.float({ fractionDigits: 2 }),
+                undefined,
+              ]),
+              polarity: faker.helpers.arrayElement([
+                faker.helpers.arrayElement([
+                  "higher_better",
+                  "lower_better",
+                ] as const),
+                undefined,
+              ]),
+            },
+          },
+          undefined,
+        ]),
+        bindings: faker.helpers.arrayElement([
+          Array.from(
+            { length: faker.number.int({ min: 1, max: 10 }) },
+            (_, i) => i + 1,
+          ).map(() => ({
+            dimension_id: faker.helpers.arrayElement([
+              faker.string.alpha({ length: { min: 10, max: 20 } }),
+              undefined,
+            ]),
+            engine: faker.helpers.arrayElement([
+              faker.helpers.arrayElement(["ai", "human", "code"] as const),
+              undefined,
+            ]),
+            weight: faker.helpers.arrayElement([
+              faker.number.float({ fractionDigits: 2 }),
+              undefined,
+            ]),
+            target: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                faker.number.float({ fractionDigits: 2 }),
+                null,
+              ]),
+              undefined,
+            ]),
+            target_operator: faker.helpers.arrayElement([
+              faker.string.alpha({ length: { min: 10, max: 20 } }),
+              undefined,
+            ]),
+            order_index: faker.helpers.arrayElement([
+              faker.number.int(),
+              undefined,
+            ]),
+          })),
+          undefined,
+        ]),
+      },
+      undefined,
+    ]),
+    progress: { done: faker.number.int(), total: faker.number.int() },
+    headline_score: faker.helpers.arrayElement([
+      faker.number.float({ fractionDigits: 2 }),
+      null,
+    ]),
+    error: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    created_at: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    started_at: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    finished_at: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+  },
+  results: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    run_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    dataset_case_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    dimension_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    status: faker.helpers.arrayElement([
+      "ok",
+      "error",
+      "pending_human",
+      "skipped",
+    ] as const),
+    native_score: faker.helpers.arrayElement([
+      faker.number.float({ fractionDigits: 2 }),
+      null,
+    ]),
+    normalized_score: faker.helpers.arrayElement([
+      faker.number.float({ fractionDigits: 2 }),
+      null,
+    ]),
+    target_met: faker.helpers.arrayElement([
+      faker.datatype.boolean(),
+      undefined,
+    ]),
+    verdict: faker.helpers.arrayElement([{}, undefined]),
+    evidence: faker.helpers.arrayElement([{}, undefined]),
+    created_at: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+  })),
+  headline_score: faker.helpers.arrayElement([
+    faker.number.float({ fractionDigits: 2 }),
+    null,
+  ]),
+  total: faker.number.int(),
+  offset: faker.number.int(),
+  unavailable: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    key: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    reason: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  })),
+  ...overrideResponse,
+});
 
 export const getPredictLLMResponseMock = (
   overrideResponse: Partial<Extract<PredictLLMResponse, object>> = {},
@@ -4319,6 +5337,336 @@ export const getUpdateProjectInfoResponseMock = (
   ...overrideResponse,
 });
 
+export const getListEvalDatasetsMockHandler = (
+  overrideResponse?:
+    | EvalDatasetList
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<EvalDatasetList> | EvalDatasetList),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/eval_datasets/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListEvalDatasetsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getCreateEvalDatasetMockHandler = (
+  overrideResponse?:
+    | EvalDataset
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<EvalDataset> | EvalDataset),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/eval_datasets/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getCreateEvalDatasetResponseMock(),
+        { status: 201 },
+      );
+    },
+    options,
+  );
+};
+
+export const getGetEvalDatasetMockHandler = (
+  overrideResponse?:
+    | EvalDatasetDetail
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<EvalDatasetDetail> | EvalDatasetDetail),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/eval_dataset/prompt_lib/:projectId/:datasetId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetEvalDatasetResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getUpdateEvalDatasetMockHandler = (
+  overrideResponse?:
+    | EvalDataset
+    | ((
+        info: Parameters<Parameters<typeof http.put>[1]>[0],
+      ) => Promise<EvalDataset> | EvalDataset),
+  options?: RequestHandlerOptions,
+) => {
+  return http.put(
+    "*/elitea_core/eval_dataset/prompt_lib/:projectId/:datasetId",
+    async (info: Parameters<Parameters<typeof http.put>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getUpdateEvalDatasetResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getDeleteEvalDatasetMockHandler = (
+  overrideResponse?:
+    | void
+    | ((
+        info: Parameters<Parameters<typeof http.delete>[1]>[0],
+      ) => Promise<void> | void),
+  options?: RequestHandlerOptions,
+) => {
+  return http.delete(
+    "*/elitea_core/eval_dataset/prompt_lib/:projectId/:datasetId",
+    async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
+      await delay(0);
+      if (typeof overrideResponse === "function") {
+        await overrideResponse(info);
+      }
+
+      return new HttpResponse(null, { status: 204 });
+    },
+    options,
+  );
+};
+
+export const getAddEvalDatasetCaseMockHandler = (
+  overrideResponse?:
+    | EvalDatasetCase
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<EvalDatasetCase> | EvalDatasetCase),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/eval_dataset_cases/prompt_lib/:projectId/:datasetId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getAddEvalDatasetCaseResponseMock(),
+        { status: 201 },
+      );
+    },
+    options,
+  );
+};
+
+export const getUpdateEvalDatasetCaseMockHandler = (
+  overrideResponse?:
+    | EvalDatasetCase
+    | ((
+        info: Parameters<Parameters<typeof http.put>[1]>[0],
+      ) => Promise<EvalDatasetCase> | EvalDatasetCase),
+  options?: RequestHandlerOptions,
+) => {
+  return http.put(
+    "*/elitea_core/eval_dataset_case/prompt_lib/:projectId/:datasetId/:caseId",
+    async (info: Parameters<Parameters<typeof http.put>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getUpdateEvalDatasetCaseResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getDeleteEvalDatasetCaseMockHandler = (
+  overrideResponse?:
+    | void
+    | ((
+        info: Parameters<Parameters<typeof http.delete>[1]>[0],
+      ) => Promise<void> | void),
+  options?: RequestHandlerOptions,
+) => {
+  return http.delete(
+    "*/elitea_core/eval_dataset_case/prompt_lib/:projectId/:datasetId/:caseId",
+    async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
+      await delay(0);
+      if (typeof overrideResponse === "function") {
+        await overrideResponse(info);
+      }
+
+      return new HttpResponse(null, { status: 204 });
+    },
+    options,
+  );
+};
+
+export const getListEvalRunsMockHandler = (
+  overrideResponse?:
+    | EvalRunList
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<EvalRunList> | EvalRunList),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/eval_runs/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListEvalRunsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getStartEvalRunMockHandler = (
+  overrideResponse?:
+    | EvalRun
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<EvalRun> | EvalRun),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/eval_runs/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getStartEvalRunResponseMock(),
+        { status: 201 },
+      );
+    },
+    options,
+  );
+};
+
+export const getGetEvalRunMockHandler = (
+  overrideResponse?:
+    | EvalRun
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<EvalRun> | EvalRun),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/eval_run/prompt_lib/:projectId/:runId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetEvalRunResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getCancelEvalRunMockHandler = (
+  overrideResponse?:
+    | EvalRun
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<EvalRun> | EvalRun),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/eval_run_cancel/prompt_lib/:projectId/:runId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getCancelEvalRunResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getGetEvalScorecardMockHandler = (
+  overrideResponse?:
+    | EvalScorecard
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<EvalScorecard> | EvalScorecard),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/eval_results/prompt_lib/:projectId/:runId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetEvalScorecardResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getPredictLLMMockHandler = (
   overrideResponse?:
     | PredictLLMResponse
@@ -5604,6 +6952,19 @@ export const getUpdateProjectInfoMockHandler = (
   );
 };
 export const getApplicationsMock = () => [
+  getListEvalDatasetsMockHandler(),
+  getCreateEvalDatasetMockHandler(),
+  getGetEvalDatasetMockHandler(),
+  getUpdateEvalDatasetMockHandler(),
+  getDeleteEvalDatasetMockHandler(),
+  getAddEvalDatasetCaseMockHandler(),
+  getUpdateEvalDatasetCaseMockHandler(),
+  getDeleteEvalDatasetCaseMockHandler(),
+  getListEvalRunsMockHandler(),
+  getStartEvalRunMockHandler(),
+  getGetEvalRunMockHandler(),
+  getCancelEvalRunMockHandler(),
+  getGetEvalScorecardMockHandler(),
   getPredictLLMMockHandler(),
   getGenerateApplicationDraftMockHandler(),
   getListApplicationsMockHandler(),

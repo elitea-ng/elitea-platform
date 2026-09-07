@@ -33,6 +33,7 @@ import (
 	v2auth "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/auth"
 	v2convs "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
 	v2deepwiki "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
+	v2evaluation "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/evaluation"
 	v2events "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/events"
 	v2folders "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/folders"
 	v2indextypes "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indextypes"
@@ -124,15 +125,26 @@ func buildFullSurfaceConfig() api.RouterConfig {
 			SessionHandler: &v2auth.SessionHandler{},
 			OIDCHandler:    &v2auth.OIDCHandler{},
 		},
-		AppsRepo:      struct{ applications.Repository }{},
-		SkillsRepo:    struct{ v2skills.Repository }{},
-		FoldersRepo:   struct{ v2folders.Repository }{},
-		TagsRepo:      struct{ v2tags.Repository }{},
-		AnalyticsRepo: struct{ v2analytics.Repository }{},
-		ConvsRepo:     struct{ v2convs.Repository }{},
-		WebhookRepo:   struct{ webhook.Repository }{},
-		EventSource:   struct{ v2events.EventSource }{},
-		LLMProxy:      http.NotFoundHandler(),
+		AppsRepo: struct{ applications.Repository }{},
+
+		// Agent Evaluation (#617). All three are MANDATORY here, not optional
+		// stubs, and the third is the one that is easy to forget: the run
+		// routes are gated on `EvalRunsRepo != nil && EvalDimensionsRepo != nil`
+		// together, because a run's snapshot is built from the dimension
+		// library. Leave EvalDimensionsRepo nil and the five run operations the
+		// spec declares resolve to no route at all, and the forward check fails
+		// with a message about the spec rather than about this config.
+		EvalDatasetsRepo:   struct{ v2evaluation.DatasetRepository }{},
+		EvalRunsRepo:       struct{ v2evaluation.RunRepository }{},
+		EvalDimensionsRepo: struct{ v2evaluation.Repository }{},
+		SkillsRepo:         struct{ v2skills.Repository }{},
+		FoldersRepo:        struct{ v2folders.Repository }{},
+		TagsRepo:           struct{ v2tags.Repository }{},
+		AnalyticsRepo:      struct{ v2analytics.Repository }{},
+		ConvsRepo:          struct{ v2convs.Repository }{},
+		WebhookRepo:        struct{ webhook.Repository }{},
+		EventSource:        struct{ v2events.EventSource }{},
+		LLMProxy:           http.NotFoundHandler(),
 
 		// CurrentAvatarRoute has no interface-typed dependency this stub
 		// scheme can zero-value: a bare &v2social.CurrentAvatarRoute{} still
