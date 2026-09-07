@@ -1909,7 +1909,12 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			// and the SPA renders a sidebar with no items — see adminui's
 			// ServeSPA. A nil verifier (no form graph) still degrades closed.
 			ForwardedIdentityVerifier: forwardedIdentityVerifier,
-			Emails:                    adminUIEmails{pool: pool},
+			// The OIDC path's credential after shared migration 0117. The
+			// cookie carries an opaque identifier and no claims, so without
+			// this the HMAC reader below finds nothing and the sidebar is
+			// empty again. A nil manager keeps the legacy reader.
+			Sessions: adminUISessions(sessionManager),
+			Emails:   adminUIEmails{pool: pool},
 		}
 	}
 

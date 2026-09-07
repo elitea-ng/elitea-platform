@@ -115,6 +115,18 @@ unknown session is `401`. A store that could not be READ is `503` with
 `Retry-After`, because a `401` there signs out every browser for as long as the
 database is unreachable.
 
+## Who reads the cookie
+
+Three readers, and all three must know both formats, or a deployment gets a
+half-signed-in browser:
+
+* `apimw.Auth` — every `/api/v2` request.
+* `SessionHandler.Info` — the app shell's probe.
+* `adminui.Handler.ServeSPA` — the admin console's page shell, which injects
+  the operator's id, address and permission list into the served HTML. It had
+  already produced an EMPTY ADMIN SIDEBAR once, by reading one credential
+  source and not the other; a cookie it cannot read reproduces that exactly.
+
 ## The legacy-cookie window
 
 A deployment that upgrades holds unexpired signed cookies issued by the previous
