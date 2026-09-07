@@ -93,6 +93,42 @@ describe('ArtifactTable', () => {
     expect(props.onUpload).toHaveBeenCalledTimes(2);
   });
 
+  /**
+   * The picker test above drives the hidden input directly, so it says nothing
+   * about the BUTTONS that are supposed to open it. That matters here: the
+   * empty-state button disappears as soon as the bucket holds one file, so the
+   * toolbar button is the only upload affordance a non-empty bucket has, and
+   * a broken one would leave no way to add a second file at all.
+   */
+  it('opens the picker from the toolbar button while the bucket is NOT empty', async () => {
+    const user = userEvent.setup();
+    renderTable();
+    const input = document.querySelector<HTMLInputElement>('input[type="file"]');
+    if (input === null) throw new Error('Expected file input');
+    const opened = vi.spyOn(input, 'click');
+
+    expect(screen.queryByText('No files in this bucket')).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Upload files' }));
+
+    expect(opened).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens the same picker from the empty-state button', async () => {
+    const user = userEvent.setup();
+    renderTable({ contents: [] });
+    const input = document.querySelector<HTMLInputElement>('input[type="file"]');
+    if (input === null) throw new Error('Expected file input');
+    const opened = vi.spyOn(input, 'click');
+
+    // Two controls with the same accessible name — the toolbar's icon button
+    // and the empty state's — so this picks the one inside the empty state.
+    const emptyStateButton = screen.getByText('No files in this bucket').parentElement?.querySelector('button');
+    if (!(emptyStateButton instanceof HTMLElement)) throw new Error('Expected empty-state upload button');
+    await user.click(emptyStateButton);
+
+    expect(opened).toHaveBeenCalledTimes(1);
+  });
+
   it('supports select-all, repeated sorting, and folder row navigation', async () => {
     const user = userEvent.setup();
     const props = renderTable();

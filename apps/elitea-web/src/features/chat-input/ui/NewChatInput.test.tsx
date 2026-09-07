@@ -208,6 +208,49 @@ describe('NewChatInput', () => {
     expect(onAttachFiles).not.toHaveBeenCalled();
   });
 
+  /**
+   * The staged-file chips. `UserInput` renders them from `slots.attachmentList`
+   * and `NewChatInput` is the only thing that can put that slot there; before
+   * this test it did not, so `renderAttachmentList` was handed `undefined`
+   * every time and returned `null`. Nothing failed — the composer just never
+   * showed a picked file.
+   */
+  it('forwards slots.attachmentList and the staged items down to UserInput', async () => {
+    const file = new File(['x'], 'brief.txt');
+    const onDeleteAttachment = vi.fn();
+    renderInput(
+      <NewChatInput
+        {...baseProps({
+          attachments: { items: [file], onDeleteAttachment },
+          slots: {
+            attachmentList: (slotProps) => (
+              <button
+                type="button"
+                onClick={() => slotProps.onDeleteAttachment?.(0)}
+              >
+                {`chip:${slotProps.attachments.length}`}
+              </button>
+            ),
+          },
+        })}
+      />,
+      { projectId: 'proj-1' },
+    );
+    const chip = await waitFor(() => screen.getByRole('button', { name: 'chip:1' }));
+    fireEvent.click(chip);
+    expect(onDeleteAttachment).toHaveBeenCalledWith(0);
+  });
+
+  it('renders no attachment list while nothing is staged', async () => {
+    const attachmentList = vi.fn(() => <span>chips</span>);
+    renderInput(
+      <NewChatInput {...baseProps({ attachments: { items: [] }, slots: { attachmentList } })} />,
+      { projectId: 'proj-1' },
+    );
+    await waitFor(() => getTextarea());
+    expect(attachmentList).not.toHaveBeenCalled();
+  });
+
   it('exposes an imperative handle proxying to the underlying UserInput, plus pauseSpeakingMode', async () => {
     const ref = createRef<NewChatInputHandle>();
     renderInput(<NewChatInput

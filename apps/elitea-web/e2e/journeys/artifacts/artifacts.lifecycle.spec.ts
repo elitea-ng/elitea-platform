@@ -522,4 +522,75 @@ test.describe('J20 artifacts lifecycle', () => {
     );
     expect(removed.status(), await removed.text()).toBe(200);
   });
+
+  /**
+   * Two defects at once, both of them only reachable once the bucket is NOT
+   * empty — which is why every earlier test in this file missed them.
+   *
+   *  1. THE ONLY UPLOAD AFFORDANCE. `ArtifactTableEmpty`'s button disappears
+   *     the moment the bucket holds a file, so from the second upload on the
+   *     toolbar's icon button is the whole of "upload". Every other test here
+   *     calls `setInputFiles` on the hidden input directly, so none of them
+   *     touches a button at all; a toolbar button that opened nothing would
+   *     leave a populated bucket permanently unable to take another file, and
+   *     the suite would stay green.
+   *
+   *  2. THE FOOTER TOTAL. The buckets panel sums `size_bytes` from the BUCKET
+   *     list. The page used to answer a finished upload with
+   *     `files.refetch()`, which refreshes the object list only, so the total
+   *     stayed at its pre-upload value until the next full page load. The
+   *     reload at the end is the anchor: what the user sees immediately has to
+   *     be what the server already said.
+   */
+  test('J20g: the toolbar button uploads into a NON-EMPTY bucket and the size total follows', async ({ page, request }) => {
+    await page.goto(BASE_URL + '/app/artifacts');
+    await page.waitForURL('**/artifacts**', { timeout: 15_000 });
+    const projectId = await selectedProjectId(page);
+    await seedBucketWithFiles(request, projectId);
+
+    await page.goto(`${BASE_URL}/app/artifacts?bucket=${READ_BUCKET}`);
+    await expect(page.getByRole('row').filter({ hasText: FILE_NAME })).toBeVisible({ timeout: 15_000 });
+    // The precondition the whole test rests on: the empty state, and with it
+    // its own upload button, is gone.
+    await expect(page.getByText('No files in this bucket')).toHaveCount(0);
+
+    const footerSize = page.getByText('Size:', { exact: true }).locator('xpath=following-sibling::*[1]');
+    const sizeBefore = (await footerSize.textContent())?.trim();
+    expect(sizeBefore, 'the footer must report a total before the upload').toBeTruthy();
+
+    // Clicking the button must OPEN the picker. `waitForFileChooser` fails the
+    // test if it does not, which `setInputFiles` on the hidden input never
+    // could.
+    const extraName = 'j20g-toolbar-art.bin';
+    const [chooser] = await Promise.all([
+      page.waitForEvent('filechooser', { timeout: 15_000 }),
+      page.getByRole('button', { name: 'Upload files' }).click(),
+    ]);
+    await chooser.setFiles({
+      name: extraName,
+      mimeType: 'application/octet-stream',
+      // 400 KiB: large enough that the project total's rendered string cannot
+      // stay the same, whatever the other buckets already hold.
+      buffer: Buffer.alloc(400 * 1024, 5),
+    });
+    await page.getByRole('button', { name: 'Continue', exact: true }).click();
+
+    await expect(page.getByRole('row').filter({ hasText: extraName })).toBeVisible({ timeout: 30_000 });
+
+    // No reload between here and the upload.
+    await expect.poll(async () => (await footerSize.textContent())?.trim(), { timeout: 20_000 }).not.toBe(sizeBefore);
+    const sizeAfter = (await footerSize.textContent())?.trim();
+
+    // …and the value shown was the RIGHT one, not merely a different one.
+    await page.reload();
+    await expect(page.getByRole('row').filter({ hasText: extraName })).toBeVisible({ timeout: 30_000 });
+    await expect(footerSize).toHaveText(sizeAfter as string);
+
+    // Housekeeping: J20e asserts the ZIP holds EXACTLY the two seeded objects.
+    const removed = await request.post(
+      `/api/v2/artifacts/objects/${projectId}/${READ_BUCKET}:batchDelete`,
+      { data: { keys: [extraName] } },
+    );
+    expect(removed.status(), await removed.text()).toBe(200);
+  });
 });

@@ -3705,5 +3705,6 @@
   "pages.admin.toolkitTypes.bulk.body": "The decision is applied to every type the filters are showing. Types that cannot be changed are reported and the rest still land.",
   "pages.admin.toolkitTypes.bulk.subject": "{{count}} types: {{names}}",
   "pages.admin.toolkitTypes.bulk.title": "Apply to the listed types",
-  "pages.admin.toolkitTypes.error.bulk": "The toolkit types could not be changed."
+  "pages.admin.toolkitTypes.error.bulk": "The toolkit types could not be changed.",
+  "chatMessages.fileList.removeAttachment": "Remove attachment"
 }

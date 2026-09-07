@@ -67,11 +67,28 @@ export interface AttachmentButtonProps {
   limits?: Record<string, number>;
   onError?: (message: string) => void;
   showLabel?: boolean;
+  /**
+   * Render NOTHING — no button, no row, no file input — and expose only the
+   * imperative drop/paste handle.
+   *
+   * `PlusChatButton` keeps one always-mounted instance for that handle, because
+   * the visible rows live in a Popper that unmounts with the menu. That
+   * instance used to render the normal icon button inside a 0x0,
+   * `pointer-events: none` Box, which put a SECOND, permanently dead
+   * "attach files" button in the accessibility tree — and, with the menu
+   * closed, it was the FIRST match for that name on the page. Every automated
+   * reader (a screen reader, a test, an agent driving the browser) found the
+   * dead one, clicked it, got nothing, and concluded attachments were broken.
+   * Hiding it with `aria-hidden` instead traded that for an
+   * `aria-hidden-focus` violation: the button was still focusable. Rendering
+   * no control is the only form that is both invisible and honest.
+   */
+  dropTargetOnly?: boolean;
 }
 
 export const AttachmentButton = memo(
   forwardRef<AttachmentButtonHandle, AttachmentButtonProps>(
-    ({ disableAttachments = false, attachments = [], onAttachFiles, limits, onError, showLabel = false }, ref) => {
+    ({ disableAttachments = false, attachments = [], onAttachFiles, limits, onError, showLabel = false, dropTargetOnly = false }, ref) => {
       const fileInputRef = useRef<HTMLInputElement>(null);
       const [isProcessing, setIsProcessing] = useState(false);
 
@@ -131,21 +148,10 @@ export const AttachmentButton = memo(
         [processFiles],
       );
 
-      const tooltipText = isProcessing
-        ? t('widgets.chat.attachmentButton.processingTooltip', 'Processing...')
-        : capacity.isAtMaxCapacity
-          ? t('widgets.chat.attachmentButton.maxAttachmentsTooltip', 'Max {{max}} attachments', {
-              max: effectiveLimits.MAX_ATTACHMENTS,
-            })
-          : capacity.isAtMaxSize
-            ? t('widgets.chat.attachmentButton.sizeLimitTooltip', 'Size limit reached')
-            : capacity.remainingAttachments === 1
-              ? t('widgets.chat.attachmentButton.oneFileLeftTooltip', '{{count}} file left', {
-                  count: capacity.remainingAttachments,
-                })
-              : t('widgets.chat.attachmentButton.filesLeftTooltip', '{{count}} files left', {
-                  count: capacity.remainingAttachments,
-                });
+      // AFTER every hook, so the handle above is live on this instance too.
+      if (dropTargetOnly) return null;
+
+      const tooltipText = attachmentTooltip(isProcessing, capacity, effectiveLimits.MAX_ATTACHMENTS);
 
       // The row form carries the remaining count as visible text, so the
       // tooltip that exists to surface it on the icon form is redundant there.
@@ -190,6 +196,28 @@ export const AttachmentButton = memo(
     },
   ),
 );
+
+/**
+ * The icon form's hover text. Module-level rather than inline, because the
+ * component sits at the §3.5 cyclomatic-complexity-12 ceiling and this chain
+ * alone is four of its branches — the same reason `AttachmentMenuRow` below is
+ * its own component.
+ */
+function attachmentTooltip(
+  isProcessing: boolean,
+  capacity: ReturnType<typeof getRemainingAttachmentCapacity>,
+  maxAttachments: number,
+): string {
+  if (isProcessing) return t('widgets.chat.attachmentButton.processingTooltip', 'Processing...');
+  if (capacity.isAtMaxCapacity) {
+    return t('widgets.chat.attachmentButton.maxAttachmentsTooltip', 'Max {{max}} attachments', { max: maxAttachments });
+  }
+  if (capacity.isAtMaxSize) return t('widgets.chat.attachmentButton.sizeLimitTooltip', 'Size limit reached');
+  if (capacity.remainingAttachments === 1) {
+    return t('widgets.chat.attachmentButton.oneFileLeftTooltip', '{{count}} file left', { count: capacity.remainingAttachments });
+  }
+  return t('widgets.chat.attachmentButton.filesLeftTooltip', '{{count}} files left', { count: capacity.remainingAttachments });
+}
 
 AttachmentButton.displayName = 'AttachmentButton';
 
