@@ -109,8 +109,7 @@ func setupRouter(repo toolkits.Repository) *chi.Mux {
 // --- ListTypes ---
 
 func TestListTypes_Success(t *testing.T) {
-	// Mock returns ["openai", "langchain", "custom"]; handler merges with 10 knownToolkitTypes.
-	// "custom" is already in the known list, so result is 10 + 2 = 12.
+	// The two new database types join the 11 built-in types. Custom is deduplicated.
 	repo := &mockRepo{types: []string{"openai", "langchain", "custom"}}
 	r := setupRouter(repo)
 
@@ -130,20 +129,19 @@ func TestListTypes_Success(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected rows array, got %T", resp["rows"])
 	}
-	// 10 knownToolkitTypes + "openai" + "langchain" ("custom" is deduped)
-	if len(types) != 12 {
-		t.Errorf("expected 12 types, got %d", len(types))
+	if len(types) != 13 {
+		t.Errorf("expected 13 types, got %d", len(types))
 	}
 	total := resp["total"].(float64)
-	if int(total) != 12 {
-		t.Errorf("expected total 12, got %v", total)
+	if int(total) != 13 {
+		t.Errorf("expected total 13, got %v", total)
 	}
 }
 
 func TestListTypes_DBError(t *testing.T) {
 	// This route degrades on purpose. The static knownToolkitTypes list is a
 	// correct answer on its own and the create-toolkit form needs it, so a
-	// failed tenant read still gives 200 and the 10 static types. #381 changed
+	// failed tenant read still gives 200 and the 11 static types. #381 changed
 	// only the record: the repository now returns the error and the handler
 	// logs the degradation instead of dropping the error with `_`. The two
 	// tool-LIST routes below are different — an empty list is a real answer
@@ -167,13 +165,20 @@ func TestListTypes_DBError(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected rows array, got %T", resp["rows"])
 	}
-	// DB error means no extra types; only the 10 static knownToolkitTypes are returned.
-	if len(types) != 10 {
-		t.Errorf("expected 10 types on DB error (static list), got %d", len(types))
+	// A failed database read retains the built-in Remote MCP type.
+	if len(types) != 11 {
+		t.Errorf("expected 11 types on DB error (static list), got %d", len(types))
+	}
+	foundMCP := false
+	for _, toolkitType := range types {
+		foundMCP = foundMCP || toolkitType == "mcp"
+	}
+	if !foundMCP {
+		t.Error("remote MCP is missing from the built-in type list")
 	}
 	total := resp["total"].(float64)
-	if int(total) != 10 {
-		t.Errorf("expected total 10 on DB error, got %v", total)
+	if int(total) != 11 {
+		t.Errorf("expected total 11 on DB error, got %v", total)
 	}
 }
 

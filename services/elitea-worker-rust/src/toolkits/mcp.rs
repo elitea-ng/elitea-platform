@@ -129,6 +129,7 @@ pub(crate) struct RemoteMcpConfig {
     timeout: Duration,
     selected_tools: Vec<String>,
     excluded_tools: Vec<String>,
+    requested_scopes: Vec<String>,
     static_headers: reqwest_mcp::header::HeaderMap,
     access_token: Option<Zeroizing<String>>,
 }
@@ -144,6 +145,7 @@ impl RemoteMcpConfig {
         let settings = reference.settings().ok_or_else(invalid_configuration)?;
         let prebuilt = parse_mcp_authority(reference.tool_type())?;
         reject_unowned_auth(settings)?;
+        let requested_scopes = parse_requested_scopes(settings)?;
         let endpoint = parse_endpoint(settings)?;
         let timeout = Duration::from_secs(parse_bounded_integer(
             settings.get("timeout"),
@@ -190,6 +192,7 @@ impl RemoteMcpConfig {
             timeout,
             selected_tools,
             excluded_tools,
+            requested_scopes,
             static_headers,
             access_token,
         })
@@ -662,12 +665,42 @@ fn parse_mcp_authority(tool_type: &str) -> Result<bool, McpMaterializationError>
 }
 
 fn reject_unowned_auth(settings: &Map<String, Value>) -> Result<(), McpMaterializationError> {
-    for key in ["client_id", "client_secret", "scopes"] {
+    for key in ["client_id", "client_secret"] {
         if settings.get(key).is_some_and(|value| !value.is_null()) {
             return Err(unsupported_authority());
         }
     }
     Ok(())
+}
+
+fn parse_requested_scopes(
+    settings: &Map<String, Value>,
+) -> Result<Vec<String>, McpMaterializationError> {
+    let Some(value) = settings.get("scopes").filter(|value| !value.is_null()) else {
+        return Ok(Vec::new());
+    };
+    let values = value.as_array().ok_or_else(invalid_configuration)?;
+    if values.len() > MAX_AUTH_METADATA_LIST_ITEMS {
+        return Err(invalid_configuration());
+    }
+    let mut bytes = 0_usize;
+    for value in values {
+        let scope = value.as_str().ok_or_else(invalid_configuration)?;
+        bytes = bytes.saturating_add(scope.len());
+        if scope.is_empty()
+            || bytes > MAX_AUTH_METADATA_STRING_BYTES
+            || !scope
+                .bytes()
+                .all(|byte| matches!(byte, 0x21 | 0x23..=0x5b | 0x5d..=0x7e))
+        {
+            return Err(invalid_configuration());
+        }
+    }
+    Ok(values
+        .iter()
+        .filter_map(Value::as_str)
+        .map(str::to_owned)
+        .collect())
 }
 
 fn parse_static_headers(
@@ -911,7 +944,11 @@ async fn authorization_required_with_metadata(
         .as_ref()
         .filter(|resolution| resolution.source.is_discovered())
         .and_then(|resolution| {
-            authorization_resource_metadata(&resolution.metadata, config.endpoint())
+            authorization_resource_metadata(
+                &resolution.metadata,
+                config.endpoint(),
+                &config.requested_scopes,
+            )
         })
     else {
         return error;
@@ -942,6 +979,7 @@ fn resource_metadata_url(challenge: &str, endpoint: &str) -> Option<String> {
 pub(super) fn authorization_resource_metadata(
     metadata: &AuthorizationMetadata,
     endpoint: &str,
+    requested_scopes: &[String],
 ) -> Option<Value> {
     let authorization_endpoint = safe_auth_url(&metadata.authorization_endpoint)?;
     let token_endpoint = safe_auth_url(&metadata.token_endpoint)?;
@@ -1021,11 +1059,14 @@ pub(super) fn authorization_resource_metadata(
             Value::Object(server),
         ),
     ]);
-    if let Some(scopes) = metadata
-        .scopes_supported
-        .as_deref()
-        .and_then(safe_auth_string_list)
-    {
+    // The root list supplies resource consent defaults to the existing UI.
+    // The nested authorization-server document retains its discovered scope list.
+    let resource_scopes = if requested_scopes.is_empty() {
+        metadata.scopes_supported.as_deref()
+    } else {
+        Some(requested_scopes)
+    };
+    if let Some(scopes) = resource_scopes.and_then(safe_auth_string_list) {
         resource.insert("scopes_supported".to_owned(), scopes.clone());
     }
     Some(Value::Object(resource))

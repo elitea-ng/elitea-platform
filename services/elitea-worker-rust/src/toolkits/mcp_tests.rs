@@ -168,7 +168,7 @@ fn discovered_oauth_metadata_is_bounded_to_the_browser_contract() {
     .expect("authorization metadata fixture");
 
     let projected =
-        authorization_resource_metadata(&metadata, "https://mcp.example.invalid/v1/mcp")
+        authorization_resource_metadata(&metadata, "https://mcp.example.invalid/v1/mcp", &[])
             .expect("sanitized OAuth metadata");
     assert_eq!(
         projected["authorization_servers"],
@@ -200,6 +200,17 @@ fn discovered_oauth_metadata_is_bounded_to_the_browser_contract() {
             .get("unowned_provider_extension")
             .is_none()
     );
+    let scoped = authorization_resource_metadata(
+        &metadata,
+        "https://mcp.example.invalid/v1/mcp",
+        &["mcp:read".to_owned()],
+    )
+    .expect("configured consent scopes");
+    assert_eq!(scoped["scopes_supported"], json!(["mcp:read"]));
+    assert_eq!(
+        scoped["oauth_authorization_server"],
+        projected["oauth_authorization_server"]
+    );
 }
 
 #[test]
@@ -214,6 +225,7 @@ fn legacy_oauth_metadata_uses_only_the_mcp_server_origin() {
     let projected = authorization_resource_metadata(
         &metadata,
         "https://mcp.example.invalid/v1/mcp?tenant=hidden",
+        &[],
     )
     .expect("legacy OAuth metadata");
     assert_eq!(
@@ -444,7 +456,9 @@ async fn prebuilt_authorization_preserves_dynamic_toolkit_type() {
 
 #[tokio::test]
 async fn mcp_auth_challenge_materializes_selected_placeholder_and_exact_token_rebuild() {
-    let version = frozen("mcp", &settings(&["lookup_release"]));
+    let mut configured = settings(&["lookup_release"]);
+    configured["scopes"] = json!(["mcp:read", "offline_access"]);
+    let version = frozen("mcp", &configured);
     let snapshot = FrozenToolSnapshot::from_version_details(&version)
         .expect("MCP snapshot")
         .apply_policy(policy(&[]).as_ref());
@@ -529,6 +543,45 @@ async fn mcp_auth_challenge_materializes_selected_placeholder_and_exact_token_re
     .await
     .expect("wrong-server token must not be applied");
     assert_eq!(guarded.len(), 1);
+}
+
+#[tokio::test]
+async fn malformed_scope_hints_and_inline_clients_fail_before_connecting() {
+    let mut cases = Vec::new();
+    for scopes in [
+        json!("read"),
+        json!({"read": true}),
+        json!([false]),
+        json!([""]),
+        json!(["read write"]),
+        json!(["read\nwrite"]),
+        json!(["read\"write"]),
+        json!(["read\\write"]),
+        json!(vec!["read"; 65]),
+        json!(["x".repeat(4097)]),
+    ] {
+        let mut value = settings(&[]);
+        value["scopes"] = scopes;
+        cases.push(value);
+    }
+    for field in ["client_id", "client_secret"] {
+        let mut value = settings(&[]);
+        value[field] = json!("unowned-client-value");
+        cases.push(value);
+    }
+    for configured in cases {
+        let version = frozen("mcp", &configured);
+        let snapshot = FrozenToolSnapshot::from_version_details(&version)
+            .expect("MCP snapshot")
+            .apply_policy(policy(&[]).as_ref());
+        let connector = FixtureConnector::new(Vec::new());
+        assert!(
+            materialize_mcp_toolsets(&snapshot, &connector, &policy(&[]))
+                .await
+                .is_err()
+        );
+        assert_eq!(connector.calls.load(Ordering::SeqCst), 0);
+    }
 }
 
 #[tokio::test]

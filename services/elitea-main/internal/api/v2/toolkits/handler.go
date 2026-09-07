@@ -154,6 +154,7 @@ var knownToolkitTypes = []string{
 	"jira_loader",
 	"s3_loader",
 	"openapi",
+	"mcp",
 	"database",
 	"custom",
 }
@@ -231,6 +232,59 @@ func (h *Handler) ListTypes(w http.ResponseWriter, r *http.Request) {
 // they are — removing them changes the create-toolkit form, which #330 does not
 // own.
 var toolkitTypeSchemas = map[string]map[string]any{
+	// SDK runtime/toolkits/mcp.py::McpToolkit.toolkit_config_schema defines
+	// these connection settings. Tools remain remote discovery results.
+	"mcp": {
+		"type":          "object",
+		"title":         "mcp",
+		"name_required": true,
+		"required":      []any{"url"},
+		"metadata": map[string]any{
+			"label":            "Remote MCP",
+			"categories":       []any{"other"},
+			"extra_categories": []any{"remote tools", "sse", "http"},
+		},
+		"properties": map[string]any{
+			"url": map[string]any{
+				"type": "string", "title": "URL", "description": "MCP server HTTP URL",
+			},
+			"headers": map[string]any{
+				"type": "object", "title": "Headers", "default": nil,
+				"additionalProperties": map[string]any{"type": "string"},
+			},
+			"client_id": map[string]any{
+				"type": "string", "title": "Client ID", "default": nil,
+				"description": "Optional OAuth client identifier. Leave it empty for dynamic registration.",
+			},
+			"client_secret": map[string]any{
+				"type": "string", "title": "Client Secret", "default": nil,
+				"format": "password", "writeOnly": true,
+			},
+			"scopes": map[string]any{
+				"type": "array", "title": "Scopes", "default": nil,
+				"items": map[string]any{"type": "string"},
+			},
+			"timeout": map[string]any{
+				"type": "integer", "title": "Timeout", "default": 300,
+				"minimum": 1, "maximum": 3600,
+			},
+			"selected_tools": map[string]any{
+				"type": "array", "title": "Selected Tools", "default": []any{},
+				"items": map[string]any{"type": "string"}, "args_schemas": map[string]any{},
+			},
+			"enable_caching": map[string]any{
+				"type": "boolean", "title": "Enable Caching", "default": true,
+			},
+			"cache_ttl": map[string]any{
+				"type": "integer", "title": "Cache TTL", "default": 300,
+				"minimum": 60, "maximum": 3600,
+			},
+			"ssl_verify": map[string]any{
+				"type": "boolean", "title": "Verify TLS Certificates", "default": true,
+				"description": "Native execution requires verified TLS certificates.",
+			},
+		},
+	},
 	"artifact": {
 		"type": "object",
 		"properties": map[string]any{
