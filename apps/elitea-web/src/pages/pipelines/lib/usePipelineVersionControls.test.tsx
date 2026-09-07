@@ -82,7 +82,7 @@ function Probe({ readGraphDraft, version = activeVersion, isGraphAdmissible = tr
     versions,
     activeVersion: current,
     control: form.control,
-    llmSettings: undefined,
+    versionFields: { welcomeMessage: '', variables: [], stepLimit: undefined, internalTools: [], llmSettings: undefined, tags: [] },
     readGraphDraft,
     isReadOnly: false,
     isFetching: false,

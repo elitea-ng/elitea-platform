@@ -8,6 +8,10 @@ import type { ConfigurationTabProps } from '@/features/pipelines';
 import { t } from '@/shared/i18n';
 import { NoResultsMessage } from '@/shared/ui/NoResultsMessage';
 
+import {
+  EditPipelineConfigurationPanel,
+  type EditPipelineConfigurationPanelProps,
+} from '../ui/EditPipelineConfigurationPanel';
 import { PipelineTestChat, type PipelineTestChatProps } from '../ui/PipelineTestChat';
 
 /** What `buildPipelineConfigurationTabSlots` needs to build the chat slot — grouped into one object so the factory keeps two parameters. */
@@ -18,88 +22,45 @@ export interface PipelineChatSlotContext {
 
 /**
  * `ConfigurationTab`'s two REQUIRED slots (`renderConfigurationForm`/
- * `renderChat`), built for `EditPipeline.tsx` — one of them still a
- * disclosed stand-in, the other now real.
+ * `renderChat`), built for `EditPipeline.tsx`. **Both are real now.**
  *
- * **ONE gap is left here, and the other two are CLOSED — the old text
- * claiming all three was stale and is corrected, not preserved:**
- *  - `renderConfigurationForm` is no longer a pure stand-in: it now carries
- *    the model picker the page supplies (`buildPipelineConfigurationTabSlots`
- *    below), which is the one panel of that form this app can build. The
- *    REST of it still needs the six `features/agents`-owned configuration
- *    panels (`ApplicationTools`/`WelcomeMessageInput`/etc.) —
- *    NOT exported from `features/agents/index.ts` (verified: `grep -n
- *    "^export" src/features/agents/index.ts`, no such names), and
- *    `no-deep-slice-import` (`.dependency-cruiser.cjs`) mechanically forbids
- *    `pages/` from reaching a slice's un-exported internals regardless.
- *    This one is REAL and stays.
- *  - `renderChat` — CLOSED. The old reason ("needs `features/chat`'s
- *    `ChatBox` — that slice does not exist") named the wrong slice. The chat
- *    composition root is `widgets/chat-box`, which exports `ChatBox` and
- *    `ChatBoxHandle`; `ChatBoxHandle` is a structural SUPERSET of the
- *    `ChatBoxSlotHandle` (`stopAll`/`onClear`) `ChatPanel.tsx` declares as
- *    what the slot owes. `features/pipelines` genuinely may not import a
- *    widget (`no-upward-from-features`) — which is the whole reason this is
- *    a slot — but this module is in `pages/`, and `pages/` may. The slot now
- *    renders `../ui/PipelineTestChat.tsx`; read that file for the run-event
- *    wire it also carries.
- *  - `adapter` — CLOSED, see `./usePipelineChatAdapter.ts`. The four
- *    operations were never missing from the app, only from the GENERATED
- *    client: `entities/conversation`'s `conversationApi` has been carrying
- *    all of them since unit C1, and `ui/ChatWithPipelineButton.tsx` in this
- *    very directory already calls two of them. The placeholder that resolved
- *    every method to `{ error: 'not_available' }` is deleted.
- */
-
-const gapContainerSx: SxProps<Theme> = { padding: '1.5rem', height: '100%', boxSizing: 'border-box' };
-
-/**
- * `ConfigurationTab`'s required `slots.renderConfigurationForm`.
+ * This module was called `pipelineConfigurationTabGaps.tsx` and its last
+ * remaining disclosure — that `renderConfigurationForm` could only be a
+ * notice, because the `features/agents`-owned form panels were "NOT exported
+ * from `features/agents/index.ts` (verified: `grep -n "^export" ...`, no such
+ * names)" — had gone stale. `CreateAgentForm`, `AgentTagEditor` and
+ * `AgentToolsPanel` all reached that curated API when the AGENT editor
+ * mounted them, and `pages/agents/ui/EditApplicationConfigurationPanel.tsx`
+ * had been composing the identical set for some time. A pipeline IS an
+ * application row, so the same panels compose for it: see
+ * `../ui/EditPipelineConfigurationPanel.tsx`, which the page now passes in
+ * here.
  *
- * `modelSettings` is the one panel of that form this app can actually build —
- * `widgets/agent-model-settings`, which the page supplies — and it is
- * rendered ABOVE the gap notice rather than instead of it: the other panels
- * (tools, welcome message, editor notes, information) really are still
- * missing, and hiding that once one of them exists would be the "disclosed
- * gap that quietly goes stale" this codebase has been bitten by before.
- * See this module's own doc comment for why the rest can't be reached here.
+ * The file keeps its two other jobs — assembling the slot object and holding
+ * the editor's error boundary — and no longer claims anything is missing.
  */
-function renderPipelineConfigurationFormGap(modelSettings: ReactNode): ReactNode {
-  return (
-    <Box
-      data-testid="edit-pipeline-configuration-form-gap"
-      sx={gapContainerSx}
-    >
-      {modelSettings}
-      <NoResultsMessage
-        title={t('pages.pipelines.editPipeline.configurationFormGap.title', 'Configuration form is not available yet.')}
-        description={t(
-          'pages.pipelines.editPipeline.configurationFormGap.description',
-          'The agent-domain form panels this section composes have not landed in this app yet.',
-        )}
-      />
-    </Box>
-  );
-}
 
 /**
  * `ConfigurationTab`'s required `slots` prop.
  *
- * A factory rather than the module-scope constant it used to be, because
- * both slots now carry page-owned content — the model picker (whose value
- * and `onChange` belong to `EditPipeline`'s own state) and the test chat
- * (which needs the pipeline's identity and the signed-in user). The caller
- * memoises the result on those inputs — `GeneralFormPanel`/`ChatPanel` call
- * their render props straight through and hold them in no dependency array,
- * so a fresh object costs nothing but is still worth not rebuilding every
- * keystroke.
+ * A factory rather than a module-scope constant because both slots carry
+ * page-owned content: the configuration form (whose every value belongs to
+ * `EditPipeline`'s own form/version state) and the test chat (which needs the
+ * pipeline's identity and the signed-in user).
+ *
+ * The panel's PROPS cross this boundary rather than a built element, so the
+ * page has one object literal to write instead of a JSX block plus the
+ * `useMemo` that a nine-input dependency array would need — and
+ * `GeneralFormPanel`/`ChatPanel` call their render props straight through,
+ * holding them in no dependency array, so a fresh object each render costs
+ * nothing.
  */
 export function buildPipelineConfigurationTabSlots(
-  modelSettings: ReactNode,
+  panel: EditPipelineConfigurationPanelProps,
   chat: PipelineChatSlotContext,
 ): ConfigurationTabProps['slots'] {
   return {
-    renderConfigurationForm: () => renderPipelineConfigurationFormGap(modelSettings),
+    renderConfigurationForm: () => <EditPipelineConfigurationPanel {...panel} />,
     renderChat: ({ settings, disableChat, ref }) => (
       <PipelineTestChat
         settings={settings}

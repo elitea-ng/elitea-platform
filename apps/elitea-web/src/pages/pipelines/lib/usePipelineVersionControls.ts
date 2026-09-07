@@ -8,7 +8,6 @@ import type { ApplicationCreationInput } from '@/entities/application-form';
 import type { PipelineGraphDraft } from '@/features/pipelines';
 import { getGetApplicationQueryKey } from '@/shared/api/generated/applications/applications';
 import { t } from '@/shared/i18n';
-import type { AgentLlmSettings } from '@/shared/api/agentLlmSettings';
 import { disarmUnsavedChangesNavBlocker } from '@/widgets/app-shell';
 import type {
   ApplicationVersionDetail,
@@ -18,6 +17,7 @@ import type {
 
 import { carryPipelineGraphToVersion } from './carryPipelineGraphToVersion';
 import { toNewPipelineVersionBody, toVersionOptions, type EditPipelineVersionOption } from './editPipelineMappers';
+import type { EditPipelineVersionFields } from './useEditPipelineVersionFields';
 
 export interface PipelineVersionControlsArgs {
   readonly projectId: string | undefined;
@@ -33,8 +33,14 @@ export interface PipelineVersionControlsArgs {
    * typed but not yet saved must travel with it.
    */
   readonly control: Control<ApplicationCreationInput>;
-  /** The live model pick (`useEditPipelineLlmSettings`), which wins over the stored blob. */
-  readonly llmSettings: AgentLlmSettings | undefined;
+  /**
+   * The live version-level edits (`useEditPipelineVersionFields`), which win
+   * over the version's stored copy. Taking a version used to clone the
+   * server's welcome message, model, modules, step limit and variables, so an
+   * author who edited the form and then reached for "Save As Version" got a
+   * version without the edit they had just made.
+   */
+  readonly versionFields: EditPipelineVersionFields;
   /** `usePipelineGraphDraft`'s reader — called at click time, never during render. */
   readonly readGraphDraft: () => PipelineGraphDraft | undefined;
   /** Public-project viewer: the selector stays, the write affordances go (`ApplicationTabBar.jsx:65`). */
@@ -141,7 +147,7 @@ const EMPTY_VERSION_BODY: Omit<VersionWriteRequest, 'name'> = {};
  */
 export function usePipelineVersionControls(args: PipelineVersionControlsArgs): PipelineVersionControlsState {
   const { projectId, applicationId, tab, versions, activeVersion } = args;
-  const { control, llmSettings, readGraphDraft, isReadOnly, isFetching, isGraphAdmissible } = args;
+  const { control, versionFields, readGraphDraft, isReadOnly, isFetching, isGraphAdmissible } = args;
 
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -170,8 +176,8 @@ export function usePipelineVersionControls(args: PipelineVersionControlsArgs): P
 
   const versionBody = useMemo(() => {
     if (activeVersion === undefined) return EMPTY_VERSION_BODY;
-    return toNewPipelineVersionBody(activeVersion, (watchedStarters ?? []).filter(isString), llmSettings);
-  }, [activeVersion, watchedStarters, llmSettings]);
+    return toNewPipelineVersionBody(activeVersion, (watchedStarters ?? []).filter(isString), versionFields);
+  }, [activeVersion, watchedStarters, versionFields]);
 
   const goToVersion = useCallback(
     (versionId: number) => {
