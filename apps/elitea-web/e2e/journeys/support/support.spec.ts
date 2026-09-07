@@ -199,14 +199,20 @@ test.describe('the support assistant widget, off then on', () => {
   });
 
   test('3. The stored user message carries the page context.', async ({ page }) => {
-    // Test 2 already waited for the on-screen reply; this waits for the
-    // STORE to catch up, which can lag behind a slow model's stream by a
-    // further stretch — see `waitForSupportTurnSettled`'s own note.
-    test.setTimeout(300_000);
+    /*
+     * THE SAME BUDGET AS TEST 2, for the same reason.
+     *
+     * Test 2 stops as soon as the FIRST token paints; this waits for the whole
+     * answer to finish and its projection to land. Against a mock model that
+     * is seconds. Against the standalone stack's real 35B model it took 3.6
+     * minutes on one run and over 5 on the next, so a budget below test 2's
+     * fails on model latency and reads as a broken feature.
+     */
+    test.setTimeout(600_000);
 
     expect(conversationUuid, 'test 2 must have created a conversation first').toBeTruthy();
 
-    const details = await waitForSupportTurnSettled(page.request, conversationUuid, { timeout: 270_000 });
+    const details = await waitForSupportTurnSettled(page.request, conversationUuid, { timeout: 570_000 });
     expect(
       hasFencedSupportContext(details),
       'the stored user message must carry the <support_assistant_context> fenced block ' +
