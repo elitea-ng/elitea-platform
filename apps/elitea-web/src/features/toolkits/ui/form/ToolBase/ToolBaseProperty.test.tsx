@@ -191,6 +191,32 @@ describe('ToolBaseProperty', () => {
     expect(getByText('Headers')).toBeInTheDocument();
   });
 
+  /*
+   * The MCP detail screen's own axe failure (`nested-interactive`, serious).
+   * `headers` is served with a description, and the hint that description
+   * renders is a real `<button>`; while it lived in the accordion TITLE it
+   * was a focusable descendant of `StyledAccordionSummary`'s own button.
+   * Asserted structurally — the summary button must contain no focusable
+   * control — because that is exactly what axe measures.
+   */
+  it('keeps an object field description out of the accordion summary button', () => {
+    const schema: ToolPropertySchema = {
+      title: 'Headers',
+      type: 'object',
+      description: 'HTTP headers for authentication and configuration',
+    };
+    const { getByRole } = renderWithTheme(
+      <ToolBaseProperty
+        {...baseProps({ field: { key: 'headers', schema, required: false }, settings: { headers: {} } })}
+      />,
+    );
+
+    const hint = getByRole('button', { name: 'HTTP headers for authentication and configuration' });
+    const summary = getByRole('button', { name: 'Headers' });
+    expect(summary).not.toContainElement(hint);
+    expect(summary.querySelector('button, [tabindex], a[href]')).toBeNull();
+  });
+
   it('renders an object field without the accordion wrapper when noAccordionWrapper is set (the Advanced Settings group)', () => {
     const { getByText, queryByRole } = renderWithTheme(
       <ToolBaseProperty

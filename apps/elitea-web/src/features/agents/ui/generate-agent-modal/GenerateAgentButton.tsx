@@ -29,15 +29,18 @@ import { GenerateAgentModal, type GenerateAgentModalProps } from './GenerateAgen
  * from `features/`).
  *
  * This button is only ever rendered inside `CreateAgentForm`'s
- * `generateAgentButtonSlot`, which `BasicAccordion` places inside
- * `StyledAccordionSummary`'s `summaryAction` — itself a native `<button>`
- * (see that component's own doc comment). A literal `<button>` here would
- * therefore nest inside another `<button>`, which is invalid HTML. `BaseBtn`
- * is passed `component="span"`, which makes the underlying MUI `ButtonBase`
- * resolve `nativeButton` to `false` and render `role="button"` with its own
- * synthesized Enter/Space keyboard activation instead of a `<button>` tag —
- * preserving click and keyboard behaviour without the nested-button
- * violation.
+ * `generateAgentButtonSlot`, which `BasicAccordion` takes as its
+ * `summaryAction`. `BaseBtn` is passed `component="span"`, which makes the
+ * underlying MUI `ButtonBase` resolve `nativeButton` to `false` and render
+ * `role="button"` with its own synthesized Enter/Space keyboard activation
+ * instead of a `<button>` tag.
+ *
+ * THAT IS NO LONGER A CONSTRAINT, only what this file happens to do.
+ * `summaryAction` used to render INSIDE `StyledAccordionSummary`'s own
+ * `<button>`, where a nested `<button>` is invalid HTML — and where the
+ * `role="button"` span was no better to axe, which fails any focusable
+ * descendant (`nested-interactive`, J18). `BasicAccordion` now renders the
+ * action beside that button, so a real `<button>` is admissible here.
  */
 export interface GenerateAgentButtonProps {
   readonly onAgentCreated: GenerateAgentModalProps['onAgentCreated'];
