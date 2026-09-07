@@ -9,6 +9,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -71,6 +72,7 @@ type mcpOAuthResolutionError struct {
 func (e *mcpOAuthResolutionError) Error() string { return e.code }
 
 func (h *Handler) mcpOAuthProxy(w http.ResponseWriter, r *http.Request) {
+	preventMCPCredentialCaching(w)
 	if !h.requireMCPEnabled(w, r) {
 		return
 	}
@@ -150,14 +152,19 @@ func (h *Handler) mcpOAuthProxy(w http.ResponseWriter, r *http.Request) {
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		writeJSON(w, http.StatusBadRequest, safeOAuthProviderError(
 			"token_exchange_failed", providerBody,
-			credentials.clientSecret, body.Code, body.RefreshToken,
+			credentials.clientSecret, body.Code, body.RefreshToken, body.CodeVerifier,
 		))
+		return
+	}
+	if !validMCPCredentialResponse(providerBody, "access_token", "token_type", "refresh_token", "id_token", "scope") {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "invalid_token_response"})
 		return
 	}
 	writeJSON(w, http.StatusOK, oauthTokenResponse(providerBody))
 }
 
 func (h *Handler) mcpDCRProxy(w http.ResponseWriter, r *http.Request) {
+	preventMCPCredentialCaching(w)
 	if !h.requireMCPEnabled(w, r) {
 		return
 	}
@@ -240,7 +247,37 @@ func (h *Handler) mcpDCRProxy(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, safeOAuthProviderError("registration_failed", providerBody))
 		return
 	}
+	if !validMCPCredentialResponse(providerBody, "client_id", "client_secret") {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "invalid_dcr_response"})
+		return
+	}
 	writeJSON(w, http.StatusOK, providerBody)
+}
+
+func preventMCPCredentialCaching(w http.ResponseWriter) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
+}
+
+// Keep optional legacy fields, including omitted token_type and string expiry.
+// Reject a malformed credential before it crosses the browser boundary.
+func validMCPCredentialResponse(provider map[string]any, required string, optional ...string) bool {
+	if _, failed := provider["error"]; failed {
+		return false
+	}
+	value, ok := provider[required].(string)
+	if !ok || strings.TrimSpace(value) == "" || strings.ContainsAny(value, "\x00\r\n") {
+		return false
+	}
+	for _, field := range optional {
+		if value, present := provider[field]; present {
+			text, ok := value.(string)
+			if !ok || strings.ContainsAny(text, "\x00\r\n") {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func decodeMCPProxyRequest(w http.ResponseWriter, r *http.Request, destination any) bool {
@@ -625,13 +662,17 @@ func safeOAuthProviderError(code string, provider map[string]any, sensitive ...s
 			break
 		}
 	}
+	// Match longer credentials first. Do not scan replacement text again.
+	slices.SortFunc(sensitive, func(first, second string) int { return len(second) - len(first) })
+	replacements := make([]string, 0, 2*len(sensitive))
+	for _, value := range sensitive {
+		if value != "" {
+			replacements = append(replacements, value, "[redacted]")
+		}
+	}
+	description = strings.NewReplacer(replacements...).Replace(description)
 	if len(description) > 1024 {
 		description = description[:1024]
-	}
-	for _, value := range sensitive {
-		if len(value) >= 4 {
-			description = strings.ReplaceAll(description, value, "[redacted]")
-		}
 	}
 	if description != "" {
 		response["error_description"] = description

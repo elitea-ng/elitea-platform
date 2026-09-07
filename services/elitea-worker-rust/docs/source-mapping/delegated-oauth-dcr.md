@@ -1,7 +1,7 @@
 # Delegated OAuth and DCR source mapping
 
 Status: Main's OAuth and DCR proxies are implemented. The existing UI flow can
-use them. Live provider proof remains required.
+use them. Local HTTPS grant tests pass. Live provider proof remains required.
 
 This flow supports remote MCP servers and delegated toolkit authentication.
 SharePoint and OpenAPI use the same authorization contract.
@@ -446,11 +446,65 @@ Neither flow invokes protected SharePoint operations or raises a second guard af
 Both saved answers survive reload with no pending guard or error.
 These browser results prove Skip and parent ordering, not a successful provider login.
 
+### Local OAuth protocol components
+
+The current Core source is checked again on 2026-09-07 at revision `09d8d5d8e10cddd0d2b8e59d18866f021fc006cb`.
+`utils/mcp_oauth.py` remains the behavioral baseline for code exchange, refresh, and registration.
+The replatform keeps form token responses, optional token fields, DCR credential precedence, and the existing HTTP routes.
+
+The tests use temporary HTTPS servers with verified test certificates.
+One server acts as an OAuth issuer. A separate server exposes a protected OpenAPI-style resource.
+No test uses Aha, SharePoint, a real user grant, or a stored production credential.
+
+| Evidence | Owning source | Verified boundary |
+| --- | --- | --- |
+| DCR public and confidential clients | Main `mcp_oauth_protocol_test.go::TestMCPOAuthProtocolTLSGrantsAndProtectedOpenAPI` | Forward registration metadata. Preserve issued client identifiers and secrets. Do not replace them with stored OpenAPI credentials. |
+| Stored OpenAPI client | Same Main test | Resolve one toolkit under the caller's project and actor. Send its credentials only to its bound initial endpoint. |
+| Code exchange and S256 | Same Main test | Forward the RFC 7636 Appendix B verifier. Preserve rejection of wrong verifiers, callback URIs, client credentials, and consumed codes. |
+| Refresh rotation | Same Main test | Return replacement access and refresh tokens. Omit code, callback, and verifier fields from refresh requests. Preserve rejection of the consumed refresh token. |
+| Separate protected resource | Same Main test | The fixture rejects an absent Bearer token. Issued and rotated access tokens permit resource reads. |
+| Cross-origin redirect | Main `TestMCPOAuthProtocolDoesNotForwardCredentialsAcrossOriginRedirect` | Reject 302, 307, and 308 redirects before the second server receives a request. |
+| Request cancellation | Main `TestMCPOAuthProtocolCancellationReachesProviderRequest` | Carry caller cancellation into the provider request. |
+| Malformed provider success | Main `mcp_oauth_validation_test.go` | Reject missing, empty, or wrongly typed credentials, conflicting error fields, duplicate form tokens, and oversized responses. |
+| Error redaction | Same Main test file | Remove PKCE verifiers, codes, refresh tokens, and client secrets before truncation. Handle short and overlapping values. |
+| Parallel Rust operations | Rust `openapi_tests.rs::delegated_openapi_rotated_tokens_stay_bound_during_parallel_resource_calls` | Keep two configuration-and-issuer token bindings separate. Rebuilt clients use rotated tokens. No refresh or client-credential exchange occurs in these resource calls. |
+| Browser state logic | UI `oauthFlow.test.ts` and `tokenLifecycle.test.ts` | Retain the existing DCR, exchange, refresh, and token-state unit contracts. |
+
+The regression tests fail before the Main correction.
+Main now validates credential response fields and adds `Cache-Control: no-store` and `Pragma: no-cache` to both proxy responses.
+Main also redacts complete grant values before truncating provider errors.
+These corrections change neither database queries nor the successful browser request contract.
+The Rust change adds a component test. It does not change runtime token ownership.
+The coding guidelines keep this slice limited to verified defects and the existing transport test seam.
+
+The protocol references are [RFC 6749 sections 4.1.3, 5, and 6](https://www.rfc-editor.org/rfc/rfc6749),
+[RFC 7591 section 3](https://www.rfc-editor.org/rfc/rfc7591),
+and [RFC 7636 section 4.6 and Appendix B](https://www.rfc-editor.org/rfc/rfc7636).
+The fixture validates PKCE and grants. Main forwards them; Main is not the authorization server.
+
+Verification passes:
+
+- Main: 22 focused tests and 42 subtests under the race detector, with no skips.
+- Rust: 336 toolkit library tests, with no ignored tests.
+- UI: 32 OAuth and token-lifecycle unit tests.
+- Go vet for the handler package, strict all-target Rust Clippy, and Rust formatting.
+
+The broader Main handler package also runs against the rehearsal PostgreSQL service.
+All 227 tests and 195 subtests pass, with no skips.
+Each database fixture creates and removes its own named database. The fixtures do not modify rehearsal application data.
+No deployment, real browser authorization, database migration, or production capability activation occurs in this slice.
+
+These are component proofs, not a continuous browser-to-Rust run or complete OAuth/MCP certification.
+The resource request in the Main test uses a test client. The Rust test uses the existing transport seam.
+Compatibility still permits an omitted `token_type`, form token responses, and partial legacy registration metadata.
+This slice does not prove `client_secret_basic`, private-key JWT, registration management, provider consent, discovery interoperability, or concurrent-tab logout.
+
 ## Remaining gates
 
 ### Open verification
 
 - Prove one configured remote MCP DCR flow through the browser and Rust resume.
+  Local public and confidential DCR grant components pass. They do not close the browser-to-Rust gate.
 - Prove one stored SharePoint or OpenAPI delegated flow through both grants.
 - Prove the configured authorization-code and refresh grants through the deployed dialog.
   The verified dialog and Skip path do not prove either grant.

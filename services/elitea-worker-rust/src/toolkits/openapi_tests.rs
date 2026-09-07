@@ -526,6 +526,98 @@ async fn operation_execution_binds_path_query_headers_and_client_credentials() {
 }
 
 #[tokio::test]
+async fn delegated_openapi_rotated_tokens_stay_bound_during_parallel_resource_calls() {
+    let transport = Arc::new(FixtureTransport {
+        requests: Mutex::new(Vec::new()),
+        token_requests: Mutex::new(Vec::new()),
+        token: "must-not-use-client-credentials".to_owned(),
+        responses: Mutex::new(
+            (0..4)
+                .map(|_| OpenApiResponse {
+                    status: StatusCode::OK,
+                    body: br#"{"name":"Ada"}"#.to_vec(),
+                })
+                .collect(),
+        ),
+    });
+    // Two configurations share a protected API but use distinct issuers.
+    // Rebuild after a grant/refresh; the worker does not exchange refresh tokens.
+    for first_token in ["first-access", "rotated-access"] {
+        let tokens = json!({
+            "config-1:https://issuer-one.example.test/tenant": {
+                "access_token":first_token, "refresh_token":"must-not-dispatch-refresh"
+            },
+            "config-2:https://issuer-two.example.test/tenant": {
+                "access_token":"second-access"
+            }
+        });
+        let configs = [
+            ("config-1", "https://issuer-one.example.test/tenant"),
+            ("config-2", "https://issuer-two.example.test/tenant"),
+        ]
+        .map(|(configuration, issuer)| {
+            let settings = settings(
+                &json!({
+                    "configuration_uuid":configuration,
+                    "oauth_discovery_endpoint":issuer,
+                    "client_id":"stored-client", "client_secret":"must-not-dispatch-secret"
+                }),
+                &["get_users_by_id"],
+            );
+            OpenApiToolkitConfig::parse(
+                "Customer API",
+                &settings,
+                tokens.as_object().expect("claim tokens"),
+            )
+            .expect("authorized config")
+        });
+        let [first, second] = configs;
+        assert!(first.auth().delegated_requirement().is_none());
+        assert!(second.auth().delegated_requirement().is_none());
+        let operation = first.operations()[0].clone();
+        let first = OpenApiClient::with_transport(first.into_client_parts(), transport.clone());
+        let second = OpenApiClient::with_transport(second.into_client_parts(), transport.clone());
+        let arguments = json!({"id":"Ada"});
+        let arguments = arguments.as_object().expect("arguments");
+        let (first, second) = tokio::join!(
+            first.execute(&operation, arguments),
+            second.execute(&operation, arguments),
+        );
+        assert!(first.is_ok());
+        assert!(second.is_ok());
+    }
+    assert!(
+        transport
+            .token_requests
+            .lock()
+            .expect("token requests")
+            .is_empty()
+    );
+    let requests = transport.requests.lock().expect("resource requests");
+    let mut bearer_values = Vec::new();
+    for request in requests.iter() {
+        assert_eq!(
+            request.uri().to_string(),
+            "https://api.example.test/v1/users/Ada"
+        );
+        let bearer = request.headers().get(AUTHORIZATION).expect("Bearer token");
+        assert!(bearer.is_sensitive());
+        assert!(!format!("{bearer:?}").contains("access"));
+        bearer_values.push(bearer.to_str().expect("Bearer header"));
+    }
+    bearer_values.sort_unstable();
+    assert_eq!(
+        bearer_values,
+        [
+            "Bearer first-access",
+            "Bearer rotated-access",
+            "Bearer second-access",
+            "Bearer second-access"
+        ]
+    );
+}
+
+#[tokio::test]
 async fn rfc3986_query_serialization_matches_the_sdk_contract() {
     let spec = json!({
         "openapi":"3.0.3",
