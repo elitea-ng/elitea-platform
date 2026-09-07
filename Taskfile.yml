@@ -335,7 +335,18 @@ tasks:
         echo "helm:lint: $found chart(s) passed"
       - task: helm:capabilities
       - task: helm:llmpath
+      - task: helm:edge-healthz
       - task: helm:bf02b
+
+  helm:edge-healthz:
+    desc: Check that the chart's browser edge publishes /healthz with no authenticating filter in front of it
+    cmds:
+      # #569: on the cluster /healthz sat in the HTTPRoute rule that carries
+      # the forward-auth ExtensionRef, and the policy did not name it, so every
+      # probe of the public hostname got a 302 to the login form. This gate
+      # reads the RENDERED HTTPRoute and Ingress, and the Go half of the
+      # contract is tests/deployedge/edge_public_policy_test.go. Needs yq.
+      - bash deploy/helm/tests/render-edge-healthz.sh
 
   helm:capabilities:
     desc: Check that the elitea-main chart renders the capability flags the composition root reads
