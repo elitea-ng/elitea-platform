@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { configure, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { delay, http, HttpResponse } from 'msw';
 
@@ -17,6 +17,12 @@ import { usePipelineYamlStore } from '@/features/pipelines/model/pipelineYamlSto
 
 import { EditPipeline } from './EditPipeline';
 import { renderPipelinesRoute, renderPipelinesRouteWithoutSocket } from './__tests__/testRouter';
+
+// The pipeline editor mounts the real route, store and configuration panel,
+// so its first render and MUI exit transitions run past Testing Library's 1 s
+// default under CI coverage instrumentation (unit shard 2 on 26ad27cc,
+// 76adc4e5 and 793cf88e). Every waitFor/findBy in this file gets 5 s.
+configure({ asyncUtilTimeout: 5_000 });
 
 // `ConfigurationTab`'s real `EditorPanel`/`FlowEditor` needs both jsdom
 // polyfills this provides (CodeMirror's YAML mode, `ResizeObserver` for
@@ -223,13 +229,13 @@ describe('EditPipeline', () => {
     server.use(getGetApplicationMockHandler(detail()));
     renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42/999', { projectId: '9' });
 
-    expect(await screen.findByText('Version not found', {}, { timeout: 5_000 })).toBeInTheDocument();
+    expect(await screen.findByText('Version not found')).toBeInTheDocument();
   });
 
   it('skips the not-found check when isFromCreation=true', async () => {
     server.use(getGetApplicationMockHandler(detail()));
     const { router } = renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42/999', { projectId: '9' });
-    await waitFor(() => expect(screen.getByText('Version not found')).toBeInTheDocument(), { timeout: 5_000 });
+    await waitFor(() => expect(screen.getByText('Version not found')).toBeInTheDocument());
 
     await router.navigate({
       to: '/pipelines/$tab/$agentId/$version',
