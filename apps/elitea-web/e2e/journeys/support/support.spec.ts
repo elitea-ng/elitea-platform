@@ -175,12 +175,26 @@ test.describe('the support assistant widget, off then on', () => {
     // before any server round trip.
     await expect(chatWindow.locator('.elitea-assistant-message--user').last()).toContainText(question);
 
-    // The answer streams in and settles: non-empty text, and NOT the
-    // error modifier a refused turn renders itself as. A generous budget —
-    // a real remote model can take minutes for one turn, and this run may
-    // queue behind another stack's turn.
-    const answerBubble = chatWindow.locator('.elitea-assistant-message--assistant').last();
+    /*
+     * THE ANSWER IS A SECOND ASSISTANT BUBBLE, and the count is what proves it.
+     *
+     * `.last()` alone does NOT: the welcome message is itself an assistant
+     * bubble, it is non-empty, and it carries no error class. An assertion on
+     * the last bubble therefore passes the instant the panel opens, whether or
+     * not the agent ever answers — measured, on a run whose turn never started
+     * at all. Waiting for the COUNT to reach two is the discriminating check,
+     * and the text assertions then describe the answer rather than the
+     * greeting.
+     *
+     * A generous budget: a real remote model can take minutes for one turn,
+     * and this run may queue behind another stack's turn.
+     */
+    const assistantBubbles = chatWindow.locator('.elitea-assistant-message--assistant');
+    await expect(assistantBubbles).toHaveCount(2, { timeout: 570_000 });
+
+    const answerBubble = assistantBubbles.last();
     await expect(answerBubble).toContainText(/\S/, { timeout: 570_000 });
+    await expect(answerBubble).not.toContainText(WELCOME_MESSAGE);
     await expect(answerBubble).not.toHaveClass(/elitea-assistant-message--error/);
   });
 
