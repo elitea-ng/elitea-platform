@@ -17,7 +17,6 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/health"
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
 	scimapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/scim"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/shadow"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/admin"
 	v2analytics "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/analytics"
 	v2apps "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/applications"
@@ -65,10 +64,8 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcatalogue"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
 	platformauth "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/cutover"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/identityproviders"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/authsvc"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/migrate"
 	dbrepos "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
@@ -87,7 +84,6 @@ import (
 // AuthDeps preserves the current-main grouped dependency contract while the
 // parity composition continues to accept the established flat fields.
 type AuthDeps struct {
-	Client                    *authsvc.Client
 	Validator                 apimw.TokenValidator
 	PrincipalValidator        apimw.PrincipalValidator
 	ForwardedIdentityVerifier apimw.ForwardedIdentityPeerVerifier
@@ -126,7 +122,6 @@ type AuthDeps struct {
 
 type RouterConfig struct {
 	Auth               AuthDeps
-	AuthClient         *authsvc.Client
 	AuthValidator      apimw.TokenValidator
 	PrincipalValidator apimw.PrincipalValidator
 	SessionHandler     *v2auth.SessionHandler
@@ -281,10 +276,6 @@ type RouterConfig struct {
 	// which imports this layer. Unassigned, a created project has no vector
 	// store and cannot index — see createProjectVectorStore.
 	ProjectVectorStore projectprovisioning.ProjectVectorStore
-	Shadow             *shadow.Comparator
-	ShadowMetrics      *shadow.Metrics
-	CutoverTracker     *cutover.Tracker
-	CutoverRouter      *cutover.Router
 	AdminUI            *adminui.Config
 	// ObjectStore is the new S3/Azure/GCS-compatible backend (see
 	// docs/plans/storage-migration-plan.md). S8 reads it for the bucket-plane
@@ -313,10 +304,6 @@ type RouterConfig struct {
 	// Leave it nil for the OIDC-only shape, where APPLICATION_SECRET_KEY both
 	// signs the token and reads it back. Never box a nil pointer into it.
 	PATSigner v2auth.TokenSigner
-	// InternalAdminToken is a disabled-by-default transitional control for
-	// shadow/cutover operations, not production workload identity. Empty leaves
-	// those routes unmounted.
-	InternalAdminToken            string
 	RuntimeRoutes                 RuntimeRoutes
 	ProductionAuth                *ProductionAuthRoutes
 	ProductionRuntime             *ProductionRuntimeRoutes
@@ -626,11 +613,9 @@ type ArtifactDeps struct {
 // the Python SDK speaks: list, download, upload, delete, stat) on r, wrapped in
 // deps.Authenticate and per-route RBAC (S11). Called once, from
 // newProductionRouter, so the oapiserver conformance suite and production
-// see an identical route shape. Deliberately NOT nested inside the
-// shadow-wrapped /api/v2 group: the shadow middleware buffers the entire
-// response into a bytes.Buffer and has no Unwrap method, which would defeat
-// ResponseController deadlines and buffer every downloaded object in memory
-// (S12).
+// see an identical route shape. Deliberately NOT nested inside the /api/v2
+// group: that group compresses JSON responses, which would buffer and encode
+// every downloaded object rather than streaming it (S12).
 func mountArtifactRoutes(r chi.Router, deps ArtifactDeps) {
 	view := apimw.RequireResolvedPermissions(deps.Resolver, platformauth.PermissionModeDefault, artifactPermissionView)
 	aclView := apimw.RequireResolvedPermissions(deps.Resolver, platformauth.PermissionModeDefault, artifactPermissionACLView)
@@ -791,7 +776,7 @@ func mountArtifactRoutes(r chi.Router, deps ArtifactDeps) {
 // routes are: these paths live outside /api/v2 (pylon serves them from the app
 // blueprint, and the internal-toolkit URLs written into existing projects
 // hardcode `/app/{project_id}/mcp/...`), so they cannot inherit the /api/v2
-// group's middleware, and they must not inherit shadow's response buffering.
+// group's middleware, and they must not inherit its JSON compression.
 //
 // RequireProjectAccess is unconditional here. The endpoint reads one tenant's
 // agents and toolkits by name, and authentication alone would let any
@@ -873,9 +858,6 @@ func compressJSONResponses() func(http.Handler) http.Handler {
 // of the routes registered here have not been assigned an exact legacy route
 // policy, but real deployments need them anyway (#243).
 func newProductionRouter(cfg RouterConfig) chi.Router {
-	if cfg.AuthClient == nil {
-		cfg.AuthClient = cfg.Auth.Client
-	}
 	if cfg.AuthValidator == nil {
 		cfg.AuthValidator = cfg.Auth.Validator
 	}
@@ -979,7 +961,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	r.Mount("/", health.RoutesWithDeps(cfg.HealthDeps))
 
 	// Traefik forward-auth endpoint (no auth middleware — this IS the auth check)
-	forwardAuth := v2auth.NewForwardAuthHandler(cfg.AuthClient, cfg.AuthValidator)
+	forwardAuth := v2auth.NewForwardAuthHandler(cfg.AuthValidator)
 	r.Get("/auth", forwardAuth.ServeHTTP)
 
 	// Browser-facing OIDC session lifecycle. Legacy form authentication is not
@@ -1126,18 +1108,6 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		r.Mount(cfg.AdminUI.BasePath, adminUIHandler.Routes())
 	}
 
-	if len(cfg.InternalAdminToken) >= apimw.MinimumInternalAdminTokenBytes {
-		r.Group(func(r chi.Router) {
-			r.Use(apimw.RequireInternalAdminToken(cfg.InternalAdminToken))
-			if cfg.Shadow != nil && cfg.ShadowMetrics != nil {
-				r.Mount("/internal/shadow", shadow.NewAdminHandler(cfg.Shadow, cfg.ShadowMetrics).Routes())
-			}
-			if cfg.CutoverTracker != nil {
-				r.Mount("/internal/cutover", cutover.NewAdminHandler(cfg.CutoverTracker).Routes())
-			}
-		})
-	}
-
 	// Strip doubled /api/v2/api/v2/... prefix caused by admin_ui RTK Query
 	// baseUrl + explicit V2_BASE prefix in projectsApi/configurationApi/serviceDescriptorsApi
 	r.HandleFunc("/api/v2/api/v2/*", func(w http.ResponseWriter, req *http.Request) {
@@ -1146,9 +1116,9 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		r.ServeHTTP(w, req)
 	})
 
-	// Artifacts (S11): mounted here, outside the shadow-wrapped group below,
-	// on its own Auth-wrapped subrouter so it never inherits shadow's
-	// response buffering.
+	// Artifacts (S11): mounted here, outside the /api/v2 group below, on its
+	// own Auth-wrapped subrouter so it never inherits that group's JSON
+	// compression.
 	artifactResolver := cfg.ArtifactPermissionResolver
 	if artifactResolver == nil {
 		artifactResolver = permissionResolver
@@ -1243,7 +1213,6 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// AddAttachments code, not a second implementation of any of them.
 	var convHandler *v2convs.Handler
 	authenticate := apimw.Auth(apimw.AuthConfig{
-		Client:                     cfg.AuthClient,
 		Validator:                  cfg.AuthValidator,
 		PrincipalValidator:         cfg.PrincipalValidator,
 		ForwardedIdentityVerifier:  cfg.Auth.ForwardedIdentityVerifier,
@@ -1263,15 +1232,12 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		personalProjects)
 
 	// This group holds the whole JSON API — the `/api/v2` route below is its
-	// only member. Compression sits at the top of it, ABOVE the shadow
-	// comparator: shadow buffers what the handler writes. A compressor under
-	// it would hand the comparator gzip bytes to diff against pylon's JSON.
-	// The comparator would then report a mismatch on every sampled request.
+	// only member. Compression sits at the top of it, so every handler in the
+	// group writes plain JSON and only the outermost layer encodes it.
 	r.Group(func(r chi.Router) {
 		r.Use(compressJSONResponses())
 		r.Use(apimw.Auth(apimw.AuthConfig{
-			Client:                     cfg.AuthClient,
-			Validator:                  cfg.AuthValidator,
+				Validator:                  cfg.AuthValidator,
 			PrincipalValidator:         cfg.PrincipalValidator,
 			ForwardedIdentityVerifier:  cfg.Auth.ForwardedIdentityVerifier,
 			SessionSecret:              cfg.SessionSecret,
@@ -1282,29 +1248,15 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		// Maintenance mode, immediately AFTER authentication and before
 		// anything that does work.
 		//
-		// The ordering is load-bearing in both directions. It has to be after
-		// Auth, because the only caller it admits is one whose administration
-		// permissions can be resolved, and that needs a principal on the
-		// context. It has to be before the cutover router and the shadow
-		// comparator, because during a maintenance window a refused request must
-		// not be proxied to pylon or sampled for comparison — a window that
-		// stops elitea-main while traffic keeps reaching the legacy runtime is
-		// not a maintenance window.
+		// The ordering is load-bearing. It has to be after Auth, because the
+		// only caller it admits is one whose administration permissions can be
+		// resolved, and that needs a principal on the context. It has to be
+		// above everything that does work, so a refused request reaches no
+		// handler.
 		r.Use(apimw.Maintenance(apimw.MaintenanceConfig{
 			Pool:     cfg.Pool,
 			Resolver: permissionResolver,
 		}))
-
-		if cfg.CutoverRouter != nil {
-			r.Use(cfg.CutoverRouter.Middleware)
-		}
-
-		if cfg.Shadow != nil {
-			r.Use(shadow.MiddlewareWithMetrics(shadow.MiddlewareConfig{
-				Comparator: cfg.Shadow,
-				Metrics:    cfg.ShadowMetrics,
-			}))
-		}
 
 		// The audit-trail emitter for `centry.audit_events` — the producer the
 		// admin Audit Trail page never had (internal/api/middleware/audit.go
@@ -1315,11 +1267,6 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		//   - BELOW Auth, so the row carries the principal. Above it, the
 		//     handler's context — where the principal lives — is invisible,
 		//     because a context flows down and never back up.
-		//   - BELOW the cutover router and the shadow comparator. A request the
-		//     cutover router proxies to pylon is audited BY pylon's own tracing
-		//     plugin; recording it here as well would double every row during
-		//     the migration window, and the Audit Trail has no way to tell the
-		//     two copies apart.
 		//   - ABOVE the per-route RBAC gates, so a caller refused a permission
 		//     (403) is recorded rather than silently disappearing — which is
 		//     the question an audit trail is most often opened to answer.
@@ -2073,8 +2020,8 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// This gate used `apimw.RequirePermissions`, which reads
 				// `auth.User.Permissions` instead of asking the resolver.
 				// Production never fills that field. The only source that
-				// assigns it is the legacy Redis-RPC validator at
-				// internal/infra/authsvc/rpc.go:121, and production wires
+				// assigned it was the legacy Redis-RPC validator that #383
+				// deleted, and production wires
 				// `authsvc.NewPrincipalValidator` instead, which leaves the
 				// field nil. So the gate refused EVERY caller by construction,
 				// the operator included, and no migration could reach it. That
@@ -3668,10 +3615,9 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			r.Mount("/tracing", tracingHandler.Routes(requireTracingAdminStatus))
 
 			// Artifacts are mounted by mountArtifactRoutes below, outside
-			// this /api/v2 group — see S11: the shadow middleware wrapping
-			// this group buffers the whole response and has no Unwrap, which
-			// would break download streaming and ResponseController
-			// deadlines (S12).
+			// this /api/v2 group — see S11: this group's JSON compression
+			// would buffer and encode a downloaded object rather than
+			// streaming it (S12).
 
 			// === Context Manager ===
 			//
@@ -3912,8 +3858,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	mountLLM := func(proxy http.Handler, resolver apimw.PersonalProjectResolver) {
 		r.Group(func(r chi.Router) {
 			r.Use(apimw.Auth(apimw.AuthConfig{
-				Client:                     cfg.AuthClient,
-				Validator:                  cfg.AuthValidator,
+						Validator:                  cfg.AuthValidator,
 				PrincipalValidator:         cfg.PrincipalValidator,
 				ForwardedIdentityVerifier:  cfg.Auth.ForwardedIdentityVerifier,
 				SessionSecret:              cfg.SessionSecret,

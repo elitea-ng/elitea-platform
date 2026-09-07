@@ -57,10 +57,11 @@ GATEWAY_SERVER_NAME
 GATEWAY_HTTP_ADDR
 GATEWAY_NATS_URL
 
-# --- Cutover / parity rollout controls, driven by the migration tooling rather
-# --- than steady-state chart values.
+# --- Parity rollout controls, driven by the migration tooling rather than
+# --- steady-state chart values. ELITEA_SHADOW_URL left this list with #383:
+# --- its only reader was cutover-ctl's shadow readiness gate, and the shadow
+# --- comparator it read is deleted.
 ELITEA_URL
-ELITEA_SHADOW_URL
 LEGACY_LLM_URL
 LLM_BUDGET_PROJECTS_FILE
 LLM_PARITY_PROJECTS_FILE

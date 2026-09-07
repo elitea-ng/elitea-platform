@@ -108,11 +108,19 @@ func TestNilGatedRouterFieldsAreWiredOrDeclared(t *testing.T) {
 		// and "the EventSource fallback" — each justified by the other, so both
 		// being nil satisfied the allowlist while the route they gate was
 		// entirely absent (#152). That is the hole the check below closes.
-		"EventSource":    "#152 — the NATS arm; no elitea-main deployment runs NATS, and the Redis arm of this pair IS wired",
-		"Shadow":         "cutover machinery, enabled per-deployment",
-		"ShadowMetrics":  "cutover machinery, enabled per-deployment",
-		"CutoverRouter":  "cutover machinery, enabled per-deployment",
-		"CutoverTracker": "cutover machinery, enabled per-deployment",
+		// Shadow, ShadowMetrics, CutoverRouter and CutoverTracker are gone
+		// from RouterConfig entirely (#383). Their entries here read "cutover
+		// machinery, enabled per-deployment" — a reason that was never true:
+		// no deployment enabled them, no composition root ever assigned them,
+		// and the routes behind them answered 404 everywhere. That is the
+		// exact shape this map is meant to make visible, and the entries hid
+		// it instead, because the map cannot tell a deliberate absence from a
+		// forgotten one when the reason is written by the same hand that
+		// forgot. The fields, the pylon reverse proxy and the shadow
+		// comparator behind them, and the internal-admin token that gated
+		// their routes, are all deleted. TestNoPylonBridgeWiringReturns fails
+		// if any of it comes back.
+		"EventSource": "#152 — the NATS arm; no elitea-main deployment runs NATS, and the Redis arm of this pair IS wired",
 	}
 
 	root := repoRootFrom(t)

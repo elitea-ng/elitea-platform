@@ -60,7 +60,6 @@ func (a acceptEveryToken) ValidateToken(context.Context, string) (auth.User, err
 
 func absentValidatorConfig() apimw.AuthConfig {
 	return apimw.AuthConfig{
-		Client:        newTestClient(),
 		Validator:     acceptEveryToken{user: auth.User{ID: "7", UserID: "7", AuthType: "user"}},
 		SessionSecret: absentValidatorSessionSecret,
 		// PrincipalValidator is deliberately absent. That is the deployment

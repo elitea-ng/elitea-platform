@@ -32,7 +32,6 @@ func (testPrincipalValidator) ValidatePrincipal(_ context.Context, user auth.Use
 func buildGatewayRouterConfig(t *testing.T, validator apimw.TokenValidator, resolver apimw.PersonalProjectResolver, proxy http.Handler) api.RouterConfig {
 	t.Helper()
 	return api.RouterConfig{
-		AuthClient:             newTestAuthClient(t),
 		AuthValidator:          validator,
 		PrincipalValidator:     testPrincipalValidator{},
 		GatewayProxy:           proxy,

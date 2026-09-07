@@ -149,7 +149,7 @@ The core platform API. Handles authentication, project management, prompt librar
 ```bash
 cd services/elitea-main
 go run ./cmd/elitea-main     # Run directly
-go run ./cmd/cutover-ctl     # Migration cutover CLI
+go run ./cmd/cutover-ctl     # LLM-path cutover verification gates
 go run ./cmd/elitea-auth-validate -form-users-file /absolute/private/form-users.json
                              # Validate a resolved Form snapshot; success is silent
 ```
@@ -166,8 +166,6 @@ prints only fixed generic failures and never prints the file path or contents.
 |----------|---------|-------------|
 | `DATABASE_URL` | — | PostgreSQL connection string |
 | `REDIS_URL` | — | Redis host:port |
-| `LEGACY_URL` | (empty) | Legacy pylon_main URL (enables cutover routing) |
-| `CANARY_WEIGHT` | `0` | Canary traffic percentage (0-100) |
 
 ### The index plane, and the service that used to serve it
 

@@ -40,7 +40,7 @@ func TestForwardAuthRequiresCurrentBaselineTraefikHeaders(t *testing.T) {
 	for _, missing := range currentBaselineTraefikHeaders() {
 		t.Run(missing.name, func(t *testing.T) {
 			validated := false
-			forward := v2auth.NewForwardAuthHandler(nil, tokenValidatorFunc(func(context.Context, string) (identity.User, error) {
+			forward := v2auth.NewForwardAuthHandler(tokenValidatorFunc(func(context.Context, string) (identity.User, error) {
 				validated = true
 				return validatedTokenUser(), nil
 			}))
@@ -60,7 +60,7 @@ func TestForwardAuthRequiresCurrentBaselineTraefikHeaders(t *testing.T) {
 }
 
 func TestForwardAuthTraefikHeadersRequirePresenceNotContent(t *testing.T) {
-	forward := v2auth.NewForwardAuthHandler(nil, tokenValidatorFunc(func(context.Context, string) (identity.User, error) {
+	forward := v2auth.NewForwardAuthHandler(tokenValidatorFunc(func(context.Context, string) (identity.User, error) {
 		return validatedTokenUser(), nil
 	}))
 	req := httptest.NewRequest(http.MethodGet, "/auth", nil)
@@ -78,7 +78,6 @@ func TestForwardAuthTraefikHeadersRequirePresenceNotContent(t *testing.T) {
 func TestForwardAuthAuthorizationPrecedesAdditionalCredentialHeaders(t *testing.T) {
 	var validatedToken string
 	forward := v2auth.NewForwardAuthHandler(
-		nil,
 		tokenValidatorFunc(func(_ context.Context, token string) (identity.User, error) {
 			validatedToken = token
 			return validatedTokenUser(), nil
@@ -104,7 +103,6 @@ func TestForwardAuthAuthorizationPrecedesAdditionalCredentialHeaders(t *testing.
 func TestForwardAuthMalformedAuthorizationDoesNotTraverseToAdditionalHeader(t *testing.T) {
 	validated := false
 	forward := v2auth.NewForwardAuthHandler(
-		nil,
 		tokenValidatorFunc(func(context.Context, string) (identity.User, error) {
 			validated = true
 			return validatedTokenUser(), nil
@@ -150,7 +148,7 @@ func TestForwardAuthCredentialHandlers(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			var gotToken string
-			forward := v2auth.NewForwardAuthHandler(nil, tokenValidatorFunc(func(_ context.Context, token string) (identity.User, error) {
+			forward := v2auth.NewForwardAuthHandler(tokenValidatorFunc(func(_ context.Context, token string) (identity.User, error) {
 				gotToken = token
 				return validatedTokenUser(), nil
 			}))
@@ -175,7 +173,7 @@ func TestForwardAuthCredentialHandlers(t *testing.T) {
 func TestForwardAuthAdditionalCredentialHeadersAreExplicitAndOrdered(t *testing.T) {
 	t.Run("not trusted by default", func(t *testing.T) {
 		validated := false
-		forward := v2auth.NewForwardAuthHandler(nil, tokenValidatorFunc(func(context.Context, string) (identity.User, error) {
+		forward := v2auth.NewForwardAuthHandler(tokenValidatorFunc(func(context.Context, string) (identity.User, error) {
 			validated = true
 			return validatedTokenUser(), nil
 		}))
@@ -194,7 +192,6 @@ func TestForwardAuthAdditionalCredentialHeadersAreExplicitAndOrdered(t *testing.
 	t.Run("configuration order", func(t *testing.T) {
 		var gotToken string
 		forward := v2auth.NewForwardAuthHandler(
-			nil,
 			tokenValidatorFunc(func(_ context.Context, token string) (identity.User, error) {
 				gotToken = token
 				return validatedTokenUser(), nil
@@ -233,7 +230,7 @@ func TestForwardAuthSuccessTargetContract(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			forward := v2auth.NewForwardAuthHandler(nil, tokenValidatorFunc(func(context.Context, string) (identity.User, error) {
+			forward := v2auth.NewForwardAuthHandler(tokenValidatorFunc(func(context.Context, string) (identity.User, error) {
 				return validatedTokenUser(), nil
 			}))
 			req := newForwardAuthRequest(test.path)
@@ -257,7 +254,7 @@ func TestForwardAuthSuccessTargetContract(t *testing.T) {
 }
 
 func TestForwardAuthPreservesTokenRowAndOwningUserAcrossHeaders(t *testing.T) {
-	forward := v2auth.NewForwardAuthHandler(nil, tokenValidatorFunc(func(_ context.Context, token string) (identity.User, error) {
+	forward := v2auth.NewForwardAuthHandler(tokenValidatorFunc(func(_ context.Context, token string) (identity.User, error) {
 		if token != "signed-token" {
 			t.Fatalf("validated token = %q", token)
 		}
@@ -322,7 +319,7 @@ func TestForwardAuthFailsClosedWhenValidatorOmitsTypedTokenIdentity(t *testing.T
 		{ID: "7", UserID: "7", AuthType: "token"},
 		{ID: "42", TokenID: "42", AuthType: "token"},
 	} {
-		forward := v2auth.NewForwardAuthHandler(nil, tokenValidatorFunc(func(context.Context, string) (identity.User, error) {
+		forward := v2auth.NewForwardAuthHandler(tokenValidatorFunc(func(context.Context, string) (identity.User, error) {
 			return user, nil
 		}))
 		req := newForwardAuthRequest("/auth?target=rpc")
@@ -350,7 +347,7 @@ func TestForwardAuthFailsClosedWithoutAWorkingValidator(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		forward := v2auth.NewForwardAuthHandler(nil, test.validator)
+		forward := v2auth.NewForwardAuthHandler(test.validator)
 		req := newForwardAuthRequest("/auth?target=rpc")
 		req.Header.Set("Authorization", "Bearer signed-token")
 		rec := httptest.NewRecorder()

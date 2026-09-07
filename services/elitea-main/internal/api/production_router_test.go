@@ -17,7 +17,6 @@ import (
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/oapiserver"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/shadow"
 	agentexecutionapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/agentexecution"
 	applicationskillsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/applicationskills"
 	v2auth "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/auth"
@@ -32,22 +31,10 @@ import (
 	v2social "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/social"
 	socialapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/social"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/cutover"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
 	dbrepos "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
 )
-
-// newUnreachableRedisClient returns a redis client pointed at a loopback
-// address nothing listens on. cutover.Tracker calls its methods with no nil
-// check, so any test that composes CutoverRouter/CutoverTracker and expects
-// requests to reach them needs a non-nil client to avoid a nil-pointer
-// panic; pointing it at an unreachable address instead of a real redis
-// instance gives a fast, deterministic connection error, which the
-// production code already treats as "fall through" (see cutover/router.go).
-func newUnreachableRedisClient() *goredis.Client {
-	return goredis.NewClient(&goredis.Options{Addr: "127.0.0.1:1", DialTimeout: 50 * time.Millisecond})
-}
 
 // reviewedRoutesRouter exercises mountReviewedProductionRoutes in isolation,
 // the same way newProductionRouter's single call site does (#243 removed the
@@ -2378,14 +2365,20 @@ func TestProductionBrowserAuthSurfaceNeverSucceedsWithoutCredentials(t *testing.
 	}
 }
 
+// newUnreachableRedisClient returns a redis client pointed at a loopback
+// address nothing listens on. A test that composes a redis-backed route group
+// and expects requests to reach it needs a non-nil client to avoid a
+// nil-pointer panic; pointing it at an unreachable address instead of a real
+// redis instance gives a fast, deterministic connection error, which the
+// production code already treats as "this source has nothing to give".
+func newUnreachableRedisClient() *goredis.Client {
+	return goredis.NewClient(&goredis.Options{Addr: "127.0.0.1:1", DialTimeout: 50 * time.Millisecond})
+}
+
 func newCompleteProductionRouter(sessionSecret string) chi.Router {
 	runtimeHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		panic(fmt.Errorf("route coverage test must not execute runtime handler"))
 	})
-	// NewRouter's dead "reviewed production router" branch never wired
-	// CutoverRouter/CutoverTracker, so nothing exercised them before #243;
-	// see newUnreachableRedisClient for why a nil client isn't safe here.
-	unreachableRedis := newUnreachableRedisClient()
 	return NewRouter(RouterConfig{
 		AuthValidator:      testTokenValidator{user: authenticatedTestUser()},
 		PrincipalValidator: testPrincipalValidator{},
@@ -2397,15 +2390,7 @@ func newCompleteProductionRouter(sessionSecret string) chi.Router {
 		// out of this router would let all three routes be removed without a
 		// test noticing.
 		SAMLHandler:    &v2auth.SAMLHandler{},
-		SessionSecret:  sessionSecret,
-		Shadow:         shadow.NewComparator(shadow.Config{Timeout: time.Second}),
-		ShadowMetrics:  shadow.NewMetrics(10),
-		CutoverTracker: cutover.NewTracker(unreachableRedis),
-		CutoverRouter: cutover.NewRouter(cutover.RouterConfig{
-			Tracker:   cutover.NewTracker(unreachableRedis),
-			LegacyURL: "http://127.0.0.1:1",
-		}),
-		InternalAdminToken: strings.Repeat("i", middleware.MinimumInternalAdminTokenBytes),
+		SessionSecret: sessionSecret,
 		RuntimeRoutes: RuntimeRoutes{
 			Validation:      runtimeHandler,
 			ExecutionEvents: runtimeHandler,

@@ -5,16 +5,12 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"net"
 	"net/http"
 	"net/http/httptest"
-	"sync/atomic"
 	"testing"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/authsvc"
-	"github.com/redis/go-redis/v9"
 )
 
 type tokenValidatorFunc func(context.Context, string) (auth.User, error)
@@ -37,13 +33,22 @@ func (f forwardedIdentityVerifierFunc) VerifyForwardedIdentityPeer(request *http
 
 func allowForwardedIdentity(*http.Request) error { return nil }
 
-func newTestClient() *authsvc.Client {
-	rdb := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
-	return authsvc.New(rdb)
+// unusedTokenValidator names a credential reader that always refuses.
+//
+// The tests below carry it so AuthConfig describes a deployment WITH a
+// credential plane; none of them presents a credential the reader can accept,
+// and the forwarded-identity tests never reach it at all. It replaces
+// newTestClient, which returned the pylon Redis-RPC validator #383 deleted —
+// that client refused everything too, by failing to dial Redis, so no
+// assertion in this file changes.
+func unusedTokenValidator() middleware.TokenValidator {
+	return tokenValidatorFunc(func(context.Context, string) (auth.User, error) {
+		return auth.User{}, errors.New("no credential plane in this test")
+	})
 }
 
 func TestAuth_MissingHeader(t *testing.T) {
-	handler := middleware.Auth(middleware.AuthConfig{Client: newTestClient()})(
+	handler := middleware.Auth(middleware.AuthConfig{Validator: unusedTokenValidator()})(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			t.Fatal("handler should not be called")
 		}),
@@ -71,7 +76,7 @@ func TestAuth_MissingHeader(t *testing.T) {
 }
 
 func TestAuth_UnsupportedScheme(t *testing.T) {
-	handler := middleware.Auth(middleware.AuthConfig{Client: newTestClient()})(
+	handler := middleware.Auth(middleware.AuthConfig{Validator: unusedTokenValidator()})(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			t.Fatal("handler should not be called")
 		}),
@@ -93,7 +98,7 @@ func TestAuth_UnsupportedScheme(t *testing.T) {
 }
 
 func TestAuth_InvalidBasicEncoding(t *testing.T) {
-	handler := middleware.Auth(middleware.AuthConfig{Client: newTestClient()})(
+	handler := middleware.Auth(middleware.AuthConfig{Validator: unusedTokenValidator()})(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			t.Fatal("handler should not be called")
 		}),
@@ -115,7 +120,7 @@ func TestAuth_InvalidBasicEncoding(t *testing.T) {
 }
 
 func TestAuth_BasicAuthExtractsUsername(t *testing.T) {
-	handler := middleware.Auth(middleware.AuthConfig{Client: newTestClient()})(
+	handler := middleware.Auth(middleware.AuthConfig{Validator: unusedTokenValidator()})(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		}),
@@ -139,7 +144,7 @@ func TestAuth_TraefikHeaders(t *testing.T) {
 	var gotUser auth.User
 	var gotSource auth.AuthenticationSource
 	handler := middleware.Auth(middleware.AuthConfig{
-		Client:                    newTestClient(),
+		Validator:                 unusedTokenValidator(),
 		ForwardedIdentityVerifier: forwardedIdentityVerifierFunc(allowForwardedIdentity),
 		PrincipalValidator: principalValidatorFunc(func(_ context.Context, user auth.User) (auth.User, error) {
 			if user.Email != "" {
@@ -195,7 +200,7 @@ func TestAuth_TraefikHeaders(t *testing.T) {
 func TestAuth_TraefikTokenNormalizesCompatibilityIDToOwningUser(t *testing.T) {
 	var gotUser auth.User
 	handler := middleware.Auth(middleware.AuthConfig{
-		Client:                    newTestClient(),
+		Validator:                 unusedTokenValidator(),
 		ForwardedIdentityVerifier: forwardedIdentityVerifierFunc(allowForwardedIdentity),
 		PrincipalValidator: principalValidatorFunc(func(_ context.Context, user auth.User) (auth.User, error) {
 			if user.TokenID != "900" || user.UserID != "7" {
@@ -235,7 +240,7 @@ func TestAuth_TraefikTokenNormalizesCompatibilityIDToOwningUser(t *testing.T) {
 
 func TestAuth_TrustedForwardedIdentityRequiresPrincipalValidator(t *testing.T) {
 	handler := middleware.Auth(middleware.AuthConfig{
-		Client:                    newTestClient(),
+		Validator:                 unusedTokenValidator(),
 		ForwardedIdentityVerifier: forwardedIdentityVerifierFunc(allowForwardedIdentity),
 	})(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		t.Fatal("unvalidated forwarded identity reached protected handler")
@@ -254,7 +259,7 @@ func TestAuth_TrustedForwardedIdentityRequiresPrincipalValidator(t *testing.T) {
 }
 
 func TestAuth_DoesNotTrustForwardedHeadersOnPublicListenerByDefault(t *testing.T) {
-	handler := middleware.Auth(middleware.AuthConfig{Client: newTestClient()})(
+	handler := middleware.Auth(middleware.AuthConfig{Validator: unusedTokenValidator()})(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			t.Fatal("spoofed forwarded identity reached protected handler")
 		}),
@@ -273,7 +278,7 @@ func TestAuth_DoesNotTrustForwardedHeadersOnPublicListenerByDefault(t *testing.T
 func TestAuthRejectsForwardedIdentityFromUnverifiedPeer(t *testing.T) {
 	verifierCalls := 0
 	handler := middleware.Auth(middleware.AuthConfig{
-		Client: newTestClient(),
+		Validator: unusedTokenValidator(),
 		ForwardedIdentityVerifier: forwardedIdentityVerifierFunc(func(*http.Request) error {
 			verifierCalls++
 			return errors.New("untrusted socket peer")
@@ -299,7 +304,7 @@ func TestAuthRejectsForwardedIdentityFromUnverifiedPeer(t *testing.T) {
 
 func TestAuthRejectsDuplicateForwardedIdentityHeaders(t *testing.T) {
 	handler := middleware.Auth(middleware.AuthConfig{
-		Client:                    newTestClient(),
+		Validator:                 unusedTokenValidator(),
 		ForwardedIdentityVerifier: forwardedIdentityVerifierFunc(allowForwardedIdentity),
 		PrincipalValidator: principalValidatorFunc(func(context.Context, auth.User) (auth.User, error) {
 			t.Fatal("ambiguous forwarded identity reached principal validation")
@@ -323,7 +328,6 @@ func TestAuthRejectsDuplicateForwardedIdentityHeaders(t *testing.T) {
 
 func TestAuthRejectsCredentialWhenAuthoritativePrincipalCheckFails(t *testing.T) {
 	handler := middleware.Auth(middleware.AuthConfig{
-		Client: newTestClient(),
 		Validator: tokenValidatorFunc(func(context.Context, string) (auth.User, error) {
 			return auth.User{ID: "7", UserID: "7", AuthType: "token"}, nil
 		}),
@@ -345,19 +349,21 @@ func TestAuthRejectsCredentialWhenAuthoritativePrincipalCheckFails(t *testing.T)
 	}
 }
 
-func TestAuthLocalValidationNeverConsultsSharedRedisCache(t *testing.T) {
-	var redisDials atomic.Int64
-	rdb := redis.NewClient(&redis.Options{
-		Addr: "shared-legacy-redis.invalid:6379",
-		Dialer: func(context.Context, string, string) (net.Conn, error) {
-			redisDials.Add(1)
-			return nil, errors.New("shared Redis must not be an authentication authority")
-		},
-	})
-	t.Cleanup(func() { _ = rdb.Close() })
+// TestAuthConsultsOnlyTheLocalValidatorForABearerCredential is what remains of
+// TestAuthLocalValidationNeverConsultsSharedRedisCache.
+//
+// That test carried a second, Redis-backed validator on AuthConfig and proved
+// the middleware never dialled it. #383 deleted that field and the client
+// behind it, so the property is now structural rather than behavioural: there
+// is no Redis in this package at all, and
+// TestNoPylonBridgeWiringReturns (internal/api) fails if one comes back.
+//
+// What a behavioural test can still hold is the other half: a Bearer
+// credential is read exactly once, by the local validator, and its refusal is
+// a 401 rather than a fall-through to some other authority.
+func TestAuthConsultsOnlyTheLocalValidatorForABearerCredential(t *testing.T) {
 	validatorCalls := 0
 	handler := middleware.Auth(middleware.AuthConfig{
-		Client: authsvc.New(rdb),
 		Validator: tokenValidatorFunc(func(context.Context, string) (auth.User, error) {
 			validatorCalls++
 			return auth.User{}, errors.New("invalid signature")
@@ -377,14 +383,11 @@ func TestAuthLocalValidationNeverConsultsSharedRedisCache(t *testing.T) {
 	if validatorCalls != 1 {
 		t.Fatalf("local validator calls = %d, want 1", validatorCalls)
 	}
-	if redisDials.Load() != 0 {
-		t.Fatalf("shared Redis dials = %d, want 0", redisDials.Load())
-	}
 }
 
 func TestAuth_TraefikHeaders_MissingID(t *testing.T) {
 	handler := middleware.Auth(middleware.AuthConfig{
-		Client:                    newTestClient(),
+		Validator:                 unusedTokenValidator(),
 		ForwardedIdentityVerifier: forwardedIdentityVerifierFunc(allowForwardedIdentity),
 	})(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

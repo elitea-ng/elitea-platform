@@ -17,11 +17,6 @@ main:
   env:
     DATABASE_URL: "postgres://elitea:elitea@postgres:5432/elitea?sslmode=disable"
     REDIS_URL: "redis:6379"
-    SHADOW_ENABLED: "true"
-    SHADOW_LEGACY_URL: "http://pylon-main:8000"
-    SHADOW_WEIGHT: "0.1"
-    LEGACY_URL: "http://pylon-main:8000"
-    CANARY_WEIGHT: "0.0"
 
   autoscaling:
     enabled: false

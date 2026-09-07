@@ -214,7 +214,7 @@ func TestAPIGroupAuthConfigAdmitsNothingWithoutACredentialPlane(t *testing.T) {
 			"secret: %q — it would admit any cookie signed with it, and with "+
 			"no principal validator behind it", config.SessionSecret)
 	}
-	if config.Validator != nil || config.Client != nil {
+	if config.Validator != nil {
 		t.Fatal("a deployment with no credential plane carries a token validator")
 	}
 	if config.PrincipalValidator != nil {

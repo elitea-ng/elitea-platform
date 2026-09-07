@@ -10,14 +10,10 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/shadow"
 	v2artifacts "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/artifacts"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/cutover"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
 )
 
@@ -69,65 +65,6 @@ func TestObjectDownloadRejectsRawTraversalKey(t *testing.T) {
 	}
 	if envelope.Error.Code != "InvalidKey" {
 		t.Fatalf("error.code = %q, want InvalidKey; body=%s", envelope.Error.Code, rec.Body.String())
-	}
-}
-
-func TestInternalAdminRoutesGateOnInternalAdminTokenStrengthAndValue(t *testing.T) {
-	comparator := shadow.NewComparator(shadow.Config{Timeout: time.Second})
-	metrics := shadow.NewMetrics(10)
-	// See newUnreachableRedisClient (production_router_test.go): a nil
-	// redis.UniversalClient makes Tracker.List/Get panic the instant a
-	// request reaches the handler.
-	tracker := cutover.NewTracker(newUnreachableRedisClient())
-	strongToken := strings.Repeat("i", middleware.MinimumInternalAdminTokenBytes)
-
-	for _, token := range []string{"", "short", strongToken} {
-		router := NewRouter(RouterConfig{
-			AuthValidator:      testTokenValidator{user: authenticatedTestUser()},
-			PrincipalValidator: testPrincipalValidator{},
-			Shadow:             comparator,
-			ShadowMetrics:      metrics,
-			CutoverTracker:     tracker,
-			InternalAdminToken: token,
-		})
-		strong := token == strongToken
-		for _, target := range []string{"/internal/shadow/config", "/internal/cutover/"} {
-			for _, present := range []bool{false, true} {
-				// No testAuthHeader: these routes must be absent from the
-				// production mount regardless of who is asking, so the
-				// assertion must not depend on an authenticated principal.
-				req := httptest.NewRequest(http.MethodGet, target, nil)
-				if present {
-					req.Header.Set("Authorization", "Bearer "+token)
-				}
-				rec := httptest.NewRecorder()
-				router.ServeHTTP(rec, req)
-
-				switch {
-				case !strong:
-					// Below RequireInternalAdminToken's minimum length, the
-					// route group is never mounted at all (router.go), for
-					// every credential shape.
-					if rec.Code != http.StatusNotFound {
-						t.Fatalf("token length %d present=%t target %q status = %d, want %d", len(token), present, target, rec.Code, http.StatusNotFound)
-					}
-				case !present:
-					// A strong-enough token DOES mount the route (#243: this
-					// used to be masked by the dead "reviewed production
-					// router" branch, which never wired Shadow/Cutover at
-					// all) — but it still requires the exact bearer token.
-					if rec.Code != http.StatusUnauthorized {
-						t.Fatalf("token length %d present=%t target %q status = %d, want %d", len(token), present, target, rec.Code, http.StatusUnauthorized)
-					}
-				default:
-					// The correct token reaches the real handler — neither
-					// unmounted (404) nor rejected (401).
-					if rec.Code == http.StatusNotFound || rec.Code == http.StatusUnauthorized {
-						t.Fatalf("token length %d present=%t target %q status = %d, want a real handler response", len(token), present, target, rec.Code)
-					}
-				}
-			}
-		}
 	}
 }
 

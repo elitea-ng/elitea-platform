@@ -17,7 +17,6 @@ import (
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browsersession"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/authsvc"
 )
 
 // TokenValidator validates a token string and returns the authenticated user.
@@ -50,8 +49,11 @@ type BrowserSessionValidator interface {
 }
 
 type AuthConfig struct {
-	Client                    *authsvc.Client // Legacy RPC validator used only when Validator is nil.
-	Validator                 TokenValidator  // Local validator (used if non-nil, falls back to Client)
+	// Validator reads a credential back and yields the principal it names.
+	// It is the ONLY token validator now: #383 deleted the pylon Redis-RPC
+	// client that used to fill in when this field was nil, so a nil Validator
+	// admits no bearer or API-key credential at all.
+	Validator                 TokenValidator
 	PrincipalValidator        PrincipalValidator
 	ForwardedIdentityVerifier ForwardedIdentityPeerVerifier
 	SessionSecret             string // HMAC key for session cookies
@@ -696,11 +698,8 @@ func positiveSessionUserID(value string) (int64, bool) {
 }
 
 func validateToken(ctx context.Context, cfg AuthConfig, token string) (auth.User, error) {
-	if cfg.Validator != nil {
-		return cfg.Validator.ValidateToken(ctx, token)
-	}
-	if cfg.Client == nil {
+	if cfg.Validator == nil {
 		return auth.User{}, fmt.Errorf("authentication validator is not configured")
 	}
-	return cfg.Client.ValidateToken(ctx, token)
+	return cfg.Validator.ValidateToken(ctx, token)
 }
