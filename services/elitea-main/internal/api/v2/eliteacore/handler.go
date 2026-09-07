@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -3976,14 +3977,36 @@ func (h *Handler) ListProjectIcons(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows := make([]map[string]any, 0, len(page.Objects))
+	names := make([]string, 0, len(page.Objects))
 	for _, object := range page.Objects {
+		names = append(names, object.Key)
+	}
+	// social/rpc/icons.py:get_icons_list sorts by name BEFORE it slices, so the
+	// page a caller asks for is stable between two calls. An unsorted listing
+	// makes `skip` meaningless: the second page may repeat or drop a row
+	// depending on the order the backend happened to answer in.
+	sort.Strings(names)
+
+	rows := make([]map[string]any, 0, len(names))
+	for _, name := range names {
 		rows = append(rows, map[string]any{
-			"name": object.Key,
-			"url":  fmt.Sprintf("/icons/%s/%s", projectID, object.Key),
+			"name": name,
+			"url":  fmt.Sprintf("/icons/%s/%s", projectID, name),
 		})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"rows": rows, "total": len(rows)})
+	// `skip` and `limit` were accepted and DISCARDED. The picker sends both
+	// (apps/elitea-web fetchProjectIcons sends limit=200&skip=0) and pylon
+	// honours both, so a project with more icons than one page could never
+	// reach the rest of them: every request answered page one and called it the
+	// whole set. `total` stays the count of every icon, not of the page —
+	// get_icons_list computes it before the slice, and a client paging on it
+	// needs the full figure.
+	skip := safeIntOr(r.URL.Query().Get("skip"), 0)
+	limit := safeIntOr(r.URL.Query().Get("limit"), defaultProjectIconPageSize)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"rows":  pageOfIconRows(rows, skip, limit),
+		"total": len(rows),
+	})
 }
 
 // CreateProjectIcon stores the uploaded file.
@@ -4018,6 +4041,19 @@ func (h *Handler) CreateProjectIcon(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// project_icon.py measures the upload and refuses it over MAX_FILE_SIZE_KB.
+	// This route had NO cap: ParseMultipartForm's argument is a memory budget,
+	// not a limit, and its error was discarded, so an arbitrarily large file was
+	// streamed straight into the store under a permission a project editor
+	// holds.
+	if header.Size > maxProjectIconBytes {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": fmt.Sprintf("File size exceeds %d KB", maxProjectIconBytes/1024),
+			"code":  "icon_too_large",
+		})
+		return
+	}
+
 	name := projectIconKeyPrefix + generateID() + safeIconExtension(header.Filename)
 	ref, err := storage.NewObjectRef(projectID, iconBucket, name)
 	if err != nil {
@@ -4026,10 +4062,16 @@ func (h *Handler) CreateProjectIcon(w http.ResponseWriter, r *http.Request) {
 	}
 
 	contentType := mime.TypeByExtension(safeIconExtension(header.Filename))
-	if _, err := h.store.Put(r.Context(), ref, file, storage.PutOptions{
+	// LimitReader, not the declared header.Size: that number is what the
+	// multipart part CLAIMS, and the cap has to hold against a part that lies.
+	// The extra byte is what makes an over-cap body detectable instead of
+	// silently truncated into storage.
+	limited := io.LimitReader(file, maxProjectIconBytes+1)
+	info, err := h.store.Put(r.Context(), ref, limited, storage.PutOptions{
 		ContentType:   contentType,
 		ContentLength: -1,
-	}); err != nil {
+	})
+	if err != nil {
 		slog.ErrorContext(r.Context(), "create project icon", "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]any{
 			"error": "failed to save project icon",
@@ -4037,11 +4079,58 @@ func (h *Handler) CreateProjectIcon(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	if info.Size > maxProjectIconBytes {
+		if deleteErr := h.store.Delete(r.Context(), ref); deleteErr != nil {
+			slog.ErrorContext(r.Context(), "remove oversized project icon", "error", deleteErr)
+		}
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": fmt.Sprintf("File size exceeds %d KB", maxProjectIconBytes/1024),
+			"code":  "icon_too_large",
+		})
+		return
+	}
 
+	// The full icon_meta object, not the two keys this route used to answer.
+	// social_save_image returns five, the project-info PUT stores whatever the
+	// picker hands back, and the settings dialog shows the two sizes — so a
+	// two-key response made the dialog render blanks and stored an icon_meta
+	// that no longer described the file.
+	width := clampProjectIconDimension(safeIntOr(r.FormValue("width"), defaultIconDimension))
+	height := clampProjectIconDimension(safeIntOr(r.FormValue("height"), defaultIconDimension))
 	writeJSON(w, http.StatusOK, map[string]any{
-		"name": name,
-		"url":  fmt.Sprintf("/icons/%s/%s", projectID, name),
+		"name":                name,
+		"url":                 fmt.Sprintf("/icons/%s/%s", projectID, name),
+		"size":                fmt.Sprintf("%dx%d", width, height),
+		"initial_file_size":   sizeofFmt(header.Size),
+		"resulting_file_size": sizeofFmt(info.Size),
 	})
+}
+
+// maxProjectIconBytes is project_icon.py's MAX_FILE_SIZE_KB (512), in bytes.
+const maxProjectIconBytes = 512 * 1024
+
+// maxProjectIconDimension is project_icon.py's MAX_DIMENSION. It is 512, NOT
+// the 64 the skill and agent icons use — a project icon is rendered larger.
+const maxProjectIconDimension = 512
+
+// defaultIconDimension is the box every icon route falls back to when the form
+// names none, in pylon and here.
+const defaultIconDimension = 64
+
+// defaultProjectIconPageSize is project_icon.py's `limit` default.
+const defaultProjectIconPageSize = 200
+
+// clampProjectIconDimension is project_icon.py's min(int(...), MAX_DIMENSION)
+// with the lower bound the skill route already applies: a zero or negative box
+// is not a box.
+func clampProjectIconDimension(value int) int {
+	if value < 1 {
+		return 1
+	}
+	if value > maxProjectIconDimension {
+		return maxProjectIconDimension
+	}
+	return value
 }
 
 // DeleteProjectIcon removes the stored object.
