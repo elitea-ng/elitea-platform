@@ -414,7 +414,14 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
  * generates a hook and three zod models (CanvasPresence, CanvasPresenceRequest,
  * CanvasEditor) for it.
  */
-const GENERATED_OPERATION_COUNT = 189;
+/*
+ * 189 -> 190: `setSkillRelation`, the PATCH the lifecycle unit's
+ * agentSkills.setSkillRelation manifest entry named all along. Splitting the
+ * fused manifest objects (205 -> 206) made elitea-main's reverse check see the
+ * entry again, and the allowlist may only shrink, so the operation is now
+ * described. MANIFEST_ENTRY_COUNT is unchanged: the entry existed.
+ */
+const GENERATED_OPERATION_COUNT = 190;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

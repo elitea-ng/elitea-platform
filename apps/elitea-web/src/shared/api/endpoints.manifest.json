@@ -2340,7 +2340,7 @@
             "id": "agentSkills.setSkillRelation",
             "method": "PATCH",
             "path": "/elitea_core/skill/prompt_lib/{projectId}/{skillId}",
-            "operationId": null,
+            "operationId": "setSkillRelation",
             "source": "handwritten",
             "responseSchema": "SkillAttachment",
             "fixture": null,

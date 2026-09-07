@@ -13177,6 +13177,69 @@ paths:
         '400': { $ref: '#/components/responses/400' }
         '404': { $ref: '#/components/responses/404' }
 
+  /elitea_core/skill/prompt_lib/{project_id}/{skill_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: skill_id
+        in: path
+        required: true
+        schema:
+          type: integer
+
+    patch:
+      operationId: setSkillRelation
+      summary: Attach or detach a skill on one agent version
+      description: |
+        The URL is overloaded: the same PATCH (and PUT) also serves the plain
+        skill update, and the body selects the operation. A body that carries
+        `has_relation` attaches (`true`, 201) or detaches (`false`, 200) the
+        skill on the agent version named by `entity_version_id`; any other body
+        is the plain update, which this document does not describe
+        (`skills.updateSkill` stays on the reverse-check allowlist). This is the
+        convention apps/elitea-ui's `updateSkillRelation` already calls and the
+        toolkit twin implements (internal/api/v2/skills/handler.go Update).
+      tags: [skills]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [has_relation, entity_version_id]
+              properties:
+                has_relation:
+                  type: boolean
+                  description: true attaches, false detaches. Non-boolean values are refused.
+                entity_version_id:
+                  type: integer
+                  description: The agent VERSION the relation belongs to.
+                skill_version_id:
+                  type: integer
+                  description: The skill version to attach; required when has_relation is true.
+      responses:
+        '200':
+          description: Detached
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+        '201':
+          description: Attached
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                x-elitea-passthrough: >-
+                  The attachment row as the repository returns it
+                  (internal/api/v2/skills/handler.go updateSkillRelation); the
+                  writer owns the shape.
+        '400': { $ref: '#/components/responses/400' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+
   /elitea_core/agents_with_skill/prompt_lib/{project_id}/{skill_id}:
     parameters:
       - $ref: '#/components/parameters/ProjectId'

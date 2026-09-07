@@ -52,6 +52,8 @@ import type {
   ListSkillCategories200,
   PublicSkillDetail,
   PublishSkill200,
+  SetSkillRelation200,
+  SetSkillRelation201,
   Skill,
   SkillDraft,
   SkillForkPayload,
@@ -862,6 +864,19 @@ export const getExportSkillVersionForkResponseMock = (
   ...overrideResponse,
 });
 
+export const getSetSkillRelationResponseMock = (
+  overrideResponse: Partial<
+    Extract<SetSkillRelation200 | SetSkillRelation201, object>
+  > = {},
+): SetSkillRelation200 | SetSkillRelation201 =>
+  faker.helpers.arrayElement([
+    {
+      ok: faker.helpers.arrayElement([faker.datatype.boolean(), undefined]),
+      ...overrideResponse,
+    },
+    {},
+  ]);
+
 export const getListAgentsWithSkillResponseMock = (
   overrideResponse: Partial<Extract<ListAgentsWithSkill200, object>> = {},
 ): ListAgentsWithSkill200 => ({
@@ -1257,6 +1272,36 @@ export const getExportSkillVersionForkMockHandler = (
   );
 };
 
+export const getSetSkillRelationMockHandler = (
+  overrideResponse?:
+    | SetSkillRelation200
+    | SetSkillRelation201
+    | ((
+        info: Parameters<Parameters<typeof http.patch>[1]>[0],
+      ) =>
+        | Promise<SetSkillRelation200 | SetSkillRelation201>
+        | SetSkillRelation200
+        | SetSkillRelation201),
+  options?: RequestHandlerOptions,
+) => {
+  return http.patch(
+    "*/elitea_core/skill/prompt_lib/:projectId/:skillId",
+    async (info: Parameters<Parameters<typeof http.patch>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getSetSkillRelationResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getListAgentsWithSkillMockHandler = (
   overrideResponse?:
     | ListAgentsWithSkill200
@@ -1297,5 +1342,6 @@ export const getSkillsMock = () => [
   getListSkillCategoriesMockHandler(),
   getExportSkillForkMockHandler(),
   getExportSkillVersionForkMockHandler(),
+  getSetSkillRelationMockHandler(),
   getListAgentsWithSkillMockHandler(),
 ];
