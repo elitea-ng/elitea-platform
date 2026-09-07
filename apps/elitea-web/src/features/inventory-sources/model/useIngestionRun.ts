@@ -165,9 +165,17 @@ export function useIngestionRun(
       setInvocationId(null);
       setRunningSourceId(null);
       if (outcome.kind === 'failed') {
-        // The message is the provider's own, already plain text: a refusal
-        // carries no result list to unwrap.
-        setError(outcome.message);
+        // PEELED, like a success. A refusal carries the SAME envelope:
+        // `spi.ToolError` marshals `[]ResultObject{Message(text)}` into the
+        // very `result` field a completed run uses
+        // (services/elitea-subapp-host/internal/spi/errors.go:130-147), so the
+        // "message" a terminal poll hands back is a JSON array and not a
+        // sentence. Showing it unpeeled put
+        // `[{"object_type":"message","data":"Run_ingestion failed: …"}]` in
+        // the banner — the failure reported, the reason unreadable. Found by
+        // INV-009 against a stack whose facade mounts without source
+        // expansion, which is the one thing that makes this path run at all.
+        setError(inventoryDocuments.errorText(outcome.message));
       } else {
         // `outcome.result` is the SPI ENVELOPE — a JSON array of result
         // objects, not the sentence. Showing it unpeeled puts a wall of

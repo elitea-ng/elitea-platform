@@ -227,6 +227,43 @@ describe('useIngestionRun', () => {
     expect(onSettled).toHaveBeenCalledTimes(1);
   });
 
+  it('peels the refusal, because a failure carries the SAME envelope a success does', async () => {
+    // MEASURED, not imagined: `spi.ToolError` marshals
+    // `[]ResultObject{Message(text)}` into the very `result` field a completed
+    // run uses (services/elitea-subapp-host/internal/spi/errors.go:130-147).
+    // The test above serves `message`, which no provider sends — so it passed
+    // against a hook that showed the envelope verbatim, and journey INV-009
+    // found `[{"object_type":"message","data":"Run_ingestion failed: …"}]` in
+    // the banner. This is that body.
+    const refusal =
+      'Run_ingestion failed: run_ingestion needs an expanded source: this service ' +
+      'does not resolve toolkit references, the facade does.';
+    serveInvoke();
+    servePolls({
+      status: 'Error',
+      result: JSON.stringify([
+        {
+          object_type: 'message',
+          result_target: 'response',
+          result_encoding: 'plain',
+          data: refusal,
+        },
+      ]),
+      error_category: 'invalid_input',
+    });
+
+    const { result } = renderHookWithProviders(() => useIngestionRun(TARGET, vi.fn()));
+    act(() => {
+      result.current.start('9010', false);
+    });
+    await waitFor(() => {
+      expect(result.current.error).toBe(refusal);
+    });
+    // Not the envelope. A banner carrying `[{"object_type"…` reports the
+    // failure and hides the reason, which is the whole of what a user needs.
+    expect(result.current.error).not.toContain('object_type');
+  });
+
   it('settles a stopped run on its next poll, not on the click', async () => {
     // Clearing the state at the click would leave the poller running against an
     // invocation the screen has forgotten.
