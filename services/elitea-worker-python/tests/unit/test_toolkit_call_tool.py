@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import types
 from typing import Any
 
 import pytest
@@ -25,6 +26,7 @@ from elitea.runtime.v1 import (
     toolkit_pb2,
 )
 
+from elitea_worker.agents import sdk_adapter as sdk_adapter_module
 from elitea_worker.constants import (
     CONFORMANCE_HMAC_KEY,
     CONFORMANCE_HMAC_KEY_ID,
@@ -610,3 +612,45 @@ def test_an_ok_run_settles_succeeded_and_a_refusal_settles_failed() -> None:
         refused_frame.settlement_proposal.requested_outcome
         == common_pb2.EXECUTION_OUTCOME_V1_FAILED
     )
+
+def test_an_unbuildable_toolkit_type_is_named_and_a_buildable_one_is_not(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The registry of the RUNNING interpreter is the measurement.
+
+    The image installs a measured subset of elitea-sdk[all]. A toolkit whose
+    dependency that subset omits does not import: elitea_sdk.tools records the
+    failure and continues with the type absent from its registry. Asking the
+    registry needs no type-to-key mapping and so cannot drift from one.
+    """
+
+    module = types.SimpleNamespace(AVAILABLE_TOOLS={"github": object()})
+    monkeypatch.setattr(
+        sdk_adapter_module.importlib, "import_module", lambda _name: module
+    )
+
+    assert sdk_adapter_module.unsupported_toolkit_type_reason("github") == ""
+    # Case and surrounding space are the SDK's own normalization.
+    assert sdk_adapter_module.unsupported_toolkit_type_reason(" GitHub ") == ""
+
+    refused = sdk_adapter_module.unsupported_toolkit_type_reason("slack")
+    assert "slack" in refused
+    assert sdk_adapter_module.unsupported_toolkit_type_reason("") != ""
+
+
+def test_an_unreadable_registry_does_not_refuse_the_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A registry this worker cannot read is not evidence the type is absent.
+
+    Refusing on it would turn one unreadable attribute into a platform that
+    refuses every toolkit, which is the failure mode this probe exists to
+    prevent rather than cause.
+    """
+
+    module = types.SimpleNamespace(AVAILABLE_TOOLS=None)
+    monkeypatch.setattr(
+        sdk_adapter_module.importlib, "import_module", lambda _name: module
+    )
+
+    assert sdk_adapter_module.unsupported_toolkit_type_reason("github") == ""

@@ -45,6 +45,7 @@ from elitea_worker.agents.sdk_adapter import (
     EliteaSdkIndexingAdapter,
     EliteaSdkToolkitToolAdapter,
     SdkBudgetExceeded,
+    unsupported_toolkit_type_reason,
 )
 from elitea_worker.constants import (
     AGENT_EXECUTE_ADHOC_CAPABILITY_ID,
@@ -2273,15 +2274,25 @@ class ToolkitCallToolDeliveryProcessor(IndexIngestDeliveryProcessor):
                 }
             },
         )
+        # The capability check comes BEFORE the client, the authorization and
+        # the SDK call, because a toolkit this image cannot build will fail
+        # inside the SDK with a message about an import, in a place the person
+        # looking at their saved toolkit cannot read. REFUSE it here with a
+        # sentence that names the type, and settle that refusal: a skipped
+        # command settles nothing, so the caller's bounded wait would burn its
+        # whole timeout and report "slow" for a condition that never changes.
+        if reason := unsupported_toolkit_type_reason(command.toolkit_type):
+            return unsupported_toolkit_result(
+                command,
+                input_bundle_id=input_bundle_id,
+                input_bundle_digest=input_bundle_digest,
+                reason=reason,
+            )
         try:
             adapter = EliteaSdkToolkitToolAdapter.from_context(
                 resolved_input.client_context
             )
         except DependencyUnavailable as error:
-            # The image cannot build this toolkit family. REFUSE the run with
-            # the reason, do not skip it: a skipped command settles nothing, so
-            # the caller's bounded wait would report "slow" for a condition
-            # that never changes.
             return unsupported_toolkit_result(
                 command,
                 input_bundle_id=input_bundle_id,

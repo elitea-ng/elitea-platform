@@ -396,6 +396,45 @@ class EliteaSdkIndexingAdapter:
             )
 
 
+def unsupported_toolkit_type_reason(toolkit_type: str) -> str:
+    """Say why this worker image cannot build one toolkit TYPE, or "".
+
+    The image installs a measured subset of ``elitea-sdk[all]``. A toolkit whose
+    third-party dependency that subset omits does not import: ``elitea_sdk.tools``
+    catches the failure, records it, and continues with the type ABSENT from its
+    registry. ``get_toolkit_available_tools`` then answers an empty list and a
+    tool call fails somewhere inside the SDK.
+
+    So the registry is the measurement, and the type is the right key for it.
+    toolkit_capabilities.unsupported_import_keys() reports IMPORT KEYS, which
+    are not types — the Kubernetes toolkit registers under ``k8s`` and publishes
+    as ``kubernetes`` — and the type-to-key mapping lives in Main's catalogue,
+    not here. Asking the registry directly needs no mapping and cannot drift
+    from it.
+
+    An empty string means the type is buildable. Everything else is a sentence
+    that names the type, because the caller is looking at a toolkit they saved
+    and needs to know THAT one is the problem.
+    """
+
+    if not toolkit_type:
+        return "the tool run named no toolkit type"
+    with redirect_stdout(sys.stderr):
+        module = importlib.import_module("elitea_sdk.tools")
+    registry = getattr(module, "AVAILABLE_TOOLS", None)
+    if not isinstance(registry, dict):
+        # A registry this worker cannot read is not evidence that the type
+        # works. Refusing here is wrong too, so say nothing and let the SDK
+        # call be the answer.
+        return ""
+    if toolkit_type.strip().lower() in registry:
+        return ""
+    return (
+        "this worker image cannot build the "
+        f"{toolkit_type} toolkit: it is absent from the installed SDK registry"
+    )
+
+
 class EliteaSdkToolkitToolAdapter:
     """Pinned adapter for ONE toolkit tool run.
 
