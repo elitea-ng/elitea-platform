@@ -27,23 +27,29 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	v2artifacts "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/artifacts"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
 	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/dbtest"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
 	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
 )
 
@@ -344,6 +350,7 @@ func (g grantingResolver) ResolvePermissions(
 		Permissions: []string{
 			PermissionConversationsList, PermissionConversationsCreate,
 			PermissionConversationRead, PermissionMessagesCreate,
+			PermissionAttachmentsCreate, PermissionArtifactsView,
 		},
 	}, nil
 }
@@ -384,6 +391,13 @@ type supportHarness struct {
 	routes  http.Handler
 	start   *resolvingStart
 	handler *Handler
+	// attachmentUploader/attachmentDownloader are exposed so a test can build
+	// a SECOND Handler over the SAME object store and metadata repositories
+	// but a different grantingResolver identity — the gate rewrites the
+	// caller's id from the resolution (see TestSupportHistoryIsScopedToItsAuthor's
+	// own comment), so a second caller needs its own Handler either way.
+	attachmentUploader   AttachmentUploader
+	attachmentDownloader AttachmentDownloader
 }
 
 func newSupportHarness(t *testing.T) *supportHarness {
@@ -396,13 +410,255 @@ func newSupportHarness(t *testing.T) *supportHarness {
 		t.Fatalf("build the current-agent start repository: %v", err)
 	}
 	start := &resolvingStart{repository: startRepository}
+
+	// Issue #625 item 2: the SAME artifact path chat itself uses — a real
+	// conversations.Handler (S20a-wired) for upload, a real artifacts.Handler
+	// for read-back, both against fakeObjectStore (in-memory bytes) plus the
+	// REAL S6/S9 metadata repositories, exactly like router.go wires them.
+	objectStore := newFakeObjectStore()
+	attachmentUploader := conversations.NewHandler(chat).
+		WithPool(pool).
+		WithObjectStore(objectStore).
+		WithAttachmentStore(newTestAttachmentStore(t, pool))
+	attachmentDownloader := v2artifacts.NewHandler(newTestArtifactRepo(t, pool), objectStore)
+
 	handler := NewHandler(pool,
 		WithChatStore(chat),
 		WithStartUseCase(start),
 		WithPermissionResolver(grantingResolver{userID: supportCallerID}),
+		WithAttachmentUploader(attachmentUploader),
+		WithAttachmentDownloader(attachmentDownloader),
 	)
-	return &supportHarness{pool: pool, routes: handler.Routes(), start: start, handler: handler}
+	return &supportHarness{
+		pool: pool, routes: handler.Routes(), start: start, handler: handler,
+		attachmentUploader: attachmentUploader, attachmentDownloader: attachmentDownloader,
+	}
 }
+
+// testAttachmentStore bridges conversations.AttachmentStore to the real
+// dbrepos repositories — a test-local copy of internal/api's own
+// attachmentRepoAdapter (that package cannot be imported here: internal/api
+// imports internal/api/v2/supportassistant, so the reverse import would
+// cycle). Same tables, same repos, same SQL — not a second store, a second
+// small bridge object over the one store, exactly like the production one.
+type testAttachmentStore struct {
+	buckets *repos.ArtifactBucketsRepository
+	objects *repos.ArtifactObjectsRepository
+	chunks  *repos.AttachmentChunksRepository
+}
+
+func newTestAttachmentStore(t *testing.T, pool *pgxpool.Pool) conversations.AttachmentStore {
+	t.Helper()
+	buckets, err := repos.NewArtifactBucketsRepository(pool)
+	if err != nil {
+		t.Fatalf("build the artifact buckets repository: %v", err)
+	}
+	objects, err := repos.NewArtifactObjectsRepository(pool)
+	if err != nil {
+		t.Fatalf("build the artifact objects repository: %v", err)
+	}
+	chunks, err := repos.NewAttachmentChunksRepository(pool)
+	if err != nil {
+		t.Fatalf("build the attachment chunks repository: %v", err)
+	}
+	return &testAttachmentStore{buckets: buckets, objects: objects, chunks: chunks}
+}
+
+func (a *testAttachmentStore) AttachmentPolicy(ctx context.Context, projectID int64) (string, *int64, *int32, error) {
+	policy, err := a.objects.GetProjectStoragePolicy(ctx, projectID)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	bucketName := ""
+	if policy.AttachmentBucket != nil {
+		bucketName = *policy.AttachmentBucket
+	}
+	return bucketName, policy.MaxObjectBytes, policy.RetentionDefaultDays, nil
+}
+
+func (a *testAttachmentStore) RequireAttachmentBucket(ctx context.Context, projectID int64, bucketName string, retentionDays int32) (int64, error) {
+	row, err := a.buckets.GetBucket(ctx, projectID, bucketName)
+	if err == nil {
+		return row.ID, nil
+	}
+	if !errors.Is(err, storage.ErrNotFound) {
+		return 0, err
+	}
+	expiresAt := time.Now().AddDate(0, 0, int(retentionDays))
+	row, err = a.buckets.CreateBucket(ctx, repos.NewBucketInput{
+		ProjectID: projectID, Name: bucketName, DisplayName: bucketName,
+		BucketType: "system", RetentionDays: &retentionDays, ExpiresAt: &expiresAt,
+	})
+	if err == nil {
+		return row.ID, nil
+	}
+	if errors.Is(err, storage.ErrAlreadyExists) {
+		row, err = a.buckets.GetBucket(ctx, projectID, bucketName)
+		if err != nil {
+			return 0, err
+		}
+		return row.ID, nil
+	}
+	return 0, err
+}
+
+func (a *testAttachmentStore) RecordAttachmentObject(ctx context.Context, bucketID int64, key string, byteLength int64, mediaType string, expiresAt *time.Time) error {
+	_, err := a.objects.UpsertObject(ctx, repos.NewObjectInput{
+		BucketID: bucketID, Key: key, ByteLength: byteLength, MediaType: mediaType, ExpiresAt: expiresAt,
+	})
+	return err
+}
+
+func (a *testAttachmentStore) LookupAttachmentBucket(ctx context.Context, projectID int64, bucketName string) (int64, error) {
+	row, err := a.buckets.GetBucket(ctx, projectID, bucketName)
+	if err != nil {
+		return 0, err
+	}
+	return row.ID, nil
+}
+
+func (a *testAttachmentStore) ListAttachmentObjectKeys(ctx context.Context, bucketID int64, keyPrefix string) ([]string, error) {
+	rows, err := a.objects.ListObjects(ctx, bucketID, keyPrefix)
+	if err != nil {
+		return nil, err
+	}
+	keys := make([]string, len(rows))
+	for i, row := range rows {
+		keys[i] = row.Key
+	}
+	return keys, nil
+}
+
+func (a *testAttachmentStore) DeleteAttachmentObjects(ctx context.Context, bucketID int64, keys []string) error {
+	return a.objects.DeleteObjects(ctx, bucketID, keys)
+}
+
+func (a *testAttachmentStore) UpsertAttachmentChunk(ctx context.Context, projectID int64, conversationID, fileID string, chunkIndex, totalChunks int32, fileName, contentType string, body []byte) error {
+	return a.chunks.UpsertChunk(ctx, projectID, conversationID, fileID, chunkIndex, totalChunks, fileName, contentType, body)
+}
+
+func (a *testAttachmentStore) CountAttachmentChunks(ctx context.Context, projectID int64, conversationID, fileID string) (int64, error) {
+	return a.chunks.CountChunks(ctx, projectID, conversationID, fileID)
+}
+
+func (a *testAttachmentStore) ListAttachmentChunksOrdered(ctx context.Context, projectID int64, conversationID, fileID string) ([]conversations.AttachmentChunk, error) {
+	rows, err := a.chunks.ListChunksOrdered(ctx, projectID, conversationID, fileID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]conversations.AttachmentChunk, len(rows))
+	for i, row := range rows {
+		out[i] = conversations.AttachmentChunk{ChunkIndex: row.ChunkIndex, Bytes: row.Bytes}
+	}
+	return out, nil
+}
+
+func (a *testAttachmentStore) DeleteAttachmentChunks(ctx context.Context, projectID int64, conversationID, fileID string) error {
+	return a.chunks.DeleteChunks(ctx, projectID, conversationID, fileID)
+}
+
+var _ conversations.AttachmentStore = (*testAttachmentStore)(nil)
+
+// testArtifactRepo bridges v2artifacts.Repository the same way
+// router.go's own artifactRepoAdapter does — three repositories that share no
+// method names, so embedding does the rest.
+type testArtifactRepo struct {
+	*repos.ArtifactBucketsRepository
+	*repos.ArtifactObjectsRepository
+	*repos.ArtifactTransferGrantsRepository
+}
+
+func newTestArtifactRepo(t *testing.T, pool *pgxpool.Pool) v2artifacts.Repository {
+	t.Helper()
+	buckets, err := repos.NewArtifactBucketsRepository(pool)
+	if err != nil {
+		t.Fatalf("build the artifact buckets repository: %v", err)
+	}
+	objects, err := repos.NewArtifactObjectsRepository(pool)
+	if err != nil {
+		t.Fatalf("build the artifact objects repository: %v", err)
+	}
+	grants, err := repos.NewArtifactTransferGrantsRepository(pool)
+	if err != nil {
+		t.Fatalf("build the artifact transfer grants repository: %v", err)
+	}
+	return testArtifactRepo{buckets, objects, grants}
+}
+
+// fakeObjectStore is a minimal in-memory storage.ObjectStore double with a
+// REAL Put AND a REAL Get — issue #625 item 2's round trip needs both, unlike
+// conversations/attachments_test.go's fakeAttachmentObjectStore (Put only,
+// Get answers ErrNotSupported), which proves the write side alone.
+type fakeObjectStore struct {
+	mu      sync.Mutex
+	objects map[string][]byte
+	types   map[string]string
+}
+
+func newFakeObjectStore() *fakeObjectStore {
+	return &fakeObjectStore{objects: map[string][]byte{}, types: map[string]string{}}
+}
+
+func (f *fakeObjectStore) Put(_ context.Context, ref storage.ObjectRef, body io.Reader, opts storage.PutOptions) (storage.ObjectInfo, error) {
+	data, err := io.ReadAll(body)
+	if err != nil {
+		return storage.ObjectInfo{}, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	key := ref.StorageKey("")
+	f.objects[key] = data
+	f.types[key] = opts.ContentType
+	return storage.ObjectInfo{Key: ref.Key(), Size: int64(len(data)), ContentType: opts.ContentType, LastModified: time.Now()}, nil
+}
+
+func (f *fakeObjectStore) Get(_ context.Context, ref storage.ObjectRef, _ *storage.ByteRange) (io.ReadCloser, storage.ObjectInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	key := ref.StorageKey("")
+	data, ok := f.objects[key]
+	if !ok {
+		return nil, storage.ObjectInfo{}, storage.ErrNotFound
+	}
+	return io.NopCloser(bytes.NewReader(data)), storage.ObjectInfo{
+		Key: ref.Key(), Size: int64(len(data)), TotalSize: int64(len(data)),
+		ContentType: f.types[key], LastModified: time.Now(),
+	}, nil
+}
+
+func (f *fakeObjectStore) Stat(context.Context, storage.ObjectRef) (storage.ObjectInfo, error) {
+	return storage.ObjectInfo{}, storage.ErrNotSupported
+}
+func (f *fakeObjectStore) Delete(context.Context, storage.ObjectRef) error {
+	return storage.ErrNotSupported
+}
+func (f *fakeObjectStore) DeleteBatch(context.Context, []storage.ObjectRef) (storage.BatchResult, error) {
+	return storage.BatchResult{}, storage.ErrNotSupported
+}
+func (f *fakeObjectStore) List(context.Context, storage.ListQuery) (storage.ListPage, error) {
+	return storage.ListPage{}, storage.ErrNotSupported
+}
+func (f *fakeObjectStore) PresignGet(context.Context, storage.ObjectRef, time.Duration) (string, error) {
+	return "", storage.ErrNotSupported
+}
+func (f *fakeObjectStore) PresignPut(context.Context, storage.ObjectRef, time.Duration, storage.PutOptions) (string, error) {
+	return "", storage.ErrNotSupported
+}
+func (f *fakeObjectStore) StartMultipart(context.Context, storage.ObjectRef, storage.PutOptions) (storage.UploadID, error) {
+	return "", storage.ErrNotSupported
+}
+func (f *fakeObjectStore) PresignPart(context.Context, storage.ObjectRef, storage.UploadID, int32, time.Duration) (string, error) {
+	return "", storage.ErrNotSupported
+}
+func (f *fakeObjectStore) CompleteMultipart(context.Context, storage.ObjectRef, storage.UploadID, []storage.Part) (storage.ObjectInfo, error) {
+	return storage.ObjectInfo{}, storage.ErrNotSupported
+}
+func (f *fakeObjectStore) AbortMultipart(context.Context, storage.ObjectRef, storage.UploadID) error {
+	return storage.ErrNotSupported
+}
+func (f *fakeObjectStore) Capabilities() storage.Capabilities { return storage.Capabilities{} }
+
+var _ storage.ObjectStore = (*fakeObjectStore)(nil)
 
 // call drives one request through the whole route chain, as the browser does.
 func (h *supportHarness) call(
@@ -441,12 +697,89 @@ func (h *supportHarness) createConversation(t *testing.T, userID int64) string {
 	return created.UUID
 }
 
+// uploadAttachment drives one multipart upload through UploadAttachment (the
+// non-chunked branch: no file_id/chunk_index/total_chunks fields), returning
+// the filepath the SAME way the composer's own upload response does.
+func (h *supportHarness) uploadAttachment(
+	t *testing.T, userID int64, conversationUUID, filename, content string,
+) (filepath string, fileSize int64) {
+	t.Helper()
+	var buf bytes.Buffer
+	writer := multipart.NewWriter(&buf)
+	part, err := writer.CreateFormFile("file", filename)
+	if err != nil {
+		t.Fatalf("create form file: %v", err)
+	}
+	if _, err := part.Write([]byte(content)); err != nil {
+		t.Fatalf("write form file content: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close multipart writer: %v", err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/attachments/"+conversationUUID, &buf)
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	identity := strconv.FormatInt(userID, 10)
+	request = withUser(request, auth.User{ID: identity, UserID: identity, Name: "Caller"})
+	recorder := httptest.NewRecorder()
+	h.routes.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("upload status = %d, body %s", recorder.Code, recorder.Body.String())
+	}
+	var created []struct {
+		Filepath string `json:"filepath"`
+		FileSize int64  `json:"file_size"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode the upload response: %v", err)
+	}
+	if len(created) != 1 {
+		t.Fatalf("upload response named %d files, want 1: %s", len(created), recorder.Body.String())
+	}
+	return created[0].Filepath, created[0].FileSize
+}
+
+// downloadAttachment drives one GET through GetAttachment. filepath is
+// exactly what uploadAttachment returned (`/{bucket}/{conversationUUID}/
+// {name}`) — the client splits it the same way
+// attachmentDownload.helpers.ts's parseAttachmentFilepath does, and the
+// route pattern (`/attachments/{bucket}/*`) makes that split unnecessary
+// here: the trimmed filepath IS the URL tail.
+func (h *supportHarness) downloadAttachment(t *testing.T, userID int64, filepath string) *httptest.ResponseRecorder {
+	t.Helper()
+	return h.downloadAttachmentVia(t, h.routes, userID, filepath)
+}
+
+// downloadAttachmentVia is downloadAttachment with an explicit route set —
+// routesAs's "second caller, second Handler, same store" case (the gate
+// rewrites identity from the resolution, so a stranger needs its own
+// Handler; see routesAs's own doc comment).
+func (h *supportHarness) downloadAttachmentVia(
+	t *testing.T, routes http.Handler, userID int64, filepath string,
+) *httptest.ResponseRecorder {
+	t.Helper()
+	request := httptest.NewRequest(http.MethodGet, "/attachments/"+strings.TrimPrefix(filepath, "/"), nil)
+	identity := strconv.FormatInt(userID, 10)
+	request = withUser(request, auth.User{ID: identity, UserID: identity, Name: "Caller"})
+	recorder := httptest.NewRecorder()
+	routes.ServeHTTP(recorder, request)
+	return recorder
+}
+
 const supportQuestionID = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
 
 func predictBody(content, questionID string) string {
 	encoded, _ := json.Marshal(PredictRequest{
 		Content: content, QuestionID: questionID,
 		Context: &AssistantContext{CurrentPage: "/agents", ProjectName: "Acme"},
+	})
+	return string(encoded)
+}
+
+func predictBodyWithAttachments(content, questionID string, attachments []PredictAttachment) string {
+	encoded, _ := json.Marshal(PredictRequest{
+		Content: content, QuestionID: questionID,
+		Context:     &AssistantContext{CurrentPage: "/agents", ProjectName: "Acme"},
+		Attachments: attachments,
 	})
 	return string(encoded)
 }
@@ -1075,6 +1408,24 @@ func mustConversationsRepo(t *testing.T, pool *pgxpool.Pool) *repos.Conversation
 	return repos.NewConversationsRepo(pool)
 }
 
+// routesAs builds a SECOND Handler over this harness's SAME pool, object
+// store and metadata repositories — reusing h.attachmentUploader/Downloader
+// so the bytes are the SAME store, not a second one — but a
+// grantingResolver reporting a DIFFERENT caller id. Needed because the gate
+// rewrites the request's identity from the resolution (see
+// TestSupportHistoryIsScopedToItsAuthor's own comment): one harness can only
+// ever "be" the one user its resolver names.
+func (h *supportHarness) routesAs(t *testing.T, userID int64) http.Handler {
+	t.Helper()
+	return NewHandler(h.pool,
+		WithChatStore(mustConversationsRepo(t, h.pool)),
+		WithStartUseCase(h.start),
+		WithPermissionResolver(grantingResolver{userID: userID}),
+		WithAttachmentUploader(h.attachmentUploader),
+		WithAttachmentDownloader(h.attachmentDownloader),
+	).Routes()
+}
+
 func (h *supportHarness) participants(t *testing.T, conversationUUID string) []conversations.Participant {
 	t.Helper()
 	var conversationID int64
@@ -1178,4 +1529,145 @@ type failingProvisioner struct{ calls int }
 func (p *failingProvisioner) Provision(context.Context, ProvisionRequest) (int64, error) {
 	p.calls++
 	return 0, fmt.Errorf("provisioning is unavailable")
+}
+
+/* ── issue #625 item 2: attachments through the SAME artifact path ──────── */
+
+// UPLOAD -> READ-BACK: the bytes that come out are the bytes that went in,
+// through GetAttachment's delegation to artifacts.Handler.DownloadObject —
+// the same route regular chat attachments are read back through.
+func TestAttachmentRoundTripsThroughTheSameArtifactPathChatUses(t *testing.T) {
+	harness := newSupportHarness(t)
+	enableConfiguredAssistant(t, harness.pool)
+	conversationUUID := harness.createConversation(t, supportCallerID)
+
+	filepath, size := harness.uploadAttachment(t, supportCallerID, conversationUUID, "notes.txt", "hello support")
+	if size != int64(len("hello support")) {
+		t.Fatalf("file_size = %d, want %d", size, len("hello support"))
+	}
+	wantPrefix := "/chat-attachments/" + conversationUUID + "/"
+	if !strings.HasPrefix(filepath, wantPrefix) {
+		t.Fatalf("filepath = %q, want prefix %q", filepath, wantPrefix)
+	}
+
+	recorder := harness.downloadAttachment(t, supportCallerID, filepath)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("download status = %d, body %s", recorder.Code, recorder.Body.String())
+	}
+	if recorder.Body.String() != "hello support" {
+		t.Fatalf("downloaded body = %q, want %q", recorder.Body.String(), "hello support")
+	}
+	if got := recorder.Header().Get("Content-Length"); got != strconv.Itoa(len("hello support")) {
+		t.Fatalf("Content-Length = %q, want %q", got, strconv.Itoa(len("hello support")))
+	}
+}
+
+// A CALLER WHO DOES NOT OWN THE CONVERSATION CANNOT UPLOAD INTO IT.
+//
+// The permission gate alone would admit this (both users hold
+// PermissionAttachmentsCreate as viewers of the SHARED support project);
+// conversationOwnedByCaller is the check that actually refuses it.
+func TestAttachmentUploadRefusesACallerWhoDoesNotOwnTheConversation(t *testing.T) {
+	harness := newSupportHarness(t)
+	enableConfiguredAssistant(t, harness.pool)
+	conversationUUID := harness.createConversation(t, supportCallerID)
+
+	var buf bytes.Buffer
+	writer := multipart.NewWriter(&buf)
+	part, err := writer.CreateFormFile("file", "notes.txt")
+	if err != nil {
+		t.Fatalf("create form file: %v", err)
+	}
+	if _, err := part.Write([]byte("intrusion")); err != nil {
+		t.Fatalf("write form file content: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close multipart writer: %v", err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/attachments/"+conversationUUID, &buf)
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	identity := strconv.FormatInt(supportOtherCallerID, 10)
+	request = withUser(request, auth.User{ID: identity, UserID: identity, Name: "Other"})
+	recorder := httptest.NewRecorder()
+	harness.routesAs(t, supportOtherCallerID).ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("upload-as-stranger status = %d, want 404, body %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+// A CALLER WHO DOES NOT OWN THE CONVERSATION CANNOT READ ITS ATTACHMENT,
+// even holding the exact filepath the owner's own upload answered with.
+func TestAttachmentReadRefusesACallerWhoDoesNotOwnTheConversation(t *testing.T) {
+	harness := newSupportHarness(t)
+	enableConfiguredAssistant(t, harness.pool)
+	conversationUUID := harness.createConversation(t, supportCallerID)
+	filepath, _ := harness.uploadAttachment(t, supportCallerID, conversationUUID, "notes.txt", "private")
+
+	recorder := harness.downloadAttachmentVia(t, harness.routesAs(t, supportOtherCallerID), supportOtherCallerID, filepath)
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("download-as-stranger status = %d, want 404, body %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+// A MALFORMED KEY (no conversation-uuid prefix at all) IS "NOT FOUND", not a
+// 400 or a 500 — nobody could ever have uploaded to it, so it answers the
+// same way a stranger's real key does.
+func TestAttachmentReadRefusesAKeyWithNoConversationPrefix(t *testing.T) {
+	harness := newSupportHarness(t)
+	enableConfiguredAssistant(t, harness.pool)
+	harness.createConversation(t, supportCallerID)
+
+	recorder := harness.downloadAttachment(t, supportCallerID, "/chat-attachments/not-a-uuid/notes.txt")
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404, body %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+// THE MESSAGE REFERENCE: `Predict`'s `attachments` field parses into exactly
+// the (bucket, name) `CurrentTurnAttachmentRef` the main chat composer's own
+// `payload.attachments` produces, and reaches `StartCurrentApplication`
+// unchanged — the same admission code then applies its own conversation-UUID
+// prefix check (internal/application/agentexecution/attachments.go's
+// currentTurnAttachments), which this package gets for free by calling it.
+func TestPredictAttachmentsReachTheStartRequest(t *testing.T) {
+	harness := newSupportHarness(t)
+	enableConfiguredAssistant(t, harness.pool)
+	conversationUUID := harness.createConversation(t, supportCallerID)
+	filepath, _ := harness.uploadAttachment(t, supportCallerID, conversationUUID, "notes.txt", "diagnostic log")
+
+	body := predictBodyWithAttachments("what does this log mean?", supportQuestionID,
+		[]PredictAttachment{{Filepath: filepath, Name: "notes.txt"}})
+	recorder := harness.call(t, supportCallerID, http.MethodPost, "/predict/"+conversationUUID, body)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("predict status = %d, body %s", recorder.Code, recorder.Body.String())
+	}
+
+	if len(harness.start.requests) != 1 {
+		t.Fatalf("start calls = %d, want 1", len(harness.start.requests))
+	}
+	want := []agentexecutionapp.CurrentTurnAttachmentRef{{Bucket: "chat-attachments", Name: conversationUUID + "/notes.txt"}}
+	got := harness.start.requests[0].Attachments
+	if len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("StartCurrentApplication attachments = %+v, want %+v", got, want)
+	}
+}
+
+// A MALFORMED FILEPATH REFUSES THE WHOLE TURN, not just the one attachment —
+// the same all-or-nothing rule route.go's parseStartAttachments applies, so a
+// silently dropped attachment never produces a turn the user believes carried
+// their file.
+func TestPredictRefusesAMalformedAttachmentFilepath(t *testing.T) {
+	harness := newSupportHarness(t)
+	enableConfiguredAssistant(t, harness.pool)
+	conversationUUID := harness.createConversation(t, supportCallerID)
+
+	body := predictBodyWithAttachments("see attached", supportQuestionID,
+		[]PredictAttachment{{Filepath: "not-a-filepath", Name: "notes.txt"}})
+	recorder := harness.call(t, supportCallerID, http.MethodPost, "/predict/"+conversationUUID, body)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400, body %s", recorder.Code, recorder.Body.String())
+	}
+	if len(harness.start.requests) != 0 {
+		t.Fatalf("start calls = %d, want 0 — the run must not be reached", len(harness.start.requests))
+	}
 }

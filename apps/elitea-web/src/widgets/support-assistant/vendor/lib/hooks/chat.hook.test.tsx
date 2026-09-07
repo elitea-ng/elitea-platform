@@ -68,6 +68,9 @@ function fakeApi(overrides: Partial<TSupportApi> = {}): TSupportApi {
     getConversation: vi.fn().mockResolvedValue({ uuid: 'c1', message_groups: [] }),
     createConversation: vi.fn().mockResolvedValue(fakeConversation('created-1')),
     startTurn: vi.fn().mockResolvedValue({ events_url: '/stream/turn-1' } satisfies TSupportTurnStarted),
+    uploadAttachment: vi
+      .fn()
+      .mockResolvedValue({ filepath: '/chat-attachments/created-1/notes.txt', file_size: 5 }),
     ...overrides,
   } as TSupportApi;
 }
@@ -258,6 +261,59 @@ describe('useChat — sending the first message', () => {
 
     expect(api.createConversation).toHaveBeenCalledOnce();
     expect(api.startTurn).toHaveBeenCalledTimes(2);
+  });
+});
+
+// Issue #625 item 2: the attach control's send-time upload.
+describe('useChat — sending an attachment', () => {
+  it('uploads the file, then starts the turn naming it', async () => {
+    const api = fakeApi();
+    const { result } = renderHook(() => useChat(BASE_PROPS), { wrapper: wrapperWith(api) });
+    const file = new File(['diagnostic log'], 'notes.txt', { type: 'text/plain' });
+
+    await act(async () => {
+      await result.current.handleSend('What does this mean?', file);
+    });
+
+    expect(api.uploadAttachment).toHaveBeenCalledWith('created-1', file);
+    expect(api.startTurn).toHaveBeenCalledWith(
+      'created-1',
+      expect.objectContaining({
+        attachments: [{ filepath: '/chat-attachments/created-1/notes.txt', name: 'notes.txt' }],
+      }),
+    );
+  });
+
+  it('sends no attachments field when no file is given (the ordinary case)', async () => {
+    const api = fakeApi();
+    const { result } = renderHook(() => useChat(BASE_PROPS), { wrapper: wrapperWith(api) });
+
+    await act(async () => {
+      await result.current.handleSend('Just a question');
+    });
+
+    expect(api.uploadAttachment).not.toHaveBeenCalled();
+    expect(api.startTurn).toHaveBeenCalledWith(
+      'created-1',
+      expect.objectContaining({ attachments: undefined }),
+    );
+  });
+
+  // A FAILED UPLOAD REPORTS FAILURE RATHER THAN A FABRICATED SUCCESS: the
+  // turn must not start believing it carried a file that never landed.
+  it('reports an upload failure and starts NO turn', async () => {
+    const api = fakeApi({ uploadAttachment: vi.fn().mockRejectedValue(new Error('507')) });
+    const { result } = renderHook(() => useChat(BASE_PROPS), { wrapper: wrapperWith(api) });
+    const file = new File(['x'], 'notes.txt', { type: 'text/plain' });
+
+    await act(async () => {
+      await result.current.handleSend('See attached', file);
+    });
+
+    expect(result.current.messages.at(-1)).toEqual(
+      expect.objectContaining({ isError: true, content: 'Failed to attach the file. Please try again.' }),
+    );
+    expect(api.startTurn).not.toHaveBeenCalled();
   });
 });
 

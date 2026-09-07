@@ -105,4 +105,41 @@ describe('createSupportApi', () => {
       support_assistant_context: { current_page: '/agents' },
     });
   });
+
+  // Issue #625 item 2: the attach control's upload call.
+  describe('uploadAttachment', () => {
+    it('POSTs a multipart file and reads the first entry back', async () => {
+      let seenType = '';
+      let seenBody = '';
+      server.use(
+        http.post(`${BASE}/support_assistant/attachments/:id`, async ({ request }) => {
+          seenType = request.headers.get('content-type') ?? '';
+          // The RAW body, not request.formData(): undici's multipart parser is
+          // not available in this environment, and a parse that throws inside a
+          // handler surfaces as a 500 rather than as a failed assertion (same
+          // workaround features/skills/api/skillIconApi.test.ts uses).
+          seenBody = await request.text();
+          return HttpResponse.json([{ filepath: '/chat-attachments/c1/notes.txt', file_size: 5 }]);
+        }),
+      );
+
+      const api = createSupportApi();
+      const file = new File(['hello'], 'notes.txt', { type: 'text/plain' });
+      const uploaded = await api.uploadAttachment('c1', file);
+
+      expect(uploaded).toEqual({ filepath: '/chat-attachments/c1/notes.txt', file_size: 5 });
+      expect(seenType).toMatch(/^multipart\/form-data/);
+      expect(seenBody).toContain('name="file"');
+    });
+
+    it('rejects when the route answers no file (a 200 that stored nothing)', async () => {
+      server.use(
+        http.post(`${BASE}/support_assistant/attachments/:id`, () => HttpResponse.json([])),
+      );
+
+      const api = createSupportApi();
+      const file = new File(['hello'], 'notes.txt', { type: 'text/plain' });
+      await expect(api.uploadAttachment('c1', file)).rejects.toThrow('the upload answered with no file');
+    });
+  });
 });
