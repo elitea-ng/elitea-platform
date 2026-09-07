@@ -135,12 +135,6 @@ tasks:
       - git submodule update --init --recursive
       - podman compose -f deploy/docker-compose.yml up --build -d
 
-  up:full:
-    desc: Start with model cache pre-download (requires S3 access)
-    cmds:
-      - git submodule update --init --recursive
-      - podman compose -f deploy/docker-compose.yml --profile full up --build
-
   down:
     desc: Stop local environment
     cmds:
