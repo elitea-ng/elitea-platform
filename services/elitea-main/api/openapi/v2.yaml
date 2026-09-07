@@ -7753,6 +7753,176 @@ components:
               reason: { type: string }
             required: [key, reason]
       required: [run, results, headline_score, total, offset, unavailable]
+    # ── Pipeline triggers and schedules (issues 192, 193) ──────────────────
+    #
+    # NOTE(W2): every field below is marshalled by
+    # services/elitea-main/internal/api/v2/pipelinetriggers/triggers.go
+    # (triggerView, :52-70) and .../schedules.go (scheduleView, :63-81). Both
+    # structs are CLOSED — no map, no jsonb passthrough — so neither schema
+    # carries an x-elitea-passthrough marker and neither is permissive.
+    PipelineInboundTrigger:
+      type: object
+      description: >
+        One pipeline version's inbound trigger. `configured: false` with no
+        other field is the answer for a pipeline that has none, and is a 200
+        rather than a 404 because "no trigger yet" is the normal state of
+        almost every pipeline (triggers.go GetTrigger, :96-115).
+      required: [configured]
+      additionalProperties: false
+      properties:
+        configured:
+          type: boolean
+          description: Whether this pipeline version has a trigger row at all.
+        token_id:
+          type: string
+          description: >
+            The PUBLIC half of the credential, and the only part in the inbound
+            URL path. It is unguessable on its own account so an inbound caller
+            cannot enumerate a deployment's pipelines.
+        url:
+          type: string
+          description: >
+            The inbound URL WITHOUT the secret. Present on every read.
+        secret:
+          type: string
+          description: >
+            The credential itself. Present ONLY on the create/rotate response
+            and on the reveal response, both of which require the write
+            permission. Absent — not empty — everywhere else.
+        secret_url:
+          type: string
+          description: >
+            `url` with the secret in the `token` query parameter, which is the
+            complete thing a person copies. The header form is preferred and is
+            what the trigger documentation shows first: a URL is written to
+            proxy logs, and a credential in one outlives the request.
+        created_by:
+          type: integer
+          format: int64
+          description: >
+            The user an inbound run executes as. Their project permission is
+            re-resolved on EVERY inbound call, so a trigger grants no more than
+            its creator still has.
+        created_at: { type: string, format: date-time }
+        rotated_at:
+          type: string
+          format: date-time
+          description: When the credential was last replaced. Absent if never.
+        revoked_at:
+          type: string
+          format: date-time
+          description: >
+            When the trigger was revoked. The row is kept rather than deleted so
+            "was this live last Tuesday" has an answer; the inbound path refuses
+            any row where this is set.
+        last_used_at:
+          type: string
+          format: date-time
+          description: When an inbound call last presented a correct secret.
+
+    PipelineSchedule:
+      type: object
+      description: >
+        One pipeline version's cron schedule (schedules.go scheduleView).
+        `configured: false` is the answer for a pipeline with no schedule.
+      required: [configured, active]
+      additionalProperties: false
+      properties:
+        configured: { type: boolean }
+        cron:
+          type: string
+          description: >
+            A FIVE-FIELD cron expression. Names such as `@daily` are refused:
+            the parser that validates this write is the same one that fires the
+            row, and an expression it cannot parse would silently never fire.
+        active:
+          type: boolean
+          description: Whether the platform scheduler will fire this row.
+        input:
+          type: string
+          description: The text a scheduled run puts in front of the pipeline.
+        author_id:
+          type: integer
+          format: int64
+          description: >
+            Who a scheduled run executes as. Re-validated at FIRE time, not at
+            save time. Saving the schedule sets it to the caller, so a person
+            cannot retarget somebody else's identity onto a new time.
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        last_run:
+          type: string
+          format: date-time
+          description: >
+            Stamped ONLY on a real dispatch. A maintenance window or a skipped
+            overlap leaves it alone, so the row is due exactly once when the
+            reason clears rather than once per missed minute.
+        last_result:
+          type: string
+          description: The outcome of the most recent fire attempt.
+          enum: [dispatched, skipped_overlap, skipped_unauthorized, skipped_missing_version, failed]
+        last_result_detail:
+          type: string
+          description: One sentence saying why, for every non-dispatch outcome.
+        last_result_at: { type: string, format: date-time }
+        last_execution_id:
+          type: string
+          description: The execution the last dispatch admitted.
+        next_run:
+          type: string
+          format: date-time
+          description: >
+            COMPUTED, not stored, and computed with the parser that will fire
+            the row — so the preview cannot disagree with the behaviour. Absent
+            when the stored expression cannot be parsed.
+
+    PipelineScheduleUpdate:
+      type: object
+      description: >
+        The accepted schedule write (schedules.go scheduleBody, :126-130).
+        There is deliberately no `author_id` and no `last_*` field: the author
+        is the authenticated caller, and the outcome columns belong to the
+        runner.
+      required: [cron]
+      additionalProperties: false
+      properties:
+        cron: { type: string }
+        active: { type: boolean }
+        input: { type: string }
+
+    PipelineInboundTriggerRunRequest:
+      type: object
+      description: >
+        The inbound call's body (inbound.go inboundBody, :70-73). It may be
+        empty, and an unparseable body is accepted as an empty input: a webhook
+        sender's payload format is not this service's contract.
+      additionalProperties: false
+      properties:
+        input:
+          type: string
+          description: The text placed in front of the pipeline.
+
+    PipelineInboundTriggerRunAccepted:
+      type: object
+      description: >
+        The inbound call's answer (inbound.go Trigger, :195-201). It reports
+        that the run was ADMITTED; the run has not finished and will not finish
+        inside this request.
+      required: [execution_id, conversation_id, project_id, version_id, events_url]
+      additionalProperties: false
+      properties:
+        execution_id: { type: string }
+        conversation_id:
+          type: string
+          description: The transcript the run is recorded in.
+        project_id: { type: integer, format: int64 }
+        version_id: { type: integer, format: int64 }
+        events_url:
+          type: string
+          description: >
+            The durable event stream for this execution — the same path the
+            browser subscribes to. Poll or subscribe to follow the run.
+
 
   responses:
     400:
@@ -16073,6 +16243,407 @@ paths:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '503':
           description: Inventory is not enabled, or the provider is unreachable
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  # ==========================================================================
+  # PIPELINE TRIGGERS AND SCHEDULES — the two unattended ways to start a
+  # pipeline (issues 192 and 193).
+  #
+  # Legacy had both and this stack had neither; the three `/pipeline_trigger/`
+  # routes deleted with issue 126 were the API surface of the legacy
+  # subsystem, gated behind a nil runner and 404 in every deployment.
+  #
+  # Seven of the eight operations below are ordinary session-authenticated,
+  # project-gated routes. The eighth — POST /pipeline_trigger/{project_id}/
+  # {token_id} — is the one entry point in this document whose only credential
+  # is a per-pipeline secret. Read its description before changing anything
+  # about it.
+  # ==========================================================================
+
+  /pipeline_triggers/prompt_lib/{project_id}/{version_id}:
+    get:
+      operationId: getPipelineInboundTrigger
+      summary: Read a pipeline version's inbound trigger
+      description: |
+        Reports whether this pipeline version has an inbound trigger, when it
+        was made, when it was last used, and whether it is revoked.
+
+        The URL it returns does NOT carry the secret. Handing back a live
+        credential is a different act and has its own operation with the write
+        permission on it, so a person with view-only access cannot copy a
+        working webhook URL for a pipeline they cannot edit.
+
+        A pipeline with no trigger answers 200 with `configured: false`, not
+        404: having no trigger is the normal state of almost every pipeline,
+        and a 404 would make the settings tab render an error for it.
+      tags: [applications]
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema: { type: integer }
+        - name: version_id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: The trigger's state
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PipelineInboundTrigger' }
+        '403':
+          description: Caller lacks models.applications.version.details in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+    post:
+      operationId: rotatePipelineInboundTrigger
+      summary: Create or rotate a pipeline version's inbound trigger
+      description: |
+        Mints a credential and returns it ONCE in `secret` and `secret_url`.
+
+        Create and rotate are ONE operation on purpose. They differ only in
+        whether a row was already there, they have the same permission, and
+        they have the same effect on any holder of the previous secret. Two
+        operations would be two chances to implement the rotation half
+        differently from the creation half.
+
+        Rotation is immediate and total: the previous secret stops working the
+        moment this returns, and its vault entry is removed. That is what
+        "rotate" has to mean for a credential somebody else holds.
+      tags: [applications]
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema: { type: integer }
+        - name: version_id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: The trigger, WITH the new credential
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PipelineInboundTrigger' }
+        '403':
+          description: Caller lacks models.applications.version.update in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '404':
+          description: No such pipeline version in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '503':
+          description: The credential store is not available on this deployment
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+    delete:
+      operationId: revokePipelineInboundTrigger
+      summary: Revoke a pipeline version's inbound trigger
+      description: |
+        Makes the credential unusable and KEEPS the row. A revoked trigger is
+        evidence: an operator asking "was this webhook still live last
+        Tuesday?" gets an answer from a row that is present and revoked, and no
+        answer at all from a row that is gone. The inbound endpoint refuses any
+        row whose `revoked_at` is set.
+
+        The stored secret is deleted, so it cannot be revealed again after
+        revocation.
+      tags: [applications]
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema: { type: integer }
+        - name: version_id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: The revoked trigger
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PipelineInboundTrigger' }
+        '403':
+          description: Caller lacks models.applications.version.update in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '404':
+          description: This pipeline has no trigger
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /pipeline_triggers/secret/prompt_lib/{project_id}/{version_id}:
+    get:
+      operationId: revealPipelineInboundTrigger
+      summary: Reveal a pipeline version's trigger credential
+      description: |
+        Returns the live credential so the settings tab can show the webhook URL
+        again after the dialog that created it was closed.
+
+        It is a GET carrying the WRITE permission, which is deliberate. Folding
+        it into the plain read would put a credential into the response of the
+        call the settings tab makes on every open, where it would sit in the
+        browser's query cache and in any exported HAR — and would let a
+        view-only member copy a working URL.
+
+        A 409 means the row exists and its stored secret cannot be read. That is
+        reported as "rotate it" rather than as a server error, because rotation
+        is the only repair a person can perform and it always works.
+      tags: [applications]
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema: { type: integer }
+        - name: version_id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: The trigger, WITH the credential
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PipelineInboundTrigger' }
+        '403':
+          description: Caller lacks models.applications.version.update in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: The stored credential could not be read; rotate the trigger
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '503':
+          description: The credential store is not available on this deployment
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /pipeline_schedules/prompt_lib/{project_id}/{version_id}:
+    get:
+      operationId: getPipelineSchedule
+      summary: Read a pipeline version's schedule
+      description: |
+        Reports the cron expression, whether it is enabled, the computed next
+        run, and the outcome of the last fire attempt.
+
+        `last_result` is the tenant-visible half of failure visibility: an audit
+        event answers "what happened on this platform" and is what an operator
+        reads, while this column answers "is MY schedule working" and is what
+        the person who made it can see.
+      tags: [applications]
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema: { type: integer }
+        - name: version_id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: The schedule's state
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PipelineSchedule' }
+        '403':
+          description: Caller lacks models.applications.version.details in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+    put:
+      operationId: savePipelineSchedule
+      summary: Create or replace a pipeline version's schedule
+      description: |
+        Saving SETS the schedule's author to the caller, and the author is who
+        an unattended run executes as. Leaving the original author in place
+        while someone else edited the cron would let a caller retarget another
+        person's identity onto a new time.
+
+        The author's permission is re-resolved at every FIRE, not here: a
+        schedule whose author later loses access stops firing and records
+        `skipped_unauthorized`, without anybody having to remember to disable
+        it.
+
+        The cron expression is validated with the parser that will run it. Five
+        fields are required and names such as `@daily` are refused, because an
+        expression the runner cannot parse would not error at run time — it
+        would silently never fire, which on an unattended job looks exactly like
+        a job with nothing to do.
+      tags: [applications]
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema: { type: integer }
+        - name: version_id
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PipelineScheduleUpdate' }
+      responses:
+        '200':
+          description: The saved schedule
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PipelineSchedule' }
+        '400':
+          description: The cron expression cannot be parsed, or the input is too long
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '403':
+          description: Caller lacks models.applications.version.update in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '404':
+          description: No such pipeline version in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+    delete:
+      operationId: deletePipelineSchedule
+      summary: Remove a pipeline version's schedule
+      description: |
+        The row is DELETED rather than tombstoned, unlike a revoked trigger. The
+        two are not symmetric: a trigger is a credential somebody outside holds,
+        so "when did it stop working" is a question about a third party, while a
+        schedule is configuration its own author can re-create, and every fire
+        it ever made is already an audit row.
+      tags: [applications]
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema: { type: integer }
+        - name: version_id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: The schedule is gone
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PipelineSchedule' }
+        '403':
+          description: Caller lacks models.applications.version.update in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '404':
+          description: This pipeline has no schedule
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /pipeline_trigger/{project_id}/{token_id}:
+    post:
+      operationId: runPipelineInboundTrigger
+      summary: Start a pipeline run from an external caller
+      description: |
+        The inbound trigger — issue 192. An external system calls this URL and
+        one pipeline version runs.
+
+        ## This route has NO SESSION
+
+        It is mounted above the API's authentication group, beside the anonymous
+        shared-chat routes. Its ONLY credential is the per-pipeline secret,
+        presented as `Authorization: Bearer <secret>`, as
+        `X-Elitea-Trigger-Token`, or as the `token` query parameter. The header
+        forms are preferred: a URL is written to proxy and browser logs, and a
+        credential in one outlives the request.
+
+        ## Nothing the caller sends selects a tenant
+
+        `project_id` says WHERE TO LOOK and nothing more. What runs comes out of
+        the stored row: the application, the version and the identity are read
+        from the database and never from the request. A caller who guesses
+        another project's id finds no row holding their token's digest and gets
+        the same 401 as a caller who guessed nothing.
+
+        ## Every refusal is the same refusal
+
+        Unknown token, wrong secret, revoked trigger, wrong project, deleted
+        version, and a creator who has lost the run permission all answer 401
+        with one sentence. A refusal that named which one it was would be an
+        oracle for enumerating a deployment's pipelines. An operator debugging
+        their own webhook reads the audit row, which records the same request
+        with the reason attached.
+
+        ## The run is the same run a person would have started
+
+        Admission goes through the chat composer's own use case, over a
+        conversation and participants shaped exactly as a typed turn's, so
+        budgets, governance, tracing, cancel and the transcript are unchanged.
+        The answer is 202 and an events URL: the run has not finished and will
+        not finish inside this request.
+      tags: [applications]
+      security: []
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema: { type: integer }
+        - name: token_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: token
+          in: query
+          required: false
+          description: >
+            The secret, for senders that cannot set a header. Least preferred of
+            the three carriers; see the description.
+          schema: { type: string }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PipelineInboundTriggerRunRequest' }
+      responses:
+        '202':
+          description: The run was admitted; follow it on the events URL
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PipelineInboundTriggerRunAccepted' }
+        '400':
+          description: The run input is too large
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401':
+          description: This trigger cannot be used. One answer for every cause.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '413':
+          description: The request body is too large
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '503':
+          description: This deployment cannot run pipelines, or the trigger could not be checked
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }

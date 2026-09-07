@@ -38,6 +38,7 @@ import (
 	v2folders "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/folders"
 	v2indextypes "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indextypes"
 	v2inventory "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/inventory"
+	v2pipelinetriggers "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/pipelinetriggers"
 	v2skills "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/skills"
 	v2social "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/social"
 	v2tags "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/tags"
@@ -176,6 +177,14 @@ func buildFullSurfaceConfig() api.RouterConfig {
 		// each ServeHTTP answers 404 for a zero value rather than panicking.
 		CurrentIndexTypes:        &v2indextypes.CurrentIndexTypesRoute{},
 		CurrentApplicationSkills: &v2applicationskills.CurrentApplicationSkillsRoute{},
+
+		// The unattended pipeline entry points (issues 192, 193). MANDATORY
+		// here, not an optional stub: this handler is the only one for the
+		// eight operations v2.yaml now describes, and all eight resolve to no
+		// route unless the field is non-nil. A handler with NO pool is the
+		// right stub — every route answers 503 for one rather than panicking,
+		// and this walk never serves a request.
+		PipelineTriggers: v2pipelinetriggers.NewHandler(nil),
 	}
 }
 

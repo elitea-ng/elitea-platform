@@ -40,6 +40,7 @@ import (
 	v2inventory "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/inventory"
 	v2mcp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/mcp"
 	notificationsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/notifications"
+	v2pipelinetriggers "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/pipelinetriggers"
 	predictapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/predict"
 	projectinfoapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/projectinfo"
 	v2projects "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/projects"
@@ -56,7 +57,9 @@ import (
 	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
 	identityapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/identity"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
+	schedulingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/scheduling"
 	socialapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/social"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/authcomposition"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
@@ -64,6 +67,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/identityproviders"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/authsvc"
 	infradb "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	dbrepos "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
@@ -249,6 +253,23 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		return err
 	}
 	defer pool.Close()
+
+	// The `centry.audit_events` writer.
+	//
+	// It is built HERE, once, and given to BOTH the router (which mounts the
+	// audit middleware over the whole /api/v2 group) and the pipeline-trigger
+	// handler (whose inbound route sits ABOVE that group and so writes its own
+	// row). Two recorders would mean two background writers and two queues over
+	// one table; one recorder is also what makes an inbound refusal and an
+	// ordinary 403 land in the same trail with the same drop policy.
+	auditRecorder := audit.NewPostgresRecorder(pool, logger)
+	defer func() {
+		flushCtx, cancelFlush := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancelFlush()
+		if flushErr := auditRecorder.Flush(flushCtx); flushErr != nil {
+			logger.Warn("could not flush the audit trail on shutdown", "err", flushErr)
+		}
+	}()
 
 	// Object store. Production remains fail-closed: when the capability is
 	// enabled, startup requires a working S3/Azure/GCS backend. The mixed
@@ -1396,6 +1417,13 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// as "configured" downstream, and both consumers decide on `!= nil`.
 	var toolkitToolRun toolkitrun.UseCase
 	var mcpToolkitRun v2mcp.ToolkitRunUseCase
+	// The unattended pipeline entry points (issues 192, 193).
+	//
+	// ONE handler serves both the HTTP surface and the platform scheduler's
+	// `pipeline.schedule.scan.v1` job, which is why it is built here rather
+	// than inside the router: two handlers over one table would be two chances
+	// for the tick and the settings routes to disagree on a dependency.
+	var pipelineTriggers *v2pipelinetriggers.Handler
 	var currentAgentCancel http.Handler
 	var currentIndexCancel http.Handler
 	var currentIndexMeta http.Handler
@@ -1534,6 +1562,31 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		if publicRoutes.AgentStart != nil {
 			supportAssistantStart = publicRoutes.AgentStart
 			mcpAgentStart = publicRoutes.AgentStart
+			// The pipeline trigger and schedule handler. It runs pipelines
+			// through the SAME use case as chat, MCP and the support widget —
+			// see internal/api/v2/pipelinetriggers for why there is one
+			// admission path and not four.
+			pipelineTriggers = v2pipelinetriggers.NewPlatformHandler(
+				pool,
+				publicRoutes.AgentStart,
+				v2secrets.NewHandler(pool),
+				legacyrbac.NewPostgresResolver(pool),
+				auditRecorder,
+				logger,
+			)
+			// The schedule TICK. It rides elitea-main's platform scheduler —
+			// the same framework `index.schedule.scan.v1` uses — so the clock,
+			// the cross-replica occurrence lease and the claim fence are the
+			// framework's and are not re-implemented. See the package doc for
+			// why the tick is not in services/elitea-scheduler, and what was
+			// carried across from it (the maintenance gate and the
+			// no-catch-up-storm rule, both ported literally).
+			if scheduleErr := startPipelineScheduleRunner(
+				ctx, runtimePools.Admission, pipelineTriggers,
+				runtimeConfig.SchedulerInstanceID, logger,
+			); scheduleErr != nil {
+				return fmt.Errorf("compose pipeline schedule job: %w", scheduleErr)
+			}
 			currentAgentStart, err = agentexecutionapi.NewCurrentApplicationStartRoute(
 				publicRoutes.AgentStart,
 				// The browser's session cookie is this route's only credential
@@ -1935,6 +1988,8 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		MCPAgentStart:              mcpAgentStart,
 		MCPToolkitRun:              mcpToolkitRun,
 		ToolkitToolRun:             toolkitToolRun,
+		PipelineTriggers:           pipelineTriggers,
+		AuditRecorder:              auditRecorder,
 		CurrentAgentCancel:         currentAgentCancel,
 		CurrentIndexCancel:         currentIndexCancel,
 		CurrentIndexMeta:           currentIndexMeta,
@@ -2380,4 +2435,65 @@ func backfillProjectSecretsHeaderValues(ctx context.Context, pool *pgxpool.Pool,
 		"written", report.Written,
 		"already_set", report.AlreadySet,
 		"skipped", report.Skipped)
+}
+
+// startPipelineScheduleRunner registers `pipeline.schedule.scan.v1` on the
+// platform scheduler and starts it.
+//
+// It builds its OWN registry and runner rather than joining the index scan's,
+// and that is a deliberate separation of failure domains rather than an
+// oversight. The index runner is configured `MaxParallel: 1, PageSize: 1`
+// because one index scan observes every project and a second concurrent claim
+// only makes the product runner release occurrences for retry. A pipeline
+// schedule pass has no such property, and more importantly a tenant workload
+// that is slow or wedged must not delay the platform's own indexing — the
+// coupling issue 193 names as the reason not to put tenant work in the ops
+// scheduler in the first place. Two runners over ONE occurrence store, keyed by
+// distinct job ids, keep the lease semantics and drop the coupling.
+func startPipelineScheduleRunner(
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	handler *v2pipelinetriggers.Handler,
+	instanceID string,
+	logger *slog.Logger,
+) error {
+	if pool == nil || handler == nil {
+		return nil
+	}
+	job, err := v2pipelinetriggers.NewScheduleJob(handler)
+	if err != nil {
+		return fmt.Errorf("construct pipeline schedule job: %w", err)
+	}
+	cadence, err := schedulingapp.ParseCron(v2pipelinetriggers.ScheduleJobCadence)
+	if err != nil {
+		return fmt.Errorf("parse pipeline schedule cadence: %w", err)
+	}
+	config := schedulingapp.Config{
+		InstanceID:      instanceID,
+		LeaseDuration:   2 * time.Minute,
+		MaxParallel:     1,
+		PageSize:        1,
+		MaxPagesPerTick: 2,
+	}
+	registry, err := schedulingapp.NewRegistry(config.LeaseDuration, schedulingapp.Job{
+		ID:       v2pipelinetriggers.ScheduleJobID,
+		Revision: v2pipelinetriggers.ScheduleJobRevision,
+		Mode:     schedulingapp.ModeDurableAdmission,
+		Schedule: cadence,
+		Timeout:  v2pipelinetriggers.ScheduleJobTimeout,
+		Handler:  job,
+	})
+	if err != nil {
+		return fmt.Errorf("register pipeline schedule job: %w", err)
+	}
+	occurrences, err := repos.NewScheduleOccurrenceRepository(pool)
+	if err != nil {
+		return fmt.Errorf("construct pipeline schedule occurrence repository: %w", err)
+	}
+	runner, err := schedulingapp.NewRunner(occurrences, registry, config, logger)
+	if err != nil {
+		return fmt.Errorf("construct pipeline schedule runner: %w", err)
+	}
+	go runner.Run(ctx)
+	return nil
 }

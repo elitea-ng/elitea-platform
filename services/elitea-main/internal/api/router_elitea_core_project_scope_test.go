@@ -14,6 +14,7 @@ import (
 	v2analytics "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/analytics"
 	v2convs "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
 	v2folders "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/folders"
+	v2pipelinetriggers "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/pipelinetriggers"
 	v2skills "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/skills"
 	v2tags "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/tags"
 )
@@ -258,6 +259,28 @@ var eliteaCoreProjectScopedRoutes = []eliteaCoreProjectScopedRoute{
 	{http.MethodPut, "/api/v2/context_manager/summary/7/1/2", "/api/v2/context_manager/summary/8/1/2", "models.chat.conversation.edit"},
 	{http.MethodDelete, "/api/v2/context_manager/summary/7/1/2", "/api/v2/context_manager/summary/8/1/2", "models.chat.conversation.edit"},
 
+	// Pipeline triggers and schedules (issues 192, 193). Every one of these
+	// names {projectID} and then reads or writes THAT project's tenant schema,
+	// so they belong in this table for the reason every row above does: the
+	// path segment must not be the authorization claim.
+	//
+	// The permissions are the pipeline VERSION's own — a person who may edit a
+	// pipeline may configure how it starts. `secret` carries the WRITE
+	// permission on a GET, deliberately: it hands back a live credential, which
+	// is not the same act as reporting that one exists.
+	//
+	// The INBOUND trigger is NOT here and cannot be. It is mounted above the
+	// Auth group and its only credential is the per-pipeline secret; its own
+	// refusals are pinned by the pipelinetriggers package's tests, which assert
+	// that a token cannot reach another project at all.
+	{http.MethodGet, "/api/v2/pipeline_triggers/prompt_lib/7/1", "/api/v2/pipeline_triggers/prompt_lib/8/1", "models.applications.version.details"},
+	{http.MethodGet, "/api/v2/pipeline_triggers/secret/prompt_lib/7/1", "/api/v2/pipeline_triggers/secret/prompt_lib/8/1", "models.applications.version.update"},
+	{http.MethodPost, "/api/v2/pipeline_triggers/prompt_lib/7/1", "/api/v2/pipeline_triggers/prompt_lib/8/1", "models.applications.version.update"},
+	{http.MethodDelete, "/api/v2/pipeline_triggers/prompt_lib/7/1", "/api/v2/pipeline_triggers/prompt_lib/8/1", "models.applications.version.update"},
+	{http.MethodGet, "/api/v2/pipeline_schedules/prompt_lib/7/1", "/api/v2/pipeline_schedules/prompt_lib/8/1", "models.applications.version.details"},
+	{http.MethodPut, "/api/v2/pipeline_schedules/prompt_lib/7/1", "/api/v2/pipeline_schedules/prompt_lib/8/1", "models.applications.version.update"},
+	{http.MethodDelete, "/api/v2/pipeline_schedules/prompt_lib/7/1", "/api/v2/pipeline_schedules/prompt_lib/8/1", "models.applications.version.update"},
+
 	// The project member and role listings under /admin, in DEFAULT mode —
 	// what the project settings page calls as /admin/{users,roles}/default/.
 	// The /elitea_core fallback copies of these two rows are already in this
@@ -324,6 +347,11 @@ func newEliteaCoreProjectScopeRouter(
 		AnalyticsRepo:             struct{ v2analytics.Repository }{},
 		ProjectAccessQuerier:      querier,
 		ProjectPermissionResolver: resolver,
+		// The pipeline trigger and schedule settings routes (issues 192, 193).
+		// A handler with NO pool is enough here: every row below asserts a
+		// REFUSAL produced by the gate above the handler, so the handler must
+		// exist and must never be reached.
+		PipelineTriggers: v2pipelinetriggers.NewHandler(nil),
 	})
 }
 

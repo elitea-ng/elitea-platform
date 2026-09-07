@@ -42,6 +42,7 @@ import (
 	v2messagetraces "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/messagetraces"
 	v2moderation "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/moderation"
 	v2openapidocs "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/openapidocs"
+	v2pipelinetriggers "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/pipelinetriggers"
 	v2predict "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/predict"
 	v2projectinfo "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/projectinfo"
 	v2projects "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/projects"
@@ -352,7 +353,23 @@ type RouterConfig struct {
 	MCPToolkitRun v2mcp.ToolkitRunUseCase
 	// ToolkitToolRun runs one toolkit tool synchronously (#340). Nil keeps the
 	// `503 indexer service not available` both test routes have always given.
-	ToolkitToolRun             toolkitrun.UseCase
+	ToolkitToolRun toolkitrun.UseCase
+	// PipelineTriggers serves the two UNATTENDED ways to start a pipeline —
+	// the inbound signed trigger (issue 192) and the cron schedule (issue 193).
+	//
+	// It is built at the composition root rather than here, because the SAME
+	// handler is also registered as the platform scheduler's
+	// `pipeline.schedule.scan.v1` job. Two handlers over one table would be two
+	// chances for the HTTP half and the tick to disagree on a dependency — a
+	// tick wired without the permission resolver would refuse every scheduled
+	// run while the settings tab kept working, and nothing would report it.
+	//
+	// Left nil, none of the seven routes is registered at all. That is
+	// deliberate and is not a silent 200: an unregistered route answers the
+	// group's own 404, while a registered route with no runtime behind it is
+	// the "answers 200, nothing is wired" defect this repository keeps
+	// rediscovering.
+	PipelineTriggers           *v2pipelinetriggers.Handler
 	CurrentAgentCancel         http.Handler
 	CurrentIndexCancel         http.Handler
 	CurrentIndexMeta           http.Handler
@@ -990,6 +1007,23 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// branding bootstrap above does the same), and it is what keeps the URL the
 	// SPA already speaks.
 	mountSharedChatAnonymousRoutes(r, cfg)
+
+	// The INBOUND pipeline trigger — issue 192.
+	//
+	// Registered HERE, on the root mux, for exactly the reason the two routes
+	// above are: everything below `r.Group(...)`/`r.Use(apimw.Auth(...))` is
+	// authenticated, and this route must not be. Its only credential is the
+	// per-pipeline secret, compared in constant time against a digest stored
+	// beside the row; see internal/api/v2/pipelinetriggers for the four
+	// authorization rules and for why nothing the caller sends selects a
+	// tenant.
+	//
+	// It carries its full /api/v2 prefix because it is a SIBLING of the
+	// /api/v2 subrouter rather than a child of it, which is what keeps the URL
+	// an external system was given stable.
+	if cfg.PipelineTriggers != nil {
+		r.Post(v2pipelinetriggers.InboundPath, cfg.PipelineTriggers.Trigger)
+	}
 
 	// Served API docs (S251): the legacy shared plugin's openapi/swagger-ui
 	// routes had no Go counterpart at all — public/unauthenticated like the
@@ -3522,6 +3556,47 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			// not the current body.
 			requireConversationContextRead := projectPermission("models.chat.conversation.details")
 			requireConversationContextWrite := projectPermission("models.chat.conversation.edit")
+			// === Pipeline triggers and schedules (issues 192, 193) ===
+			//
+			// The SETTINGS half of both. These six ARE session-authenticated
+			// and project-gated; only the inbound call mounted above the Auth
+			// group is not.
+			//
+			// The gates are the pipeline VERSION's own read and update
+			// permissions, so a person who may edit a pipeline may configure
+			// how it starts and a person who may only look at one may only look
+			// at this. No new permission is introduced, which is what keeps
+			// this feature off the "a new grant needs a new shared migration
+			// AND a manifest head bump" path.
+			//
+			// `reveal` is separated from the plain read and carries the WRITE
+			// permission, because handing back a live credential is a different
+			// act from reporting that one exists. See the package's
+			// triggers.go.
+			if cfg.PipelineTriggers != nil {
+				pipelineTriggers := cfg.PipelineTriggers
+				requirePipelineRead := projectPermission(v2pipelinetriggers.ReadPermission)
+				requirePipelineWrite := projectPermission(v2pipelinetriggers.WritePermission)
+				r.Route("/pipeline_triggers", func(r chi.Router) {
+					r.With(requirePipelineRead).
+						Get("/prompt_lib/{projectID}/{versionID}", pipelineTriggers.GetTrigger)
+					r.With(requirePipelineWrite).
+						Get("/secret/prompt_lib/{projectID}/{versionID}", pipelineTriggers.RevealTrigger)
+					r.With(requirePipelineWrite).
+						Post("/prompt_lib/{projectID}/{versionID}", pipelineTriggers.CreateOrRotateTrigger)
+					r.With(requirePipelineWrite).
+						Delete("/prompt_lib/{projectID}/{versionID}", pipelineTriggers.RevokeTrigger)
+				})
+				r.Route("/pipeline_schedules", func(r chi.Router) {
+					r.With(requirePipelineRead).
+						Get("/prompt_lib/{projectID}/{versionID}", pipelineTriggers.GetSchedule)
+					r.With(requirePipelineWrite).
+						Put("/prompt_lib/{projectID}/{versionID}", pipelineTriggers.SaveSchedule)
+					r.With(requirePipelineWrite).
+						Delete("/prompt_lib/{projectID}/{versionID}", pipelineTriggers.DeleteSchedule)
+				})
+			}
+
 			ctxMgrHandler := v2contextmgr.NewHandler(cfg.Pool)
 			r.Route("/context_manager", func(r chi.Router) {
 				r.With(requireConversationContextWrite).

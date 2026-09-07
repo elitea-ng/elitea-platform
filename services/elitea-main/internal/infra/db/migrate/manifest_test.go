@@ -539,7 +539,14 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// `ON DELETE SET NULL` is not the alternative here, because a NULL
 	// application_id means "a project-wide dataset" — SET NULL would promote
 	// one agent's dataset into the whole project's library.
-	require.EqualValues(t, 132, Head(tenant))
+	//
+	// 133: tenant/0133_pipeline_triggers_and_schedules.sql, the storage for the
+	// two unattended pipeline entry points legacy had and this stack did not —
+	// an inbound signed trigger (issue 192) and a per-pipeline cron (issue
+	// 193). It introduces NO permission, so it has no shared sibling: the read
+	// is `models.applications.version.details` and every write is
+	// `models.applications.version.update`, both already seeded.
+	require.EqualValues(t, 133, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own
