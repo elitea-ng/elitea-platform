@@ -25,6 +25,9 @@ const ROWS = [
     version_name: 'v1',
     agent_type: 'agent',
     meta: { category: 'Productivity' },
+    tags: [],
+    likes: 0,
+    is_liked: false,
   },
   {
     project_id: '1',
@@ -35,17 +38,23 @@ const ROWS = [
     version_name: 'v1',
     agent_type: 'agent',
     meta: { category: 'Support' },
+    tags: [],
+    likes: 0,
+    is_liked: false,
   },
 ];
 
 /**
- * The Trending/My Liked buckets hit the exact same URL as the plain
- * bulk-categorize fetch (`useAgentHubData.ts`'s documented backend gap —
- * the handler reads none of `sort_by`/`my_liked` server-side either), so
- * this only returns `ROWS` for the plain bulk request (no `sort_by`/
- * `my_liked` query param) and empty for the other two — otherwise every
- * agent name would appear three times in the DOM (once per bucket) and
- * `findByText` would rightly fail on ambiguity.
+ * A stand-in for the catalogue handler that actually READS its parameters,
+ * because the real one does now (issue #36 item 8).
+ *
+ *  - Trending (`sort_by=likes`) and My Liked (`my_liked=true`) hit the same
+ *    URL as the bulk page, so they answer empty here; otherwise every agent
+ *    name would appear three times in the DOM and `findByText` would rightly
+ *    fail on ambiguity.
+ *  - `?query=` filters over name and description, exactly as the handler's
+ *    ILIKE pair does. A mock that ignored `query` would let a client-side
+ *    filter pass this test — which is the bug this whole change removes.
  */
 function mockAgentsHubData(): void {
   server.use(
@@ -64,8 +73,14 @@ function mockAgentsHubData(): void {
     // misread in the same file.
     http.get('/api/v2/elitea_core/public_applications/prompt_lib', ({ request }) => {
       const params = new URL(request.url).searchParams;
-      const isBulk = !params.has('sort_by') && !params.has('my_liked');
-      const rows = isBulk ? ROWS : [];
+      const isBulk = params.get('sort_by') !== 'likes' && !params.has('my_liked');
+      if (!isBulk) return HttpResponse.json({ rows: [], total: 0 }, { status: 200 });
+      const needle = (params.get('query') ?? '').toLowerCase();
+      const rows = needle === ''
+        ? ROWS
+        : ROWS.filter(row =>
+            row.name.toLowerCase().includes(needle) || row.description.toLowerCase().includes(needle),
+          );
       return HttpResponse.json({ rows, total: rows.length }, { status: 200 });
     }),
   );
@@ -108,7 +123,10 @@ describe('AgentHub', () => {
     expect(screen.getByRole('button', { name: 'Support' })).toBeInTheDocument();
   });
 
-  it('filters agents by the search box (adversarial-review fix, cluster A13-agents-hub, finding 9)', async () => {
+  it('sends the search box text to the server and renders what comes back (issue #36 item 8)', async () => {
+    // The typed text reaches the handler as `?query=`. The mock filters the
+    // way the handler does, so a client-side filter would no longer be able
+    // to make this pass on its own: the rows it would filter never arrive.
     configureGeneratedClient({ baseUrl: '/api/v2' });
     mockAgentsHubData();
     const user = userEvent.setup();
@@ -118,8 +136,37 @@ describe('AgentHub', () => {
 
     await user.type(screen.getByPlaceholderText('Search for agents'), 'support');
 
-    await waitFor(() => expect(screen.queryByText('Research Agent')).not.toBeInTheDocument());
+    await waitFor(
+      () => { expect(screen.queryByText('Research Agent')).not.toBeInTheDocument(); },
+      { timeout: 5000 },
+    );
     expect(screen.getByText('Support Bot')).toBeInTheDocument();
+  });
+
+  it('offers the three sort choices and asks the server for the chosen one', async () => {
+    configureGeneratedClient({ baseUrl: '/api/v2' });
+    const sorts: string[] = [];
+    mockAgentsHubData();
+    server.use(
+      http.get('/api/v2/elitea_core/public_applications/prompt_lib', ({ request }) => {
+        const params = new URL(request.url).searchParams;
+        if (params.get('sort_by') === 'likes' || params.has('my_liked')) {
+          return HttpResponse.json({ rows: [], total: 0 }, { status: 200 });
+        }
+        sorts.push(`${params.get('sort_by')}:${params.get('sort_order')}`);
+        return HttpResponse.json({ rows: ROWS, total: ROWS.length }, { status: 200 });
+      }),
+    );
+    const user = userEvent.setup();
+
+    withProviders(<AgentHub />);
+    await screen.findByText('Research Agent');
+    await waitFor(() => { expect(sorts).toContain('created_at:desc'); });
+
+    await user.click(screen.getByRole('combobox', { name: 'Sort by' }));
+    await user.click(await screen.findByRole('option', { name: 'Name A-Z' }));
+
+    await waitFor(() => { expect(sorts).toContain('name:asc'); }, { timeout: 5000 });
   });
 
   it('filters down to only the selected category when its chip is clicked (finding 9 — previously dead tag-filter plumbing)', async () => {
@@ -146,7 +193,7 @@ describe('AgentHub', () => {
 
     await user.type(screen.getByPlaceholderText('Search for agents'), 'nonexistent agent');
 
-    expect(await screen.findByText('No agents found')).toBeInTheDocument();
+    expect(await screen.findByText('No agents found', undefined, { timeout: 5000 })).toBeInTheDocument();
   });
 
   /*

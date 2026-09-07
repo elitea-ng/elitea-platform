@@ -38,25 +38,6 @@ export const getCategoryForApplication = (app: ApplicationData): string => {
 };
 
 /**
- * Case-insensitive substring filter over agent names, driving the
- * agents-hub search box (adversarial-review fix, cluster A13-agents-hub,
- * finding 9). A local duplicate of `entities/app`'s `filterAppsByQuery`
- * (same one-line behaviour) rather than an import of it: that selector is
- * typed against `entities/app`'s own `App` shape (a different generated-
- * type extension than this cluster's `ApplicationData`), and `entities/*`
- * slices may not import sideways from one another
- * (`.dependency-cruiser.cjs`'s `no-sideways-entities` rule) — `pages/`
- * could import `entities/app` directly, but duplicating this one-liner
- * locally avoids taking on a whole sibling entity's public surface (and a
- * structural-vs-nominal type mismatch) for a single filter predicate.
- */
-export const filterApplicationsByQuery = (apps: ApplicationData[], query: string): ApplicationData[] => {
-  const needle = query.trim().toLowerCase();
-  if (needle === '') return apps;
-  return apps.filter(app => app.name.toLowerCase().includes(needle));
-};
-
-/**
  * Calculate the new like count based on the selected strategy.
  */
 export const calculateNewLikesCount = (

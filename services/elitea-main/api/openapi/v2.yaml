@@ -3440,10 +3440,21 @@ components:
         :110, :135).
 
     # ---- Public applications / marketplace -------------------------------------
+    PublicApplicationTag:
+      type: object
+      required: [id, name]
+      properties:
+        id: { type: integer }
+        name: { type: string }
+      description: >
+        One tag of the published version, as the catalogue row carries it
+        (internal/api/v2/eliteacore/public_applications.go). Only the id and
+        the name are aggregated — the tag's `data` jsonb is not read here.
+
     PublicApplicationSummary:
       type: object
       required: [project_id, id, name, description, version_id, version_name,
-                 agent_type, meta]
+                 agent_type, meta, tags, likes, is_liked]
       properties:
         project_id:
           type: string
@@ -3457,8 +3468,25 @@ components:
         meta:
           allOf: [{ $ref: '#/components/schemas/VersionMeta' }]
           nullable: true
+        tags:
+          type: array
+          items: { $ref: '#/components/schemas/PublicApplicationTag' }
+          description: >
+            Tags of the published version. Empty when the version has none;
+            never null.
+        likes:
+          type: integer
+          description: >
+            How many people have liked this application, counted over the
+            public project's social_likes rows for entity `application`.
+        is_liked:
+          type: boolean
+          description: >
+            Whether the CALLER has liked this application. Always false when
+            the request carries no user identity.
       description: >
-        NOTE(W2): internal/api/v2/eliteacore/handler.go:1303-1312.
+        NOTE(W2): internal/api/v2/eliteacore/public_applications.go —
+        PublicApplications.
 
     PublicApplicationList:
       type: object
@@ -9256,9 +9284,20 @@ paths:
       operationId: listPublicApplications
       summary: List published applications visible without project membership
       description: |
-        NOTE(W2): internal/api/v2/eliteacore/handler.go:1251-1317 — {rows,
-        total}; limit/offset are accepted but not read (hard LIMIT 50); the
-        handler reads ?category=.
+        The public catalogue. Answers `{rows, total}` where `total` counts the
+        FILTERED set, not the whole catalogue, so a client can page through it.
+
+        Every parameter below is read by
+        internal/api/v2/eliteacore/public_applications.go. A `sort_by`,
+        `sort_order`, `agents_type` or `statuses` value outside its allowlist,
+        or a `limit`/`offset` outside its range, is refused with 400 and a body
+        naming the parameter — it is never silently ignored. The 400 is NOT
+        declared as a response here: `eliteaFetch` throws on every non-2xx, so
+        this codebase keeps generated response types 200-only (see
+        apps/elitea-web/src/pages/agents/Latest.tsx).
+
+        Trending (`trend_start_period`/`trend_end_period`) is the one pylon
+        parameter still missing here.
       tags: [applications]
       parameters:
         - $ref: '#/components/parameters/Limit'
@@ -9266,7 +9305,62 @@ paths:
         - name: category
           in: query
           schema: { type: string }
-          description: Marketplace category filter (read at handler.go:1270-1280).
+          description: >
+            Marketplace category filter, matched against the published
+            version's `meta.category`. The value `Other` also takes in every
+            agent with no category at all.
+        - name: query
+          in: query
+          schema: { type: string }
+          description: >
+            Case-insensitive substring search over the application name and
+            description.
+        - name: statuses
+          in: query
+          schema: { type: string }
+          description: >
+            Comma-separated version statuses (published, draft, on_moderation,
+            rejected, embedded). The catalogue only holds published versions,
+            so this narrows that set; a list without `published` answers no
+            rows.
+        - name: agents_type
+          in: query
+          schema:
+            type: string
+            default: all
+          description: >
+            One of `all`, `classic` or `pipeline`. `pipeline` keeps only
+            pipeline agents, `classic` keeps everything else, `all` (the
+            default) keeps both. Any other value is refused with 400.
+
+            The allowed set is stated here rather than as an OpenAPI `enum`
+            on purpose: an `enum` of `asc`/`desc` on a second operation makes
+            oapi-codegen rename the FIRST operation's generated constants,
+            which turns a two-parameter spec addition into a repository-wide
+            generated diff. The handler's own allowlist
+            (public_applications.go) is the enforcement point.
+        - name: sort_by
+          in: query
+          schema:
+            type: string
+            default: created_at
+          description: >
+            Sort key — one of `id`, `name`, `created_at` or `likes`. Ties
+            break on the application id descending, so paging stays stable.
+            Any other value is refused with 400.
+        - name: sort_order
+          in: query
+          schema:
+            type: string
+            default: desc
+          description: >
+            `asc` or `desc`. Any other value is refused with 400.
+        - name: my_liked
+          in: query
+          schema: { type: boolean }
+          description: >
+            Keep only the applications the CALLER has liked. A request with no
+            user identity answers no rows rather than the generic list.
       responses:
         '200':
           description: Published applications

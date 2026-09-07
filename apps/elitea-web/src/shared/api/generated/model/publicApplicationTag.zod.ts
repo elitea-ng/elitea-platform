@@ -41,26 +41,16 @@
  */
 import * as zod from "zod";
 
-export const listPublicApplicationsParamsAgentsTypeDefault = `all`;
-export const listPublicApplicationsParamsSortByDefault = `created_at`;
-export const listPublicApplicationsParamsSortOrderDefault = `desc`;
-export const ListPublicApplicationsParams = zod.object({
-  category: zod.string().optional(),
-  query: zod.string().optional(),
-  statuses: zod.string().optional(),
-  agents_type: zod
-    .string()
-    .default(listPublicApplicationsParamsAgentsTypeDefault),
-  sort_by: zod.string().default(listPublicApplicationsParamsSortByDefault),
-  sort_order: zod
-    .string()
-    .default(listPublicApplicationsParamsSortOrderDefault),
-  my_liked: zod.boolean().optional(),
-});
+export const PublicApplicationTag = zod
+  .object({
+    id: zod.int(),
+    name: zod.string(),
+  })
+  .describe(
+    "One tag of the published version, as the catalogue row carries it (internal\/api\/v2\/eliteacore\/public_applications.go). Only the id and the name are aggregated — the tag's `data` jsonb is not read here.\n",
+  );
 
-export type ListPublicApplicationsParams = zod.input<
-  typeof ListPublicApplicationsParams
->;
-export type ListPublicApplicationsParamsOutput = zod.output<
-  typeof ListPublicApplicationsParams
+export type PublicApplicationTag = zod.input<typeof PublicApplicationTag>;
+export type PublicApplicationTagOutput = zod.output<
+  typeof PublicApplicationTag
 >;

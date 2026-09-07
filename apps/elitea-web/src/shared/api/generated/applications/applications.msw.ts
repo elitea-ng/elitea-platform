@@ -744,6 +744,15 @@ export const getListPublicApplicationsResponseMock = (
       },
       null,
     ]),
+    tags: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      id: faker.number.int(),
+      name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    })),
+    likes: faker.number.int(),
+    is_liked: faker.datatype.boolean(),
   })),
   total: faker.number.int(),
   ...overrideResponse,

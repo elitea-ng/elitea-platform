@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { OTHER_CATEGORY, TRENDING_CATEGORY, MY_LIKED_CATEGORY } from './constants';
-import { buildAgentShareLink, buildAllCategories, calculateNewLikesCount, filterApplicationsByQuery, getCategoryForApplication } from './helpers';
+import { buildAgentShareLink, buildAllCategories, calculateNewLikesCount, getCategoryForApplication } from './helpers';
 import type { ApplicationData } from './types';
 
 function makeApp(overrides: Partial<ApplicationData> = {}): ApplicationData {
@@ -14,6 +14,9 @@ function makeApp(overrides: Partial<ApplicationData> = {}): ApplicationData {
     version_name: 'v1',
     agent_type: 'agent',
     meta: null,
+    tags: [],
+    likes: 0,
+    is_liked: false,
     ...overrides,
   };
 }
@@ -49,23 +52,6 @@ describe('getCategoryForApplication (adversarial-review fix, cluster A13-agents-
   it('falls back to Other when meta.category is an empty string', () => {
     const app = makeApp({ meta: { category: '' } });
     expect(getCategoryForApplication(app)).toBe(OTHER_CATEGORY);
-  });
-});
-
-describe('filterApplicationsByQuery', () => {
-  const apps = [makeApp({ id: '1', name: 'Research Agent' }), makeApp({ id: '2', name: 'Support Bot' })];
-
-  it('returns every app for a blank query', () => {
-    expect(filterApplicationsByQuery(apps, '  ')).toEqual(apps);
-  });
-
-  it('matches case-insensitively on a substring of the name', () => {
-    expect(filterApplicationsByQuery(apps, 'research')).toEqual([apps[0]]);
-    expect(filterApplicationsByQuery(apps, 'BOT')).toEqual([apps[1]]);
-  });
-
-  it('returns an empty list when nothing matches', () => {
-    expect(filterApplicationsByQuery(apps, 'nonexistent')).toEqual([]);
   });
 });
 

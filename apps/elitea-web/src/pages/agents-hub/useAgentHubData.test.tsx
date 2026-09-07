@@ -11,6 +11,8 @@ import { resetConfigForTests } from '@/shared/config/get-config';
 
 import { server } from '../../test/setup';
 
+import { ALL_AGENTS_LIMIT } from './constants';
+import type { AgentHubSortBy } from './types';
 import { useAgentHubData } from './useAgentHubData';
 
 const globals = globalThis as unknown as Record<string, unknown>;
@@ -263,5 +265,121 @@ describe('useAgentHubData', () => {
     await act(async () => {});
     expect(result.current.applicationsByTag['Support']).toBeDefined();
     expect(result.current.applicationsByTag['Productivity']).toBeUndefined();
+  });
+  /* ── Issue #36 item 8: the parameters the catalogue handler now reads ── */
+
+  it('sends the search text as ?query= and the sort as ?sort_by=/?sort_order=, and re-asks when they change', async () => {
+    // The old hook filtered by name in the browser over whatever page was in
+    // memory, so a match past the row cap read as "No agents found". The
+    // handler filters and sorts now, so the request must carry both.
+    setConfig('1');
+    configureGeneratedClient({ baseUrl: BASE });
+    server.use(getGetAgentCategoriesMockHandler({ categories: [{ name: 'Productivity', is_default: true }], total: 1 }));
+
+    const bulkQueries: string[] = [];
+    server.use(
+      http.get(`${BASE}/elitea_core/public_applications/prompt_lib`, ({ request }) => {
+        const params = new URL(request.url).searchParams;
+        // The two special buckets have their own markers; only the bulk page
+        // carries the caller's sort.
+        if (params.get('my_liked') === null && params.get('sort_by') !== 'likes') {
+          bulkQueries.push(request.url);
+        }
+        return HttpResponse.json({ rows: [], total: 0 }, { status: 200 });
+      }),
+    );
+
+    const { rerender } = renderHook(
+      ({ options }: { options: { query: string; sortBy: AgentHubSortBy } }) =>
+        useAgentHubData([], { query: options.query, sortBy: options.sortBy, sortOrder: 'asc' }),
+      { initialProps: { options: { query: 'release', sortBy: 'name' } }, wrapper },
+    );
+
+    await waitFor(() => expect(bulkQueries.length).toBeGreaterThanOrEqual(1));
+    const first = new URL(bulkQueries[0] as string).searchParams;
+    expect(first.get('query')).toBe('release');
+    expect(first.get('sort_by')).toBe('name');
+    expect(first.get('sort_order')).toBe('asc');
+    expect(first.get('limit')).toBe(String(ALL_AGENTS_LIMIT));
+    expect(first.get('offset')).toBe('0');
+
+    rerender({ options: { query: 'triage', sortBy: 'created_at' } });
+
+    await waitFor(() => expect(bulkQueries.length).toBeGreaterThanOrEqual(2));
+    const second = new URL(bulkQueries[bulkQueries.length - 1] as string).searchParams;
+    expect(second.get('query')).toBe('triage');
+    expect(second.get('sort_by')).toBe('created_at');
+  });
+
+  it('omits ?query= entirely when the search box is empty', async () => {
+    setConfig('1');
+    configureGeneratedClient({ baseUrl: BASE });
+    server.use(getGetAgentCategoriesMockHandler({ categories: [{ name: 'Productivity', is_default: true }], total: 1 }));
+    const seen: string[] = [];
+    server.use(
+      http.get(`${BASE}/elitea_core/public_applications/prompt_lib`, ({ request }) => {
+        seen.push(request.url);
+        return HttpResponse.json({ rows: [], total: 0 }, { status: 200 });
+      }),
+    );
+
+    renderHook(() => useAgentHubData([], { query: '   ' }), { wrapper });
+
+    await waitFor(() => expect(seen.length).toBeGreaterThanOrEqual(1));
+    // An empty `query=` would be a search for the empty string, which the
+    // handler reads as "no filter" only because it trims — do not rely on it.
+    expect(seen.every(url => new URL(url).searchParams.get('query') === null)).toBe(true);
+  });
+
+  it('pages with limit/offset and stops when the rows in hand reach the server total', async () => {
+    setConfig('1');
+    configureGeneratedClient({ baseUrl: BASE });
+    server.use(getGetAgentCategoriesMockHandler({ categories: [{ name: 'Productivity', is_default: true }], total: 1 }));
+
+    const row = (id: string) => ({
+      project_id: '1',
+      id,
+      name: `Agent ${id}`,
+      description: '',
+      version_id: `v-${id}`,
+      version_name: 'v1',
+      agent_type: 'agent',
+      meta: { category: 'Productivity' },
+      tags: [],
+      likes: 0,
+      is_liked: false,
+    });
+
+    server.use(
+      http.get(`${BASE}/elitea_core/public_applications/prompt_lib`, ({ request }) => {
+        const params = new URL(request.url).searchParams;
+        if (params.get('my_liked') !== null || params.get('sort_by') === 'likes') {
+          return HttpResponse.json({ rows: [], total: 0 }, { status: 200 });
+        }
+        // Two rows in the set, one per page, so "load more" has exactly one
+        // page left to ask for and then must stop.
+        const offset = Number(params.get('offset') ?? '0');
+        return HttpResponse.json(
+          { rows: offset === 0 ? [row('a')] : [row('b')], total: 2 },
+          { status: 200 },
+        );
+      }),
+    );
+
+    const { result } = renderHook(() => useAgentHubData([]), { wrapper });
+
+    await waitFor(() => expect(result.current.applicationsByTag['Productivity']).toHaveLength(1));
+    expect(result.current.hasMore).toBe(true);
+    expect(result.current.totalCount).toBe(2);
+
+    await act(async () => { await result.current.loadMore(); });
+
+    await waitFor(() => expect(result.current.applicationsByTag['Productivity']).toHaveLength(2));
+    expect(result.current.hasMore).toBe(false);
+
+    // A second call has nothing left to ask for and must not append a
+    // duplicate page.
+    await act(async () => { await result.current.loadMore(); });
+    expect(result.current.applicationsByTag['Productivity']).toHaveLength(2);
   });
 });
