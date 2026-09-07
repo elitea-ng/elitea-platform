@@ -83,6 +83,7 @@ const AdminSchedulesTasks = lazyRouteComponent(
   'AdminSchedulesTasks',
 );
 const AdminAppRequests = lazyRouteComponent(() => import('./AppRequests'), 'AdminAppRequests');
+const AdminTasks = lazyRouteComponent(() => import('./Tasks'), 'AdminTasks');
 const AdminServiceDescriptors = lazyRouteComponent(
   () => import('./ServiceDescriptors'),
   'AdminServiceDescriptors',
@@ -155,6 +156,18 @@ const schedulesRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/schedules',
   component: AdminSchedulesTasks,
+});
+
+/**
+ * `/tasks` is the PLATFORM's background jobs, not pylon's Arbiter task node.
+ * `/schedules` keeps its own "Tasks" tab and keeps rendering the unavailable
+ * notice there: that tab is about a runtime this platform does not have, and
+ * this page is about the jobs it does run. See `./Tasks.tsx`'s header.
+ */
+const tasksRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/tasks',
+  component: AdminTasks,
 });
 
 const appRequestsRoute = createRoute({
@@ -248,6 +261,7 @@ const adminRouteTree = rootRoute.addChildren([
   projectsRoute,
   secretsRoute,
   schedulesRoute,
+  tasksRoute,
   appRequestsRoute,
   configurationRoute,
   serviceDescriptorsRoute,

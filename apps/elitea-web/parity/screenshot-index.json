@@ -756,6 +756,16 @@
       "notes": "The outbound e-mail settings: the eight-control form, the per-field source tag (database / environment / unset), the write-only password with its \"no password stored\" placeholder, and the test-message box. This stack configures no relay, so the reference is the \"not configured\" state with the server's own reason — the honest finished screen, not scaffolding.",
       "surface": "admin",
       "baseline": "e2e/snapshots/visual/admin.visual.spec.ts-snapshots/admin-email-visual-linux.png"
+    },
+    {
+      "file": null,
+      "route": "/admin/app/tasks",
+      "targetComponent": "src/pages/admin/Tasks.tsx",
+      "theme": "dark",
+      "wiringStatus": "wired",
+      "notes": "The background-job union with its Kind and Status filters. The E2E stack runs no jobs, so the table renders its own empty state (`No background jobs match these filters.`) and the row count reads 0 — a stable screen that is the page's real answer, not scaffolding.",
+      "surface": "admin",
+      "baseline": "e2e/snapshots/visual/admin.visual.spec.ts-snapshots/admin-tasks-visual-linux.png"
     }
   ],
   "gaps": [],

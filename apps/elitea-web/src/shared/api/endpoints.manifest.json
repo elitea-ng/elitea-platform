@@ -100,6 +100,30 @@
             "usedBy": []
         },
         {
+            "id": "admin.listBackgroundJobs",
+            "method": "GET",
+            "path": "/admin/background_jobs/administration",
+            "operationId": "listBackgroundJobs",
+            "source": "generated",
+            "responseSchema": "BackgroundJobListResponse",
+            "fixture": null,
+            "usedBy": [
+                "pages/admin"
+            ]
+        },
+        {
+            "id": "admin.cancelBackgroundJob",
+            "method": "POST",
+            "path": "/admin/background_jobs/administration/{kind}/{jobID}:cancel",
+            "operationId": "cancelBackgroundJob",
+            "source": "generated",
+            "responseSchema": "OkResponse",
+            "fixture": null,
+            "usedBy": [
+                "pages/admin"
+            ]
+        },
+        {
             "id": "analytics.getAnalyticsAgentDetail",
             "method": "GET",
             "path": "/elitea_core/analytics_agent_detail/prompt_lib/{project_id}",

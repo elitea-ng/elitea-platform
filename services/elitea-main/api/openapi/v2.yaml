@@ -1550,6 +1550,75 @@ components:
     # Re-add them when rate limiting becomes real.
 
     # ---- Shared primitives ---------------------------------------------------
+    BackgroundJob:
+      type: object
+      description: >
+        One row of the admin Tasks table. `task_id`, `status`, `started_at`
+        and `user` carry the legacy listing's names verbatim
+        (legacy/plugins/admin/api/v2/tasks.py:94-108); the rest are new,
+        because pylon had one kind of task, one project, no completion time,
+        and a stop button it always offered.
+      required: [task_id, kind, name, status, cancellable]
+      properties:
+        task_id:
+          type: string
+          description: >
+            The execution id for a runtime job, the invocation id for a
+            scheduled occurrence, the row id for an evaluation run.
+        kind:
+          type: string
+          enum: [index, agent, toolkit, execution, schedule, eval]
+        name:
+          type: string
+          description: >
+            The capability id for a runtime job, the schedule job id for an
+            occurrence, the agent id for an evaluation run.
+        status:
+          type: string
+          description: >
+            The source's own state vocabulary, plus one value no table holds -
+            CANCELLING, for a runtime job that has been asked to stop and has
+            not stopped yet.
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+        finished_at:
+          type: string
+          format: date-time
+          nullable: true
+        project_id:
+          type: integer
+          format: int64
+          nullable: true
+          description: Null for a scheduled occurrence, which belongs to no project.
+        user:
+          type: string
+          description: >
+            The stored actor identifier, empty for a job with no interactive
+            principal.
+        cancellable:
+          type: boolean
+          description: >
+            Whether the cancel route would accept THIS row. Computed per row,
+            so the page renders the control only where it works.
+
+    BackgroundJobListResponse:
+      type: object
+      required: [total, rows, truncated]
+      properties:
+        total:
+          type: integer
+        rows:
+          type: array
+          items:
+            $ref: '#/components/schemas/BackgroundJob'
+        truncated:
+          type: boolean
+          description: >
+            The per-source scan window was full, so older rows exist that this
+            page cannot reach.
+
     OkResponse:
       type: object
       required: [ok]
@@ -8473,6 +8542,122 @@ paths:
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '500': { $ref: '#/components/responses/500' }
+
+  /admin/background_jobs/administration:
+    get:
+      operationId: listBackgroundJobs
+      summary: List the platform's background jobs
+      description: >
+        The admin Tasks page. It unions the runtime plane
+        (elitea_runtime.execution_jobs, whose capability_id gives the kind),
+        the scheduler's due work (elitea_runtime.scheduled_occurrences) and
+        every project's evaluation runs. It is NOT the pylon Arbiter task node
+        that /admin/tasks/{mode} answers 501 for. The rows keep the legacy
+        listing's task_id, status, started_at and user keys. `truncated`
+        reports that the per-source scan window was full, so older rows exist
+        that this page cannot reach.
+      tags: [admin]
+      parameters:
+        - name: kind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [index, agent, toolkit, execution, schedule, eval]
+        - name: status
+          in: query
+          required: false
+          schema: { type: string }
+        - name: project_id
+          in: query
+          required: false
+          schema: { type: integer, format: int64 }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0 }
+      responses:
+        '200':
+          description: One page of the union
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BackgroundJobListResponse'
+        '400':
+          description: project_id is not a positive integer
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '503':
+          description: This deployment has no background-job store configured
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/background_jobs/administration/{kind}/{jobID}:cancel:
+    parameters:
+      - name: kind
+        in: path
+        required: true
+        schema:
+          type: string
+          enum: [index, agent, toolkit, execution, schedule, eval]
+      - name: jobID
+        in: path
+        required: true
+        description: The row's task_id.
+        schema: { type: string }
+      - name: project_id
+        in: query
+        required: false
+        description: >
+          Required for kind=eval and ignored otherwise. A run id is unique only
+          within its own project schema. It travels in the query rather than in
+          a composite path id because the route's own `:cancel` suffix already
+          claims the colon.
+        schema: { type: integer, format: int64 }
+
+    post:
+      operationId: cancelBackgroundJob
+      summary: Stop one background job
+      description: >
+        Delegates per kind. A runtime job stops by its durable desired state,
+        the same primitive the per-kind cancels use; an evaluation run stops
+        through the evaluation repository's own CancelRun; a scheduled
+        occurrence cannot be stopped, because the next occurrence is already
+        computed from the same schedule row - disable the schedule instead.
+      tags: [admin]
+      responses:
+        '200':
+          description: The job was asked to stop
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OkResponse' }
+        '400':
+          description: Unknown kind, or a malformed evaluation run id
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '409':
+          description: >
+            The job has already settled, is already stopping, or is a
+            scheduled occurrence
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '503':
+          description: This deployment has no store for this job kind
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
 
   /admin/branding/administration:
     # ADR-0024 decision 5: the typed editor of the brand pack's DATABASE

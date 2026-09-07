@@ -57,6 +57,15 @@ type Handler struct {
 	// is. It never degrades to an in-memory decision: a control that accepts a
 	// decision and forgets it leaves the operator believing a type is off.
 	toolkitTypePolicy ToolkitTypePolicyStore
+	// The platform's own background jobs behind `Admin › Tasks`
+	// (background_jobs.go). Nil unless WithBackgroundJobs is applied, and the
+	// routes answer 503 while it is — never an empty list, for the reason
+	// arbiterTaskNodeUnavailable states below.
+	backgroundJobs BackgroundJobsStore
+	// The evaluation-run half of the Tasks page's cancel (background_jobs.go).
+	// Nil unless WithEvalRunCancel is applied; an eval row's cancel then
+	// answers 503 while every other kind still stops.
+	evalRunCancel EvalRunCanceller
 }
 
 // Option configures a Handler at construction time.

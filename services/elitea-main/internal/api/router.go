@@ -441,6 +441,21 @@ func notImplementedArtifact(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(`{"error":{"code":"NotImplemented","message":"pending S8/S9"}}`))
 }
 
+// adminEvalRunCanceller adapts the evaluation repository to
+// admin.EvalRunCanceller: the same CancelRun, with the updated row dropped.
+//
+// The adapter exists so the admin package holds no dependency on the
+// evaluation model for a value it never reads — and so the admin Tasks page's
+// cancel and the evaluation page's own cancel remain ONE implementation.
+type adminEvalRunCanceller struct {
+	runs *dbrepos.EvalRunsRepo
+}
+
+func (c adminEvalRunCanceller) CancelRun(ctx context.Context, projectID, runID string) error {
+	_, err := c.runs.CancelRun(ctx, projectID, runID)
+	return err
+}
+
 // artifactRepoAdapter satisfies v2artifacts.Repository by embedding both S6
 // repositories — they share no method names, so Go's method promotion does
 // the rest. Neither constructor accepts a nil pool without erroring, unlike
@@ -1421,23 +1436,49 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			r.Mount("/projects", v2projects.NewHandler(cfg.Pool, projectOptions...).Routes())
 
 			// === Admin endpoints ===
+			//
+			// The Tasks page's job store and its evaluation-run cancel. Both
+			// are built here rather than inside the handler for the reason
+			// every other store is: a nil pool means the option is skipped and
+			// the routes answer 503, instead of the handler discovering it has
+			// no database at request time.
+			var backgroundJobsStore *dbrepos.AdminBackgroundJobsRepository
+			if cfg.Pool != nil {
+				if store, err := dbrepos.NewAdminBackgroundJobsRepository(cfg.Pool); err == nil {
+					backgroundJobsStore = store
+				}
+			}
+			adminOptions := []admin.Option{}
+			if backgroundJobsStore != nil {
+				adminOptions = append(adminOptions,
+					admin.WithBackgroundJobs(backgroundJobsStore),
+					// The SAME repository method the evaluation API's own
+					// cancel route calls, adapted only to drop the row this
+					// page does not read — see admin.EvalRunCanceller.
+					admin.WithEvalRunCancel(adminEvalRunCanceller{
+						runs: dbrepos.NewEvalRunsRepo(cfg.Pool),
+					}),
+				)
+			}
 			adminHandler := admin.NewHandler(
 				cfg.Pool,
-				admin.WithPermissionResolver(permissionResolver),
-				admin.WithToolkitRegistry(cfg.ToolkitRegistry),
-				admin.WithPrebuiltMCPCatalogue(prebuiltMCPStore, prebuiltMCPVault),
-				admin.WithIdentityProviders(identityProviderStore, prebuiltMCPVault),
-				admin.WithBranding(brandingResolver),
-				admin.WithBrandingAssets(brandingAssets),
-				admin.WithMailer(adminMailer),
-				admin.WithEmailSettings(emailResolver.Store(), emailResolver),
-				admin.WithBrandingPackages(brandingPackages),
-				// The same store the SCIM tree writes through. One store, so
-				// the screen and a group push can never disagree about which
-				// project a binding names.
-				admin.WithSCIMGroupBindings(scimdirectory.NewStore(cfg.Pool)),
-				// The toolkit type policy the served catalogue also reads.
-				admin.WithToolkitTypePolicy(toolkitTypePolicyStore),
+				append([]admin.Option{
+					admin.WithPermissionResolver(permissionResolver),
+					admin.WithToolkitRegistry(cfg.ToolkitRegistry),
+					admin.WithPrebuiltMCPCatalogue(prebuiltMCPStore, prebuiltMCPVault),
+					admin.WithIdentityProviders(identityProviderStore, prebuiltMCPVault),
+					admin.WithBranding(brandingResolver),
+					admin.WithBrandingAssets(brandingAssets),
+					admin.WithMailer(adminMailer),
+					admin.WithEmailSettings(emailResolver.Store(), emailResolver),
+					admin.WithBrandingPackages(brandingPackages),
+					// The same store the SCIM tree writes through. One store, so
+					// the screen and a group push can never disagree about which
+					// project a binding names.
+					admin.WithSCIMGroupBindings(scimdirectory.NewStore(cfg.Pool)),
+					// The toolkit type policy the served catalogue also reads.
+					admin.WithToolkitTypePolicy(toolkitTypePolicyStore),
+				}, adminOptions...)...,
 			)
 			moderationHandler := v2moderation.NewHandler(cfg.Pool, v2moderation.WithMailer(decisionMailer))
 			// The admin panel's surface. Every route below is gated on the same
@@ -1790,6 +1831,26 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				r.With(requireRuntimePlugins).Get("/tasks/{mode}/", adminHandler.Tasks)
 				r.With(requireRuntimePlugins).Get("/tasks/{mode}", adminHandler.Tasks)
 				r.With(requireRuntimePlugins).Get("/active_tasks/{mode}", adminHandler.ActiveTasks)
+				// Admin › Tasks — the PLATFORM's own background jobs, not
+				// pylon's Arbiter task node. The two routes above keep
+				// answering 501 (arbiterTaskNodeUnavailable); these two answer
+				// the question that page asked, from this platform's tables.
+				//
+				// Same `runtime.plugins` gate in administration mode, because
+				// that is what the legacy Tasks page declares
+				// (legacy/plugins/admin/api/v2/tasks.py:43). No new permission
+				// string arrives, so the grant gate stays untripped and every
+				// operator who could open the legacy page can open this one.
+				//
+				// A STATIC `administration` segment, not `{mode}`: pylon reaches
+				// this surface only through its administration AdminAPI, so a
+				// mode variable would name a resolution this router does not
+				// perform — the same argument the moderation routes below make.
+				r.With(requireRuntimePlugins).Get("/background_jobs/administration", adminHandler.BackgroundJobs)
+				r.With(requireRuntimePlugins).Post(
+					"/background_jobs/administration/{kind}/{jobID}:cancel",
+					adminHandler.CancelBackgroundJob,
+				)
 
 				// Regular app admin endpoints (with projectID)
 				//
