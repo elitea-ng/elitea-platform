@@ -132,7 +132,9 @@ j6Test('J6: share link with project id switches project and reloads', async ({ p
     await expect(page.getByText(ERROR_BOUNDARY_TEXT)).toHaveCount(0);
 
     // ...and the switch actually took: the sidebar shows the project the
-    // share link named.
+    // share link named. This persona reaches the page already pinned to that
+    // project by `auth.setup.ts`, so what is really under test is that
+    // ROUTE-070's reload did not LOSE it.
     await expect(page.getByRole('button', { name: /Project:/ })).toHaveAccessibleName(
       /Project:\s*Default Project/,
       { timeout: 20_000 },

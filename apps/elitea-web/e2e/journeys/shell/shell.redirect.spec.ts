@@ -8,6 +8,12 @@
 import { test, expect } from '@playwright/test';
 
 import { checkA11y } from '../../fixtures/axe';
+import {
+  DEFAULT_PROJECT_NAME,
+  ensureProjectSelected,
+  projectSwitcher,
+  shellChoseAProject,
+} from '../../fixtures/project';
 import { signInThroughOidc } from '../../fixtures/session';
 import { BASE_URL } from '../../../playwright.config';
 
@@ -120,9 +126,24 @@ test('J2: OIDC login honours target_to deep link', async ({ browser }) => {
   // the URL assertions above would also pass for an unauthenticated shell
   // that was simply served the bundle at that path (which is exactly what
   // this stack does — see the note above).
-  await expect(page.getByRole('button', { name: /Project:\s*Default Project/ })).toBeVisible({
-    timeout: 20_000,
-  });
+  //
+  // A FRESH CONTEXT LANDS WHEREVER THE APP PUTS IT. This journey creates its
+  // own context precisely so it drives the whole login, so it inherits none of
+  // `auth.setup.ts`'s pinning: nothing is in storage, and `AppShell` selects
+  // the caller's own personal project — which sign-in now provisions for every
+  // account (`ensurePersonalProject`, internal/api/v2/auth/signin.go). The
+  // assertion here used to read "Project: Default Project" and started failing
+  // on "Private", which is the app doing exactly what production should do for
+  // a first-time user rather than anything about `target_to`.
+  //
+  // So the project is CHOSEN, and then asserted. Both halves still prove the
+  // session: an unauthenticated shell has no project list to choose from.
+  await shellChoseAProject(page);
+  await ensureProjectSelected(page, DEFAULT_PROJECT_NAME);
+  await expect(projectSwitcher(page)).toHaveAccessibleName(
+    new RegExp(`Project:\\s*${DEFAULT_PROJECT_NAME}`),
+    { timeout: 20_000 },
+  );
 
   await checkA11y(page);
   await context.close();
