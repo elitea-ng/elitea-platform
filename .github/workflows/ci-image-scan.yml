@@ -9,8 +9,8 @@ name: CI — Image scan
 # Containerfile. No stage copied from it, so a builder pruned it from the build
 # graph and the scan never ran. #224 recorded that for elitea-main and PR #432
 # moved that one scan into ci-go.yml. services/elitea-llm-gateway carried the
-# identical dead stage, and elitea-scheduler, elitea-web, elitea-ui and
-# pylon-indexer had no scan of any kind.
+# identical dead stage, and elitea-scheduler, elitea-web and elitea-ui had no
+# scan of any kind.
 #
 # WHY IT IS NOT IN ci-go.yml
 #
@@ -50,17 +50,22 @@ name: CI — Image scan
 # for a weaker test. The `coverage` job fails when the two matrices disagree
 # about an image, its expected target type, or whether it blocks.
 #
-# THREE IMAGES DO NOT BLOCK, AND THEY SAY SO
+# TWO IMAGES DO NOT BLOCK, AND THEY SAY SO
 #
-# `pylon-indexer`, `elitea-worker-python` and `elitea-deepwiki` are scanned,
-# report their full finding counts, and do NOT fail the merge. Every other
-# image blocks.
+# `elitea-worker-python` and `elitea-deepwiki` are scanned, report their full
+# finding counts, and do NOT fail the merge. Every other image blocks.
+#
+# A THIRD used to. `pylon-indexer` carried 604 findings, all of them from
+# `ghcr.io/eliteaai/pylon:1.2.25`, an image this repository never built. #509
+# recorded them and said the exemption ends when the service goes away rather
+# than by correcting an image we delete. #339 deleted it, so the entry is gone
+# from here and from the register. That is the shape an exemption is supposed
+# to have: a cause, and an end.
 #
 # They are exempt for different reasons, and the difference is the point.
-# pylon-indexer's 604 findings are ALL upstream: this repository does not build
-# that image. elitea-deepwiki's 54 are ALL from the Debian base, none from this
-# project's own packages, and none has a published fixed version. Both #635 and
-# #636 hold that measurement and the path that ends it.
+# elitea-deepwiki's 54 are ALL from the Debian base, none from this project's
+# own packages, and none has a published fixed version. Both #635 and #636 hold
+# that measurement and the path that ends it.
 #
 # elitea-worker-python is the MIXED case the register's criterion 1 was widened
 # for: 82 of its 101 lines come from a Debian base with no fix published, and
@@ -70,28 +75,19 @@ name: CI — Image scan
 # they too are owned outside this repository, and the register names them one
 # by one rather than rounding them into "upstream".
 #
-# `.github/image-scan-exempt.txt` records all three, with the date each count
-# was re-measured. A count in a comment goes stale in silence; the guard that
-# does not is the one below — an exempt image reporting ZERO findings FAILS.
+# `.github/image-scan-exempt.txt` records both, with the date each count was
+# re-measured. A count in a comment goes stale in silence; the guard that does
+# not is the one below — an exempt image reporting ZERO findings FAILS.
 #
-#   WHY: all 604 findings come from `ghcr.io/eliteaai/pylon:1.2.25`. This
-#   repository does not build that image; `services/pylon-indexer/Containerfile`
-#   copies three config files on top of it. Issue #509 holds the finding list.
-#   Issue #339 retires the image: the index plane moves to index v2 and
-#   pylon-indexer is deleted.
+#   WHAT AN EXEMPTION DOES NOT COVER: the threshold is unchanged, no CVE is
+#   suppressed, and the dormancy guards still BLOCK for an exempt image. A
+#   missing report, or a report without the expected target type, fails the job
+#   like any other. Only the finding count is downgraded, from an error to a
+#   warning.
 #
-#   WHY NOT LET IT BLOCK: a job that is red on every branch, for a cause no
-#   branch can fix, teaches every reader to ignore this workflow. That would
-#   cost the other five scans their meaning.
-#
-#   WHAT THE EXEMPTION DOES NOT COVER: the threshold is unchanged, no CVE is
-#   suppressed, and the dormancy guards still BLOCK for this image. A missing
-#   report, or a report without a `python-pkg` target, fails the job like any
-#   other. Only the finding count is downgraded, from an error to a warning.
-#
-#   HOW IT ENDS: delete the `pylon-indexer` entry when #339 deletes the image.
-#   Until then the job FAILS if the image ever reports zero findings, because an
-#   exemption that outlives its cause is the next stale gate.
+#   WHY NOT LET AN EXEMPT IMAGE BLOCK: a job that is red on every branch, for a
+#   cause no branch can fix, teaches every reader to ignore this workflow. That
+#   would cost the other scans their meaning.
 #
 #   Two files must agree before an image stops blocking: the `blocking` field in
 #   the matrix below, and `.github/image-scan-exempt.txt`. The `coverage` job
@@ -109,7 +105,6 @@ on:
       - "services/elitea-scheduler/**"
       - "services/elitea-subapp-host/**"
       - "services/elitea-llm-gateway/**"
-      - "services/pylon-indexer/**"
       # The DeepWiki image is in the scan matrix below, and its path was NOT in
       # this list. A change to services/elitea-deepwiki/Containerfile therefore
       # did not run the scan that guards it: the exemption in
@@ -147,7 +142,6 @@ on:
       - "services/elitea-scheduler/**"
       - "services/elitea-subapp-host/**"
       - "services/elitea-llm-gateway/**"
-      - "services/pylon-indexer/**"
       - "services/elitea-deepwiki/**"
       - "apps/elitea-web/**"
       - "apps/elitea-ui"
@@ -345,7 +339,7 @@ jobs:
           # `matrix.image.expect-type` as a subtraction.
           #   gobinary    the Go binary in a distroless image;
           #   alpine      the package database of the nginx runtime image;
-          #   python-pkg  the site-packages of the pylon base image.
+          #   python-pkg  the site-packages of a Python service image.
           # Each value names the APPLICATION content, not only the operating
           # system, so a scan that reads the base layers and stops short still
           # fails. A report without that type means the scan did not reach what
@@ -353,7 +347,7 @@ jobs:
           #
           # `blocking: false` means the FINDING COUNT is reported and does not
           # fail the merge. It never relaxes the threshold and it never relaxes
-          # the dormancy guards. Read the header for the one image that carries
+          # the dormancy guards. Read the header for the images that carry
           # it, and for the two files that must agree before a second one does.
           - name: elitea-main
             context: .
@@ -394,13 +388,6 @@ jobs:
             target: ""
             expect_type: alpine
             blocking: true
-          # Retired by #339. Findings recorded in #509. See the header.
-          - name: pylon-indexer
-            context: ./services/pylon-indexer
-            dockerfile: ./services/pylon-indexer/Containerfile
-            target: ""
-            expect_type: python-pkg
-            blocking: false
           # Exemption recorded in #553 (findings) and #554 (what ends it).
           # See the header: this is the mixed case, not an upstream-only one.
           # #554 bumped every package this repository can raise, so the Python

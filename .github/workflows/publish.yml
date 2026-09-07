@@ -233,9 +233,6 @@ jobs:
           - name: elitea-web
             context: .
             dockerfile: ./apps/elitea-web/Containerfile
-          - name: pylon-indexer
-            context: ./services/pylon-indexer
-            dockerfile: ./services/pylon-indexer/Containerfile
           # Standalone module outside go.work. Its Containerfile builds from
           # golang:1.26-alpine and carries its own toolchain, so no runner-image
           # bump is required here. scripts/ci/check-gateway-toolchain.sh holds
@@ -465,9 +462,6 @@ jobs:
           - name: elitea-web
             expect_type: alpine
             blocking: true
-          - name: pylon-indexer
-            expect_type: python-pkg
-            blocking: false
           - name: elitea-llm-gateway
             expect_type: gobinary
             blocking: true
@@ -620,9 +614,6 @@ jobs:
           - name: elitea-web
             expect_type: alpine
             blocking: true
-          - name: pylon-indexer
-            expect_type: python-pkg
-            blocking: false
           - name: elitea-llm-gateway
             expect_type: gobinary
             blocking: true
@@ -1017,7 +1008,7 @@ jobs:
           #
           # scripts/ci/image-matrix.sh --verify is the real gate, and it holds
           # all six copies of the image list against docker-bake.hcl.
-          IMAGES=("elitea-main" "elitea-scheduler" "elitea-subapp-host" "elitea-ui" "elitea-web" "pylon-indexer" "elitea-llm-gateway" "elitea-worker-python" "elitea-worker-rust" "elitea-deepwiki" "elitea-inventory")
+          IMAGES=("elitea-main" "elitea-scheduler" "elitea-subapp-host" "elitea-ui" "elitea-web" "elitea-llm-gateway" "elitea-worker-python" "elitea-worker-rust" "elitea-deepwiki" "elitea-inventory")
           SUFFIXES=("linux-amd64" "linux-arm64")
           ORG="${{ github.repository_owner }}"
 

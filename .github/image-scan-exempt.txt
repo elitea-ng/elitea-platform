@@ -39,10 +39,6 @@
 #
 # Lines that start with # are comments. Blank lines are ignored.
 
-# findings #509 — 77 CRITICAL and 527 HIGH, all from ghcr.io/eliteaai/pylon
-# retirement #339 — the index plane moves to index v2 and this image is deleted
-pylon-indexer
-
 # findings #553 — RE-MEASURED 2026-09-06 on cold local builds (trivy 0.74.0,
 #   --severity HIGH,CRITICAL, the scan job's settings). 101 lines, 7 CRITICAL
 #   and 94 HIGH: 82 from the Debian base and 19 in site-packages. Before this

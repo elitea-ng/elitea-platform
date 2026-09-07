@@ -7,7 +7,7 @@ variable "REGISTRY" {
 }
 
 group "default" {
-  targets = ["elitea-main", "elitea-ui", "pylon-indexer", "elitea-scheduler", "elitea-llm-gateway"]
+  targets = ["elitea-main", "elitea-ui", "elitea-scheduler", "elitea-llm-gateway"]
 }
 
 group "go" {
@@ -88,10 +88,6 @@ target "elitea-worker-rust" {
   platforms  = ["linux/amd64", "linux/arm64"]
 }
 
-group "pylon" {
-  targets = ["pylon-indexer"]
-}
-
 target "elitea-scheduler" {
   # Repo root, not ./services/elitea-scheduler: the Containerfile COPYs
   # libs/go/observability (issue #250's local replace target) from there.
@@ -112,16 +108,6 @@ target "elitea-subapp-host" {
   tags       = ["${REGISTRY}/elitea-subapp-host:${TAG}"]
   cache-from = ["type=gha,scope=elitea-subapp-host"]
   cache-to   = ["type=gha,mode=max,scope=elitea-subapp-host"]
-  platforms  = ["linux/amd64", "linux/arm64"]
-}
-
-target "pylon-indexer" {
-  context    = "./services/pylon-indexer"
-  dockerfile = "Containerfile"
-  tags       = ["${REGISTRY}/pylon-indexer:${TAG}"]
-  args       = { PYLON_VERSION = "1.2.25" }
-  cache-from = ["type=gha,scope=pylon-indexer"]
-  cache-to   = ["type=gha,mode=max,scope=pylon-indexer"]
   platforms  = ["linux/amd64", "linux/arm64"]
 }
 

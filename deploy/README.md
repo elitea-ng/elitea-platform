@@ -185,10 +185,11 @@ Three charts, and that is all of them: `helm lint`, the template matrix and
 `publish.yml` each read `deploy/helm/*/Chart.yaml`, so a fourth chart fails CI
 until somebody templates and publishes it.
 
-Two images have no chart. `ghcr.io/elitea-ng/elitea-ui` is the old UI: it runs
-in compose, and the Kubernetes path is the `web` component. `pylon-indexer` is
-not deployed at all — the Go runtime plane serves index ingest through the
-agent worker, on the same command stream.
+One image has no chart. `ghcr.io/elitea-ng/elitea-ui` is the old UI: it runs
+in compose, and the Kubernetes path is the `web` component. `pylon-indexer`
+used to be the second one, deployed nowhere; issue #339 deleted the service, so
+it is no longer built or published either. The Go runtime plane serves index
+ingest through the agent worker, on the same command stream.
 
 One component is off by default and needs TWO settings, not one. `deepwiki`
 is the DeepWiki provider service (ADR-0022). Turning it on is the `deepwiki`
@@ -906,19 +907,17 @@ Stated plainly, because the gap between compose and Helm is where deploys break:
 - **No secrets.** Every chart sources sensitive values from Kubernetes Secrets
   that must be provisioned out-of-band. `elitea-main`'s and the gateway's
   `GATEWAY_IDENTITY_SECRET` are `optional: false` — pods do not start without
-  them, and the two sides must carry the **same** value. `pylon-indexer`'s
-  `SECRETS_MASTER_KEY` is `optional: false` for the same reason, described
-  next.
-- **No model-cache pre-seed for `pylon-indexer`.** compose's `model-cache-init`
-  has no Kubernetes equivalent here.
+  them, and the two sides must carry the **same** value. `SECRETS_MASTER_KEY`
+  is `optional: false` for the same reason, described next.
 
 ## `SECRETS_MASTER_KEY` — one key for the whole stack
 
-`elitea-main`, `pylon-indexer` and `elitea-llm-gateway` all read
-`centry.secrets_key`. Each one wraps a project key with `SECRETS_MASTER_KEY`
+`elitea-main` and `elitea-llm-gateway` both read `centry.secrets_key`. Each one wraps a project key with `SECRETS_MASTER_KEY`
 when it holds that value, and stores the project key in the clear when it does
 not. Two services with two answers put two row formats in one table, and
-neither can read what the other wrote.
+neither can read what the other wrote. `pylon-indexer` was the third reader
+until issue #339 deleted it, which is one fewer place for those two answers to
+disagree.
 
 So the rule is: **one stack, one value, given to every service that reads that
 table.** Give it in the environment, never in a file. A committed default is a
@@ -944,9 +943,7 @@ The variable has three states. They are not equivalent:
 
 A malformed key stops the service on purpose (#412). Before that change the
 service ignored the bad value and stored the keys unwrapped. An operator who
-set the variable got plaintext storage, and no report of it. The
-`pylon-indexer` image refuses to start on a missing or malformed value in the
-same way (`services/pylon-indexer/entrypoint.sh`).
+set the variable got plaintext storage, and no report of it.
 
 A trailing newline is **not** malformed. Go and Python both ignore `\r` and
 `\n` when they decode base64, so a key mounted from a file keeps working. A

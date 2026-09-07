@@ -24,10 +24,10 @@ services:
       # vault data from the loaded staging dump, so a placeholder cannot
       # replace it. Set SECRETS_MASTER_KEY before you start this stack.
       #
-      # issue #418: pylon-indexer reads the same rows and now takes the same
-      # variable, from the base compose file. The line stays here because this
-      # file also runs against a DIFFERENT database (the staging dump), and a
-      # reader needs to see which key opens it.
+      # The line stays here because this file also runs against a DIFFERENT
+      # database (the staging dump), and a reader needs to see which key opens
+      # it. pylon-indexer used to read the same rows from the base compose
+      # file's value; #339 deleted that service.
       SECRETS_MASTER_KEY: "${SECRETS_MASTER_KEY:?set in your environment}"
       # Inherits the local oidc-mock service from docker-compose.yml (issue
       # #245) — the remote oidc-mock.technicaldomain.xyz host with a
@@ -38,12 +38,3 @@ services:
       OIDC_REDIRECT_URI: "http://localhost/forward-auth/auth_oidc/callback"
       PUBLIC_PROJECT_ID: "1"
 
-  pylon-indexer:
-    environment:
-      POSTGRES_DB: eliteadmstage2
-      POSTGRES_USER: eliteausr
-      POSTGRES_PASSWORD: elitea
-      # SECRETS_MASTER_KEY is deliberately NOT repeated here. Compose merges an
-      # `environment` mapping key by key, so the base file's value reaches this
-      # service unchanged, and one stack keeps ONE key (issue #418). Setting a
-      # different value on either service is what made them disagree.

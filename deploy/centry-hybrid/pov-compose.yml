@@ -17,20 +17,43 @@ services:
       elitea-litellm:
         condition: service_healthy
 
+  # ── pylon_indexer is retired (#339) ────────────────────────────────────────
+  #
+  # The index plane runs on the Go runtime plane and the Python agent worker,
+  # on the version-2 command stream and consumer group configured on
+  # elitea-main below. That path is proven with no pylon in the stack: the
+  # index DoD journey runs it in CI, and `standalone-stack.sh seed-index`
+  # records a run that indexes real documents.
+  #
+  # THE SERVICE IS DECLARED AND NOT STARTED, which is deliberate. Centry's own
+  # Compose model declares pylon_indexer and that model is not in this
+  # repository, so this overlay cannot delete the service — Compose has no
+  # directive for that. A profile is Compose's own mechanism for "declared,
+  # not started": `compose.sh` renders and starts with `--profile runtime`
+  # only, so this service is absent from the model it renders and from the
+  # stack it brings up. `compose.sh config` asserts that absence.
+  #
+  # Its four plugins are covered or dropped, and neither is a guess:
+  #   indexer_worker        -> services/elitea-worker-python (the agent worker
+  #                            serves index ingest on the same stream)
+  #   provider_worker       -> ADR-0012 P3; the Go successor owns provider
+  #                            descriptors, and no hybrid route reaches this
+  #   worker_core           -> the worker's own runtime, replaced with it
+  #   runtime_engine_litellm-> DROPPED for this checkpoint already (#323). The
+  #                            configuration it read now lives beside the
+  #                            rollback overlay that would need it.
+  #
+  # ROLLBACK: apply deploy/centry-hybrid/rollback/index-v1.yml as a further
+  # overlay and add `--profile index-v1`. It is a tracked file carrying the
+  # exact mounts, health check and dependency this service had, so a reversal
+  # is one command and not git archaeology.
+  #
+  # ORDER MATTERS. deploy/INDEX_V2_CUTOVER.md holds the drain rule and the
+  # preflight. Stopping this service before the version-1 drain completes
+  # strands work that no version-2 process will accept, and that document says
+  # binary rollback is prohibited once a version-2 command has been admitted.
   pylon_indexer:
-    volumes:
-      - ${ELITEA_PLATFORM_DIR:?set ELITEA_PLATFORM_DIR}/deploy/centry-hybrid/runtime-engine-litellm.yml:/data/configs/runtime_engine_litellm.yml:ro
-    healthcheck:
-      test:
-        - CMD-SHELL
-        - curl -fsS --max-time 2 http://elitea-litellm:8081/health/liveness >/dev/null
-      interval: 3s
-      timeout: 3s
-      retries: 60
-      start_period: 15s
-    depends_on:
-      elitea-litellm:
-        condition: service_healthy
+    profiles: [index-v1]
 
   elitea-main:
     build:
@@ -39,10 +62,28 @@ services:
       target: hybrid
     image: ${ELITEA_MAIN_IMAGE:?set ELITEA_MAIN_IMAGE}
     environment:
-      # The current Centry artifacts plugin remains authoritative in the
-      # mixed deployment. It uses Centry's local libcloud store, which is not
-      # an S3/Azure/GCS endpoint that elitea-main can safely share.
-      ELITEA_ARTIFACTS_ENABLED: "false"
+      # ── Artifacts (#337) ───────────────────────────────────────────────────
+      # The Go artifact plane is authoritative in the mixed deployment. Every
+      # artifact route in traefik/index-routes.yml resolves to elitea-main, so
+      # this flag and that route file are one decision: turn the flag off again
+      # and the routes still point here, at a service that composes no object
+      # store and answers 404 on every artifact path.
+      #
+      # The store is a SEPARATE endpoint from Centry's libcloud directory, and
+      # deliberately so. libcloud LOCAL is a directory tree of base64-encoded
+      # names on pylon_main's own disk (ADR-0016 SS8); it is not an S3, Azure or
+      # GCS endpoint, so no configuration of elitea-main can read it in place.
+      # The existing objects move once, with deploy/ARTIFACT_CUTOVER.md and
+      # centry-hybrid/scripts/migrate-artifacts.sh. Nothing reads the old tree
+      # after that copy, and nothing writes to it.
+      ELITEA_ARTIFACTS_ENABLED: "true"
+      STORAGE_BACKEND: "s3"
+      STORAGE_CONTAINER: "elitea-artifacts"
+      S3_ENDPOINT_URL: "http://runtime-artifacts:9000"
+      S3_ACCESS_KEY: "elitea"
+      S3_SECRET_KEY: "elitea-dev-secret"
+      S3_REGION: "us-east-1"
+      S3_FORCE_PATH_STYLE: "true"
       ELITEA_RUNTIME_ENABLED: "true"
       ELITEA_RUNTIME_INDEX_INGEST_DISPATCH_ENABLED: "true"
       ELITEA_RUNTIME_INDEX_SCHEDULING_ENABLED: "true"
@@ -71,6 +112,12 @@ services:
       ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL: https://elitea-gateway
     depends_on:
       runtime-index-v2-bootstrap:
+        condition: service_completed_successfully
+      # The bucket must exist before the first PUT. elitea-main probes the
+      # store at boot (objectStoreReadinessProbe) and refuses to start on a
+      # missing container, so this is a start ORDER requirement and not a
+      # convenience.
+      runtime-artifacts-bucket-init:
         condition: service_completed_successfully
     networks:
       - runtime_gateway
@@ -197,5 +244,51 @@ services:
     networks:
       - runtime_control
 
+  # ── The hybrid object store (#337) ─────────────────────────────────────────
+  #
+  # The same image, keys and bucket name as the standalone stack
+  # (deploy/docker-compose.standalone-full.yml), so an operator who knows one
+  # stack knows this one. It is named runtime-artifacts rather than rustfs
+  # because this overlay merges into Centry's Compose model, where a short
+  # generic name is more likely to collide with a service somebody adds there.
+  #
+  # It carries the objects the copy in deploy/ARTIFACT_CUTOVER.md writes, and
+  # every object written after the cutover.
+  runtime-artifacts:
+    image: docker.io/rustfs/rustfs:latest
+    restart: unless-stopped
+    environment:
+      RUSTFS_ACCESS_KEY: elitea
+      RUSTFS_SECRET_KEY: elitea-dev-secret
+    volumes:
+      - runtime-artifacts-data:/data
+    healthcheck:
+      # Neither this image nor its dependents ship curl — only wget — and
+      # wget's exit code does not distinguish "reachable but 403" from
+      # "refused". Treat a captured "server returned error" as reachable.
+      # Kept in step with the identical block in
+      # deploy/docker-compose.standalone-full.yml.
+      test: ["CMD-SHELL", "out=$$(wget -q -O /dev/null http://127.0.0.1:9000/ 2>&1); [ $$? -eq 0 ] || echo \"$$out\" | grep -q 'server returned error'"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+    networks:
+      - centry
+
+  runtime-artifacts-bucket-init:
+    image: docker.io/minio/mc:latest
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        mc alias set runtime-artifacts http://runtime-artifacts:9000 elitea elitea-dev-secret &&
+        mc mb --ignore-existing runtime-artifacts/elitea-artifacts
+    depends_on:
+      runtime-artifacts:
+        condition: service_healthy
+    restart: "no"
+    networks:
+      - centry
+
 volumes:
   runtime-indexer-worker-v2-spool:
+  runtime-artifacts-data:
