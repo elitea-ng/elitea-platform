@@ -503,6 +503,155 @@ func TestUsersDeleteBindingRevocationRollsBackWithTheAssignment(t *testing.T) {
 
 /* ── fixture ─────────────────────────────────────────────────────────────── */
 
+// TestUsersCreateBulkBatchIsPerAddress is the bulk-invite acceptance.
+//
+// The transport has taken `{emails: [...], roles: [...]}` since the port
+// landed, but nothing proved what a MIXED batch does, and that is the whole
+// contract: the reference writes one transaction per address, so one bad
+// address must not roll back the good ones. A handler that stopped at the
+// first failure — or that wrapped the loop in one transaction — passes every
+// single-address test in this file and fails this one.
+//
+// The four rows below are the four states an address can end in, in one
+// request: a new account, an existing project member, a malformed address, and
+// (in the sub-test after it) a role the project does not define.
+func TestUsersCreateBulkBatchIsPerAddress(t *testing.T) {
+	pool := newUsersWritePostgresPool(t)
+	prepareUsersWriteFixture(t, pool)
+	router := usersWriteRouter(eliteacore.NewHandler(pool))
+
+	const fresh = "bulk-new@autotest.local"
+	const alsoFresh = "bulk-second@autotest.local"
+	const alreadyMember = "e2e-member@autotest.local"
+	const malformed = "bulk-not-an-email"
+
+	t.Run("one bad address does not roll back the good ones", func(t *testing.T) {
+		before := readMembers(t, router)
+
+		recorder := usersWriteDo(t, router, http.MethodPost,
+			fmt.Sprintf("/admin/users/default/%d", usersWriteProjectID),
+			map[string]any{
+				"emails": []string{fresh, alreadyMember, malformed, alsoFresh},
+				"roles":  []string{"viewer"},
+			})
+
+		// 400 because SOME row failed. It is not a rejected request.
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("mixed batch status = %d, want 400 (body %s)", recorder.Code, recorder.Body.String())
+		}
+
+		var rows []struct {
+			Msg     string `json:"msg"`
+			Status  string `json:"status"`
+			Email   string `json:"email"`
+			ID      string `json:"id"`
+			Outcome string `json:"outcome"`
+		}
+		if err := json.Unmarshal(recorder.Body.Bytes(), &rows); err != nil {
+			t.Fatalf("decode mixed-batch body %q: %v", recorder.Body.String(), err)
+		}
+		if len(rows) != 4 {
+			t.Fatalf("mixed batch returned %d rows, want one per requested address (4): %+v", len(rows), rows)
+		}
+
+		// ORDER IS THE REQUEST ORDER. A client renders these beside the
+		// addresses the operator typed, so a reordered array mislabels them.
+		want := []struct {
+			email   string
+			status  string
+			outcome string
+		}{
+			{fresh, "ok", "invited"},
+			{alreadyMember, "error", "already_member"},
+			{malformed, "error", "invalid_email"},
+			{alsoFresh, "ok", "invited"},
+		}
+		for index, expected := range want {
+			if rows[index].Email != expected.email {
+				t.Fatalf("row %d email = %q, want %q", index, rows[index].Email, expected.email)
+			}
+			if rows[index].Status != expected.status {
+				t.Fatalf("row %d (%s) status = %q, want %q", index, expected.email, rows[index].Status, expected.status)
+			}
+			if rows[index].Outcome != expected.outcome {
+				t.Fatalf("row %d (%s) outcome = %q, want %q", index, expected.email, rows[index].Outcome, expected.outcome)
+			}
+		}
+		if rows[0].ID == "" || rows[3].ID == "" {
+			t.Fatalf("an invited row carries no id: %+v", rows)
+		}
+
+		// THE assertion the per-address transaction exists for: both good
+		// addresses are members, read back through the page's own GET.
+		after := readMembers(t, router)
+		for _, email := range []string{fresh, alsoFresh} {
+			roles, found := memberRoles(after, email)
+			if !found {
+				t.Fatalf("%s absent from the member list after a 400 batch: %+v", email, after.Rows)
+			}
+			if len(roles) != 1 || roles[0] != "viewer" {
+				t.Fatalf("%s roles = %v, want [viewer]", email, roles)
+			}
+		}
+		if _, found := memberRoles(after, malformed); found {
+			t.Fatalf("the malformed address %s was added as a member", malformed)
+		}
+		// The existing member keeps the role set it already had — an
+		// already_member row must not silently re-grant.
+		roles, _ := memberRoles(after, alreadyMember)
+		if len(roles) != 1 || roles[0] != "editor" {
+			t.Fatalf("existing member roles = %v after the batch, want [editor]", roles)
+		}
+		if after.Total != before.Total+2 {
+			t.Fatalf("total = %d after a batch that added two members, want %d", after.Total, before.Total+2)
+		}
+	})
+
+	t.Run("an unknown role rejects the whole batch before any address is written", func(t *testing.T) {
+		// The role names are resolved ONCE, up front. This is the one
+		// all-or-nothing check in the request, and it is deliberate: a role
+		// nobody defined is a mistake in the form, not in an address.
+		before := readMembers(t, router)
+
+		recorder := usersWriteDo(t, router, http.MethodPost,
+			fmt.Sprintf("/admin/users/default/%d", usersWriteProjectID),
+			map[string]any{
+				"emails": []string{"bulk-blocked-a@autotest.local", "bulk-blocked-b@autotest.local"},
+				"roles":  []string{"viewer", "wizard"},
+			})
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("unknown-role batch status = %d, want 400 (body %s)", recorder.Code, recorder.Body.String())
+		}
+
+		// Not the per-address array: a single error object, because no address
+		// was tried at all.
+		var refusal struct {
+			Error string `json:"error"`
+		}
+		if err := json.Unmarshal(recorder.Body.Bytes(), &refusal); err != nil {
+			t.Fatalf("decode unknown-role body %q: %v", recorder.Body.String(), err)
+		}
+		if refusal.Error == "" {
+			t.Fatalf("unknown-role refusal carries no reason: %s", recorder.Body.String())
+		}
+
+		after := readMembers(t, router)
+		if after.Total != before.Total {
+			t.Fatalf("total changed from %d to %d on a batch refused for its roles", before.Total, after.Total)
+		}
+		for _, email := range []string{"bulk-blocked-a@autotest.local", "bulk-blocked-b@autotest.local"} {
+			var userCount int
+			if err := pool.QueryRow(context.Background(),
+				`SELECT COUNT(*) FROM auth_core__user WHERE email = $1`, email).Scan(&userCount); err != nil {
+				t.Fatal(err)
+			}
+			if userCount != 0 {
+				t.Fatalf("a batch refused for its roles still created the account %s", email)
+			}
+		}
+	})
+}
+
 func prepareUsersWriteFixture(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)

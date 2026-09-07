@@ -2677,10 +2677,21 @@ components:
             True when an invitation e-mail went out for this address
             (ADR-0024 WP7); false without SMTP, on a relay refusal, or on an
             error row.
+        outcome:
+          type: string
+          enum: [invited, already_member, invalid_email, failed]
+          description: >
+            The machine-readable half of `msg`. pylon carried these four cases
+            only in free English prose, so the reference SPA could not tell
+            them apart and showed one toast for a whole batch. `status` keeps
+            its two pylon values, so this field is additive: an old client
+            reads the response exactly as before.
       description: >
         One element of the per-address array pylon's invite returns. The
         response carries one of these per requested address, and the whole
-        response is 400 when any of them failed.
+        response is 400 when any of them failed. A 400 therefore still means
+        that the `ok` rows landed — each address is written in its own
+        transaction, and one bad address does not roll back the others.
 
     UserRolesUpdateRequest:
       type: object
@@ -2941,7 +2952,12 @@ components:
         NOTE(W2): the ten boolean defaults (always present) are overlaid with
         arbitrary keys from the project's environment_settings configuration
         row (internal/api/v2/eliteacore/handler.go:51-81, merge at :74-76).
-        Channel-B fixture recommended (M1).
+        Channel-B fixture recommended (M1). Two keys are ALWAYS present and
+        are objects rather than overlay values: `dedicated_banner` and
+        `maintenance`, both written by handler.go:274 from
+        internal/platformconfig. `maintenance` carries `enabled`, `title`,
+        `message`, `html` and `bypass`; `html` is the operator's own splash
+        body (empty unless authored) and every renderer sanitises it.
       description: >
         NOTE(W2): defaults at eliteacore/handler.go:52-63 — the ten booleans
         are built unconditionally and the DB overlay (:74-76) can only add or

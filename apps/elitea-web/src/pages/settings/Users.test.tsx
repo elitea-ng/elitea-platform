@@ -20,6 +20,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
+import { http, HttpResponse } from 'msw';
+
 import { getRoleListMockHandler, getUserListMockHandler } from '@/shared/api/generated/admin/admin.msw';
 import { getPermissionListMockHandler } from '@/shared/api/generated/auth/auth.msw';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
@@ -116,5 +118,77 @@ describe('Users (settings)', () => {
     // `options` is empty — the precise thing every user saw here, and the
     // reason no invite could ever be completed.
     expect(within(listbox).queryByText('No options')).not.toBeInTheDocument();
+  });
+
+  /**
+   * The bulk case, at the composition root: the server answers 400 with the
+   * per-address array, and every `ok` row in it has ALREADY been written.
+   *
+   * Both halves of this were wrong before the port. `useInviteUsers` sent the
+   * whole thing to `onError`, which set a red toast from `error.message`
+   * ("eliteaFetch: 400 from …") and left the member list stale; and the dialog
+   * closed on its own, so the array naming which address failed was rendered
+   * nowhere. A twelve-address invite where one address was already a member
+   * looked exactly like a batch where all twelve were refused.
+   */
+  it('keeps the dialog open on a mixed batch and names what happened to every address', async () => {
+    const user = userEvent.setup();
+    server.use(
+      http.post('*/admin/users/default/1', () =>
+        HttpResponse.json(
+          [
+            { email: 'new@x.io', status: 'ok', outcome: 'invited', msg: 'added', id: '9', invitation_delivered: true },
+            { email: 'alice@example.com', status: 'error', outcome: 'already_member', msg: 'exists' },
+            { email: 'oops', status: 'error', outcome: 'invalid_email', msg: 'Invalid email: oops' },
+          ],
+          { status: 400 },
+        ),
+      ),
+    );
+
+    renderSettingsRoute(<Users projectId="1" />, '/settings/users', { projectId: '1' });
+    await user.click(await screen.findByTitle('Invite users'));
+
+    const dialog = await screen.findByRole('dialog');
+    await user.type(within(dialog).getByRole('textbox', { name: /emails/i }), 'new@x.io, alice@example.com');
+    await user.click(within(dialog).getByRole('combobox'));
+    await user.click(await screen.findByTestId('select-option-admin'));
+    await user.click(within(dialog).getByRole('button', { name: /^invite$/i }));
+
+    const results = await screen.findByTestId('invite-results');
+    expect(within(results).getByTestId('invite-result-new@x.io')).toHaveTextContent('Invited');
+    expect(within(results).getByTestId('invite-result-alice@example.com')).toHaveTextContent('Already a member');
+    expect(within(results).getByTestId('invite-result-oops')).toHaveTextContent('Invalid address');
+
+    // The dialog is still mounted: the operator has to be able to READ that.
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    // And the toast says a partial result, not a failure.
+    expect(await screen.findByText('Added 1 of 3. See the list below.')).toBeInTheDocument();
+  });
+
+  it('closes and says the plural on a batch where every address landed', async () => {
+    const user = userEvent.setup();
+    server.use(
+      http.post('*/admin/users/default/1', () =>
+        HttpResponse.json([
+          { email: 'a@x.io', status: 'ok', outcome: 'invited', msg: 'added', id: '9', invitation_delivered: true },
+          { email: 'b@x.io', status: 'ok', outcome: 'invited', msg: 'added', id: '10', invitation_delivered: true },
+        ]),
+      ),
+    );
+
+    renderSettingsRoute(<Users projectId="1" />, '/settings/users', { projectId: '1' });
+    await user.click(await screen.findByTitle('Invite users'));
+
+    const dialog = await screen.findByRole('dialog');
+    await user.type(within(dialog).getByRole('textbox', { name: /emails/i }), 'a@x.io, b@x.io');
+    await user.click(within(dialog).getByRole('combobox'));
+    await user.click(await screen.findByTestId('select-option-admin'));
+    await user.click(within(dialog).getByRole('button', { name: /^invite$/i }));
+
+    // The port had only the singular string, so a two-address invite reported
+    // "The user has been invited by e-mail".
+    expect(await screen.findByText('The users have been invited by e-mail')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   });
 });

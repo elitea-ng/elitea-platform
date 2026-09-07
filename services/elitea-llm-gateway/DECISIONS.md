@@ -709,6 +709,53 @@ in a release note.**
   | The widened price `SELECT` names four columns migration 0086 adds. What happens on a pod that rolls out ahead of `elitea-migrate`? | Postgres answers 42703 for EVERY model, and `lookupCatalog` reads any non-`ErrNoRows` error as "uncatalogued" — so the WHOLE catalog would silently bill at the default price table for the length of the skew. `queryCatalog` now catches 42703 alone, latches, and re-reads the same row with the pre-0086 two-column statement. Token pricing survives; only the audio rates go missing, so audio is UNPRICED and counted. The latch expires after 5 minutes and lifts itself when the migration lands. `gateway_price_catalog_schema_behind` (gauge) and `..._total` (counter) are the signal: one for the process, not one log line per model per cache TTL. |
   | The speech route bills a character count bifrost computed from OUR request (`BackfillParams`), not one a provider reported. Is that legitimate? | Yes, and `audio.go` says so plainly. A character-billed TTS provider charges for the input text it was sent, so a rune count of that exact text IS the billable quantity, not an estimate of one. Contrast `BifrostTranscriptionResponse.Duration`, which bifrost DERIVES from word timestamps: that is an observation of something the provider never stated, and `transcriptionUnits` still refuses it. The rule is "bill the quantity the sale is priced on, never an inference about it". Because bifrost backfills that count on every speech response and refuses an empty input, the speech "no usable usage" branch is unreachable through the real router; it is marked as a guard for a non-bifrost router, and the test for that shape now runs against the transcription route, where it is real. |
 
+- **[2026-09-07, issue 323] Voice listing is a TABLE, not a request, and it
+  lives here.** *The question the 501 was waiting on:* which provider scope owns
+  "which voices does this TTS model have". `GET /configurations/tts_voices`
+  refused for every project, and the refusal was honest — no route in any
+  dialect could ask a provider that question, and nothing wrote the
+  `meta.voices` cache the reference falls back on, so both of its two sources
+  were empty by construction.
+
+  *Finding:* for every provider this gateway speaks, the answer is not a request
+  at all. OpenAI publishes NO voices endpoint; its set is a fixed literal in the
+  API documentation. Azure OpenAI and AI-DIAL accept the same identifiers
+  because the proxy passes them through. Vertex maps only SIX of OpenAI's nine —
+  `ash`, `coral` and `sage` are forwarded literally and answered with 400 by the
+  Google API. Gemini accepts only its own native names, and nothing translates
+  an OpenAI name onto that path. The reference reached the same conclusion and
+  shipped a static table for exactly these families
+  (`legacy/plugins/configurations/data/tts_voices.json`), calling a provider API
+  only for the vendors it supported that DO publish a catalogue — ElevenLabs,
+  Deepgram, AWS Polly, PlayHT, IBM Watson, Azure Cognitive Services. This
+  gateway has an adapter for none of those six: `checkConnectionProviders`
+  covers `open_ai`, `azure_open_ai`, `open_ai_azure`, `ai_dial`, `ollama`,
+  `vllm`, `amazon_bedrock` and `vertex_ai`, and a voice lister without a checker
+  entry would be an ungated dial.
+
+  *Decision:* `POST /llm/v1/list_provider_voices`, beside `list_provider_models`
+  and behind the same identity signature, resolving the voice set from a table
+  keyed on the provider dialect and the model name
+  (`internal/llmproxy/listprovidervoices.go`). It DIALS NOTHING today, and the
+  route says so rather than implying a round trip it does not make. It is a
+  gateway route regardless, because provider knowledge is what decides the
+  answer: the day an enumerating provider gains a checker entry, it becomes a
+  lister function in that file and no caller changes.
+
+  *What a provider this build knows no catalogue for gets:* `success: true` with
+  an EMPTY list and `reason: unsupported_type`. That is a real answer — the
+  caller keeps its own default voice — and it must never be reported as a
+  failure, because a user whose TTS works perfectly would then see an error.
+  Nothing on this path answers 501 any more.
+
+  *Where the cache is, and why not here:* on `meta.voices` of the project's tts
+  configuration row, written by elitea-main
+  (`internal/api/v2/configurations/handler.go`'s `TTSVoices`), which is where
+  the reference put it. A TTL cache in this gateway would sit over a table
+  lookup, measure nothing, and read as a cache that does work it does not do.
+  When a live lister lands, the cache that matters is already in the right
+  layer.
+
   **Realtime ASR was NOT covered then. It is now** — see "Realtime sessions"
   below (2026-08-20). `indexer_asr_realtime.py` opens a WebSocket to
   `/v1/realtime`, and the budget and billing design that entry records is what

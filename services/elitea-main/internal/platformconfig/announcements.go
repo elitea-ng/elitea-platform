@@ -82,6 +82,22 @@ type Maintenance struct {
 	Enabled bool   `json:"enabled"`
 	Title   string `json:"title"`
 	Message string `json:"message"`
+	// HTML is the operator's own splash body, the port of pylon's
+	// `splash_template` tunable.
+	//
+	// It is SEPARATE from Message and does not default. Message is markdown
+	// with raw HTML disabled and always resolves to something, so the splash
+	// can always say a sentence; HTML is markup the operator supplied, and an
+	// empty one means "use the product's own splash". A default here would put
+	// this platform's words inside a field whose whole purpose is to hold
+	// somebody else's.
+	//
+	// The server refuses executable markup on the way in (admin
+	// config_values.go's validateSplashHTML) and every renderer sanitises on
+	// the way out. Neither check is sufficient alone: the stored value predates
+	// any given renderer, and a renderer cannot know what a future writer will
+	// store.
+	HTML string `json:"html"`
 }
 
 // Default copy for the splash, used when the operator left the fields empty.
@@ -131,6 +147,7 @@ func maintenanceFrom(values Values) Maintenance {
 		Enabled: values.Bool(KeyMaintenanceEnabled, false),
 		Title:   strings.TrimSpace(values.String(KeyMaintenanceTitle, "")),
 		Message: strings.TrimSpace(values.String(KeyMaintenanceMessage, "")),
+		HTML:    strings.TrimSpace(values.String(KeyMaintenanceHTML, "")),
 	}
 	if state.Title == "" {
 		state.Title = DefaultMaintenanceTitle

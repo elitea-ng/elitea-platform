@@ -96,7 +96,7 @@ these are *known* gaps, not bugs.
 | **MCP SSE pair** (`GET /<pid>/sse` + `POST /<pid>/messages`) | `v2/mcp/handler.go:21` | Not ported. The modern streamable-HTTP transport is; this is the deprecated one |
 | **Analytics by agent** | `repos/analytics.go:44-56` | Only the AGENT dimension is missing: a gateway request knows its model, not the agent that composed it, and nothing correlates the two. Tool is a weaker, different problem — nothing records a tool call outside a chat turn |
 | ~~Billing dimensions~~ | — | **WRONG, struck.** Migration `0084_budget_usage_dimensions.sql` added `gateway.llm_usage_events` carrying project, user, provider, model, prompt/completion/total tokens, api_requests and cost_usd, with two writers and three readers. Four of the five dimensions ship today |
-| **TTS voice list** | `v2/configurations/handler.go:1641,1657` | 501. The reference reads voices from the provider |
+| ~~TTS voice list~~ | — | **DONE 2026-09-07.** The gateway serves `POST /llm/v1/list_provider_voices` from the dialect's published voice table (`internal/llmproxy/listprovidervoices.go`); `v2/configurations/handler.go`'s `TTSVoices` resolves the reference's three-step order and fills the `meta.voices` cache nothing used to write. A provider with no catalogue answers an empty list, never 501. Decision recorded in `services/elitea-llm-gateway/DECISIONS.md` |
 | ~~Realtime / audio streaming~~ | — | **WRONG, struck.** `realtime.go:448` answers 501 only when the dialer is nil; production wires it (`cmd/elitea-llm-gateway/main.go:404`), `/llm/v1/audio/speech` is registered (`internal/api/router.go:73`), and the `stream_format` refusal is a deliberate 400 on a unary route |
 | **SCIM filter grammar** | `internal/scimdirectory/filter.go:122` | Grouping and `and`/`or`/`not` not implemented; some PATCH paths answer 501 (`scim/users.go:350`, `groups.go:283`) |
 | **Conversation-DELETE leaves attachment bytes** | `repos/conversations.go:340-397` | Narrower than claimed: `delete_attachment` IS ported (`v2/conversations/handler.go:620-700`) and the `:1123` comment is stale. `ConversationsRepo.Delete` never calls the object store, and the retention sweeper eventually expires them — a timeliness gap, size S |
@@ -247,7 +247,7 @@ Two existing issues gained evidence rather than duplicates:
 [#545](https://github.com/EliteaAI/elitea-platform/issues/545) (J28 is a seventh
 journey of its class, with the diagnosis recorded) and
 [#323](https://github.com/EliteaAI/elitea-platform/issues/323) (its premise has
-landed; only a voices listing remains).
+landed; the voices listing landed on 2026-09-07 — see the struck C1 row).
 
 ## The evidence bar every one of those carries
 
@@ -303,7 +303,7 @@ Sequenced by what unblocks the most. Sizes are rough and per-surface.
 | 3.3 | Conversation-DELETE attachment bytes (S) + two stale-comment deletions (XS) + surfacing `is_default` (S). | S |
 | 3.1b | **MCP `tools/call`, toolkits.** A full vertical slice: new proto capability (narrowing two `reserved` ranges), a worker handler, and durable effect identity/idempotency/cancellation — running a toolkit tool writes Jira tickets and pushes commits, so the bounded sync bridge is explicitly not sufficient. Defer. | L |
 | 3.4 | SCIM filter grammar and the 501 PATCH paths. Only if an enterprise SCIM client needs it — scope on demand. | M |
-| 3.5 | TTS voices, realtime/audio. Scope on demand. | M |
+| 3.5 | ~~TTS voices~~ (done 2026-09-07), realtime/audio. Scope on demand. | M |
 
 ### Wave 4 — admin UI completion
 

@@ -11,6 +11,14 @@ import type { EditUsersButtonProps } from '@/shared/ui/settings/EditUsersButton'
 import type { DeleteUserButtonProps } from '@/shared/ui/settings/DeleteUserButton';
 import { useEditUser, useBatchEditUsers, useDeleteUsers } from '@/entities/user';
 import { userCreate, getUserListQueryKey } from '@/shared/api/generated/admin/admin';
+import { unwrapBody } from '@/shared/api/unwrap';
+import {
+  readInviteRows,
+  readInviteRowsFromError,
+  summariseInviteRows,
+  type InviteAddressResult,
+  type InviteSummary,
+} from '@/shared/ui/settings/inviteResults';
 
 export interface UseUsersActionsArgs {
   projectId: string;
@@ -19,7 +27,7 @@ export interface UseUsersActionsArgs {
   onDeleteSuccess: () => void;
   onDeleteError: (error: unknown) => void;
   onInviteSuccess: (outcome: InviteOutcome) => void;
-  onInviteError: (error: unknown) => void;
+  onInviteError: (error: unknown, outcome: InviteOutcome) => void;
   onEditSuccess: () => void;
   onEditError: (error: unknown) => void;
 }
@@ -57,29 +65,34 @@ export interface UseUsersActionsResult {
  * fix's scope.
  */
 /**
- * What the invite mutation reports to the page (ADR-0024 WP7): whether an
- * invitation e-mail went out for EVERY address. The server says so per row
- * (`invitation_delivered`); a deployment with no SMTP configured answers
- * false, and the page must not then tell the operator "invited" as if a
- * message had been sent.
+ * What the invite mutation reports to the page: the server's answer for EVERY
+ * address, plus the counts derived from it.
+ *
+ * `delivered` (ADR-0024 WP7) says whether an invitation e-mail went out for
+ * every invited address. The server says so per row (`invitation_delivered`);
+ * a deployment with no SMTP configured answers false, and the page must not
+ * then tell the operator "invited" as if a message had been sent.
+ *
+ * `rows` is the bulk half. A batch of twelve addresses can end in four
+ * different states at once, and the page used to see only the aggregate — so
+ * "eleven invited, one already a member" and "all twelve failed" were the same
+ * red toast. The rows are carried through so the dialog can render them.
  */
 interface InviteOutcome {
   readonly delivered: boolean;
+  readonly rows: readonly InviteAddressResult[];
+  readonly summary: InviteSummary;
 }
 
-function inviteOutcome(results: unknown): InviteOutcome {
-  if (!Array.isArray(results) || results.length === 0) return { delivered: false };
-  return {
-    delivered: results.every(
-      (row) => typeof row === 'object' && row !== null && (row as { invitation_delivered?: unknown }).invitation_delivered === true,
-    ),
-  };
+function inviteOutcome(rows: readonly InviteAddressResult[]): InviteOutcome {
+  const summary = summariseInviteRows(rows);
+  return { delivered: summary.delivered, rows, summary };
 }
 
 function useInviteUsers(
   projectId: string,
   onSuccess: (outcome: InviteOutcome) => void,
-  onError: (error: unknown) => void,
+  onError: (error: unknown, outcome: InviteOutcome) => void,
 ) {
   const queryClient = useQueryClient();
 
@@ -88,10 +101,15 @@ function useInviteUsers(
       userCreate(projectId, { emails, roles }),
     onSuccess: (results) => {
       void queryClient.invalidateQueries({ queryKey: getUserListQueryKey(projectId) });
-      onSuccess(inviteOutcome(results));
+      onSuccess(inviteOutcome(readInviteRows(unwrapBody(results))));
     },
     onError: (error: unknown) => {
-      onError(error);
+      // A 400 here is a PARTIAL failure, not a rejected request: each address is
+      // written in its own transaction, so the `ok` rows in that body have
+      // already landed. Invalidating the member list on this path is what makes
+      // them appear; skipping it left the table stale until a manual reload.
+      void queryClient.invalidateQueries({ queryKey: getUserListQueryKey(projectId) });
+      onError(error, inviteOutcome(readInviteRowsFromError(error)));
     },
   });
 

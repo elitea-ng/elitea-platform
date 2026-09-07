@@ -78,7 +78,29 @@ type inviteResult struct {
 	// address (ADR-0024 WP7); false when no mailer is configured, when the
 	// relay refused, or when the row was an error.
 	InvitationDelivered bool `json:"invitation_delivered"`
+	// Outcome is the MACHINE-READABLE half of `msg`, and it is additive on
+	// purpose. pylon carried the four cases of a bulk invite — added, already a
+	// member, malformed address, write failed — only in free English prose
+	// ("user a@b.c already exists in project 3"), so the reference SPA could not
+	// tell them apart and showed one toast for the whole batch. A client that
+	// wants to say "2 invited, 1 already a member, 1 invalid" per address must
+	// otherwise match on that prose, which changes with the wording.
+	//
+	// `status` keeps its two pylon values, so an old client reads this response
+	// exactly as before. New clients branch on this field.
+	Outcome string `json:"outcome"`
 }
+
+// The four values of inviteResult.Outcome. Each one is a state an operator acts
+// on differently: invited needs nothing, already_member is not an error to fix,
+// invalid_email is a typing mistake in the address list, and failed is the
+// server's problem.
+const (
+	inviteOutcomeInvited       = "invited"
+	inviteOutcomeAlreadyMember = "already_member"
+	inviteOutcomeInvalidEmail  = "invalid_email"
+	inviteOutcomeFailed        = "failed"
+)
 
 // MODE IS STATED, NEVER SNIFFED (F1).
 //
@@ -261,9 +283,10 @@ func (h *Handler) usersCreate(w http.ResponseWriter, r *http.Request, mode strin
 		if !validEmail(email) {
 			hasErrors = true
 			results = append(results, inviteResult{
-				Msg:    fmt.Sprintf("Invalid email: %s", strings.TrimSpace(raw)),
-				Status: "error",
-				Email:  strings.TrimSpace(raw),
+				Msg:     fmt.Sprintf("Invalid email: %s", strings.TrimSpace(raw)),
+				Status:  "error",
+				Email:   strings.TrimSpace(raw),
+				Outcome: inviteOutcomeInvalidEmail,
 			})
 			continue
 		}
@@ -273,16 +296,18 @@ func (h *Handler) usersCreate(w http.ResponseWriter, r *http.Request, mode strin
 		case err != nil:
 			hasErrors = true
 			results = append(results, inviteResult{
-				Msg:    fmt.Sprintf("failed to add %s to project %d", email, projectID),
-				Status: "error",
-				Email:  email,
+				Msg:     fmt.Sprintf("failed to add %s to project %d", email, projectID),
+				Status:  "error",
+				Email:   email,
+				Outcome: inviteOutcomeFailed,
 			})
 		case alreadyMember:
 			hasErrors = true
 			results = append(results, inviteResult{
-				Msg:    fmt.Sprintf("user %s already exists in project %d", email, projectID),
-				Status: "error",
-				Email:  email,
+				Msg:     fmt.Sprintf("user %s already exists in project %d", email, projectID),
+				Status:  "error",
+				Email:   email,
+				Outcome: inviteOutcomeAlreadyMember,
 			})
 		default:
 			delivered := h.deliverProjectInvitation(r, projectID, email)
@@ -292,6 +317,7 @@ func (h *Handler) usersCreate(w http.ResponseWriter, r *http.Request, mode strin
 				Email:               email,
 				ID:                  strconv.Itoa(userID),
 				InvitationDelivered: delivered,
+				Outcome:             inviteOutcomeInvited,
 			})
 		}
 	}

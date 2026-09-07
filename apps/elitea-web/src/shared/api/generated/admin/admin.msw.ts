@@ -101,6 +101,15 @@ export const getUserCreateResponseMock = (): UserInviteResult[] =>
       faker.datatype.boolean(),
       undefined,
     ]),
+    outcome: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([
+        "invited",
+        "already_member",
+        "invalid_email",
+        "failed",
+      ] as const),
+      undefined,
+    ]),
   }));
 
 export const getUserUpdateResponseMock = (
