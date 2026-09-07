@@ -36,6 +36,7 @@ import (
 	v2events "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/events"
 	v2folders "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/folders"
 	v2indextypes "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indextypes"
+	v2inventory "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/inventory"
 	v2skills "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/skills"
 	v2social "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/social"
 	v2tags "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/tags"
@@ -69,6 +70,13 @@ const (
 	// twelve routes gated on the retired prototype indexer transport.
 	// If either input collapses, the conformance loop would vacuously pass —
 	// so guard the inputs themselves.
+	//
+	// MEASURED 2026-09-06, after the three Inventory operations landed: 185
+	// spec operations and 457 collected routes. Both numbers above are the
+	// record of an earlier day and neither has been kept current; the floors
+	// are minima, so they held anyway. The measurement is written down here
+	// rather than folded into the prose, because a prose number nobody
+	// re-measures is how the 152 and the 277 stopped being true.
 	minSpecOperations = 145
 	minRouterRoutes   = 270
 	// minManifestEndpoints guards the reverse check's own input. The manifest
@@ -134,6 +142,14 @@ func buildFullSurfaceConfig() api.RouterConfig {
 		// router. Its ServeHTTP answers 503 for a zero value rather than
 		// panicking, so even a served request would be harmless here.
 		DeepWiki: &v2deepwiki.Route{},
+
+		// The Inventory facade, the SECOND facade over the same provider SPI,
+		// mounted by the same four lines in production_router.go and stubbed
+		// the same way. It is MANDATORY here, not optional: v2.yaml now
+		// describes invokeInventoryTool, getInventoryInvocation and
+		// cancelInventoryInvocation, and those three operations resolve to no
+		// route at all unless this field is non-nil.
+		Inventory: &v2inventory.Route{},
 
 		// The index-types and attached-skills reads (#394, #395). Both are
 		// MANDATORY here, not optional stubs: each is the ONLY handler for a
