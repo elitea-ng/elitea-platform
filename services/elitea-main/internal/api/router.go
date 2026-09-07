@@ -3018,8 +3018,17 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// caller needs anyway, since the only thing to do with a
 				// generated Project Background is save it.
 				//
-				// NOT restored here: webchat. It needs the runtime task plane
-				// and is #254's P2 batch.
+				// NOT restored, here or anywhere: webchat. It is not a chat
+				// surface. legacy/plugins/elitea_core/api/v2/webchat.py is an
+				// unauthenticated Microsoft Bot Framework webhook stub that
+				// echoes the caller's own text back through a connector URL
+				// taken from the request body, with the literal placeholder
+				// strings 'MICROSOFT-APP-ID' and 'MICROSOFT-APP-PASSWORD' as
+				// its credentials and a `# FIXME: auth` where the permission
+				// gate belongs. It never predicts, never reads its own
+				// {version_id}, and creates no conversation. #254 carries the
+				// full finding and a bounded design for a real public chat
+				// surface, which is a NEW feature and not a restoration.
 				draftHandler := v2drafts.NewHandler(cfg.PredictCompleter)
 				r.With(projectPermission("models.applications.applications.create")).
 					Post("/generate_application_draft/prompt_lib/{projectID}", draftHandler.GenerateApplicationDraft)

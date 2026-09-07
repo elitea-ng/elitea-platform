@@ -13882,10 +13882,20 @@ paths:
   # ==========================================================================
   # CHAT
   # ==========================================================================
-  # NOTE(#126): webchatSync (POST
+  # NOTE(#126, re-checked for issue 254 P2): webchatSync (POST
   # /elitea_core/webchat/prompt_lib/{project_id}/{version_id}) was removed. It
   # was gated on RouterConfig.Predictor — the prototype indexer transport — and
-  # 404'd in every deployment. See #93 for the chat dispatch migration.
+  # 404'd in every deployment.
+  #
+  # It is NOT coming back, and it was never a chat surface. The pylon module
+  # (legacy/plugins/elitea_core/api/v2/webchat.py) is an unauthenticated
+  # Microsoft Bot Framework webhook stub: it echoes the caller's own text back
+  # to a connector URL taken from the request body, carries the literal
+  # placeholder strings 'MICROSOFT-APP-ID' and 'MICROSOFT-APP-PASSWORD' as its
+  # credentials, and marks its missing permission gate with `# FIXME: auth`. It
+  # never predicts and never reads its own {version_id}. A public chat entry
+  # point is a NEW feature; issue 254 carries the finding and a bounded design.
+  # See #93 for the chat dispatch migration.
 
   # NOTE(#126/#194): getChatConfig (GET
   # /elitea_core/chat_config/prompt_lib/{project_id}) was removed here when the
