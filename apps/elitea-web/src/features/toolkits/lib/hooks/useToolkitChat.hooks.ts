@@ -231,8 +231,7 @@ export function useToolkitChat(params: UseToolkitChatParams): UseToolkitChatResu
     },
     [index?.id, isTestToolsMode, traceNewIndex],
   );
-
-  /** SSE-first run dispatch with the socket.io fallback — see `./useToolkitChatDispatch.hooks.ts`. */
+  /** SSE-first run dispatch with the socket.io fallback, and the no-transport report — see `./useToolkitChatDispatch.hooks.ts`. */
   const { startToolRun, runSocketFallback } = useToolkitRunDispatch({
     projectId,
     toolkitId,
@@ -241,6 +240,7 @@ export function useToolkitChat(params: UseToolkitChatParams): UseToolkitChatResu
     buildMessagePayload,
     onStartTask,
     setExecutionId,
+    onError,
   });
 
   useToolkitChatSocket({

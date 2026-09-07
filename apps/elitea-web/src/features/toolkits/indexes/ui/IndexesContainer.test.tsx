@@ -130,7 +130,14 @@ describe('IndexesContainer', () => {
    * That is what makes this discriminate: while a 403 escalated into re-auth,
    * the query stayed pending and the rail rendered its skeleton rows
    * indefinitely (measured on a live stack: eight of them still on screen
-   * after nine seconds). It must settle and show the rail's own placeholder.
+   * after nine seconds). It must settle into a visible, readable state.
+   *
+   * UPDATED 2026-09-07: that state used to be the empty-list placeholder,
+   * because the rail had no third state and a failed read fell into the
+   * empty-list branch. It is now the failure itself — which is what this
+   * test was always about (settling, not skeletons) and which no longer
+   * claims the project has no indexes when the truth is that the caller may
+   * not read them.
    */
   it('settles into a visible state instead of indefinite skeletons when the list is refused with 403', async () => {
     configureGeneratedClient({ baseUrl: BASE, reauthenticate: () => new Promise<void>(() => undefined) });
@@ -140,7 +147,9 @@ describe('IndexesContainer', () => {
       ),
     );
     renderContainer();
-    expect(await screen.findByText('Still no indexes created')).toBeInTheDocument();
+    expect(await screen.findByTestId('indexes-list-error')).toBeInTheDocument();
+    expect(screen.getByText('insufficient permissions')).toBeInTheDocument();
+    expect(screen.queryByText('Still no indexes created')).not.toBeInTheDocument();
     expect(screen.queryAllByTestId('index-list-item-skeleton')).toHaveLength(0);
   });
 
@@ -239,5 +248,92 @@ describe('IndexesContainer', () => {
     // going away already demonstrates.
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     expect(screen.queryByRole('button', { name: 'Reindex' })).not.toBeInTheDocument();
+  });
+
+  /**
+   * A FAILED DELETE USED TO SAY NOTHING.
+   *
+   * `confirmIndexDeleting` was a bare `catch {}` — disclosed as "the baseline
+   * surfaces this via `useToast`" and left. On screen that meant the confirm
+   * modal stayed open with the name still typed, the index stayed in the
+   * rail, and nothing said why: indistinguishable from a click that never
+   * registered, so the natural next action was to press Delete again.
+   */
+  it('reports a failed delete through onError, and keeps the confirm modal open', async () => {
+    server.use(
+      http.get(`${BASE}/elitea_core/index_meta/prompt_lib/proj-1/tk-1`, () =>
+        HttpResponse.json([{ id: '1', metadata: { collection: 'my-index', state: 'completed', indexed: 1 } }]),
+      ),
+      http.delete(`${BASE}/elitea_core/index_meta/prompt_lib/proj-1/tk-1/1`, () =>
+        HttpResponse.json({ error: 'PGVector configuration is missing for toolkit 1' }, { status: 400 }),
+      ),
+    );
+    const onError = vi.fn();
+    const user = userEvent.setup();
+    renderContainer({ onError });
+    await screen.findAllByText('my-index');
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
+    await user.type(await screen.findByRole('textbox'), 'my-index');
+    const deleteButtons = screen.getAllByRole('button', { name: 'Delete' });
+    await user.click(deleteButtons[deleteButtons.length - 1]!);
+
+    // The server's own sentence, not a generic line — the same rule the rail
+    // follows for a failed read (`lib/helpers/indexesListError.ts`).
+    await waitFor(() => expect(onError).toHaveBeenCalledWith('PGVector configuration is missing for toolkit 1'));
+    // Still open, still showing the index: nothing was deleted, and the
+    // screen no longer pretends otherwise.
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+  });
+
+  it('falls back to a generic sentence when the failed delete carries none', async () => {
+    server.use(
+      http.get(`${BASE}/elitea_core/index_meta/prompt_lib/proj-1/tk-1`, () =>
+        HttpResponse.json([{ id: '1', metadata: { collection: 'my-index', state: 'completed', indexed: 1 } }]),
+      ),
+      http.delete(`${BASE}/elitea_core/index_meta/prompt_lib/proj-1/tk-1/1`, () => new HttpResponse(null, { status: 500 })),
+    );
+    const onError = vi.fn();
+    const user = userEvent.setup();
+    renderContainer({ onError });
+    await screen.findAllByText('my-index');
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
+    await user.type(await screen.findByRole('textbox'), 'my-index');
+    const deleteButtons = screen.getAllByRole('button', { name: 'Delete' });
+    await user.click(deleteButtons[deleteButtons.length - 1]!);
+
+    await waitFor(() => expect(onError).toHaveBeenCalledWith('The index could not be deleted.'));
+  });
+
+  it('a failed list read renders the failure, not the empty-list placeholder', async () => {
+    // The composition-root twin of this lives in
+    // `pages/toolkits/EditToolkit.test.tsx`; this one pins the wiring — that
+    // the container passes the query's rejection down at all.
+    server.use(
+      http.get(`${BASE}/elitea_core/index_meta/prompt_lib/proj-1/tk-1`, () =>
+        HttpResponse.json({ error: 'PGVector configuration is missing for toolkit 1' }, { status: 400 }),
+      ),
+    );
+    renderContainer();
+    expect(await screen.findByTestId('indexes-list-error')).toBeInTheDocument();
+    expect(screen.getByText('PGVector configuration is missing for toolkit 1')).toBeInTheDocument();
+    expect(screen.queryByText('Still no indexes created')).not.toBeInTheDocument();
+  });
+
+  it('a delete with no onError supplied behaves exactly as it did before', async () => {
+    // The reporter is optional; a caller that does not pass one must not throw.
+    server.use(
+      http.get(`${BASE}/elitea_core/index_meta/prompt_lib/proj-1/tk-1`, () =>
+        HttpResponse.json([{ id: '1', metadata: { collection: 'my-index', state: 'completed', indexed: 1 } }]),
+      ),
+      http.delete(`${BASE}/elitea_core/index_meta/prompt_lib/proj-1/tk-1/1`, () => new HttpResponse(null, { status: 500 })),
+    );
+    const user = userEvent.setup();
+    renderContainer();
+    await screen.findAllByText('my-index');
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
+    await user.type(await screen.findByRole('textbox'), 'my-index');
+    const deleteButtons = screen.getAllByRole('button', { name: 'Delete' });
+    await user.click(deleteButtons[deleteButtons.length - 1]!);
+    await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument());
   });
 });

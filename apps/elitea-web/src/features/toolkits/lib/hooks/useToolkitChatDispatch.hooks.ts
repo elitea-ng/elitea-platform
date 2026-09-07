@@ -28,6 +28,30 @@
  *     route is gone), and the socket emit fires after all. Without this the
  *     frontend would suppress the only working transport and follow a 404.
  *
+ * ─────────────────────────────────────────────────────────────────────────
+ * THE FOURTH CASE: THERE IS NO FALLBACK TRANSPORT (added 2026-09-07)
+ * ─────────────────────────────────────────────────────────────────────────
+ * Everything above assumes `emitOverSocket()` reaches something. On this
+ * platform it usually does not.
+ *
+ * `shared/api/socket/client.ts:86-113` builds a NULL client whenever
+ * `VITE_SOCKET_SERVER` is absent or empty — "e.g. E2E compose, offline dev" —
+ * whose `emit` is documented as a "harmless no-op" and whose connection state
+ * is permanently `'disconnected'`. Harmless is right for a presence indicator.
+ * It is not right here: for every index tool that is NOT `index_data`
+ * (`search_index_data`, `stepback_search_index`, `stepback_summary_index`)
+ * this emit is the ONLY dispatch path, because the Go start handler
+ * (`internal/api/v2/indexing/start_handler.go:87-90`) rejects any other
+ * `tool_name` with `"Input should be 'index_data'"`. So pressing Run on the
+ * index search tab called a function that did nothing, told no one, and left
+ * the chat panel waiting for a reply that no server had been asked for.
+ *
+ * That is the whole bug: not that search is unimplemented — it genuinely is
+ * not served here — but that the product presented it as working. The run is
+ * still attempted (a deployment that DOES configure a socket server is
+ * unchanged), and the report fires only when there is provably no transport
+ * to attempt it on.
+ *
  * A THIRD case, issue #310: the POST itself can answer `409 "Indexing is
  * already in progress for this index"`, naming the `task_id` of the run
  * already admitted. That is not a failure to fall back from — it is proof
@@ -44,7 +68,8 @@
  */
 import { useCallback, useRef } from 'react';
 
-import { useSocketClient } from '@/shared/api/socket/client';
+import { useSocketClient, type SocketClient } from '@/shared/api/socket/client';
+import { t } from '@/shared/i18n';
 
 import { startIndexExecution } from '../../indexes/api/indexesApi';
 import { IndexesToolsEnum } from '../../indexes/lib/constants/indexDetails.constants';
@@ -63,6 +88,8 @@ export interface UseToolkitRunDispatchParams {
   readonly onStartTask: (taskId: string | undefined) => void;
   /** Publishes the execution to follow; `undefined` means "this run is on the socket fallback". */
   readonly setExecutionId: (executionId: string | undefined) => void;
+  /** Reports a run that could not be dispatched at all. Optional: a caller that does not pass it gets exactly the previous, silent behaviour. */
+  readonly onError?: ((message: string) => void) | undefined;
 }
 
 export interface UseToolkitRunDispatchResult {
@@ -75,8 +102,29 @@ export interface UseToolkitRunDispatchResult {
   readonly runSocketFallback: () => void;
 }
 
+/**
+ * Reports a run that has no transport to travel on — the "fourth case" in this
+ * module's header.
+ *
+ * Called BEFORE the emit, not instead of it: the emit stays for the
+ * deployments that DO configure a socket server, and the state is read at
+ * dispatch time rather than cached, so a reconnect in progress is never
+ * mistaken for a missing server. Only the permanent `'disconnected'` state —
+ * which is the null client's fixed value — produces the report.
+ */
+function reportMissingTransport(socket: SocketClient, onError: ((message: string) => void) | undefined): void {
+  if (onError === undefined) return;
+  if (socket.getConnectionState() !== 'disconnected') return;
+  onError(
+    t(
+      'features.toolkits.toolkitChat.noRunTransport',
+      'This run needs a live connection to the toolkit runtime, and none is configured for this deployment. Only indexing (“Index data”) can run here.',
+    ),
+  );
+}
+
 export function useToolkitRunDispatch(params: UseToolkitRunDispatchParams): UseToolkitRunDispatchResult {
-  const { projectId, toolkitId, selectedModel, llmSettings, buildMessagePayload, onStartTask, setExecutionId } = params;
+  const { projectId, toolkitId, selectedModel, llmSettings, buildMessagePayload, onStartTask, setExecutionId, onError } = params;
   const socket = useSocketClient();
 
   /**
@@ -86,6 +134,22 @@ export function useToolkitRunDispatch(params: UseToolkitRunDispatchParams): UseT
    * its emit.
    */
   const pendingFallbackRef = useRef<(() => void) | null>(null);
+
+  /**
+   * The reporter, held in a ref so it does not enter `startToolRun`'s
+   * dependency array (§3.5 caps it at 8, and this hook is already at that
+   * cap).
+   *
+   * This is the SAFE direction of the latest-ref pattern, not the unsafe one.
+   * The closure-staleness class of bug comes from READING A STALE value at
+   * call time; here the ref is rewritten on every render and read only inside
+   * a synchronous, user-initiated dispatch, so what it yields is by
+   * construction the newest reporter — which is exactly what a report about
+   * the run happening NOW should go to. Nothing else about the run is read
+   * from it.
+   */
+  const onErrorRef = useRef(onError);
+  onErrorRef.current = onError;
 
   const runSocketFallback = useCallback(() => {
     const emit = pendingFallbackRef.current;
@@ -148,6 +212,7 @@ export function useToolkitRunDispatch(params: UseToolkitRunDispatchParams): UseT
       }
 
       setExecutionId(undefined);
+      reportMissingTransport(socket, onErrorRef.current);
       emitOverSocket();
     },
     [projectId, toolkitId, selectedModel, llmSettings, socket, buildMessagePayload, onStartTask, setExecutionId],

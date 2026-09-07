@@ -169,6 +169,10 @@ function IndexesTabPanel({ toolkitId, state, renderCredentialsSelect }: IndexesT
         selectedIndexTools={state.selectedIndexTools}
         chatUI={INDEXES_CHAT_UI}
         renderCredentialsSelect={renderCredentialsSelect}
+        // The worker-capability verdict off the served type schema. The KEY is
+        // omitted when the worker can run this type (`exactOptionalPropertyTypes`),
+        // and an empty string is a real verdict — see `IndexesTab`.
+        {...(state.unavailableReason === undefined ? {} : { unavailableReason: state.unavailableReason })}
       />
     </Box>
   );
