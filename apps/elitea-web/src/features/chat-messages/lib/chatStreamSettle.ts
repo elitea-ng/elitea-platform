@@ -91,6 +91,8 @@ export function recordStreamFailure(
   context: ChatStreamContext | undefined,
   /** The question this refused turn answered — the transport's, since no frame supplied one. */
   questionId?: string,
+  /** Use the accepted run's persisted answer identity before its first frame. */
+  responseMessageId?: string,
 ): readonly ChatMessage[] {
   const settled = settleInFlight(history, exception);
   if (settled !== history) return settled;
@@ -98,7 +100,7 @@ export function recordStreamFailure(
   return [
     ...history,
     {
-      id: crypto.randomUUID(),
+      id: responseMessageId ?? crypto.randomUUID(),
       role: ROLES.Assistant,
       name: identity.name ?? '',
       content: '',

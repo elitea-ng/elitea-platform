@@ -630,6 +630,7 @@ describe("useChatStreamTransport", () => {
     // Captured before `detach` clears it, so regenerate can still find the
     // question this refused turn answered.
     expect(failure?.questionId).toBe(QUESTION_ID);
+    expect(failure?.id).toBe(RESPONSE_MESSAGE_ID);
   });
 
   it("keeps the user's question when the turn is refused", async () => {

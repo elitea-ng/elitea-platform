@@ -250,9 +250,10 @@ export function useChatStreamTransport(
     (reason: string) => {
       const streamContext = contextRef.current;
       const questionId = questionIdRef.current;
+      const responseMessageId = cancelRef.current?.messageGroupUuid;
       detach();
       setChatHistory((prev) =>
-        recordStreamFailure(prev, reason, streamContext, questionId),
+        recordStreamFailure(prev, reason, streamContext, questionId, responseMessageId),
       );
       onStreamErrorRef.current?.(reason);
     },
