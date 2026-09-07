@@ -65,8 +65,26 @@ function toChatLlmSettings(settings: AgentLlmSettings): ChatLlmSettings {
 
 /**
  * Overlays the live edits onto the query-fetched `versionDetails` so the test
- * chat, the flow editor's node inputs and the MCP monitor all read what the
- * form currently shows rather than what the server last sent.
+ * chat, the flow editor's node inputs and the MCP monitor read what the user
+ * has DECIDED rather than what the server last sent — the model, the attached
+ * tools and the enabled modules.
+ *
+ * **`welcome_message` and `variables` are deliberately NOT overlaid, and the
+ * reason is a livelock measured in a browser against the standalone stack.**
+ * They were, at first. Typing into the welcome-message box then crashed the
+ * whole editor into `PipelineConfigurationTabBoundary` with React's "Maximum
+ * update depth exceeded", every time, on the second or third character:
+ * `ChatPanel` renders a welcome bubble off `versionDetails.welcome_message`,
+ * so feeding it a value that changes per keystroke put the chat's own message
+ * state into a self-feeding cycle. Removing the two fields from this overlay
+ * ends it, with nothing lost — the FORM reads them from
+ * `useEditPipelineEditorBridge`'s `values`, and the chat has no use for an
+ * unsaved greeting.
+ *
+ * That is also the shape of the trap: the unit suite could not see it. The
+ * loop needs the real `ChatBox` message pipeline under a real socket client,
+ * and jsdom's synthetic input does not drive it. A test pinning the omission
+ * lives in this module's own spec; the browser is what found it.
  *
  * Extracted to keep `useEditPipelineConfigurationTabBridge`'s own cyclomatic
  * complexity under this codebase's gate.
@@ -80,8 +98,6 @@ function applyOverrides(
   return {
     ...base,
     ...(tools === undefined ? {} : { tools }),
-    welcome_message: fields.welcomeMessage,
-    variables: fields.variables.map((variable) => ({ name: variable.name, value: variable.value })),
     ...(fields.llmSettings === undefined ? {} : { llm_settings: toChatLlmSettings(fields.llmSettings) }),
     meta: { ...base.meta, internal_tools: [...fields.internalTools] },
   };

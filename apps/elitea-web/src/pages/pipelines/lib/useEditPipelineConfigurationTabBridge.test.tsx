@@ -68,20 +68,49 @@ describe('useEditPipelineConfigurationTabBridge', () => {
     expect(result.current.bridge.versionDetails?.llm_settings?.max_tokens).toBe(2048);
   });
 
-  it('overlays the live welcome message, variables and modules onto what the editor reads', () => {
+  it('overlays the live modules onto what the editor reads, merged over the stored blob', () => {
+    const { result } = renderHook(() => useBridgeUnderTest(VERSION));
+
+    act(() => {
+      result.current.bridge.setFieldValue('version_details.meta.internal_tools', []);
+    });
+
+    expect(result.current.bridge.versionDetails?.meta?.internal_tools).toEqual([]);
+    // Merged, not replaced, so an unrelated key survives.
+    expect(result.current.bridge.versionDetails?.meta?.icon_meta).toEqual({ id: 9 });
+  });
+
+  /**
+   * Pins a fix found in a BROWSER, not here.
+   *
+   * `welcome_message` and `variables` used to be overlaid alongside the model
+   * and the modules. `ChatPanel` renders a welcome bubble off
+   * `versionDetails.welcome_message`, so a value that changed per keystroke
+   * put the chat's own message state into a self-feeding cycle: typing into
+   * the welcome-message box crashed the whole editor into
+   * `PipelineConfigurationTabBoundary` with React's "Maximum update depth
+   * exceeded", reproducibly, against the standalone stack.
+   *
+   * This test asserts the OMISSION rather than the absence of a crash,
+   * because jsdom cannot drive that loop — the real `ChatBox` pipeline and a
+   * real socket client are what close it. A test that watched for the crash
+   * would pass whether or not the fix were present, which is the failure mode
+   * this comment exists to prevent someone repeating.
+   */
+  it('does NOT overlay in-progress form text into what the chat reads', () => {
     const { result } = renderHook(() => useBridgeUnderTest(VERSION));
 
     act(() => {
       result.current.bridge.setFieldValue('version_details.welcome_message', 'typed');
       result.current.bridge.setFieldValue('version_details.variables', [{ name: 'y', value: '2' }]);
-      result.current.bridge.setFieldValue('version_details.meta.internal_tools', []);
     });
 
-    expect(result.current.bridge.versionDetails?.welcome_message).toBe('typed');
-    expect(result.current.bridge.versionDetails?.variables).toEqual([{ name: 'y', value: '2' }]);
-    expect(result.current.bridge.versionDetails?.meta?.internal_tools).toEqual([]);
-    // The merge is over the stored blob, so an unrelated key survives.
-    expect(result.current.bridge.versionDetails?.meta?.icon_meta).toEqual({ id: 9 });
+    // The FORM has the edit (that is `useEditPipelineEditorBridge`'s job)...
+    expect(result.current.versionFields.fields.welcomeMessage).toBe('typed');
+    expect(result.current.versionFields.fields.variables).toEqual([{ name: 'y', value: '2' }]);
+    // ...and the chat still sees the version as stored.
+    expect(result.current.bridge.versionDetails?.welcome_message).toBe('stored hello');
+    expect(result.current.bridge.versionDetails?.variables).toEqual([{ name: 'x', value: '1' }]);
   });
 
   it('routes name and description into the RHF form', () => {

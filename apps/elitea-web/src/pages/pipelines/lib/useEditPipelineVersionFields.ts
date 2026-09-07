@@ -87,20 +87,32 @@ function fromVersion(version: ApplicationVersionDetail | undefined): EditPipelin
   };
 }
 
+function areStringListsEqual(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((entry, index) => b[index] === entry);
+}
+
+function areVariablesEqual(
+  a: EditPipelineVersionFields['variables'],
+  b: EditPipelineVersionFields['variables'],
+): boolean {
+  return (
+    a.length === b.length &&
+    a.every((variable, index) => {
+      const other = b[index];
+      return other !== undefined && variable.name === other.name && variable.value === other.value;
+    })
+  );
+}
+
 /** Split out of `areEqual` purely to keep it under this codebase's oxlint cyclomatic-complexity budget (12). */
 function areListsEqual(a: EditPipelineVersionFields, b: EditPipelineVersionFields): boolean {
-  if (a.internalTools.length !== b.internalTools.length) return false;
-  if (a.internalTools.some((name, index) => b.internalTools[index] !== name)) return false;
+  if (!areStringListsEqual(a.internalTools, b.internalTools)) return false;
   if (a.tags.length !== b.tags.length) return false;
   // Compared by NAME, not by id: a tag the user just typed carries a
   // placeholder id (`AgentTagEditor`), so an id comparison would report the
   // page dirty forever after a save that stored that very tag.
   if (a.tags.some((tag, index) => b.tags[index]?.name !== tag.name)) return false;
-  if (a.variables.length !== b.variables.length) return false;
-  return a.variables.every((variable, index) => {
-    const other = b.variables[index];
-    return other !== undefined && variable.name === other.name && variable.value === other.value;
-  });
+  return areVariablesEqual(a.variables, b.variables);
 }
 
 function areEqual(a: EditPipelineVersionFields, b: EditPipelineVersionFields): boolean {
@@ -163,30 +175,59 @@ export function useEditPipelineVersionFields(
     setBaseline(seeded);
   }
 
+  /**
+   * Applies `next` only when it differs from what is already held, returning
+   * the SAME state object otherwise.
+   *
+   * Every write into this hook arrives from one of two directions: a control
+   * the user is operating, or `features/pipelines`' chat hooks re-publishing
+   * a settings object they were just handed. The second kind writes the value
+   * that is already stored, and without these guards each one still minted a
+   * new `fields` object — which the bridge turns into a new `versionDetails`,
+   * which the chat reads, which republishes. The measured livelock on this
+   * page had a different immediate cause (see
+   * `./useEditPipelineConfigurationTabBridge.ts`'s `applyOverrides`), and
+   * these guards did NOT fix it; they close the same class of feedback path
+   * one step earlier, which is worth having on its own.
+   */
   const applyFieldChange = useCallback((path: string, value: unknown): boolean => {
     switch (path) {
-      case 'version_details.welcome_message':
-        setFields((previous) => ({ ...previous, welcomeMessage: typeof value === 'string' ? value : '' }));
+      case 'version_details.welcome_message': {
+        const next = typeof value === 'string' ? value : '';
+        setFields((previous) => (previous.welcomeMessage === next ? previous : { ...previous, welcomeMessage: next }));
         return true;
+      }
       case 'version_details.variables':
-        setFields((previous) => ({ ...previous, variables: toVariables(value, previous.variables) }));
+        setFields((previous) => {
+          const next = toVariables(value, previous.variables);
+          return areVariablesEqual(previous.variables, next) ? previous : { ...previous, variables: next };
+        });
         return true;
-      case 'version_details.meta.internal_tools':
-        setFields((previous) => ({ ...previous, internalTools: toStringArray(value) }));
+      case 'version_details.meta.internal_tools': {
+        const next = toStringArray(value);
+        setFields((previous) => (areStringListsEqual(previous.internalTools, next) ? previous : { ...previous, internalTools: next }));
         return true;
-      case 'version_details.meta.step_limit':
-        setFields((previous) => ({ ...previous, stepLimit: typeof value === 'number' ? value : undefined }));
+      }
+      case 'version_details.meta.step_limit': {
+        const next = typeof value === 'number' ? value : undefined;
+        setFields((previous) => (previous.stepLimit === next ? previous : { ...previous, stepLimit: next }));
         return true;
+      }
       // A whole-object replace, which is what the settings dialog's Apply
       // emits — the picker owns every key at once, so a per-key merge would
       // let a stale `temperature` survive a switch to a reasoning model.
-      case 'version_details.llm_settings':
-        setFields((previous) => ({ ...previous, llmSettings: toAgentLlmSettings(value) }));
+      case 'version_details.llm_settings': {
+        const next = toAgentLlmSettings(value);
+        setFields((previous) => (areAgentLlmSettingsEqual(previous.llmSettings, next) ? previous : { ...previous, llmSettings: next }));
         return true;
+      }
       default: {
         const key = LLM_SETTINGS_KEY_PATTERN.exec(path)?.[1];
         if (key === undefined) return false;
-        setFields((previous) => ({ ...previous, llmSettings: mergeLlmSettingsKey(previous.llmSettings, key, value) }));
+        setFields((previous) => {
+          const next = mergeLlmSettingsKey(previous.llmSettings, key, value);
+          return areAgentLlmSettingsEqual(previous.llmSettings, next) ? previous : { ...previous, llmSettings: next };
+        });
         return true;
       }
     }
