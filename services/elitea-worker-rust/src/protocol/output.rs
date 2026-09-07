@@ -179,10 +179,17 @@ fn validate_restored_agent_payload(
                 }),
             ))
         }
+        // Every payload this worker does not produce is named here on purpose.
+        // A wildcard arm would let a future payload variant be restored as a
+        // valid agent frame the day someone adds it, which is the silent-skip
+        // class this file exists to prevent. ToolkitCallTool belongs to the
+        // Python worker: this worker never emits it, so a frame carrying one
+        // is malformed for an agent execution, not merely unhandled.
         Some(
             execution_output_frame_v1::Payload::ConfigurationValidation(_)
             | execution_output_frame_v1::Payload::ToolkitAvailableTools(_)
-            | execution_output_frame_v1::Payload::IndexIngest(_),
+            | execution_output_frame_v1::Payload::IndexIngest(_)
+            | execution_output_frame_v1::Payload::ToolkitCallTool(_),
         )
         | None => Err(malformed_restored_output()),
     }

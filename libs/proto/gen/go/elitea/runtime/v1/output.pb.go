@@ -31,6 +31,7 @@ const (
 	ExecutionOutputEventTypeV1_EXECUTION_OUTPUT_EVENT_TYPE_V1_INDEX_INGEST_RESULT             ExecutionOutputEventTypeV1 = 4
 	ExecutionOutputEventTypeV1_EXECUTION_OUTPUT_EVENT_TYPE_V1_NODE_EVENT                      ExecutionOutputEventTypeV1 = 5
 	ExecutionOutputEventTypeV1_EXECUTION_OUTPUT_EVENT_TYPE_V1_AGENT_EXECUTION_RESULT          ExecutionOutputEventTypeV1 = 6
+	ExecutionOutputEventTypeV1_EXECUTION_OUTPUT_EVENT_TYPE_V1_TOOLKIT_CALL_TOOL_RESULT        ExecutionOutputEventTypeV1 = 7
 )
 
 // Enum value maps for ExecutionOutputEventTypeV1.
@@ -43,6 +44,7 @@ var (
 		4: "EXECUTION_OUTPUT_EVENT_TYPE_V1_INDEX_INGEST_RESULT",
 		5: "EXECUTION_OUTPUT_EVENT_TYPE_V1_NODE_EVENT",
 		6: "EXECUTION_OUTPUT_EVENT_TYPE_V1_AGENT_EXECUTION_RESULT",
+		7: "EXECUTION_OUTPUT_EVENT_TYPE_V1_TOOLKIT_CALL_TOOL_RESULT",
 	}
 	ExecutionOutputEventTypeV1_value = map[string]int32{
 		"EXECUTION_OUTPUT_EVENT_TYPE_V1_UNSPECIFIED":                     0,
@@ -52,6 +54,7 @@ var (
 		"EXECUTION_OUTPUT_EVENT_TYPE_V1_INDEX_INGEST_RESULT":             4,
 		"EXECUTION_OUTPUT_EVENT_TYPE_V1_NODE_EVENT":                      5,
 		"EXECUTION_OUTPUT_EVENT_TYPE_V1_AGENT_EXECUTION_RESULT":          6,
+		"EXECUTION_OUTPUT_EVENT_TYPE_V1_TOOLKIT_CALL_TOOL_RESULT":        7,
 	}
 )
 
@@ -199,6 +202,7 @@ type ExecutionOutputFrameV1 struct {
 	//	*ExecutionOutputFrameV1_ToolkitAvailableTools
 	//	*ExecutionOutputFrameV1_IndexIngest
 	//	*ExecutionOutputFrameV1_AgentExecution
+	//	*ExecutionOutputFrameV1_ToolkitCallTool
 	//	*ExecutionOutputFrameV1_NodeEvent
 	Payload       isExecutionOutputFrameV1_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
@@ -378,6 +382,15 @@ func (x *ExecutionOutputFrameV1) GetAgentExecution() *AgentExecutionResultV1 {
 	return nil
 }
 
+func (x *ExecutionOutputFrameV1) GetToolkitCallTool() *ToolkitCallToolResultV1 {
+	if x != nil {
+		if x, ok := x.Payload.(*ExecutionOutputFrameV1_ToolkitCallTool); ok {
+			return x.ToolkitCallTool
+		}
+	}
+	return nil
+}
+
 func (x *ExecutionOutputFrameV1) GetNodeEvent() *NodeEventV1 {
 	if x != nil {
 		if x, ok := x.Payload.(*ExecutionOutputFrameV1_NodeEvent); ok {
@@ -411,6 +424,10 @@ type ExecutionOutputFrameV1_AgentExecution struct {
 	AgentExecution *AgentExecutionResultV1 `protobuf:"bytes,24,opt,name=agent_execution,json=agentExecution,proto3,oneof"`
 }
 
+type ExecutionOutputFrameV1_ToolkitCallTool struct {
+	ToolkitCallTool *ToolkitCallToolResultV1 `protobuf:"bytes,25,opt,name=toolkit_call_tool,json=toolkitCallTool,proto3,oneof"`
+}
+
 type ExecutionOutputFrameV1_NodeEvent struct {
 	// Non-terminal current NodeEvent progress. terminal is false,
 	// settlement_proposal is absent, and payload_digest binds the deterministic
@@ -428,6 +445,8 @@ func (*ExecutionOutputFrameV1_ToolkitAvailableTools) isExecutionOutputFrameV1_Pa
 func (*ExecutionOutputFrameV1_IndexIngest) isExecutionOutputFrameV1_Payload() {}
 
 func (*ExecutionOutputFrameV1_AgentExecution) isExecutionOutputFrameV1_Payload() {}
+
+func (*ExecutionOutputFrameV1_ToolkitCallTool) isExecutionOutputFrameV1_Payload() {}
 
 func (*ExecutionOutputFrameV1_NodeEvent) isExecutionOutputFrameV1_Payload() {}
 
@@ -552,7 +571,8 @@ const file_elitea_runtime_v1_output_proto_rawDesc = "" +
 	"\x11terminal_event_id\x18\x04 \x01(\tR\x0fterminalEventId\x12+\n" +
 	"\x11terminal_sequence\x18\x05 \x01(\x04R\x10terminalSequence\x12S\n" +
 	"\x17terminal_payload_digest\x18\x06 \x01(\v2\x1b.elitea.runtime.v1.DigestV1R\x15terminalPayloadDigest\x126\n" +
-	"\x17prepare_idempotency_key\x18\a \x01(\tR\x15prepareIdempotencyKeyJ\x04\b\b\x10\x10\"\xe6\t\n" +
+	"\x17prepare_idempotency_key\x18\a \x01(\tR\x15prepareIdempotencyKeyJ\x04\b\b\x10\x10\"\xc0\n" +
+	"\n" +
 	"\x16ExecutionOutputFrameV1\x124\n" +
 	"\x16output_schema_revision\x18\x01 \x01(\tR\x14outputSchemaRevision\x12\x1b\n" +
 	"\tstream_id\x18\x02 \x01(\tR\bstreamId\x12B\n" +
@@ -573,10 +593,11 @@ const file_elitea_runtime_v1_output_proto_rawDesc = "" +
 	"\rruntime_error\x18\x15 \x01(\v2!.elitea.runtime.v1.RuntimeErrorV1H\x00R\fruntimeError\x12j\n" +
 	"\x17toolkit_available_tools\x18\x16 \x01(\v20.elitea.runtime.v1.ToolkitAvailableToolsResultV1H\x00R\x15toolkitAvailableTools\x12K\n" +
 	"\findex_ingest\x18\x17 \x01(\v2&.elitea.runtime.v1.IndexIngestResultV1H\x00R\vindexIngest\x12T\n" +
-	"\x0fagent_execution\x18\x18 \x01(\v2).elitea.runtime.v1.AgentExecutionResultV1H\x00R\x0eagentExecution\x12?\n" +
+	"\x0fagent_execution\x18\x18 \x01(\v2).elitea.runtime.v1.AgentExecutionResultV1H\x00R\x0eagentExecution\x12X\n" +
+	"\x11toolkit_call_tool\x18\x19 \x01(\v2*.elitea.runtime.v1.ToolkitCallToolResultV1H\x00R\x0ftoolkitCallTool\x12?\n" +
 	"\n" +
 	"node_event\x18  \x01(\v2\x1e.elitea.runtime.v1.NodeEventV1H\x00R\tnodeEventB\t\n" +
-	"\apayloadJ\x04\b\x0e\x10\x14J\x04\b\x19\x10 \"\x8e\x04\n" +
+	"\apayloadJ\x04\b\x0e\x10\x14J\x04\b\x1a\x10 \"\x8e\x04\n" +
 	"\x14ExecutionOutputAckV1\x12\x1b\n" +
 	"\tstream_id\x18\x01 \x01(\tR\bstreamId\x12B\n" +
 	"\bidentity\x18\x02 \x01(\v2&.elitea.runtime.v1.ExecutionIdentityV1R\bidentity\x129\n" +
@@ -587,7 +608,7 @@ const file_elitea_runtime_v1_output_proto_rawDesc = "" +
 	"\fcredit_bytes\x18\a \x01(\x04R\vcreditBytes\x12O\n" +
 	"\rdesired_state\x18\b \x01(\x0e2*.elitea.runtime.v1.DesiredExecutionStateV1R\fdesiredState\x12?\n" +
 	"\trejection\x18\t \x01(\v2!.elitea.runtime.v1.RuntimeErrorV1R\trejectionJ\x04\b\n" +
-	"\x10\x10*\xa7\x03\n" +
+	"\x10\x10*\xe4\x03\n" +
 	"\x1aExecutionOutputEventTypeV1\x12.\n" +
 	"*EXECUTION_OUTPUT_EVENT_TYPE_V1_UNSPECIFIED\x10\x00\x12B\n" +
 	">EXECUTION_OUTPUT_EVENT_TYPE_V1_CONFIGURATION_VALIDATION_RESULT\x10\x01\x120\n" +
@@ -595,7 +616,8 @@ const file_elitea_runtime_v1_output_proto_rawDesc = "" +
 	"=EXECUTION_OUTPUT_EVENT_TYPE_V1_TOOLKIT_AVAILABLE_TOOLS_RESULT\x10\x03\x126\n" +
 	"2EXECUTION_OUTPUT_EVENT_TYPE_V1_INDEX_INGEST_RESULT\x10\x04\x12-\n" +
 	")EXECUTION_OUTPUT_EVENT_TYPE_V1_NODE_EVENT\x10\x05\x129\n" +
-	"5EXECUTION_OUTPUT_EVENT_TYPE_V1_AGENT_EXECUTION_RESULT\x10\x062{\n" +
+	"5EXECUTION_OUTPUT_EVENT_TYPE_V1_AGENT_EXECUTION_RESULT\x10\x06\x12;\n" +
+	"7EXECUTION_OUTPUT_EVENT_TYPE_V1_TOOLKIT_CALL_TOOL_RESULT\x10\a2{\n" +
 	"\x16ExecutionOutputService\x12a\n" +
 	"\aPublish\x12).elitea.runtime.v1.ExecutionOutputFrameV1\x1a'.elitea.runtime.v1.ExecutionOutputAckV1(\x010\x01BSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
 
@@ -627,8 +649,9 @@ var file_elitea_runtime_v1_output_proto_goTypes = []any{
 	(*ToolkitAvailableToolsResultV1)(nil),   // 10: elitea.runtime.v1.ToolkitAvailableToolsResultV1
 	(*IndexIngestResultV1)(nil),             // 11: elitea.runtime.v1.IndexIngestResultV1
 	(*AgentExecutionResultV1)(nil),          // 12: elitea.runtime.v1.AgentExecutionResultV1
-	(*NodeEventV1)(nil),                     // 13: elitea.runtime.v1.NodeEventV1
-	(DesiredExecutionStateV1)(0),            // 14: elitea.runtime.v1.DesiredExecutionStateV1
+	(*ToolkitCallToolResultV1)(nil),         // 13: elitea.runtime.v1.ToolkitCallToolResultV1
+	(*NodeEventV1)(nil),                     // 14: elitea.runtime.v1.NodeEventV1
+	(DesiredExecutionStateV1)(0),            // 15: elitea.runtime.v1.DesiredExecutionStateV1
 }
 var file_elitea_runtime_v1_output_proto_depIdxs = []int32{
 	4,  // 0: elitea.runtime.v1.SettlementProposalV1.requested_outcome:type_name -> elitea.runtime.v1.ExecutionOutcomeV1
@@ -643,18 +666,19 @@ var file_elitea_runtime_v1_output_proto_depIdxs = []int32{
 	10, // 9: elitea.runtime.v1.ExecutionOutputFrameV1.toolkit_available_tools:type_name -> elitea.runtime.v1.ToolkitAvailableToolsResultV1
 	11, // 10: elitea.runtime.v1.ExecutionOutputFrameV1.index_ingest:type_name -> elitea.runtime.v1.IndexIngestResultV1
 	12, // 11: elitea.runtime.v1.ExecutionOutputFrameV1.agent_execution:type_name -> elitea.runtime.v1.AgentExecutionResultV1
-	13, // 12: elitea.runtime.v1.ExecutionOutputFrameV1.node_event:type_name -> elitea.runtime.v1.NodeEventV1
-	6,  // 13: elitea.runtime.v1.ExecutionOutputAckV1.identity:type_name -> elitea.runtime.v1.ExecutionIdentityV1
-	7,  // 14: elitea.runtime.v1.ExecutionOutputAckV1.fence:type_name -> elitea.runtime.v1.ExecutionFenceV1
-	14, // 15: elitea.runtime.v1.ExecutionOutputAckV1.desired_state:type_name -> elitea.runtime.v1.DesiredExecutionStateV1
-	9,  // 16: elitea.runtime.v1.ExecutionOutputAckV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
-	2,  // 17: elitea.runtime.v1.ExecutionOutputService.Publish:input_type -> elitea.runtime.v1.ExecutionOutputFrameV1
-	3,  // 18: elitea.runtime.v1.ExecutionOutputService.Publish:output_type -> elitea.runtime.v1.ExecutionOutputAckV1
-	18, // [18:19] is the sub-list for method output_type
-	17, // [17:18] is the sub-list for method input_type
-	17, // [17:17] is the sub-list for extension type_name
-	17, // [17:17] is the sub-list for extension extendee
-	0,  // [0:17] is the sub-list for field type_name
+	13, // 12: elitea.runtime.v1.ExecutionOutputFrameV1.toolkit_call_tool:type_name -> elitea.runtime.v1.ToolkitCallToolResultV1
+	14, // 13: elitea.runtime.v1.ExecutionOutputFrameV1.node_event:type_name -> elitea.runtime.v1.NodeEventV1
+	6,  // 14: elitea.runtime.v1.ExecutionOutputAckV1.identity:type_name -> elitea.runtime.v1.ExecutionIdentityV1
+	7,  // 15: elitea.runtime.v1.ExecutionOutputAckV1.fence:type_name -> elitea.runtime.v1.ExecutionFenceV1
+	15, // 16: elitea.runtime.v1.ExecutionOutputAckV1.desired_state:type_name -> elitea.runtime.v1.DesiredExecutionStateV1
+	9,  // 17: elitea.runtime.v1.ExecutionOutputAckV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
+	2,  // 18: elitea.runtime.v1.ExecutionOutputService.Publish:input_type -> elitea.runtime.v1.ExecutionOutputFrameV1
+	3,  // 19: elitea.runtime.v1.ExecutionOutputService.Publish:output_type -> elitea.runtime.v1.ExecutionOutputAckV1
+	19, // [19:20] is the sub-list for method output_type
+	18, // [18:19] is the sub-list for method input_type
+	18, // [18:18] is the sub-list for extension type_name
+	18, // [18:18] is the sub-list for extension extendee
+	0,  // [0:18] is the sub-list for field type_name
 }
 
 func init() { file_elitea_runtime_v1_output_proto_init() }
@@ -675,6 +699,7 @@ func file_elitea_runtime_v1_output_proto_init() {
 		(*ExecutionOutputFrameV1_ToolkitAvailableTools)(nil),
 		(*ExecutionOutputFrameV1_IndexIngest)(nil),
 		(*ExecutionOutputFrameV1_AgentExecution)(nil),
+		(*ExecutionOutputFrameV1_ToolkitCallTool)(nil),
 		(*ExecutionOutputFrameV1_NodeEvent)(nil),
 	}
 	type x struct{}
