@@ -1,8 +1,7 @@
 /**
- * ChatBox — composition root for the chat experience.
- * Composes entities/conversation lifecycle + streaming,
- * features/chat-messages ChatMessageList, features/chat-input NewChatInput,
- * Phase-2 button primitives, Phase-4 recommendation list, and TTS.
+ * ChatBox — composition root for the chat experience. Composes entities/conversation
+ * lifecycle + streaming, features/chat-messages ChatMessageList, features/chat-input
+ * NewChatInput, Phase-2 button primitives, Phase-4 recommendation list, and TTS.
  * Port of the old 2300-line ChatBox.jsx — split across sibling hooks
  * (data/state/handlers/participant/model-selection/internal-tools/
  * versioning/mentions/actions — see ./hooks/) plus a pure-helpers module
@@ -42,7 +41,7 @@ import type { ChatBoxEditorCallbacks } from './ChatBox.helpers';
 import type { ChatBoxAgentEventSink, ChatBoxConversationProp } from './ChatBox.props';
 import { unwrapChatBoxConversation } from './ChatBox.props';
 import type { ChatBoxHandle } from './ChatBox.types';
-import { buildChatBoxInputSlots } from './ChatBoxInputSlots';
+import { buildChatBoxAttachmentProps, buildChatBoxInputSlots } from './ChatBoxInputSlots';
 import { buildChatBoxPopupsProps, ChatBoxPopups } from './ChatBoxPopups';
 import { ChatBoxDeleteModal } from './ChatBoxDeleteModal';
 import { ChatEmptyGreeting } from './ChatEmptyGreeting';
@@ -375,6 +374,7 @@ const ChatBoxInner = memo(function ChatBox({
             onSelectVersion: (version) => { void handleSelectVersion(version); },
             editorCallbacks,
           })}
+          attachments={buildChatBoxAttachmentProps(data.attachments)}
           mentions={{ users: state.users, onMentionChange: handleMentionChange }}
           voice={{ isSpeakingMode: state.isSpeakingMode, onSpeakingModeToggle: () => state.setIsSpeakingMode(!state.isSpeakingMode), isTTSPlaying: readAloud.isPlaying }}
           slots={buildChatBoxInputSlots({

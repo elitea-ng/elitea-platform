@@ -203,6 +203,7 @@ export const NewChatInput = forwardRef(function NewChatInput(
         ),
         sendControl: slots.sendControl,
         highlightOverlay: slots.highlightOverlay,
+        attachmentList: slots.attachmentList,
       }}
       slotProps={{
         container: { onDrop },

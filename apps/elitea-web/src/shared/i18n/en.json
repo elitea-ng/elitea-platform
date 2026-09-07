@@ -3552,5 +3552,6 @@
   "deepwiki.source.folder": "Artifact folder",
   "deepwiki.source.label": "Wiki source",
   "deepwiki.source.prefix": "Folder (optional)",
-  "deepwiki.source.repository": "Repository"
+  "deepwiki.source.repository": "Repository",
+  "chatMessages.fileList.removeAttachment": "Remove attachment"
 }

@@ -5,6 +5,7 @@ import type { VersionSummary } from '@/entities/version';
 
 import type { MentionCandidate, MentionMatch } from '../lib/hooks/useMentionDetection.hooks';
 import type {
+  UserInputAttachmentListSlotProps,
   UserInputHandle,
   UserInputHighlightOverlaySlotProps,
   UserInputSendControlSlotProps,
@@ -30,19 +31,29 @@ export interface NewChatInputHandle extends UserInputHandle {
  * slots, unchanged, so the composition root that renders this component
  * (`widgets/chat-box`, unit C6) supplies them once for both layers.
  *
- * **Open gap, as of this writing**: `widgets/chat-box/ui/ChatBoxInputSlots
- * .tsx`'s `buildChatBoxInputSlots()` does not yet set either of these two
- * fields, even though the real `SendButton` (`widgets/chat/ui/chat-button
- * /SendButton.tsx`) and `HighlightedText` (`features/chat-messages/ui
- * /highlighted-text/HighlightedText.tsx`) both already exist. Until that
- * composition-root wiring lands, the composer renders with no visible send
- * control and no slash/mention highlight overlay. Do NOT close this gap by
- * importing either component here — that would reintroduce the exact
- * `no-sideways-features` violation this slot exists to avoid.
+ * CLOSED (this comment used to record it as open): `widgets/chat-box/ui
+ * /ChatBoxInputSlots.tsx`'s `buildChatBoxInputSlots()` now sets `sendControl`,
+ * `highlightOverlay` AND `attachmentList`. Do NOT close a future slot gap by
+ * importing the component here — that would reintroduce the exact
+ * `no-sideways-features` violation these slots exist to avoid; fill it from
+ * the composition root instead.
  */
 export interface NewChatInputSlots {
   readonly sendControl?: ((props: UserInputSendControlSlotProps) => ReactNode) | undefined;
   readonly highlightOverlay?: ((props: UserInputHighlightOverlaySlotProps) => ReactNode) | undefined;
+  /**
+   * The chips for the files staged on the NEXT message — baseline renders
+   * `FileList` directly inside `UserInput` (`ComponentsLib/Chat/UserInput
+   * .jsx:422-427`). `FileList` lives in `features/chat-messages`, so the same
+   * `no-sideways-features` rule that makes `sendControl` a slot makes this one
+   * a slot too, and the composition root supplies it once for both layers.
+   *
+   * Without it the composer counts a picked file (the "+" menu's "N left"
+   * ticks down) and sends it, but shows the user NOTHING: no chip, no name, no
+   * way to remove it before sending. That is what the slot existing and nobody
+   * filling it looked like from the outside.
+   */
+  readonly attachmentList?: ((props: UserInputAttachmentListSlotProps) => ReactNode) | undefined;
   /**
    * Baseline: `PlusChatButton` (fromTheChat) / `ChatButton.AttachmentButton`
    * (unit C6, genuine `no-sideways-features` cross-unit import either way).

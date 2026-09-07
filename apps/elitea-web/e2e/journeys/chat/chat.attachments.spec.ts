@@ -13,22 +13,21 @@
  * afterwards, and the status codes + JSON bodies elitea-main really returns
  * (202 chunk ack / 201 final array).
  *
+ * CLOSED, and now asserted (this header used to record both as product gaps):
+ *  - The PRE-SEND PREVIEW exists. `ChatBox` passes the staged list to
+ *    `NewChatInput` and `buildChatBoxInputSlots` fills `slots.attachmentList`
+ *    with `FileList`, so a picked file shows as a named, removable chip
+ *    (`chat-attachment-chip-<i>`) before the message is sent — J12c below.
+ *    Until that wiring landed the only pre-send signal was the attach row's
+ *    remaining-capacity counter, and a user who picked a file saw nothing.
+ *  - `isUploading`/`uploadProgress` now reach `UserInputFooter`, so the
+ *    determinate `UploadProgressIndicator` can render. The percent itself is
+ *    still asserted through the WIRE (two chunk requests, 202 then 201) and
+ *    not the UI: on a loopback stack a 6 MiB upload finishes faster than a
+ *    poll can catch an intermediate frame, so a UI assertion on it would be a
+ *    flake, not a check.
+ *
  * PRODUCT GAPS deliberately NOT asserted around (verified 2026-08-08):
- *  - There is no pre-send attachment preview: ChatBox never passes
- *    `slots.attachmentList`, so `normalizeUserInputProps` renders null.
- *    The only pre-send signals the product emits are the attach row's
- *    remaining-capacity counter and its disabled state — this file asserts
- *    those. (The counter used to live in a hover tooltip on a bare paperclip
- *    button; on the chat surface that control is now the first row of the
- *    "+" menu and the count is visible text on it.)
- *  - Upload PROGRESS PERCENT is dead in the chat page. `UserInputFooter`
- *    renders `<UploadProgressIndicator progress={isUploading ? uploadProgress
- *    : undefined}>`, but ChatBox.tsx never passes an `attachments` prop to
- *    NewChatInput carrying `isUploading`/`uploadProgress` (it passes only
- *    `{attachments, onAttachFiles}` for the button, ChatBox.tsx:374), so the
- *    determinate variant with its `aria-valuenow` + "<n>%" label can never
- *    render here. Chunk-level progress is therefore asserted through the
- *    wire protocol (two chunk requests, 202 then 201) instead of the UI.
  *  - Uploaded attachments never appear in the transcript: the optimistic
  *    user message carries no attachments and elitea-main does not persist a
  *    `chat_messages_attachment` row (see conversations/attachments.go), so
@@ -112,8 +111,25 @@ function attachInput(page: import('@playwright/test').Page) {
     .locator('input[type="file"]');
 }
 
+/**
+ * Closes the "+" menu if it is open.
+ *
+ * `openAttachRow` leaves it open because the hidden file input only exists
+ * while it is rendered. Once a file is staged the composer grows by a chip
+ * row, and the menu's Popper — anchored to the "+" button — then sits OVER the
+ * text area and swallows every pointer event aimed at it. Closing it is what a
+ * user does before typing anyway.
+ */
+async function closeAttachMenu(page: import('@playwright/test').Page): Promise<void> {
+  const row = page.getByTestId('plus-menu-attachments');
+  if ((await row.count()) === 0) return;
+  await page.getByTestId('plus-menu-button').click();
+  await expect(row).toHaveCount(0);
+}
+
 /** Types a question and sends it. Send stays disabled while the question is empty. */
 async function send(page: import('@playwright/test').Page, question: string): Promise<void> {
+  await closeAttachMenu(page);
   await page.getByTestId('chat-message-input').click();
   await page.keyboard.type(question);
   const sendButton = page.getByTestId('chat-send-button');
@@ -155,6 +171,11 @@ test('J12: attach a small file to a chat message', async ({ page }) => {
     // choreography any more — the counter is visible text on the row, so it
     // is readable without provoking a tooltip.
     await expect(attach).toContainText(`${MAX_ATTACHMENTS - 1} left`);
+
+    // ...and the user can SEE it. The counter alone proves the state changed;
+    // the chip proves the composer told the user which file is riding this
+    // message. See J12c for the removal half.
+    await expect(page.getByTestId('chat-attachment-chip-0')).toContainText('e2e-small-file-attach.txt');
 
     // Arm the upload watcher BEFORE sending: the send creates the conversation
     // over REST first, then uploads into it (resolveConversationForSend →
@@ -255,6 +276,60 @@ test('J12b: attaching MAX_ATTACHMENTS files disables further attachment', async 
     await checkA11y(page);
   } finally {
     for (const f of files) fs.unlinkSync(f);
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Journey 12c: the staged file is visible, named and removable BEFORE sending
+// ─────────────────────────────────────────────────────────────────────────────
+/**
+ * The defect this guards is a wiring one, and it survived a full unit suite.
+ * `useAttachmentState` held the file, `FileList` knew how to draw it, and the
+ * send path uploaded it — but nothing joined them: `ChatBox` passed no
+ * `attachments` prop to `NewChatInput`, and `NewChatInput` passed no
+ * `attachmentList` slot to `UserInput`. Every component was correct on its own
+ * and the composer still showed the user nothing.
+ *
+ * Two files, not one, because the removal assertion has to distinguish "the
+ * right chip went" from "the list went".
+ */
+test('J12c: staged files show as removable chips before the message is sent', async ({ page }) => {
+  const keep = path.join(os.tmpdir(), 'e2e-chip-keep.txt');
+  const drop = path.join(os.tmpdir(), 'e2e-chip-drop.txt');
+  fs.writeFileSync(keep, 'keep me');
+  fs.writeFileSync(drop, 'drop me');
+
+  try {
+    await page.goto(BASE_URL + '/app/chat');
+    const attach = await openAttachRow(page);
+    await attachInput(page).setInputFiles([keep, drop]);
+    await expect(attach).toContainText(`${MAX_ATTACHMENTS - 2} left`);
+
+    // Close the "+" menu before touching a chip: the menu is a Popper behind a
+    // ClickAwayListener, so the first mousedown anywhere outside it closes the
+    // menu, and an assertion on the row afterwards would be asserting on an
+    // unmounted element rather than on the product.
+    await closeAttachMenu(page);
+
+    const first = page.getByTestId('chat-attachment-chip-0');
+    const second = page.getByTestId('chat-attachment-chip-1');
+    await expect(first).toContainText('e2e-chip-keep.txt');
+    await expect(second).toContainText('e2e-chip-drop.txt');
+
+    // Remove the SECOND one. `onDeleteAttachment(index)` splices by index, so
+    // a fix that removed the wrong entry (or cleared the list) fails here.
+    await second.getByTestId('chat-attachment-remove-1').click();
+    await expect(page.getByTestId('chat-attachment-chip-1')).toHaveCount(0);
+    await expect(page.getByTestId('chat-attachment-chip-0')).toContainText('e2e-chip-keep.txt');
+
+    // The capacity counter and the chip list agree — they read the same state,
+    // and disagreement is how the original defect hid.
+    await expect(await openAttachRow(page)).toContainText(`${MAX_ATTACHMENTS - 1} left`);
+
+    await checkA11y(page);
+  } finally {
+    fs.unlinkSync(keep);
+    fs.unlinkSync(drop);
   }
 });
 

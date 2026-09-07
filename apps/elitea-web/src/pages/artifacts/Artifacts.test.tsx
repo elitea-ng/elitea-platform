@@ -30,6 +30,8 @@ const mocks = {
   deleteFile: vi.fn(),
   deleteMany: vi.fn(),
   stageFiles: vi.fn(),
+  refreshFiles: vi.fn(),
+  uploadOptions: undefined as { onUploaded: () => unknown } | undefined,
   fetchArtifactBlob: vi.fn(),
   triggerBlobDownload: vi.fn(),
   zipStart: vi.fn(),
@@ -38,6 +40,10 @@ const mocks = {
 
 interface BucketSidebarMockProps {
   readonly onCreate: () => void;
+  readonly onEdit: (bucket: { id: string; name: string; isPinned: boolean; createdAt: string }) => void;
+  readonly onToggleCollapsed: () => void;
+  readonly onSelectFile: (item: { key: string }) => void;
+  readonly onSelectFolder: (key: string) => void;
   readonly onSelect: (bucket: { id: string; name: string; isPinned: boolean; createdAt: string }) => void;
   readonly onStorageChange: (id: string) => void;
   readonly onPin: (bucket: { id: string; name: string; isPinned: boolean; createdAt: string }) => Promise<unknown>;
@@ -73,8 +79,12 @@ function MockBucketSidebar(props: BucketSidebarMockProps): ReactNode {
       <button onClick={() => props.onSelect(bucket)}>select-docs</button>
       <button onClick={() => props.onSelect({ ...bucket, id: 'bucket-2', name: 'reports' })}>select-reports</button>
       <button onClick={() => props.onStorageChange('storage-2')}>select-storage</button>
-      <button onClick={() => void props.onPin(bucket)}>pin-docs</button>
-      <button onClick={() => void props.onDelete(bucket)}>delete-docs</button>
+      <button onClick={() => void props.onPin(bucket).catch(() => undefined)}>pin-docs</button>
+      <button onClick={() => void props.onDelete(bucket).catch(() => undefined)}>delete-docs</button>
+      <button onClick={() => props.onEdit(bucket)}>edit-docs</button>
+      <button onClick={props.onToggleCollapsed}>toggle-buckets</button>
+      <button onClick={() => props.onSelectFile({ key: 'folder/deep.txt' })}>tree-select-file</button>
+      <button onClick={() => props.onSelectFolder('folder/')}>tree-select-folder</button>
     </nav>
   );
 }
@@ -135,6 +145,7 @@ describe('Artifacts page', () => {
       mutation.mockReset().mockResolvedValue(undefined);
     }
     mocks.stageFiles.mockReset();
+    mocks.refreshFiles.mockReset().mockResolvedValue(undefined);
     mocks.triggerBlobDownload.mockReset();
     mocks.zipStart.mockReset().mockResolvedValue(undefined);
     mocks.files.refetch.mockReset().mockResolvedValue(undefined);
@@ -157,8 +168,9 @@ describe('Artifacts page', () => {
       deleteBucket: { mutateAsync: mocks.deleteBucket },
       deleteFile: { mutateAsync: mocks.deleteFile },
       deleteMany: { mutateAsync: mocks.deleteMany, isPending: false },
+      refreshFiles: mocks.refreshFiles,
     } as never);
-    vi.spyOn(artifactsFeature, 'useArtifactUpload').mockReturnValue({
+    const uploadHookResult = {
       stageFiles: mocks.stageFiles,
       pathDialogOpen: false,
       closePathDialog: vi.fn(),
@@ -169,7 +181,14 @@ describe('Artifacts page', () => {
       skipDuplicates: vi.fn(),
       replaceDuplicates: vi.fn(),
       keepBoth: vi.fn(),
-    } as never);
+    };
+    vi.spyOn(artifactsFeature, 'useArtifactUpload').mockImplementation(((options: { onUploaded: () => unknown }) => {
+      // Keep the real `onUploaded` callback so the test can fire it — that is
+      // the only place the page decides WHICH queries a finished upload
+      // refreshes, and mocking the hook away is what let it go stale.
+      mocks.uploadOptions = options;
+      return uploadHookResult;
+    }) as never);
     vi.spyOn(artifactsFeature, 'useZipDownload').mockReturnValue({
       start: mocks.zipStart,
       cancel: mocks.zipCancel,
@@ -199,6 +218,18 @@ describe('Artifacts page', () => {
     await waitFor(() => expect(router.state.location.search).toMatchObject({ bucket: 'docs', folder: '' }));
   });
 
+  it('refreshes the BUCKET list after an upload, not only the object list', async () => {
+    // The bucket panel's "Size:" footer is summed from the bucket list's
+    // `size_bytes`. Refreshing only the object list left it showing the
+    // pre-upload total until the next full page load — measured on the
+    // standalone stack: 18 B after a second, 35 B upload; 53 B after F5.
+    renderArtifactsRoute(<Artifacts />, '/artifacts?bucket=docs');
+    expect(mocks.uploadOptions).toBeDefined();
+    await mocks.uploadOptions?.onUploaded();
+    expect(mocks.refreshFiles).toHaveBeenCalledWith('docs');
+    expect(mocks.files.refetch).not.toHaveBeenCalled();
+  });
+
   it('opens, closes, deletes, and refreshes a file preview', async () => {
     const user = userEvent.setup();
     const { router } = renderArtifactsRoute(<Artifacts />, '/artifacts?bucket=docs');
@@ -207,7 +238,10 @@ describe('Artifacts page', () => {
     await user.click(screen.getByRole('button', { name: 'preview-delete' }));
     expect(mocks.deleteFile).toHaveBeenCalledWith({ bucket: 'docs', key: 'readme.md' });
     await user.click(screen.getByRole('button', { name: 'preview-saved' }));
-    expect(mocks.files.refetch).toHaveBeenCalled();
+    // Both queries, not just the object list: an in-place edit changes the
+    // object's byte length, and the buckets panel's "Size:" footer is summed
+    // from the BUCKET list. See the upload case below.
+    expect(mocks.refreshFiles).toHaveBeenCalledWith('docs');
     await user.click(screen.getByRole('button', { name: 'close-preview' }));
     await waitFor(() => expect(router.state.location.search).toMatchObject({ file: '' }));
   });
@@ -258,6 +292,74 @@ describe('Artifacts page', () => {
     }));
     await user.click(await screen.findByRole('button', { name: 'delete-empty' }));
     expect(mocks.deleteMany).toHaveBeenCalledTimes(1);
+  });
+
+  it('drives the bucket tree, the edit route and the collapse toggle', async () => {
+    const user = userEvent.setup();
+    const { router } = renderArtifactsRoute(<Artifacts />, '/artifacts?bucket=docs');
+    await user.click(await screen.findByRole('button', { name: 'tree-select-file' }));
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ file: 'folder/deep.txt' }));
+    await user.click(screen.getByRole('button', { name: 'tree-select-folder' }));
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ folder: 'folder' }));
+    await user.click(screen.getByRole('button', { name: 'toggle-buckets' }));
+    await user.click(screen.getByRole('button', { name: 'edit-docs' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/artifacts/create-bucket'));
+  });
+
+  it('surfaces a failed bucket pin', async () => {
+    const user = userEvent.setup();
+    mocks.pinBucket.mockRejectedValueOnce(new Error('nope'));
+    renderArtifactsRoute(<Artifacts />, '/artifacts?bucket=docs');
+    await user.click(await screen.findByRole('button', { name: 'pin-docs' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Failed to update the bucket pin.');
+  });
+
+  it('surfaces a failed bucket delete', async () => {
+    const user = userEvent.setup();
+    mocks.deleteBucket.mockRejectedValueOnce(new Error('nope'));
+    renderArtifactsRoute(<Artifacts />, '/artifacts?bucket=docs');
+    await user.click(await screen.findByRole('button', { name: 'delete-docs' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Failed to delete the bucket.');
+  });
+
+  it('surfaces a failed artifact delete', async () => {
+    const user = userEvent.setup();
+    mocks.deleteMany.mockRejectedValueOnce(new Error('nope'));
+    renderArtifactsRoute(<Artifacts />, '/artifacts?bucket=docs');
+    await user.click(await screen.findByRole('button', { name: 'delete-file' }));
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
+    // `findByText`, not `findByRole('alert')`: a failed delete leaves the
+    // confirmation dialog open, and an open MUI dialog puts `aria-hidden` on
+    // everything behind it — including this message — so a role query cannot
+    // reach it.
+    expect(await screen.findByText('Failed to delete the selected artifacts.')).toBeInTheDocument();
+  });
+
+  it('keeps the file open when the unsaved-changes guard is dismissed', async () => {
+    const user = userEvent.setup();
+    const { router } = renderArtifactsRoute(<Artifacts />, '/artifacts?bucket=docs&file=readme.md');
+    await user.click(await screen.findByRole('button', { name: 'mark-dirty' }));
+    await user.click(screen.getByRole('button', { name: 'select-reports' }));
+    await user.click(screen.getByRole('button', { name: 'Keep editing' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Discard unsaved changes?' })).toBeNull());
+    expect(router.state.location.search).toMatchObject({ bucket: 'docs', file: 'readme.md' });
+  });
+
+  it('refuses to download when the runtime configuration is unavailable', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(runtimeConfig, 'getConfig').mockReturnValue({ status: 'error' } as never);
+    renderArtifactsRoute(<Artifacts />, '/artifacts?bucket=docs');
+    await user.click(await screen.findByRole('button', { name: 'download-file' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Runtime configuration is unavailable.');
+    expect(mocks.fetchArtifactBlob).not.toHaveBeenCalled();
+  });
+
+  it('reports a failed download without losing the table', async () => {
+    const user = userEvent.setup();
+    mocks.fetchArtifactBlob.mockResolvedValueOnce({ ok: false, error: { kind: 'network' } });
+    renderArtifactsRoute(<Artifacts />, '/artifacts?bucket=docs');
+    await user.click(await screen.findByRole('button', { name: 'download-file' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Failed to download readme.md.');
   });
 
   it('shows empty and missing bucket states with working recovery actions', async () => {

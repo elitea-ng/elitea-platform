@@ -1,5 +1,4 @@
-import type { ReactNode } from 'react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 
 import AddOutlinedIcon from '@mui/icons-material/AddOutlined';
 import Box from '@mui/material/Box';
@@ -134,7 +133,10 @@ export function Artifacts(): ReactNode {
     ...(selectedBucket === undefined ? {} : { bucket: selectedBucket.name }),
     contents: files.data ?? [],
     currentPrefix,
-    onUploaded: () => files.refetch(),
+    // `refreshFiles`, not `files.refetch()`: the "Size:" footer sums the BUCKET list's `size_bytes`,
+    // so refreshing the object list alone froze the total until the next page load (18 B after a
+    // second, 35 B upload; 53 B after F5) — the delete mutations already invalidate both.
+    onUploaded: () => mutations.refreshFiles(selectedBucket?.name ?? ''),
   });
 
   const downloadFile = useCallback(async (item: ArtifactListItem) => {
@@ -268,7 +270,7 @@ export function Artifacts(): ReactNode {
             bucket={selectedBucket.name}
             onClose={() => setSearch({ bucket: selectedBucket.name, folder: currentPrefix.replace(/\/$/, '') })}
             onDelete={(key) => mutations.deleteFile.mutateAsync({ bucket: selectedBucket.name, key })}
-            onSaved={() => files.refetch()}
+            onSaved={() => mutations.refreshFiles(selectedBucket.name)}
             onUnsavedChangesUpdate={setHasUnsavedChanges}
           />
         ) : selectedBucket !== undefined ? (

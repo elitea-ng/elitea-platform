@@ -199,19 +199,20 @@ export const PlusChatButton = memo(
         {/*
           * The drag-and-drop / paste target. The visible AttachmentButton rows
           * below are inside a Popper and unmount whenever the menu is closed,
-          * so the injected imperative handle must live on this always-mounted,
-          * visually hidden instance instead — baseline PlusChatButton.jsx:
-          * 313-320 (`styles.hiddenAttachment`), byte-for-byte the same sx.
+          * so the injected imperative handle must live on this always-mounted
+          * instance instead (baseline PlusChatButton.jsx:313-320's
+          * `hiddenAttachment` Box). `dropTargetOnly` renders no DOM for it at
+          * all — see that prop's own doc for why a hidden CONTROL was worse
+          * than none.
           */}
-        <Box sx={{ position: 'absolute', width: 0, height: 0, overflow: 'hidden', pointerEvents: 'none' }}>
-          <AttachmentButton
-            ref={attachmentButtonRef}
-            onAttachFiles={onAttachFiles}
-            disableAttachments={disableAttachments}
-            attachments={attachments}
-            limits={limits}
-          />
-        </Box>
+        <AttachmentButton
+          dropTargetOnly
+          ref={attachmentButtonRef}
+          onAttachFiles={onAttachFiles}
+          disableAttachments={disableAttachments}
+          attachments={attachments}
+          limits={limits}
+        />
 
         <Tooltip title={t('widgets.chat.plusChatButton.tooltip', 'Add files, agents, toolkits and more...')} placement="top">
           <IconButton

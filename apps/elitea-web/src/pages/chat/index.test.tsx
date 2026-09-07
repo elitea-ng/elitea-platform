@@ -147,6 +147,44 @@ describe('ChatPage deep links', () => {
   });
 });
 
+/**
+ * DEFECT: the composer took a file and showed nothing.
+ *
+ * `useAttachmentState` held the picked file, the "+" menu's "N left" counter
+ * ticked down, and the send path uploaded it — but `ChatBox` never handed the
+ * staged list to `NewChatInput`, and `NewChatInput` never handed
+ * `slots.attachmentList` to `UserInput`. Both halves had green unit tests of
+ * their own; the seam between them had none, so the user picked a file and got
+ * no chip, no filename and no way to remove it.
+ *
+ * Mounted through the real page for that reason: this is a wiring defect, and
+ * only a run that walks the whole composition root can see it.
+ */
+describe('ChatPage composer attachments', () => {
+  it('shows a removable chip for a file staged on the next message', async () => {
+    renderAt('/chat');
+    const user = userEvent.setup();
+    await screen.findByPlaceholderText('Type your message...');
+
+    // The picker lives on the "+" menu's own "Attach Files" row, and that row
+    // only exists while the menu is open — the always-mounted instance beside
+    // it renders no DOM at all (see `AttachmentButton`'s `dropTargetOnly`).
+    await user.click(screen.getByTestId('plus-menu-button'));
+    const picker = await screen.findByTestId('plus-menu-attachments')
+      .then((row) => row.parentElement?.querySelector<HTMLInputElement>('input[type="file"]') ?? null);
+    expect(picker).not.toBeNull();
+    const file = new File(['brief'], 'brief.txt', { type: 'text/plain' });
+    Object.defineProperty(picker, 'files', { configurable: true, value: [file] });
+    fireEvent.change(picker as HTMLInputElement);
+
+    const chip = await screen.findByTestId('chat-attachment-chip-0');
+    expect(chip).toHaveTextContent('brief.txt');
+
+    await user.click(chip.querySelector('[data-testid="chat-attachment-remove-0"]') as Element);
+    await waitFor(() => expect(screen.queryByTestId('chat-attachment-chip-0')).toBeNull());
+  });
+});
+
 describe('ChatPage new-conversation promotion', () => {
   it('promotes the first persisted conversation into the route', async () => {
     const eventSources = installTestEventSource();

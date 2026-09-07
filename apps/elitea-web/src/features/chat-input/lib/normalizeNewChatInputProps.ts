@@ -97,6 +97,7 @@ export function resolveSlots(slots: NewChatInputSlots | undefined): NewChatInput
   return {
     sendControl: slots?.sendControl,
     highlightOverlay: slots?.highlightOverlay,
+    attachmentList: slots?.attachmentList,
     attachmentButton: slots?.attachmentButton,
     internalToolsConfig: slots?.internalToolsConfig,
     voiceButton: slots?.voiceButton,
