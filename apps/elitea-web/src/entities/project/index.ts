@@ -3,7 +3,7 @@
  */
 export type { Project, ProjectContext } from './model/types';
 export type { ProjectContextEntry, ProjectInfoEntry, UploadedIcon } from './model/projectContextTypes';
-export { isPublicProject, isSuspendedProject, sortProjectsByName } from './model/selectors';
+export { isPersonalProjectName, isPublicProject, isSuspendedProject, sortProjectsByName } from './model/selectors';
 
 /* ── API hooks ─────────────────────────────────────────────────────────── */
 

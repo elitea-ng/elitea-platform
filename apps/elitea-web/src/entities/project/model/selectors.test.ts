@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { isPublicProject, isSuspendedProject, sortProjectsByName } from './selectors';
+import { isPersonalProjectName, isPublicProject, isSuspendedProject, sortProjectsByName } from './selectors';
 import type { Project } from './types';
 
 const project = (id: number, name: string, suspended = false): Project => ({
@@ -57,5 +57,30 @@ describe('sortProjectsByName', () => {
     const copy = [...projects];
     sortProjectsByName(projects);
     expect(projects).toEqual(copy);
+  });
+});
+
+describe('isPersonalProjectName', () => {
+  it('accepts the reserved storage name', () => {
+    expect(isPersonalProjectName('project_user_1')).toBe(true);
+    expect(isPersonalProjectName('project_user_90101')).toBe(true);
+  });
+
+  /*
+   * The case this predicate exists for: `GET /social/author` answers
+   * `personal_project_id` with an ORDINARY project id whenever the caller has
+   * no `project_user_<uid>` row (`resolvePersonalProjectID`'s third branch).
+   * A reader that trusted the id alone would call this project personal.
+   */
+  it('rejects an ordinary project that merely holds the personal id', () => {
+    expect(isPersonalProjectName('Default Project')).toBe(false);
+    expect(isPersonalProjectName('promptlib_public')).toBe(false);
+  });
+
+  it('is anchored, so a name that only contains the prefix does not match', () => {
+    expect(isPersonalProjectName('shared project_user_2')).toBe(false);
+    expect(isPersonalProjectName('project_user_2 archive')).toBe(false);
+    expect(isPersonalProjectName('project_user_two')).toBe(false);
+    expect(isPersonalProjectName('project_user_')).toBe(false);
   });
 });

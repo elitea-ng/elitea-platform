@@ -32,3 +32,33 @@ export function isSuspendedProject(project: Project): boolean {
 export function sortProjectsByName(projects: readonly Project[]): Project[] {
   return [...projects].sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
 }
+
+/**
+ * pylon's reserved storage name for a personal project
+ * (`PROJECT_PERSONAL_NAME_TEMPLATE`, `project_user_<uid>`) — the same rule the
+ * admin projects listing uses to answer `is_personal`, and the same one
+ * `personalproject.Name` writes on this backend.
+ */
+const PERSONAL_STORAGE_NAME = /^project_user_\d+$/;
+
+/**
+ * `true` when a project's STORED name marks it as somebody's personal project.
+ *
+ * WHY THE NAME AND NOT THE ID. `GET /social/author`'s `personal_project_id` is
+ * the id the old app compares against, and behind pylon that field only ever
+ * named a `project_user_<uid>` row. This backend resolves the same field down a
+ * third branch pylon does not have — "the lowest-id project the user actually
+ * holds a role in" (`resolvePersonalProjectID`, services/elitea-main/internal/
+ * api/v2/social/handler.go) — so an account whose personal project has not been
+ * provisioned yet still gets a usable scope instead of a 403. That branch hands
+ * back an ORDINARY TEAM PROJECT, and every "is this my private project?" test
+ * written as an id comparison alone then answers yes for a shared project.
+ *
+ * `widgets/sidebar/lib/projectOptions.ts` already had to learn this (it was
+ * renaming a shared project to "Private"). The Settings drawer learned it the
+ * same way: it hid the Users tab — and redirected away from `/settings/users` —
+ * for every member of a single shared project.
+ */
+export function isPersonalProjectName(name: string): boolean {
+  return PERSONAL_STORAGE_NAME.test(name);
+}

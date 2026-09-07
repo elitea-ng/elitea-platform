@@ -171,7 +171,12 @@ describe('finding 2 — pagination, page size, sort and search are all reachable
       expect(new URL(capturedUrls.at(-1)!).searchParams.get('sort_order')).toBe('desc');
     });
 
-    // Search.
+    // Search. The placeholder is pinned because `e2e/journeys/settings/
+    // settings.notifications.spec.ts` locates this box by it, and because it
+    // is the reference's own copy (`NotificationTableToolbar.jsx:45` passes
+    // `placeholder="Search"`; this port had invented a longer one). A rename
+    // now fails here rather than in a browser run.
+    expect(screen.getByRole('textbox', { name: /search/i })).toHaveAttribute('placeholder', 'Search');
     await user.type(screen.getByRole('textbox', { name: /search/i }), 'billing');
     await waitFor(
       () => {

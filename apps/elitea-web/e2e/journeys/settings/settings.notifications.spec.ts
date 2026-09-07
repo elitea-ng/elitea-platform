@@ -33,6 +33,20 @@ import { test, expect } from '@playwright/test';
 
 import { BASE_URL } from '../../../playwright.config';
 
+/**
+ * The toolbar's search box, and the addressable proof that the page chrome is
+ * present (`DrawerPageHeader` renders its title as a `<div>`, so the title is
+ * not a role landmark).
+ *
+ * `Search`, EXACT — not `Search notifications…`. The screen was rebuilt to
+ * match production, whose `NotificationTableToolbar.jsx:45` passes
+ * `placeholder="Search"`; the longer string was this port's invention.
+ * `exact` matters: the settings header's own default placeholder is
+ * `Search something amazing!`, and a substring match would accept it.
+ */
+const searchBox = (page: import('@playwright/test').Page) =>
+  page.getByPlaceholder('Search', { exact: true });
+
 /** Every list read, for any project id — the page picks the id itself. */
 const LIST_PATH_PREFIX = '/api/v2/notifications/notifications/prompt_lib/';
 
@@ -88,7 +102,7 @@ test('J31a: the notifications screen reads its list from a registered route', as
   expect(Array.isArray(body.rows)).toBe(true);
 
   // The screen itself is alive and reports no failure.
-  await expect(page.getByPlaceholder('Search notifications…')).toBeVisible({ timeout: 20_000 });
+  await expect(searchBox(page)).toBeVisible({ timeout: 20_000 });
   await expect(page.getByRole('alert')).toHaveCount(0);
 });
 
@@ -112,7 +126,5 @@ test('J31b: a failing notifications read shows an error, not an empty inbox', as
   await expect(page.getByText('No notifications yet', { exact: true })).toHaveCount(0);
 
   // The failure is scoped to the list body. The rest of the screen still works.
-  // `DrawerPageHeader` renders its title as a `<div>`, so the search input is
-  // the addressable proof that the page chrome is present.
-  await expect(page.getByPlaceholder('Search notifications…')).toBeVisible();
+  await expect(searchBox(page)).toBeVisible();
 });

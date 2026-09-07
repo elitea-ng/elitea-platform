@@ -5,6 +5,7 @@ import { Outlet, useLocation, useNavigate, useRouteContext } from '@tanstack/rea
 import Box from '@mui/material/Box';
 import type { SxProps, Theme } from '@mui/material/styles';
 
+import { useIsPersonalProject } from '@/routes/-guards/personalProject';
 import { isPublicProject } from '@/routes/-guards/publicProject';
 import { t } from '@/shared/i18n';
 import { useIsAnalyticsVisible } from '@/shared/lib/hooks/useIsAnalyticsVisible';
@@ -80,12 +81,20 @@ export function SettingsLayout() {
   // Without these three, a personal project drew three rows production does
   // not have, which is also why "General" (the reference's first row and its
   // default tab) had no room in this drawer.
+  //
+  // `useIsPersonalProject` is the id comparison the reference makes PLUS the
+  // reserved-name check this backend needs — see `routes/-guards/
+  // personalProject.ts`. Written here as `selectedProjectId ===
+  // personalProjectId` alone, it answered yes for every member of a single
+  // shared project (whose `personal_project_id` resolves to that shared
+  // project, because provisioning never runs for them), hid Users and
+  // redirected `/settings/users` back to General.
   const selectedProjectId = useSelectedProjectStore((state) => state.project?.id ?? '');
   const personalProjectId = usePersonalProjectId();
+  const isPersonalProject = useIsPersonalProject(selectedProjectId, personalProjectId);
   const gates: SettingsSectionGates = {
     isPublicProject: isPublicProject(selectedProjectId),
-    isPersonalProject:
-      personalProjectId !== undefined && String(selectedProjectId) === String(personalProjectId),
+    isPersonalProject,
     analyticsVisible,
     usageVisible,
   };

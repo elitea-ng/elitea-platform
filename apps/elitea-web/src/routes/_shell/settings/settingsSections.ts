@@ -19,7 +19,14 @@ import type { SettingsSection } from '@/shared/ui/settings/SettingsDrawer';
 export interface SettingsSectionGates {
   /** The selected project is the tenant's PUBLIC project. */
   readonly isPublicProject: boolean;
-  /** The selected project is the caller's OWN personal project. */
+  /**
+   * The selected project is the caller's OWN personal project.
+   *
+   * `routes/-guards/personalProject.ts` is what answers this, and it is not a
+   * bare `selectedProjectId === personal_project_id`: this backend resolves
+   * `personal_project_id` to an ordinary shared project for any account whose
+   * personal project was never provisioned. See that file.
+   */
   readonly isPersonalProject: boolean;
   /** `analytics_enabled` on platform settings. */
   readonly analyticsVisible: boolean;
