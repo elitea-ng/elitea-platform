@@ -1361,3 +1361,45 @@ func identityForFence(fence runtimedomain.Fence) *runtimev1.ExecutionIdentityV1 
 		Generation:          fence.Generation,
 	}
 }
+
+// ClaimCommand resolves the bundle manifest against this map, so a role the map
+// does not name is a content the worker cannot fetch. Getting the two tool-run
+// roles right here is what makes a claimed tool run able to read its own
+// settings; getting them WRONG is a 403 with no explanation at the data plane.
+func TestExpectedInputRolesNamesBothToolRunEntries(t *testing.T) {
+	command := &runtimev1.WorkerCommandV1{
+		CapabilityId: executiondomain.ToolkitCallToolCapability,
+		CapabilityCommand: &runtimev1.WorkerCommandV1_ToolkitCallTool{
+			ToolkitCallTool: &runtimev1.ToolkitCallToolCommandV1{
+				SettingsEntryId:  "toolkit-settings",
+				ArgumentsEntryId: "tool-arguments",
+			},
+		},
+	}
+
+	roles, err := expectedInputRoles(command)
+	if err != nil {
+		t.Fatalf("expectedInputRoles() error = %v", err)
+	}
+	if roles["toolkit-settings"] != executiondomain.ToolkitCallToolSettingsRole ||
+		roles["tool-arguments"] != executiondomain.ToolkitCallToolArgumentsRole ||
+		len(roles) != 2 {
+		t.Fatalf("unexpected tool-run input roles: %v", roles)
+	}
+}
+
+func TestExpectedInputRolesRefusesAToolRunWithOneEntryForBoth(t *testing.T) {
+	command := &runtimev1.WorkerCommandV1{
+		CapabilityId: executiondomain.ToolkitCallToolCapability,
+		CapabilityCommand: &runtimev1.WorkerCommandV1_ToolkitCallTool{
+			ToolkitCallTool: &runtimev1.ToolkitCallToolCommandV1{
+				SettingsEntryId:  "one-entry",
+				ArgumentsEntryId: "one-entry",
+			},
+		},
+	}
+
+	if _, err := expectedInputRoles(command); err == nil {
+		t.Fatal("expectedInputRoles() accepted one entry for settings and arguments")
+	}
+}
