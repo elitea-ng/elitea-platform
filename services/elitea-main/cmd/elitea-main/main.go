@@ -50,6 +50,7 @@ import (
 	socialapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/social"
 	v2support "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/supportassistant"
 	v2tags "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/tags"
+	toolkitrun "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkitrun"
 	v2toolkits "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkits"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/webhook"
 	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
@@ -1342,6 +1343,41 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			return fmt.Errorf("compose DeepWiki facade: %w", err)
 		}
 	}
+	// The same endpoint serves every SDK toolkit type's settings schema and its
+	// metadata — the label, categories and icon the create page groups it by.
+	// This is a second pinned file rather than a larger first one: the argument
+	// schemas already measure 596 KB against a 1 MiB ceiling.
+	toolkitCatalogue, err := runtimecomposition.LoadPinnedCurrentToolkitCatalogueSnapshot()
+	if err != nil {
+		return fmt.Errorf("load pinned current toolkit catalogue snapshot: %w", err)
+	}
+	// Which of those types the deployment can actually run depends on the
+	// worker image it starts. The catalogue holds 52 types; the Python image
+	// imports 39 of them and the Rust worker materializes 22 families. A type
+	// the worker cannot run is served hidden, with the reason, so the operator
+	// can see why rather than hunting a tile that is simply absent.
+	workerImplementation, err := runtimecomposition.WorkerImplementationFromEnv(os.LookupEnv)
+	if err != nil {
+		return fmt.Errorf("read worker implementation: %w", err)
+	}
+	workerToolkitCapability, err := runtimecomposition.LoadPinnedWorkerToolkitCapability(
+		workerImplementation,
+	)
+	if err != nil {
+		return fmt.Errorf("load pinned worker toolkit capability: %w", err)
+	}
+	logger.Info(
+		"toolkit type catalogue composed",
+		"worker_implementation", workerImplementation,
+		"catalogued_types", toolkitCatalogue.EntryCount(),
+	)
+	// Both are loaded HERE, ahead of the runtime, rather than beside the router
+	// config they also feed: the tool-run producer composed inside the runtime
+	// block below asks the SAME pair whether a type is runnable, and a second
+	// answer to that question is how a deployment would offer a type it then
+	// refuses. Loading is pure — two embedded snapshots — so moving it earlier
+	// changes nothing but the order.
+
 	var currentIndexStart http.Handler
 	var currentAgentStart http.Handler
 	// The support assistant's half of the agent-execution wiring. It is
@@ -1355,6 +1391,11 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// and for the same typed-nil reason. `tools/call` runs an agent through the
 	// SAME use case; left nil it keeps answering the refusal it always has.
 	var mcpAgentStart v2mcp.AgentStartUseCase
+	// The tool-run halves, assigned ONLY inside the guard below and for the
+	// same typed-nil reason: a nil concrete value in a non-nil interface reads
+	// as "configured" downstream, and both consumers decide on `!= nil`.
+	var toolkitToolRun toolkitrun.UseCase
+	var mcpToolkitRun v2mcp.ToolkitRunUseCase
 	var currentAgentCancel http.Handler
 	var currentIndexCancel http.Handler
 	var currentIndexMeta http.Handler
@@ -1402,6 +1443,8 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			PermissionResolver:               legacyrbac.NewPostgresResolver(pool),
 			Logger:                           logger,
 			ObjectStore:                      objectStore,
+			ToolkitCatalogue:                 toolkitCatalogue,
+			WorkerToolkitCapability:          workerToolkitCapability,
 		})
 		if err != nil {
 			return fmt.Errorf("compose optional runtime: %w", err)
@@ -1463,11 +1506,27 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		// carry that: apiGroupAuthConfig picks the branch by testing the
 		// pointer.
 		if publicRoutes.IndexStart != nil {
-			currentIndexStart, err = indexingapi.NewCurrentIndexStartRoute(
-				publicRoutes.IndexStart,
-				apiGroupAuth,
-				legacyrbac.NewPostgresResolver(pool),
-			)
+			if publicRoutes.ToolkitCallTool != nil {
+				// The SAME path, the same credentials, the same permission —
+				// plus the synchronous branch its `await_response` refusal used
+				// to occupy (#340). This route is what a tool run actually
+				// reaches wherever the runtime is composed; see
+				// internal/application/toolkitcalltool/doc.go.
+				toolkitToolRun = publicRoutes.ToolkitCallTool
+				mcpToolkitRun = publicRoutes.ToolkitCallTool
+				currentIndexStart, err = indexingapi.NewCurrentIndexStartRouteWithToolRuns(
+					publicRoutes.IndexStart,
+					publicRoutes.ToolkitCallTool,
+					apiGroupAuth,
+					legacyrbac.NewPostgresResolver(pool),
+				)
+			} else {
+				currentIndexStart, err = indexingapi.NewCurrentIndexStartRoute(
+					publicRoutes.IndexStart,
+					apiGroupAuth,
+					legacyrbac.NewPostgresResolver(pool),
+				)
+			}
 			if err != nil {
 				return fmt.Errorf("compose current index-start route: %w", err)
 			}
@@ -1808,35 +1867,6 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if err != nil {
 		return fmt.Errorf("compose current toolkit settings definitions: %w", err)
 	}
-	// The same endpoint serves every SDK toolkit type's settings schema and its
-	// metadata — the label, categories and icon the create page groups it by.
-	// This is a second pinned file rather than a larger first one: the argument
-	// schemas already measure 596 KB against a 1 MiB ceiling.
-	toolkitCatalogue, err := runtimecomposition.LoadPinnedCurrentToolkitCatalogueSnapshot()
-	if err != nil {
-		return fmt.Errorf("load pinned current toolkit catalogue snapshot: %w", err)
-	}
-	// Which of those types the deployment can actually run depends on the
-	// worker image it starts. The catalogue holds 52 types; the Python image
-	// imports 39 of them and the Rust worker materializes 22 families. A type
-	// the worker cannot run is served hidden, with the reason, so the operator
-	// can see why rather than hunting a tile that is simply absent.
-	workerImplementation, err := runtimecomposition.WorkerImplementationFromEnv(os.LookupEnv)
-	if err != nil {
-		return fmt.Errorf("read worker implementation: %w", err)
-	}
-	workerToolkitCapability, err := runtimecomposition.LoadPinnedWorkerToolkitCapability(
-		workerImplementation,
-	)
-	if err != nil {
-		return fmt.Errorf("load pinned worker toolkit capability: %w", err)
-	}
-	logger.Info(
-		"toolkit type catalogue composed",
-		"worker_implementation", workerImplementation,
-		"catalogued_types", toolkitCatalogue.EntryCount(),
-	)
-
 	// patSigner signs the personal access tokens /api/v2/auth/token returns.
 	//
 	// The form graph validates a personal access token with the bytes of
@@ -1903,6 +1933,8 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		// apart on tracing, budgets and cancellation.
 		SupportAssistantStart:      supportAssistantStart,
 		MCPAgentStart:              mcpAgentStart,
+		MCPToolkitRun:              mcpToolkitRun,
+		ToolkitToolRun:             toolkitToolRun,
 		CurrentAgentCancel:         currentAgentCancel,
 		CurrentIndexCancel:         currentIndexCancel,
 		CurrentIndexMeta:           currentIndexMeta,

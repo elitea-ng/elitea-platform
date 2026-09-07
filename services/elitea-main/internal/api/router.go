@@ -54,6 +54,7 @@ import (
 	v2social "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/social"
 	v2support "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/supportassistant"
 	v2tags "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/tags"
+	toolkitrun "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkitrun"
 	v2toolkits "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkits"
 	v2tracing "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/tracing"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/webhook"
@@ -344,7 +345,14 @@ type RouterConfig struct {
 	// and the support assistant drive, for the same reason. Left nil (which is
 	// what `runtime.enabled` off produces), `tools/call` answers the unchanged
 	// v2mcp.ToolExecutionUnavailableReason and `tools/list` is unaffected.
-	MCPAgentStart              v2mcp.AgentStartUseCase
+	MCPAgentStart v2mcp.AgentStartUseCase
+	// MCPToolkitRun is the toolkit half of `tools/call` (#616). Nil keeps the
+	// refusal ToolkitExecutionUnavailableReason, which is the honest answer on
+	// a deployment with no worker.
+	MCPToolkitRun v2mcp.ToolkitRunUseCase
+	// ToolkitToolRun runs one toolkit tool synchronously (#340). Nil keeps the
+	// `503 indexer service not available` both test routes have always given.
+	ToolkitToolRun             toolkitrun.UseCase
 	CurrentAgentCancel         http.Handler
 	CurrentIndexCancel         http.Handler
 	CurrentIndexMeta           http.Handler
@@ -726,8 +734,12 @@ func mountMCPServerRoutes(
 	pool *pgxpool.Pool,
 	authenticate func(http.Handler) http.Handler,
 	agentStart v2mcp.AgentStartUseCase,
+	toolkitRun v2mcp.ToolkitRunUseCase,
 ) {
-	handler := v2mcp.NewHandler(pool, apimw.NewDBPersonalProjectResolver(pool), agentStart, legacyrbac.NewPostgresResolver(pool))
+	handler := v2mcp.NewHandlerWithToolkitRuns(
+		pool, apimw.NewDBPersonalProjectResolver(pool), agentStart, toolkitRun,
+		legacyrbac.NewPostgresResolver(pool),
+	)
 	r.Group(func(r chi.Router) {
 		r.Use(authenticate)
 		r.Use(apimw.RequireProjectAccess(pool))
@@ -1124,7 +1136,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 
 	// The MCP server (issue 252). Outside the /api/v2 group for the reasons in
 	// mountMCPServerRoutes.
-	mountMCPServerRoutes(r, cfg.Pool, authenticate, cfg.MCPAgentStart)
+	mountMCPServerRoutes(r, cfg.Pool, authenticate, cfg.MCPAgentStart, cfg.MCPToolkitRun)
 
 	// This group holds the whole JSON API — the `/api/v2` route below is its
 	// only member. Compression sits at the top of it, ABOVE the shadow
@@ -2297,6 +2309,10 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					toolkitOptions = append(toolkitOptions,
 						v2toolkits.WithCatalogue(cfg.ToolkitCatalogue))
 				}
+				if cfg.ToolkitToolRun != nil {
+					toolkitOptions = append(toolkitOptions,
+						v2toolkits.WithToolRuns(cfg.ToolkitToolRun))
+				}
 				if cfg.ToolkitWorkerCapability != nil {
 					toolkitOptions = append(toolkitOptions,
 						v2toolkits.WithWorkerCapability(cfg.ToolkitWorkerCapability))
@@ -3201,7 +3217,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// internal/api/v2/mcp/registry.go. It is registered rather than
 				// left off so the refusal is explicit and pinned by a test: a
 				// 404 leaves the next person free to wire a stub up.
-				mcpHandler := v2mcp.NewHandler(cfg.Pool, apimw.NewDBPersonalProjectResolver(cfg.Pool), cfg.MCPAgentStart, permissionResolver)
+				mcpHandler := v2mcp.NewHandlerWithToolkitRuns(cfg.Pool, apimw.NewDBPersonalProjectResolver(cfg.Pool), cfg.MCPAgentStart, cfg.MCPToolkitRun, permissionResolver)
 				r.Group(func(r chi.Router) {
 					r.Use(projectScoped)
 					r.Get("/tools_list/{projectID}", mcpHandler.ToolsList)
