@@ -281,4 +281,153 @@ describe('finding 3 — bulk mark-toggle sends the correct isSeen', () => {
     await waitFor(() => expect(capturedBodies).toHaveLength(1));
     expect(capturedBodies[0]).toMatchObject({ is_seen: false, ids: ['1', '2'] });
   });
+
+  /**
+   * Parity, issue 841. The reference confirms a bulk delete through
+   * `DeleteEntityButton` (`NotificationTableToolbar.jsx:63-73`) and toasts
+   * every outcome of both bulk actions (`NotificationTable.jsx:145-185`).
+   * This page deleted on the first click, reported nothing, and cleared the
+   * selection before the request resolved.
+   */
+  it('asks before it deletes, and sends nothing when the reader cancels', async () => {
+    const deleteBodies: unknown[] = [];
+    server.use(
+      http.get(LIST_PATH, () =>
+        HttpResponse.json({
+          rows: [{ id: 1, event_type: 'chat_user_added', created_at: '2026-01-01T00:00:00Z', is_seen: false }],
+          total: 1,
+        }),
+      ),
+      http.delete(LIST_PATH, async ({ request }) => {
+        deleteBodies.push(await request.json());
+        return HttpResponse.json({});
+      }),
+    );
+
+    mountAt(authWith('personal-1', 'other-project'));
+
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('checkbox', { name: 'Select all' }));
+    await user.click(await screen.findByTestId('notification-delete-button'));
+
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    expect(deleteBodies).toHaveLength(0);
+
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(deleteBodies).toHaveLength(0);
+  });
+
+  it('deletes on confirmation and reports the result', async () => {
+    const deleteBodies: unknown[] = [];
+    server.use(
+      http.get(LIST_PATH, () =>
+        HttpResponse.json({
+          rows: [{ id: 1, event_type: 'chat_user_added', created_at: '2026-01-01T00:00:00Z', is_seen: false }],
+          total: 1,
+        }),
+      ),
+      http.delete(LIST_PATH, async ({ request }) => {
+        deleteBodies.push(await request.json());
+        return HttpResponse.json({});
+      }),
+    );
+
+    mountAt(authWith('personal-1', 'other-project'));
+
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('checkbox', { name: 'Select all' }));
+    await user.click(await screen.findByTestId('notification-delete-button'));
+    await user.click(await screen.findByRole('button', { name: /^Delete$/ }));
+
+    await waitFor(() => expect(deleteBodies).toHaveLength(1));
+    expect(deleteBodies[0]).toMatchObject({ ids: ['1'] });
+    expect(await screen.findByText('The selected notifications have been successfully deleted.')).toBeInTheDocument();
+  });
+
+  /**
+   * A refused mutation must not read as a successful one. The selection
+   * stays, so the reader can try again on the same rows.
+   */
+  it('reports a refused mark-read and keeps the selection', async () => {
+    server.use(
+      http.get(LIST_PATH, () =>
+        HttpResponse.json({
+          rows: [{ id: 1, event_type: 'chat_user_added', created_at: '2026-01-01T00:00:00Z', is_seen: false }],
+          total: 1,
+        }),
+      ),
+      http.put(LIST_PATH, () => HttpResponse.json({ error: 'nope' }, { status: 500 })),
+    );
+
+    mountAt(authWith('personal-1', 'other-project'));
+
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('checkbox', { name: 'Select all' }));
+    await user.click(await screen.findByTestId('notification-mark-toggle-button'));
+
+    expect(await screen.findByText('The action could not be completed.')).toBeInTheDocument();
+    expect(screen.getByTestId('notification-mark-toggle-button')).toBeEnabled();
+  });
+
+  it('addresses one row checkbox and one row message by test id', async () => {
+    server.use(
+      http.get(LIST_PATH, () =>
+        HttpResponse.json({
+          rows: [
+            { id: 1, event_type: 'chat_user_added', created_at: '2026-01-01T00:00:00Z', is_seen: false },
+            { id: 2, event_type: 'chat_user_added', created_at: '2026-01-02T00:00:00Z', is_seen: true },
+          ],
+          total: 2,
+        }),
+      ),
+    );
+
+    mountAt(authWith('personal-1', 'other-project'));
+
+    expect(await screen.findByTestId('notification-table-body')).toBeInTheDocument();
+    expect(screen.getByTestId('notification-checkbox-2')).toBeInTheDocument();
+    expect(screen.getAllByTestId('notification-message-text')).toHaveLength(2);
+  });
+
+  /**
+   * Manifest COPY-482 / COPY-483 — the strings this screen shares with
+   * `NotificationTable.jsx` and `NotificationTableToolbar.jsx`, asserted
+   * verbatim (issue 841).
+   *
+   * COPY-482 stays `in-progress` on purpose. Its fourth string is the empty
+   * state, which the reference writes "No notifications" and this app
+   * writes "No notifications yet". Journey J31b asserts the longer form as
+   * its anti-oracle — it proves the error branch is on screen and the empty
+   * branch is not — so the two must change together, and that is not this
+   * change.
+   */
+  it('renders the reference toolbar and column strings verbatim', async () => {
+    server.use(
+      http.get(LIST_PATH, () =>
+        HttpResponse.json({
+          rows: [{ id: 1, event_type: 'chat_user_added', created_at: '2026-01-01T00:00:00Z', is_seen: false }],
+          total: 1,
+        }),
+      ),
+    );
+
+    mountAt(authWith('personal-1', 'other-project'));
+
+    // COPY-483 — NotificationTableToolbar.jsx. The mark button names the
+    // action it would take, so the selection decides which of the two
+    // strings is on screen.
+    const user = userEvent.setup();
+    expect(await screen.findByText('Notifications Center')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Search')).toBeInTheDocument();
+    expect(screen.getByTestId('notification-mark-toggle-button')).toHaveTextContent('Mark selected as unread');
+    await user.click(await screen.findByRole('checkbox', { name: 'Select all' }));
+    expect(screen.getByTestId('notification-mark-toggle-button')).toHaveTextContent('Mark selected as read');
+
+    // COPY-482 — NotificationTable.jsx column headers
+    for (const column of ['Type', 'Notification', 'Date & Time']) {
+      expect(await screen.findByText(column)).toBeInTheDocument();
+    }
+  });
 });
