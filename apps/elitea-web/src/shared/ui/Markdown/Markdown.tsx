@@ -6,6 +6,7 @@ import type { SxProps, Theme } from '@mui/material/styles';
 import { marked, type MarkedToken } from 'marked';
 
 import { combineSx } from '../lib/combineSx';
+import { stampTokenPositions, type SpokenRange } from '../lib/spokenRange';
 import { Token } from '../Token';
 
 /** @public shared/ui component API — consumed once a features/widgets/pages caller exists (none does yet in this pass). */
@@ -15,6 +16,13 @@ export interface MarkdownProps {
   renderHtml?: boolean;
   sx?: SxProps<Theme>;
   'data-testid'?: string;
+  /**
+   * The word currently being read aloud, as an offset range into `children`
+   * (issue #625 item 1). Omit while text-to-speech is idle — nothing
+   * highlights. Only the TOP-LEVEL token whose span contains it highlights;
+   * see `isPlainTextToken` for which token types support it.
+   */
+  spokenRange?: SpokenRange | undefined;
 }
 
 /**
@@ -38,8 +46,13 @@ export function Markdown({
   renderHtml = true,
   sx,
   'data-testid': dataTestId,
+  spokenRange,
 }: MarkdownProps): ReactNode {
   const tokens = useMemo(() => marked.lexer(children), [children]);
+  // `marked.lexer()`'s return type admits `Tokens.Generic` (marked's own
+  // extension point); this app registers no marked extensions, so every
+  // lexed token is actually a `MarkedToken`.
+  const stamped = useMemo(() => stampTokenPositions(tokens as MarkedToken[]), [tokens]);
 
   return (
     <Box
@@ -55,15 +68,14 @@ export function Markdown({
         sx,
       )}
     >
-      {tokens.map((token, index) => (
+      {stamped.map(({ token, startPos }, index) => (
         // eslint-disable-next-line react/no-array-index-key -- marked tokens have no stable identity across re-renders
         <Token
           key={index}
-          // `marked.lexer()`'s return type admits `Tokens.Generic` (marked's
-          // own extension point); this app registers no marked extensions,
-          // so every lexed token is actually a `MarkedToken`.
-          token={token as MarkedToken}
+          token={token}
           renderHtml={renderHtml}
+          spokenRange={spokenRange}
+          startPos={startPos}
         />
       ))}
     </Box>
