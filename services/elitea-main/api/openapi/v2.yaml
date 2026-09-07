@@ -841,6 +841,13 @@ components:
         date_to:
           type: string
           format: date-time
+        estimate:
+          allOf:
+            - $ref: '#/components/schemas/AnalyticsUsageEstimate'
+          description: >
+            The per-model, per-user and per-day view, read from the gateway
+            request log rather than from the accumulator. Absent on a database
+            that carries no request log.
 
     AnalyticsCostPeriod:
       type: object
@@ -874,6 +881,203 @@ components:
             True while the gateway's recovery goroutine still owns the row
             (outage_mode and not reconciled). The figure is the last durable
             one and not necessarily the current one.
+
+    AnalyticsUsageEstimate:
+      type: object
+      description: |
+        The dimensional half of the cost view, over gateway.llm_request_logs
+        (shared migration 0099): one row per call, carrying the project, the
+        user, the provider, the model, the clock and the token counts.
+
+        Tokens here are RECORDED. Money here is DERIVED, by multiplying those
+        tokens by the price catalogue in gateway.gateway_models, and it is
+        therefore an estimate. It is published under its own key so it cannot
+        be confused with kpis.total_cost, which is what the billing path
+        accounted.
+      required:
+        [token_dimension_available, cost_dimension_available,
+         cache_dimension_available, currency, priced_calls, unpriced_calls,
+         totals, by_model, by_user, daily, by_model_truncated,
+         by_user_truncated]
+      properties:
+        token_dimension_available:
+          type: boolean
+          description: >
+            True whenever this block is present. Published so a client reads a
+            flag instead of inferring an answer from a missing key.
+        cost_dimension_available:
+          type: boolean
+          description: >
+            False when no call in the window has a catalogue price. Every money
+            field is then absent, because a cost of zero would render as "this
+            project spent nothing", which is a different claim.
+        cache_dimension_available:
+          type: boolean
+          description: >
+            Always false. The request log records prompt and completion tokens
+            and no cache counts, and no second source carries them.
+        currency:
+          type: string
+          description: Always USD.
+        priced_calls:
+          type: integer
+          format: int64
+          description: Calls whose model the catalogue prices.
+        unpriced_calls:
+          type: integer
+          format: int64
+          description: >
+            Calls whose model the catalogue does not price. They count their
+            tokens and contribute no money, so a large value here says the
+            money covers only part of the traffic.
+        totals:
+          $ref: '#/components/schemas/AnalyticsEstimateTotals'
+        by_model:
+          type: array
+          description: One entry per provider and model, capped at 100 rows.
+          items:
+            $ref: '#/components/schemas/AnalyticsEstimateModel'
+        by_user:
+          type: array
+          description: One entry per caller, capped at 200 rows.
+          items:
+            $ref: '#/components/schemas/AnalyticsEstimateUser'
+        daily:
+          type: array
+          description: >
+            One entry per UTC day that had traffic. A day with no call is
+            absent rather than zero-filled.
+          items:
+            $ref: '#/components/schemas/AnalyticsEstimateDay'
+        by_model_truncated:
+          type: boolean
+        by_user_truncated:
+          type: boolean
+
+    AnalyticsEstimateTotals:
+      type: object
+      required: [calls, prompt_tokens, completion_tokens, total_tokens]
+      properties:
+        calls:
+          type: integer
+          format: int64
+        prompt_tokens:
+          type: integer
+          format: int64
+        completion_tokens:
+          type: integer
+          format: int64
+        total_tokens:
+          type: integer
+          format: int64
+        input_cost:
+          type: number
+          description: >
+            Prompt tokens at the catalogue rate, an exact decimal. Absent when
+            cost_dimension_available is false.
+        output_cost:
+          type: number
+          description: Completion tokens at the catalogue rate, an exact decimal.
+        total_cost:
+          type: number
+          description: input_cost plus output_cost, added in the database.
+
+    AnalyticsEstimateModel:
+      type: object
+      required:
+        [provider, model, calls, prompt_tokens, completion_tokens,
+         total_tokens, priced]
+      properties:
+        provider:
+          type: string
+        model:
+          type: string
+        calls:
+          type: integer
+          format: int64
+        prompt_tokens:
+          type: integer
+          format: int64
+        completion_tokens:
+          type: integer
+          format: int64
+        total_tokens:
+          type: integer
+          format: int64
+        priced:
+          type: boolean
+          description: >
+            False when the catalogue carries no rate for this model. The row
+            keeps its token counts and omits its money.
+        input_cost:
+          type: number
+        output_cost:
+          type: number
+        total_cost:
+          type: number
+
+    AnalyticsEstimateUser:
+      type: object
+      required:
+        [user_id, email, name, calls, prompt_tokens, completion_tokens,
+         total_tokens, priced]
+      properties:
+        user_id:
+          type: integer
+          format: int64
+        email:
+          type: string
+          description: >
+            Empty when the identity corpus is not on this database. The row
+            keeps its figures; only the display name is lost.
+        name:
+          type: string
+        calls:
+          type: integer
+          format: int64
+        prompt_tokens:
+          type: integer
+          format: int64
+        completion_tokens:
+          type: integer
+          format: int64
+        total_tokens:
+          type: integer
+          format: int64
+        priced:
+          type: boolean
+        input_cost:
+          type: number
+        output_cost:
+          type: number
+        total_cost:
+          type: number
+
+    AnalyticsEstimateDay:
+      type: object
+      required: [date, calls, prompt_tokens, completion_tokens, total_tokens]
+      properties:
+        date:
+          type: string
+          description: The UTC day, as YYYY-MM-DD.
+        calls:
+          type: integer
+          format: int64
+        prompt_tokens:
+          type: integer
+          format: int64
+        completion_tokens:
+          type: integer
+          format: int64
+        total_tokens:
+          type: integer
+          format: int64
+        input_cost:
+          type: number
+        output_cost:
+          type: number
+        total_cost:
+          type: number
 
     MessageTraceListing:
       type: object
