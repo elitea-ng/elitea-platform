@@ -35,6 +35,18 @@ const SEEDED_PERSONAL = 'project_user_90001';
 const SEEDED_OWNER_NAME = 'E2E Project Owner';
 const SEEDED_PROJECT_ADMIN = 'E2E Project Admin';
 
+/**
+ * The address J31g grants the new project's `admin` role, and the name the
+ * listing then renders for it.
+ *
+ * The MEMBER persona, seeded by `scripts/e2e-stack.sh seed`. It must be an
+ * account that already exists: the create handler resolves every
+ * `project_admin_email` and refuses the whole request when one is unknown,
+ * rolling back every step it had taken.
+ */
+const PROJECT_ADMIN_EMAIL = 'e2e-member@autotest.local';
+const PROJECT_ADMIN_NAME = 'E2E Member';
+
 adminTest('J31: the projects table lists seeded projects with owner, admins and status', async ({ page }) => {
   const response = await page.goto(BASE_URL + '/admin/app/projects', { waitUntil: 'domcontentloaded' });
   expect(response?.status(), 'the admin SPA must serve the projects route, not 404').toBeLessThan(400);
@@ -245,19 +257,141 @@ adminTest('J31f: the activity drawer reads the audit trail scoped to one project
 });
 
 /*
+ * J31g — THE PROVISIONING ROUND TRIP, IN A BROWSER (issue #377, criterion 7)
+ *
+ * The other tests in this file assert the state of the two provisioning
+ * CONTROLS. This one drives them, because the criterion the issue states is
+ * about the list and not about a status code: "the new project appears in the
+ * project list", and "the project leaves the list".
+ *
+ * Why that is not already covered. `TestCreateProjectRouteBuildsTheReferenceTenant`
+ * and `TestCreateThenDeleteLeavesTheDeploymentMigratable` drive the same two
+ * routes against a real database, and they assert the tenant schema, the vault,
+ * the system account and the migration ledger. None of them can say whether the
+ * page that calls those routes shows the result: the create mutation refreshes
+ * the listing by invalidating a query key, and a key that did not match would
+ * leave an operator looking at a list without the project they had just made.
+ * That is the #132 shape — the write lands, and the screen does not move.
+ *
+ * ## Why this does not disturb the rest of the file
+ *
+ * It works on a project OF ITS OWN, named with the browser project and the
+ * clock, so the two engines cannot collide and no run reuses a name. The seeded
+ * rows J31 depends on are asserted to be untouched at the end, which is what
+ * makes "the delete removed the right row" a statement rather than a hope: a
+ * delete that emptied the table would pass an assertion that only looked for
+ * the absence of the new name.
+ *
+ * ## Why it takes its own timeout
+ *
+ * Creating a project is nine steps — the row, the `p_<id>` tenant schema and
+ * its whole migration chain, the permission set, a system account and its
+ * token, the vault, the buckets — and deleting it runs them in reverse and ends
+ * in `DROP SCHEMA p_<id> CASCADE`. That is minutes on a cold stack, not the 30
+ * seconds a journey gets by default.
+ */
+adminTest('J31g: creating a project puts it in the list, and deleting it takes it out', async ({ page }, testInfo) => {
+  adminTest.setTimeout(240_000);
+  const name = `e2e-provisioned-${testInfo.project.name}-${Date.now()}`;
+
+  await page.goto(BASE_URL + '/admin/app/projects', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByText(SEEDED_TEAM_ACTIVE)).toBeVisible({ timeout: 20_000 });
+  // Nothing of this name exists yet, so the assertion after the create cannot
+  // be satisfied by a row that was already on screen.
+  await expect(page.getByRole('row').filter({ hasText: name })).toHaveCount(0);
+
+  /* ── create ─────────────────────────────────────────────────────────── */
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByLabel('Project name').fill(name);
+  // The dialog sends `project_admin_email` (criterion 2), so a project made in
+  // the user interface always has a human administrator. The address must
+  // already have an account: the server resolves each one and refuses the whole
+  // request when it cannot, rolling every step back.
+  const adminEmails = page.getByLabel('Project admin email(s)');
+  await adminEmails.fill(PROJECT_ADMIN_EMAIL);
+  await adminEmails.press('Enter');
+
+  const [created] = await Promise.all([
+    page.waitForResponse(
+      (r) => r.url().includes('/projects/project/administration') && r.request().method() === 'POST',
+      { timeout: 180_000 },
+    ),
+    page.getByRole('button', { name: 'Create', exact: true }).click(),
+  ]);
+  // Read for the MESSAGE, not as the acceptance: a provisioning refusal names
+  // the step it stopped at, and a journey that only reported "the row is not on
+  // screen" would hide it.
+  expect(
+    created.status(),
+    `provisioning must complete: ${(await created.text()).slice(0, 500)}`,
+  ).toBe(201);
+
+  // THE CRITERION. A full reload, not the mutation's own cache invalidation, so
+  // this cannot pass on an optimistic row that the server never stored.
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  const provisioned = page.getByRole('row').filter({ hasText: name });
+  await expect(provisioned).toHaveCount(1, { timeout: 30_000 });
+  // The administrator the form asked for is on the row. `admin_names` is
+  // resolved by the listing from the project-role tables, so this is what says
+  // the address in the dialog became a real membership rather than a body field
+  // the server ignored.
+  await expect(provisioned).toContainText(PROJECT_ADMIN_NAME);
+  await expect(provisioned.getByText('Active', { exact: true })).toBeVisible();
+
+  /* ── delete ─────────────────────────────────────────────────────────── */
+  await provisioned.getByRole('checkbox').check();
+  const deleteButton = page.getByRole('button', { name: 'Delete projects' });
+  await expect(deleteButton).toBeEnabled();
+  await deleteButton.click();
+
+  // The dialog names what it is about to destroy, and stays inert until the
+  // word is typed — J31e asserts that property on a seeded row and backs out;
+  // this is the one place the armed button is actually pressed.
+  await expect(page.getByTestId('admin-projects-delete-list')).toContainText(name);
+  const confirm = page.getByRole('button', { name: 'Delete permanently' });
+  await expect(confirm).toBeDisabled();
+  await page.getByLabel('Type DELETE to confirm').fill('DELETE');
+  await expect(confirm).toBeEnabled();
+
+  const [deleted] = await Promise.all([
+    page.waitForResponse(
+      (r) =>
+        r.url().includes('/projects/project/administration/') && r.request().method() === 'DELETE',
+      { timeout: 180_000 },
+    ),
+    confirm.click(),
+  ]);
+  expect(
+    deleted.status(),
+    `deprovisioning must complete: ${(await deleted.text()).slice(0, 500)}`,
+  ).toBe(200);
+
+  // THE OTHER HALF OF THE CRITERION, after a full reload again.
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.getByText(SEEDED_TEAM_ACTIVE)).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole('row').filter({ hasText: name })).toHaveCount(0);
+  // …and the seeded rows are exactly where they were. A delete that took the
+  // wrong project, or the whole table, passes the line above and fails these.
+  await expect(page.getByRole('row').filter({ hasText: SEEDED_TEAM_ACTIVE })).toHaveCount(1);
+  await expect(page.getByRole('row').filter({ hasText: SEEDED_TEAM_SUSPENDED })).toHaveCount(1);
+  await expect(page.getByText('No projects')).toHaveCount(0);
+});
+
+/*
  * NOT COVERED here — deliberately, and each covered elsewhere or stated:
  *
- *  - the provisioning ROUND TRIPS. Both are implemented and both are exercised
- *    against a real database — by `TestCreateProjectRouteBuildsTheReferenceTenant`
- *    and `TestCreateThenDeleteLeavesTheDeploymentMigratable` in
- *    services/elitea-main/internal/api/v2/projects, which assert the tenant
- *    schema, the vault, the system account and the migration ledger directly.
- *    They are deliberately NOT re-run here: this stack's seeded projects are
- *    load-bearing for J31's `admin_names`, `counts` and pagination assertions,
- *    so a journey that provisioned a tenth project or dropped a seeded one
- *    would change what its siblings assert. J31e covers the part that is only
- *    observable in a browser — that the irreversible control cannot fire on a
- *    click alone.
+ *  - the provisioning PIPELINE's internals. The round trips themselves ARE
+ *    driven through the browser now, by J31g (issue #377, criterion 7): it
+ *    creates a project OF ITS OWN, asserts it enters the list, deletes it, and
+ *    asserts it leaves while the seeded rows stay. What J31g does not read is
+ *    what the nine steps wrote — the tenant schema, the vault, the system
+ *    account, the migration ledger. Those need SQL, and
+ *    `TestCreateProjectRouteBuildsTheReferenceTenant` and
+ *    `TestCreateThenDeleteLeavesTheDeploymentMigratable` in
+ *    services/elitea-main/internal/api/v2/projects assert them directly.
+ *    J31e still covers the part that is only observable in a browser — that the
+ *    irreversible control cannot fire on a click alone — and it does so against
+ *    a SEEDED row, which J31g must not touch.
  *  - the member dialog's WRITES. They reach real handlers
  *    (`POST`/`PUT /admin/users/administration/{projectID}`) and are covered by
  *    `TestUsersWriteVerbsPersistProjectMembership` in

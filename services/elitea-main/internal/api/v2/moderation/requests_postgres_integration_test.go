@@ -78,9 +78,9 @@ const (
 	decisionURL = "/admin/moderation_status/administration"
 )
 
-// moderationRouter mounts all four routes exactly as internal/api/router.go
+// moderationRouter mounts all five routes exactly as internal/api/router.go
 // does, minus the route-level permission middleware, and injects `principal` so
-// the two project-scoped handlers have an author to attribute a request to.
+// the three project-scoped handlers have an author to attribute a request to.
 //
 // It mounts BOTH the static `administration` registrations and the `{mode}`
 // pair, because that composition is load-bearing: a static segment binds no URL
@@ -98,6 +98,7 @@ func moderationRouter(handler *moderation.Handler, principal auth.User) chi.Rout
 	router.Put(decisionURL, handler.AdministrationRequestUpdate)
 	router.Get("/admin/moderation_status/{mode}/{projectID}/{entityID}", handler.Requests)
 	router.Post("/admin/moderation_status/{mode}/{projectID}/{entityID}", handler.RequestCreate)
+	router.Delete("/admin/moderation_status/{mode}/{projectID}/{entityID}", handler.RequestDelete)
 	return router
 }
 

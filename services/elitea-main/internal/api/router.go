@@ -1801,6 +1801,15 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					permissionResolver, platformauth.PermissionModeDefault,
 					"admin.moderation.create",
 				)).Post("/moderation_status/{mode}/{projectID}/{entityID}", moderationHandler.RequestCreate)
+				// Withdraw (#544). The same permission as the POST, on purpose:
+				// a person who may file a request may take it back, so no
+				// deployment needs a new grant. The handler scopes the delete to
+				// the CALLER's own rows in SQL, so an `administration` value on
+				// `{mode}` does not let a moderator erase what they answered.
+				r.With(apimw.RequireResolvedPermissions(
+					permissionResolver, platformauth.PermissionModeDefault,
+					"admin.moderation.create",
+				)).Delete("/moderation_status/{mode}/{projectID}/{entityID}", moderationHandler.RequestDelete)
 
 				// Preserve current-main gateway administration. Server-side
 				// permission enforcement is required even when the UI hides
