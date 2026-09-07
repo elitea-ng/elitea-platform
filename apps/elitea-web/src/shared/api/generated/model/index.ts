@@ -380,6 +380,8 @@ export * from "./toolkitExport.zod";
 export * from "./toolkitInstance.zod";
 export * from "./toolkitInstanceListResponse.zod";
 export * from "./toolkitTool.zod";
+export * from "./toolkitToolRunRequest.zod";
+export * from "./toolkitToolRunResult.zod";
 export * from "./toolkitToolsPayload.zod";
 export * from "./toolkitTypeSchemas.zod";
 export * from "./toolkitUpdateRequest.zod";

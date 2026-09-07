@@ -461,7 +461,24 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
  * excuse, and the manifest is where that fact belongs. So the manifest moves by
  * eight as well.
  */
-const GENERATED_OPERATION_COUNT = 211;
+/*
+ * 211 -> 212, when the "Test tool" run finally got a description. The entry
+ * below recorded the route as "Not in v2.yaml", and the Go reverse check
+ * (TestSpecRouterConformance/manifest_reverse_check) refused that: the
+ * allowlist that holds undescribed endpoints is at its cap of 76 and may only
+ * shrink, so a NEW manifest endpoint the spec does not cover fails the gate by
+ * design. `testToolkitTool` is the operation, and orval generates one client
+ * for it, so this number moves by one.
+ *
+ * MANIFEST_ENTRY_COUNT does NOT move. The endpoint already had its entry; the
+ * entry gained an `operationId` and a real `responseSchema`. It also stays
+ * `source: 'handwritten'`, because the caller
+ * (features/toolkits/api/toolkitTestRun.ts) folds six status codes into one
+ * settled-outcome union and never rejects — orval's hook hands back a thrown
+ * error instead, so switching to it would move that mapping into every call
+ * site rather than delete it.
+ */
+const GENERATED_OPERATION_COUNT = 212;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

@@ -6589,6 +6589,120 @@ components:
         and a named reason. Only a toolkit with no tools gives 200 and an empty
         array. Render the two apart.
 
+    ToolkitToolRunRequest:
+      type: object
+      required: [tool_name]
+      description: >
+        NOTE(W2): the body `toolkitrun.DecodeRequest` reads
+        (internal/api/v2/toolkitrun/response.go:78-118). It is pylon's
+        `TestToolkitToolInputModel` minus the fields this platform refuses to
+        take from a caller.
+
+        NO SETTINGS AND NO CREDENTIALS ARE ACCEPTED. pylon takes
+        `toolkit_config.settings` from the request and runs the tool against
+        them, which is how its own UI tests unsaved form values. This operation
+        names the toolkit in the URL and reads the SAVED row instead, because a
+        caller that can supply settings can supply credentials — the same rule
+        internal/api/v2/indexing/start_handler.go already states for
+        `index_data`. The stated cost: unsaved settings cannot be tested through
+        this route, so the toolkit must be saved first. A `toolkit_config` key
+        is accepted for wire compatibility and IGNORED here; the route segment
+        wins, because the route is what the permission gate resolved
+        (response.go:86-95).
+      properties:
+        tool_name:
+          type: string
+          description: >
+            The tool to run, spelled as `toolkit_available_tools` names it. The
+            value is trimmed and then required to be non-empty
+            (response.go:101-116), so a blank name is 400 and not an empty run.
+        tool_params:
+          type: object
+          additionalProperties: true
+          description: >
+            The tool's own arguments. An absent or empty value means `{}`.
+          x-elitea-passthrough: >-
+            NOTE(W2): internal/api/v2/toolkitrun/response.go:96-99 keeps this
+            value as raw JSON and hands it to the worker unread. The key set is
+            the TOOL's own args_schema, which differs per tool and per toolkit
+            type, so no closed shape here could be right for every tool.
+
+    ToolkitToolRunResult:
+      type: object
+      required: [ok]
+      description: >
+        NOTE(W2): the one body `toolkitrun.WriteOutcome` and
+        `toolkitrun.WriteError` write for every settled and every refused run
+        (internal/api/v2/toolkitrun/response.go:145-241). THE STATUS CODE
+        CARRIES THE OUTCOME; there is no status string to read:
+
+        200 with `ok: true` — the run reached the tool and the tool returned.
+        200 with `ok: false` — the run reached the tool and the tool RAISED.
+        422 with `reason: unsupported_toolkit` — this image cannot build that
+        toolkit type.
+        422 with `reason: unknown_tool` — the toolkit has no tool by that name.
+        504 with `reason: timeout` — the bounded wait passed. The run is STILL
+        GOING and durable; `task_id` names it.
+        500 with `reason: runtime_failure` — a server fault, reported with a
+        safe message and no cause.
+
+        A TOOL THAT RAISED IS 200 ON PURPOSE. The run completed, and "it raised,
+        and here is why" is the answer to "does this tool work against my saved
+        settings". pylon could not tell these conditions apart, because the SDK
+        handed it one dict.
+      properties:
+        ok:
+          type: boolean
+          description: >
+            True only on the 200 branch where the tool returned a result. Every
+            other branch, including a tool that raised, is `false`.
+        task_id:
+          type: string
+          description: >
+            The execution this run wrote. On 504 it is the handle to poll, which
+            is why that branch is 504 and not pylon's 400: the request gave up,
+            the run did not (response.go:205-215). Absent on a refusal that
+            happened before admission, because nothing was written and nothing
+            ran.
+        tool_name:
+          type: string
+          description: The tool the run resolved, echoed back.
+        toolkit_type:
+          type: string
+          description: >
+            Present once the run resolved the toolkit far enough to know its
+            type. Absent on a refusal that happened before that point.
+        result:
+          description: >
+            Whatever the tool returned, verbatim. Present only on the 200
+            `ok: true` branch, and absent there when `truncated` is true.
+          x-elitea-passthrough: >-
+            NOTE(W2): internal/api/v2/toolkitrun/response.go:159-172 relays the
+            worker's canonical JSON without reading it, and relays the raw
+            string where the encoding is not the JSON the worker promised. The
+            shape belongs to the tool, so this document cannot close it.
+        truncated:
+          type: boolean
+          description: >
+            The worker DROPPED an oversized result rather than cutting it, so
+            there is no `result` key at all (response.go:155-163). Half a JSON
+            document reads as a corrupt result, and an absent one does not.
+        error:
+          type: string
+          description: >
+            The tool's own sentence on the 200 `ok: false` branch, and the
+            refusal's own sentence on every other branch. The 500 branch never
+            relays an internal message: it is a server fault, not the caller's.
+        reason:
+          type: string
+          description: >
+            Why the run did not answer with a result. Absent on both 200
+            branches, present on every other. The values are
+            `unsupported_toolkit`, `unknown_tool`, `timeout` and
+            `runtime_failure`, written verbatim by response.go:176-197 and
+            :205-215. It is not modelled as an enum: a caller must treat an
+            unknown value as a plain failure rather than as a shape it can
+            switch on.
     # ---- MCP (issue 252) ---------------------------------------------------
 
     McpRegisteredServerTool:
@@ -15119,6 +15233,126 @@ paths:
         '403': { $ref: '#/components/responses/403' }
         '500': { $ref: '#/components/responses/500' }
 
+  /elitea_core/test_tool/prompt_lib/{project_id}/{tool_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: tool_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64 }
+        description: >
+          The SAVED toolkit instance whose tool runs. It is parsed as a positive
+          integer and refused with 400 otherwise
+          (internal/api/v2/toolkits/handler.go:761-766). Naming it here is what
+          lets the body carry only the tool and its arguments: the settings and
+          the credentials come from this row.
+
+    post:
+      operationId: testToolkitTool
+      summary: Run one tool of a saved toolkit and answer with what it returned
+      description: |
+        NOTE(W2): internal/api/v2/toolkits/handler.go:719-721 (TestTool) into
+        the shared body at :737-781, which maps the outcome through
+        internal/api/v2/toolkitrun/response.go. Registered at
+        internal/api/router.go:2445-2446, gated on
+        `models.applications.tool.patch` — pylon declares only
+        `test_toolkit_tool.py`, so both verbs that run a tool take the string
+        that module declares.
+
+        THE OUTCOME IS THE STATUS CODE. `ToolkitToolRunResult` lists the six
+        branches and why a tool that RAISED is 200. Read that schema before
+        writing a caller: `ok: false` at 200 is a completed run, not a
+        transport failure.
+
+        THIS IS THE ROUTE THAT IS ALWAYS REACHABLE. Its sibling,
+        `POST /elitea_core/test_toolkit_tool/prompt_lib/{project_id}`, names the
+        toolkit in the body and shares its path with the index-start route, so
+        chi resolves the index handler ahead of it wherever a runtime is
+        composed; it answers only in a runtime-less deployment. The route
+        decision is recorded in
+        internal/application/toolkitcalltool/doc.go. `index_data` is therefore
+        not run through this operation — it keeps the streaming index-start
+        path.
+
+        A DEPLOYMENT WITH NO WORKER ANSWERS 503, unchanged. Where no runtime is
+        composed the handler writes the same
+        `{"ok": false, "error": "indexer service not available"}` it wrote
+        before this capability existed (toolkitrun.WriteUnavailable), because a
+        new sentence there would read as a new failure rather than the same
+        absence.
+
+        THE BODY IS BOUNDED to 1 MiB (toolkitrun.MaxRequestBodyBytes). Arguments
+        are caller content of unbounded size, and the bound that would otherwise
+        refuse them sits inside the bundle factory, too late for the caller to
+        see why.
+      tags: [toolkits]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ToolkitToolRunRequest'
+      responses:
+        '200':
+          description: >
+            The run settled. `ok: true` carries the tool's result; `ok: false`
+            carries the tool's own error, and is still a completed run.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolkitToolRunResult'
+        '400':
+          description: >
+            The project id, the toolkit id or the body could not be read
+            (handler.go:748-772, toolkitrun.WriteInvalidRequest). The envelope
+            is the `ok: false` one, not the flat `{"error": ...}` shape.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolkitToolRunResult'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: >
+            The toolkit is not visible to this caller in this project
+            (toolkitrun.WriteError on ErrToolkitNotVisible).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolkitToolRunResult'
+        '422':
+          description: >
+            The run was refused before any provider work: `reason` is
+            `unsupported_toolkit` (this image cannot build that toolkit type) or
+            `unknown_tool` (the toolkit has no tool by that name).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolkitToolRunResult'
+        '500':
+          description: >
+            A runtime fault, with `reason: runtime_failure` and a safe message.
+            The cause is logged and never put on the wire.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolkitToolRunResult'
+        '503':
+          description: >
+            No runtime is composed in this deployment, or the toolkit settings
+            could not be resolved. Both write the `ok: false` envelope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolkitToolRunResult'
+        '504':
+          description: >
+            The bounded wait passed. The execution named by `task_id` is STILL
+            RUNNING and durable — poll it rather than re-sending the run.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolkitToolRunResult'
   # ==========================================================================
   # MCP (issue 252)
   #

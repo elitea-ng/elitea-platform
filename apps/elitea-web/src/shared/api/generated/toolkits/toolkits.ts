@@ -66,6 +66,8 @@ import type {
   ToolkitCreateRequest,
   ToolkitInstance,
   ToolkitInstanceListResponse,
+  ToolkitToolRunRequest,
+  ToolkitToolRunResult,
   ToolkitToolsPayload,
   ToolkitTypeSchemas,
   ToolkitUpdateRequest,
@@ -1712,6 +1714,324 @@ export function useDiscoverToolkitTools<
   const queryOptions = getDiscoverToolkitToolsQueryOptions(
     projectId,
     toolkitType,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type testToolkitToolResponse200 = {
+  data: ToolkitToolRunResult;
+  status: 200;
+};
+
+export type testToolkitToolResponse400 = {
+  data: ToolkitToolRunResult;
+  status: 400;
+};
+
+export type testToolkitToolResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type testToolkitToolResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type testToolkitToolResponse404 = {
+  data: ToolkitToolRunResult;
+  status: 404;
+};
+
+export type testToolkitToolResponse422 = {
+  data: ToolkitToolRunResult;
+  status: 422;
+};
+
+export type testToolkitToolResponse500 = {
+  data: ToolkitToolRunResult;
+  status: 500;
+};
+
+export type testToolkitToolResponse503 = {
+  data: ToolkitToolRunResult;
+  status: 503;
+};
+
+export type testToolkitToolResponse504 = {
+  data: ToolkitToolRunResult;
+  status: 504;
+};
+
+export type testToolkitToolResponseSuccess = testToolkitToolResponse200 & {
+  headers: Headers;
+};
+export type testToolkitToolResponseError = (
+  | testToolkitToolResponse400
+  | testToolkitToolResponse401
+  | testToolkitToolResponse403
+  | testToolkitToolResponse404
+  | testToolkitToolResponse422
+  | testToolkitToolResponse500
+  | testToolkitToolResponse503
+  | testToolkitToolResponse504
+) & {
+  headers: Headers;
+};
+
+export type testToolkitToolResponse =
+  testToolkitToolResponseSuccess | testToolkitToolResponseError;
+
+export const getTestToolkitToolUrl = (projectId: string, toolId: number) => {
+  return `/elitea_core/test_tool/prompt_lib/${projectId}/${toolId}`;
+};
+
+/**
+ * NOTE(W2): internal/api/v2/toolkits/handler.go:719-721 (TestTool) into
+ * the shared body at :737-781, which maps the outcome through
+ * internal/api/v2/toolkitrun/response.go. Registered at
+ * internal/api/router.go:2445-2446, gated on
+ * `models.applications.tool.patch` — pylon declares only
+ * `test_toolkit_tool.py`, so both verbs that run a tool take the string
+ * that module declares.
+ *
+ * THE OUTCOME IS THE STATUS CODE. `ToolkitToolRunResult` lists the six
+ * branches and why a tool that RAISED is 200. Read that schema before
+ * writing a caller: `ok: false` at 200 is a completed run, not a
+ * transport failure.
+ *
+ * THIS IS THE ROUTE THAT IS ALWAYS REACHABLE. Its sibling,
+ * `POST /elitea_core/test_toolkit_tool/prompt_lib/{project_id}`, names the
+ * toolkit in the body and shares its path with the index-start route, so
+ * chi resolves the index handler ahead of it wherever a runtime is
+ * composed; it answers only in a runtime-less deployment. The route
+ * decision is recorded in
+ * internal/application/toolkitcalltool/doc.go. `index_data` is therefore
+ * not run through this operation — it keeps the streaming index-start
+ * path.
+ *
+ * A DEPLOYMENT WITH NO WORKER ANSWERS 503, unchanged. Where no runtime is
+ * composed the handler writes the same
+ * `{"ok": false, "error": "indexer service not available"}` it wrote
+ * before this capability existed (toolkitrun.WriteUnavailable), because a
+ * new sentence there would read as a new failure rather than the same
+ * absence.
+ *
+ * THE BODY IS BOUNDED to 1 MiB (toolkitrun.MaxRequestBodyBytes). Arguments
+ * are caller content of unbounded size, and the bound that would otherwise
+ * refuse them sits inside the bundle factory, too late for the caller to
+ * see why.
+ * @summary Run one tool of a saved toolkit and answer with what it returned
+ */
+export const testToolkitTool = async (
+  projectId: string,
+  toolId: number,
+  toolkitToolRunRequest: ToolkitToolRunRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<testToolkitToolResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+  return eliteaFetch<testToolkitToolResponse>(
+    getTestToolkitToolUrl(projectId, toolId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(toolkitToolRunRequest),
+    },
+  );
+};
+
+export const getTestToolkitToolQueryKey = (
+  projectId: string,
+  toolId: number,
+  toolkitToolRunRequest?: ToolkitToolRunRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/test_tool/prompt_lib/${projectId}/${toolId}`,
+    toolkitToolRunRequest,
+  ] as const;
+};
+
+export const getTestToolkitToolQueryOptions = <
+  TData = Awaited<ReturnType<typeof testToolkitTool>>,
+  TError = ToolkitToolRunResult | N401Response | N403Response,
+>(
+  projectId: string,
+  toolId: number,
+  toolkitToolRunRequest: ToolkitToolRunRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof testToolkitTool>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getTestToolkitToolQueryKey(projectId, toolId, toolkitToolRunRequest);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof testToolkitTool>>> = ({
+    signal,
+  }) =>
+    testToolkitTool(projectId, toolId, toolkitToolRunRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      toolId !== null &&
+      toolId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof testToolkitTool>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type TestToolkitToolQueryResult = NonNullable<
+  Awaited<ReturnType<typeof testToolkitTool>>
+>;
+export type TestToolkitToolQueryError =
+  ToolkitToolRunResult | N401Response | N403Response;
+
+export function useTestToolkitTool<
+  TData = Awaited<ReturnType<typeof testToolkitTool>>,
+  TError = ToolkitToolRunResult | N401Response | N403Response,
+>(
+  projectId: string,
+  toolId: number,
+  toolkitToolRunRequest: ToolkitToolRunRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof testToolkitTool>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof testToolkitTool>>,
+          TError,
+          Awaited<ReturnType<typeof testToolkitTool>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useTestToolkitTool<
+  TData = Awaited<ReturnType<typeof testToolkitTool>>,
+  TError = ToolkitToolRunResult | N401Response | N403Response,
+>(
+  projectId: string,
+  toolId: number,
+  toolkitToolRunRequest: ToolkitToolRunRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof testToolkitTool>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof testToolkitTool>>,
+          TError,
+          Awaited<ReturnType<typeof testToolkitTool>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useTestToolkitTool<
+  TData = Awaited<ReturnType<typeof testToolkitTool>>,
+  TError = ToolkitToolRunResult | N401Response | N403Response,
+>(
+  projectId: string,
+  toolId: number,
+  toolkitToolRunRequest: ToolkitToolRunRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof testToolkitTool>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Run one tool of a saved toolkit and answer with what it returned
+ */
+
+export function useTestToolkitTool<
+  TData = Awaited<ReturnType<typeof testToolkitTool>>,
+  TError = ToolkitToolRunResult | N401Response | N403Response,
+>(
+  projectId: string,
+  toolId: number,
+  toolkitToolRunRequest: ToolkitToolRunRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof testToolkitTool>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getTestToolkitToolQueryOptions(
+    projectId,
+    toolId,
+    toolkitToolRunRequest,
     options,
   );
 
