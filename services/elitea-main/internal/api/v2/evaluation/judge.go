@@ -158,35 +158,92 @@ func (j *AIJudge) Score(ctx context.Context, req JudgeRequest) (JudgeVerdict, er
 // parseJudgeAnswer reads `{"score": <number>, "reason": "..."}` out of a model
 // answer.
 //
-// It accepts the object with surrounding text, because a model that has been
-// told not to wrap its answer in a code fence still sometimes does, and
-// refusing a perfectly good score over a pair of backticks would report a
-// prompt-formatting nuisance as an evaluation failure. It does NOT accept prose
-// containing a number: the extraction is a JSON parse of the outermost
-// brace-delimited span, so "I would give this about 4 out of 5" is
-// unparseable — which is the correct answer, because a number scraped out of a
-// sentence is a guess about what the model meant.
+// IT SCANS FROM THE END FOR THE LAST BALANCED OBJECT, and that is not a
+// refinement — it is the fix for a defect a real model found on the first run.
+//
+// The first version took the span from the first `{` to the last `}`. Every
+// stub test passed. Then Qwen3.5-35B was pointed at this prompt and answered
+// with three thousand characters of `<think>…</think>` reasoning followed by
+// the JSON object, and the reasoning QUOTED THE SCHEMA back — `Output Format:
+// {"score": <number>, ...}` — so the widest span started inside the model's own
+// notes, swallowed the real object, and failed to parse. Every case would have
+// been stored `error` with a perfectly good score sitting at the end of the
+// text, and no stub could have shown it.
+//
+// Reasoning models are the normal case for this workload, not an exotic one, so
+// the parse has to survive prose that contains braces. Scanning backwards for
+// the last object that PARSES AND CARRIES A NUMERIC SCORE does that without
+// knowing anything about `<think>` tags or any other provider's convention.
+//
+// It still does NOT accept prose containing a number: the extraction is a JSON
+// parse, so "I would give this about 4 out of 5" is unparseable — which is the
+// correct answer, because a number scraped out of a sentence is a guess about
+// what the model meant.
 func parseJudgeAnswer(raw string) (JudgeVerdict, bool) {
-	start := strings.Index(raw, "{")
-	end := strings.LastIndex(raw, "}")
-	if start < 0 || end <= start {
-		return JudgeVerdict{}, false
+	for start := strings.LastIndex(raw, "{"); start >= 0; start = strings.LastIndex(raw[:start], "{") {
+		end, closed := matchingBrace(raw, start)
+		if !closed {
+			continue
+		}
+		verdict, ok := decodeScoreObject(raw[start : end+1])
+		if ok {
+			verdict.Raw = raw
+			return verdict, true
+		}
 	}
+	return JudgeVerdict{}, false
+}
 
+// matchingBrace finds the `}` that closes the `{` at start, ignoring braces
+// inside JSON strings. A brace inside `"reason"` text is not structure, and a
+// depth counter that did not know that would close the object early.
+func matchingBrace(raw string, start int) (int, bool) {
+	depth := 0
+	inString := false
+	escaped := false
+	for index := start; index < len(raw); index++ {
+		char := raw[index]
+		switch {
+		case escaped:
+			escaped = false
+		case char == '\\' && inString:
+			escaped = true
+		case char == '"':
+			inString = !inString
+		case inString:
+			// Nothing: braces inside a string are text.
+		case char == '{':
+			depth++
+		case char == '}':
+			depth--
+			if depth == 0 {
+				return index, true
+			}
+		}
+	}
+	return 0, false
+}
+
+// decodeScoreObject accepts one candidate object.
+func decodeScoreObject(candidate string) (JudgeVerdict, bool) {
 	var parsed struct {
 		// A POINTER, so an object that carries no `score` key is rejected
 		// rather than read as 0. That is the difference between "the judge did
-		// not answer" and "the judge said this is the worst possible answer".
+		// not answer" and "the judge said this is the worst possible answer" —
+		// and it is also what makes the backwards scan safe: the model's own
+		// notes contain `{"score": <number>, ...}` with a NON-NUMERIC
+		// placeholder, which fails to decode and is skipped rather than being
+		// read as a score of 0.
 		Score  *float64 `json:"score"`
 		Reason string   `json:"reason"`
 	}
-	if err := json.Unmarshal([]byte(raw[start:end+1]), &parsed); err != nil {
+	if err := json.Unmarshal([]byte(candidate), &parsed); err != nil {
 		return JudgeVerdict{}, false
 	}
 	if parsed.Score == nil {
 		return JudgeVerdict{}, false
 	}
-	return JudgeVerdict{Score: *parsed.Score, Reason: parsed.Reason, Raw: raw}, true
+	return JudgeVerdict{Score: *parsed.Score, Reason: parsed.Reason}, true
 }
 
 // formatScaleBound prints a bound without a trailing ".0", so a 1..5 ordinal

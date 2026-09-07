@@ -209,3 +209,91 @@ func TestAIJudgeOmitsAnUnstatedExpectedOutput(t *testing.T) {
 		t.Error("the stated expected answer did not reach the judge")
 	}
 }
+
+// THE REGRESSION A REAL MODEL FOUND, pinned without needing one.
+//
+// Qwen3.5-35B answers this prompt with three thousand characters of
+// `<think>…</think>` reasoning and then the JSON object. The reasoning QUOTES
+// THE SCHEMA back, so the first `{` in the answer is inside the model's own
+// notes. The original parse took the span from the first `{` to the last `}`,
+// swallowed the real object, and failed — and every stub test in this file
+// passed while it did, because none of them contained a brace before the real
+// one.
+//
+// The fixture below is that answer's shape, trimmed. It is the one case that
+// separates "scan backwards for the last balanced object" from "take the widest
+// span", and it is why the real-model test exists at all.
+func TestAIJudgeReadsTheScoreOutOfAThinkingModelsAnswer(t *testing.T) {
+	t.Parallel()
+
+	answer := `<think>
+Output Format: {"score": <number>, "reason": "<one or two sentences>"}
+Score Range: 1 to 5.
+
+The agent said Paris. That is correct, so it deserves the top score.
+Let me be careful about the format: {"score": 5} would be missing the reason.
+</think>
+
+{"score": 5, "reason": "Paris is the capital of France, and the answer says so."}`
+
+	verdict, err := NewAIJudge(&stubCompleter{answer: answer}).Score(context.Background(), JudgeRequest{
+		ProjectID: "7", Dimension: aiDimension(), Input: "capital of France?", Output: "Paris",
+	})
+	if err != nil {
+		t.Fatalf("a thinking model's answer was rejected: %v", err)
+	}
+	if verdict.Score != 5 {
+		t.Errorf("score = %v, want 5 — the real object is the LAST one, not the first", verdict.Score)
+	}
+	if verdict.Reason != "Paris is the capital of France, and the answer says so." {
+		t.Errorf("reason = %q, want the real object's reason", verdict.Reason)
+	}
+}
+
+// A brace inside the `reason` TEXT is not structure. A depth counter that did
+// not know about JSON strings would close the object early and drop the rest of
+// the sentence, or fail the parse outright.
+func TestAIJudgeAcceptsABraceInsideTheReasonText(t *testing.T) {
+	t.Parallel()
+
+	answer := `{"score": 2, "reason": "The answer printed a literal {{name}} instead of substituting it."}`
+	verdict, err := NewAIJudge(&stubCompleter{answer: answer}).Score(context.Background(), JudgeRequest{
+		ProjectID: "7", Dimension: aiDimension(),
+	})
+	if err != nil {
+		t.Fatalf("Score: %v", err)
+	}
+	if !strings.Contains(verdict.Reason, "{{name}}") {
+		t.Errorf("reason = %q, want the braces kept", verdict.Reason)
+	}
+}
+
+// The backwards scan must SKIP a candidate whose `score` is not a number. The
+// model's own notes carry `{"score": <number>, …}`, which is not JSON at all,
+// and an earlier `{"score": null}` must not be read as zero either.
+func TestAIJudgeSkipsCandidatesWithNoNumericScore(t *testing.T) {
+	t.Parallel()
+
+	answer := `Notes: {"score": null, "reason": "undecided"}
+Final: {"score": 3.5, "reason": "partly right"}`
+	verdict, err := NewAIJudge(&stubCompleter{answer: answer}).Score(context.Background(), JudgeRequest{
+		ProjectID: "7", Dimension: aiDimension(),
+	})
+	if err != nil {
+		t.Fatalf("Score: %v", err)
+	}
+	if verdict.Score != 3.5 {
+		t.Errorf("score = %v, want 3.5", verdict.Score)
+	}
+}
+
+// An UNCLOSED brace is skipped rather than treated as the answer.
+func TestAIJudgeIgnoresAnUnclosedObject(t *testing.T) {
+	t.Parallel()
+
+	_, err := NewAIJudge(&stubCompleter{answer: `{"score": 4, "reason": "truncated`}).
+		Score(context.Background(), JudgeRequest{ProjectID: "7", Dimension: aiDimension()})
+	if !errors.Is(err, ErrJudgeUnparseable) {
+		t.Fatalf("err = %v, want ErrJudgeUnparseable", err)
+	}
+}
