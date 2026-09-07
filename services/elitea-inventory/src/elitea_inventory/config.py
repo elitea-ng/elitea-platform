@@ -107,6 +107,17 @@ class Settings:
     #: How long the ``fixture`` runner pauses between progress steps.
     fixture_step_seconds: float = 0.0
 
+    #: Where the ``fixture`` runner reads its canned graph from — a directory
+    #: shaped like ``conformance/provider/fixtures/inventory`` (i.e. it must
+    #: contain ``spi/graph.json``). Unset (the default) means the package's
+    #: own bundled copy, ``elitea_inventory/fixtures/inventory`` — a wheel
+    #: cannot read outside itself, so that copy is what a built image serves
+    #: with no other configuration. Setting this lets an operator point the
+    #: standalone-full compose overlay at the repository's own fixture
+    #: directory instead — see ``fixture_graph.FixtureGraph.load`` and
+    #: ``deploy/docker-compose.standalone-full.yml``'s ``INVENTORY_FIXTURES``.
+    fixtures_path: str | None = None
+
     #: Source toolkit types this deployment may ingest from.
     source_types: tuple[str, ...] = field(default=DEFAULT_SOURCE_TYPES)
 
@@ -126,6 +137,7 @@ class Settings:
             engine_socket=_raw("ENGINE_SOCKET", "/run/inventory/engine.sock"),
             runner=_choice("RUNNER", "unavailable", ("unavailable", "legacy", "fixture")),
             fixture_step_seconds=_seconds("FIXTURE_STEP_SECONDS", 0.0),
+            fixtures_path=_raw("FIXTURES") or None,
             source_types=_csv("SOURCE_TYPES", DEFAULT_SOURCE_TYPES),
             tls_ca_file=_raw("TLS_CA_FILE") or None,
         )

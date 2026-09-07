@@ -1,0 +1,11 @@
+{
+  "tool": "get_stats",
+  "params": { "output_format": "json" },
+  "expected": {
+    "node_count": 6,
+    "edge_count": 5,
+    "entities_by_type": { "class": 3, "function": 1, "document": 2 },
+    "entities_by_layer": { "application": 2, "domain": 1, "infrastructure": 1, "documentation": 2 },
+    "source_toolkits": ["code", "docs"]
+  }
+}

@@ -1195,15 +1195,16 @@ services:
     environment:
       ELITEA_SUBAPP: inventory
       # `legacy` reaches the engine sidecar over the socket, which is what this
-      # stack exists to exercise. `INVENTORY_RUNNER=fixture` switches the Go
-      # host to its OWN canned graph instead, and it is a variable rather than
-      # a constant for one measured reason: the sidecar here serves the PYTHON
-      # fixture runner, which answers a sentence and an EMPTY graph
-      # (services/elitea-inventory/src/elitea_inventory/fixture_runner.py), so
-      # every Inventory screen on this stack renders empty. An operator
-      # demonstrating the Inventory application on the standalone stack sets
-      # INVENTORY_RUNNER=fixture and gets the six-entity graph the E2E stack
-      # serves. The default is unchanged.
+      # stack exists to exercise. The sidecar below serves the PYTHON fixture
+      # engine (elitea_inventory.fixture_graph), which since the standalone
+      # fixture package landed replays the SAME six-entity graph the Go
+      # host's OWN fixture runner uses on the E2E stack
+      # (conformance/provider/fixtures/inventory/spi/graph.json) — so the
+      # default already shows a populated Inventory workspace; no flag
+      # needed. `INVENTORY_RUNNER=fixture` remains as an alternative path: it
+      # switches the GO HOST to its own canned graph and bypasses the sidecar
+      # entirely, which is useful if you want to exercise the Go fixture
+      # runner specifically, or the sidecar's socket hop is not needed.
       ELITEA_INVENTORY_RUNNER: "${INVENTORY_RUNNER:-legacy}"
       ELITEA_INVENTORY_ENGINE_SOCKET: /run/inventory/engine.sock
       ELITEA_INVENTORY_FIXTURE_STEP_SECONDS: "${INVENTORY_FIXTURE_STEP_SECONDS:-1}"
@@ -1254,8 +1255,17 @@ services:
       ELITEA_INVENTORY_FIXTURE_STEP_SECONDS: "${INVENTORY_FIXTURE_STEP_SECONDS:-1}"
       ELITEA_INVENTORY_ENGINE_SOCKET: /run/inventory/engine.sock
       ELITEA_INVENTORY_SCRATCH_PATH: /tmp/inventory
+      # Unset (default): the fixture engine reads its packaged copy of the
+      # canned graph (elitea_inventory/fixtures/inventory/spi/graph.json,
+      # built into the image). Set INVENTORY_FIXTURES=/fixtures/inventory to
+      # read the bind-mounted copy below instead — the repository's own
+      # conformance/provider/fixtures/inventory, live-editable without a
+      # rebuild. Both copies are asserted identical by
+      # services/elitea-inventory/tests/unit/test_fixture_graph.py.
+      ELITEA_INVENTORY_FIXTURES: "${INVENTORY_FIXTURES:-}"
     volumes:
       - inventory-engine-sock:/run/inventory
+      - ../conformance/provider/fixtures/inventory:/fixtures/inventory:ro
     healthcheck:
       test: ["CMD", "python3", "-c", "import socket; s=socket.socket(socket.AF_UNIX); s.settimeout(2); s.connect('/run/inventory/engine.sock'); s.close()"]
       interval: 5s

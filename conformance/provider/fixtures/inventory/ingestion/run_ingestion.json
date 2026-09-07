@@ -1,0 +1,23 @@
+{
+  "_comment": "run_ingestion over the canned graph (spi/graph.json), for a fixed source. Both fixture runners must derive the SAME source label from `source` (SourceLabelFor in fixture.go) and land the same graph metadata, sources_status and checkpoint documents.",
+  "tool": "run_ingestion",
+  "params": { "source": { "type": "github", "id": "acme-widgets" } },
+  "expected": {
+    "source_label": "github:acme-widgets",
+    "result": "Ingestion completed for github:acme-widgets: 6 entities, 5 relations from 12 files.",
+    "graph_metadata": {
+      "fixture": true,
+      "schema_version": 1,
+      "source_toolkits": ["code", "docs"],
+      "ingested_source": "github:acme-widgets",
+      "node_count": 6,
+      "edge_count": 5
+    },
+    "sources_status": {
+      "sources": [
+        { "source": "github:acme-widgets", "status": "completed", "entity_count": 6, "relation_count": 5 }
+      ]
+    },
+    "checkpoint": { "source": "github:acme-widgets", "stage": "completed", "files_processed": 12 }
+  }
+}
