@@ -504,7 +504,17 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// so the two streams could not both claim the next free number and discover
 	// it only at merge — the collision 0102, 0103, 0104 and 0115 each carry a
 	// note about. Both numbers are used, and the reservation worked.
-	require.EqualValues(t, 119, Head(shared))
+	//
+	// 120: shared/0120_application_task_status_permission.sql, the one
+	// default-mode grant the restored `application_task` GET needs
+	// (`models.applications.task.get`, issue 254 P2). 0068 transcribed the
+	// legacy default-mode matrix for the routes that EXISTED then;
+	// application_task had been deleted by #126, so its read string had no gate
+	// to reach and was left out while its sibling
+	// `models.applications.task.delete` went in. A new file for 0116's reason:
+	// 0068 is checksum-immutable and 0060 returns early on any configured
+	// deployment.
+	require.EqualValues(t, 120, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

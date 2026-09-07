@@ -28,16 +28,16 @@ import (
 // fails both halves of this test. AUTH_DEV_MODE cannot reach here at all: it
 // is a startup error (ADR-0017), not a third plane.
 //
-// Client and Validator are both accepted as the credential reader because
-// apimw.Auth's Bearer branch takes either one. SessionSecret counts because
-// the browser session cookie is a credential the deployment issues and
-// apimw.Auth verifies with the same key.
+// Validator is the credential reader apimw.Auth's Bearer branch uses. It used
+// to be joined here by Client, the pylon Redis-RPC validator; #383 deleted
+// that client, so Validator is the only token reader left. SessionSecret
+// counts because the browser session cookie is a credential the deployment
+// issues and apimw.Auth verifies with the same key.
 func productionAuthenticationComposed(auth apimw.AuthConfig) bool {
 	if auth.PrincipalValidator == nil {
 		return false
 	}
 	return auth.ForwardedIdentityVerifier != nil ||
 		auth.Validator != nil ||
-		auth.Client != nil ||
 		auth.SessionSecret != ""
 }

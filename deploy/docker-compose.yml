@@ -134,8 +134,6 @@ services:
     environment:
       DATABASE_URL: "postgres://elitea:elitea@postgres:5432/elitea?sslmode=disable"
       REDIS_URL: "redis:6379"
-      SHADOW_ENABLED: "false"
-      LEGACY_URL: ""
       ADMIN_UI_STATIC_DIR: "/data/admin_ui/static/dist"
       APPLICATION_SECRET_KEY: "changeme"
       SKIP_MIGRATIONS: "1"

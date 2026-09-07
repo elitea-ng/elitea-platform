@@ -8,7 +8,6 @@ import (
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
 	forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/forwardauth"
 	identity "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/authsvc"
 )
 
 var traefikForwardHeaders = [...]string{
@@ -48,16 +47,17 @@ type ForwardAuthHandler struct {
 	credentialHeaders []ForwardAuthCredentialHeader
 }
 
+// NewForwardAuthHandler takes exactly one token validator. It used to take a
+// pylon Redis-RPC client as a fallback for a nil validator; #383 deleted that
+// client, so a nil validator now means the handler authenticates nothing and
+// refuses every credential.
 func NewForwardAuthHandler(
-	client *authsvc.Client,
 	validator apimw.TokenValidator,
 	opts ...ForwardAuthOption,
 ) *ForwardAuthHandler {
 	var tokenValidator forwardapp.TokenValidator
 	if validator != nil {
 		tokenValidator = validator
-	} else if client != nil {
-		tokenValidator = client
 	}
 	credentials, _ := forwardapp.NewTokenCredentialAuthenticator(tokenValidator)
 	handler := &ForwardAuthHandler{credentials: credentials}

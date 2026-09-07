@@ -161,8 +161,18 @@ test.describe('J20 artifacts lifecycle', () => {
     await page.getByRole('button', { name: /^create bucket$/i }).first().click();
     await page.waitForURL('**/artifacts/create-bucket**', { timeout: 15_000 });
 
+    // The FIRST assertion after a navigation carries its own budget (#545).
+    // `expect` defaults to 5 s and nothing in playwright.config.ts raises it,
+    // while the SPA still has to fetch the lazy route chunk for
+    // /artifacts/create-bucket and render the form. Measured while answering
+    // #545: this line failed 1 run in 8 on a loaded machine, and the file is
+    // `mode: 'serial'`, so it took every later J20 test with it. The budget of
+    // the `waitForURL` above is the right size for the same wait.
+    //
+    // Nothing is softened. A form that never prefills still fails here, one
+    // line later than before.
     const name = page.getByRole('textbox', { name: /^name$/i });
-    await expect(name).toHaveValue('new-bucket');
+    await expect(name).toHaveValue('new-bucket', { timeout: 15_000 });
     await expect(name).toHaveAttribute('maxlength', '56');
 
     const submit = page.getByRole('button', { name: /^create bucket$/i });

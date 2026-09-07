@@ -124,6 +124,12 @@ type SAMLHandler struct {
 	sessions         *browsersession.Manager
 	personalProjects personalproject.AsyncEnsurer
 
+	// personalProjectWait bounds how long a successful login waits for the
+	// personal project it just asked for. Zero means defaultSignInProvisionWait;
+	// only a test sets it, so the production path cannot be given a wait an
+	// operator did not review. See signin.go's ensurePersonalProject.
+	personalProjectWait time.Duration
+
 	runtimeMu    sync.Mutex
 	runtimeCache map[string]*samlRuntime
 }
@@ -149,6 +155,16 @@ func (h *SAMLHandler) WithPersonalProjectEnsurer(ensurer personalproject.AsyncEn
 		return h
 	}
 	h.personalProjects = ensurer
+	return h
+}
+
+// WithPersonalProjectWait replaces the bound on the sign-in wait. See the OIDC
+// plane's copy: it exists for the tests that measure the bound.
+func (h *SAMLHandler) WithPersonalProjectWait(wait time.Duration) *SAMLHandler {
+	if h == nil || wait <= 0 {
+		return h
+	}
+	h.personalProjectWait = wait
 	return h
 }
 
@@ -346,7 +362,7 @@ func (h *SAMLHandler) ACS(w http.ResponseWriter, r *http.Request) {
 	}, r) {
 		return
 	}
-	ensurePersonalProject(h.personalProjects, userID)
+	ensurePersonalProject(h.personalProjects, userID, h.personalProjectWait)
 	slog.Info("SAML login successful", "email", email, "user_id", userID, "provider", runtime.origin)
 	http.Redirect(w, r, target, http.StatusFound)
 }

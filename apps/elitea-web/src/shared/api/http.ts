@@ -62,7 +62,8 @@ export interface HttpConfig {
 /** @public Wave-1 surface: consumed by S4/S6 endpoint modules and R2. */
 export type HttpFailure =
   | { kind: 'http'; status: number; url: string; body: unknown }
-  | { kind: 'auth'; status: number; url: string }
+  /** `refusal` is the server's own name for the check that refused it (see `credentialRefusalCode`); absent when the 401 named nothing. */
+  | { kind: 'auth'; status: number; url: string; refusal?: string | undefined }
   | { kind: 'network'; url: string; message: string; cause: unknown }
   | { kind: 'aborted'; url: string };
 
@@ -117,6 +118,7 @@ export interface HttpClient {
 }
 
 import {
+  credentialRefusalCode,
   needsReauth,
   resourceAuthorizationBody,
   sessionExpiredLoginUrl,
@@ -273,7 +275,7 @@ async function expiredSessionRefusal<T>(
   const loginUrl = await sessionExpiredLoginUrl(response);
   if (loginUrl === undefined) return undefined;
   cfg.onSessionExpired(loginUrl);
-  return failure({ kind: 'auth', status: response.status, url: response.url });
+  return sessionFailure<T>(response);
 }
 
 /**
@@ -287,7 +289,17 @@ async function authRefusal<T>(response: Response): Promise<HttpResult<T>> {
   if (resourceAuth !== undefined) {
     return failure({ kind: 'http', status: response.status, url: response.url, body: resourceAuth });
   }
-  return failure({ kind: 'auth', status: response.status, url: response.url });
+  return sessionFailure<T>(response);
+}
+
+/** The session failure, carrying the server's own name for the refusal (#538). */
+async function sessionFailure<T>(response: Response): Promise<HttpResult<T>> {
+  return failure({
+    kind: 'auth',
+    status: response.status,
+    url: response.url,
+    refusal: await credentialRefusalCode(response),
+  });
 }
 
 /* ── factory ─────────────────────────────────────────────────────────────── */
@@ -339,7 +351,7 @@ export function createHttpClient(cfg: HttpConfig): HttpClient {
       // Behaviour 2: a real 401 is the PRIMARY signal, redirect-sniff the
       // secondary one; both funnel into the same single-flight re-auth.
       const restored = await runReauth();
-      if (!restored) return failure({ kind: 'auth', status: response.status, url: response.url });
+      if (!restored) return sessionFailure<T>(response);
       if (options.signal?.aborted === true) return failure({ kind: 'aborted', url });
       try {
         // Byte-identical replay: same serialized body, same headers.

@@ -1272,6 +1272,39 @@ in a release note.**
   `TestElapsedHeaderIsAlwaysFedByAMeter` reads the source and fails a stamp
   that is not fed by `overhead.Meter.Overhead`, or a handler that stamps the
   header without attaching a Meter.
+
+  **[2026-09-07] A local sample, not the BFC.1 staging measurement.** This
+  entry records `X-Elapsed-Ms` values from the standalone-full compose stack
+  (`ghcr.io/elitea-ng/elitea-llm-gateway:standalone`, built 2026-09-07T01:12Z,
+  the mTLS listener at `:8083`). It does not close this follow-up: BFC.1 still
+  needs the k6 p99 from the ArgoCD staging playground named in issue #19.
+
+  `/metrics` on this deployed image publishes no overhead or
+  credential-resolution series. It exposes only the allowlist in
+  `gatewayMetrics()` (budget-enforcement gauge, SSE gauge, model-map/audio/
+  realtime/budget-outage counters). The BFF.9d value stays a per-request
+  response header, read by k6 into the `gateway_overhead_ms` trend metric, by
+  design (bifrost v1.7.3 gives no round-trip seam, so a Prometheus histogram
+  cannot isolate the hop either).
+
+  20 unary `POST /llm/v1/chat/completions` requests carried project 1's real
+  `platform-qwen` configuration: provider `vllm`, `api_base
+  http://192.168.29.60:8000/v1`, model `Qwen/Qwen3.5-35B-A3B-FP8`. Credential
+  resolution ran for every request — each one reached the real vLLM host and
+  got back `"The model \`Qwen/Qwen3.5-35B-A3B-FP8\` does not exist"` (that vLLM
+  host now serves `unsloth/Qwen3.8-27B-NVFP4`; the model name drifted after
+  someone configured project 1, and it is not an issue-#17 defect). A 200
+  response needs a stored-configuration edit, and the read-only mandate on
+  this stack forbids that edit, so this sample has no successful completion in
+  it.
+
+  `X-Elapsed-Ms` (credential resolution included, provider round-trip
+  excluded): min 0.648 ms, avg 0.915 ms, max 2.313 ms, n=20. Every value stays
+  one to two orders of magnitude under the unchanged 50 ms default. This
+  single-process, single-connection sample cannot stand in for the k6 p99 that
+  BFC.1 needs, and it does not carry concurrent load. It does confirm the
+  SUPERSET direction argued above in a live deployment. The full sample and the
+  request recipe are on issue #17.
 - ~~Set `secrets.*.optional: false` ... for `GATEWAY_IDENTITY_SECRET`~~ — DONE
   2026-08-09 (issue #11, see the Trust-boundary entry above): it is `false` in
   the base chart for both the gateway and elitea-main. `SECRETS_MASTER_KEY`

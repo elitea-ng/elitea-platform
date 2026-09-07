@@ -58,10 +58,14 @@ import type {
   AttachPublicSkillBody,
   ErrorResponse,
   GenerateSkillDraftRequest,
+  IconGalleryPage,
+  IconMeta,
+  IconUploadForm,
   ListAgentsWithSkill200,
   ListPublicSkills200,
   ListPublicSkillsParams,
   ListSkillCategories200,
+  ListSkillIconsParams,
   ListSkillsParams,
   N400Response,
   N401Response,
@@ -69,6 +73,7 @@ import type {
   N404Response,
   N409Response,
   N500Response,
+  OkResponse,
   PredictLLMUnavailableResponse,
   PublicSkillDetail,
   PublishSkill200,
@@ -82,10 +87,14 @@ import type {
   SkillCreateRequest,
   SkillDraft,
   SkillForkPayload,
+  SkillIconBindRefusal,
+  SkillIconBindRequest,
+  SkillIconDeleteRefusal,
   SkillValidationResult,
   SkillsList,
   UnpublishSkill200,
   UnpublishSkillBody,
+  UpdatedResponse,
   ValidateSkillForPublishBody,
 } from "../model";
 
@@ -1081,6 +1090,1319 @@ export function useCreateSkill<
     skillCreateRequest,
     options,
   );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listSkillIconsResponse200 = {
+  data: IconGalleryPage;
+  status: 200;
+};
+
+export type listSkillIconsResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type listSkillIconsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listSkillIconsResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listSkillIconsResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type listSkillIconsResponseSuccess = listSkillIconsResponse200 & {
+  headers: Headers;
+};
+export type listSkillIconsResponseError = (
+  | listSkillIconsResponse400
+  | listSkillIconsResponse401
+  | listSkillIconsResponse403
+  | listSkillIconsResponse500
+) & {
+  headers: Headers;
+};
+
+export type listSkillIconsResponse =
+  listSkillIconsResponseSuccess | listSkillIconsResponseError;
+
+export const getListSkillIconsUrl = (
+  projectId: string,
+  params?: ListSkillIconsParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/elitea_core/upload_skill_icon/prompt_lib/${projectId}?${stringifiedParams}`
+    : `/elitea_core/upload_skill_icon/prompt_lib/${projectId}`;
+};
+
+/**
+ * NOTE(W2): internal/api/v2/eliteacore/skill_icon.go:142 (ListSkillIcons).
+ *
+ * `total` is the count of EVERY skill icon in the project, not the length
+ * of the page — social/rpc/icons.py:get_icons_list computes it before it
+ * slices, and a client paging on it needs the full figure. The rows are
+ * sorted by name before the slice, so a page is stable between two calls.
+ *
+ * A storage backend that cannot list (storage.ErrNotSupported) answers an
+ * empty gallery rather than a 500: "this deployment stores no listable
+ * icons" is what such a deployment truly has to show.
+ * @summary List the skill icons uploaded to a project
+ */
+export const listSkillIcons = async (
+  projectId: string,
+  params?: ListSkillIconsParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listSkillIconsResponse> => {
+  return eliteaFetch<listSkillIconsResponse>(
+    getListSkillIconsUrl(projectId, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListSkillIconsQueryKey = (
+  projectId: string,
+  params?: ListSkillIconsParams,
+) => {
+  return [
+    `/elitea_core/upload_skill_icon/prompt_lib/${projectId}`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getListSkillIconsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listSkillIcons>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  params?: ListSkillIconsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof listSkillIcons>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListSkillIconsQueryKey(projectId, params);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof listSkillIcons>>> = ({
+    signal,
+  }) => listSkillIcons(projectId, params, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listSkillIcons>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListSkillIconsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listSkillIcons>>
+>;
+export type ListSkillIconsQueryError =
+  N400Response | N401Response | N403Response | N500Response;
+
+export function useListSkillIcons<
+  TData = Awaited<ReturnType<typeof listSkillIcons>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  params: undefined | ListSkillIconsParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof listSkillIcons>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listSkillIcons>>,
+          TError,
+          Awaited<ReturnType<typeof listSkillIcons>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListSkillIcons<
+  TData = Awaited<ReturnType<typeof listSkillIcons>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  params?: ListSkillIconsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof listSkillIcons>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listSkillIcons>>,
+          TError,
+          Awaited<ReturnType<typeof listSkillIcons>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListSkillIcons<
+  TData = Awaited<ReturnType<typeof listSkillIcons>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  params?: ListSkillIconsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof listSkillIcons>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List the skill icons uploaded to a project
+ */
+
+export function useListSkillIcons<
+  TData = Awaited<ReturnType<typeof listSkillIcons>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  params?: ListSkillIconsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof listSkillIcons>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListSkillIconsQueryOptions(
+    projectId,
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type uploadSkillIconResponse200 = {
+  data: IconMeta;
+  status: 200;
+};
+
+export type uploadSkillIconResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type uploadSkillIconResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type uploadSkillIconResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type uploadSkillIconResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type uploadSkillIconResponseSuccess = uploadSkillIconResponse200 & {
+  headers: Headers;
+};
+export type uploadSkillIconResponseError = (
+  | uploadSkillIconResponse400
+  | uploadSkillIconResponse401
+  | uploadSkillIconResponse403
+  | uploadSkillIconResponse500
+) & {
+  headers: Headers;
+};
+
+export type uploadSkillIconResponse =
+  uploadSkillIconResponseSuccess | uploadSkillIconResponseError;
+
+export const getUploadSkillIconUrl = (projectId: string) => {
+  return `/elitea_core/upload_skill_icon/prompt_lib/${projectId}`;
+};
+
+/**
+ * NOTE(W2): internal/api/v2/eliteacore/skill_icon.go:245 (UploadSkillIcon).
+ *
+ * The multipart field is `file`. A request that names no file is a 400,
+ * NOT the agent route's accepted no-op: this family has a listing to keep
+ * honest, and a 200 for an upload that stored nothing is the
+ * success-without-persistence shape the port refuses.
+ *
+ * The response IS the icon_meta object, unchanged, and is what a caller
+ * PUTs back to bind the icon to a skill version later.
+ * @summary Store a skill icon
+ */
+export const uploadSkillIcon = async (
+  projectId: string,
+  iconUploadForm: IconUploadForm,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<uploadSkillIconResponse> => {
+  const formData = new FormData();
+  formData.append(`file`, iconUploadForm.file);
+  if (iconUploadForm.width !== undefined) {
+    formData.append(`width`, iconUploadForm.width.toString());
+  }
+  if (iconUploadForm.height !== undefined) {
+    formData.append(`height`, iconUploadForm.height.toString());
+  }
+
+  return eliteaFetch<uploadSkillIconResponse>(
+    getUploadSkillIconUrl(projectId),
+    {
+      ...options,
+      method: "POST",
+      body: formData,
+    },
+  );
+};
+
+export const getUploadSkillIconQueryKey = (
+  projectId: string,
+  iconUploadForm?: IconUploadForm,
+) => {
+  return [
+    "POST",
+    `/elitea_core/upload_skill_icon/prompt_lib/${projectId}`,
+    iconUploadForm,
+  ] as const;
+};
+
+export const getUploadSkillIconQueryOptions = <
+  TData = Awaited<ReturnType<typeof uploadSkillIcon>>,
+  TError = ErrorResponse | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  iconUploadForm: IconUploadForm,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof uploadSkillIcon>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getUploadSkillIconQueryKey(projectId, iconUploadForm);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof uploadSkillIcon>>> = ({
+    signal,
+  }) =>
+    uploadSkillIcon(projectId, iconUploadForm, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof uploadSkillIcon>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type UploadSkillIconQueryResult = NonNullable<
+  Awaited<ReturnType<typeof uploadSkillIcon>>
+>;
+export type UploadSkillIconQueryError =
+  ErrorResponse | N401Response | N403Response | N500Response;
+
+export function useUploadSkillIcon<
+  TData = Awaited<ReturnType<typeof uploadSkillIcon>>,
+  TError = ErrorResponse | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  iconUploadForm: IconUploadForm,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof uploadSkillIcon>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof uploadSkillIcon>>,
+          TError,
+          Awaited<ReturnType<typeof uploadSkillIcon>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUploadSkillIcon<
+  TData = Awaited<ReturnType<typeof uploadSkillIcon>>,
+  TError = ErrorResponse | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  iconUploadForm: IconUploadForm,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof uploadSkillIcon>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof uploadSkillIcon>>,
+          TError,
+          Awaited<ReturnType<typeof uploadSkillIcon>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUploadSkillIcon<
+  TData = Awaited<ReturnType<typeof uploadSkillIcon>>,
+  TError = ErrorResponse | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  iconUploadForm: IconUploadForm,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof uploadSkillIcon>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Store a skill icon
+ */
+
+export function useUploadSkillIcon<
+  TData = Awaited<ReturnType<typeof uploadSkillIcon>>,
+  TError = ErrorResponse | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  iconUploadForm: IconUploadForm,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof uploadSkillIcon>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getUploadSkillIconQueryOptions(
+    projectId,
+    iconUploadForm,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type uploadSkillIconForVersionResponse200 = {
+  data: IconMeta;
+  status: 200;
+};
+
+export type uploadSkillIconForVersionResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type uploadSkillIconForVersionResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type uploadSkillIconForVersionResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type uploadSkillIconForVersionResponse404 = {
+  data: SkillIconBindRefusal;
+  status: 404;
+};
+
+export type uploadSkillIconForVersionResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type uploadSkillIconForVersionResponseSuccess =
+  uploadSkillIconForVersionResponse200 & {
+    headers: Headers;
+  };
+export type uploadSkillIconForVersionResponseError = (
+  | uploadSkillIconForVersionResponse400
+  | uploadSkillIconForVersionResponse401
+  | uploadSkillIconForVersionResponse403
+  | uploadSkillIconForVersionResponse404
+  | uploadSkillIconForVersionResponse500
+) & {
+  headers: Headers;
+};
+
+export type uploadSkillIconForVersionResponse =
+  | uploadSkillIconForVersionResponseSuccess
+  | uploadSkillIconForVersionResponseError;
+
+export const getUploadSkillIconForVersionUrl = (
+  projectId: string,
+  versionId: number,
+) => {
+  return `/elitea_core/upload_skill_icon/prompt_lib/${projectId}/${versionId}`;
+};
+
+/**
+ * NOTE(W2): internal/api/v2/eliteacore/skill_icon.go:245 (UploadSkillIcon,
+ * the registration carrying the optional trailing segment).
+ *
+ * The same upload as the two-segment POST, plus the bind, in one request.
+ * The two-call shape stays available and is what the picker uses for an
+ * icon that is already stored.
+ *
+ * The bind is reported. A version id that matches no row is a 404, not a
+ * 200 for a skill that still has no icon.
+ * @summary Store a skill icon and bind it to one skill version
+ */
+export const uploadSkillIconForVersion = async (
+  projectId: string,
+  versionId: number,
+  iconUploadForm: IconUploadForm,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<uploadSkillIconForVersionResponse> => {
+  const formData = new FormData();
+  formData.append(`file`, iconUploadForm.file);
+  if (iconUploadForm.width !== undefined) {
+    formData.append(`width`, iconUploadForm.width.toString());
+  }
+  if (iconUploadForm.height !== undefined) {
+    formData.append(`height`, iconUploadForm.height.toString());
+  }
+
+  return eliteaFetch<uploadSkillIconForVersionResponse>(
+    getUploadSkillIconForVersionUrl(projectId, versionId),
+    {
+      ...options,
+      method: "POST",
+      body: formData,
+    },
+  );
+};
+
+export const getUploadSkillIconForVersionQueryKey = (
+  projectId: string,
+  versionId: number,
+  iconUploadForm?: IconUploadForm,
+) => {
+  return [
+    "POST",
+    `/elitea_core/upload_skill_icon/prompt_lib/${projectId}/${versionId}`,
+    iconUploadForm,
+  ] as const;
+};
+
+export const getUploadSkillIconForVersionQueryOptions = <
+  TData = Awaited<ReturnType<typeof uploadSkillIconForVersion>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | SkillIconBindRefusal
+    | N500Response,
+>(
+  projectId: string,
+  versionId: number,
+  iconUploadForm: IconUploadForm,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof uploadSkillIconForVersion>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getUploadSkillIconForVersionQueryKey(projectId, versionId, iconUploadForm);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof uploadSkillIconForVersion>>
+  > = ({ signal }) =>
+    uploadSkillIconForVersion(projectId, versionId, iconUploadForm, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      versionId !== null &&
+      versionId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof uploadSkillIconForVersion>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type UploadSkillIconForVersionQueryResult = NonNullable<
+  Awaited<ReturnType<typeof uploadSkillIconForVersion>>
+>;
+export type UploadSkillIconForVersionQueryError =
+  | ErrorResponse
+  | N401Response
+  | N403Response
+  | SkillIconBindRefusal
+  | N500Response;
+
+export function useUploadSkillIconForVersion<
+  TData = Awaited<ReturnType<typeof uploadSkillIconForVersion>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | SkillIconBindRefusal
+    | N500Response,
+>(
+  projectId: string,
+  versionId: number,
+  iconUploadForm: IconUploadForm,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof uploadSkillIconForVersion>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof uploadSkillIconForVersion>>,
+          TError,
+          Awaited<ReturnType<typeof uploadSkillIconForVersion>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUploadSkillIconForVersion<
+  TData = Awaited<ReturnType<typeof uploadSkillIconForVersion>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | SkillIconBindRefusal
+    | N500Response,
+>(
+  projectId: string,
+  versionId: number,
+  iconUploadForm: IconUploadForm,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof uploadSkillIconForVersion>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof uploadSkillIconForVersion>>,
+          TError,
+          Awaited<ReturnType<typeof uploadSkillIconForVersion>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUploadSkillIconForVersion<
+  TData = Awaited<ReturnType<typeof uploadSkillIconForVersion>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | SkillIconBindRefusal
+    | N500Response,
+>(
+  projectId: string,
+  versionId: number,
+  iconUploadForm: IconUploadForm,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof uploadSkillIconForVersion>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Store a skill icon and bind it to one skill version
+ */
+
+export function useUploadSkillIconForVersion<
+  TData = Awaited<ReturnType<typeof uploadSkillIconForVersion>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | SkillIconBindRefusal
+    | N500Response,
+>(
+  projectId: string,
+  versionId: number,
+  iconUploadForm: IconUploadForm,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof uploadSkillIconForVersion>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getUploadSkillIconForVersionQueryOptions(
+    projectId,
+    versionId,
+    iconUploadForm,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type bindSkillIconResponse200 = {
+  data: UpdatedResponse;
+  status: 200;
+};
+
+export type bindSkillIconResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type bindSkillIconResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type bindSkillIconResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type bindSkillIconResponse404 = {
+  data: SkillIconBindRefusal;
+  status: 404;
+};
+
+export type bindSkillIconResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type bindSkillIconResponseSuccess = bindSkillIconResponse200 & {
+  headers: Headers;
+};
+export type bindSkillIconResponseError = (
+  | bindSkillIconResponse400
+  | bindSkillIconResponse401
+  | bindSkillIconResponse403
+  | bindSkillIconResponse404
+  | bindSkillIconResponse500
+) & {
+  headers: Headers;
+};
+
+export type bindSkillIconResponse =
+  bindSkillIconResponseSuccess | bindSkillIconResponseError;
+
+export const getBindSkillIconUrl = (projectId: string, versionId: number) => {
+  return `/elitea_core/upload_skill_icon/prompt_lib/${projectId}/${versionId}`;
+};
+
+/**
+ * NOTE(W2): internal/api/v2/eliteacore/skill_icon.go:353
+ * (UpdateSkillIcon).
+ *
+ * The body is the icon_meta object the upload answered. `name` and `url`
+ * are REQUIRED strings — pylon parses the body through a model that
+ * declares them so, and a payload missing either is a 400 here rather
+ * than an icon_meta the read path cannot render. Empty strings in both
+ * reset the version to the default icon.
+ *
+ * A version id that matches no row is a 404. That refusal is the
+ * load-bearing half: a blind UPDATE matching no row would answer "saved"
+ * for a skill that still has no icon.
+ * @summary Bind an already-stored icon to a skill version, or clear it
+ */
+export const bindSkillIcon = async (
+  projectId: string,
+  versionId: number,
+  skillIconBindRequest: SkillIconBindRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<bindSkillIconResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+  return eliteaFetch<bindSkillIconResponse>(
+    getBindSkillIconUrl(projectId, versionId),
+    {
+      ...options,
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(skillIconBindRequest),
+    },
+  );
+};
+
+export const getBindSkillIconQueryKey = (
+  projectId: string,
+  versionId: number,
+  skillIconBindRequest?: SkillIconBindRequest,
+) => {
+  return [
+    "PUT",
+    `/elitea_core/upload_skill_icon/prompt_lib/${projectId}/${versionId}`,
+    skillIconBindRequest,
+  ] as const;
+};
+
+export const getBindSkillIconQueryOptions = <
+  TData = Awaited<ReturnType<typeof bindSkillIcon>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | SkillIconBindRefusal
+    | N500Response,
+>(
+  projectId: string,
+  versionId: number,
+  skillIconBindRequest: SkillIconBindRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof bindSkillIcon>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getBindSkillIconQueryKey(projectId, versionId, skillIconBindRequest);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof bindSkillIcon>>> = ({
+    signal,
+  }) =>
+    bindSkillIcon(projectId, versionId, skillIconBindRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      versionId !== null &&
+      versionId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof bindSkillIcon>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type BindSkillIconQueryResult = NonNullable<
+  Awaited<ReturnType<typeof bindSkillIcon>>
+>;
+export type BindSkillIconQueryError =
+  | ErrorResponse
+  | N401Response
+  | N403Response
+  | SkillIconBindRefusal
+  | N500Response;
+
+export function useBindSkillIcon<
+  TData = Awaited<ReturnType<typeof bindSkillIcon>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | SkillIconBindRefusal
+    | N500Response,
+>(
+  projectId: string,
+  versionId: number,
+  skillIconBindRequest: SkillIconBindRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof bindSkillIcon>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof bindSkillIcon>>,
+          TError,
+          Awaited<ReturnType<typeof bindSkillIcon>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useBindSkillIcon<
+  TData = Awaited<ReturnType<typeof bindSkillIcon>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | SkillIconBindRefusal
+    | N500Response,
+>(
+  projectId: string,
+  versionId: number,
+  skillIconBindRequest: SkillIconBindRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof bindSkillIcon>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof bindSkillIcon>>,
+          TError,
+          Awaited<ReturnType<typeof bindSkillIcon>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useBindSkillIcon<
+  TData = Awaited<ReturnType<typeof bindSkillIcon>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | SkillIconBindRefusal
+    | N500Response,
+>(
+  projectId: string,
+  versionId: number,
+  skillIconBindRequest: SkillIconBindRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof bindSkillIcon>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Bind an already-stored icon to a skill version, or clear it
+ */
+
+export function useBindSkillIcon<
+  TData = Awaited<ReturnType<typeof bindSkillIcon>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | SkillIconBindRefusal
+    | N500Response,
+>(
+  projectId: string,
+  versionId: number,
+  skillIconBindRequest: SkillIconBindRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof bindSkillIcon>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getBindSkillIconQueryOptions(
+    projectId,
+    versionId,
+    skillIconBindRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type deleteSkillIconResponse200 = {
+  data: OkResponse;
+  status: 200;
+};
+
+export type deleteSkillIconResponse400 = {
+  data: SkillIconDeleteRefusal;
+  status: 400;
+};
+
+export type deleteSkillIconResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type deleteSkillIconResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type deleteSkillIconResponse500 = {
+  data: SkillIconDeleteRefusal;
+  status: 500;
+};
+
+export type deleteSkillIconResponseSuccess = deleteSkillIconResponse200 & {
+  headers: Headers;
+};
+export type deleteSkillIconResponseError = (
+  | deleteSkillIconResponse400
+  | deleteSkillIconResponse401
+  | deleteSkillIconResponse403
+  | deleteSkillIconResponse500
+) & {
+  headers: Headers;
+};
+
+export type deleteSkillIconResponse =
+  deleteSkillIconResponseSuccess | deleteSkillIconResponseError;
+
+export const getDeleteSkillIconUrl = (projectId: string, name: string) => {
+  return `/elitea_core/upload_skill_icon/prompt_lib/${projectId}/${name}`;
+};
+
+/**
+ * NOTE(W2): internal/api/v2/eliteacore/skill_icon.go:405
+ * (DeleteSkillIcon).
+ *
+ * The unlink runs FIRST and its failure is reported. Deleting the bytes
+ * while leaving the rows pointing at them is how a gallery ends up full
+ * of broken images with no way back.
+ *
+ * An object that was already absent still answers `{"ok": true}` — the
+ * object store's delete is documented idempotent.
+ * @summary Remove a skill icon and unlink every version wearing it
+ */
+export const deleteSkillIcon = async (
+  projectId: string,
+  name: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<deleteSkillIconResponse> => {
+  return eliteaFetch<deleteSkillIconResponse>(
+    getDeleteSkillIconUrl(projectId, name),
+    {
+      ...options,
+      method: "DELETE",
+    },
+  );
+};
+
+export const getDeleteSkillIconQueryKey = (projectId: string, name: string) => {
+  return [
+    "DELETE",
+    `/elitea_core/upload_skill_icon/prompt_lib/${projectId}/${name}`,
+  ] as const;
+};
+
+export const getDeleteSkillIconQueryOptions = <
+  TData = Awaited<ReturnType<typeof deleteSkillIcon>>,
+  TError = SkillIconDeleteRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  name: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteSkillIcon>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getDeleteSkillIconQueryKey(projectId, name);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof deleteSkillIcon>>> = ({
+    signal,
+  }) => deleteSkillIcon(projectId, name, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      name !== null &&
+      name !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof deleteSkillIcon>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type DeleteSkillIconQueryResult = NonNullable<
+  Awaited<ReturnType<typeof deleteSkillIcon>>
+>;
+export type DeleteSkillIconQueryError =
+  SkillIconDeleteRefusal | N401Response | N403Response;
+
+export function useDeleteSkillIcon<
+  TData = Awaited<ReturnType<typeof deleteSkillIcon>>,
+  TError = SkillIconDeleteRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  name: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteSkillIcon>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof deleteSkillIcon>>,
+          TError,
+          Awaited<ReturnType<typeof deleteSkillIcon>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDeleteSkillIcon<
+  TData = Awaited<ReturnType<typeof deleteSkillIcon>>,
+  TError = SkillIconDeleteRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  name: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteSkillIcon>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof deleteSkillIcon>>,
+          TError,
+          Awaited<ReturnType<typeof deleteSkillIcon>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDeleteSkillIcon<
+  TData = Awaited<ReturnType<typeof deleteSkillIcon>>,
+  TError = SkillIconDeleteRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  name: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteSkillIcon>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Remove a skill icon and unlink every version wearing it
+ */
+
+export function useDeleteSkillIcon<
+  TData = Awaited<ReturnType<typeof deleteSkillIcon>>,
+  TError = SkillIconDeleteRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  name: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteSkillIcon>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getDeleteSkillIconQueryOptions(projectId, name, options);
 
   const query = useQuery(queryOptions, queryClient) as UseQueryResult<
     TData,

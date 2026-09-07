@@ -63,6 +63,23 @@
 #   elitea-sdk release that raises pillow, fastapi and httpcore, plus the
 #   unstructured 0.24.0 parity run. Delete this line and flip blocking to true
 #   when the image reports zero.
+#
+#   RE-CONFIRMED 2026-09-07 without a build: the resolved site-package closure
+#   (uv pip compile over the pinned SDK plus [agent-current,indexing-current])
+#   scanned with `trivy fs` reports the SAME 19 lines and the SAME split —
+#   pillow 13, starlette 3, h11 1, nltk 1, unstructured 1 — and uv refuses
+#   pillow==12.3.0, starlette==0.49.1 and h11==0.16.0 by naming the three SDK
+#   pins. The Debian half was NOT re-measured: that needs the image.
+#
+#   SIZE OF THE unstructured MOVE, measured the same way. Raising the three
+#   floors DOES resolve, but unstructured 0.24.0 changes its own BASE
+#   dependencies: it adds spacy>=3.7, numba>=0.60, filelock, installer and
+#   regex, and drops nltk and backoff. In this closure that is 25 new
+#   distributions — spacy with blis/thinc/cymem/preshed/murmurhash/catalogue/
+#   srsly/wasabi/weasel/confection/cloudpathlib/typer/rich, and numba with
+#   llvmlite. The parity run is therefore not a three-floor bump: it swaps the
+#   tokenizer stack under every indexing family and adds an LLVM JIT to the
+#   image. Size it before taking it.
 elitea-worker-python
 
 # findings #635 — RE-MEASURED 2026-09-06 on a cold local build of the shipping

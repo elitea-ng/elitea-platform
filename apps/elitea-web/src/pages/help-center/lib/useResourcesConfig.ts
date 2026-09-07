@@ -20,15 +20,14 @@
  * exposes exactly one section to non-administrators, `_PUBLIC_SECTIONS =
  * {"resources"}` — so the contract is preserved rather than invented.
  *
- * ## Why this calls `eliteaFetch` rather than a generated hook
+ * ## It reads through the generated client (issue 36, item 7)
  *
- * `orval` builds from `v2.yaml`, which does not describe the admin-panel routes;
- * there is nothing for it to generate. The spec's "one hand-written fetch
- * wrapper" rule (§2.4) is about not introducing a SECOND transport — and
- * `eliteaFetch` is that one wrapper, the same one every `pages/admin/api/*`
- * module in this port uses. Annotating the admin surface in the OpenAPI spec and
- * moving to a generated client stays a clean follow-up; it is not what was
- * keeping the links off the page.
+ * This hook used to call `eliteaFetch` with a literal URL, because `v2.yaml`
+ * described no admin-panel route and there was nothing for orval to generate.
+ * The route IS described now — `getResourcesConfigValues` — so the URL and the
+ * response type come from `shared/api/generated/resources`. The `useQuery`
+ * around it stays hand-written: this hook owns a five-minute `staleTime` and a
+ * fail-open default that orval's generated query options know nothing about.
  *
  * ## What is still empty, and honestly so
  *
@@ -52,7 +51,7 @@
 import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 
-import { eliteaFetch } from '@/shared/api/generated/mutator';
+import { getResourcesConfigValues } from '@/shared/api/generated/resources/resources';
 import { unwrapBody } from '@/shared/api/unwrap';
 
 import { RESOURCE_CARD_CONFIGS } from './ResourceCardConfig';
@@ -86,8 +85,6 @@ const DEFAULT_CONFIG_VALUES: Record<string, unknown> = Object.fromEntries(
   RESOURCE_CARD_CONFIGS.map((c): [string, boolean] => [c.enabledKey, true]),
 );
 
-const RESOURCES_URL = '/admin/plugin_config_values/prompt_lib/resources';
-
 /**
  * Builds the "Version: X (date)" label from the two values the administrator
  * sets on the Information card. Empty when neither is configured — a bare
@@ -109,11 +106,11 @@ export function useResourcesConfig(): ResourcesConfigResult {
   const query = useQuery({
     queryKey: ['help-center', 'resources-config'],
     queryFn: async (): Promise<Record<string, unknown>> => {
-      // `eliteaFetch` resolves `{data,status,headers}`; `unwrapBody` is the one
-      // sanctioned peel (R-A6). Reading `.values` off the envelope instead is
-      // the silent-empty-state defect of #132, and on this page it would look
-      // exactly like the gap this change closes.
-      const body = unwrapBody(await eliteaFetch<unknown>(RESOURCES_URL)) as
+      // The generated fetcher resolves `{data,status,headers}`; `unwrapBody` is
+      // the one sanctioned peel (R-A6). Reading `.values` off the envelope
+      // instead is the silent-empty-state defect of #132, and on this page it
+      // would look exactly like the gap this change closes.
+      const body = unwrapBody(await getResourcesConfigValues()) as
         | { values?: Record<string, unknown> }
         | undefined;
       return body?.values ?? {};

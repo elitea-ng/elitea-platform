@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"errors"
 
@@ -66,6 +67,12 @@ type OIDCHandler struct {
 	// personalProjects asks for the caller's personal project at sign-in. Nil
 	// is a working no-op, so a composition with no provisioner needs no branch.
 	personalProjects personalproject.AsyncEnsurer
+
+	// personalProjectWait bounds how long a successful login waits for the
+	// personal project it just asked for. Zero means defaultSignInProvisionWait;
+	// only a test sets it, so the production path cannot be given a wait an
+	// operator did not review. See signin.go's ensurePersonalProject.
+	personalProjectWait time.Duration
 
 	// firstLogin is operator configuration applied after an assertion resolves
 	// to an account. Empty unless WithFirstLoginPolicy was applied, in which
@@ -134,6 +141,17 @@ func (h *OIDCHandler) WithPersonalProjectEnsurer(ensurer personalproject.AsyncEn
 		return h
 	}
 	h.personalProjects = ensurer
+	return h
+}
+
+// WithPersonalProjectWait replaces the bound on that wait. It exists for the
+// tests that measure the bound: the production value is a constant, so a
+// deployment cannot be configured into holding its login callback open.
+func (h *OIDCHandler) WithPersonalProjectWait(wait time.Duration) *OIDCHandler {
+	if h == nil || wait <= 0 {
+		return h
+	}
+	h.personalProjectWait = wait
 	return h
 }
 
@@ -465,8 +483,8 @@ func (h *OIDCHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The personal project this account needs before the product is usable.
-	// Off the request path; see ensurePersonalProject.
-	ensurePersonalProject(h.personalProjects, userID)
+	// Bounded, and it never blocks the login; see ensurePersonalProject.
+	ensurePersonalProject(h.personalProjects, userID, h.personalProjectWait)
 
 	slog.Info("OIDC login successful",
 		"email", claims.Email, "user_id", userID, "provider", runtime.origin)

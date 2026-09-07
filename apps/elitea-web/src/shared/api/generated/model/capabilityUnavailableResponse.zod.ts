@@ -45,7 +45,11 @@ export const CapabilityUnavailableResponse = zod
   .object({
     error: zod.string().describe("Human-readable refusal message."),
     code: zod
-      .enum(["project_info_not_available", "index_types_not_available"])
+      .enum([
+        "project_info_not_available",
+        "index_types_not_available",
+        "icon_storage_not_configured",
+      ])
       .describe(
         "The machine-readable reason. One value per capability, stable across deployments, so a client branches on this and never on the message text.\n",
       ),

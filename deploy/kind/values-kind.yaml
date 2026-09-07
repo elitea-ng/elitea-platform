@@ -127,8 +127,6 @@ main:
 
   env:
     REDIS_URL: "redis:6379"
-    SHADOW_ENABLED: "false"
-    LEGACY_URL: ""
     APPLICATION_SECRET_KEY: "changeme-kind"
     COOKIE_SECURE: "false"
 

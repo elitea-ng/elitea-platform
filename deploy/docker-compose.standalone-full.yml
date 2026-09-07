@@ -706,8 +706,6 @@ services:
       # unwrapped E2E seed; a restored deployment can supply its existing key.
       SECRETS_MASTER_KEY: "${SECRETS_MASTER_KEY-}"
       REDIS_URL: "redis:6379"
-      SHADOW_ENABLED: "false"
-      LEGACY_URL: ""
       ADMIN_UI_STATIC_DIR: "/data/admin_ui/static/dist"
       APPLICATION_SECRET_KEY: "changeme-standalone"
       OIDC_ISSUER_URL: "http://oidc.localhost:9400"

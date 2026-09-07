@@ -1393,6 +1393,7 @@ components:
           enum:
             - project_info_not_available
             - index_types_not_available
+            - icon_storage_not_configured
         detail:
           type: string
           description: >
@@ -5782,6 +5783,278 @@ components:
       x-elitea-passthrough: >-
         NOTE(W2): UpdateIcon decodes an arbitrary map and stores it verbatim
         as meta.icon_meta (internal/api/v2/eliteacore/handler.go:1849-1858).
+
+    # ---- Icon galleries (issue 36, items 1 and 5) ------------------------------
+    IconRef:
+      type: object
+      required: [name, url]
+      properties:
+        name:
+          type: string
+          description: The stored file name. It is also the DELETE path segment.
+        url:
+          type: string
+          description: >
+            The path the browser loads the icon from, `/icons/{project}/{name}`.
+            That route is served OUTSIDE the authenticated group, because an
+            `<img src>` carries no Authorization header.
+      description: >
+        NOTE(W2): one row of a gallery listing —
+        internal/api/v2/eliteacore/skill_icon.go:160-166 and
+        internal/api/v2/eliteacore/handler.go (ListProjectIcons).
+
+    IconGalleryPage:
+      type: object
+      required: [rows, total]
+      properties:
+        rows:
+          type: array
+          items:
+            $ref: '#/components/schemas/IconRef'
+        total:
+          type: integer
+          description: >
+            Every icon in the project, NOT the length of this page.
+            social/rpc/icons.py:get_icons_list computes it before it slices, and
+            a client paging on it needs the full figure.
+      description: >
+        NOTE(W2): the `{rows, total}` shape both galleries answer —
+        internal/api/v2/eliteacore/skill_icon.go:168-171 and
+        internal/api/v2/eliteacore/handler.go (ListProjectIcons). It is `rows`
+        and not `items`: an `items` key is a 200 that renders an empty gallery,
+        which this family has already shipped once.
+
+    IconMeta:
+      type: object
+      required: [name, url, size, initial_file_size, resulting_file_size]
+      properties:
+        name:
+          type: string
+          description: >
+            The GENERATED file name, never the uploaded one. It becomes a path
+            segment of a public URL, so its extension comes from an allowlist.
+        url:
+          type: string
+        size:
+          type: string
+          description: >
+            The requested thumbnail box as `WxH`. It is what the CLIENT asked
+            for, clamped — this service re-encodes nothing, so it is not a
+            promise about the stored pixels.
+        initial_file_size:
+          type: string
+          description: The uploaded size, formatted by social/utils/image_utils.py's sizeof_fmt.
+        resulting_file_size:
+          type: string
+          description: The stored size, in the same format.
+      description: >
+        NOTE(W2): the object social/rpc/process_image.py:save_image returns and
+        both upload routes answer —
+        internal/api/v2/eliteacore/skill_icon.go:311-317 and
+        internal/api/v2/eliteacore/handler.go (CreateProjectIcon). A caller PUTs
+        this back, unchanged, to bind the icon to an entity.
+
+    IconUploadForm:
+      type: object
+      required: [file]
+      properties:
+        file:
+          type: string
+          format: binary
+          description: The image. 512 KB is the cap for both families.
+        width:
+          type: integer
+          description: >
+            The requested box width. 64 by default. It is clamped to 64 for
+            skill icons and to 512 for project icons — project_icon.py's
+            MAX_DIMENSION really is different from upload_skill_icon.py's.
+        height:
+          type: integer
+          description: The requested box height. Same defaults and clamps as width.
+      description: >
+        NOTE(W2): the multipart form both upload routes read —
+        internal/api/v2/eliteacore/skill_icon.go:245-283 and
+        internal/api/v2/eliteacore/handler.go (CreateProjectIcon). The file part
+        is named `file`; a request without it is a 400 and stores nothing.
+
+    SkillIconBindRequest:
+      type: object
+      required: [name, url]
+      properties:
+        name:
+          type: string
+          description: Empty together with `url` resets the version to the default icon.
+        url:
+          type: string
+        size:
+          type: string
+        initial_file_size:
+          type: string
+        resulting_file_size:
+          type: string
+      description: >
+        NOTE(W2): internal/api/v2/eliteacore/skill_icon.go:353-380
+        (UpdateSkillIcon). The body is decoded as a free map and stored verbatim
+        as meta.icon_meta, but `name` and `url` must both be strings or the
+        request is a 400 — pylon's model declares them required, and an
+        icon_meta without them is one the read path cannot render.
+
+    SkillIconBindRefusal:
+      type: object
+      required: [ok, msg]
+      properties:
+        ok:
+          type: boolean
+          description: Always false on this body.
+        msg:
+          type: string
+          description: '`There is no such version id N`.'
+      description: >
+        NOTE(W2): internal/api/v2/eliteacore/skill_icon.go:333-336 and :392-395
+        — the 404 both binding routes answer. It is NOT the flat
+        `{"error": "..."}` shape; pylon answers `{ok, msg}` here and the port
+        keeps it.
+
+    SkillIconDeleteRefusal:
+      type: object
+      required: [ok, error]
+      properties:
+        ok:
+          type: boolean
+          description: Always false on this body.
+        error:
+          type: string
+      description: >
+        NOTE(W2): internal/api/v2/eliteacore/skill_icon.go:405-450
+        (DeleteSkillIcon). The refusals on this route carry `ok` beside
+        `error`, because the success body is `{"ok": true}` and a client
+        branches on one key.
+
+    UpdatedResponse:
+      type: object
+      required: [updated]
+      properties:
+        updated:
+          type: boolean
+      description: >
+        NOTE(W2): internal/api/v2/eliteacore/skill_icon.go:399
+        (UpdateSkillIcon's success body).
+
+    # ---- Personal access tokens (issue 36, item 6) -----------------------------
+    PersonalAccessToken:
+      type: object
+      required: [id, uuid, expires, user_id, name, project_id, token]
+      properties:
+        id:
+          type: integer
+          format: int64
+        uuid:
+          type: string
+          nullable: true
+          description: The identifier the GET and the DELETE address the token by.
+        expires:
+          type: string
+          format: date-time
+          nullable: true
+          description: Null means the key never expires.
+        user_id:
+          type: integer
+          format: int64
+        name:
+          type: string
+          nullable: true
+          description: >
+            Null is a real stored value here, distinct from an absent key: the
+            create refuses a body with no `name` and accepts an explicit null.
+        project_id:
+          type: integer
+          format: int64
+          nullable: true
+          description: >
+            The project this key bills, or null when the key is unbound. It is
+            reported WITHOUT omitempty so a client can tell "unbound" from "a
+            server that does not know about bindings".
+        token:
+          type: string
+          description: >
+            THE FULL SIGNED VALUE ON THE CREATE RESPONSE, AND ONLY THERE. Every
+            read masks it to `"..."` plus the last seven characters, which is a
+            display hint and not a credential.
+      description: >
+        NOTE(W2): internal/api/v2/auth/tokens.go:41-52 (the `Token` struct) and
+        :575-600 (presentToken, which decides whether `token` is revealed).
+
+    PersonalAccessTokenCreateRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          nullable: true
+          description: >
+            Required as a KEY. An absent `name` is a 400; an explicit null is
+            stored and read back as null. Longer than 768 bytes is a 400.
+        expires:
+          allOf: [{ $ref: '#/components/schemas/TokenExpiration' }]
+          nullable: true
+          description: Absent or null mints a key that never expires.
+        project_id:
+          type: integer
+          format: int64
+          nullable: true
+          description: >
+            Absent or null mints an UNBOUND key, which is the default. Every
+            other shape — a JSON string, a float, a boolean, zero, a negative
+            number, a value the integer column cannot hold — is refused rather
+            than falling back to unbound, because a caller that typed a project
+            must not receive a key that bills somewhere else.
+      description: >
+        NOTE(W2): internal/api/v2/auth/tokens.go:360-368
+        (tokenCreateRequest) and :375-400 (resolveTokenProjectID).
+
+    TokenExpiration:
+      type: object
+      required: [measure, value]
+      properties:
+        measure:
+          type: string
+          enum: [seconds, minutes, hours, days, weeks]
+          description: Any other value is a 400, not a silent default.
+        value:
+          type: integer
+          format: int64
+          nullable: true
+          description: >
+            Null is a 400 ("expires must have value"). A value large enough to
+            overflow the duration arithmetic is a 400 as well, not a wrapped
+            date in the past.
+      description: >
+        NOTE(W2): internal/api/v2/auth/tokens.go:410-413 (tokenExpiration) and
+        :636-659 (resolve). The expiry is computed from the server's clock at
+        creation, so the client sends an OFFSET and never an instant.
+
+    # ---- Public platform configuration (issue 36, item 7) ----------------------
+    PublicConfigValues:
+      type: object
+      required: [values]
+      properties:
+        values:
+          type: object
+          additionalProperties: true
+          x-elitea-passthrough: >-
+            NOTE(W2): internal/api/v2/admin/config_values.go:175-192
+            (PromptLibResourcesValues) — the keys are BUILT from the resources
+            section's card list at
+            internal/api/v2/admin/config_schemas.go:1083-1160
+            (`resources_<card>_enabled`, `_title`, `_description`, `_links`,
+            plus `resources_information_version`), so the key set changes with
+            the card list rather than with this document. A fixed property list
+            here would be stale the first time a card is added.
+      description: >
+        NOTE(W2): internal/api/v2/admin/config_values.go:124-129
+        (configValuesResponse) minus the two keys this route deliberately omits
+        — `fields_meta` and `requires_restart` are authoring concerns for the
+        admin form, and this response is read by the product UI.
 
     DefaultIcon:
       type: object
@@ -11314,15 +11587,28 @@ paths:
               schema:
                 $ref: '#/components/schemas/PublishValidationResult'
 
-  # APPLICATIONS — task cancellation
-  # NOTE(W1, waiver W-008): the former DELETE
-  # /elitea_core/application_task/prompt_lib/{project_id}/{task_id}
-  # (stopApplicationTask) was removed. The router has never served DELETE on
-  # that path (only GET, internal/api/router.go:430); the old SPA defines the
-  # mutation (src/api/applications.js:338) but useStopApplicationTaskMutation
-  # is imported by zero components, and the live stop paths use
-  # DELETE /task/prompt_lib/{projectID}/{taskID}, which the router serves.
-  # Dead surface — not ported to the new app.
+  # APPLICATIONS — task poll and cancellation
+  # NOTE(W1, waiver W-008, superseded by issue 254 P2): the former
+  # stopApplicationTask operation on
+  # /elitea_core/application_task/prompt_lib/{project_id}/{task_id} was removed
+  # here as dead surface — the old SPA defines the mutation
+  # (src/api/applications.js:338) but useStopApplicationTaskMutation is
+  # imported by zero components.
+  #
+  # The path IS served again, by internal/api/v2/agentexecution
+  # (CurrentApplicationTaskPath), mounted in production_router.go under the
+  # runtime plane. GET polls the run bound to a response message and DELETE
+  # stops it through the same use case
+  # DELETE /task/prompt_lib/{projectID}/{responseMessageID} runs. The path
+  # parameter is the RESPONSE MESSAGE UUID, not a pylon arbiter task id.
+  #
+  # Both operations are deliberately still absent from this document, for the
+  # reason the chat_config note below gives and one more of their own: every
+  # sibling route of the runtime plane — the message start, the regeneration,
+  # continue_predict and the task cancel — is undescribed too, so describing
+  # the poll alone would tell a client it can watch a run it has no described
+  # way to start. Describe them together, or not at all. No client in this
+  # workspace calls either verb.
 
   # APPLICATIONS — versions
   /elitea_core/version/prompt_lib/{project_id}/{application_id}/{version_id}:
@@ -13092,6 +13378,184 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
 
   # ==========================================================================
+  # APPLICATIONS — project icons (issue 36, item 5)
+  # internal/api/v2/eliteacore/handler.go (ListProjectIcons,
+  # CreateProjectIcon, DeleteProjectIcon), registered in
+  # internal/api/router.go under `models.project_context.view` for the read
+  # and `.edit` for the two writes.
+  #
+  # These share the `icons` bucket with the agent and skill icons and are told
+  # apart by the `pi_` FILENAME prefix, for the same reason the skill family
+  # uses `skill_`: the only route that serves an icon to a browser takes ONE
+  # path segment for the file name.
+  #
+  # All three answer 501 `icon_storage_not_configured` when the deployment
+  # composes no object store. That is a property of the deployment, identical
+  # for every retry, so it is 501 and not 500 — and it is not an empty 200,
+  # which is what this family used to answer for all three verbs.
+  # ==========================================================================
+  /elitea_core/project_icon/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+
+    get:
+      operationId: listProjectIcons
+      summary: List the icons uploaded to a project
+      description: |
+        NOTE(W2): internal/api/v2/eliteacore/handler.go (ListProjectIcons).
+
+        `total` counts every uploaded icon, not the rows on this page. The rows
+        are sorted by name before the slice, so a page is stable between two
+        calls.
+
+        Both parameters used to be accepted and DISCARDED, so a project with
+        more icons than one backend page could never reach the rest of them:
+        every request answered page one and reported it as the whole set.
+      tags: [applications]
+      parameters:
+        - name: skip
+          in: query
+          schema: { type: integer, default: 0 }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 200 }
+      responses:
+        '200':
+          description: One page of the project's uploaded icons
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IconGalleryPage'
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500':
+          description: >
+            The object store could not be listed. `code` is `icon_list_failed`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '501':
+          description: >
+            No object store is composed. `code` is
+            `icon_storage_not_configured`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CapabilityUnavailableResponse'
+
+    post:
+      operationId: uploadProjectIcon
+      summary: Store a project icon
+      description: |
+        NOTE(W2): internal/api/v2/eliteacore/handler.go (CreateProjectIcon).
+
+        The multipart field is `file`; `width` and `height` are optional and
+        are clamped to project_icon.py's MAX_DIMENSION of 512 — NOT the 64 the
+        agent and skill icons use, because a project icon is rendered larger.
+
+        The response is the whole icon_meta object. It used to carry `name` and
+        `url` only, and the project-info PUT stores whatever the picker hands
+        back, so the stored icon_meta stopped describing the file.
+
+        The stored name is GENERATED, never taken from the upload: it becomes a
+        path segment of a public, unauthenticated URL, and the extension
+        allowlist is what keeps that route from serving attacker-chosen content
+        types from the app's own origin.
+      tags: [applications]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/IconUploadForm'
+      responses:
+        '200':
+          description: The stored icon's metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IconMeta'
+        '400':
+          description: >
+            No `file` part (`code` is `missing_file`), or the file is larger
+            than 512 KB (`code` is `icon_too_large`). The cap is enforced
+            against the declared part size AND the measured stored size, and an
+            object that gets past the first check is removed rather than left
+            for the listing to advertise.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500':
+          description: >
+            The object store refused the write. `code` is `icon_write_failed`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '501':
+          description: >
+            No object store is composed. `code` is
+            `icon_storage_not_configured`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CapabilityUnavailableResponse'
+
+  /elitea_core/project_icon/prompt_lib/{project_id}/{name}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: name
+        in: path
+        required: true
+        schema: { type: string }
+        description: The stored file name, as the listing reports it.
+
+    delete:
+      operationId: deleteProjectIcon
+      summary: Remove a project icon
+      description: |
+        NOTE(W2): internal/api/v2/eliteacore/handler.go (DeleteProjectIcon).
+
+        204 for an object that was already absent is deliberate — the object
+        store's delete is documented idempotent — but a store that could not be
+        reached is reported, because "gone" and "we could not tell" are
+        different answers. This route used to answer 204 and do nothing at all,
+        so a deleted icon reappeared on the next listing.
+      tags: [applications]
+      responses:
+        '204':
+          description: The icon is gone.
+        '400':
+          description: The icon name is not a usable path segment.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500':
+          description: >
+            The object store refused the delete. `code` is
+            `icon_delete_failed`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '501':
+          description: >
+            No object store is composed. `code` is
+            `icon_storage_not_configured`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CapabilityUnavailableResponse'
+
+  # ==========================================================================
   # ARTIFACTS — buckets, objects, transfer grants
   # docs/plans/storage-migration-plan.md S7. Replaces the retired legacy
   # surface (ADR-0016 §7) outright — no data migration, no old-shape
@@ -13867,12 +14331,197 @@ paths:
   # (src/api/auth.js:19: '/permissions/prompt_lib/' + PUBLIC_PROJECT_ID).
 
   # ==========================================================================
+  # AUTH — personal access tokens (issue 36, item 6)
+  # internal/api/v2/auth/tokens.go, mounted at /auth by internal/api/router.go.
+  #
+  # Every operation below is scoped to the CALLING user. There is no route that
+  # reads or deletes another user's key, and the repository takes the owner id
+  # from the request context rather than from any parameter.
+  #
+  # The secret is shown ONCE. The create answers the full signed token; every
+  # read answers `"..." + the last seven characters`, which is a display hint
+  # and not a credential.
+  # ==========================================================================
+  /auth/token/:
+    get:
+      operationId: listPersonalTokens
+      summary: List the calling user's personal access tokens
+      description: |
+        NOTE(W2): internal/api/v2/auth/tokens.go:306 (TokenList).
+
+        A PLAIN ARRAY, not a paged envelope. `token` on every row is the masked
+        form.
+
+        503 when the deployment composes no token repository or no signing key.
+        A deployment that cannot sign a token cannot honestly list one either,
+        and answering an empty array would read as "you have no keys".
+      tags: [auth]
+      responses:
+        '200':
+          description: The caller's tokens, masked
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PersonalAccessToken'
+        '401': { $ref: '#/components/responses/401' }
+        '503':
+          description: The token service is not configured on this deployment.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    post:
+      operationId: createPersonalToken
+      summary: Mint a personal access token
+      description: |
+        NOTE(W2): internal/api/v2/auth/tokens.go:430 (TokenCreate).
+
+        THE ONLY RESPONSE THAT CARRIES THE SECRET. `token` here is the full
+        signed value; every later read masks it. The response also sets
+        `Cache-Control: no-store`.
+
+        `name` is required and may be JSON null — an absent key is a 400, an
+        explicit null is stored and returned as null. `expires` absent or null
+        means the key never expires. `project_id` is optional: absent or null
+        mints an UNBOUND key, which is the default; any other shape (a string,
+        a float, zero, a negative number, a value the integer column cannot
+        hold) is refused rather than silently falling back to unbound, because
+        a caller that typed a project must not receive a key that bills
+        somewhere else.
+      tags: [auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PersonalAccessTokenCreateRequest'
+      responses:
+        '200':
+          description: The new token, with its secret shown once
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PersonalAccessToken'
+        '400':
+          description: >
+            The body is not one complete JSON document, `name` is absent or too
+            long, `expires` names no value or an unknown measure, or
+            `project_id` is not a positive integer (`code` is
+            `invalid_project_id`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: >
+            The token owner is not a member of the requested project. `code` is
+            `project_forbidden`. The message names only the project the caller
+            supplied, and is the same whether that project exists, is
+            suspended, or was never created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: The token service is not configured on this deployment.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/token/{token_uuid}:
+    parameters:
+      - name: token_uuid
+        in: path
+        required: true
+        schema: { type: string }
+        description: >
+          The token's UUID, exactly 36 characters in the canonical hyphenated
+          hexadecimal form. Any other shape is a 400 and never reaches a query.
+
+    get:
+      operationId: getPersonalToken
+      summary: Read one of the calling user's tokens
+      description: |
+        NOTE(W2): internal/api/v2/auth/tokens.go:332 (TokenGet). `token` is
+        masked.
+
+        A token that does not exist and a token belonging to somebody else are
+        the SAME 400 here. The lookup is scoped to the caller, so the two cases
+        are not distinguishable and a probing caller learns nothing.
+      tags: [auth]
+      responses:
+        '200':
+          description: The token, masked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PersonalAccessToken'
+        '400':
+          description: The UUID is malformed, or names no token this caller owns.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '503':
+          description: The token service is not configured on this deployment.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    delete:
+      operationId: deletePersonalToken
+      summary: Revoke one of the calling user's tokens
+      description: |
+        NOTE(W2): internal/api/v2/auth/tokens.go:528 (TokenDelete). 204 with no
+        body.
+      tags: [auth]
+      responses:
+        '204':
+          description: The token is revoked.
+        '400':
+          description: The UUID is malformed, or names no token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: The token belongs to another user.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: The token service is not configured on this deployment.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ==========================================================================
   # CHAT
   # ==========================================================================
-  # NOTE(#126): webchatSync (POST
+  # NOTE(#126, re-checked for issue 254 P2): webchatSync (POST
   # /elitea_core/webchat/prompt_lib/{project_id}/{version_id}) was removed. It
   # was gated on RouterConfig.Predictor — the prototype indexer transport — and
-  # 404'd in every deployment. See #93 for the chat dispatch migration.
+  # 404'd in every deployment.
+  #
+  # It is NOT coming back, and it was never a chat surface. The pylon module
+  # (legacy/plugins/elitea_core/api/v2/webchat.py) is an unauthenticated
+  # Microsoft Bot Framework webhook stub: it echoes the caller's own text back
+  # to a connector URL taken from the request body, carries the literal
+  # placeholder strings 'MICROSOFT-APP-ID' and 'MICROSOFT-APP-PASSWORD' as its
+  # credentials, and marks its missing permission gate with `# FIXME: auth`. It
+  # never predicts and never reads its own {version_id}. A public chat entry
+  # point is a NEW feature; issue 254 carries the finding and a bounded design.
+  # See #93 for the chat dispatch migration.
 
   # NOTE(#126/#194): getChatConfig (GET
   # /elitea_core/chat_config/prompt_lib/{project_id}) was removed here when the
@@ -14087,19 +14736,98 @@ paths:
   # ==========================================================================
 
   # ==========================================================================
-  # RESOURCES
+  # RESOURCES (issue 36, item 7)
   # NOTE(issue 621): the header used to read "TODO: Enumerate endpoints when
   # inventory is available". The inventory is available. The TODO was stale.
   #
-  # ONE route carries this name: GET
-  # /admin/plugin_config_values/prompt_lib/resources
-  # (internal/api/router.go, adminHandler.PromptLibResourcesValues). It is the
-  # Help Center's link list, and the only config section pylon exposes to a
-  # non-administrator. It stays undescribed because no elitea-web client calls
-  # it: the Help Center renders the baseline's own hardcoded fallback copy
-  # (RESOURCE_CARD_CONFIGS). Describe it when a page reads it (issue 36,
-  # item 7).
+  # It then said the one route here stays undescribed because no elitea-web
+  # client calls it. That reason has expired: the Help Center reads it, and the
+  # route is described below.
+  #
+  # The SECOND route the Help Center's data comes from, GET
+  # /admin/system_info/prompt_lib, is described under ADMIN — system info. It
+  # answers 501 in every deployment and no first-party page calls it; it is in
+  # this document so a generated client carries the refusal rather than
+  # inventing a shape for it.
   # ==========================================================================
+  /admin/plugin_config_values/prompt_lib/resources:
+    get:
+      operationId: getResourcesConfigValues
+      summary: Read the Help Center's administrator-owned links and version label
+      description: |
+        NOTE(W2): internal/api/v2/admin/config_values.go:175
+        (PromptLibResourcesValues).
+
+        THE ONLY CONFIG SECTION A NON-ADMINISTRATOR MAY READ, and it is
+        restricted by being a ROUTE rather than a parameter: there is no section
+        id a caller could substitute. pylon restricts it the same way
+        (`_PUBLIC_SECTIONS = {"resources"}`).
+
+        The answer merges the section's declared defaults with whatever an
+        administrator saved on Admin › Configuration › Resources, so a key is
+        always present even when nothing was ever stored.
+
+        There is no `fields_meta` here. That key is an authoring concern for the
+        admin form, and this response is consumed by the product UI.
+
+        This route used to answer 200 with chat and upload limits
+        (`max_file_size`, `max_context_length`, …) under no `values` wrapper —
+        a handler answering a different question than the page asked, which is
+        why every Help Center card rendered "No links configured".
+      tags: [resources]
+      responses:
+        '200':
+          description: The resources section's effective values
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicConfigValues'
+        '401': { $ref: '#/components/responses/401' }
+        '500':
+          description: The platform configuration store could not be read.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ==========================================================================
+  # ADMIN — system info (issue 36, item 7)
+  #
+  # DESCRIBED AS A REFUSAL, deliberately. internal/api/v2/admin/handler.go:170
+  # answers 501 unconditionally, in every deployment, and the comment above it
+  # states why: in pylon this route reports the versions of six named plugins,
+  # collected from the pylons that announced themselves on the Arbiter bus in
+  # the last 60 seconds. This service loads no plugins and has no such bus, and
+  # AGENTS.md names both as things the target architecture does not preserve.
+  # The route used to invent a hardcoded elitea_core/auth version map instead.
+  #
+  # NO FIRST-PARTY CLIENT CALLS IT, and none should while the answer can only
+  # be a refusal: apps/elitea-web's useResourcesConfig returns an empty plugin
+  # list on purpose rather than putting a 501 in the network log of every Help
+  # Center visit. It is described here so that anyone generating a client from
+  # this document gets the refusal, not an invented shape — and so the day this
+  # service has a real build version to report, the operation already exists.
+  # ==========================================================================
+  /admin/system_info/prompt_lib:
+    get:
+      operationId: getSystemInfo
+      summary: Report the platform's component versions (not available here)
+      description: |
+        NOTE(W2): internal/api/v2/admin/handler.go:170 (SystemInfo). It answers
+        501 and nothing else. There is no 200 to describe: this service reports
+        no per-plugin versions because it loads no plugins.
+      tags: [admin]
+      responses:
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '501':
+          description: >
+            System information has no equivalent in this service. The body is
+            the flat `{"error": "..."}` shape, with no `code`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   # ==========================================================================
   # SEARCH
@@ -14306,6 +15034,257 @@ paths:
   # (listPublicSkills/createPublicSkill) was spec-only drift — the router only
   # serves /skills/{mode}/{projectID} (3 segments; chi will not match a
   # 2-segment path to it) and the UI has no call site for the 2-segment shape.
+
+  # ==========================================================================
+  # SKILLS — icons (issue 36, item 1)
+  # internal/api/v2/eliteacore/skill_icon.go, registered in
+  # internal/api/router.go beside the agent icon family under the
+  # `models.applications.skills.upload_icon.*` permissions.
+  #
+  # The bytes live in the project's reserved `icons` bucket and are told apart
+  # from the agent icons by the `skill_` FILENAME prefix, not by a key
+  # directory: the only route that serves an icon back to a browser is
+  # `GET /icons/{projectID}/{filename}`, whose last segment is ONE path
+  # segment, so a key with a separator could not be addressed through it.
+  #
+  # WHAT THIS FAMILY DOES NOT DO, stated here because a client can observe it:
+  # pylon decodes the upload through Pillow, refuses an image smaller than the
+  # requested box, and re-encodes every icon to PNG at at most 64x64. There is
+  # no image codec in this service, so the bytes are stored as uploaded and
+  # `size` reports the box the CLIENT asked for. An icon may therefore be
+  # served at its original pixel size.
+  # ==========================================================================
+  /elitea_core/upload_skill_icon/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+
+    get:
+      operationId: listSkillIcons
+      summary: List the skill icons uploaded to a project
+      description: |
+        NOTE(W2): internal/api/v2/eliteacore/skill_icon.go:142 (ListSkillIcons).
+
+        `total` is the count of EVERY skill icon in the project, not the length
+        of the page — social/rpc/icons.py:get_icons_list computes it before it
+        slices, and a client paging on it needs the full figure. The rows are
+        sorted by name before the slice, so a page is stable between two calls.
+
+        A storage backend that cannot list (storage.ErrNotSupported) answers an
+        empty gallery rather than a 500: "this deployment stores no listable
+        icons" is what such a deployment truly has to show.
+      tags: [skills]
+      parameters:
+        - name: skip
+          in: query
+          schema: { type: integer, default: 0 }
+          description: >
+            Rows to drop from the front. A value past the end is an empty page,
+            never an error.
+        - name: limit
+          in: query
+          schema: { type: integer, default: 200 }
+          description: >
+            Rows to return. A non-positive value means "everything from skip".
+            A missing or non-numeric value is the default, not a 400.
+      responses:
+        '200':
+          description: One page of the project's skill icons
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IconGalleryPage'
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500': { $ref: '#/components/responses/500' }
+
+    post:
+      operationId: uploadSkillIcon
+      summary: Store a skill icon
+      description: |
+        NOTE(W2): internal/api/v2/eliteacore/skill_icon.go:245 (UploadSkillIcon).
+
+        The multipart field is `file`. A request that names no file is a 400,
+        NOT the agent route's accepted no-op: this family has a listing to keep
+        honest, and a 200 for an upload that stored nothing is the
+        success-without-persistence shape the port refuses.
+
+        The response IS the icon_meta object, unchanged, and is what a caller
+        PUTs back to bind the icon to a skill version later.
+      tags: [skills]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/IconUploadForm'
+      responses:
+        '200':
+          description: The stored icon's metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IconMeta'
+        '400':
+          description: >
+            No `file` part, or the file is larger than 512 KB. The cap is
+            enforced against the declared part size AND the measured stored
+            size, and an object that gets past the first check is removed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/upload_skill_icon/prompt_lib/{project_id}/{version_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: version_id
+        in: path
+        required: true
+        schema: { type: integer }
+
+    post:
+      operationId: uploadSkillIconForVersion
+      summary: Store a skill icon and bind it to one skill version
+      description: |
+        NOTE(W2): internal/api/v2/eliteacore/skill_icon.go:245 (UploadSkillIcon,
+        the registration carrying the optional trailing segment).
+
+        The same upload as the two-segment POST, plus the bind, in one request.
+        The two-call shape stays available and is what the picker uses for an
+        icon that is already stored.
+
+        The bind is reported. A version id that matches no row is a 404, not a
+        200 for a skill that still has no icon.
+      tags: [skills]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/IconUploadForm'
+      responses:
+        '200':
+          description: The stored icon's metadata, bound to the version
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IconMeta'
+        '400':
+          description: No `file` part, or the file is larger than 512 KB.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: >
+            No skill version with this id. The body is
+            `{"ok": false, "msg": "There is no such version id N"}`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SkillIconBindRefusal'
+        '500': { $ref: '#/components/responses/500' }
+
+    put:
+      operationId: bindSkillIcon
+      summary: Bind an already-stored icon to a skill version, or clear it
+      description: |
+        NOTE(W2): internal/api/v2/eliteacore/skill_icon.go:353
+        (UpdateSkillIcon).
+
+        The body is the icon_meta object the upload answered. `name` and `url`
+        are REQUIRED strings — pylon parses the body through a model that
+        declares them so, and a payload missing either is a 400 here rather
+        than an icon_meta the read path cannot render. Empty strings in both
+        reset the version to the default icon.
+
+        A version id that matches no row is a 404. That refusal is the
+        load-bearing half: a blind UPDATE matching no row would answer "saved"
+        for a skill that still has no icon.
+      tags: [skills]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SkillIconBindRequest'
+      responses:
+        '200':
+          description: The version now wears this icon
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UpdatedResponse'
+        '400':
+          description: >
+            The body is not an object, or `name` or `url` is missing or not a
+            string, or the project id is not a tenant this service can address.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: >
+            No skill version with this id. The body is
+            `{"ok": false, "msg": "There is no such version id N"}`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SkillIconBindRefusal'
+        '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/upload_skill_icon/prompt_lib/{project_id}/{name}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: name
+        in: path
+        required: true
+        schema: { type: string }
+        description: The stored file name, as the listing reports it.
+
+    delete:
+      operationId: deleteSkillIcon
+      summary: Remove a skill icon and unlink every version wearing it
+      description: |
+        NOTE(W2): internal/api/v2/eliteacore/skill_icon.go:405
+        (DeleteSkillIcon).
+
+        The unlink runs FIRST and its failure is reported. Deleting the bytes
+        while leaving the rows pointing at them is how a gallery ends up full
+        of broken images with no way back.
+
+        An object that was already absent still answers `{"ok": true}` — the
+        object store's delete is documented idempotent.
+      tags: [skills]
+      responses:
+        '200':
+          description: The icon is gone and no version references it
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: The project id or the icon name is not a usable segment.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SkillIconDeleteRefusal'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500':
+          description: The unlink or the object delete failed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SkillIconDeleteRefusal'
 
   # ==========================================================================
   # SKILLS — publishing (#249)

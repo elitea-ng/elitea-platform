@@ -52,7 +52,14 @@ import type {
   UseQueryResult,
 } from "@tanstack/react-query";
 
-import type { N401Response, N403Response, Permission } from "../model";
+import type {
+  ErrorResponse,
+  N401Response,
+  N403Response,
+  Permission,
+  PersonalAccessToken,
+  PersonalAccessTokenCreateRequest,
+} from "../model";
 
 import { eliteaFetch } from ".././mutator";
 
@@ -246,6 +253,868 @@ export function usePermissionList<
   queryKey: DataTag<QueryKey, TData, TError>;
 } {
   const queryOptions = getPermissionListQueryOptions(projectId, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listPersonalTokensResponse200 = {
+  data: PersonalAccessToken[];
+  status: 200;
+};
+
+export type listPersonalTokensResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listPersonalTokensResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type listPersonalTokensResponseSuccess =
+  listPersonalTokensResponse200 & {
+    headers: Headers;
+  };
+export type listPersonalTokensResponseError = (
+  listPersonalTokensResponse401 | listPersonalTokensResponse503
+) & {
+  headers: Headers;
+};
+
+export type listPersonalTokensResponse =
+  listPersonalTokensResponseSuccess | listPersonalTokensResponseError;
+
+export const getListPersonalTokensUrl = () => {
+  return `/auth/token/`;
+};
+
+/**
+ * NOTE(W2): internal/api/v2/auth/tokens.go:306 (TokenList).
+ *
+ * A PLAIN ARRAY, not a paged envelope. `token` on every row is the masked
+ * form.
+ *
+ * 503 when the deployment composes no token repository or no signing key.
+ * A deployment that cannot sign a token cannot honestly list one either,
+ * and answering an empty array would read as "you have no keys".
+ * @summary List the calling user's personal access tokens
+ */
+export const listPersonalTokens = async (
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listPersonalTokensResponse> => {
+  return eliteaFetch<listPersonalTokensResponse>(getListPersonalTokensUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getListPersonalTokensQueryKey = () => {
+  return [`/auth/token/`] as const;
+};
+
+export const getListPersonalTokensQueryOptions = <
+  TData = Awaited<ReturnType<typeof listPersonalTokens>>,
+  TError = N401Response | ErrorResponse,
+>(options?: {
+  query?: Partial<
+    UseQueryOptions<
+      Awaited<ReturnType<typeof listPersonalTokens>>,
+      TError,
+      TData
+    >
+  >;
+  request?: SecondParameter<typeof eliteaFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getListPersonalTokensQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listPersonalTokens>>
+  > = ({ signal }) => listPersonalTokens({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listPersonalTokens>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListPersonalTokensQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listPersonalTokens>>
+>;
+export type ListPersonalTokensQueryError = N401Response | ErrorResponse;
+
+export function useListPersonalTokens<
+  TData = Awaited<ReturnType<typeof listPersonalTokens>>,
+  TError = N401Response | ErrorResponse,
+>(
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listPersonalTokens>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listPersonalTokens>>,
+          TError,
+          Awaited<ReturnType<typeof listPersonalTokens>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListPersonalTokens<
+  TData = Awaited<ReturnType<typeof listPersonalTokens>>,
+  TError = N401Response | ErrorResponse,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listPersonalTokens>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listPersonalTokens>>,
+          TError,
+          Awaited<ReturnType<typeof listPersonalTokens>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListPersonalTokens<
+  TData = Awaited<ReturnType<typeof listPersonalTokens>>,
+  TError = N401Response | ErrorResponse,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listPersonalTokens>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List the calling user's personal access tokens
+ */
+
+export function useListPersonalTokens<
+  TData = Awaited<ReturnType<typeof listPersonalTokens>>,
+  TError = N401Response | ErrorResponse,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listPersonalTokens>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListPersonalTokensQueryOptions(options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type createPersonalTokenResponse200 = {
+  data: PersonalAccessToken;
+  status: 200;
+};
+
+export type createPersonalTokenResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type createPersonalTokenResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type createPersonalTokenResponse403 = {
+  data: ErrorResponse;
+  status: 403;
+};
+
+export type createPersonalTokenResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type createPersonalTokenResponseSuccess =
+  createPersonalTokenResponse200 & {
+    headers: Headers;
+  };
+export type createPersonalTokenResponseError = (
+  | createPersonalTokenResponse400
+  | createPersonalTokenResponse401
+  | createPersonalTokenResponse403
+  | createPersonalTokenResponse503
+) & {
+  headers: Headers;
+};
+
+export type createPersonalTokenResponse =
+  createPersonalTokenResponseSuccess | createPersonalTokenResponseError;
+
+export const getCreatePersonalTokenUrl = () => {
+  return `/auth/token/`;
+};
+
+/**
+ * NOTE(W2): internal/api/v2/auth/tokens.go:430 (TokenCreate).
+ *
+ * THE ONLY RESPONSE THAT CARRIES THE SECRET. `token` here is the full
+ * signed value; every later read masks it. The response also sets
+ * `Cache-Control: no-store`.
+ *
+ * `name` is required and may be JSON null — an absent key is a 400, an
+ * explicit null is stored and returned as null. `expires` absent or null
+ * means the key never expires. `project_id` is optional: absent or null
+ * mints an UNBOUND key, which is the default; any other shape (a string,
+ * a float, zero, a negative number, a value the integer column cannot
+ * hold) is refused rather than silently falling back to unbound, because
+ * a caller that typed a project must not receive a key that bills
+ * somewhere else.
+ * @summary Mint a personal access token
+ */
+export const createPersonalToken = async (
+  personalAccessTokenCreateRequest: PersonalAccessTokenCreateRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<createPersonalTokenResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+  return eliteaFetch<createPersonalTokenResponse>(getCreatePersonalTokenUrl(), {
+    ...options,
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...getHeaders(options?.headers),
+    },
+    body: JSON.stringify(personalAccessTokenCreateRequest),
+  });
+};
+
+export const getCreatePersonalTokenQueryKey = (
+  personalAccessTokenCreateRequest?: PersonalAccessTokenCreateRequest,
+) => {
+  return ["POST", `/auth/token/`, personalAccessTokenCreateRequest] as const;
+};
+
+export const getCreatePersonalTokenQueryOptions = <
+  TData = Awaited<ReturnType<typeof createPersonalToken>>,
+  TError = ErrorResponse | N401Response,
+>(
+  personalAccessTokenCreateRequest: PersonalAccessTokenCreateRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createPersonalToken>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getCreatePersonalTokenQueryKey(personalAccessTokenCreateRequest);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof createPersonalToken>>
+  > = ({ signal }) =>
+    createPersonalToken(personalAccessTokenCreateRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof createPersonalToken>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type CreatePersonalTokenQueryResult = NonNullable<
+  Awaited<ReturnType<typeof createPersonalToken>>
+>;
+export type CreatePersonalTokenQueryError = ErrorResponse | N401Response;
+
+export function useCreatePersonalToken<
+  TData = Awaited<ReturnType<typeof createPersonalToken>>,
+  TError = ErrorResponse | N401Response,
+>(
+  personalAccessTokenCreateRequest: PersonalAccessTokenCreateRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createPersonalToken>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof createPersonalToken>>,
+          TError,
+          Awaited<ReturnType<typeof createPersonalToken>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCreatePersonalToken<
+  TData = Awaited<ReturnType<typeof createPersonalToken>>,
+  TError = ErrorResponse | N401Response,
+>(
+  personalAccessTokenCreateRequest: PersonalAccessTokenCreateRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createPersonalToken>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof createPersonalToken>>,
+          TError,
+          Awaited<ReturnType<typeof createPersonalToken>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCreatePersonalToken<
+  TData = Awaited<ReturnType<typeof createPersonalToken>>,
+  TError = ErrorResponse | N401Response,
+>(
+  personalAccessTokenCreateRequest: PersonalAccessTokenCreateRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createPersonalToken>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Mint a personal access token
+ */
+
+export function useCreatePersonalToken<
+  TData = Awaited<ReturnType<typeof createPersonalToken>>,
+  TError = ErrorResponse | N401Response,
+>(
+  personalAccessTokenCreateRequest: PersonalAccessTokenCreateRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createPersonalToken>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getCreatePersonalTokenQueryOptions(
+    personalAccessTokenCreateRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getPersonalTokenResponse200 = {
+  data: PersonalAccessToken;
+  status: 200;
+};
+
+export type getPersonalTokenResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type getPersonalTokenResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getPersonalTokenResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type getPersonalTokenResponseSuccess = getPersonalTokenResponse200 & {
+  headers: Headers;
+};
+export type getPersonalTokenResponseError = (
+  | getPersonalTokenResponse400
+  | getPersonalTokenResponse401
+  | getPersonalTokenResponse503
+) & {
+  headers: Headers;
+};
+
+export type getPersonalTokenResponse =
+  getPersonalTokenResponseSuccess | getPersonalTokenResponseError;
+
+export const getGetPersonalTokenUrl = (tokenUuid: string) => {
+  return `/auth/token/${tokenUuid}`;
+};
+
+/**
+ * NOTE(W2): internal/api/v2/auth/tokens.go:332 (TokenGet). `token` is
+ * masked.
+ *
+ * A token that does not exist and a token belonging to somebody else are
+ * the SAME 400 here. The lookup is scoped to the caller, so the two cases
+ * are not distinguishable and a probing caller learns nothing.
+ * @summary Read one of the calling user's tokens
+ */
+export const getPersonalToken = async (
+  tokenUuid: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getPersonalTokenResponse> => {
+  return eliteaFetch<getPersonalTokenResponse>(
+    getGetPersonalTokenUrl(tokenUuid),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetPersonalTokenQueryKey = (tokenUuid: string) => {
+  return [`/auth/token/${tokenUuid}`] as const;
+};
+
+export const getGetPersonalTokenQueryOptions = <
+  TData = Awaited<ReturnType<typeof getPersonalToken>>,
+  TError = ErrorResponse | N401Response,
+>(
+  tokenUuid: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getPersonalToken>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetPersonalTokenQueryKey(tokenUuid);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getPersonalToken>>
+  > = ({ signal }) =>
+    getPersonalToken(tokenUuid, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: tokenUuid !== null && tokenUuid !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getPersonalToken>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetPersonalTokenQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getPersonalToken>>
+>;
+export type GetPersonalTokenQueryError = ErrorResponse | N401Response;
+
+export function useGetPersonalToken<
+  TData = Awaited<ReturnType<typeof getPersonalToken>>,
+  TError = ErrorResponse | N401Response,
+>(
+  tokenUuid: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getPersonalToken>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getPersonalToken>>,
+          TError,
+          Awaited<ReturnType<typeof getPersonalToken>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetPersonalToken<
+  TData = Awaited<ReturnType<typeof getPersonalToken>>,
+  TError = ErrorResponse | N401Response,
+>(
+  tokenUuid: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getPersonalToken>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getPersonalToken>>,
+          TError,
+          Awaited<ReturnType<typeof getPersonalToken>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetPersonalToken<
+  TData = Awaited<ReturnType<typeof getPersonalToken>>,
+  TError = ErrorResponse | N401Response,
+>(
+  tokenUuid: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getPersonalToken>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Read one of the calling user's tokens
+ */
+
+export function useGetPersonalToken<
+  TData = Awaited<ReturnType<typeof getPersonalToken>>,
+  TError = ErrorResponse | N401Response,
+>(
+  tokenUuid: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getPersonalToken>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetPersonalTokenQueryOptions(tokenUuid, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type deletePersonalTokenResponse204 = {
+  data: void;
+  status: 204;
+};
+
+export type deletePersonalTokenResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type deletePersonalTokenResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type deletePersonalTokenResponse403 = {
+  data: ErrorResponse;
+  status: 403;
+};
+
+export type deletePersonalTokenResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type deletePersonalTokenResponseSuccess =
+  deletePersonalTokenResponse204 & {
+    headers: Headers;
+  };
+export type deletePersonalTokenResponseError = (
+  | deletePersonalTokenResponse400
+  | deletePersonalTokenResponse401
+  | deletePersonalTokenResponse403
+  | deletePersonalTokenResponse503
+) & {
+  headers: Headers;
+};
+
+export type deletePersonalTokenResponse =
+  deletePersonalTokenResponseSuccess | deletePersonalTokenResponseError;
+
+export const getDeletePersonalTokenUrl = (tokenUuid: string) => {
+  return `/auth/token/${tokenUuid}`;
+};
+
+/**
+ * NOTE(W2): internal/api/v2/auth/tokens.go:528 (TokenDelete). 204 with no
+ * body.
+ * @summary Revoke one of the calling user's tokens
+ */
+export const deletePersonalToken = async (
+  tokenUuid: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<deletePersonalTokenResponse> => {
+  return eliteaFetch<deletePersonalTokenResponse>(
+    getDeletePersonalTokenUrl(tokenUuid),
+    {
+      ...options,
+      method: "DELETE",
+    },
+  );
+};
+
+export const getDeletePersonalTokenQueryKey = (tokenUuid: string) => {
+  return ["DELETE", `/auth/token/${tokenUuid}`] as const;
+};
+
+export const getDeletePersonalTokenQueryOptions = <
+  TData = Awaited<ReturnType<typeof deletePersonalToken>>,
+  TError = ErrorResponse | N401Response,
+>(
+  tokenUuid: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deletePersonalToken>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getDeletePersonalTokenQueryKey(tokenUuid);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof deletePersonalToken>>
+  > = ({ signal }) =>
+    deletePersonalToken(tokenUuid, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: tokenUuid !== null && tokenUuid !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof deletePersonalToken>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type DeletePersonalTokenQueryResult = NonNullable<
+  Awaited<ReturnType<typeof deletePersonalToken>>
+>;
+export type DeletePersonalTokenQueryError = ErrorResponse | N401Response;
+
+export function useDeletePersonalToken<
+  TData = Awaited<ReturnType<typeof deletePersonalToken>>,
+  TError = ErrorResponse | N401Response,
+>(
+  tokenUuid: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deletePersonalToken>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof deletePersonalToken>>,
+          TError,
+          Awaited<ReturnType<typeof deletePersonalToken>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDeletePersonalToken<
+  TData = Awaited<ReturnType<typeof deletePersonalToken>>,
+  TError = ErrorResponse | N401Response,
+>(
+  tokenUuid: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deletePersonalToken>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof deletePersonalToken>>,
+          TError,
+          Awaited<ReturnType<typeof deletePersonalToken>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDeletePersonalToken<
+  TData = Awaited<ReturnType<typeof deletePersonalToken>>,
+  TError = ErrorResponse | N401Response,
+>(
+  tokenUuid: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deletePersonalToken>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Revoke one of the calling user's tokens
+ */
+
+export function useDeletePersonalToken<
+  TData = Awaited<ReturnType<typeof deletePersonalToken>>,
+  TError = ErrorResponse | N401Response,
+>(
+  tokenUuid: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deletePersonalToken>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getDeletePersonalTokenQueryOptions(tokenUuid, options);
 
   const query = useQuery(queryOptions, queryClient) as UseQueryResult<
     TData,

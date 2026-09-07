@@ -6209,3 +6209,165 @@ export function useListAdminPublishedAgents<
 
   return withQueryKey(query, queryOptions.queryKey);
 }
+
+export type getSystemInfoResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getSystemInfoResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type getSystemInfoResponse501 = {
+  data: ErrorResponse;
+  status: 501;
+};
+
+export type getSystemInfoResponseError = (
+  getSystemInfoResponse401 | getSystemInfoResponse403 | getSystemInfoResponse501
+) & {
+  headers: Headers;
+};
+
+export type getSystemInfoResponse = getSystemInfoResponseError;
+
+export const getGetSystemInfoUrl = () => {
+  return `/admin/system_info/prompt_lib`;
+};
+
+/**
+ * NOTE(W2): internal/api/v2/admin/handler.go:170 (SystemInfo). It answers
+ * 501 and nothing else. There is no 200 to describe: this service reports
+ * no per-plugin versions because it loads no plugins.
+ * @summary Report the platform's component versions (not available here)
+ */
+export const getSystemInfo = async (
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getSystemInfoResponse> => {
+  return eliteaFetch<getSystemInfoResponse>(getGetSystemInfoUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetSystemInfoQueryKey = () => {
+  return [`/admin/system_info/prompt_lib`] as const;
+};
+
+export const getGetSystemInfoQueryOptions = <
+  TData = Awaited<ReturnType<typeof getSystemInfo>>,
+  TError = N401Response | N403Response | ErrorResponse,
+>(options?: {
+  query?: Partial<
+    UseQueryOptions<Awaited<ReturnType<typeof getSystemInfo>>, TError, TData>
+  >;
+  request?: SecondParameter<typeof eliteaFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetSystemInfoQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getSystemInfo>>> = ({
+    signal,
+  }) => getSystemInfo({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getSystemInfo>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetSystemInfoQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getSystemInfo>>
+>;
+export type GetSystemInfoQueryError =
+  N401Response | N403Response | ErrorResponse;
+
+export function useGetSystemInfo<
+  TData = Awaited<ReturnType<typeof getSystemInfo>>,
+  TError = N401Response | N403Response | ErrorResponse,
+>(
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getSystemInfo>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getSystemInfo>>,
+          TError,
+          Awaited<ReturnType<typeof getSystemInfo>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetSystemInfo<
+  TData = Awaited<ReturnType<typeof getSystemInfo>>,
+  TError = N401Response | N403Response | ErrorResponse,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getSystemInfo>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getSystemInfo>>,
+          TError,
+          Awaited<ReturnType<typeof getSystemInfo>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetSystemInfo<
+  TData = Awaited<ReturnType<typeof getSystemInfo>>,
+  TError = N401Response | N403Response | ErrorResponse,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getSystemInfo>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Report the platform's component versions (not available here)
+ */
+
+export function useGetSystemInfo<
+  TData = Awaited<ReturnType<typeof getSystemInfo>>,
+  TError = N401Response | N403Response | ErrorResponse,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getSystemInfo>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetSystemInfoQueryOptions(options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}

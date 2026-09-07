@@ -100,8 +100,17 @@ test('J21a: settings/secrets renders its real page chrome', async ({ page }) => 
   await page.goto(SECRETS_PAGE);
 
   // `DrawerPageHeader` with showSearchInput + showAddButton (Secrets.tsx:298-324).
+  //
+  // The FIRST assertion after a navigation carries its own budget (#545).
+  // `expect` defaults to 5 s and nothing in playwright.config.ts raises it,
+  // while the SPA still has to fetch the lazy route chunk for
+  // /settings/secrets and paint the header. Measured while answering #545:
+  // this line failed 1 run in 5 on a loaded machine. The `Create new secret`
+  // assertion below already carries 15 s for the same reason.
+  //
+  // Nothing is softened. A page that renders no search box still fails here.
   const search = page.getByRole('textbox', { name: 'Search', exact: true });
-  await expect(search).toBeVisible();
+  await expect(search).toBeVisible({ timeout: 15_000 });
   await expect(search).toHaveAttribute('placeholder', 'Search secrets');
   await expect(search).toHaveValue('');
   // The header owns this input's state (routes/_shell/settings/secrets.tsx:37) —

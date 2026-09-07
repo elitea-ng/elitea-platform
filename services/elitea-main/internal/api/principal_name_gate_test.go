@@ -108,13 +108,14 @@ func TestPrincipalNameIsNotDerivedFromTokenName(t *testing.T) {
 // caller-controlled, and it is not a token name". A new writer must prove the
 // same before it is added, because auth.User.Name is an authorization input at
 // the /llm edge and not a display string.
-var principalNameWriters = map[string]string{
-	// The Pylon Redis RPC response. cmd/elitea-main never assigns
-	// RouterConfig.AuthClient, so this validator is composed in no deployment
-	// (ADR-0018, "What the code does today"). It stays until Stage 3 retires
-	// the Pylon parity path.
-	"internal/infra/authsvc/rpc.go": "pylon RPC principal payload; the client is composed in no deployment",
-}
+//
+// It is EMPTY, and that is the end state ADR-0018 describes. The one entry it
+// ever held was internal/infra/authsvc/rpc.go, the pylon Redis RPC validator
+// that populated auth.User.Name from an RPC response. #383 deleted that file
+// and RouterConfig.AuthClient with it, so no non-test file in this service
+// assigns a principal name any more. An addition here now needs the full
+// proof above, with no precedent to point at.
+var principalNameWriters = map[string]string{}
 
 // tokenNameSource matches an expression that reads a name off a token. It is
 // deliberately narrow: it fires on `tokenRow.Name`, `token.Name`, `pat.Name`,

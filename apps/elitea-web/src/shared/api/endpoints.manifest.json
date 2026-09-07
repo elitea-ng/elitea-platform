@@ -2731,6 +2731,174 @@
             "usedBy": [
                 "features/toolkits"
             ]
+        },
+        {
+            "id": "skillIcons.list",
+            "method": "GET",
+            "path": "/elitea_core/upload_skill_icon/prompt_lib/{projectId}",
+            "operationId": "listSkillIcons",
+            "source": "generated",
+            "responseSchema": "IconGalleryPage",
+            "fixture": null,
+            "usedBy": [
+                "features/skills"
+            ]
+        },
+        {
+            "id": "skillIcons.upload",
+            "method": "POST",
+            "path": "/elitea_core/upload_skill_icon/prompt_lib/{projectId}",
+            "operationId": "uploadSkillIcon",
+            "source": "generated",
+            "responseSchema": "IconMeta",
+            "fixture": null,
+            "usedBy": [
+                "features/skills"
+            ]
+        },
+        {
+            "id": "skillIcons.uploadForVersion",
+            "method": "POST",
+            "path": "/elitea_core/upload_skill_icon/prompt_lib/{projectId}/{versionId}",
+            "operationId": "uploadSkillIconForVersion",
+            "source": "generated",
+            "responseSchema": "IconMeta",
+            "fixture": null,
+            "usedBy": [
+                "features/skills"
+            ]
+        },
+        {
+            "id": "skillIcons.bind",
+            "method": "PUT",
+            "path": "/elitea_core/upload_skill_icon/prompt_lib/{projectId}/{versionId}",
+            "operationId": "bindSkillIcon",
+            "source": "generated",
+            "responseSchema": "UpdatedResponse",
+            "fixture": null,
+            "usedBy": [
+                "features/skills"
+            ]
+        },
+        {
+            "id": "skillIcons.delete",
+            "method": "DELETE",
+            "path": "/elitea_core/upload_skill_icon/prompt_lib/{projectId}/{name}",
+            "operationId": "deleteSkillIcon",
+            "source": "generated",
+            "responseSchema": "OkResponse",
+            "fixture": null,
+            "usedBy": [
+                "features/skills"
+            ]
+        },
+        {
+            "id": "projectIcons.list",
+            "method": "GET",
+            "path": "/elitea_core/project_icon/prompt_lib/{projectId}",
+            "operationId": "listProjectIcons",
+            "source": "generated",
+            "responseSchema": "IconGalleryPage",
+            "fixture": null,
+            "usedBy": [
+                "entities/project"
+            ]
+        },
+        {
+            "id": "projectIcons.upload",
+            "method": "POST",
+            "path": "/elitea_core/project_icon/prompt_lib/{projectId}",
+            "operationId": "uploadProjectIcon",
+            "source": "generated",
+            "responseSchema": "IconMeta",
+            "fixture": null,
+            "usedBy": [
+                "entities/project"
+            ]
+        },
+        {
+            "id": "projectIcons.delete",
+            "method": "DELETE",
+            "path": "/elitea_core/project_icon/prompt_lib/{projectId}/{name}",
+            "operationId": "deleteProjectIcon",
+            "source": "generated",
+            "responseSchema": null,
+            "fixture": null,
+            "usedBy": [
+                "entities/project"
+            ]
+        },
+        {
+            "id": "projectInfo.get",
+            "method": "GET",
+            "path": "/elitea_core/project_info/prompt_lib/{projectId}/project-info",
+            "operationId": "getProjectInfo",
+            "source": "generated",
+            "responseSchema": "ProjectInfo",
+            "fixture": null,
+            "usedBy": [
+                "entities/project"
+            ]
+        },
+        {
+            "id": "projectInfo.update",
+            "method": "PUT",
+            "path": "/elitea_core/project_info/prompt_lib/{projectId}/project-info",
+            "operationId": "updateProjectInfo",
+            "source": "generated",
+            "responseSchema": "ProjectInfoUpdateResponse",
+            "fixture": null,
+            "usedBy": [
+                "entities/project"
+            ]
+        },
+        {
+            "id": "tokens.list",
+            "method": "GET",
+            "path": "/auth/token/",
+            "operationId": "listPersonalTokens",
+            "source": "generated",
+            "responseSchema": "PersonalAccessToken",
+            "fixture": null,
+            "usedBy": [
+                "entities/token"
+            ]
+        },
+        {
+            "id": "tokens.create",
+            "method": "POST",
+            "path": "/auth/token/",
+            "operationId": "createPersonalToken",
+            "source": "generated",
+            "responseSchema": "PersonalAccessToken",
+            "fixture": null,
+            "usedBy": [
+                "entities/token"
+            ]
+        },
+        {
+            "id": "tokens.delete",
+            "method": "DELETE",
+            "path": "/auth/token/{tokenUuid}",
+            "operationId": "deletePersonalToken",
+            "source": "generated",
+            "responseSchema": null,
+            "fixture": null,
+            "usedBy": [
+                "entities/token"
+            ]
+        },
+        {
+            "id": "resources.getConfigValues",
+            "method": "GET",
+            "path": "/admin/plugin_config_values/prompt_lib/resources",
+            "operationId": "getResourcesConfigValues",
+            "source": "generated",
+            "responseSchema": "PublicConfigValues",
+            "fixture": null,
+            "usedBy": [
+                "pages/help-center"
+            ]
         }
     ]
 }

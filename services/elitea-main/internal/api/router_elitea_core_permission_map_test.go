@@ -33,6 +33,7 @@ import (
 	"strings"
 	"testing"
 
+	agentexecutionapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/agentexecution"
 	applicationskillsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/applicationskills"
 	indextypesapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indextypes"
 )
@@ -54,6 +55,12 @@ import (
 var reviewedRoutePermissions = []string{
 	indextypesapi.CurrentIndexTypesPermission,
 	applicationskillsapi.CurrentApplicationSkillsPermission,
+	// #254 P2 restored `application_task`. Its READ permission is the one
+	// /elitea_core string 0068 left out — the route was deleted by #126 when
+	// 0068 was written, so the name gated nothing and was not seeded. It is
+	// listed here so both invariants above cover it: the catalogue check proves
+	// pylon declares it, and the grant check proves shared/0120 seeds it.
+	agentexecutionapi.CurrentApplicationTaskStatusPermission,
 }
 
 // projectPermissionCall matches the router's own gate helper, including the
