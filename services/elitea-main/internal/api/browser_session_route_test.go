@@ -16,8 +16,13 @@ package api
 
 import (
 	"context"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -199,3 +204,110 @@ func serveWithSessionCookie(t *testing.T, router http.Handler, path, value strin
 // change to either side that broke it would otherwise surface only in
 // cmd/elitea-main.
 var _ apimw.BrowserSessionValidator = (*browsersession.Manager)(nil)
+
+// TestEveryAuthConfigInThisPackageReadsBothCookieFormats is the structural half
+// of the two tests above, and the one that would have caught the defect they
+// missed.
+//
+// THE RULE. A non-test file in internal/api that composes an
+// `apimw.AuthConfig` and sets `SessionSecret` is composing a BROWSER credential
+// set. apimw.Auth reads three fields for a browser cookie — SessionSecret for
+// the legacy signed value, SessionStore for the server-side identifier
+// migrations/shared/0117 introduced, and RejectLegacySessionCookies for the
+// operator switch between them — so a literal that sets one and not the others
+// reads one cookie format and refuses the other.
+//
+// WHY A ROUTE TEST WAS NOT ENOUGH. The two tests above drive NewRouter, and
+// NewRouter is not the only composition in this package: production_runtime.go
+// builds its own AuthConfig for the two runtime routes, which
+// production_router.go registers OUTSIDE every group NewRouter builds. That
+// literal took SessionSecret and not SessionStore, so the execution-events
+// stream — the one route whose only possible credential is a cookie, because an
+// EventSource can send nothing else — answered 401 to every browser the moment
+// sessions became server-side. A run started, and its terminal event never
+// arrived.
+//
+// A per-route test cannot close this, because the next literal is behind a
+// route nobody has thought to add to the list. The field set is what has to be
+// asserted.
+func TestEveryAuthConfigInThisPackageReadsBothCookieFormats(t *testing.T) {
+	const (
+		secretField = "SessionSecret"
+		storeField  = "SessionStore"
+		rejectField = "RejectLegacySessionCookies"
+	)
+
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("read internal/api: %v", err)
+	}
+	fileSet := token.NewFileSet()
+	// Counted so an empty result cannot read as a pass — a rename or a moved
+	// package would otherwise turn this guard vacuous, which is the failure
+	// mode it exists to prevent.
+	browserLiterals := 0
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") ||
+			strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, parseErr := parser.ParseFile(fileSet, name, nil, 0)
+		if parseErr != nil {
+			t.Fatalf("parse %s: %v", name, parseErr)
+		}
+		ast.Inspect(file, func(node ast.Node) bool {
+			literal, ok := node.(*ast.CompositeLit)
+			if !ok || selectorTypeName(literal.Type) != "AuthConfig" {
+				return true
+			}
+			fields := literalFieldNames(literal)
+			if !fields[secretField] {
+				// Not a browser credential set. An edge-only composition that
+				// reads no cookie at all is a deliberate shape, and the zero
+				// AuthConfig every test passes is another.
+				return true
+			}
+			browserLiterals++
+			for _, required := range []string{storeField, rejectField} {
+				if !fields[required] {
+					t.Errorf("%s:%d composes an apimw.AuthConfig with %s and no %s. "+
+						"apimw.Auth reads all three cookie fields; a literal one field "+
+						"short reads the legacy signed cookie and refuses the "+
+						"server-side identifier (or the reverse), so every browser on "+
+						"the routes it guards is signed out while every other route "+
+						"works. Copy the /api/v2 group's AuthConfig instead of "+
+						"rebuilding one.",
+						name, fileSet.Position(literal.Pos()).Line, secretField, required)
+				}
+			}
+			return true
+		})
+	}
+	if browserLiterals == 0 {
+		t.Fatal("no apimw.AuthConfig in internal/api sets SessionSecret: the guard " +
+			"above is vacuously true, which is the state it exists to make impossible")
+	}
+}
+
+func selectorTypeName(expr ast.Expr) string {
+	selector, ok := expr.(*ast.SelectorExpr)
+	if !ok || selector.Sel == nil {
+		return ""
+	}
+	return selector.Sel.Name
+}
+
+func literalFieldNames(literal *ast.CompositeLit) map[string]bool {
+	names := map[string]bool{}
+	for _, element := range literal.Elts {
+		keyed, ok := element.(*ast.KeyValueExpr)
+		if !ok {
+			continue
+		}
+		if key, ok := keyed.Key.(*ast.Ident); ok {
+			names[key.Name] = true
+		}
+	}
+	return names
+}
