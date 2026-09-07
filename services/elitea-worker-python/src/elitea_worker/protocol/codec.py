@@ -26,6 +26,7 @@ from elitea.runtime.v1 import (
     input_pb2,
     node_event_pb2,
     output_pb2,
+    toolkit_pb2,
     validation_pb2,
 )
 
@@ -49,6 +50,8 @@ from elitea_worker.constants import (
     MAX_WORKER_COMMAND_BYTES,
     OUTPUT_SCHEMA_REVISION,
     PROTOCOL_REVISION,
+    TOOLKIT_CALL_TOOL_CAPABILITY_ID,
+    TOOLKIT_CALL_TOOL_CAPABILITY_VERSION,
 )
 from elitea_worker.execution.errors import (
     AuthorizationFailure,
@@ -343,6 +346,29 @@ def build_output_frame(
         )
         frame.agent_execution.CopyFrom(payload)
         requested_outcome = common_pb2.EXECUTION_OUTCOME_V1_SUCCEEDED
+    elif (
+        isinstance(outcome, toolkit_pb2.ToolkitCallToolResultV1)
+        and selected_capability == "toolkit_call_tool"
+    ):
+        payload = outcome
+        frame.event_type = (
+            output_pb2.EXECUTION_OUTPUT_EVENT_TYPE_V1_TOOLKIT_CALL_TOOL_RESULT
+        )
+        frame.toolkit_call_tool.CopyFrom(payload)
+        # A tool that RAISED is a completed run: the caller asked whether the
+        # tool works and got the answer. Only a refusal made before any provider
+        # work — an unsupported toolkit, an unknown tool — settles as FAILED,
+        # because in those two cases nothing ran and there is nothing to report.
+        requested_outcome = (
+            common_pb2.EXECUTION_OUTCOME_V1_FAILED
+            if payload.HasField("result_summary")
+            and payload.result_summary.status
+            in (
+                toolkit_pb2.TOOLKIT_CALL_TOOL_STATUS_V1_UNSUPPORTED_TOOLKIT,
+                toolkit_pb2.TOOLKIT_CALL_TOOL_STATUS_V1_UNKNOWN_TOOL,
+            )
+            else common_pb2.EXECUTION_OUTCOME_V1_SUCCEEDED
+        )
     elif isinstance(outcome, WorkerError):
         payload = _runtime_error_message(outcome)
         frame.event_type = output_pb2.EXECUTION_OUTPUT_EVENT_TYPE_V1_RUNTIME_ERROR
@@ -537,12 +563,25 @@ def _validate_command(command: command_pb2.WorkerCommandV1) -> None:
         and selected_capability == "agent_execution"
     )
     agent_command = agent_application_command or agent_adhoc_command
-    if not configuration_command and not index_command and not agent_command:
+    call_tool_command = (
+        command.capability_id == TOOLKIT_CALL_TOOL_CAPABILITY_ID
+        and command.command_type
+        == command_pb2.WORKER_COMMAND_TYPE_V1_TOOLKIT_CALL_TOOL
+        and selected_capability == "toolkit_call_tool"
+    )
+    if (
+        not configuration_command
+        and not index_command
+        and not agent_command
+        and not call_tool_command
+    ):
         raise UnsupportedCapability()
     if index_command:
         expected_capability_version = INDEX_INGEST_CAPABILITY_VERSION
     elif agent_command:
         expected_capability_version = AGENT_EXECUTION_CAPABILITY_VERSION
+    elif call_tool_command:
+        expected_capability_version = TOOLKIT_CALL_TOOL_CAPABILITY_VERSION
     else:
         expected_capability_version = CAPABILITY_VERSION
     if command.capability_version != expected_capability_version:
@@ -575,6 +614,14 @@ def _validate_command(command: command_pb2.WorkerCommandV1) -> None:
         required += (
             command.index_ingest.toolkit_configuration_entry_id,
             command.index_ingest.tool_parameters_entry_id,
+        )
+    elif call_tool_command:
+        required += (
+            command.toolkit_call_tool.toolkit_type,
+            command.toolkit_call_tool.tool_name,
+            command.toolkit_call_tool.settings_entry_id,
+            command.toolkit_call_tool.arguments_entry_id,
+            command.toolkit_call_tool.toolkit_id,
         )
     else:
         required += (
@@ -661,6 +708,24 @@ def _validate_command(command: command_pb2.WorkerCommandV1) -> None:
             raise InvalidInput("The index-ingest event route is malformed.")
         if command.index_ingest.initiator not in ("user", "llm", "schedule"):
             raise InvalidInput("The index-ingest initiator is malformed.")
+    elif call_tool_command:
+        # The two entries must be DISTINCT. Settings and arguments have
+        # different trust: settings are redeemed by the platform, arguments come
+        # from the caller. One entry serving as both would let a caller's
+        # arguments stand in for the settings the platform authorized.
+        if (
+            command.toolkit_call_tool.settings_entry_id
+            == command.toolkit_call_tool.arguments_entry_id
+        ):
+            raise InvalidInput("The tool-run command bindings are malformed.")
+        if any(
+            any(character in value for character in ("\x00", "\r", "\n"))
+            for value in (
+                command.toolkit_call_tool.toolkit_type,
+                command.toolkit_call_tool.tool_name,
+            )
+        ):
+            raise InvalidInput("The tool-run command names are malformed.")
     else:
         client_correlations = (
             command.agent_execution.client_stream_id,
@@ -704,6 +769,8 @@ def _logical_output_id(command: command_pb2.WorkerCommandV1) -> str:
         return f"index-ingest:{command.execution_id}"
     if selected == "agent_execution":
         return f"agent-execution:{command.execution_id}"
+    if selected == "toolkit_call_tool":
+        return f"toolkit-call-tool:{command.execution_id}"
     raise UnsupportedCapability()
 
 
@@ -792,6 +859,11 @@ def _scan_worker_command(raw: bytes) -> None:
         _scan_message(
             _length_field(fields, 35, "agent execution command"),
             agent_pb2.AgentExecutionCommandV1.DESCRIPTOR,
+        )
+    elif 36 in fields:
+        _scan_message(
+            _length_field(fields, 36, "toolkit call tool command"),
+            toolkit_pb2.ToolkitCallToolCommandV1.DESCRIPTOR,
         )
 
 

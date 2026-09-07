@@ -35,6 +35,7 @@ from elitea_worker.constants import (
     AGENT_EXECUTE_ADHOC_CAPABILITY_ID,
     AGENT_EXECUTE_APPLICATION_CAPABILITY_ID,
     INDEX_INGEST_CAPABILITY_ID,
+    TOOLKIT_CALL_TOOL_CAPABILITY_ID,
 )
 from elitea_worker.execution.delivery import (
     AgentExecutionDeliveryProcessor,
@@ -43,6 +44,7 @@ from elitea_worker.execution.delivery import (
     DeliveryResult,
     IndexClientContextFactory,
     IndexIngestDeliveryProcessor,
+    ToolkitCallToolDeliveryProcessor,
 )
 from elitea_worker.execution.errors import (
     DependencyUnavailable,
@@ -778,6 +780,23 @@ class ProductionDeliveryProcessor:
 
         if command.capability_id == INDEX_INGEST_CAPABILITY_ID:
             processor = IndexIngestDeliveryProcessor(
+                supervisor=self._supervisor,
+                client_context_factory=self._index_client_context_factory,
+                control=self._control,
+                command_acker=self._acker,
+                input_client=self._input,
+                input_request_builder=self._input_builder,
+                output_session_factory=output_session,
+                signed_command_authenticator=self._authenticator,
+                workload_session_id=self._config.workload_session_id,
+                producer_id=self._config.producer_id,
+                clock_unix_millis=lambda: int(time.time() * 1000),
+                output_ack_timeout_seconds=limits.output_ack_timeout_millis / 1000,
+                max_output_sessions=limits.output_max_sessions,
+                lease_poll_interval_seconds=limits.lease_poll_interval_millis / 1000,
+            )
+        elif command.capability_id == TOOLKIT_CALL_TOOL_CAPABILITY_ID:
+            processor = ToolkitCallToolDeliveryProcessor(
                 supervisor=self._supervisor,
                 client_context_factory=self._index_client_context_factory,
                 control=self._control,

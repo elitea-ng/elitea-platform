@@ -396,6 +396,110 @@ class EliteaSdkIndexingAdapter:
             )
 
 
+def unsupported_toolkit_type_reason(toolkit_type: str) -> str:
+    """Say why this worker image cannot build one toolkit TYPE, or "".
+
+    The image installs a measured subset of ``elitea-sdk[all]``. A toolkit whose
+    third-party dependency that subset omits does not import: ``elitea_sdk.tools``
+    catches the failure, records it, and continues with the type ABSENT from its
+    registry. ``get_toolkit_available_tools`` then answers an empty list and a
+    tool call fails somewhere inside the SDK.
+
+    So the registry is the measurement, and the type is the right key for it.
+    toolkit_capabilities.unsupported_import_keys() reports IMPORT KEYS, which
+    are not types — the Kubernetes toolkit registers under ``k8s`` and publishes
+    as ``kubernetes`` — and the type-to-key mapping lives in Main's catalogue,
+    not here. Asking the registry directly needs no mapping and cannot drift
+    from it.
+
+    An empty string means the type is buildable. Everything else is a sentence
+    that names the type, because the caller is looking at a toolkit they saved
+    and needs to know THAT one is the problem.
+    """
+
+    if not toolkit_type:
+        return "the tool run named no toolkit type"
+    with redirect_stdout(sys.stderr):
+        module = importlib.import_module("elitea_sdk.tools")
+    registry = getattr(module, "AVAILABLE_TOOLS", None)
+    if not isinstance(registry, dict):
+        # A registry this worker cannot read is not evidence that the type
+        # works. Refusing here is wrong too, so say nothing and let the SDK
+        # call be the answer.
+        return ""
+    if toolkit_type.strip().lower() in registry:
+        return ""
+    return (
+        "this worker image cannot build the "
+        f"{toolkit_type} toolkit: it is absent from the installed SDK registry"
+    )
+
+
+class EliteaSdkToolkitToolAdapter:
+    """Pinned adapter for ONE toolkit tool run.
+
+    This is ``EliteaSdkIndexingAdapter`` with the tool name promoted from a
+    constant to a parameter. It is a separate class and not a keyword argument
+    on that one because the two carry different obligations: the index adapter
+    must keep applying the current wrapper's ``index_data`` tool-name
+    compatibility rewrite, and a caller-named tool must NOT be rewritten. One
+    class per obligation is what stops a later edit from giving an arbitrary
+    tool the index path's special case.
+
+    The SDK entrypoint is the same public method the current indexer worker
+    calls, so no new SDK surface is admitted by this capability.
+    """
+
+    def __init__(self, client: Any) -> None:
+        client_type = _indexing_client_type()
+        if not isinstance(client, client_type):
+            raise TypeError(
+                "client must be an EliteAClient from the admitted SDK artifact"
+            )
+        self._client = client
+
+    @classmethod
+    def from_context(cls, context: EliteaClientContext) -> EliteaSdkToolkitToolAdapter:
+        """Construct one SDK client from claim-scoped in-memory authority."""
+
+        client_type = _indexing_client_type()
+        client = client_type(
+            project_id=context.project_id,
+            base_url=context.base_url,
+            auth_token=context.auth_token,
+            # X-SECRET, not api_extra_headers. See _secrets_header_kwargs: the
+            # value authenticates one platform route and must not reach the
+            # model call. A tool run makes model calls, so this matters here.
+            **_secrets_header_kwargs(context),
+        )
+        return cls(client)
+
+    def call_tool(
+        self,
+        *,
+        toolkit_config: dict[str, Any],
+        tool_name: str,
+        tool_params: dict[str, Any],
+        runtime_config: dict[str, Any],
+        llm_model: str | None,
+        llm_config: dict[str, Any],
+        mcp_tokens: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        # Business-compatibility boundary: exactly the public SDK operation the
+        # current indexer worker uses, exactly once per kernel invocation, with
+        # the caller's tool name passed through unaltered.
+        with _sdk_budget_boundary():
+            return self._client.test_toolkit_tool(
+                toolkit_config=deepcopy(toolkit_config),
+                tool_name=tool_name,
+                tool_params=deepcopy(tool_params),
+                runtime_config=runtime_config,
+                llm_model=llm_model,
+                llm_config=deepcopy(llm_config),
+                mcp_tokens=mcp_tokens,
+            )
+
+
 class EliteaSdkAgentAdapter:
     """Initial synchronous SDK seam for the two current agent constructors.
 
