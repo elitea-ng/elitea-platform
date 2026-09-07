@@ -129,6 +129,7 @@ export function ProjectContext({
   const [isEditorFocused, setIsEditorFocused] = useState(false);
   const [showSaveToast, setShowSaveToast] = useState(false);
   const [showErrorToast, setShowErrorToast] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string>();
   const [content, setContent] = useState('');
   const [enabled, setEnabled] = useState(true);
   const [mode, setMode] = useState<'edit' | 'preview'>('edit');
@@ -175,10 +176,36 @@ export function ProjectContext({
     [],
   );
 
-  const handleToggle = useCallback((checked: boolean) => {
-    setEnabled(checked);
-    setIsDirty(true);
-  }, []);
+  /*
+   * The toggle SAVES. It does not wait for the Save button.
+   *
+   * The reference writes it straight through
+   * (`ProjectContextSavedView.jsx:30-40`: `updateProjectContext({projectId,
+   * content, enabled: e.target.checked})`). This port only set local state,
+   * so a reader who switched the context off, changed nothing else and left
+   * the tab still had it switched on, and the toggle disabled the AI for
+   * nobody (issue 841).
+   *
+   * It sends the SAVED content and not the editor buffer, which is what the
+   * reference sends: the switch is not a way to commit an unfinished draft.
+   * The buffer's own dirty state is untouched for the same reason.
+   */
+  const handleToggle = useCallback(
+    (checked: boolean) => {
+      const previous = enabled;
+      setEnabled(checked);
+      const savedContent = isProjectContext && serverData !== undefined ? (serverData.content ?? '') : '';
+      saveMutation
+        .mutateAsync({ content: savedContent, enabled: checked })
+        .then(() => setShowSaveToast(true))
+        .catch(() => {
+          setEnabled(previous);
+          setErrorMessage(undefined);
+          setShowErrorToast(true);
+        });
+    },
+    [enabled, isProjectContext, serverData, saveMutation],
+  );
 
   const handleFileUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -188,7 +215,11 @@ export function ProjectContext({
       const result = (ev.target?.result as string) ?? '';
       const text = String(result).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
       if (text.length > MAX_CHARS) {
-        console.warn(t('entities.projectContext.content.fileTooLarge', 'File content exceeds 2500 characters'));
+        // The reference toasts this (`ProjectContextEditor.jsx:127-146`). A
+        // console warning told the reader nothing: the import simply did
+        // not happen (issue 841).
+        setErrorMessage(t('entities.projectContext.content.fileTooLarge', 'File content exceeds 2500 characters'));
+        setShowErrorToast(true);
         return;
       }
       setContent(text);
@@ -205,6 +236,7 @@ export function ProjectContext({
       setIsDirty(false);
       setShowSaveToast(true);
     } catch {
+      setErrorMessage(undefined);
       setShowErrorToast(true);
     } finally {
       setIsSaving(false);
@@ -348,6 +380,7 @@ export function ProjectContext({
         showErrorToast={showErrorToast}
         onCloseSave={handleCloseSaveToast}
         onCloseError={handleCloseErrorToast}
+        errorMessage={errorMessage}
       />
     </>
   );
