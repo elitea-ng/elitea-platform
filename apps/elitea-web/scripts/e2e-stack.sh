@@ -809,6 +809,17 @@ ON CONFLICT (project_id, user_id, role_id) DO NOTHING;
 -- owns a `project_user_%` row — is gone, and anything written on top of it is
 -- gone with it.
 --
+-- IT ONLY BECAME TRUE WHEN `auth.setup.ts` MADE IT TRUE. "Sign-in provisions
+-- one" is what sign-in ASKS for, not what it guarantees: the provisioner runs
+-- one attempt at a time and DROPS the rest (`maxConcurrentProvisions = 1`,
+-- internal/application/personalproject/ensurer.go), and the three sign-ins
+-- used to run in parallel. One persona won the slot; the others got nothing,
+-- and `GET /social/author` hid it by answering the lowest-id project they hold
+-- a role in — project 1 — so nothing ever asked again. Two self-consistent
+-- worlds per run, decided by worker scheduling (issue #839). `auth.setup.ts`
+-- now runs the sign-ins sequentially and waits for each persona's own project,
+-- which is what makes the sentence above a fact rather than an intention.
+--
 -- What is still true is why the chat driver is a persona of its own: the
 -- permissions below are granted INSIDE its personal project, and the `/llm`
 -- hop resolves the caller's personal project for the provider credential

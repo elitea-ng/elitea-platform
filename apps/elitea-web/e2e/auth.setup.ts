@@ -25,6 +25,17 @@ import {
   shellChoseAProject,
 } from './fixtures/project';
 
+/**
+ * One sign-in's budget.
+ *
+ * 180s, not the 90s that stood here: a sign-in now WAITS for the persona's own
+ * personal project to be provisioned (`readPersonalProjectId` below), and the
+ * three sign-ins are SEQUENTIAL (`playwright.config.ts`'s `setup` project) so
+ * that each one finds the single server-side provisioning slot free. The wait
+ * itself is bounded at 90s; the rest is the OIDC round trip and the shell.
+ */
+const PERSONA_TIMEOUT_MS = 180_000;
+
 setup.describe('Auth setup', () => {
   setup.beforeAll(() => {
     // Ensure the state directory exists.
@@ -33,12 +44,12 @@ setup.describe('Auth setup', () => {
   });
 
   setup('authenticate as member persona', async ({ page }) => {
-    setup.setTimeout(90_000);
+    setup.setTimeout(PERSONA_TIMEOUT_MS);
     await performOidcLogin(page, 'e2e-member@autotest.local', STORAGE_STATE.member, 'seeded');
   });
 
   setup('authenticate as admin persona', async ({ page }) => {
-    setup.setTimeout(90_000);
+    setup.setTimeout(PERSONA_TIMEOUT_MS);
     await performOidcLogin(page, 'e2e-admin@autotest.local', STORAGE_STATE.admin, 'seeded');
   });
 
@@ -46,7 +57,7 @@ setup.describe('Auth setup', () => {
   // the provider credential from, which is why it cannot be one of the two
   // personas above — see `playwright.config.ts`'s STORAGE_STATE.chat.
   setup('authenticate as chat-driver persona', async ({ page }) => {
-    setup.setTimeout(90_000);
+    setup.setTimeout(PERSONA_TIMEOUT_MS);
     await performOidcLogin(page, 'e2e-chat@autotest.local', STORAGE_STATE.chat, 'personal');
   });
 });
@@ -152,6 +163,20 @@ async function performOidcLogin(
   // supports. What the recorded state carries is then an assertion, not a race.
   await shellChoseAProject(page);
 
+  // ── EVERY PERSONA LEAVES THIS FUNCTION OWNING A PERSONAL PROJECT ─────────
+  //
+  // It is read for BOTH kinds of persona, and the read is the point rather
+  // than the value: sign-in only ASKS for the personal project, and the ask
+  // can be refused silently. See `playwright.config.ts`'s `setup` project for
+  // the mechanism — one provisioning slot, dropped rather than queued, and a
+  // `/social/author` fallback that hides the absence behind project 1 so
+  // nothing ever asks again. Waiting here, with the sign-ins sequential, is
+  // what turns "whichever persona won the slot" into "all of them".
+  //
+  // It is also the read the CHAT driver's pin needs, so it happens before the
+  // branch rather than inside it.
+  const personalProjectId = await readPersonalProjectId(page, email);
+
   if (project === 'seeded') {
     await ensureProjectSelected(page, DEFAULT_PROJECT_NAME);
     const stored = await page.evaluate(() => localStorage.getItem('el.project.id'));
@@ -162,8 +187,6 @@ async function performOidcLogin(
     // this persona exists at all. So the pin is its personal project, and the
     // one thing worth asserting is that the shell really settled there rather
     // than on the shared project every other persona uses.
-    const personalProjectId = await readPersonalProjectId(page);
-    expect(personalProjectId, `${email} must own a personal project`).toBeTruthy();
     await expect
       .poll(() => page.evaluate(() => localStorage.getItem('el.project.id')), { timeout: 30_000 })
       .toBe(personalProjectId);
@@ -185,15 +208,48 @@ async function performOidcLogin(
 type PersonaProject = 'seeded' | 'personal';
 
 /**
- * The caller's `personal_project_id`, asked for until the server names one.
+ * The caller's OWN `personal_project_id`, asked for until the server names it.
  *
  * The same poll the shell itself runs (`widgets/app-shell/model/
  * usePersonalProjectId.ts`): `""` is not an error and not a terminal answer on
  * a first sign-in, it means provisioning has not finished, and the only way to
  * learn that it changed is to ask again.
+ *
+ * ── WHY `""` IS NOT THE ONLY ANSWER THAT MEANS "NOT YET" ───────────────────
+ *
+ * The poll used to stop at the first non-empty answer, and for the two seeded
+ * personas that answer arrives IMMEDIATELY and is WRONG.
+ * `resolvePersonalProjectID` (services/elitea-main/internal/api/v2/social/
+ * handler.go) tries three branches in order: the `project_user_<uid>` project
+ * the caller holds a role in, the `system_user_<n>@centry.user` email form,
+ * and finally the LOWEST-ID project the caller holds any role in. Both journey
+ * personas hold a role on the seeded project 1, so branch 3 answers `"1"` for
+ * them from the first request onwards — before any personal project exists,
+ * and forever after if none is ever made.
+ *
+ * That fallback is what made the absence invisible. `GET /social/author` only
+ * re-arms the provisioner when it resolves `""`, so a non-empty branch-3
+ * answer also stops the retry: a persona whose provisioning attempt was
+ * dropped at sign-in (`playwright.config.ts`'s `setup` project explains the
+ * single slot) stays without a personal project for the whole run, while every
+ * reader is told it has one — project 1, the project it is already working in.
+ *
+ * `personal_project_id === DEFAULT_PROJECT_ID` is therefore read here as "not
+ * provisioned yet", not as an id. The seeded project is named `Default
+ * Project`, never `project_user_<uid>`, so it can never legitimately BE a
+ * caller's personal project; and each persona's real one — seeded for the chat
+ * driver, provisioned at sign-in for the other two — always has another id.
+ *
+ * A timeout here is a real failure and says so: it means provisioning did not
+ * happen, and every screen whose content depends on `personal_project_id`
+ * (the list-page rail's author card vs. trending authors, the personal-token
+ * and secrets panels, the admin budgets table's "Personal project" rows) would
+ * otherwise have been photographed and asserted in the wrong one of two
+ * self-consistent states.
  */
 async function readPersonalProjectId(
   page: import('@playwright/test').Page,
+  email: string,
 ): Promise<string | undefined> {
   let id: string | undefined;
   await expect
@@ -202,9 +258,18 @@ async function readPersonalProjectId(
         const author = await page.request.get(BASE_URL + '/api/v2/social/author/');
         if (!author.ok()) return '';
         id = ((await author.json()) as { personal_project_id?: string }).personal_project_id;
-        return id ?? '';
+        // Both "no answer yet" and the branch-3 fallback map to the same
+        // sentinel, so one `.not.toBe('')` covers them.
+        return id === undefined || id === DEFAULT_PROJECT_ID ? '' : id;
       },
-      { timeout: 30_000 },
+      {
+        timeout: 90_000,
+        message:
+          `${email} never got a personal project of its own: GET /social/author kept answering ` +
+          `the seeded project ${DEFAULT_PROJECT_ID}. Sign-in asks for one and the provisioner ` +
+          `runs a single attempt at a time, dropping the rest — see playwright.config.ts's ` +
+          `setup project.`,
+      },
     )
     .not.toBe('');
   return id;

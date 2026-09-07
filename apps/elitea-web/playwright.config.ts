@@ -231,9 +231,41 @@ export default defineConfig({
 
   projects: [
     // ── Auth setup — runs before any browser project ──────────────────────
+    /*
+     * `fullyParallel: false`: THE THREE SIGN-INS COMPETE FOR ONE SERVER-SIDE
+     * RESOURCE, so they may not run at the same time.
+     *
+     * Every sign-in starts the caller's personal project
+     * (`ensurePersonalProject`, services/elitea-main/internal/api/v2/auth/
+     * signin.go). The provisioner runs ONE attempt at a time
+     * (`maxConcurrentProvisions = 1`, internal/application/personalproject/
+     * ensurer.go) and, when that single slot is taken, it DROPS the attempt
+     * instead of queueing it — safe for a browser, which polls
+     * `/social/author` until the id arrives, and NOT safe here, because for
+     * these two personas that poll never asks again: `resolvePersonalProjectID`
+     * falls back to "the lowest-id project the user holds a role in", which is
+     * the seeded project 1, and a non-empty answer stops `GET /social/author`
+     * from re-arming the provisioner. The persona that lost the race therefore
+     * has no personal project for the WHOLE run.
+     *
+     * Under the top-level `fullyParallel: true` the three tests below went to
+     * three workers, so which persona won was decided by worker scheduling and
+     * held for the rest of the run. That is the two stable states issue #839
+     * describes: the rail on every list page shows "Trending Authors" when the
+     * member persona owns a personal project and its own author card when
+     * `personal_project_id` collapses onto the selected project 1, and the
+     * admin budgets table gains or loses that persona's "Personal project"
+     * row. Both states are self-consistent, so a re-recorded baseline is
+     * simply the state of the run that recorded it.
+     *
+     * Sequential, plus the per-persona wait `auth.setup.ts` now makes, means
+     * each sign-in finds the slot free — so EVERY persona ends the setup owning
+     * a personal project, which is what the product promises a signed-in user.
+     */
     {
       name: 'setup',
       testMatch: /auth\.setup\.ts/,
+      fullyParallel: false,
       use: { ...devices['Desktop Chrome'], launchOptions: CHROMIUM_LAUNCH_OPTIONS },
     },
 
