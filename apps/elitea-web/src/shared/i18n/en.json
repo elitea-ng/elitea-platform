@@ -3956,5 +3956,13 @@
   "features.toolkits.toolkitChat.testTool.toolError": "Tool \"{{toolName}}\" reported an error:\n\n{{message}}",
   "features.toolkits.toolkitChat.testTool.truncated": "The result was too large to display.",
   "features.toolkits.toolkitChat.testTool.unknownTool": "Tool \"{{toolName}}\" is not available on this toolkit: {{message}}",
-  "features.toolkits.toolkitChat.testTool.unsupportedToolkit": "This toolkit type cannot run tools on this deployment: {{message}}"
+  "features.toolkits.toolkitChat.testTool.unsupportedToolkit": "This toolkit type cannot run tools on this deployment: {{message}}",
+  "shared.ui.settings.users.inviteNoneAdded": "No user was added. See the list below.",
+  "shared.ui.settings.users.invitePartial": "Added {{added}} of {{total}}. See the list below.",
+  "shared.ui.settings.users.multipleUsersAdded": "The users have been added. No invitation e-mail was sent.",
+  "shared.ui.settings.users.multipleUsersInvited": "The users have been invited by e-mail",
+  "shared.ui.settings.users.outcome.alreadyMember": "Already a member",
+  "shared.ui.settings.users.outcome.failed": "Not added",
+  "shared.ui.settings.users.outcome.invalidEmail": "Invalid address",
+  "shared.ui.settings.users.outcome.invited": "Invited"
 }
