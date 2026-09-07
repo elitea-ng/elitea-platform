@@ -158,7 +158,7 @@ func TestEnsurePersonalProjectAsksOnlyForARealAccount(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			ensurer := &recordingEnsurer{}
-			ensurePersonalProject(ensurer, test.userID)
+			ensurePersonalProject(ensurer, test.userID, time.Millisecond)
 			got := ensurer.seen()
 			if len(got) != len(test.want) {
 				t.Fatalf("asked for %v, want %v", got, test.want)
@@ -175,7 +175,7 @@ func TestEnsurePersonalProjectAsksOnlyForARealAccount(t *testing.T) {
 // TestANilEnsurerIsAWorkingNoValue. A composition with no project provisioner
 // must need no branch at the call site.
 func TestANilEnsurerIsAWorkingNoValue(t *testing.T) {
-	ensurePersonalProject(nil, "42")
+	ensurePersonalProject(nil, "42", time.Millisecond)
 }
 
 // TestASignInCreatesASessionRowPerProvider. The row records WHICH plane signed

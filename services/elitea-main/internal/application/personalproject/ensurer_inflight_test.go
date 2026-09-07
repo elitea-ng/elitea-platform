@@ -41,7 +41,7 @@ func TestTwoConcurrentCallsForOneUserJoinOneAttempt(t *testing.T) {
 	entered := make(chan int64, 8)
 	release := make(chan struct{})
 
-	ensurer := newSeamEnsurer(t, maxConcurrentProvisions,
+	ensurer := newSeamEnsurer(t, maxConcurrentProvisions, maxQueuedProvisions,
 		func(_ context.Context, userID int64) (int64, error) {
 			attempts.Add(1)
 			entered <- userID
@@ -103,9 +103,7 @@ func TestTwoConcurrentCallsForOneUserJoinOneAttempt(t *testing.T) {
 	if _, pending := ensurer.inFlight.Load(int64(9)); pending {
 		t.Fatal("the in-flight entry outlived the channel close")
 	}
-	if held := len(ensurer.slots); held != 0 {
-		t.Fatalf("%d slots are still held after the attempt ended", held)
-	}
+	awaitIdle(t, ensurer)
 }
 
 // A SECOND USER IS A SECOND ATTEMPT. The join is keyed by user id, so it must
@@ -118,7 +116,7 @@ func TestAnotherUserTakesAnAttemptOfItsOwn(t *testing.T) {
 	// A budget of two, because the production budget is one and this test is
 	// about the KEY rather than about the budget. The case where the budget is
 	// what refuses the second user is the next test.
-	ensurer := newSeamEnsurer(t, 2, func(_ context.Context, userID int64) (int64, error) {
+	ensurer := newSeamEnsurer(t, 2, maxQueuedProvisions, func(_ context.Context, userID int64) (int64, error) {
 		attempts.Add(1)
 		entered <- userID
 		<-release
@@ -144,16 +142,25 @@ func TestAnotherUserTakesAnAttemptOfItsOwn(t *testing.T) {
 	}
 }
 
-// A FULL BUDGET STILL DROPS. The slot is taken before any goroutine exists, so
-// a burst of first logins cannot pile goroutines onto a one-deep budget. The
-// dropped caller gets nil, which the endpoint reads as "answer as before and
-// let the poll ask again".
-func TestAFullBudgetDropsTheCallAndLeavesNothingPending(t *testing.T) {
+// A FULL BUDGET QUEUES, IT DOES NOT DROP (issue 843).
+//
+// THE DEFECT. The slot was taken before any goroutine existed, and a full
+// budget ABANDONED the attempt. Three E2E personas signing in together got one
+// personal project between them. That was safe only for an account that is a
+// member of nothing, because resolvePersonalProjectID answers "" for it and
+// the next request asks again; a member of a shared project was answered that
+// shared project, so nothing ever asked again.
+//
+// The bound survives — see maxQueuedProvisions — and the outcome changes: the
+// caller beyond the slot goes on a bounded queue that the RUNNING worker
+// drains, oldest entry first, and its channel closes when ITS attempt ends
+// rather than immediately.
+func TestAFullBudgetQueuesTheCallInsteadOfDroppingIt(t *testing.T) {
 	var attempts atomic.Int64
 	entered := make(chan int64, 8)
 	release := make(chan struct{})
 
-	ensurer := newSeamEnsurer(t, maxConcurrentProvisions,
+	ensurer := newSeamEnsurer(t, maxConcurrentProvisions, maxQueuedProvisions,
 		func(_ context.Context, userID int64) (int64, error) {
 			attempts.Add(1)
 			entered <- userID
@@ -167,54 +174,151 @@ func TestAFullBudgetDropsTheCallAndLeavesNothingPending(t *testing.T) {
 	}
 	awaitAttempt(t, entered, 9)
 
-	if dropped := ensurer.EnsureStarted(10); dropped != nil {
-		t.Fatal("a call was accepted with a full budget; a burst of first logins " +
-			"would queue goroutines that each suppress their own later polls")
-	}
-	// A DROPPED ATTEMPT MUST NOT LOOK LIKE A RUNNING ONE. The in-flight entry
-	// is taken before the slot, so the drop has to release it — otherwise the
-	// next poll would join an attempt nobody is running and wait for a channel
-	// nothing closes.
-	if _, pending := ensurer.inFlight.Load(int64(10)); pending {
-		t.Fatal("the dropped call left the user marked as being provisioned")
-	}
-	if again := ensurer.EnsureStarted(10); again != nil {
-		t.Fatal("the retry was not dropped, so the budget stopped bounding anything")
+	queued := ensurer.EnsureStarted(10)
+	if queued == nil {
+		t.Fatal("the second caller was dropped; a shared-project member dropped here " +
+			"is told the shared project is their personal one, for good")
 	}
 
-	// Nor may a caller that JOINED inside the drop window wait for ever. Every
-	// channel handed out here belongs to an attempt that was dropped before it
-	// started, so every one of them must already be closed.
-	var joiners sync.WaitGroup
-	joined := make(chan (<-chan struct{}), 8)
-	for range cap(joined) {
-		joiners.Add(1)
-		go func() {
-			defer joiners.Done()
-			if wait := ensurer.EnsureStarted(11); wait != nil {
-				joined <- wait
-			}
-		}()
+	// A QUEUED ATTEMPT IS PENDING, NOT FINISHED. The channel must stay open,
+	// because the endpoint reads its close as "re-resolve now" — and it must
+	// stay MARKED in flight, so the caller's own polls join this entry instead
+	// of filling the queue with copies of one account.
+	select {
+	case <-queued:
+		t.Fatal("the queued caller was released before its attempt ever ran")
+	default:
 	}
-	joiners.Wait()
-	close(joined)
-	for wait := range joined {
-		awaitClosed(t, 11, wait)
+	if _, pending := ensurer.inFlight.Load(int64(10)); !pending {
+		t.Fatal("the queued call left the user unmarked, so its own next request " +
+			"would take a second place in the queue")
+	}
+	if again := ensurer.EnsureStarted(10); again != queued {
+		t.Fatal("a second call for a QUEUED user did not join its entry, so one user " +
+			"can occupy two places in the queue")
+	}
+
+	// The budget still bounds the WORK: nothing beyond the one slot is running.
+	if got := attempts.Load(); got != 1 {
+		t.Fatalf("%d attempts are running with a one-deep budget, want 1", got)
+	}
+
+	// A third account queues behind the second, and the queue is drained
+	// OLDEST FIRST. Without the order, a burst starves whoever arrived first.
+	third := ensurer.EnsureStarted(11)
+	if third == nil {
+		t.Fatal("the third caller was dropped")
 	}
 
 	close(release)
 	awaitClosed(t, 9, holder)
-
-	if got := attempts.Load(); got != 1 {
-		t.Fatalf("%d attempts ran, want 1: only the call that took the slot may provision", got)
-	}
-
-	// And the budget is a budget, not a fuse: the slot is free again.
-	after := ensurer.EnsureStarted(10)
-	if after == nil {
-		t.Fatal("the returned slot was never reusable")
-	}
 	awaitAttempt(t, entered, 10)
+	awaitClosed(t, 10, queued)
+	awaitAttempt(t, entered, 11)
+	awaitClosed(t, 11, third)
+
+	if got := attempts.Load(); got != 3 {
+		t.Fatalf("%d attempts ran for three accounts, want 3: every caller must be "+
+			"provisioned, not just the one that took the slot", got)
+	}
+	awaitIdle(t, ensurer)
+}
+
+// THE DRAIN IS OLDEST-FIRST, which is the half the test above cannot see while
+// its attempts all block on one channel. Ten accounts arrive behind a held
+// slot; they must be provisioned in arrival order.
+func TestTheQueueIsDrainedOldestFirst(t *testing.T) {
+	entered := make(chan int64, 16)
+	release := make(chan struct{})
+
+	ensurer := newSeamEnsurer(t, maxConcurrentProvisions, maxQueuedProvisions,
+		func(_ context.Context, userID int64) (int64, error) {
+			entered <- userID
+			if userID == 1 {
+				<-release
+			}
+			return 0, nil
+		})
+
+	// User 1 takes the slot and holds it, so the rest are enqueued in the
+	// order these calls are made — one goroutine per caller would make the
+	// arrival order itself a race.
+	if ensurer.EnsureStarted(1) == nil {
+		t.Fatal("the first caller was refused")
+	}
+	awaitAttempt(t, entered, 1)
+
+	var waits []<-chan struct{}
+	for userID := int64(2); userID <= 11; userID++ {
+		wait := ensurer.EnsureStarted(userID)
+		if wait == nil {
+			t.Fatalf("user %d was dropped with a queue of %d", userID, maxQueuedProvisions)
+		}
+		waits = append(waits, wait)
+	}
+
+	close(release)
+	for index, wait := range waits {
+		awaitClosed(t, index, wait)
+	}
+	for want := int64(2); want <= 11; want++ {
+		select {
+		case got := <-entered:
+			if got != want {
+				t.Fatalf("the queue ran user %d where user %d was waiting longer", got, want)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("user %d was never provisioned", want)
+		}
+	}
+	awaitIdle(t, ensurer)
+}
+
+// THE QUEUE IS BOUNDED, and the bound behaves exactly as the old drop did: the
+// caller is refused with a closed channel and nothing about it stays pending,
+// so its next authenticated request queues it again. This is what keeps a
+// burst from costing unbounded memory.
+func TestAFullQueueRefusesRatherThanGrowing(t *testing.T) {
+	entered := make(chan int64, 8)
+	release := make(chan struct{})
+
+	// One slot, one waiting place.
+	ensurer := newSeamEnsurer(t, 1, 1, func(_ context.Context, userID int64) (int64, error) {
+		entered <- userID
+		<-release
+		return 0, nil
+	})
+
+	if ensurer.EnsureStarted(9) == nil {
+		t.Fatal("the first caller was refused")
+	}
+	awaitAttempt(t, entered, 9)
+	if ensurer.EnsureStarted(10) == nil {
+		t.Fatal("the second caller was refused with a free place in the queue")
+	}
+
+	refused := ensurer.EnsureStarted(11)
+	if refused != nil {
+		select {
+		case <-refused:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the refused caller holds a channel nothing closes")
+		}
+	}
+	if _, pending := ensurer.inFlight.Load(int64(11)); pending {
+		t.Fatal("the refused call left the user marked as being provisioned, so its " +
+			"next request would join an entry no worker holds")
+	}
+
+	close(release)
+	awaitAttempt(t, entered, 10)
+	awaitIdle(t, ensurer)
+
+	// And the bound is a bound, not a fuse: the queue is usable again.
+	if after := ensurer.EnsureStarted(11); after == nil {
+		t.Fatal("the drained queue never took another caller")
+	}
+	awaitAttempt(t, entered, 11)
 }
 
 /* ── fixture ───────────────────────────────────────────────────────────── */
@@ -226,7 +330,7 @@ func TestAFullBudgetDropsTheCallAndLeavesNothingPending(t *testing.T) {
 // rot with no test noticing. The pool is a zero value nothing dereferences,
 // because `attempt` replaces the only method that reads it.
 func newSeamEnsurer(
-	t *testing.T, budget int, attempt func(context.Context, int64) (int64, error),
+	t *testing.T, budget, queued int, attempt func(context.Context, int64) (int64, error),
 ) *Ensurer {
 	t.Helper()
 	ensurer, err := NewEnsurer(&pgxpool.Pool{}, refusingProvisioner{})
@@ -238,9 +342,7 @@ func newSeamEnsurer(
 	}
 	ensurer.logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	ensurer.attempt = attempt
-	if budget != maxConcurrentProvisions {
-		ensurer.slots = make(chan struct{}, budget)
-	}
+	WithBounds(budget, queued)(ensurer)
 	return ensurer
 }
 
@@ -289,5 +391,31 @@ func awaitClosed(t *testing.T, label int, wait <-chan struct{}) {
 	case <-time.After(5 * time.Second):
 		t.Fatalf("the channel of caller %d never closed, so a request waits its whole bound "+
 			"for an attempt that already ended", label)
+	}
+}
+
+// awaitIdle waits until no worker is running and nothing is queued.
+//
+// It POLLS rather than reading the counters once, because the last worker
+// retires just AFTER it closes the channel that released the test: the close is
+// the last deferred action of the attempt, and the retirement happens on the
+// next turn of the drain loop. Reading the counters immediately would be a race
+// against that turn, not an assertion about the design.
+func awaitIdle(t *testing.T, ensurer *Ensurer) {
+	t.Helper()
+	deadline := time.After(5 * time.Second)
+	for {
+		ensurer.queueMu.Lock()
+		running, waiting := ensurer.running, len(ensurer.waiting)
+		ensurer.queueMu.Unlock()
+		if running == 0 && waiting == 0 {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("%d workers and %d queued entries outlived every attempt; "+
+				"a slot that is never returned stops the queue for good", running, waiting)
+		case <-time.After(5 * time.Millisecond):
+		}
 	}
 }
