@@ -707,9 +707,9 @@ The separate MCP bootstrap failure remains visible. This check proves regenerati
 
 Execution `7c20139bc33f0adcbd9069ce8b1e50d4` reaches Rust and fails with `native_agent.authorization_failed` during toolset assembly.
 The remote server requires authorization before discovery. The saved operation selection is empty.
-`materialize_mcp_toolsets` currently creates authorization placeholders only for known selected names.
+At that revision, `materialize_mcp_toolsets` creates authorization placeholders only for known selected names.
 Without those names, it returns the authorization error instead of creating a toolkit-level guard.
-This is an open runtime bootstrap gap, not a failed code grant.
+This identifies a runtime bootstrap gap, not a failed code grant.
 
 The browser's MCP editor shows Load Tools, but clicking it sends no request.
 The shared toolkit form accepts discovery callbacks, but `ConfigurationTab.tsx::formSlots` supplies no MCP discovery integration.
@@ -723,13 +723,93 @@ Additional direct-node cases remain explicit:
 - Resume the owning child after each decision. Do not wake the parent before its required children complete.
 - Keep authorization and Skip scoped to the bound toolkit and run contract.
 
+### Authorization before remote operation discovery
+
+The current-platform baseline is `elitea-sdk/elitea_sdk/runtime/toolkits/tools.py::_build_deferred_mcp_auth_tools`.
+It supplies a toolkit authorization operation when remote discovery requires consent.
+`runtime/toolkits/mcp.py` treats an empty selection as all discovered operations.
+These contracts do not require invented remote operation names.
+
+Rust `toolkits/delegated_auth.rs` now stores discovery requirements independently from protected operations.
+`toolkits/delegated_auth/model_tools.rs` exposes one authorization proxy for each bound requirement.
+`toolkits/mcp.rs` adds this requirement when remote discovery requires authorization and the selection is empty.
+No protected operation is exposed before consent. An admitted token allows real discovery on rebuild.
+Existing selection, exclusion, policy, and credential admission checks remain in place.
+
+The regression first fails on the original unauthorized-discovery response and passes after the change.
+Additional tests cover catalog merge, exact binding, current-run Skip, a fresh run, and internal-name collisions.
+The rehearsal PostgreSQL suite passes 887 library tests and 83 integration or contract tests, with zero ignored tests.
+Strict all-target Clippy passes.
+
+Regeneration of the existing failed conversation starts execution `266b4de2b0c44bb5ce56728d6923f8de`.
+It reaches a durable authorization pause at terminal sequence 15.
+The browser presents the guard and successfully registers a public DCR client.
+The first consent attempt then fails with `invalid_target` because the authorization URL has no resource audience.
+This proves toolkit authorization before discovery. It does not yet prove a completed DCR grant or Rust resume.
+
+### MCP OAuth resource audience
+
+The [MCP authorization contract](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization) requires the protected resource in authorization and token requests.
+The current-platform OAuth helper does not supply this parameter. Its omission is not a compatibility requirement.
+
+Web `features/mcps/lib/oauthFlow.ts` now carries the protected MCP URL separately from the browser storage key.
+The consent URL and code exchange use this audience. Token metadata retains it for refresh.
+`authModalHelpers.ts` supplies the actual MCP resource when a configuration-specific storage key differs.
+Delegated OpenAPI and SharePoint flows retain their existing request shape.
+Main `internal/api/v2/eliteacore/mcp_oauth_proxy.go` validates and forwards the optional resource for both grants.
+It rejects malformed resources, user information, fragments, and disallowed plain HTTP before transport.
+
+Regression tests fail before audience propagation and pass after it.
+All 288 MCP UI tests pass, with TypeScript checking and targeted lint.
+Main OAuth and DCR race tests pass.
+The broader MCP lint invocation reports an existing unsafe access in `useMcpTokenChange.test.tsx`; the edited files pass.
+### Public DCR browser grant and refresh
+
+The scoped rehearsal deployment preserves all original environment values and mounts.
+It does not reset the emulator, conversation history, or durable runtime state.
+The image configuration identifiers are:
+
+- Rust worker: `sha256:6cc009ec1784c624d81f53e99d4df9a5667dfd80dc876c1d086dfe91a33668e5`.
+- Main: `sha256:4494adf2e3c8a822dec57f9ef127a7570445a1b99fc51441f6c0ceab1a9b4e73`.
+- Web: `sha256:ced2f7f2574441f3c2fc4d2b0b28ad94bc0c2bbfdc2eb0653e5de27420e947ea`.
+
+Conversation 536 reloads its saved authorization guard after Main and worker replacement.
+The browser registers the public client, presents consent with the MCP resource audience, and exchanges the code.
+Execution `be8b2e98f68306fd1fc4291b9f07decb` resumes the pending authorization call.
+Rust discovers the real operations and returns the fixture marker with mode `dcr-public` and generation 1.
+The run settles, acknowledges terminal sequence 36, and retires its delivery.
+
+A later ordinary task refreshes the token without another registration or consent prompt.
+Execution `7c0135406ab05484f01a6094f2249a23` returns the new marker with mode `dcr-public` and generation 2.
+It also settles and retires its delivery.
+This closes the public DCR browser-to-Rust and between-turn refresh proof for the local emulator.
+It does not prove a real provider, the confidential variant, active-run expiry, or editor discovery.
+
+DCR registers the client automatically; it does not grant user access by itself.
+The authorization-code flow still uses browser consent. Later valid-token use and refresh do not require another consent prompt.
+Client credentials is a separate application-access grant, not a shortcut around delegated user authorization.
+
+### Confidential DCR browser grant
+
+The browser creates Private-project MCP fixture 29 without an inline client identifier or secret.
+Conversation 537 uses this fixture on its first turn.
+Execution `babf91ac84c1d030667e30188b90b095` pauses for toolkit authorization before operation discovery.
+The browser registers the confidential client and completes user consent and the code exchange.
+The token endpoint accepts the registration-issued client credentials.
+Execution `c4c2fa2c0150eb1a78ac753c83ccc36a` resumes the pending call and returns the marker with mode `dcr-secret` and generation 1.
+It settles, acknowledges terminal sequence 41, and retires its delivery.
+No protected call occurs before consent. No operator-supplied client secret is added to the toolkit.
+The next ordinary task refreshes the confidential client token without another consent prompt.
+Execution `da5679e973c46ee972d805a4a81cd6b7` returns the new marker with mode `dcr-secret` and generation 2.
+It settles and retires its delivery. Real-provider checks remain open.
+
 ## Remaining gates
 
 ### Open verification
 
-- Prove one configured remote MCP DCR flow through the browser and Rust resume.
-  Local public and confidential DCR grant components pass. They do not close the browser-to-Rust gate.
-  Wire editor discovery and support toolkit authorization before operation names are known.
+- Repeat DCR against a real provider.
+  Both variants now pass the local emulator grant, durable resume, tool call, and between-turn refresh proof.
+  Wire editor discovery. Toolkit authorization before operation names are known now passes runtime and browser checks.
 - Repeat stored delegated code and refresh grants against a real provider.
   The deployed OpenAPI emulator proves both grants and first-turn session reuse.
 - Extend the deployed authorization-tool proof to a real provider grant.
