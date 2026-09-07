@@ -377,7 +377,18 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
  * The operations are described so a generated client exists to migrate those
  * files onto; the migration is the change that moves the manifest.
  */
-const GENERATED_OPERATION_COUNT = 182;
+
+/*
+ * 182 -> 185 when fix/ci-wave-reds described the three Inventory facade
+ * operations in v2.yaml (invokeInventoryTool, getInventoryInvocation,
+ * cancelInventoryInvocation) so that elitea-main's manifest reverse-check
+ * could find a spec entry for the `inventory.*` manifest ids the Inventory UI
+ * unit added. orval generates a hook for each, which is the whole delta; the
+ * app keeps calling them through entities/inventory/api, so
+ * MANIFEST_ENTRY_COUNT is unchanged. The tripwire was left at 182 by that
+ * fix and read RED on the wave head — the same late reading as the #440 case.
+ */
+const GENERATED_OPERATION_COUNT = 185;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
