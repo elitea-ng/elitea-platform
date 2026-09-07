@@ -87,6 +87,7 @@ const AdminServiceDescriptors = lazyRouteComponent(
   () => import('./ServiceDescriptors'),
   'AdminServiceDescriptors',
 );
+const AdminToolkitTypes = lazyRouteComponent(() => import('./ToolkitTypes'), 'AdminToolkitTypes');
 const AdminGatewayGovernance = lazyRouteComponent(
   () => import('./GatewayGovernance'),
   'AdminGatewayGovernance',
@@ -177,6 +178,19 @@ const serviceDescriptorsRoute = createRoute({
 });
 
 /**
+ * Admin › Toolkits (shared migration 0114). The path is `/toolkits`, and the
+ * page decides which toolkit TYPES this platform offers and to which projects.
+ * The reference SPA has no counterpart: the legacy platform's only operator
+ * control over the toolkit catalogue is the guardrails deny-list, which is a
+ * section of the Configuration page.
+ */
+const toolkitTypesRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/toolkits',
+  component: AdminToolkitTypes,
+});
+
+/**
  * Admin › LLM Governance (#218). The Configuration page's LLM Governance
  * section has always pointed the operator at `/admin/gateway/governance` — an
  * elitea-main REST route with no screen behind it in this SPA. This is that
@@ -237,6 +251,7 @@ const adminRouteTree = rootRoute.addChildren([
   appRequestsRoute,
   configurationRoute,
   serviceDescriptorsRoute,
+  toolkitTypesRoute,
   featuresRoute,
   governanceRoute,
   budgetsRoute,

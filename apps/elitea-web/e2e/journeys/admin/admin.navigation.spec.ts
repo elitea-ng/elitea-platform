@@ -73,6 +73,16 @@ const ITEMS = [
     heading: 'Service Descriptors',
     path: '/admin/app/service-descriptors',
   },
+  // Toolkits renders for this persona because shared migration 0114 grants
+  // `toolkit_catalogue.type.manage` to the administration `admin` role, which
+  // `apps/elitea-web/scripts/e2e-stack.sh` gives e2e-admin. The nav gate reads
+  // the same name.
+  {
+    id: 'toolkit-types',
+    label: 'Toolkits',
+    heading: 'Toolkits',
+    path: '/admin/app/toolkits',
+  },
   { id: 'audit', label: 'Audit Trail', heading: 'Audit Trail', path: '/admin/app/audit' },
   {
     id: 'schedules',

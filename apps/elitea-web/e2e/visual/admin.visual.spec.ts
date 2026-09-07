@@ -367,6 +367,24 @@ const ADMIN_ROUTES: readonly AdminVisualRoute[] = [
     landmark: (page) =>
       page.getByRole('grid', { name: 'Registered service descriptors' }),
   },
+  {
+    // @covers /admin/app/toolkits
+    name: 'admin-toolkit-types',
+    path: '/admin/app/toolkits',
+    // The GRID, which this page renders only on `query.isSuccess` - during load
+    // it shows its title, its intro paragraph and a `LinearProgress`, so the
+    // grid cannot be mistaken for a loading state. The filter row renders in
+    // the same branch, so waiting on the grid also waits on it.
+    //
+    // Not the empty-state text: the DataGrid's `noRowsLabel` renders for an
+    // empty list AND for a page whose rows have not mounted, while the grid
+    // itself is present only after the listing resolved. This stack records no
+    // policy rows, so the reference is every served type at its DEFAULT - which
+    // is the state a fresh install has, and the one the absence rule protects.
+    // Measured: loaded YES, stalled no.
+    landmark: (page) =>
+      page.getByRole('grid', { name: 'Toolkit types this platform can serve' }),
+  },
 ];
 
 for (const route of ADMIN_ROUTES) {
