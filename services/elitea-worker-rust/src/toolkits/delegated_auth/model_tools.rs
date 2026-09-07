@@ -32,7 +32,11 @@ pub(crate) fn bind_authorization_model_tools(
     }
     let mut proxies = BTreeMap::new();
     let hidden = catalog.provider_requirements.keys().cloned().collect();
-    for requirement in catalog.provider_requirements.values() {
+    for requirement in catalog
+        .provider_requirements
+        .values()
+        .chain(catalog.discovery_requirements.values())
+    {
         let name = requirement.authorization_tool_name();
         if catalog.provider_requirements.contains_key(&name) {
             return Err(adk_rust::AdkError::config(

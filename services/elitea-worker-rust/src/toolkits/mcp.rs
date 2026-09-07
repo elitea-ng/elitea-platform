@@ -343,9 +343,8 @@ pub(crate) async fn materialize_mcp_toolsets_with_tokens(
         .map(|(toolsets, _)| toolsets)
 }
 
-/// Materialize MCP toolsets and retain the sanitized identity of selected
-/// placeholder tools whose server rejected discovery with an OAuth challenge.
-/// LLM runtimes use this catalog to pause before dispatching the original call.
+/// Retain toolkit authorization even when the server protects tool discovery.
+/// LLM runtimes expose an authorization tool before any protected operations.
 pub(crate) async fn materialize_mcp_toolsets_with_tokens_and_authorization(
     snapshot: &AdmittedToolSnapshot<'_>,
     connector: &dyn McpConnector,
@@ -371,6 +370,12 @@ pub(crate) async fn materialize_mcp_toolsets_with_tokens_and_authorization(
                     .authorization()
                     .cloned()
                     .ok_or_else(invalid_configuration)?;
+                if config.selected_tools().is_empty() {
+                    authorization
+                        .insert_discovery_requirement(requirement)
+                        .map_err(|()| invalid_configuration())?;
+                    continue;
+                }
                 let guarded_names = config
                     .selected_tools()
                     .iter()
@@ -401,14 +406,7 @@ pub(crate) async fn materialize_mcp_toolsets_with_tokens_and_authorization(
                     policy,
                     guarded,
                 )
-                .map_err(|error| match error.code() {
-                    super::invocation::MaterializedToolsetErrorCode::InvalidDefinition => {
-                        invalid_configuration()
-                    }
-                    super::invocation::MaterializedToolsetErrorCode::ResourceExhausted => {
-                        resource_exhausted()
-                    }
-                })?;
+                .map_err(|error| materialized_toolset_error(error.code()))?;
                 toolsets.push(Arc::new(admitted) as Arc<dyn Toolset>);
                 continue;
             }
@@ -437,17 +435,21 @@ pub(crate) async fn materialize_mcp_toolsets_with_tokens_and_authorization(
             policy,
             wrapped,
         )
-        .map_err(|error| match error.code() {
-            super::invocation::MaterializedToolsetErrorCode::InvalidDefinition => {
-                invalid_configuration()
-            }
-            super::invocation::MaterializedToolsetErrorCode::ResourceExhausted => {
-                resource_exhausted()
-            }
-        })?;
+        .map_err(|error| materialized_toolset_error(error.code()))?;
         toolsets.push(Arc::new(admitted) as Arc<dyn Toolset>);
     }
     Ok((toolsets, authorization))
+}
+
+fn materialized_toolset_error(
+    code: super::invocation::MaterializedToolsetErrorCode,
+) -> McpMaterializationError {
+    match code {
+        super::invocation::MaterializedToolsetErrorCode::InvalidDefinition => {
+            invalid_configuration()
+        }
+        super::invocation::MaterializedToolsetErrorCode::ResourceExhausted => resource_exhausted(),
+    }
 }
 
 fn select_tools(

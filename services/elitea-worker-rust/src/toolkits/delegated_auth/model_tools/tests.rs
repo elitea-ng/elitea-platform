@@ -106,6 +106,96 @@ async fn request(model: &dyn Llm, tools: &BTreeMap<String, Arc<dyn Tool>>) {
 }
 
 #[tokio::test]
+async fn undiscovered_toolkits_keep_exact_guards_through_merge_binding_and_skip() {
+    let first = requirement("mcp", "first", "configuration-a");
+    let other = requirement("mcp", "other", "configuration-b");
+    let mut catalog = DelegatedAuthorizationCatalog::default();
+    catalog.insert_discovery_requirement(first.clone()).unwrap();
+    let mut nested = DelegatedAuthorizationCatalog::default();
+    nested.insert_discovery_requirement(other.clone()).unwrap();
+    catalog.merge(nested).unwrap();
+    let binding = crate::toolkits::bind_toolsets(Vec::new(), &BTreeSet::new(), "fixture")
+        .await
+        .unwrap();
+    let mut catalog = catalog.bind_provider_names(&binding).unwrap();
+    assert!(
+        catalog
+            .requirement_for(&first.authorization_tool_name())
+            .unwrap()
+            .same_authority(&first)
+    );
+    assert!(catalog.requirement_for("unknown_operation").is_none());
+    let fresh = catalog.clone();
+    catalog.decline(&first);
+    let scope = catalog.encode_declined_scope().unwrap().unwrap();
+    let decoded = super::super::decode_declined_authorization_scope(&scope).unwrap();
+    assert_eq!(decoded.len(), 1);
+    assert!(decoded[0].same_authority(&first));
+
+    let recorder = Arc::new(Model::default());
+    let (model, tools) =
+        bind_authorization_model_tools(recorder.clone(), Vec::new(), &mut catalog).unwrap();
+    let tools = enumerate(tools).await;
+    request(model.as_ref(), &tools).await;
+    assert_eq!(
+        *recorder.tools.lock().unwrap(),
+        BTreeSet::from([
+            first.authorization_tool_name(),
+            other.authorization_tool_name(),
+        ])
+    );
+    let declined = tools[&first.authorization_tool_name()]
+        .execute(Arc::new(SimpleToolContext::new("fixture")), json!({}))
+        .await
+        .unwrap();
+    assert_eq!(declined["status"], "declined");
+    assert_eq!(declined["scope"], "current_run");
+    assert!(declined.get("auth_context").is_none());
+    assert!(
+        tools[&other.authorization_tool_name()]
+            .execute(Arc::new(SimpleToolContext::new("fixture")), json!({}),)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        catalog.tool_names().collect::<Vec<_>>(),
+        vec![other.authorization_tool_name()]
+    );
+
+    let (_, next_turn) =
+        bind_authorization_model_tools(recorder, Vec::new(), &mut fresh.clone()).unwrap();
+    let next_turn = enumerate(next_turn).await;
+    assert!(
+        next_turn[&first.authorization_tool_name()]
+            .execute(Arc::new(SimpleToolContext::new("fixture")), json!({}),)
+            .await
+            .is_err(),
+        "Skip must not authorize or decline a later invocation"
+    );
+}
+
+#[tokio::test]
+async fn discovery_guard_rejects_a_remote_operation_using_its_internal_identity() {
+    let requirement = requirement("mcp", "first", "configuration-a");
+    let mut catalog = DelegatedAuthorizationCatalog::default();
+    catalog
+        .insert_discovery_requirement(requirement.clone())
+        .unwrap();
+    let operation = Arc::new(Operation {
+        name: requirement.authorization_tool_name(),
+        calls: Arc::new(AtomicUsize::new(0)),
+    }) as Arc<dyn Tool>;
+    let binding = crate::toolkits::bind_toolsets(
+        vec![Arc::new(BasicToolset::new("unrelated", vec![operation])) as Arc<dyn Toolset>],
+        &BTreeSet::new(),
+        "fixture",
+    )
+    .await
+    .unwrap();
+    assert!(catalog.bind_provider_names(&binding).is_err());
+}
+
+#[tokio::test]
 async fn authorization_proxy_cardinality_and_skip_scope_are_family_independent() {
     for family in ["mcp", "openapi", "sharepoint"] {
         for count in 1..=16 {

@@ -60,6 +60,42 @@ impl McpConnector for TokenConnector {
     }
 }
 
+#[tokio::test]
+async fn undiscovered_mcp_requires_toolkit_authorization_before_exposing_operations() {
+    let version = frozen("mcp", &settings(&[]));
+    let policy = policy(&[]);
+    let snapshot = FrozenToolSnapshot::from_version_details(&version)
+        .unwrap()
+        .apply_policy(&policy);
+    let (tools, authorization) = materialize_mcp_toolsets_with_tokens_and_authorization(
+        &snapshot,
+        &AuthorizationConnector,
+        &policy,
+        &Map::new(),
+    )
+    .await
+    .expect("undiscovered toolkit authorization");
+    assert!(tools.is_empty(), "no invented remote operation");
+    assert!(!authorization.is_empty());
+
+    let tokens = Map::from_iter([(
+        "https://mcp.example.invalid/v1/mcp".to_owned(),
+        json!({"access_token": "runtime-secret"}),
+    )]);
+    let (tools, authorization) = materialize_mcp_toolsets_with_tokens_and_authorization(
+        &snapshot,
+        &TokenConnector,
+        &policy,
+        &tokens,
+    )
+    .await
+    .unwrap();
+    assert!(authorization.is_empty());
+    let tools = tools[0].tools(context()).await.unwrap();
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0].name(), "lookup_release");
+}
+
 struct PrebuiltConnector {
     expected_type: &'static str,
     expected_authorization: &'static str,

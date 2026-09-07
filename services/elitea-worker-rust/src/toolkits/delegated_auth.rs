@@ -39,6 +39,9 @@ pub(crate) const DELEGATED_AUTHORIZATION_SCOPE_KEY: &str =
 #[derive(Clone, Default)]
 pub(crate) struct DelegatedAuthorizationCatalog {
     scoped_requirements: BTreeMap<DelegatedToolIdentity, DelegatedAuthorizationRequirement>,
+    // A server may reject discovery before any operation names are known.
+    // These requirements authorize discovery, not an invented remote operation.
+    discovery_requirements: BTreeMap<String, DelegatedAuthorizationRequirement>,
     provider_requirements: BTreeMap<String, DelegatedAuthorizationRequirement>,
     declined_tools: BTreeSet<String>,
 }
@@ -50,6 +53,21 @@ struct DelegatedToolIdentity {
 }
 
 impl DelegatedAuthorizationCatalog {
+    pub(crate) fn insert_discovery_requirement(
+        &mut self,
+        requirement: DelegatedAuthorizationRequirement,
+    ) -> Result<(), ()> {
+        let name = requirement.authorization_tool_name();
+        match self.discovery_requirements.get(&name) {
+            Some(existing) if existing == &requirement => Ok(()),
+            Some(_) => Err(()),
+            None => {
+                self.discovery_requirements.insert(name, requirement);
+                Ok(())
+            }
+        }
+    }
+
     pub(crate) fn insert(
         &mut self,
         tool_name: &str,
@@ -77,11 +95,14 @@ impl DelegatedAuthorizationCatalog {
         &self,
         tool_name: &str,
     ) -> Option<&DelegatedAuthorizationRequirement> {
-        self.provider_requirements.get(tool_name).or_else(|| {
-            self.provider_requirements
-                .values()
-                .find(|requirement| requirement.authorization_tool_name() == tool_name)
-        })
+        self.provider_requirements
+            .get(tool_name)
+            .or_else(|| self.discovery_requirements.get(tool_name))
+            .or_else(|| {
+                self.provider_requirements
+                    .values()
+                    .find(|requirement| requirement.authorization_tool_name() == tool_name)
+            })
     }
 
     pub(crate) fn requirement_for_scoped(
@@ -121,6 +142,11 @@ impl DelegatedAuthorizationCatalog {
             .provider_requirements
             .iter()
             .filter(|(name, _)| self.is_declined(name))
+            .chain(
+                self.discovery_requirements
+                    .iter()
+                    .filter(|(name, _)| self.is_declined(name)),
+            )
             .map(|(_, requirement)| (requirement.authorization_tool_name(), requirement))
             .collect();
         if requirements.is_empty() {
@@ -133,10 +159,13 @@ impl DelegatedAuthorizationCatalog {
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        self.scoped_requirements.is_empty()
+        self.scoped_requirements.is_empty() && self.discovery_requirements.is_empty()
     }
 
     pub(crate) fn merge(&mut self, other: Self) -> Result<(), ()> {
+        for requirement in other.discovery_requirements.into_values() {
+            self.insert_discovery_requirement(requirement)?;
+        }
         for (identity, requirement) in other.scoped_requirements {
             match self.scoped_requirements.get(&identity) {
                 Some(existing) if existing == &requirement => {}
@@ -151,6 +180,12 @@ impl DelegatedAuthorizationCatalog {
     }
 
     pub(crate) fn bind_provider_names(mut self, binding: &ToolBindingPlan) -> Result<Self, ()> {
+        if binding
+            .bindings()
+            .any(|(_, _, name)| self.discovery_requirements.contains_key(name))
+        {
+            return Err(());
+        }
         let mut provider_requirements = BTreeMap::new();
         for (identity, requirement) in &self.scoped_requirements {
             let provider_name = binding
