@@ -719,6 +719,67 @@ func TestApplicationsRepoPostgres_UpdateVersionWritesOnlySuppliedFields(t *testi
 	}
 }
 
+// TestApplicationsRepoPostgres_UpdateVersionClearsExplicitEmptyStrings covers
+// #824. The test above proves an OMITTED field is left alone; that behaviour
+// was implemented as "an empty value is left alone", so a client that cleared
+// its welcome message got a 201 and read the old text back. The two cases only
+// come apart when both are asserted in one test, which is why they live side
+// by side.
+func TestApplicationsRepoPostgres_UpdateVersionClearsExplicitEmptyStrings(t *testing.T) {
+	repo, pool := newApplicationsTestRepo(t)
+	ctx := testContext(t)
+	seedUser(t, pool, 1, "one@elitea.ai")
+
+	app := createTestApplication(t, repo, "clearable", 1, &applications.Version{
+		Name:           "base",
+		Instructions:   "x",
+		WelcomeMessage: "x",
+	})
+	versionID := app.Versions[0].ID
+
+	// Present with an empty value CLEARS the column.
+	cleared, err := repo.UpdateVersion(ctx, testProjectID, app.ID, versionID, applications.Version{
+		Present: applications.VersionFieldSet{Instructions: true, WelcomeMessage: true},
+	})
+	if err != nil {
+		t.Fatalf("clearing update: %v", err)
+	}
+	if cleared.Instructions != "" {
+		t.Errorf("instructions = %q, want cleared", cleared.Instructions)
+	}
+	if cleared.WelcomeMessage != "" {
+		t.Errorf("welcome_message = %q, want cleared", cleared.WelcomeMessage)
+	}
+
+	// Read it back through the repository's own read path, not the UPDATE's
+	// RETURNING projection: a SET list that never ran would still echo the
+	// values it was handed if the echo came from the request.
+	readBack, err := repo.GetVersion(ctx, testProjectID, app.ID, versionID)
+	if err != nil {
+		t.Fatalf("get version: %v", err)
+	}
+	if readBack.Instructions != "" || readBack.WelcomeMessage != "" {
+		t.Errorf("stored row still holds the old text: %+v", readBack)
+	}
+
+	// Write a value back, then omit the fields: the row must not change.
+	if _, err := repo.UpdateVersion(ctx, testProjectID, app.ID, versionID, applications.Version{
+		Instructions:   "y",
+		WelcomeMessage: "y",
+	}); err != nil {
+		t.Fatalf("rewriting update: %v", err)
+	}
+	untouched, err := repo.UpdateVersion(ctx, testProjectID, app.ID, versionID, applications.Version{
+		Meta: map[string]any{"note": "unrelated"},
+	})
+	if err != nil {
+		t.Fatalf("unrelated update: %v", err)
+	}
+	if untouched.Instructions != "y" || untouched.WelcomeMessage != "y" {
+		t.Errorf("an omitted field was blanked: %+v", untouched)
+	}
+}
+
 func TestApplicationsRepoPostgres_ListVersionsIsNewestFirstAndScopedToTheApplication(t *testing.T) {
 	repo, pool := newApplicationsTestRepo(t)
 	ctx := testContext(t)

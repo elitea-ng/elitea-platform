@@ -17,7 +17,7 @@ import { fmtDuration, fmtNum, UNAVAILABLE_METRIC } from '../lib/format';
 import { AnalyticsToolDetailed } from './AnalyticsToolDetailed';
 import { ChartTooltip } from './components/ChartTooltip';
 import { renderColoredBar } from './components/coloredBarShape';
-import { AnalyticsLoadError } from './components/DetailStatus';
+import { AnalyticsDimensionUnavailable, AnalyticsLoadError } from './components/DetailStatus';
 import { PaginatedEntityTable } from './components/PaginatedEntityTable';
 import type { EntityTableColumn } from './components/PaginatedEntityTable';
 
@@ -134,6 +134,24 @@ function AnalyticsToolsImpl({ projectId, dateFrom, dateTo }: AnalyticsToolsProps
   // a detail screen that owns its own query and Back button.
   if (isError) {
     return <AnalyticsLoadError error={error} />;
+  }
+
+  // The dimension can be unavailable on a 200 (issue 618). The tool record is
+  // shared migration 0119, so a window that closed before it was applied has no
+  // tool data — the server answers `tool_dimension_available: false` and NO
+  // `items` key rather than an empty list, and `data?.items ?? []` above would
+  // otherwise turn that into a convincing "0 tools" table for a period in which
+  // tools ran constantly. That is the same claim the 501 refusal used to
+  // prevent, so it gets the same screen.
+  if (data !== undefined && !data.tool_dimension_available) {
+    return (
+      <AnalyticsDimensionUnavailable
+        detail={t(
+          'analytics.tools.notRecorded',
+          'This deployment did not record tool calls for the selected period.',
+        )}
+      />
+    );
   }
 
   const columns: readonly EntityTableColumn[] = [

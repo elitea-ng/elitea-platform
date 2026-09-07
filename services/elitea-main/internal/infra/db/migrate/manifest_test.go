@@ -484,7 +484,27 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	//
 	// A new file for 0110's reason: 0060 returns early on any configured
 	// deployment, and migrations are checksum-immutable.
-	require.EqualValues(t, 118, Head(shared))
+	//
+	// 119: shared/0119_tool_call_records.sql, the durable per-tool-call record
+	// the Analytics Tools tab is built on. Two producers write it — the
+	// explicit tool run (toolkit.call_tool.v1, whose execution_jobs row carries
+	// a project but neither toolkit id nor tool name) and the agent turn's
+	// tool-call trace step (which carries a tool name but no toolkit id, and
+	// covers chat turns only). Either one alone under-reports by an unknown
+	// factor, which is why issue 618 stayed refused until a table existed.
+	//
+	// It is SHARED rather than tenant for the three reasons the analytics
+	// header gives: one project column, one clock, one statement. Nothing is
+	// backfilled — a window ending before this migration was applied is
+	// reported unavailable, and the read finds that moment in
+	// elitea_runtime.schema_migrations.
+	//
+	// It took 119 rather than 118 because the artifact-ACL package above ran
+	// concurrently off the same base and 0118 was reserved for it at dispatch,
+	// so the two streams could not both claim the next free number and discover
+	// it only at merge — the collision 0102, 0103, 0104 and 0115 each carry a
+	// note about. Both numbers are used, and the reservation worked.
+	require.EqualValues(t, 119, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

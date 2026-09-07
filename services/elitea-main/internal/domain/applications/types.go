@@ -81,6 +81,39 @@ type Version struct {
 	// caller did not send the key"; the repository then leaves the stored
 	// value alone rather than blanking it.
 	PipelineSettings map[string]any `json:"pipeline_settings,omitempty"`
+
+	// Present names the string-valued columns above that the caller
+	// EXPLICITLY sent. The map-valued and slice-valued fields carry their own
+	// absent marker — nil is "not sent" and an empty map/slice is a real
+	// value — but a string cannot: "" is both "the caller cleared this" and
+	// "the caller said nothing". Without this flag UpdateVersion read "" as
+	// absence, so a client that cleared the welcome message got a 201 and
+	// read the old text back (#824).
+	//
+	// It is a separate flag rather than a *string on each field because the
+	// same struct is the READ surface: every caller of GetVersion /
+	// ListVersions dereferences Name and Instructions directly, and the
+	// scanner writes them from the row. Only the write paths set Present.
+	// It is not part of the wire shape — the HTTP layer decodes presence
+	// from the request body and sets it here.
+	Present VersionFieldSet `json:"-"`
+}
+
+// VersionFieldSet marks which string-valued columns a version write carries.
+//
+// A false flag with a non-empty value still writes the column, so a caller
+// that only fills the value keeps working. A true flag with an empty value
+// CLEARS the column, which is the whole point of the type.
+//
+// Whether an empty value is ALLOWED is the caller's policy, not the
+// repository's: the HTTP layer refuses an explicit empty `name` or
+// `agent_type` (both NOT NULL, both given a default when the create path sees
+// "") and accepts an explicit empty `instructions` or `welcome_message`.
+type VersionFieldSet struct {
+	Name           bool
+	AgentType      bool
+	Instructions   bool
+	WelcomeMessage bool
 }
 
 // VersionConfig is a derived projection over the application_versions columns

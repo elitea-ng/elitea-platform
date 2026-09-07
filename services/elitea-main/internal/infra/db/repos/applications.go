@@ -653,16 +653,21 @@ func (r *ApplicationsRepo) UpdateVersion(ctx context.Context, projectID, applica
 		args = append(args, value)
 		setClauses = append(setClauses, fmt.Sprintf(clause, len(args)))
 	}
-	if v.Name != "" {
+	// Presence, not emptiness, decides whether a string column joins the SET
+	// list. The `|| value != ""` half keeps every caller that fills the value
+	// without setting the flag; the flag half is what lets an explicit ""
+	// CLEAR the column. Before #824 the test was emptiness alone, so clearing
+	// a welcome message answered 201 and read the old text back.
+	if v.Present.Name || v.Name != "" {
 		appendSet("name = $%d", v.Name)
 	}
-	if v.AgentType != "" {
+	if v.Present.AgentType || v.AgentType != "" {
 		appendSet("agent_type = $%d", v.AgentType)
 	}
-	if v.Instructions != "" {
+	if v.Present.Instructions || v.Instructions != "" {
 		appendSet("instructions = $%d", v.Instructions)
 	}
-	if v.WelcomeMessage != "" {
+	if v.Present.WelcomeMessage || v.WelcomeMessage != "" {
 		appendSet("welcome_message = $%d", v.WelcomeMessage)
 	}
 	if v.LLMSettings != nil {

@@ -4014,5 +4014,6 @@
   "routes.settings.notifications.toastError": "The action could not be completed.",
   "routes.settings.notifications.toastRead": "Notifications marked as read",
   "routes.settings.notifications.toastUnread": "Notifications marked as unread",
-  "entities.projectContext.content.copyTitle": "Copy to clipboard"
+  "entities.projectContext.content.copyTitle": "Copy to clipboard",
+  "analytics.tools.notRecorded": "This deployment did not record tool calls for the selected period."
 }

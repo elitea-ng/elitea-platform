@@ -41,6 +41,7 @@
  */
 import * as zod from "zod";
 import { AnalyticsKpis } from "./analyticsKpis.zod";
+import { ToolAnalytics } from "./toolAnalytics.zod";
 
 export const AnalyticsDetailEnvelope = zod
   .object({
@@ -48,7 +49,18 @@ export const AnalyticsDetailEnvelope = zod
     kpis: AnalyticsKpis.optional(),
     users: zod.array(zod.looseObject({})).optional(),
     agents: zod.array(zod.looseObject({})).optional(),
-    tools: zod.array(zod.looseObject({})).optional(),
+    tool_dimension_available: zod
+      .boolean()
+      .optional()
+      .describe(
+        "Present on the agents and tools detail branches. It is READ rather than hardcoded false since issue 618 gave the dimension a producer, and it decides whether a `tools` key appears at all.\n",
+      ),
+    tools: zod
+      .array(ToolAnalytics)
+      .optional()
+      .describe(
+        "The agents detail branch publishes the window's tool rows when tool_dimension_available is true, and NO key at all when it is false. They are the PROJECT's tools, not the requested agent's: elitea_runtime.tool_call_records carries the project and the producing row, not the agent that composed the turn, so a per-agent split would need a correlation that does not exist and is not faked. The users detail branch still answers an empty array here — its own sibling lists are unbuilt.\n",
+      ),
     daily_usage: zod.array(zod.looseObject({})),
   })
   .describe(

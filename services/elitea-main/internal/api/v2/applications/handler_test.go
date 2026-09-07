@@ -333,6 +333,84 @@ func TestUpdateVersion_ForwardsPipelineSettings(t *testing.T) {
 	}
 }
 
+// #824 — an explicit empty string is a real edit and must reach the repository
+// as PRESENT, so the UPDATE's SET list carries it and the column is cleared.
+// Before the fix the handler decoded presence correctly and then threw it away
+// by storing a plain string, and the repository read "" as "not sent".
+func TestUpdateVersion_ExplicitEmptyStringsAreMarkedPresent(t *testing.T) {
+	repo := &recordingRepo{}
+	r := setupVersionRouter(repo)
+
+	body, _ := json.Marshal(map[string]any{
+		"instructions":    "",
+		"welcome_message": "",
+	})
+	req := httptest.NewRequest("PUT", "/version/prompt_lib/1/2/3", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if !repo.lastUpdate.Present.Instructions {
+		t.Error("instructions: an explicit \"\" did not reach the repository as present")
+	}
+	if !repo.lastUpdate.Present.WelcomeMessage {
+		t.Error("welcome_message: an explicit \"\" did not reach the repository as present")
+	}
+	if repo.lastUpdate.Instructions != "" || repo.lastUpdate.WelcomeMessage != "" {
+		t.Errorf("values were rewritten: %+v", repo.lastUpdate)
+	}
+}
+
+// The mirror of the test above: a key the caller never sent must NOT be marked
+// present, or every partial save would blank the fields it did not mention.
+func TestUpdateVersion_OmittedStringsAreNotPresent(t *testing.T) {
+	repo := &recordingRepo{}
+	r := setupVersionRouter(repo)
+
+	body, _ := json.Marshal(map[string]any{"name": "base"})
+	req := httptest.NewRequest("PUT", "/version/prompt_lib/1/2/3", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if repo.lastUpdate.Present.Instructions || repo.lastUpdate.Present.WelcomeMessage ||
+		repo.lastUpdate.Present.AgentType {
+		t.Errorf("an unsent key was marked present: %+v", repo.lastUpdate.Present)
+	}
+	if !repo.lastUpdate.Present.Name {
+		t.Error("name was sent and must be present")
+	}
+}
+
+// `name` and `agent_type` are NOT NULL columns the create path defaults when
+// it sees "", and the version name is unique per application. An explicit ""
+// is therefore refused rather than written — and, above all, rather than
+// silently dropped, which is the shape #824 is about.
+func TestUpdateVersion_EmptyNameAndAgentTypeAreRefused(t *testing.T) {
+	for _, field := range []string{"name", "agent_type"} {
+		t.Run(field, func(t *testing.T) {
+			repo := &recordingRepo{}
+			r := setupVersionRouter(repo)
+
+			body, _ := json.Marshal(map[string]any{field: ""})
+			req := httptest.NewRequest("PUT", "/version/prompt_lib/1/2/3", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
 // A body with no pipeline_settings key must leave the stored value alone —
 // nil, not an empty map that would blank the column.
 func TestUpdateVersion_OmittedPipelineSettingsStaysNil(t *testing.T) {

@@ -2630,12 +2630,34 @@ components:
     VersionWriteRequest:
       type: object
       properties:
-        name: { type: string }
+        name:
+          type: string
+          description: >
+            Omit the key to leave the stored name alone. An explicit empty
+            string is REFUSED with a 400 on the PUT: the column is NOT NULL
+            and unique per application, and the create paths substitute the
+            default version name for an empty value, so a blank name is not a
+            state the platform can read back (issue 824).
         agent_type:
           type: string
-          description: Defaults to "openai" when empty (handler.go:398-400, 731-733).
-        instructions: { type: string }
-        welcome_message: { type: string }
+          description: >
+            Defaults to "openai" when empty on the CREATE paths
+            (handler.go:398-400, 731-733). On the PUT, omit the key to leave
+            the stored value alone; an explicit empty string is REFUSED with a
+            400, for the same reason as `name` (issue 824).
+        instructions:
+          type: string
+          description: >
+            Omit the key to leave the stored text alone. An explicit empty
+            string CLEARS the column — it is the clearing value, since the
+            property is not nullable and a client must be able to erase the
+            text it wrote (issue 824).
+        welcome_message:
+          type: string
+          description: >
+            Omit the key to leave the stored text alone. An explicit empty
+            string CLEARS the column, exactly as for `instructions`
+            (issue 824).
         llm_settings: { $ref: '#/components/schemas/LlmSettings' }
         conversation_starters: { $ref: '#/components/schemas/ConversationStarters' }
         variables:
@@ -3515,14 +3537,38 @@ components:
 
     ToolAnalytics:
       type: object
-      required: [toolkit_id, tool_name, run_count, avg_duration_ms, error_rate]
+      required: [toolkit_id, toolkit_name, tool_name, run_count, error_count, avg_duration_ms, error_rate]
       properties:
-        toolkit_id: { type: string }
+        toolkit_id:
+          type: string
+          description: >
+            EMPTY when the producer did not know one. The two producers know
+            different halves of a toolkit's identity: an explicit tool run holds
+            the saved toolkit's row id, and an agent turn holds only the toolkit
+            NAME its tool metadata carried. A row with a name and no id is a real
+            measurement, not a broken one — resolving the name to an id at write
+            time would store a guess as a fact (issue 618).
+        toolkit_name:
+          type: string
+          description: The toolkit as the producer knew it. Empty when it knew only an id.
         tool_name: { type: string }
-        run_count: { type: integer }
-        avg_duration_ms: { type: number }
+        run_count:
+          type: integer
+          description: >
+            Calls in the window, one per tool call. A call still running counts;
+            a call re-projected by a streaming turn counts ONCE.
+        error_count: { type: integer }
+        avg_duration_ms:
+          type: number
+          description: >
+            Averaged over the calls that FINISHED. A call still running has no
+            duration, and counting it as zero would pull the average toward zero
+            exactly when a tool has started hanging.
         error_rate: { type: number }
-      description: NOTE(W2) internal/domain/analytics/types.go:31-37.
+      description: >
+        One row of the Tools tab, from elitea_runtime.tool_call_records (shared
+        migration 0119) grouped by (toolkit_id, toolkit_name, tool_name).
+        Source — internal/domain/analytics/types.go.
 
     UserActivity:
       type: object
@@ -3556,12 +3602,35 @@ components:
 
     AnalyticsToolsList:
       type: object
-      required: [items]
+      required: [tool_dimension_available]
       properties:
+        tool_dimension_available:
+          type: boolean
+          description: >
+            Whether this deployment was recording tool calls for the WHOLE of
+            the requested window. False for a window that ends before shared
+            migration 0119 created elitea_runtime.tool_call_records, and for a
+            database that has not run it. It does NOT mean "no tool ran".
         items:
           type: array
           items: { $ref: '#/components/schemas/ToolAnalytics' }
-      description: NOTE(W2) internal/api/v2/analytics/handler.go:114.
+          description: >
+            ABSENT — not empty — when tool_dimension_available is false.
+            Nothing written before the producer existed identifies a tool call,
+            so there is no backfill and none is invented; answering `[]` would
+            report a month of constant tool use as zero, with nothing on screen
+            able to tell the difference. PRESENT AND EMPTY is a different and
+            real state: the deployment was recording and no tool ran.
+        truncated:
+          type: boolean
+          description: >
+            True when the list was cut to the busiest N tools. Present only
+            beside items, and stated rather than implied because the client
+            normalises its share column by summing what it received.
+      description: >
+        The Tools tab's list. Source — internal/api/v2/analytics/handler.go's
+        Tools. The availability flag decides the SHAPE, the way
+        AnalyticsAgentsList's does and budgets' usage dimensions do.
 
     AnalyticsUsersList:
       type: object
@@ -3608,12 +3677,24 @@ components:
             type: object
             x-elitea-passthrough: >-
               NOTE(W2): always empty (analytics/handler.go:109, 133) — see users.
+        tool_dimension_available:
+          type: boolean
+          description: >
+            Present on the agents and tools detail branches. It is READ rather
+            than hardcoded false since issue 618 gave the dimension a producer,
+            and it decides whether a `tools` key appears at all.
         tools:
           type: array
-          items:
-            type: object
-            x-elitea-passthrough: >-
-              NOTE(W2): always empty (analytics/handler.go:84, 134) — see users.
+          items: { $ref: '#/components/schemas/ToolAnalytics' }
+          description: >
+            The agents detail branch publishes the window's tool rows when
+            tool_dimension_available is true, and NO key at all when it is
+            false. They are the PROJECT's tools, not the requested agent's:
+            elitea_runtime.tool_call_records carries the project and the
+            producing row, not the agent that composed the turn, so a per-agent
+            split would need a correlation that does not exist and is not faked.
+            The users detail branch still answers an empty array here — its own
+            sibling lists are unbuilt.
         daily_usage:
           type: array
           items:

@@ -177,18 +177,46 @@ describe('useAnalyticsUserDetailQuery (API-010) — the one baseline detail call
 });
 
 describe('useAnalyticsToolsListQuery (API-011)', () => {
-  it('resolves the flat {items} list', async () => {
+  it('resolves the list beside its availability flag', async () => {
     server.use(
       http.get(`${BASE}/elitea_core/analytics_tools/prompt_lib/7`, () =>
         HttpResponse.json({
-          items: [{ toolkit_id: 'tk1', tool_name: 'web_search', run_count: 9, avg_duration_ms: 120, error_rate: 0 }],
+          tool_dimension_available: true,
+          items: [
+            {
+              toolkit_id: 'tk1',
+              toolkit_name: 'GitHub',
+              tool_name: 'web_search',
+              run_count: 9,
+              error_count: 0,
+              avg_duration_ms: 120,
+              error_rate: 0,
+            },
+          ],
         }),
       ),
     );
     const { wrapper } = createWrapper();
     const { result } = renderHook(() => useAnalyticsToolsListQuery('7', RANGE), { wrapper });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(result.current.data?.items[0]?.toolkit_id).toBe('tk1');
+    expect(result.current.data?.tool_dimension_available).toBe(true);
+    expect(result.current.data?.items?.[0]?.toolkit_id).toBe('tk1');
+  });
+
+  // `items` is ABSENT, not empty, for a window the deployment cannot speak for
+  // (issue 618). The hook must carry that through rather than normalise it into
+  // an empty list, which is what would let the tab render "0 tools".
+  it('carries an unavailable window through with no items key', async () => {
+    server.use(
+      http.get(`${BASE}/elitea_core/analytics_tools/prompt_lib/7`, () =>
+        HttpResponse.json({ tool_dimension_available: false }),
+      ),
+    );
+    const { wrapper } = createWrapper();
+    const { result } = renderHook(() => useAnalyticsToolsListQuery('7', RANGE), { wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data?.tool_dimension_available).toBe(false);
+    expect(result.current.data?.items).toBeUndefined();
   });
 });
 

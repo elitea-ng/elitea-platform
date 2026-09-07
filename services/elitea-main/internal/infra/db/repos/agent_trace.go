@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -81,6 +83,14 @@ func (noopCurrentAgentTraceProjector) projectAgentTraceDelta(
 // history, tool calls, thinking steps or checkpoint state.
 type postgresCurrentAgentTraceProjector struct {
 	readySchemas sync.Map
+	// toolRecordsReady caches the presence of
+	// elitea_runtime.tool_call_records, and only the POSITIVE answer. A
+	// database that has not run shared migration 0119 must keep projecting
+	// chat turns exactly as before — a missing analytics table cannot be
+	// allowed to fail the transaction that writes the transcript — and a
+	// negative answer is not cached, so the first turn after the migration
+	// starts recording.
+	toolRecordsReady atomic.Bool
 }
 
 type currentAgentTraceDelta struct {
@@ -210,6 +220,16 @@ func (p *postgresCurrentAgentTraceProjector) projectAgentTraceDelta(
 		messageGroupID,
 		existing,
 		desired,
+	); err != nil {
+		return err
+	}
+	if err := p.recordAgentToolCalls(
+		ctx,
+		tx,
+		projectID,
+		messageGroupID,
+		desired,
+		frame.OccurredAt,
 	); err != nil {
 		return err
 	}
@@ -1009,6 +1029,118 @@ func validateCurrentAgentAttrs(attrs map[string]any) error {
 		return errors.New("current agent trace attrs exceed their display bound")
 	}
 	return nil
+}
+
+// recordAgentToolCalls writes the durable per-tool-call record for the tools an
+// AGENT called inside this turn (issue 618).
+//
+// This is the half the analytics TOOL dimension was missing and the half that
+// matters most: the explicit tool run — the test button and MCP tools/call — is
+// the small end of tool usage, and everything an agent reaches for during a
+// chat turn was recorded nowhere a project-wide read could reach.
+// p_<id>.chat_message_trace_step holds it, but it is per-tenant, carries no
+// toolkit id, and covers chat turns only, so a Tools tab built on it would
+// silently exclude the other producer.
+//
+// It writes in the CALLER'S TRANSACTION on purpose. The record describes the
+// trace step reconciled immediately above it, and a record committed on another
+// connection could outlive a rollback of the turn it claims to describe.
+//
+// It is keyed by (message group, run id) — the same natural key the reconcile
+// above matches rows by — so a streaming turn, which re-projects the same tool
+// call on every partial message as its output and finish time arrive, updates
+// one record rather than counting one call many times.
+func (p *postgresCurrentAgentTraceProjector) recordAgentToolCalls(
+	ctx context.Context,
+	tx sqlExecutor,
+	projectID int64,
+	messageGroupID int64,
+	desired []currentAgentTraceRow,
+	occurredAt time.Time,
+) error {
+	calls := make([]currentAgentTraceRow, 0, len(desired))
+	for _, row := range desired {
+		if row.kind == "tool_call" && row.toolName != "" && row.runID != "" {
+			calls = append(calls, row)
+		}
+	}
+	if len(calls) == 0 {
+		return nil
+	}
+	ready, err := p.toolRecordsAvailable(ctx, tx)
+	if err != nil || !ready {
+		return err
+	}
+
+	for _, row := range calls {
+		started := occurredAt
+		if row.startedAt != nil {
+			started = *row.startedAt
+		}
+		if started.IsZero() {
+			// A call the producer cannot time is recorded at the moment its
+			// frame arrived rather than dropped: a missing timestamp must not
+			// silently shrink a count.
+			started = time.Now().UTC()
+		}
+		record := ToolCallRecord{
+			ProjectID: projectID,
+			Source:    ToolCallSourceAgentTurn,
+			SourceRef: strconv.FormatInt(messageGroupID, 10) + ":" + row.runID,
+			// No toolkit id. The worker's tool metadata carries a toolkit NAME
+			// and TYPE and no id (currentAgentToolMetadataKeys), and resolving
+			// the name back to a row here would store a guess as a fact.
+			ToolkitName: currentAgentToolkitAttr(row.attrs, "toolkit_name"),
+			ToolkitType: currentAgentToolkitAttr(row.attrs, "toolkit_type"),
+			ToolName:    row.toolName,
+			StartedAt:   started,
+			IsError:     row.isError,
+		}
+		if row.finishedAt != nil && !row.finishedAt.Before(started) {
+			record.FinishedAt = *row.finishedAt
+		}
+		if err := RecordToolCall(ctx, tx, record); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// currentAgentToolkitAttr reads one allowlisted toolkit attribute out of a
+// projected tool-call row.
+//
+// The attributes are NESTED, in two places, because currentAgentToolCallAttrs
+// folds the worker's `metadata` and its `tool_meta.metadata` separately and the
+// worker fills whichever one its emitting frame carried. Reading the top level
+// finds neither, which is the shape of bug that would leave every recorded
+// toolkit name empty while every test on the trace row still passed.
+func currentAgentToolkitAttr(attrs map[string]any, key string) string {
+	if value := currentAgentString(currentAgentMap(attrs, "metadata")[key]); value != "" {
+		return value
+	}
+	toolMeta := currentAgentMap(attrs, "tool_meta")
+	return currentAgentString(currentAgentMap(toolMeta, "metadata")[key])
+}
+
+// toolRecordsAvailable probes the analytics record table, caching only the
+// positive answer. See the field comment on toolRecordsReady.
+func (p *postgresCurrentAgentTraceProjector) toolRecordsAvailable(
+	ctx context.Context,
+	tx sqlExecutor,
+) (bool, error) {
+	if p.toolRecordsReady.Load() {
+		return true, nil
+	}
+	var ready bool
+	if err := tx.QueryRow(ctx,
+		`SELECT to_regclass('elitea_runtime.tool_call_records') IS NOT NULL`,
+	).Scan(&ready); err != nil {
+		return false, fmt.Errorf("inspect tool call record table: %w", err)
+	}
+	if ready {
+		p.toolRecordsReady.Store(true)
+	}
+	return ready, nil
 }
 
 func reconcileCurrentAgentTraceRows(
