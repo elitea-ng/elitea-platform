@@ -70,6 +70,21 @@ describe('AdminTasks', () => {
     expect(await screen.findByTestId('admin-tasks-count')).toHaveTextContent('1');
   });
 
+  /**
+   * The nav journey (`e2e/journeys/admin/admin.navigation.spec.ts`, J37b) proves
+   * a click LANDED by reading the destination's own heading, because a link to a
+   * deleted route moves the address bar and renders nothing. Every other admin
+   * page states its title with `variant="h5"`; this one uses `headingMedium`,
+   * which is a real heading only because `shared/brand/mui-overrides/MuiTypography`
+   * maps it to `h2`. Drop that mapping and the page still LOOKS right while the
+   * journey stops being able to see it, so the landmark is asserted here too.
+   */
+  it('states its title as a real heading, the landmark the nav journey reads', async () => {
+    seedListing([]);
+    renderAdminRoute(<AdminTasks refetchInterval={false} />);
+    expect(await screen.findByRole('heading', { name: 'Tasks', level: 2 })).toBeInTheDocument();
+  });
+
   it('says the filters match nothing rather than rendering an empty table', async () => {
     seedListing([]);
     renderAdminRoute(<AdminTasks refetchInterval={false} />);

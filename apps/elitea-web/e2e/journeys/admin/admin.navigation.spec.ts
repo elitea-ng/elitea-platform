@@ -84,6 +84,13 @@ const ITEMS = [
     path: '/admin/app/toolkits',
   },
   { id: 'audit', label: 'Audit Trail', heading: 'Audit Trail', path: '/admin/app/audit' },
+  // Tasks is the platform's OWN background jobs (`pages/admin/Tasks.tsx`), not
+  // the `/schedules` page's "Tasks" tab, which still reports the pylon Arbiter
+  // node as unavailable. The nav gate is `runtime.plugins` in administration
+  // mode, granted by shared migration 0060, so this item renders for every
+  // persona that reaches this nav at all. Listed in NAV ORDER so the page the
+  // loop leaves behind for `checkA11y` stays the one it always was.
+  { id: 'tasks', label: 'Tasks', heading: 'Tasks', path: '/admin/app/tasks' },
   {
     id: 'schedules',
     label: 'Schedules & Tasks',
