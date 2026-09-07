@@ -7753,6 +7753,7 @@ components:
               reason: { type: string }
             required: [key, reason]
       required: [run, results, headline_score, total, offset, unavailable]
+
     # ── Pipeline triggers and schedules (issues 192, 193) ──────────────────
     #
     # NOTE(W2): every field below is marshalled by

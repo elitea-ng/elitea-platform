@@ -10,6 +10,7 @@ import { AgentModelSettings } from '@/widgets/agent-model-settings';
 import type { EditPipelineEditorBridge } from '../lib/useEditPipelineEditorBridge';
 import type { EditPipelineVersionFieldsState } from '../lib/useEditPipelineVersionFields';
 import { EditPipelineToolsPanel } from './EditPipelineToolsPanel';
+import { EditPipelineTriggersPanel } from './EditPipelineTriggersPanel';
 
 /**
  * The pipeline editor's left pane — the real configuration form, replacing
@@ -40,6 +41,15 @@ import { EditPipelineToolsPanel } from './EditPipelineToolsPanel';
  *  - **Information** — rendered, read-only. `showPipeline` opens the stored
  *    document; the trigger rows come from the `pipeline_trigger` endpoint
  *    `ApplicationInformation` already queries.
+ *  - **Triggers & schedules** — the pipeline's two UNATTENDED entry points
+ *    (issues 192 and 193): an inbound signed URL an external system calls,
+ *    and a cron the platform fires. Both are new capability rather than
+ *    parity: legacy had them, the Go stack had neither, and the three
+ *    `/pipeline_trigger/` routes issue 126 deleted were the legacy API
+ *    surface. `EditPipelineTriggersPanel` owns them for the same reason
+ *    `EditPipelineToolsPanel` owns the tools grid — this file is a
+ *    composition root and that one is a stateful feature with its own
+ *    queries.
  *  - **EDITOR NOTES is absent, and that is a backend contract gap, not an
  *    omission.** `features/agents/ui/ApplicationEditorNotes.tsx` exists and
  *    is tested, but `version_details.notes` has no column on
@@ -113,6 +123,11 @@ export function EditPipelineConfigurationPanel(props: EditPipelineConfigurationP
         activeVersion={activeVersion}
         versionFields={versionFields}
         isDirty={isDirty}
+        isReadOnly={isReadOnly}
+      />
+      <EditPipelineTriggersPanel
+        projectId={projectId}
+        versionId={activeVersion === undefined ? undefined : Number(activeVersion.id)}
         isReadOnly={isReadOnly}
       />
       <ApplicationInformation

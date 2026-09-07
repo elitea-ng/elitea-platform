@@ -72,6 +72,9 @@ import type {
   IconUploadResponse,
   ImportWizardResponse,
   OkResponse,
+  PipelineInboundTrigger,
+  PipelineInboundTriggerRunAccepted,
+  PipelineSchedule,
   PredictLLMResponse,
   ProjectContext,
   ProjectInfo,
@@ -5337,6 +5340,344 @@ export const getUpdateProjectInfoResponseMock = (
   ...overrideResponse,
 });
 
+export const getGetPipelineInboundTriggerResponseMock = (
+  overrideResponse: Partial<Extract<PipelineInboundTrigger, object>> = {},
+): PipelineInboundTrigger => ({
+  configured: faker.datatype.boolean(),
+  token_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  url: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  secret: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  secret_url: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  created_by: faker.helpers.arrayElement([faker.number.int(), undefined]),
+  created_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  rotated_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  revoked_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  last_used_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  ...overrideResponse,
+});
+
+export const getRotatePipelineInboundTriggerResponseMock = (
+  overrideResponse: Partial<Extract<PipelineInboundTrigger, object>> = {},
+): PipelineInboundTrigger => ({
+  configured: faker.datatype.boolean(),
+  token_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  url: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  secret: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  secret_url: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  created_by: faker.helpers.arrayElement([faker.number.int(), undefined]),
+  created_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  rotated_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  revoked_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  last_used_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  ...overrideResponse,
+});
+
+export const getRevokePipelineInboundTriggerResponseMock = (
+  overrideResponse: Partial<Extract<PipelineInboundTrigger, object>> = {},
+): PipelineInboundTrigger => ({
+  configured: faker.datatype.boolean(),
+  token_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  url: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  secret: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  secret_url: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  created_by: faker.helpers.arrayElement([faker.number.int(), undefined]),
+  created_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  rotated_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  revoked_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  last_used_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  ...overrideResponse,
+});
+
+export const getRevealPipelineInboundTriggerResponseMock = (
+  overrideResponse: Partial<Extract<PipelineInboundTrigger, object>> = {},
+): PipelineInboundTrigger => ({
+  configured: faker.datatype.boolean(),
+  token_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  url: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  secret: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  secret_url: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  created_by: faker.helpers.arrayElement([faker.number.int(), undefined]),
+  created_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  rotated_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  revoked_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  last_used_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  ...overrideResponse,
+});
+
+export const getGetPipelineScheduleResponseMock = (
+  overrideResponse: Partial<Extract<PipelineSchedule, object>> = {},
+): PipelineSchedule => ({
+  configured: faker.datatype.boolean(),
+  cron: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  active: faker.datatype.boolean(),
+  input: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  author_id: faker.helpers.arrayElement([faker.number.int(), undefined]),
+  created_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  updated_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  last_run: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  last_result: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([
+      "dispatched",
+      "skipped_overlap",
+      "skipped_unauthorized",
+      "skipped_missing_version",
+      "failed",
+    ] as const),
+    undefined,
+  ]),
+  last_result_detail: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  last_result_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  last_execution_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  next_run: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  ...overrideResponse,
+});
+
+export const getSavePipelineScheduleResponseMock = (
+  overrideResponse: Partial<Extract<PipelineSchedule, object>> = {},
+): PipelineSchedule => ({
+  configured: faker.datatype.boolean(),
+  cron: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  active: faker.datatype.boolean(),
+  input: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  author_id: faker.helpers.arrayElement([faker.number.int(), undefined]),
+  created_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  updated_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  last_run: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  last_result: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([
+      "dispatched",
+      "skipped_overlap",
+      "skipped_unauthorized",
+      "skipped_missing_version",
+      "failed",
+    ] as const),
+    undefined,
+  ]),
+  last_result_detail: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  last_result_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  last_execution_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  next_run: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  ...overrideResponse,
+});
+
+export const getDeletePipelineScheduleResponseMock = (
+  overrideResponse: Partial<Extract<PipelineSchedule, object>> = {},
+): PipelineSchedule => ({
+  configured: faker.datatype.boolean(),
+  cron: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  active: faker.datatype.boolean(),
+  input: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  author_id: faker.helpers.arrayElement([faker.number.int(), undefined]),
+  created_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  updated_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  last_run: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  last_result: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([
+      "dispatched",
+      "skipped_overlap",
+      "skipped_unauthorized",
+      "skipped_missing_version",
+      "failed",
+    ] as const),
+    undefined,
+  ]),
+  last_result_detail: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  last_result_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  last_execution_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  next_run: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  ...overrideResponse,
+});
+
+export const getRunPipelineInboundTriggerResponseMock = (
+  overrideResponse: Partial<
+    Extract<PipelineInboundTriggerRunAccepted, object>
+  > = {},
+): PipelineInboundTriggerRunAccepted => ({
+  execution_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  conversation_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  project_id: faker.number.int(),
+  version_id: faker.number.int(),
+  events_url: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  ...overrideResponse,
+});
+
 export const getListEvalDatasetsMockHandler = (
   overrideResponse?:
     | EvalDatasetList
@@ -6951,6 +7292,216 @@ export const getUpdateProjectInfoMockHandler = (
     options,
   );
 };
+
+export const getGetPipelineInboundTriggerMockHandler = (
+  overrideResponse?:
+    | PipelineInboundTrigger
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<PipelineInboundTrigger> | PipelineInboundTrigger),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/pipeline_triggers/prompt_lib/:projectId/:versionId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetPipelineInboundTriggerResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getRotatePipelineInboundTriggerMockHandler = (
+  overrideResponse?:
+    | PipelineInboundTrigger
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<PipelineInboundTrigger> | PipelineInboundTrigger),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/pipeline_triggers/prompt_lib/:projectId/:versionId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getRotatePipelineInboundTriggerResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getRevokePipelineInboundTriggerMockHandler = (
+  overrideResponse?:
+    | PipelineInboundTrigger
+    | ((
+        info: Parameters<Parameters<typeof http.delete>[1]>[0],
+      ) => Promise<PipelineInboundTrigger> | PipelineInboundTrigger),
+  options?: RequestHandlerOptions,
+) => {
+  return http.delete(
+    "*/pipeline_triggers/prompt_lib/:projectId/:versionId",
+    async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getRevokePipelineInboundTriggerResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getRevealPipelineInboundTriggerMockHandler = (
+  overrideResponse?:
+    | PipelineInboundTrigger
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<PipelineInboundTrigger> | PipelineInboundTrigger),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/pipeline_triggers/secret/prompt_lib/:projectId/:versionId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getRevealPipelineInboundTriggerResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getGetPipelineScheduleMockHandler = (
+  overrideResponse?:
+    | PipelineSchedule
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<PipelineSchedule> | PipelineSchedule),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/pipeline_schedules/prompt_lib/:projectId/:versionId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetPipelineScheduleResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getSavePipelineScheduleMockHandler = (
+  overrideResponse?:
+    | PipelineSchedule
+    | ((
+        info: Parameters<Parameters<typeof http.put>[1]>[0],
+      ) => Promise<PipelineSchedule> | PipelineSchedule),
+  options?: RequestHandlerOptions,
+) => {
+  return http.put(
+    "*/pipeline_schedules/prompt_lib/:projectId/:versionId",
+    async (info: Parameters<Parameters<typeof http.put>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getSavePipelineScheduleResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getDeletePipelineScheduleMockHandler = (
+  overrideResponse?:
+    | PipelineSchedule
+    | ((
+        info: Parameters<Parameters<typeof http.delete>[1]>[0],
+      ) => Promise<PipelineSchedule> | PipelineSchedule),
+  options?: RequestHandlerOptions,
+) => {
+  return http.delete(
+    "*/pipeline_schedules/prompt_lib/:projectId/:versionId",
+    async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getDeletePipelineScheduleResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getRunPipelineInboundTriggerMockHandler = (
+  overrideResponse?:
+    | PipelineInboundTriggerRunAccepted
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) =>
+        | Promise<PipelineInboundTriggerRunAccepted>
+        | PipelineInboundTriggerRunAccepted),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/pipeline_trigger/:projectId/:tokenId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getRunPipelineInboundTriggerResponseMock(),
+        { status: 202 },
+      );
+    },
+    options,
+  );
+};
 export const getApplicationsMock = () => [
   getListEvalDatasetsMockHandler(),
   getCreateEvalDatasetMockHandler(),
@@ -7015,4 +7566,12 @@ export const getApplicationsMock = () => [
   getUpdateProjectContextMockHandler(),
   getGetProjectInfoMockHandler(),
   getUpdateProjectInfoMockHandler(),
+  getGetPipelineInboundTriggerMockHandler(),
+  getRotatePipelineInboundTriggerMockHandler(),
+  getRevokePipelineInboundTriggerMockHandler(),
+  getRevealPipelineInboundTriggerMockHandler(),
+  getGetPipelineScheduleMockHandler(),
+  getSavePipelineScheduleMockHandler(),
+  getDeletePipelineScheduleMockHandler(),
+  getRunPipelineInboundTriggerMockHandler(),
 ];

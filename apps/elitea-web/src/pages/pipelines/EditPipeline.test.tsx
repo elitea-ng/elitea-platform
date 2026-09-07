@@ -136,6 +136,12 @@ beforeEach(() => {
     // The editor's chat pane mounts the real `ChatBox`, whose read-aloud hook
     // asks the project for its TTS voices as soon as a model is selected.
     http.get('*/configurations/tts_voices/*', () => HttpResponse.json({ items: [] })),
+    // The configuration panel now carries the "Triggers & schedules" section
+    // (issues 192, 193), which reads both rows on every open. msw runs with
+    // `onUnhandledRequest: 'error'`, so these two are not decoration: without
+    // them every test in this file fails on a request the page really makes.
+    http.get('*/pipeline_triggers/prompt_lib/*', () => HttpResponse.json({ configured: false })),
+    http.get('*/pipeline_schedules/prompt_lib/*', () => HttpResponse.json({ configured: false, active: false })),
   );
 });
 
@@ -167,6 +173,27 @@ describe('EditPipeline', () => {
 
     await waitFor(() => expect(usePipelineYamlStore.getState().yamlCode).toBe(graphYaml));
     expect(usePipelineYamlStore.getState().layoutVersion).toBe('1.0');
+  });
+
+  /*
+   * THE COMPOSITION ROOT, not the component.
+   *
+   * `EditPipelineTriggersPanel` has its own suite, and it would keep passing
+   * with the panel mounted nowhere. This is the assertion that only the real
+   * route can make: the section reaches the screen a person opens. The unit
+   * suite here was blind to exactly this class twice — a correct component and
+   * a correct page with no wiring between them (#597).
+   */
+  it('mounts the Triggers & schedules section in the real pipeline edit route', async () => {
+    server.use(getGetApplicationMockHandler(detail()));
+    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', { projectId: '9' });
+
+    const panel = within(await screen.findByTestId('edit-pipeline-configuration-panel'));
+    expect(await panel.findByTestId('edit-pipeline-triggers-panel')).toBeInTheDocument();
+    // And it is really wired to the version this page loaded, not rendered
+    // empty: the trigger read resolved and the card rendered its answer.
+    expect(await panel.findByTestId('pipeline-trigger-absent')).toBeInTheDocument();
+    expect(await panel.findByTestId('pipeline-schedule-card')).toBeInTheDocument();
   });
 
   it('renders the pipeline name once it loads', async () => {

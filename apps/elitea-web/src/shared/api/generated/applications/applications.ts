@@ -112,6 +112,11 @@ import type {
   N409Response,
   N500Response,
   OkResponse,
+  PipelineInboundTrigger,
+  PipelineInboundTriggerRunAccepted,
+  PipelineInboundTriggerRunRequest,
+  PipelineSchedule,
+  PipelineScheduleUpdate,
   PredictLLMRequest,
   PredictLLMResponse,
   PredictLLMUnavailableResponse,
@@ -134,6 +139,7 @@ import type {
   PublishValidationFailedResponse,
   PublishValidationResult,
   RecommendationsResponse,
+  RunPipelineInboundTriggerParams,
   SaveApplicationNewVersionBody,
   SetAgentAttachmentStorageBody,
   SetDefaultVersionRequest,
@@ -15962,6 +15968,2029 @@ export function useUpdateProjectInfo<
   const queryOptions = getUpdateProjectInfoQueryOptions(
     projectId,
     projectInfoUpdateRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getPipelineInboundTriggerResponse200 = {
+  data: PipelineInboundTrigger;
+  status: 200;
+};
+
+export type getPipelineInboundTriggerResponse403 = {
+  data: ErrorResponse;
+  status: 403;
+};
+
+export type getPipelineInboundTriggerResponseSuccess =
+  getPipelineInboundTriggerResponse200 & {
+    headers: Headers;
+  };
+export type getPipelineInboundTriggerResponseError =
+  getPipelineInboundTriggerResponse403 & {
+    headers: Headers;
+  };
+
+export type getPipelineInboundTriggerResponse =
+  | getPipelineInboundTriggerResponseSuccess
+  | getPipelineInboundTriggerResponseError;
+
+export const getGetPipelineInboundTriggerUrl = (
+  projectId: number,
+  versionId: number,
+) => {
+  return `/pipeline_triggers/prompt_lib/${projectId}/${versionId}`;
+};
+
+/**
+ * Reports whether this pipeline version has an inbound trigger, when it
+ * was made, when it was last used, and whether it is revoked.
+ *
+ * The URL it returns does NOT carry the secret. Handing back a live
+ * credential is a different act and has its own operation with the write
+ * permission on it, so a person with view-only access cannot copy a
+ * working webhook URL for a pipeline they cannot edit.
+ *
+ * A pipeline with no trigger answers 200 with `configured: false`, not
+ * 404: having no trigger is the normal state of almost every pipeline,
+ * and a 404 would make the settings tab render an error for it.
+ * @summary Read a pipeline version's inbound trigger
+ */
+export const getPipelineInboundTrigger = async (
+  projectId: number,
+  versionId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getPipelineInboundTriggerResponse> => {
+  return eliteaFetch<getPipelineInboundTriggerResponse>(
+    getGetPipelineInboundTriggerUrl(projectId, versionId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetPipelineInboundTriggerQueryKey = (
+  projectId: number,
+  versionId: number,
+) => {
+  return [`/pipeline_triggers/prompt_lib/${projectId}/${versionId}`] as const;
+};
+
+export const getGetPipelineInboundTriggerQueryOptions = <
+  TData = Awaited<ReturnType<typeof getPipelineInboundTrigger>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getPipelineInboundTrigger>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGetPipelineInboundTriggerQueryKey(projectId, versionId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getPipelineInboundTrigger>>
+  > = ({ signal }) =>
+    getPipelineInboundTrigger(projectId, versionId, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      versionId !== null &&
+      versionId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getPipelineInboundTrigger>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetPipelineInboundTriggerQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getPipelineInboundTrigger>>
+>;
+export type GetPipelineInboundTriggerQueryError = ErrorResponse;
+
+export function useGetPipelineInboundTrigger<
+  TData = Awaited<ReturnType<typeof getPipelineInboundTrigger>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getPipelineInboundTrigger>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getPipelineInboundTrigger>>,
+          TError,
+          Awaited<ReturnType<typeof getPipelineInboundTrigger>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetPipelineInboundTrigger<
+  TData = Awaited<ReturnType<typeof getPipelineInboundTrigger>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getPipelineInboundTrigger>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getPipelineInboundTrigger>>,
+          TError,
+          Awaited<ReturnType<typeof getPipelineInboundTrigger>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetPipelineInboundTrigger<
+  TData = Awaited<ReturnType<typeof getPipelineInboundTrigger>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getPipelineInboundTrigger>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Read a pipeline version's inbound trigger
+ */
+
+export function useGetPipelineInboundTrigger<
+  TData = Awaited<ReturnType<typeof getPipelineInboundTrigger>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getPipelineInboundTrigger>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetPipelineInboundTriggerQueryOptions(
+    projectId,
+    versionId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type rotatePipelineInboundTriggerResponse200 = {
+  data: PipelineInboundTrigger;
+  status: 200;
+};
+
+export type rotatePipelineInboundTriggerResponse403 = {
+  data: ErrorResponse;
+  status: 403;
+};
+
+export type rotatePipelineInboundTriggerResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type rotatePipelineInboundTriggerResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type rotatePipelineInboundTriggerResponseSuccess =
+  rotatePipelineInboundTriggerResponse200 & {
+    headers: Headers;
+  };
+export type rotatePipelineInboundTriggerResponseError = (
+  | rotatePipelineInboundTriggerResponse403
+  | rotatePipelineInboundTriggerResponse404
+  | rotatePipelineInboundTriggerResponse503
+) & {
+  headers: Headers;
+};
+
+export type rotatePipelineInboundTriggerResponse =
+  | rotatePipelineInboundTriggerResponseSuccess
+  | rotatePipelineInboundTriggerResponseError;
+
+export const getRotatePipelineInboundTriggerUrl = (
+  projectId: number,
+  versionId: number,
+) => {
+  return `/pipeline_triggers/prompt_lib/${projectId}/${versionId}`;
+};
+
+/**
+ * Mints a credential and returns it ONCE in `secret` and `secret_url`.
+ *
+ * Create and rotate are ONE operation on purpose. They differ only in
+ * whether a row was already there, they have the same permission, and
+ * they have the same effect on any holder of the previous secret. Two
+ * operations would be two chances to implement the rotation half
+ * differently from the creation half.
+ *
+ * Rotation is immediate and total: the previous secret stops working the
+ * moment this returns, and its vault entry is removed. That is what
+ * "rotate" has to mean for a credential somebody else holds.
+ * @summary Create or rotate a pipeline version's inbound trigger
+ */
+export const rotatePipelineInboundTrigger = async (
+  projectId: number,
+  versionId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<rotatePipelineInboundTriggerResponse> => {
+  return eliteaFetch<rotatePipelineInboundTriggerResponse>(
+    getRotatePipelineInboundTriggerUrl(projectId, versionId),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getRotatePipelineInboundTriggerQueryKey = (
+  projectId: number,
+  versionId: number,
+) => {
+  return [
+    "POST",
+    `/pipeline_triggers/prompt_lib/${projectId}/${versionId}`,
+  ] as const;
+};
+
+export const getRotatePipelineInboundTriggerQueryOptions = <
+  TData = Awaited<ReturnType<typeof rotatePipelineInboundTrigger>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof rotatePipelineInboundTrigger>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getRotatePipelineInboundTriggerQueryKey(projectId, versionId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof rotatePipelineInboundTrigger>>
+  > = ({ signal }) =>
+    rotatePipelineInboundTrigger(projectId, versionId, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      versionId !== null &&
+      versionId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof rotatePipelineInboundTrigger>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type RotatePipelineInboundTriggerQueryResult = NonNullable<
+  Awaited<ReturnType<typeof rotatePipelineInboundTrigger>>
+>;
+export type RotatePipelineInboundTriggerQueryError = ErrorResponse;
+
+export function useRotatePipelineInboundTrigger<
+  TData = Awaited<ReturnType<typeof rotatePipelineInboundTrigger>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof rotatePipelineInboundTrigger>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof rotatePipelineInboundTrigger>>,
+          TError,
+          Awaited<ReturnType<typeof rotatePipelineInboundTrigger>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRotatePipelineInboundTrigger<
+  TData = Awaited<ReturnType<typeof rotatePipelineInboundTrigger>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof rotatePipelineInboundTrigger>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof rotatePipelineInboundTrigger>>,
+          TError,
+          Awaited<ReturnType<typeof rotatePipelineInboundTrigger>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRotatePipelineInboundTrigger<
+  TData = Awaited<ReturnType<typeof rotatePipelineInboundTrigger>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof rotatePipelineInboundTrigger>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Create or rotate a pipeline version's inbound trigger
+ */
+
+export function useRotatePipelineInboundTrigger<
+  TData = Awaited<ReturnType<typeof rotatePipelineInboundTrigger>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof rotatePipelineInboundTrigger>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getRotatePipelineInboundTriggerQueryOptions(
+    projectId,
+    versionId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type revokePipelineInboundTriggerResponse200 = {
+  data: PipelineInboundTrigger;
+  status: 200;
+};
+
+export type revokePipelineInboundTriggerResponse403 = {
+  data: ErrorResponse;
+  status: 403;
+};
+
+export type revokePipelineInboundTriggerResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type revokePipelineInboundTriggerResponseSuccess =
+  revokePipelineInboundTriggerResponse200 & {
+    headers: Headers;
+  };
+export type revokePipelineInboundTriggerResponseError = (
+  | revokePipelineInboundTriggerResponse403
+  | revokePipelineInboundTriggerResponse404
+) & {
+  headers: Headers;
+};
+
+export type revokePipelineInboundTriggerResponse =
+  | revokePipelineInboundTriggerResponseSuccess
+  | revokePipelineInboundTriggerResponseError;
+
+export const getRevokePipelineInboundTriggerUrl = (
+  projectId: number,
+  versionId: number,
+) => {
+  return `/pipeline_triggers/prompt_lib/${projectId}/${versionId}`;
+};
+
+/**
+ * Makes the credential unusable and KEEPS the row. A revoked trigger is
+ * evidence: an operator asking "was this webhook still live last
+ * Tuesday?" gets an answer from a row that is present and revoked, and no
+ * answer at all from a row that is gone. The inbound endpoint refuses any
+ * row whose `revoked_at` is set.
+ *
+ * The stored secret is deleted, so it cannot be revealed again after
+ * revocation.
+ * @summary Revoke a pipeline version's inbound trigger
+ */
+export const revokePipelineInboundTrigger = async (
+  projectId: number,
+  versionId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<revokePipelineInboundTriggerResponse> => {
+  return eliteaFetch<revokePipelineInboundTriggerResponse>(
+    getRevokePipelineInboundTriggerUrl(projectId, versionId),
+    {
+      ...options,
+      method: "DELETE",
+    },
+  );
+};
+
+export const getRevokePipelineInboundTriggerQueryKey = (
+  projectId: number,
+  versionId: number,
+) => {
+  return [
+    "DELETE",
+    `/pipeline_triggers/prompt_lib/${projectId}/${versionId}`,
+  ] as const;
+};
+
+export const getRevokePipelineInboundTriggerQueryOptions = <
+  TData = Awaited<ReturnType<typeof revokePipelineInboundTrigger>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokePipelineInboundTrigger>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getRevokePipelineInboundTriggerQueryKey(projectId, versionId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof revokePipelineInboundTrigger>>
+  > = ({ signal }) =>
+    revokePipelineInboundTrigger(projectId, versionId, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      versionId !== null &&
+      versionId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof revokePipelineInboundTrigger>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type RevokePipelineInboundTriggerQueryResult = NonNullable<
+  Awaited<ReturnType<typeof revokePipelineInboundTrigger>>
+>;
+export type RevokePipelineInboundTriggerQueryError = ErrorResponse;
+
+export function useRevokePipelineInboundTrigger<
+  TData = Awaited<ReturnType<typeof revokePipelineInboundTrigger>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokePipelineInboundTrigger>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof revokePipelineInboundTrigger>>,
+          TError,
+          Awaited<ReturnType<typeof revokePipelineInboundTrigger>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRevokePipelineInboundTrigger<
+  TData = Awaited<ReturnType<typeof revokePipelineInboundTrigger>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokePipelineInboundTrigger>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof revokePipelineInboundTrigger>>,
+          TError,
+          Awaited<ReturnType<typeof revokePipelineInboundTrigger>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRevokePipelineInboundTrigger<
+  TData = Awaited<ReturnType<typeof revokePipelineInboundTrigger>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokePipelineInboundTrigger>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Revoke a pipeline version's inbound trigger
+ */
+
+export function useRevokePipelineInboundTrigger<
+  TData = Awaited<ReturnType<typeof revokePipelineInboundTrigger>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokePipelineInboundTrigger>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getRevokePipelineInboundTriggerQueryOptions(
+    projectId,
+    versionId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type revealPipelineInboundTriggerResponse200 = {
+  data: PipelineInboundTrigger;
+  status: 200;
+};
+
+export type revealPipelineInboundTriggerResponse403 = {
+  data: ErrorResponse;
+  status: 403;
+};
+
+export type revealPipelineInboundTriggerResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type revealPipelineInboundTriggerResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type revealPipelineInboundTriggerResponseSuccess =
+  revealPipelineInboundTriggerResponse200 & {
+    headers: Headers;
+  };
+export type revealPipelineInboundTriggerResponseError = (
+  | revealPipelineInboundTriggerResponse403
+  | revealPipelineInboundTriggerResponse409
+  | revealPipelineInboundTriggerResponse503
+) & {
+  headers: Headers;
+};
+
+export type revealPipelineInboundTriggerResponse =
+  | revealPipelineInboundTriggerResponseSuccess
+  | revealPipelineInboundTriggerResponseError;
+
+export const getRevealPipelineInboundTriggerUrl = (
+  projectId: number,
+  versionId: number,
+) => {
+  return `/pipeline_triggers/secret/prompt_lib/${projectId}/${versionId}`;
+};
+
+/**
+ * Returns the live credential so the settings tab can show the webhook URL
+ * again after the dialog that created it was closed.
+ *
+ * It is a GET carrying the WRITE permission, which is deliberate. Folding
+ * it into the plain read would put a credential into the response of the
+ * call the settings tab makes on every open, where it would sit in the
+ * browser's query cache and in any exported HAR — and would let a
+ * view-only member copy a working URL.
+ *
+ * A 409 means the row exists and its stored secret cannot be read. That is
+ * reported as "rotate it" rather than as a server error, because rotation
+ * is the only repair a person can perform and it always works.
+ * @summary Reveal a pipeline version's trigger credential
+ */
+export const revealPipelineInboundTrigger = async (
+  projectId: number,
+  versionId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<revealPipelineInboundTriggerResponse> => {
+  return eliteaFetch<revealPipelineInboundTriggerResponse>(
+    getRevealPipelineInboundTriggerUrl(projectId, versionId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getRevealPipelineInboundTriggerQueryKey = (
+  projectId: number,
+  versionId: number,
+) => {
+  return [
+    `/pipeline_triggers/secret/prompt_lib/${projectId}/${versionId}`,
+  ] as const;
+};
+
+export const getRevealPipelineInboundTriggerQueryOptions = <
+  TData = Awaited<ReturnType<typeof revealPipelineInboundTrigger>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revealPipelineInboundTrigger>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getRevealPipelineInboundTriggerQueryKey(projectId, versionId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof revealPipelineInboundTrigger>>
+  > = ({ signal }) =>
+    revealPipelineInboundTrigger(projectId, versionId, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      versionId !== null &&
+      versionId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof revealPipelineInboundTrigger>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type RevealPipelineInboundTriggerQueryResult = NonNullable<
+  Awaited<ReturnType<typeof revealPipelineInboundTrigger>>
+>;
+export type RevealPipelineInboundTriggerQueryError = ErrorResponse;
+
+export function useRevealPipelineInboundTrigger<
+  TData = Awaited<ReturnType<typeof revealPipelineInboundTrigger>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revealPipelineInboundTrigger>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof revealPipelineInboundTrigger>>,
+          TError,
+          Awaited<ReturnType<typeof revealPipelineInboundTrigger>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRevealPipelineInboundTrigger<
+  TData = Awaited<ReturnType<typeof revealPipelineInboundTrigger>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revealPipelineInboundTrigger>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof revealPipelineInboundTrigger>>,
+          TError,
+          Awaited<ReturnType<typeof revealPipelineInboundTrigger>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRevealPipelineInboundTrigger<
+  TData = Awaited<ReturnType<typeof revealPipelineInboundTrigger>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revealPipelineInboundTrigger>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Reveal a pipeline version's trigger credential
+ */
+
+export function useRevealPipelineInboundTrigger<
+  TData = Awaited<ReturnType<typeof revealPipelineInboundTrigger>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revealPipelineInboundTrigger>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getRevealPipelineInboundTriggerQueryOptions(
+    projectId,
+    versionId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getPipelineScheduleResponse200 = {
+  data: PipelineSchedule;
+  status: 200;
+};
+
+export type getPipelineScheduleResponse403 = {
+  data: ErrorResponse;
+  status: 403;
+};
+
+export type getPipelineScheduleResponseSuccess =
+  getPipelineScheduleResponse200 & {
+    headers: Headers;
+  };
+export type getPipelineScheduleResponseError =
+  getPipelineScheduleResponse403 & {
+    headers: Headers;
+  };
+
+export type getPipelineScheduleResponse =
+  getPipelineScheduleResponseSuccess | getPipelineScheduleResponseError;
+
+export const getGetPipelineScheduleUrl = (
+  projectId: number,
+  versionId: number,
+) => {
+  return `/pipeline_schedules/prompt_lib/${projectId}/${versionId}`;
+};
+
+/**
+ * Reports the cron expression, whether it is enabled, the computed next
+ * run, and the outcome of the last fire attempt.
+ *
+ * `last_result` is the tenant-visible half of failure visibility: an audit
+ * event answers "what happened on this platform" and is what an operator
+ * reads, while this column answers "is MY schedule working" and is what
+ * the person who made it can see.
+ * @summary Read a pipeline version's schedule
+ */
+export const getPipelineSchedule = async (
+  projectId: number,
+  versionId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getPipelineScheduleResponse> => {
+  return eliteaFetch<getPipelineScheduleResponse>(
+    getGetPipelineScheduleUrl(projectId, versionId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetPipelineScheduleQueryKey = (
+  projectId: number,
+  versionId: number,
+) => {
+  return [`/pipeline_schedules/prompt_lib/${projectId}/${versionId}`] as const;
+};
+
+export const getGetPipelineScheduleQueryOptions = <
+  TData = Awaited<ReturnType<typeof getPipelineSchedule>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getPipelineSchedule>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGetPipelineScheduleQueryKey(projectId, versionId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getPipelineSchedule>>
+  > = ({ signal }) =>
+    getPipelineSchedule(projectId, versionId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      versionId !== null &&
+      versionId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getPipelineSchedule>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetPipelineScheduleQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getPipelineSchedule>>
+>;
+export type GetPipelineScheduleQueryError = ErrorResponse;
+
+export function useGetPipelineSchedule<
+  TData = Awaited<ReturnType<typeof getPipelineSchedule>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getPipelineSchedule>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getPipelineSchedule>>,
+          TError,
+          Awaited<ReturnType<typeof getPipelineSchedule>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetPipelineSchedule<
+  TData = Awaited<ReturnType<typeof getPipelineSchedule>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getPipelineSchedule>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getPipelineSchedule>>,
+          TError,
+          Awaited<ReturnType<typeof getPipelineSchedule>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetPipelineSchedule<
+  TData = Awaited<ReturnType<typeof getPipelineSchedule>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getPipelineSchedule>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Read a pipeline version's schedule
+ */
+
+export function useGetPipelineSchedule<
+  TData = Awaited<ReturnType<typeof getPipelineSchedule>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getPipelineSchedule>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetPipelineScheduleQueryOptions(
+    projectId,
+    versionId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type savePipelineScheduleResponse200 = {
+  data: PipelineSchedule;
+  status: 200;
+};
+
+export type savePipelineScheduleResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type savePipelineScheduleResponse403 = {
+  data: ErrorResponse;
+  status: 403;
+};
+
+export type savePipelineScheduleResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type savePipelineScheduleResponseSuccess =
+  savePipelineScheduleResponse200 & {
+    headers: Headers;
+  };
+export type savePipelineScheduleResponseError = (
+  | savePipelineScheduleResponse400
+  | savePipelineScheduleResponse403
+  | savePipelineScheduleResponse404
+) & {
+  headers: Headers;
+};
+
+export type savePipelineScheduleResponse =
+  savePipelineScheduleResponseSuccess | savePipelineScheduleResponseError;
+
+export const getSavePipelineScheduleUrl = (
+  projectId: number,
+  versionId: number,
+) => {
+  return `/pipeline_schedules/prompt_lib/${projectId}/${versionId}`;
+};
+
+/**
+ * Saving SETS the schedule's author to the caller, and the author is who
+ * an unattended run executes as. Leaving the original author in place
+ * while someone else edited the cron would let a caller retarget another
+ * person's identity onto a new time.
+ *
+ * The author's permission is re-resolved at every FIRE, not here: a
+ * schedule whose author later loses access stops firing and records
+ * `skipped_unauthorized`, without anybody having to remember to disable
+ * it.
+ *
+ * The cron expression is validated with the parser that will run it. Five
+ * fields are required and names such as `@daily` are refused, because an
+ * expression the runner cannot parse would not error at run time — it
+ * would silently never fire, which on an unattended job looks exactly like
+ * a job with nothing to do.
+ * @summary Create or replace a pipeline version's schedule
+ */
+export const savePipelineSchedule = async (
+  projectId: number,
+  versionId: number,
+  pipelineScheduleUpdate: PipelineScheduleUpdate,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<savePipelineScheduleResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+  return eliteaFetch<savePipelineScheduleResponse>(
+    getSavePipelineScheduleUrl(projectId, versionId),
+    {
+      ...options,
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(pipelineScheduleUpdate),
+    },
+  );
+};
+
+export const getSavePipelineScheduleQueryKey = (
+  projectId: number,
+  versionId: number,
+  pipelineScheduleUpdate?: PipelineScheduleUpdate,
+) => {
+  return [
+    "PUT",
+    `/pipeline_schedules/prompt_lib/${projectId}/${versionId}`,
+    pipelineScheduleUpdate,
+  ] as const;
+};
+
+export const getSavePipelineScheduleQueryOptions = <
+  TData = Awaited<ReturnType<typeof savePipelineSchedule>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  pipelineScheduleUpdate: PipelineScheduleUpdate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof savePipelineSchedule>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getSavePipelineScheduleQueryKey(
+      projectId,
+      versionId,
+      pipelineScheduleUpdate,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof savePipelineSchedule>>
+  > = ({ signal }) =>
+    savePipelineSchedule(projectId, versionId, pipelineScheduleUpdate, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      versionId !== null &&
+      versionId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof savePipelineSchedule>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type SavePipelineScheduleQueryResult = NonNullable<
+  Awaited<ReturnType<typeof savePipelineSchedule>>
+>;
+export type SavePipelineScheduleQueryError = ErrorResponse;
+
+export function useSavePipelineSchedule<
+  TData = Awaited<ReturnType<typeof savePipelineSchedule>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  pipelineScheduleUpdate: PipelineScheduleUpdate,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof savePipelineSchedule>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof savePipelineSchedule>>,
+          TError,
+          Awaited<ReturnType<typeof savePipelineSchedule>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSavePipelineSchedule<
+  TData = Awaited<ReturnType<typeof savePipelineSchedule>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  pipelineScheduleUpdate: PipelineScheduleUpdate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof savePipelineSchedule>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof savePipelineSchedule>>,
+          TError,
+          Awaited<ReturnType<typeof savePipelineSchedule>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSavePipelineSchedule<
+  TData = Awaited<ReturnType<typeof savePipelineSchedule>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  pipelineScheduleUpdate: PipelineScheduleUpdate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof savePipelineSchedule>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Create or replace a pipeline version's schedule
+ */
+
+export function useSavePipelineSchedule<
+  TData = Awaited<ReturnType<typeof savePipelineSchedule>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  pipelineScheduleUpdate: PipelineScheduleUpdate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof savePipelineSchedule>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getSavePipelineScheduleQueryOptions(
+    projectId,
+    versionId,
+    pipelineScheduleUpdate,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type deletePipelineScheduleResponse200 = {
+  data: PipelineSchedule;
+  status: 200;
+};
+
+export type deletePipelineScheduleResponse403 = {
+  data: ErrorResponse;
+  status: 403;
+};
+
+export type deletePipelineScheduleResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type deletePipelineScheduleResponseSuccess =
+  deletePipelineScheduleResponse200 & {
+    headers: Headers;
+  };
+export type deletePipelineScheduleResponseError = (
+  deletePipelineScheduleResponse403 | deletePipelineScheduleResponse404
+) & {
+  headers: Headers;
+};
+
+export type deletePipelineScheduleResponse =
+  deletePipelineScheduleResponseSuccess | deletePipelineScheduleResponseError;
+
+export const getDeletePipelineScheduleUrl = (
+  projectId: number,
+  versionId: number,
+) => {
+  return `/pipeline_schedules/prompt_lib/${projectId}/${versionId}`;
+};
+
+/**
+ * The row is DELETED rather than tombstoned, unlike a revoked trigger. The
+ * two are not symmetric: a trigger is a credential somebody outside holds,
+ * so "when did it stop working" is a question about a third party, while a
+ * schedule is configuration its own author can re-create, and every fire
+ * it ever made is already an audit row.
+ * @summary Remove a pipeline version's schedule
+ */
+export const deletePipelineSchedule = async (
+  projectId: number,
+  versionId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<deletePipelineScheduleResponse> => {
+  return eliteaFetch<deletePipelineScheduleResponse>(
+    getDeletePipelineScheduleUrl(projectId, versionId),
+    {
+      ...options,
+      method: "DELETE",
+    },
+  );
+};
+
+export const getDeletePipelineScheduleQueryKey = (
+  projectId: number,
+  versionId: number,
+) => {
+  return [
+    "DELETE",
+    `/pipeline_schedules/prompt_lib/${projectId}/${versionId}`,
+  ] as const;
+};
+
+export const getDeletePipelineScheduleQueryOptions = <
+  TData = Awaited<ReturnType<typeof deletePipelineSchedule>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deletePipelineSchedule>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getDeletePipelineScheduleQueryKey(projectId, versionId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof deletePipelineSchedule>>
+  > = ({ signal }) =>
+    deletePipelineSchedule(projectId, versionId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      versionId !== null &&
+      versionId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof deletePipelineSchedule>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type DeletePipelineScheduleQueryResult = NonNullable<
+  Awaited<ReturnType<typeof deletePipelineSchedule>>
+>;
+export type DeletePipelineScheduleQueryError = ErrorResponse;
+
+export function useDeletePipelineSchedule<
+  TData = Awaited<ReturnType<typeof deletePipelineSchedule>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deletePipelineSchedule>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof deletePipelineSchedule>>,
+          TError,
+          Awaited<ReturnType<typeof deletePipelineSchedule>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDeletePipelineSchedule<
+  TData = Awaited<ReturnType<typeof deletePipelineSchedule>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deletePipelineSchedule>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof deletePipelineSchedule>>,
+          TError,
+          Awaited<ReturnType<typeof deletePipelineSchedule>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDeletePipelineSchedule<
+  TData = Awaited<ReturnType<typeof deletePipelineSchedule>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deletePipelineSchedule>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Remove a pipeline version's schedule
+ */
+
+export function useDeletePipelineSchedule<
+  TData = Awaited<ReturnType<typeof deletePipelineSchedule>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deletePipelineSchedule>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getDeletePipelineScheduleQueryOptions(
+    projectId,
+    versionId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type runPipelineInboundTriggerResponse202 = {
+  data: PipelineInboundTriggerRunAccepted;
+  status: 202;
+};
+
+export type runPipelineInboundTriggerResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type runPipelineInboundTriggerResponse401 = {
+  data: ErrorResponse;
+  status: 401;
+};
+
+export type runPipelineInboundTriggerResponse413 = {
+  data: ErrorResponse;
+  status: 413;
+};
+
+export type runPipelineInboundTriggerResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type runPipelineInboundTriggerResponseSuccess =
+  runPipelineInboundTriggerResponse202 & {
+    headers: Headers;
+  };
+export type runPipelineInboundTriggerResponseError = (
+  | runPipelineInboundTriggerResponse400
+  | runPipelineInboundTriggerResponse401
+  | runPipelineInboundTriggerResponse413
+  | runPipelineInboundTriggerResponse503
+) & {
+  headers: Headers;
+};
+
+export type runPipelineInboundTriggerResponse =
+  | runPipelineInboundTriggerResponseSuccess
+  | runPipelineInboundTriggerResponseError;
+
+export const getRunPipelineInboundTriggerUrl = (
+  projectId: number,
+  tokenId: string,
+  params?: RunPipelineInboundTriggerParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/pipeline_trigger/${projectId}/${tokenId}?${stringifiedParams}`
+    : `/pipeline_trigger/${projectId}/${tokenId}`;
+};
+
+/**
+ * The inbound trigger — issue 192. An external system calls this URL and
+ * one pipeline version runs.
+ *
+ * ## This route has NO SESSION
+ *
+ * It is mounted above the API's authentication group, beside the anonymous
+ * shared-chat routes. Its ONLY credential is the per-pipeline secret,
+ * presented as `Authorization: Bearer <secret>`, as
+ * `X-Elitea-Trigger-Token`, or as the `token` query parameter. The header
+ * forms are preferred: a URL is written to proxy and browser logs, and a
+ * credential in one outlives the request.
+ *
+ * ## Nothing the caller sends selects a tenant
+ *
+ * `project_id` says WHERE TO LOOK and nothing more. What runs comes out of
+ * the stored row: the application, the version and the identity are read
+ * from the database and never from the request. A caller who guesses
+ * another project's id finds no row holding their token's digest and gets
+ * the same 401 as a caller who guessed nothing.
+ *
+ * ## Every refusal is the same refusal
+ *
+ * Unknown token, wrong secret, revoked trigger, wrong project, deleted
+ * version, and a creator who has lost the run permission all answer 401
+ * with one sentence. A refusal that named which one it was would be an
+ * oracle for enumerating a deployment's pipelines. An operator debugging
+ * their own webhook reads the audit row, which records the same request
+ * with the reason attached.
+ *
+ * ## The run is the same run a person would have started
+ *
+ * Admission goes through the chat composer's own use case, over a
+ * conversation and participants shaped exactly as a typed turn's, so
+ * budgets, governance, tracing, cancel and the transcript are unchanged.
+ * The answer is 202 and an events URL: the run has not finished and will
+ * not finish inside this request.
+ * @summary Start a pipeline run from an external caller
+ */
+export const runPipelineInboundTrigger = async (
+  projectId: number,
+  tokenId: string,
+  pipelineInboundTriggerRunRequest?: PipelineInboundTriggerRunRequest,
+  params?: RunPipelineInboundTriggerParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<runPipelineInboundTriggerResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+  return eliteaFetch<runPipelineInboundTriggerResponse>(
+    getRunPipelineInboundTriggerUrl(projectId, tokenId, params),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(pipelineInboundTriggerRunRequest),
+    },
+  );
+};
+
+export const getRunPipelineInboundTriggerQueryKey = (
+  projectId: number,
+  tokenId: string,
+  pipelineInboundTriggerRunRequest?: PipelineInboundTriggerRunRequest,
+  params?: RunPipelineInboundTriggerParams,
+) => {
+  return [
+    "POST",
+    `/pipeline_trigger/${projectId}/${tokenId}`,
+    ...(params ? [params] : []),
+    pipelineInboundTriggerRunRequest,
+  ] as const;
+};
+
+export const getRunPipelineInboundTriggerQueryOptions = <
+  TData = Awaited<ReturnType<typeof runPipelineInboundTrigger>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  tokenId: string,
+  pipelineInboundTriggerRunRequest?: PipelineInboundTriggerRunRequest,
+  params?: RunPipelineInboundTriggerParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof runPipelineInboundTrigger>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getRunPipelineInboundTriggerQueryKey(
+      projectId,
+      tokenId,
+      pipelineInboundTriggerRunRequest,
+      params,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof runPipelineInboundTrigger>>
+  > = ({ signal }) =>
+    runPipelineInboundTrigger(
+      projectId,
+      tokenId,
+      pipelineInboundTriggerRunRequest,
+      params,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      tokenId !== null &&
+      tokenId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof runPipelineInboundTrigger>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type RunPipelineInboundTriggerQueryResult = NonNullable<
+  Awaited<ReturnType<typeof runPipelineInboundTrigger>>
+>;
+export type RunPipelineInboundTriggerQueryError = ErrorResponse;
+
+export function useRunPipelineInboundTrigger<
+  TData = Awaited<ReturnType<typeof runPipelineInboundTrigger>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  tokenId: string,
+  pipelineInboundTriggerRunRequest:
+    undefined | PipelineInboundTriggerRunRequest,
+  params: undefined | RunPipelineInboundTriggerParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof runPipelineInboundTrigger>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof runPipelineInboundTrigger>>,
+          TError,
+          Awaited<ReturnType<typeof runPipelineInboundTrigger>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRunPipelineInboundTrigger<
+  TData = Awaited<ReturnType<typeof runPipelineInboundTrigger>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  tokenId: string,
+  pipelineInboundTriggerRunRequest?: PipelineInboundTriggerRunRequest,
+  params?: RunPipelineInboundTriggerParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof runPipelineInboundTrigger>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof runPipelineInboundTrigger>>,
+          TError,
+          Awaited<ReturnType<typeof runPipelineInboundTrigger>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRunPipelineInboundTrigger<
+  TData = Awaited<ReturnType<typeof runPipelineInboundTrigger>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  tokenId: string,
+  pipelineInboundTriggerRunRequest?: PipelineInboundTriggerRunRequest,
+  params?: RunPipelineInboundTriggerParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof runPipelineInboundTrigger>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Start a pipeline run from an external caller
+ */
+
+export function useRunPipelineInboundTrigger<
+  TData = Awaited<ReturnType<typeof runPipelineInboundTrigger>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  tokenId: string,
+  pipelineInboundTriggerRunRequest?: PipelineInboundTriggerRunRequest,
+  params?: RunPipelineInboundTriggerParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof runPipelineInboundTrigger>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getRunPipelineInboundTriggerQueryOptions(
+    projectId,
+    tokenId,
+    pipelineInboundTriggerRunRequest,
+    params,
     options,
   );
 

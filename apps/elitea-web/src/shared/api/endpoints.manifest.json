@@ -2556,6 +2556,108 @@
             "usedBy": [
                 "features/agent-evaluation"
             ]
+        },
+        {
+            "$comment": "READ. Reports that a trigger exists and when it was last used. The URL it returns carries NO credential; revealing one is a separate operation with the write permission on it.",
+            "id": "pipelines.getTrigger",
+            "method": "GET",
+            "path": "/pipeline_triggers/prompt_lib/{projectId}/{versionId}",
+            "operationId": "getPipelineInboundTrigger",
+            "source": "generated",
+            "responseSchema": "PipelineInboundTrigger",
+            "fixture": null,
+            "usedBy": [
+                "pages/pipelines"
+            ]
+        },
+        {
+            "$comment": "A GET carrying the WRITE permission. It hands back a live credential, which is a different act from reporting that one exists.",
+            "id": "pipelines.revealTrigger",
+            "method": "GET",
+            "path": "/pipeline_triggers/secret/prompt_lib/{projectId}/{versionId}",
+            "operationId": "revealPipelineInboundTrigger",
+            "source": "generated",
+            "responseSchema": "PipelineInboundTrigger",
+            "fixture": null,
+            "usedBy": [
+                "pages/pipelines"
+            ]
+        },
+        {
+            "$comment": "Create AND rotate. They differ only in whether a row was already there, and two operations would be two chances to implement rotation differently from creation.",
+            "id": "pipelines.rotateTrigger",
+            "method": "POST",
+            "path": "/pipeline_triggers/prompt_lib/{projectId}/{versionId}",
+            "operationId": "rotatePipelineInboundTrigger",
+            "source": "generated",
+            "responseSchema": "PipelineInboundTrigger",
+            "fixture": null,
+            "usedBy": [
+                "pages/pipelines"
+            ]
+        },
+        {
+            "$comment": "The row is kept and stamped rather than deleted: a revoked trigger is the evidence that answers 'was this live last Tuesday'.",
+            "id": "pipelines.revokeTrigger",
+            "method": "DELETE",
+            "path": "/pipeline_triggers/prompt_lib/{projectId}/{versionId}",
+            "operationId": "revokePipelineInboundTrigger",
+            "source": "generated",
+            "responseSchema": "PipelineInboundTrigger",
+            "fixture": null,
+            "usedBy": [
+                "pages/pipelines"
+            ]
+        },
+        {
+            "$comment": "READ. `next_run` is computed by the parser that will fire the row, so the preview cannot disagree with the behaviour.",
+            "id": "pipelines.getSchedule",
+            "method": "GET",
+            "path": "/pipeline_schedules/prompt_lib/{projectId}/{versionId}",
+            "operationId": "getPipelineSchedule",
+            "source": "generated",
+            "responseSchema": "PipelineSchedule",
+            "fixture": null,
+            "usedBy": [
+                "pages/pipelines"
+            ]
+        },
+        {
+            "$comment": "Saving sets the schedule's author to the caller, and the author is who an unattended run executes as.",
+            "id": "pipelines.saveSchedule",
+            "method": "PUT",
+            "path": "/pipeline_schedules/prompt_lib/{projectId}/{versionId}",
+            "operationId": "savePipelineSchedule",
+            "source": "generated",
+            "responseSchema": "PipelineSchedule",
+            "fixture": null,
+            "usedBy": [
+                "pages/pipelines"
+            ]
+        },
+        {
+            "$comment": "Deleted rather than tombstoned, unlike a revoked trigger: a schedule is configuration its own author can re-create.",
+            "id": "pipelines.deleteSchedule",
+            "method": "DELETE",
+            "path": "/pipeline_schedules/prompt_lib/{projectId}/{versionId}",
+            "operationId": "deletePipelineSchedule",
+            "source": "generated",
+            "responseSchema": "PipelineSchedule",
+            "fixture": null,
+            "usedBy": [
+                "pages/pipelines"
+            ]
+        },
+        {
+            "$comment": "NO FIRST-PARTY CLIENT, and that is the point: this is the door an EXTERNAL system calls with the pipeline's own secret. The SPA shows the URL and never calls it.",
+            "id": "pipelines.runTrigger",
+            "method": "POST",
+            "path": "/pipeline_trigger/{projectId}/{tokenId}",
+            "operationId": "runPipelineInboundTrigger",
+            "source": "generated",
+            "responseSchema": "PipelineInboundTriggerRunAccepted",
+            "fixture": null,
+            "usedBy": []
         }
     ]
 }
