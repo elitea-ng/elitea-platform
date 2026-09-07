@@ -423,7 +423,13 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	//
 	// A new file for 0110's reason: 0060 returns early on any configured
 	// deployment, and migrations are checksum-immutable.
-	require.EqualValues(t, 114, Head(shared))
+	//
+	// 0115 (WP16, issues #340/#616) admits the worker's fourth capability,
+	// `toolkit.call_tool.v1`, into the kernel's capability allowlists so a
+	// single toolkit tool can run on the existing runtime plane. The producer
+	// in elitea-main is a follow-up; the acceptance lands first so the
+	// worker's manifest and the kernel agree on the capability name.
+	require.EqualValues(t, 115, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
