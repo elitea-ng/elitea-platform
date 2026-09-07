@@ -10,13 +10,13 @@ type Metrics struct {
 	results []CompareResult
 	maxSize int
 
-	total       int64
-	matches     int64
-	statusOnly  int64
-	bodyOnly    int64
-	errors      int64
-	latencySum  time.Duration
-	legacySum   time.Duration
+	total      int64
+	matches    int64
+	statusOnly int64
+	bodyOnly   int64
+	errors     int64
+	latencySum time.Duration
+	legacySum  time.Duration
 }
 
 func NewMetrics(bufferSize int) *Metrics {

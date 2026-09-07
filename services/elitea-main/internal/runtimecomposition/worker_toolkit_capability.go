@@ -48,9 +48,9 @@ var pinnedPythonWorkerToolkitCapabilityJSON []byte
 var pinnedRustWorkerToolkitCapabilityJSON []byte
 
 type pythonWorkerToolkitCapabilityDocument struct {
-	SchemaVersion string `json:"schema_version"`
+	SchemaVersion  string `json:"schema_version"`
 	Implementation string `json:"implementation"`
-	SDKRevision   string `json:"sdk_revision"`
+	SDKRevision    string `json:"sdk_revision"`
 	// UnsupportedImportKeys are the SDK registry keys whose import failed in
 	// the admitted image. The image installs a measured subset of
 	// elitea-sdk[all], so a toolkit whose third-party dependency the subset

@@ -170,6 +170,14 @@ BEGIN
         application_id integer,
         application_version_id integer,
         trigger_type varchar(32) NOT NULL DEFAULT 'on_demand',
+        -- The person who started the run. NO foreign key, for tenant/0131's
+        -- reason: a USER-kind column referencing public.auth_core__user would
+        -- make the admin panel's user delete fail on a run row, and a run's
+        -- provenance must survive the account that started it. It is carried
+        -- because the run's model calls are signed with it — the gateway bills
+        -- and authorizes the PERSON, and a background job with no actor bills
+        -- the project to nobody.
+        created_by integer,
         status varchar(32) NOT NULL DEFAULT 'created',
         execution_mode varchar(32) NOT NULL DEFAULT 'predict_blocking',
         snapshot jsonb NOT NULL DEFAULT '{}'::jsonb,

@@ -1647,6 +1647,35 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			"the route stays registered and answers 503")
 	}
 
+	// Agent Evaluation runs execute HERE, in this process: a bounded worker
+	// pool of goroutines driven by the run rows themselves. The reasoning for
+	// not using the runtime plane or the scheduler is in the package doc of
+	// internal/api/v2/evaluation (orchestrator.go).
+	//
+	// The judge and the agent turn both take `predictCompleter`, the SAME
+	// client /predict_llm and the three AI-draft routes take. There is no
+	// second LLM client in this service, and adding one would mean a second
+	// place that resolves credentials and a second egress path to keep
+	// SSRF-safe.
+	//
+	// A nil completer is a supported state and does NOT unregister the routes:
+	// runs are still stored and listed, every case fails with the reason
+	// "no LLM plane is composed", and the run finishes `errored` carrying it.
+	// An operator can then see the run, read why, and fix the deployment —
+	// which a 404 would not let them do (#126).
+	evalRunsRepo := evalRunsRepository(pool)
+	var evalOrchestrator v2evaluation.Enqueuer
+	if evalRunsRepo != nil {
+		orchestrator := v2evaluation.NewOrchestrator(
+			evalRunsRepo, v2evaluation.NewAIJudge(predictCompleter), predictCompleter, logger)
+		// Started with the PROCESS context, so the workers and the recovery
+		// sweep stop on SIGTERM. A run in flight then leaves its row `running`
+		// with a fresh heartbeat, and the next process re-queues it once the
+		// heartbeat goes stale — which is what makes a restart lose nothing.
+		orchestrator.Start(ctx)
+		evalOrchestrator = orchestrator
+	}
+
 	// The admin LLM Proxy section reads the gateway's own enforcement status.
 	// Same four settings again, for the third and last consumer of the hop, so
 	// an operator configures the gateway once. No identity secret: the gateway
@@ -1921,6 +1950,13 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		// records — both halves correct, the wiring the defect, and 2475 green
 		// unit tests unable to see it.
 		EvalDimensionsRepo: evalDimensionsRepository(pool),
+		// Agent Evaluation slice 2, composed in the SAME change as its routes
+		// for the reason above. The orchestrator is started below, after the
+		// config is built, so that a nil pool leaves all three fields nil
+		// together and the thirteen routes are simply not registered.
+		EvalDatasetsRepo: evalDatasetsRepository(pool),
+		EvalRunsRepo:     evalRunsRepo,
+		EvalOrchestrator: evalOrchestrator,
 		// WebhookRepo is the sixth instance of the same defect, and it hid one
 		// step deeper than the other five. Its gate mounts a subrouter —
 		// `r.Mount("/webhooks/prompt_lib/{projectID}", webhook.NewHandler(...).Routes())`
@@ -2040,6 +2076,25 @@ func evalDimensionsRepository(pool *pgxpool.Pool) v2evaluation.Repository {
 		return nil
 	}
 	return dbrepos.NewEvalDimensionsRepo(pool)
+}
+
+func evalDatasetsRepository(pool *pgxpool.Pool) v2evaluation.DatasetRepository {
+	if pool == nil {
+		return nil
+	}
+	return dbrepos.NewEvalDatasetsRepo(pool)
+}
+
+// evalRunsRepository returns a nil INTERFACE and not a boxed nil pointer when
+// there is no pool. The router's `cfg.EvalRunsRepo != nil` gate is an interface
+// comparison, and a typed nil satisfies it — the route would then register and
+// call a method on a nil receiver, which is the /healthz panic recorded in the
+// gateway's own composition notes.
+func evalRunsRepository(pool *pgxpool.Pool) v2evaluation.RunRepository {
+	if pool == nil {
+		return nil
+	}
+	return dbrepos.NewEvalRunsRepo(pool)
 }
 
 func tagsRepository(pool *pgxpool.Pool) v2tags.Repository {

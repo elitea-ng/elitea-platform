@@ -138,9 +138,9 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 		"icon":        app.Icon,
 		// The owning PROJECT (#533). `applications.owner_id` holds the project,
 		// which is what the legacy route answers here as well.
-		"owner_id":    app.OwnerID,
-		"created_at":  app.CreatedAt,
-		"versions":    versions,
+		"owner_id":   app.OwnerID,
+		"created_at": app.CreatedAt,
+		"versions":   versions,
 		// `meta` carries the one key this service actually records on an
 		// application: which of its versions is the default
 		// (repos/applications.go's defaultVersionMetaKey, written by
@@ -525,8 +525,8 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		// The owning PROJECT, as Get and Update answer it (#533). The create
 		// response used to echo the caller, so one route said "user" and the
 		// next said "project" for one field of one entity.
-		"owner_id":    projectID,
-		"created_at":  app.CreatedAt,
+		"owner_id":   projectID,
+		"created_at": app.CreatedAt,
 	}
 	if len(app.Versions) > 0 {
 		// Create writes no tag association, so the echo says "none" and is

@@ -12,12 +12,12 @@ type Request struct {
 }
 
 type Response struct {
-	MessageGroupUID string          `json:"message_group_uid"`
-	Content         string          `json:"content,omitempty"`
-	IsStreaming     bool            `json:"is_streaming"`
-	Usage           *Usage          `json:"usage,omitempty"`
-	ToolCalls       []ToolCall      `json:"tool_calls,omitempty"`
-	ChildMessages   []ChildMessage  `json:"child_messages,omitempty"`
+	MessageGroupUID string         `json:"message_group_uid"`
+	Content         string         `json:"content,omitempty"`
+	IsStreaming     bool           `json:"is_streaming"`
+	Usage           *Usage         `json:"usage,omitempty"`
+	ToolCalls       []ToolCall     `json:"tool_calls,omitempty"`
+	ChildMessages   []ChildMessage `json:"child_messages,omitempty"`
 }
 
 type Usage struct {

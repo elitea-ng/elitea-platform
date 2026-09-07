@@ -424,7 +424,7 @@ func currentConfigurationLifecycleKind(
 // TestCurrentProviderCredentialTypeCoversGatewayProviderTable reads the gateway
 // source and fails when the two tables drift apart. It also requires the pinned
 // catalogue to describe every type in this list: a dispatchable type with no
-// catalogue entry gets `section = ''` and no data schema, so the row is
+// catalogue entry gets `section = ”` and no data schema, so the row is
 // invisible to the gateway and its key cannot be sealed (#G3).
 //
 // EXPORTED through CurrentProviderCredentialType because the admin global

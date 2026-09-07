@@ -7,10 +7,10 @@ import (
 )
 
 type GateChecker struct {
-	tracker          *Tracker
-	healthCheck      func(ctx context.Context) error
-	shadowMatchRate  func(ctx context.Context) (rate float64, total int, err error)
-	errorRateCheck   func(ctx context.Context, endpoint string, window time.Duration) (float64, error)
+	tracker         *Tracker
+	healthCheck     func(ctx context.Context) error
+	shadowMatchRate func(ctx context.Context) (rate float64, total int, err error)
+	errorRateCheck  func(ctx context.Context, endpoint string, window time.Duration) (float64, error)
 }
 
 type GateConfig struct {

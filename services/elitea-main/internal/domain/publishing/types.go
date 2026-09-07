@@ -19,11 +19,11 @@ type PublishedApplication struct {
 }
 
 type Author struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Email       string `json:"email,omitempty"`
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Email        string `json:"email,omitempty"`
 	PublishCount int    `json:"publish_count"`
-	ForkCount   int    `json:"fork_count"`
+	ForkCount    int    `json:"fork_count"`
 }
 
 type PublishRequest struct {

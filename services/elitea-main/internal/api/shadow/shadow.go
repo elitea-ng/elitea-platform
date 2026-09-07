@@ -61,9 +61,9 @@ type CompareResult struct {
 }
 
 type Diff struct {
-	Path     string `json:"path"`
-	Legacy   string `json:"legacy"`
-	New      string `json:"new"`
+	Path   string `json:"path"`
+	Legacy string `json:"legacy"`
+	New    string `json:"new"`
 }
 
 func (c *Comparator) Compare(ctx context.Context, method, path string, newStatus int, newBody []byte, headers http.Header) CompareResult {

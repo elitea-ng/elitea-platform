@@ -17,22 +17,22 @@ type Application struct {
 	// UUID is the applications.uuid column. It is a second, stable identity
 	// for the row; ID is the SERIAL primary key every other endpoint and the
 	// UI's /agents/$tab/$agentId route address the application by.
-	UUID         string         `json:"uuid,omitempty"`
-	ProjectID    string         `json:"project_id,omitempty"`
-	Name         string         `json:"name"`
-	Description  string         `json:"description,omitempty"`
-	Type         string         `json:"type,omitempty"`
-	Icon         string         `json:"icon,omitempty"`
-	Tags         []string       `json:"tags,omitempty"`
-	FolderID     string         `json:"folder_id,omitempty"`
-	Status       string         `json:"status,omitempty"`
-	Metadata     map[string]any `json:"metadata,omitempty"`
-	CreatedAt    time.Time      `json:"created_at"`
-	UpdatedAt    time.Time      `json:"updated_at,omitempty"`
+	UUID        string         `json:"uuid,omitempty"`
+	ProjectID   string         `json:"project_id,omitempty"`
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	Type        string         `json:"type,omitempty"`
+	Icon        string         `json:"icon,omitempty"`
+	Tags        []string       `json:"tags,omitempty"`
+	FolderID    string         `json:"folder_id,omitempty"`
+	Status      string         `json:"status,omitempty"`
+	Metadata    map[string]any `json:"metadata,omitempty"`
+	CreatedAt   time.Time      `json:"created_at"`
+	UpdatedAt   time.Time      `json:"updated_at,omitempty"`
 	// CreatedBy stays empty for an application. The table has no creator
 	// column: `owner_id` is the project. The list path leaves it empty as
 	// well, so an empty value is what every read of this type answers with.
-	CreatedBy    string         `json:"created_by,omitempty"`
+	CreatedBy string `json:"created_by,omitempty"`
 	// OwnerID is the owning PROJECT of the application, as
 	// `applications.owner_id` holds it (#533). It is not the creator. The
 	// creator of a version is Version.AuthorID.

@@ -1,4 +1,4 @@
--- 0115_evaluation_dataset_run_permissions.sql — the six default-mode grants
+-- 0116_evaluation_dataset_run_permissions.sql — the six default-mode grants
 -- Agent Evaluation slice 2 needs.
 --
 --   models.applications.evaluation.dataset.read
@@ -106,6 +106,12 @@
 -- strings have never been granted on any deployment, so no project's saved
 -- matrix can have omitted them deliberately. Every omission is an absence.
 --
+-- WRITTEN AS 0115 AND RENUMBERED AT MERGE. 0115 was free when this file was
+-- authored and was claimed by the toolkit call-tool capability before this
+-- branch landed. Both authors were correct at the time; only the merge can see
+-- the collision, and the number belongs to whichever lands first. 0102, 0103
+-- and 0104 all carry the same note.
+--
 -- Idempotent and additive: it grants to roles that already exist, never
 -- creates one, and conflicts are ignored.
 DO $$
@@ -113,7 +119,7 @@ BEGIN
 
 IF to_regclass('public.auth_core__role') IS NULL
    OR to_regclass('public.auth_core__role_permission') IS NULL THEN
-    RAISE NOTICE '0115: auth_core tables absent, nothing to grant';
+    RAISE NOTICE '0116: auth_core tables absent, nothing to grant';
     RETURN;
 END IF;
 
@@ -148,7 +154,7 @@ ON CONFLICT (role_id, permission) DO NOTHING;
 -- out of every future central grant — the very hole this block exists to close.
 IF to_regclass('public.auth_core__project_role') IS NULL
    OR to_regclass('public.auth_core__project_role_permission') IS NULL THEN
-    RAISE NOTICE '0115: no per-project permission tables, central grants are the whole story here';
+    RAISE NOTICE '0116: no per-project permission tables, central grants are the whole story here';
     RETURN;
 END IF;
 

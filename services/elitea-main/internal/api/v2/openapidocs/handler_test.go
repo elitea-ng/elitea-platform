@@ -71,4 +71,3 @@ func TestUIServesSelfContainedHTMLWithNoExternalReferences(t *testing.T) {
 		t.Fatalf("missing restrictive CSP: %q", csp)
 	}
 }
-

@@ -251,6 +251,19 @@ type RouterConfig struct {
 	// an empty list would be indistinguishable, in the browser, from a working
 	// library that happens to be empty.
 	EvalDimensionsRepo v2evaluation.Repository
+	// EvalDatasetsRepo and EvalRunsRepo back Agent Evaluation SLICE 2 — the
+	// dataset, the run and the read-only scorecard. Unassigned, the thirteen
+	// routes below are not registered at all, for the reason the dimension
+	// four give: a stubbed 200 with an empty list is indistinguishable, in the
+	// browser, from a working feature with no data.
+	EvalDatasetsRepo v2evaluation.DatasetRepository
+	EvalRunsRepo     v2evaluation.RunRepository
+	// EvalOrchestrator executes runs. It may be nil while the repositories are
+	// not: a deployment with no LLM plane still stores and lists runs, and a
+	// `created` row that nothing executes is visibly stuck rather than
+	// invisibly absent. The run START route reports the row it wrote either
+	// way, so a queued run is never claimed to be running.
+	EvalOrchestrator v2evaluation.Enqueuer
 	// ProjectVectorStore provisions a new project's PgVector credentials and
 	// its `vectorstorage` configuration row (#371). It is injected because the
 	// composition needs the Configurations runtime's finder, unsecreter and
@@ -2486,12 +2499,18 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// shared/0100_evaluation_dimension_permissions.sql is that
 				// grant, and it lands with this registration rather than after
 				// it — either alone is the #354/#359 defect.
+				//
+				// ONE gate constructor for every evaluation route, hoisted out
+				// of the dimension block that first declared it: slice 2's
+				// dataset and run routes are registered behind their own nil
+				// checks, and a second copy of this closure would be a second
+				// place for the resolver or the mode to drift.
+				evaluationGate := func(permission string) func(http.Handler) http.Handler {
+					return apimw.RequireResolvedPermissions(
+						coreResolver, platformauth.PermissionModeDefault, permission)
+				}
 				if cfg.EvalDimensionsRepo != nil {
 					evaluationHandler := v2evaluation.NewHandler(cfg.EvalDimensionsRepo)
-					evaluationGate := func(permission string) func(http.Handler) http.Handler {
-						return apimw.RequireResolvedPermissions(
-							coreResolver, platformauth.PermissionModeDefault, permission)
-					}
 					r.With(evaluationGate(v2evaluation.PermissionDimensionRead)).
 						Get("/eval_dimensions/prompt_lib/{projectID}", evaluationHandler.List)
 					r.With(evaluationGate(v2evaluation.PermissionDimensionCreate)).
@@ -2500,6 +2519,86 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						Put("/eval_dimension/prompt_lib/{projectID}/{dimensionID}", evaluationHandler.Update)
 					r.With(evaluationGate(v2evaluation.PermissionDimensionDelete)).
 						Delete("/eval_dimension/prompt_lib/{projectID}/{dimensionID}", evaluationHandler.Delete)
+				}
+
+				// Agent Evaluation SLICE 2 — the dataset, the run and the
+				// read-only scorecard. Thirteen routes: five for the dataset,
+				// three for its cases, four for the run and one scorecard.
+				//
+				// STILL NOT REGISTERED, and absent rather than stubbed: the
+				// suite and binding families, the dataset import and the
+				// conversation promote, the human-score writes, the platform
+				// catalogue and `generate_eval_dimensions`. Twelve of the
+				// reference's thirty-eight operations are here; the rest answer
+				// 404, which is what an unbuilt route should answer.
+				//
+				// The gates use the same package constants and the same
+				// `apimw.RequireResolvedPermissions` construction the dimension
+				// four use, and NOT router.go's `projectPermission` helper, for
+				// the reason recorded above and in
+				// migrations/shared/0115_evaluation_dataset_run_permissions.sql:
+				// Agent Evaluation is not in the pylon corpus this repository
+				// carries, so these names have no `check_api` to be transcribed
+				// from and the helper's provenance assertion would be false.
+				// router_permission_grant_gate_test.go still binds them to a
+				// shared migration, and 0115 is that migration.
+				//
+				// CANCEL is gated on `run.create` and not on a `run.cancel`
+				// string, because the reference's vocabulary has no such
+				// string: the right that started a run is the right that stops
+				// it. Inventing a name would ship either a widened vocabulary
+				// or a permanent 403 (#313).
+				if cfg.EvalDatasetsRepo != nil {
+					datasetHandler := v2evaluation.NewDatasetHandler(cfg.EvalDatasetsRepo)
+					requireDatasetRead := evaluationGate(v2evaluation.PermissionDatasetRead)
+					requireDatasetUpdate := evaluationGate(v2evaluation.PermissionDatasetUpdate)
+
+					r.With(requireDatasetRead).
+						Get("/eval_datasets/prompt_lib/{projectID}", datasetHandler.List)
+					r.With(evaluationGate(v2evaluation.PermissionDatasetCreate)).
+						Post("/eval_datasets/prompt_lib/{projectID}", datasetHandler.Create)
+					r.With(requireDatasetRead).
+						Get("/eval_dataset/prompt_lib/{projectID}/{datasetID}", datasetHandler.Get)
+					r.With(requireDatasetUpdate).
+						Put("/eval_dataset/prompt_lib/{projectID}/{datasetID}", datasetHandler.Update)
+					r.With(evaluationGate(v2evaluation.PermissionDatasetDelete)).
+						Delete("/eval_dataset/prompt_lib/{projectID}/{datasetID}", datasetHandler.Delete)
+
+					// A CASE is part of its dataset, so its writes take the
+					// dataset UPDATE permission rather than a permission of
+					// their own. The reference declares none for cases, and a
+					// caller who may not edit a dataset must not be able to
+					// change what it asks.
+					r.With(requireDatasetUpdate).
+						Post("/eval_dataset_cases/prompt_lib/{projectID}/{datasetID}", datasetHandler.AddCase)
+					r.With(requireDatasetUpdate).
+						Put("/eval_dataset_case/prompt_lib/{projectID}/{datasetID}/{caseID}", datasetHandler.UpdateCase)
+					r.With(requireDatasetUpdate).
+						Delete("/eval_dataset_case/prompt_lib/{projectID}/{datasetID}/{caseID}", datasetHandler.DeleteCase)
+				}
+
+				// The run routes need BOTH repositories: the run one for the
+				// rows, and the dimension one to freeze the snapshot a run is
+				// scored against. Registering them on the run repository alone
+				// would produce a route that starts runs whose snapshot has no
+				// dimensions in it, and every case would then score nothing
+				// behind a 201.
+				if cfg.EvalRunsRepo != nil && cfg.EvalDimensionsRepo != nil {
+					runHandler := v2evaluation.NewRunHandler(
+						cfg.EvalRunsRepo, cfg.EvalDimensionsRepo, cfg.EvalOrchestrator)
+					requireRunRead := evaluationGate(v2evaluation.PermissionRunRead)
+					requireRunWrite := evaluationGate(v2evaluation.PermissionRunCreate)
+
+					r.With(requireRunRead).
+						Get("/eval_runs/prompt_lib/{projectID}", runHandler.List)
+					r.With(requireRunWrite).
+						Post("/eval_runs/prompt_lib/{projectID}", runHandler.Start)
+					r.With(requireRunRead).
+						Get("/eval_run/prompt_lib/{projectID}/{runID}", runHandler.Get)
+					r.With(requireRunWrite).
+						Post("/eval_run_cancel/prompt_lib/{projectID}/{runID}", runHandler.Cancel)
+					r.With(requireRunRead).
+						Get("/eval_results/prompt_lib/{projectID}/{runID}", runHandler.Results)
 				}
 
 				// Conversations
