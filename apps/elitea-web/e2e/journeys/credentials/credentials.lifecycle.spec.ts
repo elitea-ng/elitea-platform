@@ -33,7 +33,7 @@ import { test, expect } from '@playwright/test';
 
 import { checkA11y } from '../../fixtures/axe';
 import { BASE_URL } from '../../../playwright.config';
-import { AUTOTEST_PREFIX } from '../../fixtures/api';
+import { AUTOTEST_PREFIX, DEFAULT_PROJECT_ID } from '../../fixtures/api';
 
 /**
  * The entry point into the credential-creation flow.
@@ -196,10 +196,21 @@ test('J19b: create a credential, verify it persisted, then delete it', async ({ 
   //
   // The wait is armed BEFORE the navigation that causes the request, because
   // its budget is wall-clock from creation.
+  //
+  // THE PROJECT SEGMENT IS PART OF THE PREDICATE, and it is not decoration.
+  // Matching on the path prefix and the id alone also matched a request for
+  // NO project — `/configurations/configuration//{id}`, which the edit screen
+  // used to fire on its first render, while the selected-project store was
+  // still hydrating. Chromium abandons that request when the store resolves
+  // and the query key changes, and then has no body to give for the response
+  // this line captured: `Protocol error (Network.getResponseBody): No data
+  // found for resource with given identifier`. The app no longer makes that
+  // request (`features/credentials/api/useConfigurations.ts`'s
+  // `isResolvedId`, unit-tested there); naming the project here means a
+  // future stray fails on its own assertion instead of on this one's body.
   const detailRead = page.waitForResponse(
     (res) => res.request().method() === 'GET'
-      && res.url().includes('/configurations/configuration/')
-      && res.url().includes(`/${configId}`),
+      && new RegExp(`/configurations/configuration/${DEFAULT_PROJECT_ID}/${configId}(\\?|$)`).test(res.url()),
     { timeout: 20_000 },
   );
   await page.goto(`${BASE_URL}/app/settings/edit-configuration/${configId}`);
