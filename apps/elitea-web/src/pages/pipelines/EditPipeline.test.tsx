@@ -876,4 +876,60 @@ describe('pipeline versioning', () => {
     expect(await screen.findByTestId('version-selector-trigger')).toBeVisible();
     expect(screen.queryByRole('button', { name: 'Save As Version' })).toBeNull();
   }, 20_000);
+  /*
+   * J16b's cause. LAST in this file on purpose: it is the only test here that
+   * drives a save AND the refetch that follows it, and it therefore leaves the
+   * editor in the state a real author is in after saving — which the earlier
+   * tests, sharing this file's module-scoped editor stores, are not written
+   * for. `useRefetchPipelineAfterSave` refetches the detail after
+   * every save, and the header row used to be gated on the raw `isFetching`,
+   * so the version bar — "Save As Version" included — left the document for
+   * the length of that request. The journey clicked the button the moment the
+   * save landed and waited 30s for an element that was not there.
+   *
+   * The refetch is held open deliberately: the assertion is about the window
+   * WHILE it is in flight, which is the only window in which the defect
+   * existed.
+   */
+  it('keeps the version bar mounted while the post-save refetch is in flight', async () => {
+    server.use(getGetApplicationMockHandler(detail()));
+    let refetches = 0;
+    server.use(
+      http.put('*/elitea_core/version/prompt_lib/:projectId/:applicationId/:versionId', async () => {
+        // Slow enough that the page renders once with the save in flight:
+        // `useRefetchPipelineAfterSave` watches for the true->false edge of
+        // `isSaving`, and an instantly-answered PUT never produces one.
+        await delay(60);
+        return HttpResponse.json({ id: '1', application_id: '42', name: 'base', status: 'draft' }, { status: 201 });
+      }),
+      http.get('*/elitea_core/application/prompt_lib/:projectId/:applicationId', async () => {
+        refetches += 1;
+        // Held open only for the FIRST refetch — the window the defect lived
+        // in — so nothing is left in flight for the next test.
+        if (refetches === 1) await delay(400);
+        return HttpResponse.json(detail());
+      }),
+    );
+    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', { projectId: '9' });
+    const user = userEvent.setup();
+
+    await screen.findByTestId('edit-pipeline-configuration-form-gap');
+    await configPanel().findByText('GPT-4o');
+    expect(await screen.findByRole('button', { name: 'Save As Version' })).toBeInTheDocument();
+
+    refetches = 0;
+    await user.click(await screen.findByTestId('pipeline-save-button'));
+
+    await waitFor(() => expect(refetches).toBe(1), { timeout: 10_000 });
+    expect(screen.getByRole('button', { name: 'Save As Version' })).toBeInTheDocument();
+    expect(screen.getByTestId('pipeline-save-button')).toBeInTheDocument();
+
+    // Let the held refetch land while the tree is still mounted. A response
+    // that arrives after the test has finished writes the module-scoped
+    // editor stores from an unmounted tree, and the NEXT test then starts
+    // dirty — the same leak the `beforeEach` reset above exists for.
+    await waitFor(() => expect(usePipelineYamlStore.getState().yamlCode).toContain('Printer_1'), {
+      timeout: 10_000,
+    });
+  }, 20_000);
 });

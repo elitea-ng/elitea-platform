@@ -336,10 +336,20 @@ export function EditPipeline(): ReactNode {
             versions={versions}
             activeVersion={activeVersion}
             isReadOnly={isReadOnlyView}
-            isFetching={isFetching}
+            /* `isEditorLoading`, NOT `isFetching` — the same distinction, and
+               the same measured cost, that `editorIsLoading` above records for
+               the canvas. `useRefetchPipelineAfterSave` refetches the detail
+               after EVERY save, and while that request is in flight a raw
+               `isFetching` unmounted this whole header row: the version
+               selector, "Save As Version", Share/Fork and the Save bar all
+               left the screen and came back. Journey J16b measured the
+               consequence as a 30s wait for a "Save As Version" button that
+               was not in the document — an author who saves and then takes a
+               version sees the control they are reaching for disappear. */
+            isFetching={isEditorLoading}
             llmSettings={llmSettings.value}
           />
-          {!isFetching && !isReadOnlyView && (
+          {!isEditorLoading && !isReadOnlyView && (
             <>
               {/* The Chat action — the only way to actually TALK to this
                   pipeline; see `./ui/ChatWithPipelineButton.tsx` for the

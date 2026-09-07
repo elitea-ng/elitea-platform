@@ -39,7 +39,16 @@ export interface PipelineVersionControlsArgs {
   readonly readGraphDraft: () => PipelineGraphDraft | undefined;
   /** Public-project viewer: the selector stays, the write affordances go (`ApplicationTabBar.jsx:65`). */
   readonly isReadOnly: boolean;
-  /** While the detail is in flight there is neither a version list nor an active version to show. */
+  /**
+   * The FIRST load only — there is neither a version list nor an active
+   * version to show yet.
+   *
+   * Not "a request is in flight": TanStack keeps the previous detail while it
+   * revalidates, and the page refetches after every save
+   * (`useRefetchPipelineAfterSave`), so a raw `isFetching` here took the whole
+   * version bar off screen each time an author saved. See the call site in
+   * `pages/pipelines/EditPipeline.tsx`.
+   */
   readonly isFetching: boolean;
   /**
    * Whether the live graph is one the native runtime would accept.
