@@ -26,6 +26,12 @@ export interface IndexesTabState {
   readonly hidden: boolean;
   /** The `IndexesToolsEnum` members this toolkit has actually selected. */
   readonly selectedIndexTools: readonly string[];
+  /**
+   * The worker-capability verdict off the served type schema — set when the
+   * worker cannot run this toolkit type at all. `IndexesTab` renders it in
+   * place of the create form; see `indexesTabVisibility.ts`.
+   */
+  readonly unavailableReason?: string | undefined;
   /** `tab`, collapsed to Configuration whenever the Indexes tab is not offered. */
   readonly activeTab: number;
   /** The toolkit's `{type, settings}`, as the baseline's Formik `values` reached `IndexesContainer`. */
@@ -57,6 +63,8 @@ export function useIndexesTabState(params: UseIndexesTabStateParams): IndexesTab
   return {
     hidden: visibility.hidden,
     selectedIndexTools: visibility.selectedIndexTools,
+    // Key omitted, not set to `undefined`: `exactOptionalPropertyTypes`.
+    ...(visibility.unavailableReason === undefined ? {} : { unavailableReason: visibility.unavailableReason }),
     // The tab index is only stable while the Indexes tab exists; if it
     // disappears under a selection change (e.g. the last index tool is
     // deselected), fall back to Configuration rather than render nothing.

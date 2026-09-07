@@ -271,6 +271,57 @@ describe('useToolkitChat', () => {
     expect(emitted.tool_call_input).toEqual({ tool_name: 'search_index', tool_params: { query: 'x' } });
   });
 
+  /**
+   * THE RUN WITH NO TRANSPORT — see `./useToolkitChatDispatch.hooks.ts`'
+   * "fourth case".
+   *
+   * `search_index` is not `index_data`, so the Go start route refuses it
+   * (`internal/api/v2/indexing/start_handler.go:87-90`) and socket.io is the
+   * only path left. When `VITE_SOCKET_SERVER` is absent the app is given the
+   * NULL socket client, whose emit is a documented no-op and whose connection
+   * state is permanently `'disconnected'`
+   * (`shared/api/socket/client.ts:86-113`). The run then did nothing and said
+   * nothing, and the chat panel waited for a reply no server had been asked
+   * for.
+   */
+  it('reports a search run that has no transport, instead of emitting into a void', async () => {
+    const client = createTestSocketClient();
+    client.setConnectionState('disconnected');
+    const onError = vi.fn();
+
+    const { box } = renderToolkitChat(baseParams({ onError }), client);
+    await waitFor(() => expect(box.current).toBeDefined());
+
+    act(() => {
+      box.current?.handleRunTool();
+    });
+
+    await waitFor(() => expect(onError).toHaveBeenCalledTimes(1));
+    expect(String(onError.mock.calls[0]?.[0])).toContain('none is configured for this deployment');
+    // The emit still fires — this reports the run, it does not cancel it. A
+    // deployment that DOES serve socket.io behaves exactly as before.
+    await waitFor(() => expect(client.getEmitted('chat_predict')).toHaveLength(1));
+  });
+
+  it.each([['connected'], ['connecting'], ['reconnecting']] as const)(
+    'stays silent while the socket is %s, so a reconnect is not reported as a missing server',
+    async (state) => {
+      const client = createTestSocketClient();
+      client.setConnectionState(state);
+      const onError = vi.fn();
+
+      const { box } = renderToolkitChat(baseParams({ onError }), client);
+      await waitFor(() => expect(box.current).toBeDefined());
+
+      act(() => {
+        box.current?.handleRunTool();
+      });
+
+      await waitFor(() => expect(client.getEmitted('chat_predict')).toHaveLength(1));
+      expect(onError).not.toHaveBeenCalled();
+    },
+  );
+
   it('does not run when isValidForm is false and the tool is not the indexing tool', async () => {
     const client = createTestSocketClient();
     const createConversation = vi.fn();

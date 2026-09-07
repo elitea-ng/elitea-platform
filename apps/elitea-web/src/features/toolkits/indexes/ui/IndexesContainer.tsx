@@ -12,6 +12,7 @@ import { DeleteEntityModal } from '@/shared/ui/DeleteEntityModal';
 import { useDeleteIndexItemMutation, useIndexScheduleQuery, useIndexesListQuery } from '../api/indexesApi';
 import { IndexViewsEnum, NEW_INDEX_ID, SearchParams } from '../lib/constants/indexDetails.constants';
 import { toDisplayString } from '../lib/helpers/displayString.local';
+import { readIndexesListErrorMessage } from '../lib/helpers/indexesListError';
 import { useSelectedProjectId } from '../lib/hooks/useSelectedProjectId';
 import { mergeIndexesOverlay, useIndexesStore } from '../model/indexesStore';
 import type { IndexRow } from '../model/indexesStore';
@@ -86,10 +87,12 @@ export interface IndexesContainerProps extends IndexesContainerDetailsProps {
   readonly selectedIndexTools: readonly string[];
   readonly editToolDetail?: IndexDetailsProps['editToolDetail'];
   readonly values: Record<string, unknown>;
+  /** Reports a failure the user must see. Supplied by `IndexesTab`, which owns the Snackbar; absent in tests that mount this container alone. */
+  readonly onError?: ((message: string) => void) | undefined;
 }
 
 export function IndexesContainer(props: IndexesContainerProps): ReactNode {
-  const { toolkitId, selectedIndexTools, values, ...detailsProps } = props;
+  const { toolkitId, selectedIndexTools, values, onError, ...detailsProps } = props;
 
   const skipAutoSelection = useRef(false);
   const hasSelectedFromUrlRef = useRef(false);
@@ -104,7 +107,7 @@ export function IndexesContainer(props: IndexesContainerProps): ReactNode {
   const [indexNameFromUrl, setIndexNameFromUrl] = useState<string | null>(() => readIndexNameParam());
 
   useIndexScheduleQuery({ projectId, toolkitId });
-  const { data: serverIndexes, isLoading, isFetching, refetch } = useIndexesListQuery({ toolkitId, projectId });
+  const { data: serverIndexes, isLoading, isFetching, refetch, error: listError } = useIndexesListQuery({ toolkitId, projectId });
   const indexesList = serverIndexes ?? EMPTY_INDEX_LIST;
 
   // The baseline's `indexesList` (its Redux-mirrored `selectIndexesList`) is
@@ -245,11 +248,26 @@ export function IndexesContainer(props: IndexesContainerProps): ReactNode {
       });
       setDeleteIndexModal(false);
       setCurrentIndex(null);
-    } catch {
-      // The baseline surfaces this via `useToast` — see `IndexActions.tsx`'s
-      // own doc comment for the disclosed, already-established platform gap.
+    } catch (error) {
+      /*
+       * WAS a bare `catch {}`, disclosed as "the baseline surfaces this via
+       * `useToast`" and left. The consequence on screen: the delete-confirm
+       * modal STAYS OPEN with the name still typed in, the index is still in
+       * the rail, and nothing says why — indistinguishable from a click that
+       * did not register, so the natural next action is to try again.
+       *
+       * The gap the disclosure named is closed: `IndexesTab` now hosts a
+       * Snackbar (its own doc comment records why it is local and not a
+       * global toast host) and passes its reporter down as `onError`. Absent
+       * — in the tests that mount this container directly — the behaviour is
+       * exactly what it was.
+       */
+      onError?.(
+        readIndexesListErrorMessage(error) ??
+          t('features.toolkits.indexesContainer.deleteFailed', 'The index could not be deleted.'),
+      );
     }
-  }, [currentIndex, deleteIndexItemMutation, projectId, toolkitId]);
+  }, [currentIndex, deleteIndexItemMutation, projectId, toolkitId, onError]);
 
   return (
     <Box sx={{ display: 'flex', flexGrow: 1, height: '100%', paddingLeft: '1.5rem', paddingRight: '1.5rem' }}>
@@ -259,6 +277,11 @@ export function IndexesContainer(props: IndexesContainerProps): ReactNode {
         onIndexClick={handleSelectIndex}
         currentIndex={currentIndex}
         loading={isLoading || isFetching}
+        // A failed read must not be reported as "no indexes" — see
+        // `IndexesList`'s own doc comment and `lib/helpers/indexesListError.ts`.
+        // Passed as the raw rejection: the rail owns the wording, this
+        // container owns only the query.
+        error={listError}
       />
       {currentIndex && (
         <IndexDetails

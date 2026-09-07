@@ -3854,5 +3854,12 @@
   "analytics.tokens.totalCaption": "input + output tokens",
   "analytics.tokens.totalLabel": "TOTAL TOKENS",
   "canvas.presence.oneEditing": "{{name}} is editing…",
-  "canvas.presence.manyEditing": "{{people}} people are editing…"
+  "canvas.presence.manyEditing": "{{people}} people are editing…",
+  "features.toolkits.indexesContainer.deleteFailed": "The index could not be deleted.",
+  "features.toolkits.indexesList.loadFailed": "The index list could not be loaded.",
+  "features.toolkits.indexesList.loadFailedWithStatus": "The index list could not be loaded ({{status}}).",
+  "features.toolkits.indexesList.missingVectorStore": "Indexes need a vector store. Create a PgVector configuration in Settings → AI Providers, then select it in this toolkit’s Configuration tab.",
+  "features.toolkits.indexesTab.unavailableGeneric": "The worker that runs indexing jobs does not support this toolkit type.",
+  "features.toolkits.indexesTab.unavailableTitle": "Indexing is not available for this toolkit type",
+  "features.toolkits.toolkitChat.noRunTransport": "This run needs a live connection to the toolkit runtime, and none is configured for this deployment. Only indexing (“Index data”) can run here."
 }

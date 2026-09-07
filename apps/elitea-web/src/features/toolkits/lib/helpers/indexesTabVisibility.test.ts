@@ -85,3 +85,79 @@ describe('resolveIndexesTabVisibility', () => {
     expect(resolveIndexesTabVisibility({ isMCP: false, toolkitTypeSchema: ARTIFACT_SCHEMA, selectedTools: 'index_data' }).selectedIndexTools).toEqual([]);
   });
 });
+
+/**
+ * THE WORKER-CAPABILITY VERDICT.
+ *
+ * `services/elitea-main/internal/api/v2/toolkits/type_catalogue.go:232-240`
+ * stamps `metadata.unavailable` + `metadata.unavailable_reason` onto a type
+ * the worker cannot import, and its own comment says the verdict "is written
+ * LAST and is not negotiable". The schema below is that stamp applied to the
+ * measured `artifact` payload above — a type that DOES advertise `index_data`
+ * and still cannot be run, which is the only combination that matters here.
+ */
+const UNAVAILABLE_ARTIFACT_SCHEMA = {
+  ...ARTIFACT_SCHEMA,
+  metadata: {
+    hidden: true,
+    unavailable: true,
+    unavailable_reason: 'the worker does not declare the toolkit class alita_sdk.tools.artifact',
+  },
+};
+
+describe('resolveIndexesTabVisibility — the worker-capability verdict', () => {
+  it('returns the server sentence for a type the worker cannot run', () => {
+    const result = resolveIndexesTabVisibility({
+      isMCP: false,
+      toolkitTypeSchema: UNAVAILABLE_ARTIFACT_SCHEMA,
+      selectedTools: ['index_data'],
+    });
+    expect(result.unavailableReason).toBe('the worker does not declare the toolkit class alita_sdk.tools.artifact');
+  });
+
+  it('still offers the tab, because a vanished tab explains nothing', () => {
+    // The whole design decision, asserted: the verdict is a REASON, never a
+    // second `hidden`. A toolkit with existing indexes keeps the tab that
+    // lists them, and the reason is rendered inside it.
+    const result = resolveIndexesTabVisibility({
+      isMCP: false,
+      toolkitTypeSchema: UNAVAILABLE_ARTIFACT_SCHEMA,
+      selectedTools: ['index_data'],
+    });
+    expect(result.hidden).toBe(false);
+    expect(result.selectedIndexTools).toEqual(['index_data']);
+  });
+
+  it('omits the key entirely for a type the worker can run', () => {
+    const result = resolveIndexesTabVisibility({ isMCP: false, toolkitTypeSchema: ARTIFACT_SCHEMA, selectedTools: ['index_data'] });
+    // `exactOptionalPropertyTypes`: absent, not `undefined`-valued. A caller
+    // spreading this object must not create the prop.
+    expect('unavailableReason' in result).toBe(false);
+  });
+
+  it('treats a verdict with no sentence as unavailable, not as available', () => {
+    // `unavailable` is the gate; the sentence is only its explanation. Reading
+    // a missing sentence as "runnable" would restore the silence.
+    const result = resolveIndexesTabVisibility({
+      isMCP: false,
+      toolkitTypeSchema: { ...ARTIFACT_SCHEMA, metadata: { unavailable: true } },
+      selectedTools: [],
+    });
+    expect(result.unavailableReason).toBe('');
+  });
+
+  it.each([
+    ['metadata absent', ARTIFACT_SCHEMA],
+    ['unavailable false', { ...ARTIFACT_SCHEMA, metadata: { unavailable: false, unavailable_reason: 'stale' } }],
+    ['unavailable truthy-but-not-true', { ...ARTIFACT_SCHEMA, metadata: { unavailable: 'yes', unavailable_reason: 'stale' } }],
+    ['metadata null', { ...ARTIFACT_SCHEMA, metadata: null }],
+  ])('reports no verdict when %s', (_name, schema) => {
+    expect(resolveIndexesTabVisibility({ isMCP: false, toolkitTypeSchema: schema, selectedTools: [] }).unavailableReason).toBeUndefined();
+  });
+
+  it('reports no verdict on the MCP route, which is short-circuited before the schema is read', () => {
+    expect(
+      resolveIndexesTabVisibility({ isMCP: true, toolkitTypeSchema: UNAVAILABLE_ARTIFACT_SCHEMA, selectedTools: [] }).unavailableReason,
+    ).toBeUndefined();
+  });
+});
