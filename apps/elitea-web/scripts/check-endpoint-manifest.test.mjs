@@ -442,7 +442,26 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
  * first and moved the base to 190; both streams counted correctly from where
  * they stood, and only the merge can add them up.
  */
-const GENERATED_OPERATION_COUNT = 203;
+/*
+ * 203 -> 211 and 219 -> 227, when a pipeline got the two UNATTENDED ways to
+ * start it: an inbound signed trigger (issue 192) and a cron schedule (issue
+ * 193).
+ *
+ * BOTH NUMBERS MOVE, and by DIFFERENT amounts, which is the part worth the
+ * line. Eight operations are described in api/openapi/v2.yaml; SEVEN of them
+ * are called from the pipeline settings tab that ships in the same change, and
+ * the eighth — `runPipelineInboundTrigger` — has no first-party client and
+ * never will. It is the door an EXTERNAL system calls with the pipeline's own
+ * secret; the SPA shows the URL and does not call it.
+ *
+ * That eighth one STILL gets a manifest entry, with an empty `usedBy` and a
+ * `$comment` saying why. The alternative would be an allowlist entry, and the
+ * allowlist is at its cap and may only shrink — but more to the point, "no
+ * first-party caller" is a FACT about this endpoint rather than an omission to
+ * excuse, and the manifest is where that fact belongs. So the manifest moves by
+ * eight as well.
+ */
+const GENERATED_OPERATION_COUNT = 211;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -506,7 +525,9 @@ const GENERATED_OPERATION_COUNT = 203;
  * manifest while its file still claimed it. Splitting them back restores the
  * entry the lifecycle unit added.
  */
-const MANIFEST_ENTRY_COUNT = 219;
+/* 219 -> 227: the eight pipeline trigger and schedule entries. See the note on
+ * GENERATED_OPERATION_COUNT for why the eighth has an empty `usedBy`. */
+const MANIFEST_ENTRY_COUNT = 227;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {
