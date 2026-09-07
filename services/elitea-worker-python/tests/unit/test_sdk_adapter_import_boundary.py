@@ -11,6 +11,25 @@ from elitea_worker.agents.sdk_adapter import _import_sdk_configurations
 from elitea_worker.execution.errors import DependencyUnavailable
 
 
+# The modules allowed to reach elitea_sdk, and why each one is.
+#
+# `agents/sdk_adapter.py` is the single execution boundary: every toolkit and
+# configuration call the worker makes goes through it, and it verifies the
+# installed package tree against the admitted digest before it makes one.
+#
+# `toolkit_capabilities.py` joined the list when the served toolkit catalogue
+# landed. It reads `elitea_sdk.tools.FAILED_IMPORTS` to publish the deny-set
+# elitea-main embeds — it makes NO toolkit call, and its import is deliberately
+# inside the function so an interpreter without the SDK fails at the answer
+# rather than at import. It was already reaching the SDK and this assertion had
+# no entry for it, so this test has been red on the branch since that change;
+# an unexplained red gate is how a boundary rule stops being read.
+_SDK_IMPORT_BOUNDARY = [
+    Path("agents/sdk_adapter.py"),
+    Path("toolkit_capabilities.py"),
+]
+
+
 def test_only_sdk_adapter_imports_elitea_sdk() -> None:
     source_root = Path(__file__).parents[2] / "src" / "elitea_worker"
     importers: list[Path] = []
@@ -29,7 +48,7 @@ def test_only_sdk_adapter_imports_elitea_sdk() -> None:
         else:
             if "elitea_sdk.configurations" in source:
                 importers.append(path.relative_to(source_root))
-    assert importers == [Path("agents/sdk_adapter.py")]
+    assert sorted(importers) == sorted(_SDK_IMPORT_BOUNDARY)
 
 
 def test_only_command_transport_modules_may_import_redis_client() -> None:

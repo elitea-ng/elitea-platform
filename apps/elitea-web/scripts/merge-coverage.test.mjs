@@ -54,7 +54,18 @@ function fileCoverage(absolutePath, covered) {
   };
 }
 
-/** Every layer the ratchet names, so no rule matches zero files by default. */
+/**
+ * Every layer the ratchet names, so no rule matches zero files by default.
+ *
+ * One file per RULE, not per layer: a rule that matches nothing fails the gate
+ * by design (#426), so a rule added to merge-coverage.mjs without a file here
+ * fails these two cases immediately. That is the intended coupling — it is how
+ * this fixture stays a real subject rather than a list somebody forgot.
+ *
+ * The last three are the toolkit slices, which sit INSIDE `src/features/**`
+ * and `src/pages/**`. Their files therefore count toward two aggregates each,
+ * which is what the overlapping-rule note in matchesPattern describes.
+ */
 const LAYER_FILES = [
   'src/shared/api/client.ts',
   'src/shared/config/env.ts',
@@ -65,6 +76,9 @@ const LAYER_FILES = [
   'src/processes/boot/start.ts',
   'src/widgets/nav/Nav.tsx',
   'src/pages/home/HomePage.tsx',
+  'src/features/toolkits/ui/ToolBase.tsx',
+  'src/pages/toolkits/Toolkits.tsx',
+  'src/routes/_shell/toolkits/$tab.tsx',
 ];
 
 /**
@@ -122,8 +136,9 @@ describe('merge-coverage.mjs threshold validation', () => {
 
     const result = runValidation(root);
 
-    // 8 of 9 statements covered = 88.9% total, above every global floor
-    // (80/80/75/70). Only the per-layer rule can fail this run.
+    // Every LAYER_FILES entry but the one under src/widgets is covered, which
+    // is comfortably above every global floor (80/80/75/70). Only the
+    // per-layer rule can fail this run.
     expect(result.status).not.toBe(0);
     expect(result.output).toContain('layer src/widgets/**: lines 0.0% < 47%');
     expect(result.output).not.toContain('Total coverage:');
@@ -156,15 +171,18 @@ describe('merge-coverage.mjs threshold validation', () => {
   });
 
   it('still fails when the GLOBAL floors are missed', () => {
-    // One covered file of nine: 11.1% total. All zeroes would trip
-    // assertInstrumentationNotBroken() first, which is a different gate.
+    // One covered file of the LAYER_FILES set: 8.3% total at twelve files.
+    // The number moves whenever a rule (and so a file) is added, which is why
+    // it is derived below rather than written out a second time. All zeroes
+    // would trip assertInstrumentationNotBroken() first, a different gate.
     const root = seedWorkspace(
       LAYER_FILES.map((file) => [file, file === 'src/shared/api/client.ts']),
     );
 
     const result = runValidation(root);
 
+    const total = ((1 / LAYER_FILES.length) * 100).toFixed(1);
     expect(result.status).not.toBe(0);
-    expect(result.output).toContain('Total coverage: lines 11.1% < 80%');
+    expect(result.output).toContain(`Total coverage: lines ${total}% < 80%`);
   });
 });
