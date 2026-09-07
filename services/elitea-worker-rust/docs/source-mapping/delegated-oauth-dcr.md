@@ -373,9 +373,78 @@ Resume `f518b52ba11c060588ee45bd6e197e51` records the first Skip at event 85.
 The second original operation raises a new guard at event 87.
 This is not duplicate execution of the resolved call or premature parent completion.
 The next Skip completes the pipeline. However, requiring a second toolkit decision differs from the SDK's toolkit-level proxy behavior.
-This difference remains open. A single-operation success does not close toolkit-wide authorization or Skip semantics.
+This reproduction defines the toolkit-wide authorization regression addressed below.
 
 The [runtime limit inventory](runtime-limits.md) distinguishes this event bound from cumulative session limits and execution policy.
+
+### Toolkit authorization tools and run-scoped Skip
+
+The SDK baseline was checked again on 2026-09-07 at revision `c0bca04c5a3ef53608932eeb925e4a473175e5f2`.
+The user confirms demand-driven authorization for agents and LLM nodes, not preauthorization before the model runs.
+
+| Current SDK source | Required behavior | Rust source |
+| --- | --- | --- |
+| `runtime/toolkits/tools.py::_infer_proxy_tool_names` | Expose one authorization tool for an unavailable toolkit. | `toolkits/delegated_auth/model_tools.rs` |
+| `runtime/toolkits/tools.py::_build_deferred_mcp_auth_tools` | Hide protected operations until authorization succeeds. | `bind_authorization_model_tools` and the existing toolkit materializers |
+| `runtime/toolkits/tools.py::_make_mcp_auth_control_tool` | Retain a structured Skip decision without another prompt for each operation. | `DelegatedAuthorizationCatalog::decline` and `DeclinedTool` |
+| Deferred toolkit handling in `runtime/toolkits/tools.py` | Keep direct-node authorization separate from model tool selection. | Existing direct Toolkit/MCP node guards remain unchanged. |
+
+An unauthorized toolkit now exposes only its local authorization tool to the model.
+The tool name identifies the frozen toolkit configuration without putting a resource URL in the name.
+Selected protected declarations remain hidden, including distinct operations requested together.
+Private operation placeholders remain available for exact legacy replay. They cannot dispatch protected work.
+
+Authorize validates the stored continuation and rebuilds the toolkit with claim-scoped credentials.
+The resumed authorization tool returns a local structured result. It does not execute a protected operation.
+The next model request sees the admitted operations and selects its next action.
+A sensitive-action policy still requires its own approval.
+
+Skip covers the bound toolkit's unavailable operations for the current run.
+Sequential and parallel retries return structured `declined` results without protected dispatch or another authorization interrupt.
+The private checkpoint retains this scope if another guard suspends the run.
+A fresh user turn does not inherit this private Skip scope.
+Different toolkit configurations on the same resource do not inherit each other's decisions.
+
+Direct agents, nested agents, and pipeline LLM nodes use the shared model boundary.
+Pipeline replay stores the decisions in its existing checkpoint envelope.
+Direct Toolkit/MCP nodes retain their node-start authorization path.
+This slice changes neither Main nor the browser wire contract.
+
+Removing the authorization declaration exposed a model-facade history defect.
+The facade required historical tool names to remain in the current declaration list.
+It now validates historical names and payload bounds without treating that history as current execution authority.
+Both model facades still reject new calls outside the current tool declarations.
+
+Verification passes 871 library tests and 93 integration or contract tests, with no ignored tests.
+The run includes PostgreSQL session, checkpoint, fencing, and recovery tests.
+Component cases cover MCP, OpenAPI, and SharePoint with 1 through 16 protected operations.
+Runtime tests cover application and ad-hoc execution, nested siblings, pipeline LLM nodes, Authorize, Skip, and separate sensitive guards.
+Both model facades preserve retired-tool history and reject a new call to that retired tool.
+Formatting, strict Clippy, and strict rustdoc checks pass.
+Real provider authorization-code, DCR, refresh, and concurrent-tab proofs remain separate gates.
+
+### Deployed authorization-tool proof
+
+The release image `sha256:3148e1cb30f0c54fd5a57bb6e371b7d77ecc5020ddea03345f5188460edfc19e` passes both Private-project browser flows.
+Only the idle Rust worker is replaced. Main, UI, and database containers remain unchanged.
+
+Full Name Resolver in conversation 533 starts execution `5cd7464300b90d18b20e8e033eeef617`.
+Surname Resolver calls the authorization tool at event 83, before any protected operation.
+Name Resolver completes at event 85 while Surname Resolver waits.
+The browser shows one authorization guard with an enabled Authorize button.
+Skip resumes execution `f2f36365db6963cb10272262b7ce7969` and records `declined` at event 90.
+Surname Resolver completes at event 91. The parent completes at event 93, without another Name Resolver invocation.
+The saved answer contains 1,283 characters and one resolved authorization identifier.
+
+Resolve Name in conversation 532 regenerates through HTTP 200 and starts execution `0b3976ed76b28f1ed7397b947fc36b0a`.
+Surname Resolver calls the authorization tool at event 131. Name Resolver completes at event 133.
+One Skip returns HTTP 200 and resumes execution `a7a063f2ffda600be03ea91c37455cd2`.
+The authorization result is `declined` at event 140. Surname Resolver completes at event 141.
+Full Name Resolver completes at event 143. The pipeline completes at event 145.
+The saved answer contains 1,516 characters and one resolved authorization identifier.
+Neither flow invokes protected SharePoint operations or raises a second guard after Skip.
+Both saved answers survive reload with no pending guard or error.
+These browser results prove Skip and parent ordering, not a successful provider login.
 
 ## Remaining gates
 
@@ -385,8 +454,8 @@ The [runtime limit inventory](runtime-limits.md) distinguishes this event bound 
 - Prove one stored SharePoint or OpenAPI delegated flow through both grants.
 - Prove the configured authorization-code and refresh grants through the deployed dialog.
   The verified dialog and Skip path do not prove either grant.
-- Review proxy cardinality separately. The SDK exposes one proxy per unauthenticated server; Rust currently retains selected operation guards.
-  The two-operation pipeline reproduction above demonstrates this difference after the result-collection fixes.
+- Extend the deployed authorization-tool proof to a real provider grant.
+  Local tests cover operation unlocking and repeated parallel Skip calls. Browser proofs currently cover Skip.
 - Prove logout and concurrent-tab behavior against the replatform stack.
   A second tab on conversation 533 temporarily retained active guard controls after the deciding tab completed.
   The controls later cleared; immediate collaborator synchronization is not proven.

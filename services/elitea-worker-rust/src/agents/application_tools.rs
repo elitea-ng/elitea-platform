@@ -1390,7 +1390,11 @@ impl Agent for LazyNestedAgent {
     }
 
     async fn run(&self, ctx: Arc<dyn InvocationContext>) -> adk_rust::Result<EventStream> {
-        let agent = self.build_agent(self.bind_model()?, self.toolsets.clone())?;
+        let agent = self.build_agent(
+            self.bind_model()?,
+            self.toolsets.clone(),
+            self.delegated_authorization.clone(),
+        )?;
         agent.run(ctx).await
     }
 }
@@ -1431,7 +1435,10 @@ impl LazyNestedAgent {
         &self,
         model: Arc<dyn adk_rust::Llm>,
         toolsets: Vec<Arc<dyn Toolset>>,
+        mut authorization: DelegatedAuthorizationCatalog,
     ) -> adk_rust::Result<Arc<dyn Agent>> {
+        let (model, toolsets) =
+            crate::toolkits::bind_authorization_model_tools(model, toolsets, &mut authorization)?;
         let mut builder = LlmAgentBuilder::new(self.name.clone())
             .description(self.description.clone())
             .model(model)
@@ -1449,10 +1456,14 @@ impl LazyNestedAgent {
         for toolset in toolsets {
             builder = builder.toolset(toolset);
         }
-        for tool_name in &self.sensitive_tool_names {
+        for tool_name in self
+            .sensitive_tool_names
+            .iter()
+            .filter(|name| !authorization.is_declined(name))
+        {
             builder = builder.require_tool_confirmation(tool_name);
         }
-        for tool_name in self.delegated_authorization.tool_names() {
+        for tool_name in authorization.tool_names() {
             builder = builder.require_tool_confirmation(tool_name);
         }
         if self.internal_tools.ask_user_enabled() {
@@ -1465,7 +1476,7 @@ impl LazyNestedAgent {
             .build()
             .map(|agent| Arc::new(agent) as Arc<dyn Agent>)
             .map_err(|_| agent_configuration_error())?;
-        let agent = delegated_authorization_agent(agent, self.delegated_authorization.clone());
+        let agent = delegated_authorization_agent(agent, authorization);
         Ok(clarifying_question_agent(agent, self.internal_tools))
     }
 
@@ -1476,8 +1487,10 @@ impl LazyNestedAgent {
     ) -> adk_rust::Result<PreparedChildApplicationResume> {
         match action {
             ChildApplicationResumeAction::Direct(decision) => {
+                let mut authorization = self.delegated_authorization.clone();
+                decision.restore_authorization_scope(&mut authorization);
                 let replay = if decision.is_delegated_authorization() {
-                    (*decision).into_delegated_authorization_replay(&self.delegated_authorization)
+                    (*decision).into_delegated_authorization_replay(&mut authorization)
                 } else if decision.is_clarifying_question() {
                     (*decision).into_clarifying_question_replay()
                 } else {
@@ -1488,7 +1501,7 @@ impl LazyNestedAgent {
                 let (model, run_input, toolsets) = prepared.into_parts(self.toolsets.clone());
                 let (user_content, run_config) = run_input.into_parts();
                 Ok(PreparedChildApplicationResume {
-                    agent: self.build_agent(model, toolsets)?,
+                    agent: self.build_agent(model, toolsets, authorization)?,
                     user_content,
                     run_config,
                     children: None,
@@ -1507,7 +1520,11 @@ impl LazyNestedAgent {
                     replay_marker: user_content.clone(),
                 });
                 Ok(PreparedChildApplicationResume {
-                    agent: self.build_agent(model, self.toolsets.clone())?,
+                    agent: self.build_agent(
+                        model,
+                        self.toolsets.clone(),
+                        self.delegated_authorization.clone(),
+                    )?,
                     user_content,
                     run_config: application_run_config(),
                     children: Some(children),

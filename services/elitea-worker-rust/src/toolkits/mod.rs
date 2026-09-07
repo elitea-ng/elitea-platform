@@ -21,10 +21,12 @@ mod tool_binding;
 #[cfg(test)]
 pub(crate) use delegated_auth::delegated_authorization_error_fixture;
 pub(crate) use delegated_auth::{
-    DELEGATED_AUTHORIZATION_METADATA_KEY, DelegatedAuthorizationCatalog,
-    DelegatedAuthorizationRequirement, decode_delegated_authorization_requirement,
-    delegated_authorization_declined_result, delegated_authorization_requirement,
-    encode_delegated_authorization_requirement,
+    DELEGATED_AUTHORIZATION_METADATA_KEY, DELEGATED_AUTHORIZATION_SCOPE_KEY,
+    DelegatedAuthorizationCatalog, DelegatedAuthorizationRequirement,
+    bind_authorization_model_tools, decode_declined_authorization_scope,
+    decode_delegated_authorization_requirement, delegated_authorization_declined_result,
+    delegated_authorization_granted_result, delegated_authorization_requirement,
+    encode_delegated_authorization_requirement, hide_model_tools,
 };
 pub(crate) use direct_request::{DirectToolkitRequest, DirectToolkitRequestErrorCode};
 pub(crate) use direct_runtime::{DirectToolkitRuntime, DirectToolkitRuntimeErrorCode};

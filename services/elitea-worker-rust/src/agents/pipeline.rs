@@ -965,10 +965,36 @@ impl PipelineLlmAgentFactory for NativePipelineLlmAgentFactory {
             )
             .map_err(|_| LlmExecutionError::Unavailable)?;
         let binding = self.bind_selected_tools(definition)?;
-        let guards = self.guards_for_binding(&binding)?;
+        let mut guards = self.guards_for_binding(&binding)?;
+        let mut authorization = DelegatedAuthorizationCatalog::default();
+        for (name, guard) in &guards {
+            if let PipelineToolGuard::DelegatedAuthorization(requirement) = guard {
+                authorization
+                    .insert(name, requirement.clone())
+                    .map_err(|()| LlmExecutionError::Unavailable)?;
+            }
+        }
+        if let Some(replay) = replay {
+            replay.apply_authorization_scope(&mut authorization)?;
+        }
         let selected_toolsets = binding.into_toolsets();
         let (model, selected_toolsets) =
             prepare_pipeline_llm_replay(model.adk_model(), selected_toolsets, replay);
+        let (model, selected_toolsets) = crate::toolkits::bind_authorization_model_tools(
+            model,
+            selected_toolsets,
+            &mut authorization,
+        )
+        .map_err(|_| LlmExecutionError::Unavailable)?;
+        guards.retain(|name, _| !authorization.is_declined(name));
+        for name in authorization.tool_names() {
+            if let Some(requirement) = authorization.requirement_for(name) {
+                guards.insert(
+                    name.to_owned(),
+                    PipelineToolGuard::DelegatedAuthorization(requirement.clone()),
+                );
+            }
+        }
         if replay.is_some_and(|replay| {
             guards.iter().any(|(tool_name, guard)| {
                 matches!(guard, PipelineToolGuard::DelegatedAuthorization(_))

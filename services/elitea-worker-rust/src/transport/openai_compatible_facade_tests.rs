@@ -274,6 +274,16 @@ async fn empty_system_instruction_is_omitted_from_openai_messages() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn tool_declarations_calls_and_results_round_trip_across_model_turns() {
+    tool_history_round_trip(false).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn retired_tool_history_does_not_admit_new_calls() {
+    tool_history_round_trip(true).await;
+}
+
+#[allow(clippy::too_many_lines)] // Keep the history transition and rejected new call in one proof.
+async fn tool_history_round_trip(retire_tool: bool) {
     let tool_sse = concat!(
         "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"double\",\"arguments\":\"{\\\"value\\\":\"}}]},\"finish_reason\":null}]}\n\n",
         "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"21}\"}}]},\"finish_reason\":null}]}\n\n",
@@ -288,6 +298,9 @@ async fn tool_declarations_calls_and_results_round_trip_across_model_turns() {
             )))),
             TestModelGatewayOutcome::Response(test_model_gateway_response(Body::new(Full::new(
                 Bytes::from(ordinary_sse()),
+            )))),
+            TestModelGatewayOutcome::Response(test_model_gateway_response(Body::new(Full::new(
+                Bytes::from(tool_sse),
             )))),
         ],
         test_model_gateway_config(),
@@ -334,16 +347,20 @@ async fn tool_declarations_calls_and_results_round_trip_across_model_turns() {
             annotations: None,
         }],
     };
+    let mut resumed = tool_request(vec![
+        user,
+        Content {
+            role: "model".to_owned(),
+            parts: vec![call],
+        },
+        result,
+    ]);
+    if retire_tool {
+        resumed.tools.clear();
+    }
     drain(
         bound
-            .generate_for_test(tool_request(vec![
-                user,
-                Content {
-                    role: "model".to_owned(),
-                    parts: vec![call],
-                },
-                result,
-            ]))
+            .generate_for_test(resumed)
             .await
             .expect("final stream"),
     )
@@ -354,14 +371,33 @@ async fn tool_declarations_calls_and_results_round_trip_across_model_turns() {
         "Hello 🌍"
     );
 
+    // Historical authority never permits a new call to a removed operation.
+    if retire_tool {
+        let bound = client
+            .bind_ordinary(
+                &ClaimScopedEliteaContext::fixture(17, TOKEN),
+                17,
+                test_model_facade_invocation(),
+            )
+            .unwrap();
+        let mut unbound = tool_request(vec![Content::new("user").with_text("try again")]);
+        unbound.tools.clear();
+        assert!(
+            drain(bound.generate_for_test(unbound).await.unwrap())
+                .await
+                .is_err()
+        );
+    }
+
     let captured = captured.lock().expect("captured requests");
-    assert_eq!(captured.len(), 2);
+    assert_eq!(captured.len(), if retire_tool { 3 } else { 2 });
     let first_body: serde_json::Value =
         serde_json::from_slice(&captured[0].body).expect("first body");
     assert_eq!(first_body["tools"][0]["function"]["name"], "double");
     assert_eq!(first_body["tool_choice"], "auto");
     let second_body: serde_json::Value =
         serde_json::from_slice(&captured[1].body).expect("second body");
+    assert_eq!(second_body.get("tools").is_none(), retire_tool);
     assert_eq!(second_body["messages"][2]["role"], "assistant");
     assert_eq!(second_body["messages"][2]["tool_calls"][0]["id"], "call_1");
     assert_eq!(second_body["messages"][3]["role"], "tool");

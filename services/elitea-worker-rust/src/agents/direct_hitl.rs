@@ -331,6 +331,7 @@ impl DirectDelegatedAuthorizationContinuation {
             application_route: None,
             delegated_authorization: Some(requirement),
             clarifying_question: None,
+            prior_authorization_declines: authorization_scope(confirmation_event)?,
         })
     }
 }
@@ -701,6 +702,7 @@ impl DirectHitlDecision {
             application_route,
             delegated_authorization,
             clarifying_question,
+            prior_authorization_declines: authorization_scope(confirmation_event)?,
         })
     }
 }
@@ -858,6 +860,7 @@ pub(crate) struct ResolvedDirectHitlDecision {
     application_route: Option<DirectHitlApplicationRoute>,
     delegated_authorization: Option<DelegatedAuthorizationRequirement>,
     clarifying_question: Option<AskUserRequest>,
+    prior_authorization_declines: Vec<DelegatedAuthorizationRequirement>,
 }
 
 pub(crate) enum ResolvedDirectHitlStart {
@@ -900,6 +903,11 @@ struct PersistedReplayState {
 }
 
 impl ResolvedDirectHitlDecision {
+    pub(crate) fn restore_authorization_scope(&self, catalog: &mut DelegatedAuthorizationCatalog) {
+        for requirement in &self.prior_authorization_declines {
+            catalog.decline(requirement);
+        }
+    }
     pub(crate) fn tool_name(&self) -> &str {
         &self.tool_name
     }
@@ -1009,7 +1017,7 @@ impl ResolvedDirectHitlDecision {
 
     pub(crate) fn into_delegated_authorization_replay(
         self,
-        authorization: &DelegatedAuthorizationCatalog,
+        authorization: &mut DelegatedAuthorizationCatalog,
     ) -> Result<DirectHitlReplay, DirectHitlError> {
         let requirement = self
             .delegated_authorization
@@ -1020,15 +1028,19 @@ impl ResolvedDirectHitlDecision {
                 .requirement_for(&self.tool_name)
                 .filter(|materialized| materialized.same_authority(requirement))
                 .ok_or_else(|| DirectHitlError::new(DirectHitlErrorCode::StaleDecision))?;
-            Some(delegated_authorization_declined_result(
-                materialized,
-                &self.tool_name,
-            ))
+            let result = delegated_authorization_declined_result(materialized, &self.tool_name);
+            authorization.decline(requirement);
+            Some(result)
         } else {
             if authorization.requirement_for(&self.tool_name).is_some() {
                 return Err(DirectHitlError::new(DirectHitlErrorCode::StaleDecision));
             }
-            None
+            (self.tool_name == requirement.authorization_tool_name()).then(|| {
+                crate::toolkits::delegated_authorization_granted_result(
+                    requirement,
+                    &self.tool_name,
+                )
+            })
         };
         if matches!(self.resume_mode, ReplayResumeMode::ContinueAfterResult)
             && blocked_result
@@ -1045,17 +1057,40 @@ impl ResolvedDirectHitlDecision {
             user_content: self.user_content,
             resume_mode: self.resume_mode,
             approve_confirmation: blocked_result.is_some(),
-            replacement_decision: blocked_result
-                .as_ref()
-                .map(|_| ToolConfirmationDecision::Deny),
+            replacement_decision: blocked_result.as_ref().map(|_| self.decision),
             blocked_result,
         })
     }
 }
 
+fn authorization_scope(
+    event: &Event,
+) -> Result<Vec<DelegatedAuthorizationRequirement>, DirectHitlError> {
+    event
+        .provider_metadata
+        .get(crate::toolkits::DELEGATED_AUTHORIZATION_SCOPE_KEY)
+        .map_or_else(
+            || Ok(Vec::new()),
+            |encoded| {
+                crate::toolkits::decode_declined_authorization_scope(encoded)
+                    .ok_or_else(|| DirectHitlError::new(DirectHitlErrorCode::CorruptSession))
+            },
+        )
+}
+
 impl DirectHitlReplay {
     /// Bind the one-shot replay model and exact ADK confirmation decision.
     pub(crate) fn bind(self, delegate: Arc<dyn Llm>) -> PreparedDirectHitlReplay {
+        let hidden = self
+            .blocked_result
+            .as_ref()
+            .filter(|result| {
+                result["type"] == "mcp_auth_decision" && result["status"] == "authorized"
+            })
+            .map(|_| self.tool_name.clone())
+            .into_iter()
+            .collect();
+        let delegate = crate::toolkits::hide_model_tools(delegate, hidden);
         let mut run_config = RunConfig::default();
         let state = match self.resume_mode {
             ReplayResumeMode::ExecuteCall => {
@@ -1122,6 +1157,20 @@ impl PreparedDirectHitlReplay {
         self,
         toolsets: Vec<Arc<dyn Toolset>>,
     ) -> (Arc<dyn Llm>, DirectHitlRunInput, Vec<Arc<dyn Toolset>>) {
+        let mut toolsets = toolsets;
+        if let Some(blocked) = self.blocked_result.as_ref()
+            && blocked.response["type"] == "mcp_auth_decision"
+            && blocked.response["status"] == "authorized"
+        {
+            // A validated auth proxy resumes with a local decision result.
+            // Protected operations are selected by the next model request.
+            toolsets.push(Arc::new(adk_rust::tool::BasicToolset::new(
+                "elitea_authorization_result",
+                vec![Arc::new(AuthorizationReplayResult {
+                    blocked: blocked.clone(),
+                })],
+            )));
+        }
         let toolsets = match self.blocked_result {
             None => toolsets,
             Some(blocked) => toolsets
@@ -1159,6 +1208,39 @@ struct BlockedToolReplay {
     arguments: Value,
     response: Value,
     confirmation_decision: ToolConfirmationDecision,
+}
+
+struct AuthorizationReplayResult {
+    blocked: BlockedToolReplay,
+}
+
+#[async_trait]
+impl Tool for AuthorizationReplayResult {
+    fn name(&self) -> &str {
+        &self.blocked.tool_name
+    }
+    fn description(&self) -> &'static str {
+        "Return the validated toolkit authorization result."
+    }
+    fn parameters_schema(&self) -> Option<Value> {
+        Some(serde_json::json!({"type": "object", "properties": {}, "additionalProperties": false}))
+    }
+    fn is_read_only(&self) -> bool {
+        true
+    }
+    async fn execute(
+        &self,
+        context: Arc<dyn ToolContext>,
+        arguments: Value,
+    ) -> adk_rust::Result<Value> {
+        if context.function_call_id() != self.blocked.call_id || arguments != self.blocked.arguments
+        {
+            return Err(AdkError::agent(
+                "authorization replay does not match the selected call",
+            ));
+        }
+        Ok(self.blocked.response.clone())
+    }
 }
 
 struct BlockedToolset {

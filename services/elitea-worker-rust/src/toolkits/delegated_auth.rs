@@ -7,7 +7,7 @@
 //! materialized. Concrete toolkit families remain responsible for resolving
 //! claim-fetched tokens into their own clients during the continuation rebuild.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use adk_rust::{AdkError, ErrorCategory, ErrorComponent, ErrorDetails};
 use serde::{Deserialize, Serialize};
@@ -16,6 +16,9 @@ use serde_json::{Value, json};
 use super::tool_binding::ToolBindingPlan;
 
 mod discovery;
+mod model_tools;
+
+pub(crate) use model_tools::{bind_authorization_model_tools, hide_model_tools};
 
 const MAX_AUTH_CHALLENGE_BYTES: usize = 16 * 1_024;
 const MAX_AUTH_METADATA_BYTES: usize = 64 * 1_024;
@@ -27,6 +30,8 @@ const MAX_TOOLKIT_IDENTITY_BYTES: usize = 1_024;
 /// signal through policy wrappers without exposing a provider error body.
 pub(crate) const DELEGATED_AUTHORIZATION_ERROR_CODE: &str = "mcp.authorization_required";
 pub(crate) const DELEGATED_AUTHORIZATION_METADATA_KEY: &str = "elitea.delegated-authorization.v1";
+pub(crate) const DELEGATED_AUTHORIZATION_SCOPE_KEY: &str =
+    "elitea.delegated-authorization-scope.v1";
 
 /// Model-callable tools that are placeholders for one delegated authorization
 /// boundary. The catalog is built together with the invocation's toolsets and
@@ -35,6 +40,7 @@ pub(crate) const DELEGATED_AUTHORIZATION_METADATA_KEY: &str = "elitea.delegated-
 pub(crate) struct DelegatedAuthorizationCatalog {
     scoped_requirements: BTreeMap<DelegatedToolIdentity, DelegatedAuthorizationRequirement>,
     provider_requirements: BTreeMap<String, DelegatedAuthorizationRequirement>,
+    declined_tools: BTreeSet<String>,
 }
 
 #[derive(Clone, Eq, Ord, PartialEq, PartialOrd)]
@@ -71,7 +77,11 @@ impl DelegatedAuthorizationCatalog {
         &self,
         tool_name: &str,
     ) -> Option<&DelegatedAuthorizationRequirement> {
-        self.provider_requirements.get(tool_name)
+        self.provider_requirements.get(tool_name).or_else(|| {
+            self.provider_requirements
+                .values()
+                .find(|requirement| requirement.authorization_tool_name() == tool_name)
+        })
     }
 
     pub(crate) fn requirement_for_scoped(
@@ -86,7 +96,40 @@ impl DelegatedAuthorizationCatalog {
     }
 
     pub(crate) fn tool_names(&self) -> impl Iterator<Item = &str> {
-        self.provider_requirements.keys().map(String::as_str)
+        self.provider_requirements
+            .keys()
+            .filter_map(|name| (!self.declined_tools.contains(name)).then_some(name.as_str()))
+    }
+
+    /// Apply an already validated decision to this invocation's exact toolkit.
+    pub(crate) fn decline(&mut self, requirement: &DelegatedAuthorizationRequirement) {
+        for (name, candidate) in &self.provider_requirements {
+            if candidate.same_authority(requirement) {
+                self.declined_tools.insert(name.clone());
+            }
+        }
+        self.declined_tools
+            .insert(requirement.authorization_tool_name());
+    }
+
+    pub(crate) fn is_declined(&self, tool_name: &str) -> bool {
+        self.declined_tools.contains(tool_name)
+    }
+
+    pub(crate) fn encode_declined_scope(&self) -> Result<Option<String>, ()> {
+        let requirements: BTreeMap<_, _> = self
+            .provider_requirements
+            .iter()
+            .filter(|(name, _)| self.is_declined(name))
+            .map(|(_, requirement)| (requirement.authorization_tool_name(), requirement))
+            .collect();
+        if requirements.is_empty() {
+            return Ok(None);
+        }
+        let encoded =
+            serde_json::to_string(&requirements.values().collect::<Vec<_>>()).map_err(|_| ())?;
+        decode_declined_authorization_scope(&encoded).ok_or(())?;
+        Ok(Some(encoded))
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -153,6 +196,23 @@ pub(crate) struct DelegatedAuthorizationRequirement {
 }
 
 impl DelegatedAuthorizationRequirement {
+    /// Stable model namespace for one frozen toolkit, independent of its tools.
+    pub(crate) fn authorization_tool_name(&self) -> String {
+        use std::fmt::Write as _;
+        let identity = json!([
+            self.toolkit_name,
+            self.toolkit_type,
+            self.server_url,
+            discovery::configured_metadata(self.resource_metadata.as_ref())
+        ]);
+        let hash = ring::digest::digest(&ring::digest::SHA256, identity.to_string().as_bytes());
+        let mut name = String::from("mcp_authorize_");
+        for byte in &hash.as_ref()[..16] {
+            let _ = write!(name, "{byte:02x}");
+        }
+        name
+    }
+
     /// Admit a storage identity, not an egress URL. Resolution binds it exactly.
     pub(crate) fn valid_token_key(value: &str) -> bool {
         !value.is_empty()
@@ -302,6 +362,20 @@ pub(crate) fn delegated_authorization_declined_result(
     })
 }
 
+pub(crate) fn delegated_authorization_granted_result(
+    requirement: &DelegatedAuthorizationRequirement,
+    tool_name: &str,
+) -> Value {
+    json!({
+        "type": "mcp_auth_decision",
+        "status": "authorized",
+        "tool_name": tool_name,
+        "toolkit_type": requirement.toolkit_type(),
+        "message": "Authorization is available. Use the toolkit operations to continue the original task.",
+        "next_step": "use_authorized_tools",
+    })
+}
+
 pub(crate) fn delegated_authorization_requirement(
     error: &AdkError,
 ) -> Option<DelegatedAuthorizationRequirement> {
@@ -327,6 +401,18 @@ pub(crate) fn decode_delegated_authorization_requirement(
     value: &str,
 ) -> Option<DelegatedAuthorizationRequirement> {
     serde_json::from_str(value).ok().filter(valid_requirement)
+}
+
+pub(crate) fn decode_declined_authorization_scope(
+    value: &str,
+) -> Option<Vec<DelegatedAuthorizationRequirement>> {
+    if value.len() > MAX_AUTH_METADATA_BYTES {
+        return None;
+    }
+    let requirements: Vec<DelegatedAuthorizationRequirement> = serde_json::from_str(value).ok()?;
+    (requirements.len() <= MAX_AUTH_METADATA_LIST_ITEMS
+        && requirements.iter().all(valid_requirement))
+    .then_some(requirements)
 }
 
 pub(super) fn preserve_delegated_authorization_error(error: &AdkError) -> Option<AdkError> {

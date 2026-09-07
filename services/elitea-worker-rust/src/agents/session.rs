@@ -345,6 +345,9 @@ impl Agent for DelegatedAuthorizationEventAgent {
     async fn run(&self, context: Arc<dyn InvocationContext>) -> adk_rust::Result<EventStream> {
         let mut events = self.inner.run(context).await?;
         let authorization = self.authorization.clone();
+        let declined_scope = authorization
+            .encode_declined_scope()
+            .map_err(|()| AdkError::agent("delegated authorization scope exceeds its bound"))?;
         Ok(Box::pin(async_stream::stream! {
             while let Some(event) = adk_rust::futures::StreamExt::next(&mut events).await {
                 let mut event = match event {
@@ -354,6 +357,11 @@ impl Agent for DelegatedAuthorizationEventAgent {
                         return;
                     }
                 };
+                if event.actions.tool_confirmation.is_some()
+                    && let Some(scope) = &declined_scope
+                {
+                    event.provider_metadata.insert(crate::toolkits::DELEGATED_AUTHORIZATION_SCOPE_KEY.to_owned(), scope.clone());
+                }
                 if let Some(request) = event.actions.tool_confirmation.as_ref()
                     && let Some(requirement) = authorization.requirement_for(&request.tool_name)
                 {
@@ -1551,6 +1559,13 @@ fn build_runtime_agent(
         internal_tools,
         application_runtime,
     } = runtime;
+    let mut delegated_authorization = delegated_authorization;
+    let (model, toolsets) = crate::toolkits::bind_authorization_model_tools(
+        model,
+        toolsets,
+        &mut delegated_authorization,
+    )
+    .map_err(|_| invalid_configuration())?;
     let mut builder = LlmAgentBuilder::new(ROOT_AGENT_NAME)
         .model(model)
         .generate_content_config(generation_config)
@@ -1563,7 +1578,10 @@ fn build_runtime_agent(
     for toolset in toolsets {
         builder = builder.toolset(toolset);
     }
-    for tool_name in sensitive_tools.tool_names() {
+    for tool_name in sensitive_tools
+        .tool_names()
+        .filter(|name| !delegated_authorization.is_declined(name))
+    {
         builder = builder.require_tool_confirmation(tool_name);
     }
     for tool_name in delegated_authorization.tool_names() {
@@ -1698,7 +1716,7 @@ async fn prepare_direct_resume(
     let OrdinaryRuntimeBindings {
         toolsets,
         sensitive_tools,
-        delegated_authorization,
+        mut delegated_authorization,
         internal_tools,
         application_runtime,
     } = runtime;
@@ -1721,9 +1739,10 @@ async fn prepare_direct_resume(
     } = application_runtime;
     let (model, run_input, toolsets, parallel_applications) = match resolved {
         ResolvedDirectHitlStart::Direct(decision) => {
+            decision.restore_authorization_scope(&mut delegated_authorization);
             let replay = if decision.is_delegated_authorization() {
                 (*decision)
-                    .into_delegated_authorization_replay(&delegated_authorization)
+                    .into_delegated_authorization_replay(&mut delegated_authorization)
                     .map_err(|error| direct_hitl_error(&error))?
             } else if decision.is_clarifying_question() {
                 (*decision)

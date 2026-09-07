@@ -611,7 +611,7 @@ pub(super) fn validate_llm_request<'a>(
         return Err(invalid_llm_request());
     }
     for content in &request.contents {
-        validate_openai_content(content, &request.tools)?;
+        validate_openai_content(content)?;
     }
     for (name, declaration) in &request.tools {
         validate_tool_declaration(name, declaration)?;
@@ -619,10 +619,7 @@ pub(super) fn validate_llm_request<'a>(
     Ok(&request.contents)
 }
 
-fn validate_openai_content(
-    content: &Content,
-    tools: &std::collections::HashMap<String, serde_json::Value>,
-) -> Result<(), AdkError> {
+fn validate_openai_content(content: &Content) -> Result<(), AdkError> {
     if content.parts.is_empty() {
         return Err(invalid_llm_request());
     }
@@ -638,8 +635,10 @@ fn validate_openai_content(
                 Ok(())
             }
             Part::FunctionCall { name, args, id, .. }
-                if tools.contains_key(name)
-                    && valid_tool_name(name)
+                // Historical calls do not grant current execution authority.
+                // Authorization can replace a proxy with protected operations.
+                // New response calls still require a current tool declaration.
+                if valid_tool_name(name)
                     && id.as_deref().is_some_and(valid_tool_call_id)
                     && args.is_object()
                     && serde_json::to_vec(args)
@@ -654,7 +653,7 @@ fn validate_openai_content(
                 function_response,
                 id: Some(id),
                 ..
-            } if tools.contains_key(&function_response.name)
+            } if valid_tool_name(&function_response.name)
                 && valid_tool_call_id(id)
                 && serde_json::to_vec(&function_response.response)
                     .is_ok_and(|encoded| encoded.len() <= MAX_TOOL_ARGUMENT_BYTES) =>

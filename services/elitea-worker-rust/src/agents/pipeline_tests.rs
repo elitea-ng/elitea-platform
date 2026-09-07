@@ -650,11 +650,12 @@ fn recursive_sensitive_pipeline_runtime() -> PipelineChildRuntime {
 
 fn recursive_sensitive_pipeline_runtime_with_capture()
 -> (PipelineChildRuntime, CapturedModelRequests) {
-    recursive_pipeline_runtime_with_capture(None)
+    recursive_pipeline_runtime_with_capture(None, None)
 }
 
 fn recursive_pipeline_runtime_with_capture(
     completed_child: Option<usize>,
+    authorize: Option<bool>,
 ) -> (PipelineChildRuntime, CapturedModelRequests) {
     let calls = Arc::new(AtomicUsize::new(0));
     let paths = Arc::new(Mutex::new(Vec::new()));
@@ -723,11 +724,14 @@ fn recursive_pipeline_runtime_with_capture(
             ]
         })
         .collect::<VecDeque<_>>();
-    let outcomes = recursive_pipeline_outcomes(completed_child);
+    let outcomes = recursive_pipeline_outcomes(completed_child, authorize);
     pipeline_runtime_from_responses_with_capture(responses, outcomes, calls, paths)
 }
 
-fn recursive_pipeline_outcomes(completed_child: Option<usize>) -> Vec<TestModelGatewayOutcome> {
+fn recursive_pipeline_outcomes(
+    completed_child: Option<usize>,
+    authorize: Option<bool>,
+) -> Vec<TestModelGatewayOutcome> {
     let mut outcomes = vec![
         model_response_for(
             "orchestrator-model",
@@ -737,6 +741,8 @@ fn recursive_pipeline_outcomes(completed_child: Option<usize>) -> Vec<TestModelG
             "resolver-model",
             if completed_child == Some(0) {
                 pipeline_text_response("first resolved leaf")
+            } else if authorize.is_some() {
+                super::ordinary_tests::mcp_authorization_response()
             } else {
                 pipeline_mcp_tool_call_response()
             },
@@ -745,15 +751,29 @@ fn recursive_pipeline_outcomes(completed_child: Option<usize>) -> Vec<TestModelG
             "resolver-model",
             if completed_child == Some(1) {
                 pipeline_text_response("first resolved leaf")
+            } else if authorize.is_some() {
+                super::ordinary_tests::mcp_authorization_response()
             } else {
                 pipeline_mcp_tool_call_response()
             },
         ),
     ];
     if completed_child.is_none() {
+        if authorize == Some(true) {
+            outcomes.push(model_response_for(
+                "resolver-model",
+                super::ordinary_tests::mcp_tool_batch_response(1),
+            ));
+        }
         outcomes.push(model_response_for(
             "resolver-model",
             pipeline_text_response("first resolved leaf"),
+        ));
+    }
+    if authorize == Some(true) {
+        outcomes.push(model_response_for(
+            "resolver-model",
+            super::ordinary_tests::mcp_tool_batch_response(1),
         ));
     }
     outcomes.extend([
@@ -837,7 +857,22 @@ fn mixed_guardrail_pipeline_runtime_with_capture() -> (PipelineChildRuntime, Cap
         ),
         model_response_for(
             "auth-model",
-            pipeline_named_mcp_tool_call_response("call_auth_mcp", "lookup_auth"),
+            pipeline_named_mcp_tool_call_response(
+                "call_auth_mcp",
+                &crate::toolkits::DelegatedAuthorizationRequirement::new(
+                    "authorized evidence".to_owned(),
+                    "mcp".to_owned(),
+                    "https://auth.example.invalid/v1/mcp".to_owned(),
+                    None,
+                    None,
+                )
+                .unwrap()
+                .authorization_tool_name(),
+            ),
+        ),
+        model_response_for(
+            "auth-model",
+            pipeline_named_mcp_tool_call_response("call_auth_operation", "lookup_auth"),
         ),
         model_response_for(
             "sensitive-model",
@@ -1836,11 +1871,14 @@ async fn pipeline_agent_node_resumes_parallel_nested_authorization_for_authorize
 }
 
 #[tokio::test(flavor = "current_thread")]
+#[allow(clippy::too_many_lines)] // One pause, exact resume, and sibling preservation form one proof.
 async fn pipeline_parent_waits_for_single_child_authorization_before_final_answer() {
     for (completed_child, action) in [(0, "authorize"), (1, "authorize"), (0, "skip"), (1, "skip")]
     {
-        let ((platform, model_facade, _, _), captured) =
-            recursive_pipeline_runtime_with_capture(Some(completed_child));
+        let ((platform, model_facade, _, _), captured) = recursive_pipeline_runtime_with_capture(
+            Some(completed_child),
+            Some(action == "authorize"),
+        );
         let tool_calls = Arc::new(AtomicUsize::new(0));
         let assembler = PipelineNativeAgentAssembler::with_state(
             Arc::new(InMemorySessionService::new()),
@@ -1899,7 +1937,7 @@ async fn pipeline_parent_waits_for_single_child_authorization_before_final_answe
         );
         assert_eq!(
             captured.lock().expect("requests").len(),
-            5,
+            if action == "authorize" { 6 } else { 5 },
             "resume must not rerun the already completed child"
         );
         let captured = captured.lock().expect("requests");
@@ -1954,7 +1992,7 @@ async fn run_pipeline_agent_node_nested_authorization(authorize: bool) {
     let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
     let checkpointer = Arc::new(MemoryCheckpointer::new());
     let ((platform, model_facade, context_calls, _paths), captured) =
-        recursive_sensitive_pipeline_runtime_with_capture();
+        recursive_pipeline_runtime_with_capture(None, Some(authorize));
     let connections = Arc::new(AtomicUsize::new(0));
     let tool_calls = Arc::new(AtomicUsize::new(0));
     let assembler = PipelineNativeAgentAssembler::with_state(
@@ -2063,7 +2101,7 @@ async fn run_pipeline_agent_node_nested_authorization(authorize: bool) {
     let captured = captured.lock().expect("captured model requests");
     assert_eq!(
         captured.len(),
-        6,
+        if authorize { 8 } else { 6 },
         "resume must not replan saved-agent calls"
     );
     for request in captured.iter() {
@@ -2210,7 +2248,7 @@ async fn pipeline_agent_node_resumes_parallel_mixed_sensitive_and_authorization_
     assert_eq!(context_calls.load(Ordering::Acquire), 8);
     assert_eq!(
         captured.lock().expect("captured model requests").len(),
-        6,
+        7,
         "resume must replay both exact child calls without replanning"
     );
 }
@@ -3111,7 +3149,7 @@ async fn llm_node_ask_user_resumes_the_checkpointed_call_with_the_answer_result(
 #[tokio::test]
 async fn llm_node_delegated_authorization_replays_original_call_after_token_rebuild() {
     let (assembler, captured, connections, tool_calls) =
-        delegated_authorization_llm_assembler("continued after authorization", false);
+        delegated_authorization_llm_assembler("continued after authorization", false, true);
     let mut request = llm_mcp_pipeline_request(
         "release intelligence",
         &["lookup_release"],
@@ -3162,7 +3200,11 @@ async fn llm_node_delegated_authorization_replays_original_call_after_token_rebu
     assert_eq!(tool_calls.load(Ordering::Acquire), 1);
 
     let captured = captured.lock().expect("captured model requests");
-    assert_eq!(captured.len(), 2, "resume must not ask the model to replan");
+    assert_eq!(
+        captured.len(),
+        3,
+        "authorized operations require a new model selection"
+    );
     let continuation: Value =
         serde_json::from_slice(&captured[1].body).expect("continuation request JSON");
     let tool_message = continuation["messages"]
@@ -3174,14 +3216,14 @@ async fn llm_node_delegated_authorization_replays_original_call_after_token_rebu
     assert!(
         tool_message["content"]
             .as_str()
-            .is_some_and(|content| content.contains("risk"))
+            .is_some_and(|content| content.contains("authorized"))
     );
 }
 
 #[tokio::test]
 async fn llm_node_delegated_authorization_skip_closes_original_call_without_dispatch() {
     let (assembler, captured, connections, tool_calls) =
-        delegated_authorization_llm_assembler("continued after authorization skip", false);
+        delegated_authorization_llm_assembler("continued after authorization skip", false, false);
     let mut request = llm_mcp_pipeline_request(
         "release intelligence",
         &["lookup_release"],
@@ -3235,13 +3277,16 @@ async fn llm_node_delegated_authorization_skip_closes_original_call_without_disp
     .expect("decline result JSON");
     assert_eq!(declined["type"], "mcp_auth_decision");
     assert_eq!(declined["status"], "declined");
-    assert_eq!(declined["tool_name"], "lookup_release");
+    assert_eq!(
+        declined["tool_name"],
+        super::ordinary_tests::mcp_authorization_tool_name()
+    );
 }
 
 #[tokio::test]
 async fn llm_node_authorization_does_not_approve_distinct_sensitive_guard() {
     let (assembler, captured, connections, tool_calls) =
-        delegated_authorization_llm_assembler("must remain unreachable", true);
+        delegated_authorization_llm_assembler("must remain unreachable", true, true);
     let mut request = llm_mcp_pipeline_request(
         "release intelligence",
         &["lookup_release"],
@@ -3286,14 +3331,15 @@ async fn llm_node_authorization_does_not_approve_distinct_sensitive_guard() {
     assert_eq!(tool_calls.load(Ordering::Acquire), 0);
     assert_eq!(
         captured.lock().expect("captured model requests").len(),
-        1,
-        "neither confirmation pause may replan the model-selected call"
+        2,
+        "authorization exposes operations without approving sensitive actions"
     );
 }
 
 fn delegated_authorization_llm_assembler(
     final_text: &str,
     sensitive: bool,
+    authorize: bool,
 ) -> (
     PipelineNativeAgentAssembler,
     CapturedModelRequests,
@@ -3324,14 +3370,19 @@ fn delegated_authorization_llm_assembler(
         },
     )
     .expect("pipeline runtime-context fixture");
-    let (gateway, captured) = test_model_gateway_client(
-        vec![
-            TestModelGatewayOutcome::Response(pipeline_mcp_tool_call_response()),
-            TestModelGatewayOutcome::Response(pipeline_text_response(final_text)),
-        ],
-        test_model_gateway_config(),
-    )
-    .expect("pipeline model gateway fixture");
+    let mut outcomes = vec![TestModelGatewayOutcome::Response(
+        super::ordinary_tests::mcp_authorization_response(),
+    )];
+    if authorize {
+        outcomes.push(TestModelGatewayOutcome::Response(
+            super::ordinary_tests::mcp_tool_batch_response(1),
+        ));
+    }
+    outcomes.push(TestModelGatewayOutcome::Response(pipeline_text_response(
+        final_text,
+    )));
+    let (gateway, captured) = test_model_gateway_client(outcomes, test_model_gateway_config())
+        .expect("pipeline model gateway fixture");
     let connections = Arc::new(AtomicUsize::new(0));
     let tool_calls = Arc::new(AtomicUsize::new(0));
     let mut assembler = PipelineNativeAgentAssembler::with_state(

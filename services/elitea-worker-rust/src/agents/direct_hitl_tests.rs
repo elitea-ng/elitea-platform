@@ -62,6 +62,43 @@ fn authorization_requirement() -> DelegatedAuthorizationRequirement {
     .expect("authorization requirement")
 }
 
+#[test]
+fn checkpointed_skip_survives_another_guard_without_leaking_into_a_fresh_run() {
+    let arguments = json!({"value": 21});
+    let mut events = pending_events(arguments.clone());
+    let mut skipped = DelegatedAuthorizationCatalog::default();
+    skipped
+        .insert("read_first", authorization_requirement())
+        .unwrap();
+    skipped
+        .insert("read_second", authorization_requirement())
+        .unwrap();
+    skipped.decline(&authorization_requirement());
+    events[1].provider_metadata.insert(
+        crate::toolkits::DELEGATED_AUTHORIZATION_SCOPE_KEY.to_owned(),
+        skipped.encode_declined_scope().unwrap().unwrap(),
+    );
+    let (interrupt_id, _) =
+        sensitive_call_identity("invocation-1", "call-1", "double", &arguments).unwrap();
+    let decision = DirectHitlDecision::from_payload(&direct_payload("approve", "", &interrupt_id))
+        .unwrap()
+        .resolve(&session(events))
+        .unwrap();
+    let mut fresh = DelegatedAuthorizationCatalog::default();
+    fresh
+        .insert("read_first", authorization_requirement())
+        .unwrap();
+    fresh
+        .insert("read_second", authorization_requirement())
+        .unwrap();
+    let mut resumed = fresh.clone();
+    decision.restore_authorization_scope(&mut resumed);
+    assert!(resumed.is_declined("read_first"));
+    assert!(resumed.is_declined("read_second"));
+    assert!(!fresh.is_declined("read_first"));
+    assert!(!fresh.is_declined("read_second"));
+}
+
 fn direct_payload(
     action: &str,
     value: &str,
@@ -293,7 +330,7 @@ fn delegated_authorization_decision_is_bound_to_interrupt_action_and_server_auth
                 .expect("materialized authorization catalog");
         }
         decision
-            .into_delegated_authorization_replay(&materialized)
+            .into_delegated_authorization_replay(&mut materialized)
             .expect("authorization replay");
     }
 

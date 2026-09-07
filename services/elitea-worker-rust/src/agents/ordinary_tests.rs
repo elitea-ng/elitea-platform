@@ -327,12 +327,32 @@ fn mcp_tool_call_response() -> Response<Body> {
     test_model_gateway_response(Body::new(Full::<Bytes>::from(raw)))
 }
 
-fn mcp_tool_batch_response(count: usize) -> Response<Body> {
+pub(super) fn mcp_tool_batch_response(count: usize) -> Response<Body> {
+    named_mcp_batch_response("lookup_release", count, "call_operation")
+}
+
+pub(super) fn mcp_authorization_tool_name() -> String {
+    crate::toolkits::DelegatedAuthorizationRequirement::new(
+        "release intelligence".to_owned(),
+        "mcp".to_owned(),
+        "https://mcp.example.invalid/v1/mcp".to_owned(),
+        None,
+        None,
+    )
+    .expect("fixture authorization identity")
+    .authorization_tool_name()
+}
+
+pub(super) fn mcp_authorization_response() -> Response<Body> {
+    named_mcp_batch_response(&mcp_authorization_tool_name(), 1, "call_mcp")
+}
+
+fn named_mcp_batch_response(name: &str, count: usize, prefix: &str) -> Response<Body> {
     let calls: Vec<_> = (0..count).map(|index| serde_json::json!({
         "index": index,
-        "id": if index == 0 { "call_mcp".to_owned() } else { format!("call_mcp_{index}") },
+        "id": if index == 0 { prefix.to_owned() } else { format!("{prefix}_{index}") },
         "type": "function",
-        "function": {"name": "lookup_release", "arguments": format!("{{\"release\":\"1.{index}\"}}")}
+        "function": {"name": if name == "lookup_release" && index % 2 == 1 { "inspect_release" } else { name }, "arguments": if name.starts_with("mcp_authorize_") { "{}".to_owned() } else { format!("{{\"release\":\"1.{index}\"}}") }}
     })).collect();
     let frame =
         serde_json::json!({"choices":[{"delta":{"tool_calls":calls},"finish_reason":null}]});
@@ -679,9 +699,16 @@ impl McpConnector for AgentDelegatedAuthorizationMcpConnector {
         }
         Ok(Arc::new(BasicToolset::new(
             "authorized_fixture_mcp",
-            vec![Arc::new(AgentMcpTool {
-                calls: Arc::clone(&self.tool_calls),
-            })],
+            vec![
+                Arc::new(AgentMcpTool {
+                    name: "lookup_release",
+                    calls: Arc::clone(&self.tool_calls),
+                }),
+                Arc::new(AgentMcpTool {
+                    name: "inspect_release",
+                    calls: Arc::clone(&self.tool_calls),
+                }),
+            ],
         )))
     }
 }
@@ -697,6 +724,7 @@ impl McpConnector for AgentMcpConnector {
         Ok(Arc::new(BasicToolset::new(
             "fixture_mcp",
             vec![Arc::new(AgentMcpTool {
+                name: "lookup_release",
                 calls: self.tool_calls.clone(),
             })],
         )))
@@ -704,13 +732,14 @@ impl McpConnector for AgentMcpConnector {
 }
 
 struct AgentMcpTool {
+    name: &'static str,
     calls: Arc<AtomicUsize>,
 }
 
 #[async_trait]
 impl Tool for AgentMcpTool {
     fn name(&self) -> &'static str {
-        "lookup_release"
+        self.name
     }
 
     fn description(&self) -> &'static str {
@@ -1416,16 +1445,29 @@ async fn run_delegated_authorization_resume(
     authorize: bool,
     count: usize,
 ) {
-    let attempts = if authorize { 1 } else { count };
+    // One toolkit authorization decision covers the whole pending tool batch.
+    let attempts = 1;
     let (runtime_context, context_calls) = runtime_context_client_for_redemptions(attempts + 1);
-    let (model_gateway, captured) = test_model_gateway_client(
-        vec![
-            TestModelGatewayOutcome::Response(mcp_tool_batch_response(count)),
-            TestModelGatewayOutcome::Response(model_response()),
-        ],
-        test_model_gateway_config(),
-    )
-    .expect("delegated authorization model gateway");
+    let mut outcomes = vec![TestModelGatewayOutcome::Response(
+        mcp_authorization_response(),
+    )];
+    if authorize {
+        outcomes.push(TestModelGatewayOutcome::Response(mcp_tool_batch_response(
+            count,
+        )));
+    } else if count > 1 {
+        for prefix in ["call_retry_first", "call_retry_second"] {
+            outcomes.push(TestModelGatewayOutcome::Response(named_mcp_batch_response(
+                &mcp_authorization_tool_name(),
+                count,
+                prefix,
+            )));
+        }
+    }
+    outcomes.push(TestModelGatewayOutcome::Response(model_response()));
+    let (model_gateway, captured) =
+        test_model_gateway_client(outcomes, test_model_gateway_config())
+            .expect("delegated authorization model gateway");
     let tool_calls = Arc::new(AtomicUsize::new(0));
     let connector = Arc::new(AgentDelegatedAuthorizationMcpConnector {
         calls: AtomicUsize::new(0),
@@ -1443,6 +1485,7 @@ async fn run_delegated_authorization_resume(
 
     let mut initial_request = ordinary_request(kind);
     attach_remote_mcp_tool(&mut initial_request);
+    select_both_mcp_operations(&mut initial_request);
     let initial = AuthorizedNativeAssembly::new(
         &initial_request,
         test_runtime_context_authority(),
@@ -1483,6 +1526,7 @@ async fn run_delegated_authorization_resume(
     let mut resume_request = ordinary_request(kind);
     resume_request.binding.request_content_digest = if authorize { [13; 32] } else { [14; 32] };
     attach_remote_mcp_tool(&mut resume_request);
+    select_both_mcp_operations(&mut resume_request);
     resume_request.payload.should_continue = true;
     if authorize {
         resume_request.payload.mcp_tokens.insert(
@@ -1511,7 +1555,9 @@ async fn run_delegated_authorization_resume(
             .project_start(chrono::Utc::now())
             .expect("resume start projection");
         let (mut run, mut projector, completion) = resumed.start().expect("resumed native start");
-        while let Some(event) = run.next_event().await.expect("resumed authorization event") {
+        while let Some(event) = run.next_event().await.unwrap_or_else(|error| {
+            panic!("resumed authorization event {error:?}; authorize={authorize}, count={count}")
+        }) {
             projector
                 .project(&event)
                 .expect("resumed authorization projection");
@@ -1536,7 +1582,22 @@ async fn run_delegated_authorization_resume(
     );
 
     let captured = captured.lock().expect("captured model requests");
-    assert_eq!(captured.len(), 2, "resume must not replan the pending call");
+    assert_eq!(
+        captured.len(),
+        if authorize {
+            3
+        } else if count > 1 {
+            4
+        } else {
+            2
+        }
+    );
+    let initial: serde_json::Value = serde_json::from_slice(&captured[0].body).unwrap();
+    assert_eq!(initial["tools"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        initial["tools"][0]["function"]["name"],
+        mcp_authorization_tool_name()
+    );
     let resumed: serde_json::Value =
         serde_json::from_slice(&captured[1].body).expect("resumed model request");
     assert_complete_tool_history(&resumed);
@@ -1547,10 +1608,22 @@ async fn run_delegated_authorization_resume(
         .find(|message| message["role"] == "tool" && message["tool_call_id"] == "call_mcp")
         .expect("same original call result");
     if authorize {
+        let result: serde_json::Value =
+            serde_json::from_str(tool_message["content"].as_str().unwrap()).unwrap();
+        assert_eq!(result["status"], "authorized");
         assert!(
-            tool_message["content"]
-                .as_str()
-                .is_some_and(|content| content.contains("risk"))
+            resumed["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|tool| tool["function"]["name"] != mcp_authorization_tool_name())
+        );
+        assert!(
+            resumed["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|tool| tool["function"]["name"] == "lookup_release")
         );
     } else {
         let declined: serde_json::Value = serde_json::from_str(
@@ -1562,6 +1635,18 @@ async fn run_delegated_authorization_resume(
         assert_eq!(declined["type"], "mcp_auth_decision");
         assert_eq!(declined["status"], "declined");
     }
+}
+
+fn select_both_mcp_operations(request: &mut super::request::AgentExecutionRequest) {
+    let tool = match request.kind {
+        AgentExecutionKind::Application => &mut request
+            .payload
+            .application
+            .get_mut("version_details")
+            .unwrap()["tools"][0],
+        AgentExecutionKind::Adhoc => &mut request.payload.tools[0],
+    };
+    tool["settings"]["selected_tools"] = serde_json::json!(["lookup_release", "inspect_release"]);
 }
 
 pub(super) fn assert_complete_tool_history(request: &serde_json::Value) {
@@ -1595,7 +1680,10 @@ pub(super) fn assert_complete_tool_history(request: &serde_json::Value) {
 async fn delegated_authorization_does_not_approve_a_distinct_sensitive_action() {
     let (runtime_context, _) = runtime_context_client_for_redemptions(2);
     let (model_gateway, captured) = test_model_gateway_client(
-        vec![TestModelGatewayOutcome::Response(mcp_tool_call_response())],
+        vec![
+            TestModelGatewayOutcome::Response(mcp_authorization_response()),
+            TestModelGatewayOutcome::Response(mcp_tool_batch_response(1)),
+        ],
         test_model_gateway_config(),
     )
     .expect("authorization plus sensitive model gateway");
@@ -1668,8 +1756,8 @@ async fn delegated_authorization_does_not_approve_a_distinct_sensitive_action() 
     assert_eq!(connector.calls.load(Ordering::Acquire), 2);
     assert_eq!(
         captured.lock().expect("captured model requests").len(),
-        1,
-        "the exact replay must pause before another provider request"
+        2,
+        "authorization exposes the operation, which retains its sensitive guard"
     );
 }
 
@@ -2157,18 +2245,27 @@ async fn run_parallel_nested_authorization_resume(authorize: bool) {
     let mut request = ordinary_request(AgentExecutionKind::Application);
     attach_nested_agent(&mut request);
     let (runtime_context, context_calls) = runtime_context_with_sensitive_child();
-    let (model_gateway, captured) = test_model_gateway_client(
-        vec![
-            TestModelGatewayOutcome::Response(parallel_nested_agent_call_response()),
-            TestModelGatewayOutcome::Response(mcp_tool_call_response()),
-            TestModelGatewayOutcome::Response(mcp_tool_call_response()),
-            TestModelGatewayOutcome::Response(text_response("resolved child")),
-            TestModelGatewayOutcome::Response(text_response("resolved child")),
-            TestModelGatewayOutcome::Response(text_response("root resumed answer")),
-        ],
-        test_model_gateway_config(),
-    )
-    .expect("parallel nested authorization model gateway");
+    let mut outcomes = vec![
+        TestModelGatewayOutcome::Response(parallel_nested_agent_call_response()),
+        TestModelGatewayOutcome::Response(mcp_authorization_response()),
+        TestModelGatewayOutcome::Response(mcp_authorization_response()),
+    ];
+    for _ in 0..2 {
+        if authorize {
+            outcomes.push(TestModelGatewayOutcome::Response(mcp_tool_batch_response(
+                1,
+            )));
+        }
+        outcomes.push(TestModelGatewayOutcome::Response(text_response(
+            "resolved child",
+        )));
+    }
+    outcomes.push(TestModelGatewayOutcome::Response(text_response(
+        "root resumed answer",
+    )));
+    let (model_gateway, captured) =
+        test_model_gateway_client(outcomes, test_model_gateway_config())
+            .expect("parallel nested authorization model gateway");
     let tool_calls = Arc::new(AtomicUsize::new(0));
     let connector = Arc::new(AgentDelegatedAuthorizationMcpConnector {
         calls: AtomicUsize::new(0),
@@ -2336,8 +2433,8 @@ async fn run_parallel_nested_authorization_resume(authorize: bool) {
     assert_eq!(connector.calls.load(Ordering::Acquire), 3);
     assert_eq!(context_calls.load(Ordering::Acquire), 6);
     let captured = captured.lock().expect("captured model requests");
-    assert_eq!(captured.len(), 6, "resume must not replan child calls");
-    let parent: serde_json::Value = serde_json::from_slice(&captured[5].body).unwrap();
+    assert_eq!(captured.len(), if authorize { 8 } else { 6 });
+    let parent: serde_json::Value = serde_json::from_slice(&captured.last().unwrap().body).unwrap();
     let child_results = parent["messages"]
         .as_array()
         .unwrap()
@@ -2351,7 +2448,7 @@ async fn run_parallel_nested_authorization_resume(authorize: bool) {
         child_results,
         vec![serde_json::json!({"response": "resolved child"}); 2]
     );
-    let mut resumed_tasks = captured[3..5]
+    let mut resumed_tasks = captured[3..captured.len() - 1]
         .iter()
         .map(|request| {
             let body: serde_json::Value =
@@ -2366,6 +2463,7 @@ async fn run_parallel_nested_authorization_resume(authorize: bool) {
         })
         .collect::<Vec<_>>();
     resumed_tasks.sort_by_cached_key(|task| serde_json::to_string(task).expect("user contents"));
+    resumed_tasks.dedup();
     assert_eq!(
         resumed_tasks,
         vec![

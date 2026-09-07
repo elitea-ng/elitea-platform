@@ -495,6 +495,8 @@ struct PipelineLlmReplayDecision {
     defer_confirmation: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     blocked_result: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    authorization: Option<DelegatedAuthorizationRequirement>,
 }
 
 /// Private, checkpoint-bound continuation state for one native LLM-node tool turn.
@@ -514,6 +516,8 @@ pub(crate) struct PipelineLlmReplayEnvelope {
     history_before_pending: Vec<Content>,
     pending_content: Content,
     decisions: BTreeMap<String, PipelineLlmReplayDecision>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    declined_authorizations: Vec<DelegatedAuthorizationRequirement>,
 }
 
 impl PipelineLlmReplayEnvelope {
@@ -537,6 +541,8 @@ impl PipelineLlmReplayEnvelope {
             history_before_pending,
             pending_content,
             decisions,
+            declined_authorizations: prior
+                .map_or_else(Vec::new, |prior| prior.declined_authorizations.clone()),
         };
         envelope.validate()?;
         Ok(envelope)
@@ -550,6 +556,7 @@ impl PipelineLlmReplayEnvelope {
             || !valid_sha256_label(&self.predecessor_digest)
             || self.history_before_pending.len() > MAX_LLM_REPLAY_CONTENTS
             || self.decisions.len() > MAX_LLM_REPLAY_DECISIONS
+            || self.declined_authorizations.len() > MAX_LLM_REPLAY_DECISIONS
             || self.pending_content.role != "model"
         {
             return Err(LlmExecutionError::InvalidInputMapping);
@@ -659,6 +666,7 @@ impl PipelineLlmReplayEnvelope {
                 fingerprint: tool_call_fingerprint(tool_name, call.arguments),
                 defer_confirmation: false,
                 blocked_result,
+                authorization: None,
             },
         );
         self.validate()?;
@@ -689,8 +697,17 @@ impl PipelineLlmReplayEnvelope {
                 defer_confirmation: authorize,
                 blocked_result: (!authorize)
                     .then(|| delegated_authorization_declined_result(requirement, tool_name)),
+                authorization: Some(requirement.clone()),
             },
         );
+        if !authorize
+            && !self
+                .declined_authorizations
+                .iter()
+                .any(|other| other.same_authority(requirement))
+        {
+            self.declined_authorizations.push(requirement.clone());
+        }
         self.validate()?;
         serde_json::to_value(self).map_err(|_| LlmExecutionError::InvalidInputMapping)
     }
@@ -722,6 +739,7 @@ impl PipelineLlmReplayEnvelope {
                 fingerprint: tool_call_fingerprint(tool_name, call.arguments),
                 defer_confirmation: false,
                 blocked_result: Some(result),
+                authorization: None,
             },
         );
         self.validate()?;
@@ -730,7 +748,7 @@ impl PipelineLlmReplayEnvelope {
 
     fn apply_run_config(&self, run_config: &mut RunConfig) {
         for (call_id, decision) in &self.decisions {
-            if decision.defer_confirmation {
+            if decision.defer_confirmation && !decision.is_authorization_proxy() {
                 continue;
             }
             run_config
@@ -746,20 +764,31 @@ impl PipelineLlmReplayEnvelope {
         self.decisions
             .iter()
             .filter_map(|(call_id, decision)| {
-                decision
-                    .blocked_result
-                    .as_ref()
-                    .map(|response| PipelineBlockedToolReplay {
-                        call_id: call_id.clone(),
-                        tool_name: decision.tool_name.clone(),
-                        arguments: decision.arguments.clone(),
-                        response: response.clone(),
-                        confirmation_decision: if response.is_string() {
-                            ToolConfirmationDecision::Approve
-                        } else {
-                            ToolConfirmationDecision::Deny
-                        },
-                    })
+                let response = decision.blocked_result.clone().or_else(|| {
+                    decision
+                        .authorization
+                        .as_ref()
+                        .filter(|_| decision.is_authorization_proxy())
+                        .map(|requirement| {
+                            crate::toolkits::delegated_authorization_granted_result(
+                                requirement,
+                                &decision.tool_name,
+                            )
+                        })
+                });
+                response.map(|response| PipelineBlockedToolReplay {
+                    call_id: call_id.clone(),
+                    tool_name: decision.tool_name.clone(),
+                    arguments: decision.arguments.clone(),
+                    confirmation_decision: if response.is_string()
+                        || response["status"] == "authorized"
+                    {
+                        ToolConfirmationDecision::Approve
+                    } else {
+                        ToolConfirmationDecision::Deny
+                    },
+                    response,
+                })
             })
             .collect()
     }
@@ -784,12 +813,49 @@ impl PipelineLlmReplayEnvelope {
         })
     }
 
+    pub(crate) fn apply_authorization_scope(
+        &self,
+        catalog: &mut crate::toolkits::DelegatedAuthorizationCatalog,
+    ) -> Result<(), LlmExecutionError> {
+        for decision in self.decisions.values() {
+            if decision.defer_confirmation && catalog.requirement_for(&decision.tool_name).is_some()
+            {
+                return Err(LlmExecutionError::Unavailable);
+            }
+        }
+        for requirement in &self.declined_authorizations {
+            catalog.decline(requirement);
+        }
+        // Old checkpoints contain a per-call result, without a toolkit scope.
+        // Match that result to the current frozen authority before widening Skip.
+        for decision in self.decisions.values() {
+            if let Some(requirement) = catalog.requirement_for(&decision.tool_name).cloned()
+                && decision.blocked_result.as_ref()
+                    == Some(&delegated_authorization_declined_result(
+                        &requirement,
+                        &decision.tool_name,
+                    ))
+            {
+                catalog.decline(&requirement);
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn definition_digest(&self) -> &str {
         &self.definition_digest
     }
 
     fn input_digest(&self) -> &str {
         &self.input_digest
+    }
+}
+
+impl PipelineLlmReplayDecision {
+    fn is_authorization_proxy(&self) -> bool {
+        self.authorization
+            .as_ref()
+            .is_some_and(|requirement| self.tool_name == requirement.authorization_tool_name())
     }
 }
 
@@ -1494,6 +1560,38 @@ struct PipelineBlockedToolReplay {
     confirmation_decision: ToolConfirmationDecision,
 }
 
+struct PipelineAuthorizationResult {
+    replay: PipelineBlockedToolReplay,
+}
+
+#[async_trait]
+impl Tool for PipelineAuthorizationResult {
+    fn name(&self) -> &str {
+        &self.replay.tool_name
+    }
+    fn description(&self) -> &'static str {
+        "Return the validated toolkit authorization result."
+    }
+    fn parameters_schema(&self) -> Option<Value> {
+        Some(json!({"type": "object", "properties": {}, "additionalProperties": false}))
+    }
+    fn is_read_only(&self) -> bool {
+        true
+    }
+    async fn execute(
+        &self,
+        context: Arc<dyn ToolContext>,
+        arguments: Value,
+    ) -> adk_rust::Result<Value> {
+        if context.function_call_id() != self.replay.call_id || arguments != self.replay.arguments {
+            return Err(AdkError::agent(
+                "authorization result does not match the checkpointed call",
+            ));
+        }
+        Ok(self.replay.response.clone())
+    }
+}
+
 struct PipelineBlockedToolset {
     name: String,
     inner: Arc<dyn Toolset>,
@@ -1612,6 +1710,13 @@ pub(crate) fn prepare_pipeline_llm_replay(
     let Some(replay) = replay else {
         return (delegate, toolsets);
     };
+    let hidden = replay
+        .decisions
+        .values()
+        .filter(|decision| decision.defer_confirmation && decision.is_authorization_proxy())
+        .map(|decision| decision.tool_name.clone())
+        .collect();
+    let delegate = crate::toolkits::hide_model_tools(delegate, hidden);
     let model: Arc<dyn Llm> = Arc::new(PipelineLlmReplayModel {
         delegate,
         state: AtomicU8::new(PIPELINE_REPLAY_PENDING),
@@ -1624,6 +1729,25 @@ pub(crate) fn prepare_pipeline_llm_replay(
         .collect::<BTreeMap<_, _>>();
     if blocked.is_empty() {
         return (model, toolsets);
+    }
+    let mut toolsets = toolsets;
+    let authorized: Vec<Arc<dyn Tool>> = blocked
+        .values()
+        .filter(|blocked| {
+            blocked.response["type"] == "mcp_auth_decision"
+                && blocked.response["status"] == "authorized"
+        })
+        .map(|replay| {
+            Arc::new(PipelineAuthorizationResult {
+                replay: replay.clone(),
+            }) as Arc<dyn Tool>
+        })
+        .collect();
+    if !authorized.is_empty() {
+        toolsets.push(Arc::new(adk_rust::tool::BasicToolset::new(
+            "elitea_authorization_result",
+            authorized,
+        )));
     }
     let blocked = Arc::new(blocked);
     let toolsets = toolsets
