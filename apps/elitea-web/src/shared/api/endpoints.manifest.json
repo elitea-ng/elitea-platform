@@ -2296,6 +2296,42 @@
             "usedBy": [
                 "pages/settings"
             ]
+        },
+        {
+            "id": "inventory.invokeTool",
+            "method": "POST",
+            "path": "/inventory/tools/{projectId}/{toolkitName}/{toolName}/invoke",
+            "operationId": null,
+            "source": "handwritten",
+            "responseSchema": "InventoryInvocationAcceptedWire",
+            "fixture": null,
+            "usedBy": [
+                "entities/inventory"
+            ]
+        },
+        {
+            "id": "inventory.getInvocation",
+            "method": "GET",
+            "path": "/inventory/invocations/{projectId}/{toolkitName}/{toolName}/{invocationId}",
+            "operationId": null,
+            "source": "handwritten",
+            "responseSchema": "InventoryInvocationPollWire",
+            "fixture": null,
+            "usedBy": [
+                "entities/inventory"
+            ]
+        },
+        {
+            "id": "inventory.cancelInvocation",
+            "method": "DELETE",
+            "path": "/inventory/invocations/{projectId}/{toolkitName}/{toolName}/{invocationId}",
+            "operationId": null,
+            "source": "handwritten",
+            "responseSchema": null,
+            "fixture": null,
+            "usedBy": [
+                "entities/inventory"
+            ]
         }
     ]
 }

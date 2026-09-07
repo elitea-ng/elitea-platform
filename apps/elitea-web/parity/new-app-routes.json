@@ -28,6 +28,8 @@
   "/deepwiki/:toolkitId",
   "/elitea-catalog",
   "/help-center",
+  "/inventory",
+  "/inventory/:toolkitId",
   "/mcp-auth-callback",
   "/mcps",
   "/mcps/:tab",
