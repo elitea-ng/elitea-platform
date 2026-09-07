@@ -1976,6 +1976,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"POST /api/v2/elitea_core/attach_public_skill/prompt_lib/{projectID}",
 		"POST /api/v2/elitea_core/attachments/prompt_lib/{projectID}/{conversationID}",
 		"POST /api/v2/elitea_core/batch_replace_version/prompt_lib/{projectID}/{oldVersionID}/{newVersionID}",
+		"POST /api/v2/elitea_core/canvas/prompt_lib/{projectID}/{canvasID}/presence",
 		"POST /api/v2/elitea_core/canvases/prompt_lib/{projectID}",
 		"POST /api/v2/elitea_core/conversations/prompt_lib/{projectID}",
 		"POST /api/v2/elitea_core/export_converter/prompt_lib",

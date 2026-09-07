@@ -132,6 +132,13 @@ func (m *mockRepo) GetCanvas(ctx context.Context, projectID, canvasID string) (m
 	return m.getCanvasFn(ctx, projectID, canvasID)
 }
 
+// ResolveCanvas satisfies the Repository interface. The presence route
+// (internal/api/v2/canvaspresence) is what calls it; no handler in this package
+// does, so the double answers a fixed pair rather than taking a hook.
+func (m *mockRepo) ResolveCanvas(_ context.Context, _, canvasID string) (string, string, error) {
+	return canvasID, "message-group-" + canvasID, nil
+}
+
 func (m *mockRepo) UpdateCanvas(ctx context.Context, projectID, canvasID string, body map[string]any) error {
 	return m.updateCanvasFn(ctx, projectID, canvasID, body)
 }

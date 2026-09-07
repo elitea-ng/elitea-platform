@@ -407,7 +407,14 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
  * shapes every write endpoint as a `useQuery` gated by `enabled` and these are
  * click-to-generate buttons.
  */
-const GENERATED_OPERATION_COUNT = 188;
+/*
+ * 188 -> 189, when canvas editor presence was served over the project SSE plane
+ * (#622): heartbeatCanvasPresence, POST
+ * /elitea_core/canvas/prompt_lib/{project_id}/{canvas_id}/presence. orval
+ * generates a hook and three zod models (CanvasPresence, CanvasPresenceRequest,
+ * CanvasEditor) for it.
+ */
+const GENERATED_OPERATION_COUNT = 189;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -449,7 +456,21 @@ const GENERATED_OPERATION_COUNT = 188;
  * MISSING entry lowers the number rather than raising it. The other two draft
  * call sites were already counted here; they change source, not existence.
  */
-const MANIFEST_ENTRY_COUNT = 204;
+/*
+ * 204 -> 205, with the same change. ONE entry, `canvas.presenceHeartbeat`, and
+ * the app calls it through a hand-written sender
+ * (features/chat-messages/api/canvasPresence.ts) rather than the generated hook,
+ * for the reason that entry's $comment gives: orval shapes every write endpoint
+ * as a `useQuery` gated by `enabled`, and this beat is sent from an effect and
+ * from a `visibilitychange` listener.
+ *
+ * Recorded beside the number because it is what this ledger is for: the SSE half
+ * of the same feature adds NO entry. It is a subscription to
+ * /elitea_core/events/prompt_lib/{projectId}, which is a stream and not an
+ * endpoint the manifest describes — no manifest entry has ever covered a
+ * `useEventSource` url, including the notifications stream that predates this.
+ */
+const MANIFEST_ENTRY_COUNT = 205;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

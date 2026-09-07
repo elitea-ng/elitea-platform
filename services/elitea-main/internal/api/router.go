@@ -26,6 +26,7 @@ import (
 	v2auth "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/auth"
 	v2branding "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/branding"
 	v2budgets "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/budgets"
+	v2canvaspresence "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/canvaspresence"
 	v2configs "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/configurations"
 	v2contextmgr "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/contextmgr"
 	v2convs "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
@@ -2573,6 +2574,27 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						Get("/canvas/prompt_lib/{projectID}/{canvasID}", convHandler.GetCanvas)
 					r.With(projectPermission("models.chat.canvas.update")).
 						Put("/canvas/prompt_lib/{projectID}/{canvasID}", convHandler.UpdateCanvas)
+					// Canvas editor presence (#622). A heartbeat, published onto
+					// events.ProjectChannel({projectID}) — the SSE room primitive
+					// mounted further down this same group — instead of the
+					// socket.io server #615 decided not to rebuild.
+					//
+					// It takes `projectPermission`, the SAME composition root as
+					// the three canvas routes above it, and the same permission
+					// string as the canvas READ: announcing presence on a canvas
+					// is not a wider claim than reading it, and reusing the
+					// string is what keeps this route out of a new migration.
+					//
+					// WithRedis is called UNCONDITIONALLY on purpose. It is a
+					// no-op on a nil client, and the route serves either way on
+					// the package's in-process store, so this is not a
+					// registration gate — see the option's own note.
+					r.With(projectPermission(v2canvaspresence.Permission)).
+						Post("/canvas/prompt_lib/{projectID}/{canvasID}/presence",
+							v2canvaspresence.NewHandler(
+								cfg.ConvsRepo,
+								v2canvaspresence.WithRedis(cfg.RedisClient),
+							).Heartbeat)
 					// attachment_storage has no pylon module; it writes the
 					// conversation's own storage setting, so it takes
 					// context_strategy.py's string — the other per-conversation
