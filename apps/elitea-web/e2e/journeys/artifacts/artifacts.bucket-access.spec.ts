@@ -37,6 +37,41 @@ const ACL_BODY = 'access list journey';
 
 const MEMBER_EMAIL = 'e2e-member@autotest.local';
 
+/**
+ * The shell mounts at `/app` (`app/router.tsx`'s `basepath`), so the page is
+ * `/app/artifacts` and never `/artifacts`.
+ *
+ * MEASURED, because a bare `/artifacts` fails in the one way that is easy to
+ * misread: the server answers a plain-text `404 page not found` and the SPA
+ * never boots at all, yet the URL still ENDS IN `/artifacts`, so
+ * `waitForURL('**\/artifacts**')` is satisfied, and `selectedProjectId` still
+ * returns an id because `localStorage` belongs to the ORIGIN and arrives with
+ * the storage state rather than with the app. Everything up to the click
+ * passes, and the only symptom is a bucket control that never appears — which
+ * reads exactly like a missing `aria-label` on the control this journey is
+ * about. `openArtifacts` therefore judges the navigation's own status code, so
+ * a wrong path can never again present itself as a broken component.
+ */
+const ARTIFACTS_URL = `${BASE_URL}/app/artifacts`;
+
+/** Open the artifacts page and prove the app — not a 404 — is what loaded. */
+async function openArtifacts(page: Page): Promise<void> {
+  const response = await page.goto(ARTIFACTS_URL);
+  expect(response?.status(), 'the artifacts page must be served at /app/artifacts').toBeLessThan(400);
+}
+
+/**
+ * Enter the route a SECOND time, once the first document has stopped working —
+ * the wait the sibling lifecycle spec measured (`reenterArtifacts` there): a
+ * navigation started inside the boot traffic is cancelled by WebKit and
+ * reported as `page.goto: Frame load interrupted`.
+ */
+async function reenterArtifacts(page: Page): Promise<void> {
+  await page.waitForLoadState('networkidle');
+  await openArtifacts(page);
+  await page.waitForURL('**/artifacts**', { timeout: 15_000 });
+}
+
 /** The project the app itself selected, read from the store the app writes. */
 async function selectedProjectId(page: Page): Promise<string> {
   const id = await page.evaluate(() => localStorage.getItem('el.project.id'));
@@ -83,15 +118,13 @@ test.describe('J20 artifacts bucket access lists', () => {
   test.describe.configure({ mode: 'serial' });
 
   test('J20h: the dialog states the default and shows no exceptions for an open bucket', async ({ page, request }) => {
-    await page.goto(`${BASE_URL}/artifacts`);
+    await openArtifacts(page);
     const projectId = await selectedProjectId(page);
     await seedAclBucket(request, projectId);
     const userId = await memberUserId(request, projectId);
     await clearExceptions(request, projectId, userId);
 
-    await page.waitForLoadState('networkidle');
-    await page.goto(`${BASE_URL}/artifacts`);
-    await page.waitForURL('**/artifacts**', { timeout: 15_000 });
+    await reenterArtifacts(page);
 
     // The control lives in the bucket row's hover slot; `aria-label` is the
     // stable handle, exactly as the pin and delete controls are addressed.
@@ -107,15 +140,13 @@ test.describe('J20 artifacts bucket access lists', () => {
   });
 
   test('J20i: an exception authored in the dialog is stored and read back', async ({ page, request }) => {
-    await page.goto(`${BASE_URL}/artifacts`);
+    await openArtifacts(page);
     const projectId = await selectedProjectId(page);
     await seedAclBucket(request, projectId);
     const userId = await memberUserId(request, projectId);
     await clearExceptions(request, projectId, userId);
 
-    await page.waitForLoadState('networkidle');
-    await page.goto(`${BASE_URL}/artifacts`);
-    await page.waitForURL('**/artifacts**', { timeout: 15_000 });
+    await reenterArtifacts(page);
     await page.getByLabel(`Manage access to ${ACL_BUCKET}`).click();
     await expect(page.getByTestId('bucket-access-dialog')).toBeVisible();
 
@@ -150,7 +181,7 @@ test.describe('J20 artifacts bucket access lists', () => {
   });
 
   test('J20j: a stored exception changes what the server allows', async ({ page, request }) => {
-    await page.goto(`${BASE_URL}/artifacts`);
+    await openArtifacts(page);
     const projectId = await selectedProjectId(page);
     await seedAclBucket(request, projectId);
     const userId = await memberUserId(request, projectId);
