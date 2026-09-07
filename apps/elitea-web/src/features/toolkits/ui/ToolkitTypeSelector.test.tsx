@@ -257,6 +257,28 @@ describe('ToolkitTypeSelector', () => {
   it('keeps the "no local MCP available" state while showing the served Remote MCP tile', async () => {
     server.use(
       http.get('/api/v2/elitea_core/toolkits/prompt_lib/:projectId', () => HttpResponse.json(servedCatalogue)),
+  /**
+   * Validation gap 1: "MCPs cannot be created at all". The page above is the
+   * whole of the MCP create surface, and it was a dead end because the served
+   * catalogue carried no mcp-flavoured entry at all — `useGetCurrentMCPSchemas`
+   * filtered the catalogue to `key === 'mcp' || value.type === 'mcp' || key
+   * ends with 'mcp'` and found nothing, so `useToolMenuItems` produced no items
+   * and only the pinned, empty `Local` section rendered.
+   *
+   * `internal/api/v2/toolkits/mcp_projection.go` now serves that entry. The two
+   * assertions below are what "the chooser works" means, and they are
+   * independent: LOCAL keeps its docs pointer (there is still no local runner),
+   * and REMOTE gains a real, clickable `Remote MCP` tile. Production shows both
+   * chips at once, which is why this is one test and not two.
+   */
+  it('shows both a Local section with the docs pointer and a Remote section offering Remote MCP once the catalogue serves the mcp type', async () => {
+    server.use(
+      http.get('/api/v2/elitea_core/toolkits/prompt_lib/:projectId', () =>
+        HttpResponse.json({
+          github: { metadata: { label: 'GitHub' } },
+          mcp: { type: 'object', title: 'mcp', metadata: { label: 'Remote MCP', categories: ['other'] } },
+        }),
+      ),
       http.get('/api/v2/elitea_core/platform_settings/prompt_lib', () => HttpResponse.json({ mcp_enabled: true })),
     );
     renderSelector({ isMCP: true });
@@ -284,5 +306,39 @@ describe('ToolkitTypeSelector', () => {
     }
     // Withheld by the worker capability projection, so no tile at all.
     expect(screen.queryByRole('button', { name: /^Slack$/ })).not.toBeInTheDocument();
+    // The Remote half: a real tile, named as production names it.
+    expect(await screen.findByRole('button', { name: 'Remote MCP' })).toBeEnabled();
+    // `Remote` renders twice by design — once as a filter chip, once as the
+    // section heading — so this counts rather than expecting a single node.
+    expect(screen.getAllByText('Remote').length).toBeGreaterThanOrEqual(2);
+
+    // The Local half is UNCHANGED by the Remote tile arriving. A pre-built
+    // local runner is still not offered, so the guidance must stay.
+    expect(screen.getAllByText('Local').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText(/Still no local MCP available/)).toBeInTheDocument();
+
+    // A toolkit type that is not MCP-shaped must not leak onto this tab.
+    expect(screen.queryByText('GitHub')).not.toBeInTheDocument();
+  });
+
+  /**
+   * The other direction of the same projection: a pre-built `mcp_<key>` type
+   * belongs on the TOOLKIT tab under the MCP heading, exactly as production
+   * files its 23 pre-built servers, and must not appear on the MCP tab (whose
+   * Local section is for a user's own local runner).
+   */
+  it('files a pre-built mcp_ type under the MCP category of the toolkit chooser', async () => {
+    server.use(
+      http.get('/api/v2/elitea_core/toolkits/prompt_lib/:projectId', () =>
+        HttpResponse.json({
+          mcp_context7: { type: 'object', title: 'mcp_context7', metadata: { label: 'Context7', categories: ['mcp'] } },
+        }),
+      ),
+    );
+    renderSelector();
+
+    expect(await screen.findByRole('button', { name: 'Context7' })).toBeEnabled();
+    // Chip plus section heading, as above.
+    expect(screen.getAllByText('MCP').length).toBeGreaterThanOrEqual(2);
   });
 });

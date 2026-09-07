@@ -346,13 +346,40 @@ test.describe('JRNY-018 — MCP OAuth callback round trip', () => {
     await expect(search).toBeVisible();
     await expect(search).toBeEditable();
 
-    // The catalogue must match the backend exactly, in BOTH directions: every
-    // returned type is offered, and the documented empty state appears if and
-    // only if the backend offered nothing.
-    const emptyState = page.getByText('Still no local MCP available. Follow creation guides in our', { exact: false });
-    await expect(emptyState).toHaveCount(mcpTypeKeys.length === 0 ? 1 : 0);
+    // The catalogue must match the backend exactly: every returned type is
+    // offered as a tile.
     for (const key of mcpTypeKeys) {
       await expect(page.getByRole('button', { name: key === 'mcp' ? 'Remote MCP' : key })).toBeVisible();
+    }
+
+    // CORRECTED. This used to read `toHaveCount(mcpTypeKeys.length === 0 ? 1 : 0)`
+    // — "the empty state appears if and only if the backend offered nothing" —
+    // which was right only while the backend offered nothing at all.
+    //
+    // The two halves of this page are independent, and production shows both at
+    // once (`/app/mcps/create`, category chips Local and Remote): LOCAL lists
+    // the MCP servers a user registered on their own machine, and its empty
+    // state is a pointer at the docs that explain how to make one; REMOTE
+    // offers the `mcp` type. `ToolkitTypeSelector`'s `localGroupForMCP` pins
+    // the empty Local section open for exactly this reason. So the Remote MCP
+    // tile arriving does NOT retire the Local guidance, and asserting it did
+    // would fail the moment the catalogue started serving `mcp` — which is what
+    // the projection in `internal/api/v2/toolkits/mcp_projection.go` now does.
+    //
+    // What still holds in both directions is the LOCAL half: the guidance is
+    // shown when no local server is registered, and only then.
+    const emptyState = page.getByText('Still no local MCP available. Follow creation guides in our', { exact: false });
+    const localTypeKeys = mcpTypeKeys.filter((key) => key !== 'mcp');
+    await expect(emptyState).toHaveCount(localTypeKeys.length === 0 ? 1 : 0);
+
+    // The Remote half is a real section with a real tile whenever the catalogue
+    // serves the generic type. Asserting the heading as well as the tile is
+    // what keeps a tile that landed in the wrong category from passing.
+    // `Remote` renders twice by design — the filter chip and the section
+    // heading — so this counts both rather than tripping strict mode on one.
+    if (mcpTypeKeys.includes('mcp')) {
+      await expect(page.getByText('Remote', { exact: true })).toHaveCount(2);
+      await expect(page.getByRole('button', { name: 'Remote MCP' })).toBeEnabled();
     }
 
     await checkA11y(page);

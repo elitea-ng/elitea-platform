@@ -3706,5 +3706,6 @@
   "pages.admin.toolkitTypes.bulk.subject": "{{count}} types: {{names}}",
   "pages.admin.toolkitTypes.bulk.title": "Apply to the listed types",
   "pages.admin.toolkitTypes.error.bulk": "The toolkit types could not be changed.",
-  "chatMessages.fileList.removeAttachment": "Remove attachment"
+  "chatMessages.fileList.removeAttachment": "Remove attachment",
+  "pages.toolkits.mcpLoadTools.error": "Could not load the tools of this MCP server: "
 }

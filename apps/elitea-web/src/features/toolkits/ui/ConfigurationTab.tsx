@@ -97,6 +97,18 @@ export interface ConfigurationTabSlots {
    * depend on this slot: `useCredentialLikeFieldSlot` renders those itself.
    */
   readonly renderCredentialPicker?: ToolBaseSlots['renderCredentialPicker'];
+  /**
+   * The "Load Tools" action of an MCP toolkit's tool section.
+   *
+   * Same seam and same reason as the two above: `ToolActionsSelector` renders
+   * the action from caller-injected props because the baseline's MCP fetch hook
+   * lives in `features/mcps`. The `pages/`-layer caller supplies it — see
+   * `pages/toolkits/lib/useMcpLoadTools.tsx`.
+   *
+   * Omitted, the action still renders and is permanently disabled, which is the
+   * state every MCP toolkit's form was in before this slot was forwarded.
+   */
+  readonly toolActionsExtra?: ToolBaseSlots['toolActionsExtra'];
 }
 
 /** @public */
@@ -159,7 +171,7 @@ export function ConfigurationTab({
   saveHandlers,
   slots,
 }: ConfigurationTabProps): ReactNode {
-  const { renderTestPane, renderRunHistory, sharepointAuth, renderCredentialPicker } = slots;
+  const { renderTestPane, renderRunHistory, sharepointAuth, renderCredentialPicker, toolActionsExtra } = slots;
   const { editToolDetail, onChangeToolDetail, isToolDirty } = toolDetailState;
   const { saveToolkit, onSaveSuccess, onSaveError } = saveHandlers;
   /**
@@ -177,12 +189,13 @@ export function ConfigurationTab({
   // `ToolkitForm.hooks.ts`'s own note — but a fresh object here would also
   // remount nothing, it would just churn; keep it cheap and stable).
   const formSlots = useMemo<ToolBaseSlots | undefined>(() => {
-    if (sharepointAuth === undefined && renderCredentialPicker === undefined) return undefined;
+    if (sharepointAuth === undefined && renderCredentialPicker === undefined && toolActionsExtra === undefined) return undefined;
     return {
       ...(sharepointAuth === undefined ? {} : { sharepointAuthModals: sharepointAuth }),
       ...(renderCredentialPicker === undefined ? {} : { renderCredentialPicker }),
+      ...(toolActionsExtra === undefined ? {} : { toolActionsExtra }),
     };
-  }, [sharepointAuth, renderCredentialPicker]);
+  }, [sharepointAuth, renderCredentialPicker, toolActionsExtra]);
 
   const handleShowHistory = useCallback(() => setShowHistory(true), []);
   const handleCloseHistory = useCallback(() => setShowHistory(false), []);
