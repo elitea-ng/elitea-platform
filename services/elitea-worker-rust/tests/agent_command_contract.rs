@@ -8,8 +8,8 @@ use elitea_worker_rust::protocol::command::{
     TestOnlyConformanceHmacAuthenticator, parse_and_verify_agent_command,
 };
 use elitea_worker_rust::protocol::elitea::runtime::v1::{
-    DigestAlgorithmV1, SignatureProfileV1, SignedWorkerCommandEnvelopeV1,
-    ToolkitCallToolCommandV1, WorkerCommandTypeV1, WorkerCommandV1, worker_command_v1,
+    DigestAlgorithmV1, SignatureProfileV1, SignedWorkerCommandEnvelopeV1, ToolkitCallToolCommandV1,
+    WorkerCommandTypeV1, WorkerCommandV1, worker_command_v1,
 };
 use prost::Message;
 use ring::signature::KeyPair;
