@@ -39,6 +39,24 @@ export interface HttpConfig {
    * re-auth (e.g. the callback page's session probe).
    */
   reauthenticate?: () => Promise<void>;
+  /**
+   * Called when the server states that this browser's session has EXPIRED,
+   * with the login URL it named.
+   *
+   * ONLY THE APP SHELL'S OWN SESSION PROBE SUPPLIES IT, and that is the whole
+   * design. `/forward-auth/info` answers `401 {"error":{"code":
+   * "session_expired"}}` when a cookie was presented and no longer works
+   * (services/elitea-main/docs/browser-sessions.md). That answer is about the
+   * SESSION, so acting on it — a full-page navigation to the identity
+   * provider — is correct.
+   *
+   * A 401 from the notification bell, a permission read or any other
+   * peripheral call is NOT that answer, and must never move the browser. A
+   * peripheral 401 once re-authenticated in a loop forever; `background: true`
+   * exists for the same reason. Clients that do not configure this handler
+   * keep the existing behaviour exactly.
+   */
+  onSessionExpired?: (loginUrl: string) => void;
 }
 
 /** @public Wave-1 surface: consumed by S4/S6 endpoint modules and R2. */
@@ -98,6 +116,12 @@ export interface HttpClient {
   delete<T>(path: string, options?: HttpRequestOptions): Promise<HttpResult<T>>;
 }
 
+import {
+  needsReauth,
+  resourceAuthorizationBody,
+  sessionExpiredLoginUrl,
+} from './reauth-policy';
+
 /* ── behaviour 1: credentials resolution ─────────────────────────────────── */
 
 /**
@@ -121,95 +145,6 @@ function randomHex(chars: number): string {
 /** `{version}-{trace-id}-{span-id}-{trace-flags}`, e.g. `00-…32…-…16…-01`. */
 export function generateTraceparent(): string {
   return `00-${randomHex(32)}-${randomHex(16)}-01`;
-}
-
-/* ── behaviour 2 (secondary): forward-auth redirect sniff ────────────────── */
-
-/**
- * Old sniff retained as the SECONDARY signal (eliteaApi.js:26-28): the final
- * URL, with `target_to` removed first so its VALUE cannot fake a match,
- * containing both `/forward-auth/` and `/login`.
- */
-function isAuthRedirect(finalUrl: string): boolean {
-  const url = new URL(finalUrl);
-  url.searchParams.delete('target_to');
-  const stripped = url.toString();
-  return stripped.includes('/forward-auth/') && stripped.includes('/login');
-}
-
-/**
- * 401 only, not 403.
- *
- * elitea-main splits the two cleanly: `middleware/auth.go` answers 401
- * `authentication_error` when it cannot establish a principal, and
- * `middleware/rbac.go` answers 403 `insufficient permissions` when it can but
- * the permission is missing. Re-authenticating the SAME user cannot add a
- * permission, so a 403 that re-auths always replays into the same 403 — the
- * flow is pure cost.
- *
- * It is worse than pure cost, which is why this changed. Measured against a
- * live standalone stack (issue 93, project 1 without
- * `models.applications.index_meta.details`): the indexes rail's 403 opened the
- * re-auth flow, the flow did not settle, and `useQuery` therefore stayed
- * PENDING — eight loading skeletons still on screen after nine seconds, with
- * the Indexes tab itself still rendered because tab visibility comes from the
- * toolkit type schema rather than from permissions. A refusal presented as a
- * hung fetch. Any future permission misconfiguration presented the same way.
- *
- * The escalation also DISCARDED the response body for every 403, since the
- * `kind: 'auth'` failure carries none — a gap already disclosed from four
- * separate call sites (`pages/admin/api/adminSecretsApi.ts`,
- * `adminSchedulesApi.ts`, `adminConfigurationApi.ts`, `adminAppRequestsApi.ts`)
- * and worked around in a fifth (`pages/settings/Secrets.tsx`, which tests
- * `kind === 'http' || kind === 'auth'` for its 403). A 403 now takes the
- * ordinary `kind: 'http'` path with its status and body intact; every consumer
- * of `HttpFailure` already switches exhaustively over both kinds.
- *
- * The redirect sniff is unchanged and still secondary: a forward-auth login
- * redirect is a session failure whatever status it carries.
- */
-function needsReauth(response: Response): boolean {
-  if (response.status === 401) return true;
-  return response.redirected && isAuthRedirect(response.url);
-}
-
-/* ── behaviour 2b: resource-authorization 401s are NOT session failures ──── */
-
-/**
- * A 401 whose JSON body carries `requires_authorization: true` is a protocol
- * response about the RESOURCE, not about the caller's session: the backend is
- * saying "this toolkit/MCP server needs its own OAuth authorization", and the
- * body's `auth_metadata` is the authorization-server metadata the client needs
- * to start that flow (`POST /configurations/check_connection/...` is the live
- * example). Re-authenticating the user changes nothing about it, and — the
- * reason this exists — funnelling it into the `kind: 'auth'` branch DISCARDS
- * the body, which is the only place `auth_metadata` ever appears.
- *
- * That discard is what made SharePoint's delegated login unreachable even
- * once its UI was wired: `useSharepointCheckConnection`'s
- * `authRequiredErrorData` looks for exactly this body and could never see
- * one, so the OAuth modal was never asked to open. `features/agents/model/
- * useCreateConfiguration.ts`'s `isAuthRequiredError` disclosed the same gap
- * from the other side.
- *
- * Deliberately narrow: 401 only, JSON only, and only when the flag is
- * literally `true` — every other 401 keeps the existing re-auth behaviour
- * untouched. Reads a CLONE, so the original response is still
- * consumable by `toResult`.
- */
-async function resourceAuthorizationBody(response: Response): Promise<unknown> {
-  if (response.status !== 401) return undefined;
-  if (!(response.headers.get('content-type') ?? '').includes('application/json')) return undefined;
-  try {
-    const body: unknown = await response.clone().json();
-    if (typeof body === 'object' && body !== null && (body as { readonly requires_authorization?: unknown }).requires_authorization === true) {
-      return body;
-    }
-  } catch {
-    // Handled (§3.6): a 401 that lies about its content-type is just a 401 —
-    // fall through to the normal re-auth path.
-  }
-  return undefined;
 }
 
 /* ── request assembly ────────────────────────────────────────────────────── */
@@ -321,6 +256,40 @@ async function toResult<T>(response: Response): Promise<HttpResult<T>> {
   return { ok: true, status: response.status, data: body as T, headers: response.headers };
 }
 
+/**
+ * The refusal an EXPIRED session becomes, or `undefined` when this 401 is not
+ * that answer.
+ *
+ * It is checked BEFORE the re-auth escalation because the two are different
+ * answers: a re-auth popup is a recovery attempt, and this is the server
+ * telling the shell there is nothing to recover. Only a client that configured
+ * `onSessionExpired` reaches it, so no peripheral call can navigate.
+ */
+async function expiredSessionRefusal<T>(
+  cfg: HttpConfig,
+  response: Response,
+): Promise<HttpResult<T> | undefined> {
+  if (cfg.onSessionExpired === undefined) return undefined;
+  const loginUrl = await sessionExpiredLoginUrl(response);
+  if (loginUrl === undefined) return undefined;
+  cfg.onSessionExpired(loginUrl);
+  return failure({ kind: 'auth', status: response.status, url: response.url });
+}
+
+/**
+ * The failure a 401 that survived re-authentication becomes.
+ *
+ * A resource-authorization 401 keeps its BODY, because `auth_metadata` appears
+ * nowhere else; every other one is a session failure with no body to keep.
+ */
+async function authRefusal<T>(response: Response): Promise<HttpResult<T>> {
+  const resourceAuth = await resourceAuthorizationBody(response);
+  if (resourceAuth !== undefined) {
+    return failure({ kind: 'http', status: response.status, url: response.url, body: resourceAuth });
+  }
+  return failure({ kind: 'auth', status: response.status, url: response.url });
+}
+
 /* ── factory ─────────────────────────────────────────────────────────────── */
 
 export function createHttpClient(cfg: HttpConfig): HttpClient {
@@ -356,6 +325,10 @@ export function createHttpClient(cfg: HttpConfig): HttpClient {
       return fromException<T>(cause, url);
     }
 
+    // Behaviour 2c: the server stated that this SESSION expired.
+    const expired = await expiredSessionRefusal<T>(cfg, response);
+    if (expired !== undefined) return expired;
+
     if (needsReauth(response) && options.background !== true) {
       // Behaviour 2b first: a resource-authorization 401 is not a session
       // failure — surface its body instead of burning it on a re-auth.
@@ -374,13 +347,7 @@ export function createHttpClient(cfg: HttpConfig): HttpClient {
       } catch (cause) {
         return fromException<T>(cause, url);
       }
-      if (needsReauth(response)) {
-        const replayResourceAuth = await resourceAuthorizationBody(response);
-        if (replayResourceAuth !== undefined) {
-          return failure({ kind: 'http', status: response.status, url: response.url, body: replayResourceAuth });
-        }
-        return failure({ kind: 'auth', status: response.status, url: response.url });
-      }
+      if (needsReauth(response)) return authRefusal<T>(response);
     }
 
     return toResult<T>(response);
