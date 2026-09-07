@@ -55,7 +55,10 @@ const theme = buildEliteaTheme(DEFAULT_BRAND_PACK);
 // which do not structurally match THIS call's specific route-tree
 // instantiation under `exactOptionalPropertyTypes` — letting TS infer the
 // precise type from the function body avoids that mismatch.
-export async function renderWithNavigation(ui: ReactNode, options?: { initialPath?: string }) {
+export async function renderWithNavigation(
+  ui: ReactNode,
+  options?: { initialPath?: string; queryClient?: QueryClient },
+) {
   const initialPath = options?.initialPath ?? '/';
   const rootRoute = createRootRoute({ component: () => <Outlet /> });
   const homeRoute = createRoute({
@@ -79,7 +82,17 @@ export async function renderWithNavigation(ui: ReactNode, options?: { initialPat
   });
   await router.load();
 
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  /*
+   * `options.queryClient` lets a test hand in a client whose cache is ALREADY
+   * populated. That is the only way to reproduce a shell that mounts with both
+   * of its lists already answered — a remount, not a cold page load — which is
+   * the exact condition under which AppShell's auto-select effect and the
+   * hydration effect run in the same passive-effect flush. A client created
+   * here is empty by construction, so a test using it can only ever exercise
+   * the cold path.
+   */
+  const queryClient =
+    options?.queryClient ?? new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
   const result = render(
     <ThemeProvider

@@ -1,8 +1,11 @@
+import { QueryClient } from '@tanstack/react-query';
 import { screen, waitFor } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { getListProjectsQueryKey } from '@/shared/api/generated/applications/applications';
 import { getListProjectsMockHandler } from '@/shared/api/generated/applications/applications.msw';
+import { getGetCurrentAuthorQueryKey } from '@/shared/api/generated/social/social';
 import { getPermissionListMockHandler } from '@/shared/api/generated/auth/auth.msw';
 import { getGetCurrentAuthorMockHandler } from '@/shared/api/generated/social/social.msw';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
@@ -55,6 +58,39 @@ function projectRow(id: number, name: string) {
  */
 function reservedNamePersonalProjectHandler() {
   return getListProjectsMockHandler([projectRow(11, 'Public'), projectRow(2, 'project_user_3')]);
+}
+
+/**
+ * A client whose cache ALREADY holds the two answers the shell is built from,
+ * so the shell's first commit has both — the remount shape, not the cold-load
+ * shape. `eliteaFetch` resolves the `{data, status, headers}` envelope
+ * (`shared/api/generated/mutator.ts`), which is what both hooks read through,
+ * so the seeded value has to be that envelope and not the bare body.
+ *
+ * The personal project (99) is in the list under pylon's reserved storage
+ * name, so `orderedProjectOptions` renames it to the user-facing "Private" —
+ * the name the auto-select effect then persists.
+ */
+function warmQueryClient(): QueryClient {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  client.setQueryData(getGetCurrentAuthorQueryKey(), {
+    data: {
+      id: 'user-1',
+      name: 'Test User',
+      email: 'test@example.com',
+      avatar: '',
+      description: '',
+      personal_project_id: '99',
+    },
+    status: 200,
+    headers: new Headers(),
+  });
+  client.setQueryData(getListProjectsQueryKey(11), {
+    data: [projectRow(11, 'Public'), projectRow(2, 'Acme'), projectRow(99, 'project_user_3')],
+    status: 200,
+    headers: new Headers(),
+  });
+  return client;
 }
 
 beforeEach(() => {
@@ -312,6 +348,83 @@ describe('AppShell', () => {
     );
     await waitFor(() => {
       expect(useSelectedProjectStore.getState().project).toEqual({ id: '2', name: 'Acme' });
+    });
+  });
+
+  /*
+   * THE SAME RULE, ON A SHELL THAT MOUNTS WITH BOTH LISTS ALREADY ANSWERED.
+   *
+   * The test above proves the stored selection wins on a COLD load, where the
+   * author query and the project list are still in flight when the shell first
+   * commits, so the auto-select effect returns early on `projectsLoading` and
+   * only ever sees `project` after the hydration effect's re-render.
+   *
+   * That is not the only way the shell mounts. On a remount — a warm
+   * react-query cache — both lists are answered in the FIRST commit, and the
+   * two effects then run in the same passive-effect flush: hydration reads
+   * `el.project.*` and calls `setProject`, and the auto-select effect, which
+   * was rendered with `project === null` and cannot see that call, ran next.
+   * It selected the personal project over the restored one and overwrote
+   * `el.project.*` with it, so the overwrite survived the reload as well.
+   *
+   * The E2E suite met this as "the persona is in Private, not Default
+   * Project": the storage state names project 1, the persona owns a personal
+   * project since sign-in provisions one, and the journeys that assert a
+   * project-1 screen failed on the project they were photographed in.
+   */
+  it('keeps a stored, still-valid selection when both lists are already answered at mount', async () => {
+    window.localStorage.setItem('el.project.id', '2');
+    window.localStorage.setItem('el.project.name', 'Acme');
+
+    await renderWithNavigation(
+      <AppShell>
+        <div>page content</div>
+      </AppShell>,
+      { queryClient: warmQueryClient() },
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('page content')).toBeInTheDocument();
+    });
+    // Not a one-shot read: the clobber this covers happens in the flush AFTER
+    // the hydration effect, so a value asserted too early passes either way.
+    await waitFor(() => {
+      expect(useSelectedProjectStore.getState().project).toEqual({ id: '2', name: 'Acme' });
+    });
+    expect(useSelectedProjectStore.getState().project).toEqual({ id: '2', name: 'Acme' });
+    // The storage keys are the half that survives a reload, so they are
+    // asserted separately from the store.
+    expect(window.localStorage.getItem('el.project.id')).toBe('2');
+  });
+
+  it('falls back to the personal project when nothing is stored and both lists are already answered', async () => {
+    await renderWithNavigation(
+      <AppShell>
+        <div>page content</div>
+      </AppShell>,
+      { queryClient: warmQueryClient() },
+    );
+
+    await waitFor(() => {
+      expect(useSelectedProjectStore.getState().project).toEqual({ id: '99', name: 'Private' });
+    });
+  });
+
+  it('falls back to the personal project when the stored id is not in the list the server returns', async () => {
+    // A project that was deleted, or that belongs to another deployment: the
+    // id is stored and it names nothing this session can open.
+    window.localStorage.setItem('el.project.id', '4242');
+    window.localStorage.setItem('el.project.name', 'Gone');
+
+    await renderWithNavigation(
+      <AppShell>
+        <div>page content</div>
+      </AppShell>,
+      { queryClient: warmQueryClient() },
+    );
+
+    await waitFor(() => {
+      expect(useSelectedProjectStore.getState().project).toEqual({ id: '99', name: 'Private' });
     });
   });
 
