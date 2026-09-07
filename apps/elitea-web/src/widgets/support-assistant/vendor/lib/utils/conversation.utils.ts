@@ -10,7 +10,24 @@ const toTimestamp = (value: unknown): number => {
 };
 
 const toMessage = (group: TRawMessageGroup): TMessage => {
-  const role = group.sent_to != null ? 'user' : 'assistant';
+  /*
+   * A group ADDRESSED to somebody is a question; a group addressed to nobody is
+   * an answer. That rule is right, and the key it read was wrong.
+   *
+   * The reference's socket.io payload names the field `sent_to`. This
+   * service's REST transcript names it `sent_to_id`
+   * (`repos.ConversationsRepo.ListMessageGroups`), and writes NOTHING under the
+   * short name. So `group.sent_to` was always undefined here and every replayed
+   * message became an assistant message: reopening a conversation rendered the
+   * user's own questions in the answer bubble, with the answers, in one voice.
+   *
+   * Both names are read. The widget's live turns push their own `role` and
+   * never reach this function, which is why the defect survived: it appears
+   * only after a reload or a history switch, and only for a conversation that
+   * already had messages.
+   */
+  const addressedTo = group.sent_to_id ?? group.sent_to;
+  const role = addressedTo != null ? 'user' : 'assistant';
 
   let content = '';
   for (const item of group.message_items ?? []) {

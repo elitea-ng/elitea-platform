@@ -65,7 +65,17 @@ type TRawMessageItem = {
 export type TRawMessageGroup = {
   uuid?: string;
   id?: string;
+  /**
+   * WHO THE GROUP WAS ADDRESSED TO, under BOTH names this widget can meet.
+   *
+   * The reference's socket.io payload carries `sent_to`. This service's REST
+   * transcript carries `sent_to_id` — `ConversationsRepo.ListMessageGroups`
+   * writes that key and never the short one. The vendored reader knew only the
+   * short name, so every replayed message read as an assistant message: a
+   * reopened conversation rendered the user's own questions as answers.
+   */
   sent_to?: unknown;
+  sent_to_id?: unknown;
   message_items?: TRawMessageItem[];
   created_at_ts?: number;
   created_at?: string;

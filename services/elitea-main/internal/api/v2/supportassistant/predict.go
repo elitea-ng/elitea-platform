@@ -27,10 +27,8 @@ package supportassistant
 // that already exist.
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -41,7 +39,6 @@ import (
 	"github.com/google/uuid"
 
 	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
@@ -70,10 +67,6 @@ const maxPredictBody = int64(512 * 1024)
 // composed string is what makes the refusal correspond to something the user
 // can act on.
 const maxAgentUserInput = 256 * 1024
-
-// applicationEntityName is the `chat_participants.entity_name` an agent
-// participant carries, matching what the chat surface writes.
-const applicationEntityName = "application"
 
 // PredictRequest is one question.
 //
@@ -199,10 +192,17 @@ func (h *Handler) Predict(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	participantID, err := h.ensureAgentParticipant(r.Context(), settings, conversationID)
+	// BOTH participants, on every turn — see participants.go. The user row is
+	// what the resolver's author join needs, and the agent row's
+	// entity_settings.version_id is what its application_versions join needs.
+	// A conversation opened before either was written is repaired here.
+	participantID, err := h.ensureTurnParticipants(r.Context(), settings, conversationID, userID)
 	if err != nil {
-		h.logger.Error("support assistant: attach agent participant",
-			"agent_id", settings.AgentID, "err", err)
+		h.logger.Error("support assistant: prepare turn participants",
+			"agent_id", settings.AgentID,
+			"agent_project_id", settings.AgentProject(),
+			"support_project_id", settings.ProjectID,
+			"err", err)
 		apierr.WriteStatus(w, http.StatusServiceUnavailable, "failed to prepare the support agent")
 		return
 	}
@@ -217,7 +217,15 @@ func (h *Handler) Predict(w http.ResponseWriter, r *http.Request) {
 			UserInput:           userInput,
 		})
 	if err != nil {
-		h.logger.Error("support assistant: start turn", "err", err)
+		// `err` now NAMES the precondition the resolver objected to
+		// (agentexecution.UnsupportedCurrentAgentStart). Before that it was one
+		// sentinel for every cause, and this feature spent a release answering
+		// 502 with a log line that said only "not supported by the admitted
+		// parity slice". The body stays generic; the log must not be.
+		h.logger.Error("support assistant: start turn",
+			"conversation_uuid", conversationUUID,
+			"participant_id", participantID,
+			"err", err)
 		apierr.WriteStatus(w, http.StatusBadGateway, "failed to start the support agent")
 		return
 	}
@@ -257,106 +265,6 @@ func (h *Handler) composeUserInput(body PredictRequest) string {
 		return body.Content
 	}
 	return body.Content + "\n\n<support_assistant_context>\n" + string(encoded) + "\n</support_assistant_context>"
-}
-
-// ensureAgentParticipant attaches the configured agent to the conversation and
-// returns its participant id, creating the row only when it is missing.
-func (h *Handler) ensureAgentParticipant(
-	ctx context.Context, settings platformconfig.SupportAssistant, conversationID int64,
-) (int64, error) {
-	projectKey := strconv.FormatInt(settings.ProjectID, 10)
-	conversationKey := strconv.FormatInt(conversationID, 10)
-	agentProject := settings.AgentProject()
-
-	if participantID, found, err := h.findAgentParticipant(
-		ctx, projectKey, conversationKey, settings.AgentID, agentProject,
-	); err != nil {
-		return 0, err
-	} else if found {
-		return participantID, nil
-	}
-
-	if err := h.chat.AddParticipant(ctx, projectKey, conversationKey, map[string]any{
-		"entity_name": applicationEntityName,
-		"entity_meta": map[string]any{
-			"id":         settings.AgentID,
-			"project_id": agentProject,
-		},
-	}); err != nil {
-		return 0, err
-	}
-
-	participantID, found, err := h.findAgentParticipant(
-		ctx, projectKey, conversationKey, settings.AgentID, agentProject)
-	if err != nil {
-		return 0, err
-	}
-	if !found {
-		// The insert reported success and the row is not there. Rather than
-		// starting a turn addressed to participant 0, refuse.
-		return 0, fmt.Errorf("support assistant: agent participant not found after attach")
-	}
-	return participantID, nil
-}
-
-// findAgentParticipant looks for the agent among the conversation's participants.
-//
-// The match is on ENTITY IDENTITY (`application` + agent id + agent project),
-// not on position or on name, because a conversation legitimately holds several
-// participants — the user, the agent, and whatever an operator's repointing has
-// left behind — and picking the wrong one sends the question to a different
-// agent. The comparison goes through `json.Number`-tolerant reads because
-// `entity_meta` is a JSON document whose numbers arrive as float64.
-func (h *Handler) findAgentParticipant(
-	ctx context.Context, projectKey, conversationKey string, agentID, agentProjectID int64,
-) (int64, bool, error) {
-	participants, err := h.chat.ListParticipants(ctx, projectKey, conversationKey)
-	if err != nil {
-		return 0, false, err
-	}
-	for _, participant := range participants {
-		if participant.EntityName != applicationEntityName {
-			continue
-		}
-		if metaInt(participant.EntityMeta, "id") != agentID {
-			continue
-		}
-		// A participant written before an operator set `agent_project_id`
-		// carries no project. It still identifies the same agent in the same
-		// project, so an ABSENT project matches; a DIFFERENT one does not.
-		if project, present := metaIntPresent(participant.EntityMeta, "project_id"); present && project != agentProjectID {
-			continue
-		}
-		return int64(participant.ID), true, nil
-	}
-	return 0, false, nil
-}
-
-func metaInt(meta map[string]any, key string) int64 {
-	value, _ := metaIntPresent(meta, key)
-	return value
-}
-
-func metaIntPresent(meta map[string]any, key string) (int64, bool) {
-	raw, ok := meta[key]
-	if !ok || raw == nil {
-		return 0, false
-	}
-	switch typed := raw.(type) {
-	case float64:
-		return int64(typed), true
-	case int64:
-		return typed, true
-	case int:
-		return int64(typed), true
-	case json.Number:
-		value, err := typed.Int64()
-		return value, err == nil
-	case string:
-		value, err := strconv.ParseInt(typed, 10, 64)
-		return value, err == nil
-	}
-	return 0, false
 }
 
 // validTurnUUID applies the same rule `agentexecution`'s own Validate does —
