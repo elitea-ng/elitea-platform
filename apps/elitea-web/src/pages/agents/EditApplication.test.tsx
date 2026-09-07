@@ -178,7 +178,10 @@ describe('EditApplication', () => {
     server.use(getGetApplicationMockHandler(detail()));
     renderAgentsRoute(<EditApplication />, '/agents/all/42/999', { projectId: '9' });
 
-    expect(await screen.findByText('Version not found')).toBeInTheDocument();
+    // The not-found state renders only after the detail fetch settles and
+    // the version list is resolved; under CI coverage instrumentation that
+    // takes longer than Testing Library's 1 s default (shard 2 on 26ad27cc).
+    expect(await screen.findByText('Version not found', {}, { timeout: 5_000 })).toBeInTheDocument();
   });
 
   it('skips the not-found check when isFromCreation=true', async () => {
@@ -191,7 +194,7 @@ describe('EditApplication', () => {
     // string, which this fixture found does NOT reliably populate
     // `location.search` for a cold `initialEntries` string.
     const { router } = renderAgentsRoute(<EditApplication />, '/agents/all/42/999', { projectId: '9' });
-    await waitFor(() => expect(screen.getByText('Version not found')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Version not found')).toBeInTheDocument(), { timeout: 5_000 });
 
     await router.navigate({
       to: '/agents/$tab/$agentId/$version',
