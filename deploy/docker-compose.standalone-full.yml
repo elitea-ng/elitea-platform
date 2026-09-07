@@ -887,6 +887,34 @@ services:
       # The prototype handler still owns PUT on the same path: the current
       # route registers GET only.
       ELITEA_PROJECT_INFO_ENABLED: "true"
+
+      # ── Current index types (issue #394) ───────────────────────────────────
+      # ON, because the reviewed route is the ONLY handler for this path now.
+      # #394 deleted the prototype fallback from internal/api/router.go, so a
+      # stack that leaves this off answers 404 on
+      # GET /elitea_core/index_types/prompt_lib/{projectID} — a path the
+      # published contract declares (getDocumentLoaders in
+      # services/elitea-main/api/openapi/v2.yaml).
+      #
+      # The route answers ONE body both shipped clients accept: the published
+      # DocumentLoadersResponse keys (items, total) beside the Pylon keys
+      # (document_types, image_types, code_types). Both halves project the same
+      # pinned SDK snapshot, so they cannot disagree.
+      #
+      # It needs an authenticated deployment, which this stack has
+      # (ELITEA_AUTH_CONFIG_FILE above).
+      ELITEA_INDEX_TYPES_ENABLED: "true"
+
+      # ── Current attached skills (issue #395) ───────────────────────────────
+      # ON, for the same reason. #395 deleted the prototype fallback, so the
+      # reviewed route is the only handler for
+      # GET /elitea_core/application_skills/prompt_lib/{projectID}/{appVersionID}.
+      #
+      # It answers only the skills attached to the named agent version, read
+      # from entity_skill_mapping, in the published SkillsList envelope beside
+      # the Pylon keys (skills, max_skills). The web app's skill-mention
+      # dropdowns read the `items` half.
+      ELITEA_APPLICATION_SKILLS_ENABLED: "true"
       # The brand pack's FILE layer (ADR-0024). Empty by default: the stack
       # brands from the admin Branding section (database layer) over the
       # product default. To exercise the file layer, mount a pack into the

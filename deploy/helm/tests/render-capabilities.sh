@@ -147,6 +147,10 @@ EXPECTED
 # the shape that has neither authentication nor a public project id. The
 # OIDC-only render below is its other half: a derivation stuck at "false"
 # would pass here and fail there.
+# ELITEA_INDEX_TYPES_ENABLED and ELITEA_APPLICATION_SKILLS_ENABLED are derived
+# the same way now (#394, #395). values.yaml ships both EMPTY, so this row also
+# proves each derivation reaches "false" for an install with no authentication,
+# and the OIDC-only render below proves it reaches "true" for one that has it.
 for key in ELITEA_CONFIGURATIONS_ENABLED ELITEA_PROJECT_INFO_ENABLED ELITEA_APPLICATION_SKILLS_ENABLED ELITEA_INDEX_TYPES_ENABLED; do
   actual="$(data "$key" "$WORK/default.yaml")"
   if [ "$actual" = "false" ]; then
@@ -179,6 +183,39 @@ if [ "$(data ELITEA_CONFIGURATIONS_ENABLED "$WORK/oidc-only.yaml")" = "true" ]; 
 else
   fail "an OIDC-only install renders ELITEA_CONFIGURATIONS_ENABLED=\"$(data ELITEA_CONFIGURATIONS_ENABLED "$WORK/oidc-only.yaml")\": a deployment with real single sign-on gets no configuration or model-catalogue routes, and must seed its LLM rows with SQL (gap G2)"
 fi
+
+# The index-types and attached-skills capabilities on the SAME OIDC-only shape
+# (#394, #395).
+#
+# Each route is now the ONLY handler for its path: the prototype fallbacks are
+# deleted from internal/api/router.go. A derivation stuck at "false" therefore
+# does not degrade the answer, it removes the path — 404 where the published
+# contract declares a body. This is the row that catches that.
+for key in ELITEA_INDEX_TYPES_ENABLED ELITEA_APPLICATION_SKILLS_ENABLED; do
+  actual="$(data "$key" "$WORK/oidc-only.yaml")"
+  if [ "$actual" = "true" ]; then
+    pass "an OIDC-only install renders $key=\"true\""
+  else
+    fail "an OIDC-only install renders $key=\"$actual\": the reviewed route is the only handler for its path, so the deployment answers 404 where the published contract declares a body"
+  fi
+done
+
+# The operator's stated value still wins over the derivation, for these two as
+# well. A capability that cannot be turned off is not configurable.
+for key in ELITEA_INDEX_TYPES_ENABLED ELITEA_APPLICATION_SKILLS_ENABLED; do
+  helm template ${GATEWAY_RENDER_POSTURE} ${ONLY_MAIN} test-release "$CHART" \
+    --set-string main.env.OIDC_ISSUER_URL=https://sso.render-only.example.invalid \
+    --set-string main.env.ELITEA_AI_PROJECT_ID=1 \
+    --set-string main.env.DEPLOYMENT_URL=https://render-only.example.invalid \
+    --set-string "main.env.$key=false" \
+    >"$WORK/oidc-capability-off.yaml"
+  actual="$(data "$key" "$WORK/oidc-capability-off.yaml")"
+  if [ "$actual" = "false" ]; then
+    pass "a stated $key=false overrides the derivation"
+  else
+    fail "a stated $key=false renders \"$actual\": the operator cannot turn the capability off"
+  fi
+done
 
 # The operator's stated value still wins over the derivation, in BOTH
 # directions. Without this, "derived" would quietly mean "not configurable".

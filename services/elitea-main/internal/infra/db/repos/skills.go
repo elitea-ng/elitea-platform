@@ -133,71 +133,16 @@ func (r *SkillsRepo) List(ctx context.Context, projectID string, params skills.L
 	}, nil
 }
 
-// ListForApplicationVersion returns the skills attached to ONE agent version.
+// NOTE(#395): `func (r *SkillsRepo) ListForApplicationVersion` stood here. It
+// read entity_skill_mapping for one agent version and served
+// GET /elitea_core/application_skills/{mode}/{projectID}/{appVersionID}, the
+// PROTOTYPE fallback that #395 deleted.
 //
-// GET /elitea_core/application_skills/{mode}/{projectID}/{appVersionID} used to
-// answer with SkillsRepo.List, which reads projectID and ignores appVersionID
-// entirely — so opening any agent version listed every skill in the project, at
-// 200, with nothing to tell a caller the answer was for the wrong question
-// (#367). entity_skill_mapping is the table that holds the attachment, and the
-// same rows drive agent execution (internal/db/sqlcgen/agent_chat.sql.go), so
-// the screen and the run disagreed.
-//
-// It deliberately does NOT swallow a query failure into an empty list the way
-// List above does. An empty list is a valid answer here — an agent version with
-// no skills attached — so returning one on error would report "this version has
-// no skills" when the truth is "the question was not answered". The caller gets
-// the error and answers 500.
-func (r *SkillsRepo) ListForApplicationVersion(
-	ctx context.Context,
-	projectID string,
-	appVersionID string,
-) (skills.ListResponse, error) {
-	s := schema(projectID)
-
-	// The mapping JOIN is an INNER join, so unattached skills cannot appear.
-	// entity_type is filtered because the same table maps skills to entities
-	// other than agents; without it a version id that collides with, say, a
-	// pipeline version id would contribute rows.
-	q := fmt.Sprintf(`SELECT %s %s
-		JOIN %s.entity_skill_mapping esm ON esm.skill_id = sk.id
-		WHERE esm.entity_version_id = $1 AND esm.entity_type = 'agent'
-		GROUP BY sk.id, sv.id ORDER BY sk.name ASC`,
-		skillsSelectColumns, skillsFromJoin(s), s)
-
-	rows, err := r.pool.Query(ctx, q, appVersionID)
-	if err != nil {
-		return skills.ListResponse{}, fmt.Errorf("skills: list for application version: %w", err)
-	}
-	defer rows.Close()
-
-	items := []skills.Skill{}
-	for rows.Next() {
-		sk, scanErr := scanSkillRow(rows, projectID)
-		if scanErr != nil {
-			return skills.ListResponse{}, fmt.Errorf("skills: scan application version skill: %w", scanErr)
-		}
-		items = append(items, sk)
-	}
-	if err := rows.Err(); err != nil {
-		return skills.ListResponse{}, fmt.Errorf("skills: iterate application version skills: %w", err)
-	}
-
-	// The attached set is small and bounded, and the caller asks for one
-	// version, so it is returned whole. The envelope keeps the SkillsList
-	// shape every current client already parses; only its contents change.
-	totalPages := 0
-	if len(items) > 0 {
-		totalPages = 1
-	}
-	return skills.ListResponse{
-		Items:      items,
-		Total:      len(items),
-		Page:       1,
-		PageSize:   len(items),
-		TotalPages: totalPages,
-	}, nil
-}
+// internal/api/v2/applicationskills owns that read now. Its repository runs
+// the same join through a transaction-local tenant search_path and is covered
+// by TestCurrentApplicationSkillsRoutePostgresContractAndTenantIsolation, so
+// the version-scoping guarantee #367 asked for is still measured — on the
+// route that answers.
 
 // AttachSkill writes one entity_skill_mapping row.
 //

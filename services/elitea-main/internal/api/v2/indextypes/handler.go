@@ -157,8 +157,22 @@ func NewCurrentIndexTypesRoute(
 	authConfig apimw.AuthConfig,
 	permissions auth.PermissionResolver,
 ) (*CurrentIndexTypesRoute, error) {
-	if reader == nil || authConfig.PrincipalValidator == nil ||
-		authConfig.ForwardedIdentityVerifier == nil || permissions == nil {
+	// ForwardedIdentityVerifier is OPTIONAL, PrincipalValidator is not.
+	//
+	// The verifier proves that an X-Auth-* request arrived over the
+	// header-stripping ingress; only the Form plane builds one. An OIDC or SAML
+	// install authenticates the same caller through a session cookie or a
+	// bearer token, and apimw.Auth reads those without a verifier. Demanding it
+	// here refused the whole capability to every install that has no Form
+	// authentication document — and this route is the ONLY handler for its path
+	// now that the prototype fallback is deleted (#394), so the refusal became
+	// a 404 on a path the published contract declares.
+	//
+	// PrincipalValidator stays mandatory: without it a deactivated user's
+	// unexpired credential still passes, because RBAC rows survive deactivation
+	// (#301, #314, #370). internal/api/v2/projects/production.go states the same
+	// split for the same reason.
+	if reader == nil || authConfig.PrincipalValidator == nil || permissions == nil {
 		return nil, ErrInvalidCurrentIndexTypesRoute
 	}
 

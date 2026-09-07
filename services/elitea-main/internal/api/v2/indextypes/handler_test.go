@@ -408,7 +408,6 @@ func TestCurrentIndexTypesRouteRejectsIncompleteComposition(t *testing.T) {
 	}{
 		"missing reader":      {authConfig: authConfig, permissions: permissions},
 		"missing principal":   {reader: reader, authConfig: apimw.AuthConfig{ForwardedIdentityVerifier: peer}, permissions: permissions},
-		"missing peer proof":  {reader: reader, authConfig: apimw.AuthConfig{PrincipalValidator: principal}, permissions: permissions},
 		"missing permissions": {reader: reader, authConfig: authConfig},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -421,6 +420,26 @@ func TestCurrentIndexTypesRouteRejectsIncompleteComposition(t *testing.T) {
 			}
 		})
 	}
+
+	// NOTE(#394): "missing peer proof" stood in the table above. A missing
+	// ForwardedIdentityVerifier is no longer an incomplete composition: it is
+	// the shape an OIDC or SAML install has, and apimw.Auth authenticates that
+	// caller through the session cookie or the bearer token. The route is
+	// composed, and TestCurrentIndexTypesRouteComposesWithoutAPeerVerifier
+	// below proves it. PrincipalValidator stays mandatory, one row above.
+	t.Run("composes without a peer verifier", func(t *testing.T) {
+		route, err := handler.NewCurrentIndexTypesRoute(
+			reader,
+			apimw.AuthConfig{PrincipalValidator: principal},
+			permissions,
+		)
+		if err != nil {
+			t.Fatalf("an OIDC-only composition was refused: %v", err)
+		}
+		if route == nil {
+			t.Fatal("an OIDC-only composition returned no route")
+		}
+	})
 
 	var nilRoute *handler.CurrentIndexTypesRoute
 	response := httptest.NewRecorder()

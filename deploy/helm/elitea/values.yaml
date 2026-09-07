@@ -769,42 +769,32 @@ main:
     # fails, several layers away from anything that names a vault.
     ELITEA_VAULT_MASTER_KEY_FILE: ""
 
-    # --- Capabilities OFF in a DEFAULT install ---------------------------------
-    # ELITEA_INDEX_TYPES_ENABLED no longer has a contract problem (#394): the
-    # index-types read answers the published DocumentLoadersResponse keys
-    # (items, total) beside the Pylon keys (document_types, image_types,
-    # code_types), so both shipped clients accept the body.
+    # --- Capabilities DERIVED from this deployment -----------------------------
+    # ELITEA_INDEX_TYPES_ENABLED and ELITEA_APPLICATION_SKILLS_ENABLED are EMPTY
+    # here, and empty means "follow this deployment". The ConfigMap fills each
+    # one from elitea-main.indexTypesEnabled / elitea-main.applicationSkillsEnabled:
+    # "true" when the install authenticates (Form document or OIDC issuer),
+    # "false" when it does not. A value stated here always wins.
     #
-    # It stays "false" HERE for the same reason ELITEA_CONFIGURATIONS_ENABLED,
-    # ELITEA_PROJECT_INFO_ENABLED and ELITEA_APPLICATION_SKILLS_ENABLED do: the
-    # capability needs production authentication, this default install builds
-    # none, and cmd/elitea-main refuses to start without it.
-    # values-standalone.yaml turns it on, together with
-    # fileConfig.authConfig.enabled.
+    # Neither flag has a contract problem any more. The index-types read answers
+    # the published DocumentLoadersResponse keys (items, total) beside the Pylon
+    # keys (document_types, image_types, code_types). The attached-skills read
+    # answers the published SkillsList keys (items, total, page, page_size,
+    # total_pages) beside the Pylon keys (skills, max_skills). Both shipped
+    # clients accept one body (#394, #395).
     #
-    # OFF is a real gap here, unlike the skills flag above. internal/api/
-    # router.go serves this path from the toolkits handler in that case, and
-    # that handler REFUSES: 501 with `code: index_types_not_available`. It used
-    # to answer 200 with a static six-loader list that no data backs, which is
-    # worse than the refusal — a client cannot tell an invented catalogue from
-    # a real one, and nothing on the screen looks broken. Turn production
-    # authentication on to close the gap.
-    ELITEA_INDEX_TYPES_ENABLED: "false"
-
-    # ELITEA_APPLICATION_SKILLS_ENABLED no longer has a contract problem (#395):
-    # the attached-skills read answers the published SkillsList keys beside the
-    # Pylon ones, so both shipped clients accept the body.
+    # These used to ship "false", and that is no longer a safe default. #394 and
+    # #395 deleted the prototype fallbacks from internal/api/router.go, so each
+    # reviewed route is the ONLY handler for its path. "false" is a 404 on a path
+    # the published contract declares, not a degraded answer.
     #
-    # It stays "false" HERE for the same reason ELITEA_CONFIGURATIONS_ENABLED and
-    # ELITEA_PROJECT_INFO_ENABLED do: the capability needs production
-    # authentication, this default install builds none, and cmd/elitea-main
-    # refuses to start without it. values-standalone.yaml turns it on, together
-    # with fileConfig.authConfig.enabled.
-    #
-    # OFF is not a gap. internal/api/router.go serves this path from the skills
-    # handler in that case, and answers the same rows in the same published
-    # envelope.
-    ELITEA_APPLICATION_SKILLS_ENABLED: "false"
+    # A literal "true" is equally wrong here: the default values file builds no
+    # authentication, and cmd/elitea-main refuses to start with
+    # "ELITEA_INDEX_TYPES_ENABLED requires an authenticated deployment".
+    # elitea-main.validateCapabilities refuses the same pair while the chart
+    # renders, so an operator reads the reason on the terminal.
+    ELITEA_INDEX_TYPES_ENABLED: ""
+    ELITEA_APPLICATION_SKILLS_ENABLED: ""
 
     # --- Project event stream (#152) -------------------------------------------
     # Transport for GET /api/v2/events/prompt_lib/{projectID}. The router has a

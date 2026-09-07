@@ -786,51 +786,23 @@ func (h *Handler) IndexMetaGet(w http.ResponseWriter, r *http.Request) {
 // They used to be three one-line stubs here that answered `{"ok":true}`/204
 // without touching the database (#180).
 
-// IndexTypes REFUSES. It is reachable only when ELITEA_INDEX_TYPES_ENABLED is
-// off, which is the default.
+// NOTE(#394): `func (h *Handler) IndexTypes` stood here, mounted at
+// GET /index_types/prompt_lib/{projectID} in internal/api/router.go.
 //
-// # WHY THERE IS NOTHING TO SERVE HERE
-//
-// This used to be a six-element slice written by hand — file_loader,
-// web_loader, confluence_loader, github_loader, jira_loader, s3_loader — each
-// with an invented display name, an invented description and an invented
+// It was the PROTOTYPE catalogue. It began as a six-element slice written by
+// hand — file_loader, web_loader, confluence_loader, github_loader,
+// jira_loader, s3_loader — each with an invented display name, description and
 // `supported_extensions` list. Nothing produced those values: no SDK, no
-// snapshot, no database, no configuration. They were a guess at what the real
-// catalogue might contain, served with a 200 and no marker of any kind.
+// snapshot, no database, no configuration. #367 replaced the wrong 200 with a
+// 501 refusal, and #394 deletes the refusal with the route.
 //
-// The real catalogue is internal/api/v2/indextypes, which answers from the
-// snapshot pinned out of the SDK
-// (elitea_sdk/runtime/langchain/document_loaders/constants.py, materialized as
+// internal/api/v2/indextypes answers this path now, from the snapshot pinned
+// out of the SDK (elitea_sdk/runtime/langchain/document_loaders/constants.py,
+// materialized as
 // internal/runtimecomposition/current_index_types_snapshot.json). It is a
-// strict superset in content AND a different shape — document/image/code
+// strict superset in content and a different shape — document/image/code
 // extension maps rather than a loader list — so the guess was not even a
 // subset a client could safely narrow to.
-//
-// A wrong 200 costs more than a refusal here: the caller uses
-// `supported_extensions` to decide which files may be indexed, so an invented
-// list both hides files this deployment could have handled and offers ones it
-// cannot, with nothing on the screen saying the list came from nowhere.
-//
-// When ELITEA_INDEX_TYPES_ENABLED is on, cmd/elitea-main composes
-// indextypes.CurrentIndexTypesRoute and internal/api/production_router.go
-// registers it at this exact path. chi resolves that explicitly registered
-// path ahead of the nested r.Route registration this handler sits behind, so
-// the real route wins and this function is never reached there.
-//
-// 501 with a machine-readable `code`, not 500, for the reason
-// internal/api/v2/analytics/handler.go:64-78 sets out at length: an absent
-// producer is the server's final answer and will be the final answer to the
-// next identical request too, so a client that treats 5xx as transient doubles
-// every request for nothing. apps/elitea-web/src/app/providers/queryClient.ts
-// classifies 501 as final (`isFinalClientAnswer`) and does not retry it.
-func (h *Handler) IndexTypes(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusNotImplemented, map[string]any{
-		"error": "index types are not available on this deployment",
-		"code":  "index_types_not_available",
-		"detail": "the index-type catalogue is served by the reviewed index-types " +
-			"route, which this deployment has not enabled (ELITEA_INDEX_TYPES_ENABLED)",
-	})
-}
 
 // List returns all toolkit instances for a project.
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
@@ -1371,11 +1343,12 @@ func redactSettings(value any) any {
 	}
 }
 
+// isSensitiveSettingKey delegates to the word-based classifier in
+// secret_settings_key.go. It used to match by SUBSTRING, which removed
+// `max_tokens` and `toolkit_configuration_max_tokens` from every toolkit read
+// (#705). Read that file before changing this rule.
 func isSensitiveSettingKey(key string) bool {
-	key = strings.ToLower(key)
-	return strings.Contains(key, "secret") || strings.Contains(key, "token") ||
-		strings.Contains(key, "password") || strings.Contains(key, "credential") ||
-		strings.Contains(key, "api_key") || strings.Contains(key, "apikey")
+	return IsSecretSettingKey(key)
 }
 
 // tenantOwnerID converts a tenant project id into the integer written to the

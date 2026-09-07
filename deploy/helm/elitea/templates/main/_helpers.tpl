@@ -90,6 +90,51 @@ false
 {{- end -}}
 
 {{/*
+elitea-main.indexTypesEnabled — the EFFECTIVE ELITEA_INDEX_TYPES_ENABLED.
+elitea-main.applicationSkillsEnabled — the same, for the attached-skills read.
+
+Both follow elitea-main.configurationsEnabled: an operator's stated value
+always wins, values.yaml ships the key EMPTY, and empty means "follow this
+deployment". The capability comes on when the install authenticates, and stays
+off otherwise.
+
+Why they must DERIVE and not stay a literal "false" (issues #394 and #395):
+each route is now the ONLY handler for its path. The prototype fallbacks in
+internal/api/router.go are deleted, so a shipped "false" is not a safe default
+any more — it is a 404 on a path the published contract declares. A literal
+"true" is equally wrong: the default values file has no authentication, and
+cmd/elitea-main refuses to start without one.
+
+The predicate is elitea-main.authenticationComposed, the same one the
+Configurations plane uses, because the composition root now asks
+productionAuthenticationComposed for these two capabilities as well. Form and
+single sign-on both satisfy it; an install with neither does not.
+*/}}
+{{- define "elitea-main.indexTypesEnabled" -}}
+{{- $env := .Values.main.env | default dict -}}
+{{- $stated := get $env "ELITEA_INDEX_TYPES_ENABLED" | toString -}}
+{{- if $stated -}}
+{{- $stated -}}
+{{- else if eq (include "elitea-main.authenticationComposed" .) "true" -}}
+true
+{{- else -}}
+false
+{{- end -}}
+{{- end -}}
+
+{{- define "elitea-main.applicationSkillsEnabled" -}}
+{{- $env := .Values.main.env | default dict -}}
+{{- $stated := get $env "ELITEA_APPLICATION_SKILLS_ENABLED" | toString -}}
+{{- if $stated -}}
+{{- $stated -}}
+{{- else if eq (include "elitea-main.authenticationComposed" .) "true" -}}
+true
+{{- else -}}
+false
+{{- end -}}
+{{- end -}}
+
+{{/*
 elitea-main.validateCapabilities — issue #382.
 
 The composition root gates whole capabilities on environment variables, and it
@@ -156,19 +201,29 @@ because it passes a manifest the binary then rejects.
 {{- end -}}
 
 {{/*
-  Same refusal again, for two more capabilities that need production
-  authentication.
-  Issues #394 and #395 landed the contract work, so neither capability is dark
-  any more. values-standalone.yaml turns both on, together with
-  fileConfig.authConfig.enabled. values.yaml keeps both "false", because the
-  default install builds no production authentication.
-  Keep this refusal. It is what makes an operator's edit fail while the chart
-  renders, instead of at pod start.
+  Same refusal again, for two more capabilities that need an authenticated
+  deployment.
+
+  The check used to ask for fileConfig.authConfig — the Form authentication
+  DOCUMENT — because the composition root tested the FormGraph. #394 and #395
+  changed that test to productionAuthenticationComposed, for the reason gap G2
+  gives above: OIDC and SAML authenticate the same caller and build no
+  FormGraph. So this asks for SOME authentication, through the same helper the
+  Configurations plane uses.
+
+  Both values are DERIVED when the operator states nothing. Reading the helper
+  rather than the raw env key is what makes the check see a derived "true":
+  reading the map would let a derived capability start with no authentication
+  and fail at pod start instead of here.
+
+  A deployment with NEITHER plane is still refused, in the chart and in the
+  binary.
 */}}
-{{- range $name := list "ELITEA_INDEX_TYPES_ENABLED" "ELITEA_APPLICATION_SKILLS_ENABLED" -}}
-{{- if eq (get $env $name | toString) "true" -}}
-{{- if not $.Values.main.fileConfig.authConfig.enabled -}}
-{{- fail (printf "env.%s=\"true\" needs production authentication. Set fileConfig.authConfig.enabled=true and point fileConfig.authConfig.configMapName at an auth configuration ConfigMap." $name) -}}
+{{- $capabilityGates := dict "ELITEA_INDEX_TYPES_ENABLED" (include "elitea-main.indexTypesEnabled" .) "ELITEA_APPLICATION_SKILLS_ENABLED" (include "elitea-main.applicationSkillsEnabled" .) -}}
+{{- range $name, $effective := $capabilityGates -}}
+{{- if eq $effective "true" -}}
+{{- if ne (include "elitea-main.authenticationComposed" $) "true" -}}
+{{- fail (printf "env.%s=\"true\" needs an authenticated deployment. Set fileConfig.authConfig.enabled=true and point fileConfig.authConfig.configMapName at an auth configuration ConfigMap, OR set env.OIDC_ISSUER_URL for a single-sign-on install. Without either, cmd/elitea-main refuses to start." $name) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

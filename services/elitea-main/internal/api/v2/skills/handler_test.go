@@ -8,7 +8,6 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -30,14 +29,6 @@ type mockSkillRepo struct {
 	// through from the HTTP layer.
 	lastListParams handler.ListParams
 
-	// attached maps an agent version id to the skills attached to it, so a
-	// test can tell "the handler read {appVersionID}" apart from "the handler
-	// returned the whole project and happened to look right".
-	attached map[string][]handler.Skill
-	// lastAppVersionID records what ListForApplicationVersion was asked for.
-	// The bug in #367 was a handler that never asked at all.
-	lastAppVersionID string
-
 	// attachCalls/detachCalls record the relation writes, and updateCalls
 	// records the plain skill updates, so a test can prove which of the two
 	// operations the overloaded PATCH selected (#38).
@@ -46,32 +37,6 @@ type mockSkillRepo struct {
 	updateCalls int
 	// relationErr is the error AttachSkill and DetachSkill return.
 	relationErr error
-}
-
-func (m *mockSkillRepo) ListForApplicationVersion(
-	_ context.Context,
-	_ string,
-	appVersionID string,
-) (handler.ListResponse, error) {
-	m.lastAppVersionID = appVersionID
-	if m.err != nil {
-		return handler.ListResponse{}, m.err
-	}
-	items := m.attached[appVersionID]
-	if items == nil {
-		items = []handler.Skill{}
-	}
-	totalPages := 0
-	if len(items) > 0 {
-		totalPages = 1
-	}
-	return handler.ListResponse{
-		Items:      items,
-		Total:      len(items),
-		Page:       1,
-		PageSize:   len(items),
-		TotalPages: totalPages,
-	}, nil
 }
 
 func (m *mockSkillRepo) List(_ context.Context, _ string, params handler.ListParams) (handler.ListResponse, error) {
@@ -854,107 +819,16 @@ func TestGenerateSkillDraft_PredictorError(t *testing.T) {
 	}
 }
 
-// ---- ListForApplication -----------------------------------------------------
-
-// TestSkillListForApplication_ReturnsOnlyThatVersionsSkills is the HTTP-level
-// half of #367's acceptance test.
+// NOTE(#395): three ListForApplication tests stood here —
+// _ReturnsOnlyThatVersionsSkills, _RefusesAMalformedVersionID and
+// _FailsLoudlyOnRepositoryError. They covered the PROTOTYPE fallback for
+// GET /application_skills/{mode}/{projectID}/{appVersionID}, which #395
+// deleted.
 //
-// The mock separates the two questions on purpose: List answers with all three
-// project skills, ListForApplicationVersion answers with the two attached to
-// version 42. Both produce a 200 and the same envelope, so the ONLY thing that
-// distinguishes the fixed handler from the one this route used to point at is
-// which skills come back. Re-point the route at List and this test reports
-// three items where it wants two.
-func TestSkillListForApplication_ReturnsOnlyThatVersionsSkills(t *testing.T) {
-	repo := &mockSkillRepo{
-		skills: []handler.Skill{
-			{ID: "s-1", ProjectID: "proj-1", Name: "Reviewer", Type: "tool"},
-			{ID: "s-2", ProjectID: "proj-1", Name: "Summarizer", Type: "tool"},
-			{ID: "s-3", ProjectID: "proj-1", Name: "Translator", Type: "tool"},
-		},
-		attached: map[string][]handler.Skill{
-			"42": {
-				{ID: "s-1", ProjectID: "proj-1", Name: "Reviewer", Type: "tool"},
-				{ID: "s-2", ProjectID: "proj-1", Name: "Summarizer", Type: "tool"},
-			},
-		},
-	}
-
-	r := chi.NewRouter()
-	r.Get("/application_skills/{mode}/{projectID}/{appVersionID}", handler.NewHandler(repo).ListForApplication)
-
-	req := httptest.NewRequest(http.MethodGet, "/application_skills/prompt_lib/proj-1/42", nil)
-	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
-	}
-	var resp handler.ListResponse
-	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-
-	var names []string
-	for _, item := range resp.Items {
-		names = append(names, item.Name)
-	}
-	want := []string{"Reviewer", "Summarizer"}
-	if !reflect.DeepEqual(names, want) {
-		t.Errorf("skills = %v, want %v — the handler answered for the project, not for version 42", names, want)
-	}
-	if repo.lastAppVersionID != "42" {
-		t.Errorf("repository was asked for app version %q, want %q — the path parameter was not read",
-			repo.lastAppVersionID, "42")
-	}
-}
-
-// A version id the route cannot mean is refused, not answered. Returning an
-// empty list here would be indistinguishable from "this version has no
-// skills", which is the class of silent wrong answer #367 is about.
-func TestSkillListForApplication_RefusesAMalformedVersionID(t *testing.T) {
-	for _, appVersionID := range []string{"abc", "0", "000", "-1", "1x"} {
-		t.Run(appVersionID, func(t *testing.T) {
-			repo := &mockSkillRepo{
-				skills: []handler.Skill{{ID: "s-1", ProjectID: "proj-1", Name: "Reviewer", Type: "tool"}},
-			}
-			r := chi.NewRouter()
-			r.Get("/application_skills/{mode}/{projectID}/{appVersionID}", handler.NewHandler(repo).ListForApplication)
-
-			req := httptest.NewRequest(http.MethodGet, "/application_skills/prompt_lib/proj-1/"+appVersionID, nil)
-			rec := httptest.NewRecorder()
-			r.ServeHTTP(rec, req)
-
-			if rec.Code != http.StatusBadRequest {
-				t.Errorf("expected 400 for app version %q, got %d; body: %s",
-					appVersionID, rec.Code, rec.Body.String())
-			}
-			if repo.lastAppVersionID != "" {
-				t.Errorf("repository was queried with %q; a malformed id must not reach it", repo.lastAppVersionID)
-			}
-		})
-	}
-}
-
-// A repository failure is a 500, never an empty list. SkillsRepo.List swallows
-// query errors into an empty page; repeating that here would report "this
-// version has no skills" whenever the database is unreachable.
-func TestSkillListForApplication_FailsLoudlyOnRepositoryError(t *testing.T) {
-	repo := &mockSkillRepo{err: errors.New("boom")}
-	r := chi.NewRouter()
-	r.Get("/application_skills/{mode}/{projectID}/{appVersionID}", handler.NewHandler(repo).ListForApplication)
-
-	req := httptest.NewRequest(http.MethodGet, "/application_skills/prompt_lib/proj-1/42", nil)
-	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("expected 500, got %d; body: %s", rec.Code, rec.Body.String())
-	}
-	if strings.Contains(rec.Body.String(), `"items"`) {
-		t.Errorf("failure body looks like a skills list: %s", rec.Body.String())
-	}
-}
+// internal/api/v2/applicationskills answers that path now, and its own suite
+// keeps all three guarantees: TestCurrentApplicationSkillsRoutePostgresContractAndTenantIsolation
+// proves the answer is scoped to ONE agent version against a real database,
+// and its handler tests cover a malformed id and a repository failure.
 
 // ---- Relation PATCH (#38) ----------------------------------------------------
 
