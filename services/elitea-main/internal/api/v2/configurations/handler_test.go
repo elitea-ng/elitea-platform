@@ -1075,8 +1075,26 @@ func TestTTSVoicesReportsTheMissingCapability(t *testing.T) {
 		if reason == "" {
 			t.Fatalf("%s: the refusal names no reason: %v", path, body)
 		}
-		if !strings.Contains(reason, "audio route") {
-			t.Errorf("%s: the reason does not say why the voices are missing: %q", path, reason)
+		// The reason must name the capability that is MISSING, and the
+		// substring is chosen so the retired claim cannot satisfy it.
+		//
+		// This assertion read `strings.Contains(reason, "audio route")` until
+		// #323's audio data plane landed. That substring matched the sentence
+		// "This platform serves no audio route to any provider", which was
+		// true when it was written and false afterwards — the gateway serves
+		// /llm/v1/audio/speech, /audio/transcriptions and /audio/translations
+		// — and it went on matching the corrected sentence, so the test never
+		// reported the change. A pin that passes on both the true claim and
+		// the false one pins nothing.
+		for _, want := range []string{"voice-listing", "synthesis and transcription"} {
+			if !strings.Contains(reason, want) {
+				t.Errorf("%s: the reason does not carry %q, so it does not separate the capability this "+
+					"platform HAS from the one it does not: %q", path, want, reason)
+			}
+		}
+		if strings.Contains(reason, "serves no audio route") {
+			t.Errorf("%s: the reason repeats the retired claim that this platform serves no audio at all "+
+				"(issue #323 landed the data plane): %q", path, reason)
 		}
 	}
 }

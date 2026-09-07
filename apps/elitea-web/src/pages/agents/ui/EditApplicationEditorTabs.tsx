@@ -7,11 +7,12 @@
  * evaluation library is a property of the agent you are editing, and reaching
  * it should not mean leaving the editor.
  *
- * ONE TAB, NOT THREE. The baseline's Evaluation tab has its own
- * sub-navigation — Suite config, Library, Datasets. Only the Library has a
- * backend in this release, so only the Library is mounted. A sub-tab that
- * renders an empty panel is indistinguishable, to the person looking at it,
- * from a feature that is broken.
+ * THE EVALUATION SUB-NAVIGATION lives in `features/agent-evaluation`'s own
+ * `EvaluationPanel`, not here. It carries Library, Datasets and Runs — the
+ * three the reference has a backend for in this release — and NOT the
+ * reference's fourth entry, Suite config: there is no suite table, and a
+ * sub-tab that renders an empty panel is indistinguishable, to the person
+ * looking at it, from a feature that is broken.
  *
  * Extracted from `EditApplication.tsx` to keep that file inside the §3.5
  * 400-line budget.
@@ -21,7 +22,7 @@ import { useState, type ReactNode, type SyntheticEvent } from 'react';
 import Box from '@mui/material/Box';
 import type { SxProps, Theme } from '@mui/material/styles';
 
-import { EvaluationLibraryView } from '@/features/agent-evaluation';
+import { EvaluationPanel } from '@/features/agent-evaluation';
 import { t } from '@/shared/i18n';
 import { BaseTab } from '@/shared/ui/BaseTab';
 import { BaseTabs } from '@/shared/ui/BaseTabs';
@@ -41,12 +42,18 @@ const stripSx: SxProps<Theme> = {
 export interface EditApplicationEditorTabsProps {
   readonly projectId: string | undefined;
   readonly applicationId: number | undefined;
+  /**
+   * The version a run scores. Passed THROUGH rather than resolved inside the
+   * evaluation feature: the editor already knows which version is open, and a
+   * second resolution here could disagree with the one the Save button writes.
+   */
+  readonly applicationVersionId: number | undefined;
   /** The existing configuration panel, passed in rather than rebuilt here. */
   readonly configurationPanel: ReactNode;
 }
 
 export function EditApplicationEditorTabs(props: EditApplicationEditorTabsProps): ReactNode {
-  const { projectId, applicationId, configurationPanel } = props;
+  const { projectId, applicationId, applicationVersionId, configurationPanel } = props;
   const [tab, setTab] = useState<EditorTab>(EDITOR_TABS.configuration);
 
   const handleChange = (_event: SyntheticEvent, value: EditorTab): void => setTab(value);
@@ -81,9 +88,10 @@ export function EditApplicationEditorTabs(props: EditApplicationEditorTabsProps)
       <Box hidden={tab !== EDITOR_TABS.configuration}>{configurationPanel}</Box>
       <Box hidden={tab !== EDITOR_TABS.evaluation}>
         {tab === EDITOR_TABS.evaluation && (
-          <EvaluationLibraryView
+          <EvaluationPanel
             projectId={projectId}
             applicationId={applicationId}
+            applicationVersionId={applicationVersionId}
           />
         )}
       </Box>

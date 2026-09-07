@@ -11,11 +11,13 @@
  * shows. `performLogout()` moves here, onto the button the baseline puts on
  * this page.
  *
- * "Last login" is the one baseline row missing: the baseline reads it off the
- * Redux `user` slice, and the only endpoint in THIS app that carries
- * `last_login` is the ADMIN users list (`pages/admin/AdminUsersTable.tsx`),
- * which a non-administrator cannot call. Showing a blank or a fabricated
- * timestamp would be worse than showing three true rows.
+ * All four reference rows are here. "Last login" used to be dropped, on the
+ * belief that only the admin users list carries `last_login`; the project
+ * author list carries it too, for any member, and the caller is always a
+ * member of their own personal project. `../../lib/profile/lastLogin.ts`
+ * documents the endpoint, the live verification and why the field is read
+ * defensively. The row renders whether or not the deployment supplies a
+ * value, matching `Profile.jsx:67-70`.
  */
 import { memo, useCallback } from 'react';
 
@@ -36,6 +38,8 @@ export interface ProfileIdentityProps {
   email: string;
   avatar: string;
   userId: string;
+  /** Already formatted for display; `''` when the deployment does not supply one. */
+  lastLogin: string;
   isFetching: boolean;
 }
 
@@ -57,6 +61,17 @@ function getInitials(name: string): string {
     .slice(0, 2);
 }
 
+/*
+ * THE COLOUR GOES IN `sx`, NOT IN THE `color` PROP.
+ *
+ * `<Typography color="text.secondary">` emits no colour rule in this MUI
+ * setup, so the value cell inherited `text.primary` and every row rendered
+ * label and value in the SAME muted grey. Measured against a live
+ * deployment the two differ: the label is `rgb(169, 183, 193)`
+ * (`text.primary`) and the value is `rgb(255, 255, 255)`
+ * (`text.secondary`). The row is a label/value pair; drawing both halves
+ * identically removed the only signal that says which is which.
+ */
 function IdentityRow({ label, value }: { label: string; value: string }) {
   const handleCopy = useCallback(() => {
     void navigator.clipboard?.writeText(value);
@@ -64,11 +79,11 @@ function IdentityRow({ label, value }: { label: string; value: string }) {
 
   return (
     <Box sx={rowSx}>
-      <Typography variant="bodyMedium" color="text.primary" sx={rowLabelSx}>
+      <Typography variant="bodyMedium" sx={rowLabelSx}>
         {label}
       </Typography>
       <Tooltip title={t('settings.profile.clickToCopy', 'Click to copy')} placement="top">
-        <Typography variant="bodyMedium" color="text.secondary" onClick={handleCopy} sx={rowValueSx}>
+        <Typography variant="bodyMedium" onClick={handleCopy} sx={rowValueSx}>
           {value}
         </Typography>
       </Tooltip>
@@ -81,6 +96,7 @@ export const ProfileIdentity = memo(function ProfileIdentity({
   email,
   avatar,
   userId,
+  lastLogin,
   isFetching,
 }: ProfileIdentityProps) {
   const onLogout = useCallback(() => {
@@ -98,7 +114,7 @@ export const ProfileIdentity = memo(function ProfileIdentity({
           ) : (
             <Box sx={avatarFallbackSx(stringToColor(name))}>{getInitials(name)}</Box>
           )}
-          <Typography variant="labelMedium" color="text.secondary" sx={nameSx}>
+          <Typography variant="labelMedium" sx={nameSx}>
             {name}
           </Typography>
         </Box>
@@ -107,6 +123,7 @@ export const ProfileIdentity = memo(function ProfileIdentity({
           <IdentityRow label={t('settings.profile.fullName', 'Full name:')} value={name} />
           <IdentityRow label={t('settings.profile.email', 'Email:')} value={email} />
           <IdentityRow label={t('settings.profile.userId', 'User ID:')} value={userId} />
+          <IdentityRow label={t('settings.profile.lastLogin', 'Last login:')} value={lastLogin} />
         </Box>
 
         <Button
@@ -164,7 +181,12 @@ const avatarFallbackSx =
     fontSize: theme.typography.headingLarge.fontSize,
   });
 
-const nameSx: SxProps<Theme> = { fontWeight: 600 };
+/* Same `color=` no-op as `IdentityRow`: production draws the display name in
+ * `text.secondary` (white), this app drew it in the inherited muted grey. */
+const nameSx: SxProps<Theme> = (theme) => ({
+  fontWeight: 600,
+  color: theme.vars.palette.text.secondary,
+});
 
 const fieldsSectionSx: SxProps<Theme> = (theme) => ({
   display: 'flex',
@@ -181,12 +203,14 @@ const rowSx: SxProps<Theme> = {
   alignItems: 'center',
 };
 
-const rowLabelSx: SxProps<Theme> = {
+const rowLabelSx: SxProps<Theme> = (theme) => ({
   width: '8.25rem',
   flexShrink: 0,
-};
+  color: theme.vars.palette.text.primary,
+});
 
 const rowValueSx: SxProps<Theme> = (theme) => ({
+  color: theme.vars.palette.text.secondary,
   padding: '0 0.5rem',
   borderRadius: 'var(--el-shape-radiusPill, 9999px)',
   '&:hover': {

@@ -2,8 +2,8 @@
   "source_repository": "deepwiki_plugin",
   "source_path": "plugin_implementation",
   "source_revision": "ce679f11dc31c209cc67f13565b286d5bb28ce58",
-  "file_count": 100,
-  "total_bytes": 3920378,
+  "file_count": 97,
+  "total_bytes": 3847885,
   "not_copied": [
     "COPY_MANIFEST.json",
     "__init__.py"
@@ -33,17 +33,9 @@
       "bytes": 39049,
       "sha256": "0f015414e8b45013c3750e501a029434c7c324e07a2e62ff7feffad7eac6fcfa"
     },
-    "ask_engine.py": {
-      "bytes": 17146,
-      "sha256": "6bf0ac8f5c1907a80b5f2585ce2bf0bdf8bb18f770f422d88fdca37d1f93b421"
-    },
     "ask_prompts.py": {
       "bytes": 6751,
       "sha256": "41937a9a4d364234855e0be286d3e244405d6c6b357ec6ebf3b3e689593b68b6"
-    },
-    "ask_subprocess_worker.py": {
-      "bytes": 35590,
-      "sha256": "4e19948cf927e5823729dfd4635236ea3d58a256a1458156485096358af74176"
     },
     "ask_tool.py": {
       "bytes": 23680,
@@ -224,10 +216,6 @@
     "k8s_job_manager.py": {
       "bytes": 45903,
       "sha256": "ee2ca9076dd753e711f060ae6d525fc5b787b1d86b061de747fd9d4832e1121a"
-    },
-    "local_repository_manager.py": {
-      "bytes": 19757,
-      "sha256": "50d9cec487be23f94435a54ac6a4acd591a4c97b477749307b030bb75a331b94"
     },
     "markdown_structure.py": {
       "bytes": 8249,
@@ -411,6 +399,22 @@
     }
   },
   "transformed_files": {
+    "plugin_implementation/local_repository_manager.py": {
+      "target": "src/elitea_deepwiki/engine/local_repository_manager.py",
+      "bytes": 21053,
+      "sha256": "41ff72ae8c5ff571c91856d5a4e83236e7c4a221f785555ddf7d3a09725df6e6",
+      "in_place": true,
+      "substitutions": [
+        {
+          "from": "        # Build clone configuration using provider factory\n        clone_config = self._get_clone_config(repository_url, branch, project)",
+          "to": "        # An ARTIFACT FOLDER is a source too, and there is nothing to clone:\n        # elitea_deepwiki.artifact_source downloads the folder into the same\n        # cache directory a clone would have produced, and everything after\n        # this branch is unchanged. See that module for the identity, which\n        # is a sha256 over the listing where a clone has a commit sha.\n        from elitea_deepwiki.artifact_source import (\n            is_artifact_source,\n            materialise_artifact_source,\n        )\n\n        if is_artifact_source(repository_url):\n            local_path = materialise_artifact_source(\n                repository_url,\n                branch,\n                self.cache_dir,\n                force=force_reclone,\n            )\n            self.active_repos[f\"{repository_url}:{branch}\"] = local_path\n            return local_path\n\n        # Build clone configuration using provider factory\n        clone_config = self._get_clone_config(repository_url, branch, project)"
+        },
+        {
+          "from": "    def get_repository_info(self, local_path: str) -> Dict[str, Any]:\n        \"\"\"Get repository information from local clone\"\"\"\n        try:",
+          "to": "    def get_repository_info(self, local_path: str) -> Dict[str, Any]:\n        \"\"\"Get repository information from local clone\"\"\"\n        # A materialised artifact folder is not a git tree. Its identity was\n        # recorded beside it when it was downloaded; answering from that\n        # record is what keeps the commit-shaped cache key content-derived.\n        from elitea_deepwiki.artifact_source import artifact_repository_info\n\n        artifact_info = artifact_repository_info(local_path)\n        if artifact_info is not None:\n            return artifact_info\n\n        try:"
+        }
+      ]
+    },
     "plugin_implementation/artifacts_platform_client.py": {
       "target": "src/elitea_deepwiki/engine/artifacts_platform_client.py",
       "bytes": 20716,
@@ -463,11 +467,55 @@
         }
       ]
     },
+    "plugin_implementation/ask_engine.py": {
+      "target": "src/elitea_deepwiki/engine/ask_engine.py",
+      "bytes": 20139,
+      "sha256": "9dcb8ef633b7fd27ce7c383739cd4a98d2663e6df1306080226ea3e5b035c9b1",
+      "in_place": true,
+      "substitutions": [
+        {
+          "from": "        self.final_answer = \"\"\n        self.error = None\n        step_count = 0\n",
+          "to": "        self.final_answer = \"\"\n        self.error = None\n        step_count = 0\n        # The fragments of the final answer, in arrival order, and the\n        # tool calls already announced. See the two streamed branches\n        # below (issue #701).\n        answer_fragments = []\n        announced_tool_calls = set()\n"
+        },
+        {
+          "from": "                        if hasattr(message, \"tool_calls\") and message.tool_calls:\n                            for tool_call in message.tool_calls:\n                                step_count += 1\n",
+          "to": "                        if hasattr(message, \"tool_calls\") and message.tool_calls:\n                            for tool_call in message.tool_calls:\n                                # STREAMED (issue #701): with `streaming` on a\n                                # tool call can reach this loop more than once,\n                                # as the chunks of its arguments arrive, and one\n                                # call would become a run of identical cards in\n                                # the thinking log. A repeat of an id already\n                                # announced is dropped. A call with NO id is\n                                # never suppressed, because there is nothing to\n                                # tell two of them apart by, and with streaming\n                                # off every id is announced once — so this is\n                                # inert on the path it replaces.\n                                announced = tool_call.get(\"id\")\n                                if announced:\n                                    if announced in announced_tool_calls:\n                                        continue\n                                    announced_tool_calls.add(announced)\n                                step_count += 1\n"
+        },
+        {
+          "from": "                        # Final content (no tool calls = final answer)\n                        if message.content and not message.tool_calls:\n                            self.final_answer = message.content\n",
+          "to": "                        # Final content (no tool calls = final answer)\n                        if message.content and not message.tool_calls:\n                            # STREAMED (issue #701). With `streaming` on, the\n                            # answer reaches this branch one fragment at a\n                            # time, so the assignment this replaces would keep\n                            # the LAST fragment and throw the answer away. The\n                            # fragments are joined instead, and each is\n                            # published as its own event so that a reader can\n                            # watch the answer being written. With streaming\n                            # off there is exactly one fragment and the join\n                            # is the assignment it replaces.\n                            if isinstance(message.content, str):\n                                answer_fragments.append(message.content)\n                                self.final_answer = \"\".join(answer_fragments)\n                                yield {\n                                    \"event_type\": \"llm_chunk\",\n                                    \"data\": {\n                                        \"text\": message.content,\n                                        \"timestamp\": datetime.now().isoformat(),\n                                    },\n                                }\n                            else:\n                                # NOT TEXT — an Anthropic content-block list,\n                                # say. Assigned whole, exactly as before: a\n                                # stringified block list is not an answer, and\n                                # joining the fragments of one would compound\n                                # that rather than fix it.\n                                self.final_answer = message.content\n"
+        }
+      ]
+    },
+    "plugin_implementation/ask_subprocess_worker.py": {
+      "target": "src/elitea_deepwiki/engine/ask_subprocess_worker.py",
+      "bytes": 36431,
+      "sha256": "8b48e7e45412cb786aae529694f1157872b2e026aa9cf978826294be3c004ffb",
+      "in_place": true,
+      "substitutions": [
+        {
+          "from": "            streaming=False,\n",
+          "to": "            streaming=_answer_streaming(llm_settings),\n"
+        },
+        {
+          "from": "def _build_llm_and_embeddings(llm_settings: Dict[str, Any], embedding_model: Any):\n    \"\"\"Build LLM and embeddings from settings.\"\"\"\n",
+          "to": "def _answer_streaming(llm_settings: Dict[str, Any]) -> bool:\n    \"\"\"Whether the model streams its answer (issue #701).\n\n    ON by default. The agentic Ask loop already reads the model through\n    LangGraph's `messages` stream, so this turns one whole message into a\n    run of fragments the engine publishes as `llm_chunk` events, and the\n    wiki chat shows the answer as it is written. A deployment whose model\n    endpoint cannot stream turns it off with `llm_settings.streaming:\n    false` rather than with a code change.\n    \"\"\"\n    return bool(llm_settings.get(\"streaming\", True))\n\n\ndef _build_llm_and_embeddings(llm_settings: Dict[str, Any], embedding_model: Any):\n    \"\"\"Build LLM and embeddings from settings.\"\"\"\n"
+        },
+        {
+          "from": "            elif event_type == 'ask_complete':\n",
+          "to": "            elif event_type == 'llm_chunk':\n                fragment = data.get('text') or ''\n                if fragment:\n                    _print(f\"[LLM_CHUNK] {json.dumps({'text': fragment})}\")\n\n            elif event_type == 'ask_complete':\n"
+        }
+      ]
+    },
     "methods/tool_operations.py": {
       "target": "src/elitea_deepwiki/tool_operations.py",
-      "bytes": 60566,
-      "sha256": "5c93c30c0ba393a3400d0b2ba2ff891a70f8d8adbf2621701a963d64b862d136",
+      "bytes": 61505,
+      "sha256": "1779355c2752752ab0b2f443c3309cf36eed8f768eccdc9b3b6bf77dfefd729b",
       "substitutions": [
+        {
+          "from": "        env = os.environ.copy()\n        env[\"PYTHONUNBUFFERED\"] = \"1\"",
+          "to": "        env = os.environ.copy()\n        env[\"PYTHONUNBUFFERED\"] = \"1\"\n        from .artifact_source import child_environment\n        env.update(child_environment(payload))"
+        },
         {
           "from": "from pylon.core.tools import log, web",
           "to": "import logging\n\nlog = logging.getLogger(__name__)"
@@ -491,6 +539,10 @@
         {
           "from": "\"plugin_implementation.deep_research_subprocess_worker\"",
           "to": "\"elitea_deepwiki.engine.deep_research_subprocess_worker\""
+        },
+        {
+          "from": "            elif line.startswith(\"[ASK_EVENT] \"):\n",
+          "to": "            elif line.startswith(\"[LLM_CHUNK] \"):\n                try:\n                    fragment = json.loads(line[12:]).get(\"text\") or \"\"\n                    if fragment:\n                        self.invocation_token(fragment)\n                    return True\n                except Exception:\n                    pass\n            elif line.startswith(\"[ASK_EVENT] \"):\n"
         }
       ]
     }

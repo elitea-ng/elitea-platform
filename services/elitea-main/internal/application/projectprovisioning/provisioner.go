@@ -30,6 +30,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"strconv"
 	"strings"
 
@@ -184,8 +185,37 @@ func WithProjectVault(vault ProjectVaultBootstrapper) Option {
 
 // WithVectorStore supplies the project vector-store provisioner. Without it the
 // project_pgvector step is inert — see createProjectVectorStore.
+//
+// A TYPED NIL IS TREATED AS ABSENT (#377). A composition root that declares its
+// variable as the concrete pointer type and assigns it into this interface hands
+// over a value that is not nil as an interface and is nil as a pointer. Every
+// `!= nil` check upstream then passes, this option stores the collaborator, and
+// the project_pgvector step calls a nil receiver — which answers "project vector
+// store is not configured" and fails the WHOLE create pipeline, rolling a fully
+// built tenant back. Measured on the end-to-end stack: a deployment that
+// composes no Configurations runtime could not create a project at all, and the
+// operator read a 500.
+//
+// The composition root is corrected as well (cmd/elitea-main/main.go declares
+// the interface type), because passing a typed nil is the defect. This guard is
+// here because the constructor is public: the next caller cannot be made to read
+// that comment first, and the failure it produces names a step rather than the
+// wiring that caused it.
 func WithVectorStore(vectorStore ProjectVectorStore) Option {
-	return func(p *Provisioner) { p.vectorStore = vectorStore }
+	return func(p *Provisioner) {
+		if isNilPointer(vectorStore) {
+			return
+		}
+		p.vectorStore = vectorStore
+	}
+}
+
+// isNilPointer reports a nil pointer wrapped in a non-nil interface.
+//
+// The same helper internal/infra/authattempt uses, for the same reason.
+func isNilPointer(value any) bool {
+	reflected := reflect.ValueOf(value)
+	return reflected.Kind() == reflect.Pointer && reflected.IsNil()
 }
 
 func New(pool *pgxpool.Pool, migrator TenantMigrator, logger *slog.Logger, options ...Option) *Provisioner {

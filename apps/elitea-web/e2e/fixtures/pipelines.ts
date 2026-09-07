@@ -53,6 +53,15 @@ export interface StoredPipelineVersion {
   readonly pipelineSettings: Readonly<Record<string, unknown>>;
   /** `meta` — carries `step_limit`/`internal_tools`, both of which a clone must not reset. */
   readonly meta: Readonly<Record<string, unknown>>;
+  /**
+   * `welcome_message` — a version-level column the pipeline editor's
+   * configuration form writes. Read here because the form's own inputs keep
+   * the typed value whether or not the save carried it, so only the stored
+   * row can tell a working save from a discarded one.
+   */
+  readonly welcomeMessage: string;
+  /** `tags` — stored as `application_version_tag_association` rows; the version GET returns the joined names. */
+  readonly tagNames: readonly string[];
 }
 
 /** The parsed pipeline document — only the fields these journeys assert on. */
@@ -138,6 +147,8 @@ export async function readStoredPipelineVersion(
     agent_type?: unknown;
     pipeline_settings?: unknown;
     meta?: unknown;
+    welcome_message?: unknown;
+    tags?: unknown;
   };
   if (typeof body.instructions !== 'string') {
     throw new Error(
@@ -153,6 +164,12 @@ export async function readStoredPipelineVersion(
     agentType: typeof body.agent_type === 'string' ? body.agent_type : '',
     pipelineSettings: asRecord(body.pipeline_settings),
     meta: asRecord(body.meta),
+    welcomeMessage: typeof body.welcome_message === 'string' ? body.welcome_message : '',
+    tagNames: Array.isArray(body.tags)
+      ? body.tags
+          .map(tag => (typeof tag === 'object' && tag !== null ? (tag as { name?: unknown }).name : undefined))
+          .filter((name): name is string => typeof name === 'string')
+      : [],
   };
 }
 

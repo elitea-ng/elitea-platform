@@ -15,7 +15,7 @@ import { BaseModal } from '@/shared/ui/BaseModal';
 
 import { useGenerateAgentDraftMutation } from '../../api/generateAgentDraft';
 import { applicationErrorMessage } from '../../lib/errorMessage';
-import { EMPTY_AGENT_DRAFT, mapPredictResponseToAgentDraft, type AgentDraft } from '../../lib/agentDraft';
+import { EMPTY_AGENT_DRAFT, mapApplicationDraft, type AgentDraft } from '../../lib/agentDraft';
 import { GenerateAgentReviewForm } from './GenerateAgentReviewForm';
 import { useAgentDraftApproval } from './useAgentDraftApproval';
 import { useToggleSet } from './useToggleSet';
@@ -57,19 +57,13 @@ import { useToggleSet } from './useToggleSet';
  * though the HTTP request itself keeps running to completion in the
  * background.
  *
- * **REAL, CONFIRMED BACKEND GAP — the "generate agent draft" endpoint
- * returns a generic chat completion, not a structured draft. See
- * `../../lib/agentDraft.ts`'s module doc comment for the full trace (old
- * app's `generateAgentDraftApi.js` vs. this app's `useGenerateAgentDraft`
- * routing to the exact same generic `predictHandler.Predict` used for
- * webchat, verified against `services/elitea-main/internal/api/
- * router.go:481-486` and `internal/api/v2/predict/handler.go:41-61`).**
- * `handleGenerate` below calls the REAL generated endpoint, via
- * `../../api/generateAgentDraft.ts`'s `useGenerateAgentDraftMutation` (the
- * network plumbing is genuine, not stubbed) but treats its response honestly —
- * `mapPredictResponseToAgentDraft` seeds only `instructions` from the raw
- * generated text; `suggested_*` are always empty until a real
- * structured-draft endpoint exists.
+ * `handleGenerate` calls the served endpoint through
+ * `../../api/generateAgentDraft.ts`'s `useGenerateAgentDraftMutation` and
+ * maps its `ApplicationDraft` with `mapApplicationDraft`, so name,
+ * description, instructions, welcome message and conversation starters all
+ * arrive filled in (#254 P1). The five `suggested_*` lists stay empty: the
+ * contract does not carry them — see `../../lib/agentDraft.ts` for why that
+ * is the endpoint's answer and not this component's guess.
  *
  * **No-toast-system-yet convention** (`features/notifications/lib/
  * errorMessage.ts`'s own doc comment: dependency-inject the error sink,
@@ -163,7 +157,7 @@ export function GenerateAgentModal({
       return;
     }
 
-    setDraft(mapPredictResponseToAgentDraft(response.content));
+    setDraft(mapApplicationDraft(response));
     resetSelections();
     setStep('review');
   }, [description, projectId, generateDraft, resetGenerateError, resetSelections]);

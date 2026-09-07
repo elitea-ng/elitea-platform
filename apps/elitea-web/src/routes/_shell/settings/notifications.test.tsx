@@ -118,7 +118,10 @@ describe('finding 2 — pagination, page size, sort and search are all reachable
         capturedUrls.push(request.url);
         return HttpResponse.json({
           rows: [{ id: 1, event_type: 'chat_user_added', created_at: '2026-01-01T00:00:00Z', is_seen: true }],
-          total: 40,
+          // Three pages at the default 50 a page, so "Next page" is live. At
+          // the old default of 20 a page, 40 rows was two pages; at 50 it is
+          // one, and the arrow this test clicks would be correctly disabled.
+          total: 120,
         });
       }),
     );
@@ -128,7 +131,9 @@ describe('finding 2 — pagination, page size, sort and search are all reachable
     await waitFor(() => expect(capturedUrls.length).toBeGreaterThan(0));
     const initial = new URL(capturedUrls[0]!);
     expect(initial.searchParams.get('offset')).toBe('0');
-    expect(initial.searchParams.get('limit')).toBe('20');
+    // 50, the reference's own opening page size (`NotificationCenter.jsx:22-25`)
+    // and what a live deployment's footer reads. This app opened on 20.
+    expect(initial.searchParams.get('limit')).toBe('50');
     expect(initial.searchParams.get('sort_by')).toBe('created_at');
     expect(initial.searchParams.get('sort_order')).toBe('desc');
 
@@ -137,29 +142,41 @@ describe('finding 2 — pagination, page size, sort and search are all reachable
     // Pagination past page 0.
     await user.click(await screen.findByRole('button', { name: /next page/i }));
     await waitFor(() => {
-      expect(new URL(capturedUrls.at(-1)!).searchParams.get('offset')).toBe('20');
+      expect(new URL(capturedUrls.at(-1)!).searchParams.get('offset')).toBe('50');
     });
 
     // A non-default page size.
     const pageSizeCombobox = screen.getAllByRole('combobox').at(-1)!;
     await user.click(pageSizeCombobox);
-    await user.click(await screen.findByRole('option', { name: '50' }));
+    await user.click(await screen.findByRole('option', { name: '10' }));
     await waitFor(() => {
       const last = new URL(capturedUrls.at(-1)!);
-      expect(last.searchParams.get('limit')).toBe('50');
+      expect(last.searchParams.get('limit')).toBe('10');
       expect(last.searchParams.get('offset')).toBe('0');
     });
 
-    // Sorting.
-    await user.click(screen.getByRole('combobox', { name: 'Sort by' }));
-    await user.click(await screen.findByRole('option', { name: 'Type (A–Z)' }));
+    // Sorting — through the COLUMN HEADER now, not a "Sort by" dropdown.
+    // Production has no such dropdown; the Type and Date & Time headers are
+    // the sort control, and a new column starts ascending.
+    await user.click(screen.getByRole('button', { name: 'Type' }));
     await waitFor(() => {
       const last = new URL(capturedUrls.at(-1)!);
       expect(last.searchParams.get('sort_by')).toBe('event_type');
       expect(last.searchParams.get('sort_order')).toBe('asc');
     });
 
-    // Search.
+    // A second click on the same column flips it.
+    await user.click(screen.getByRole('button', { name: 'Type' }));
+    await waitFor(() => {
+      expect(new URL(capturedUrls.at(-1)!).searchParams.get('sort_order')).toBe('desc');
+    });
+
+    // Search. The placeholder is pinned because `e2e/journeys/settings/
+    // settings.notifications.spec.ts` locates this box by it, and because it
+    // is the reference's own copy (`NotificationTableToolbar.jsx:45` passes
+    // `placeholder="Search"`; this port had invented a longer one). A rename
+    // now fails here rather than in a browser run.
+    expect(screen.getByRole('textbox', { name: /search/i })).toHaveAttribute('placeholder', 'Search');
     await user.type(screen.getByRole('textbox', { name: /search/i }), 'billing');
     await waitFor(
       () => {
@@ -167,7 +184,7 @@ describe('finding 2 — pagination, page size, sort and search are all reachable
       },
       { timeout: 3000 },
     );
-  }, 15000);
+  }, 20000);
 });
 
 /**
@@ -207,7 +224,7 @@ describe('issue 413 — a failed list read renders as an error, not as an empty 
 });
 
 describe('finding 3 — bulk mark-toggle sends the correct isSeen', () => {
-  it('sends isSeen:true when the selection contains an unread row, and labels the button "Mark read"', async () => {
+  it('sends isSeen:true when the selection contains an unread row, and labels the button "Mark selected as read"', async () => {
     const capturedBodies: unknown[] = [];
     server.use(
       http.get(LIST_PATH, () =>
@@ -228,15 +245,15 @@ describe('finding 3 — bulk mark-toggle sends the correct isSeen', () => {
     mountAt(authWith('personal-1', 'other-project'));
 
     const user = userEvent.setup();
-    await user.click(await screen.findByRole('button', { name: 'Select all' }));
-    const markButton = await screen.findByRole('button', { name: 'Mark read' });
+    await user.click(await screen.findByRole('checkbox', { name: 'Select all' }));
+    const markButton = await screen.findByRole('button', { name: 'Mark selected as read' });
     await user.click(markButton);
 
     await waitFor(() => expect(capturedBodies).toHaveLength(1));
     expect(capturedBodies[0]).toMatchObject({ is_seen: true, ids: ['1', '2'] });
   });
 
-  it('sends isSeen:false when every selected row is already read, and labels the button "Mark unread"', async () => {
+  it('sends isSeen:false when every selected row is already read, and labels the button "Mark selected as unread"', async () => {
     const capturedBodies: unknown[] = [];
     server.use(
       http.get(LIST_PATH, () =>
@@ -257,8 +274,8 @@ describe('finding 3 — bulk mark-toggle sends the correct isSeen', () => {
     mountAt(authWith('personal-1', 'other-project'));
 
     const user = userEvent.setup();
-    await user.click(await screen.findByRole('button', { name: 'Select all' }));
-    const markButton = await screen.findByRole('button', { name: 'Mark unread' });
+    await user.click(await screen.findByRole('checkbox', { name: 'Select all' }));
+    const markButton = await screen.findByRole('button', { name: 'Mark selected as unread' });
     await user.click(markButton);
 
     await waitFor(() => expect(capturedBodies).toHaveLength(1));

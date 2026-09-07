@@ -30,7 +30,7 @@ import { aiConfigurationFeature } from '@/features/settings';
 
 const {
   ConfigurationsPanel,
-  ModelCapabilitiesSection,
+  ModelCapabilitiesPanel,
   OpenAITemplate,
   ProjectAIConfiguration,
   RequestModelConnection,
@@ -108,7 +108,7 @@ export const AIConfiguration = memo(function AIConfiguration({ projectId, reveal
    * the two things this page composed nothing for: the capability chips of the
    * project's default model, and the copy-the-whole-card button.
    */
-  const { capabilities, copyConfiguration } = useModelConfigurationLayer({
+  const { capabilities, copyConfiguration, modelOptions, selectedModel, onSelectModel } = useModelConfigurationLayer({
     projectId,
     userApiUrl,
     configurationsBySection,
@@ -210,12 +210,17 @@ export const AIConfiguration = memo(function AIConfiguration({ projectId, reveal
       </Box>
 
       {/* Baseline `ModelConfiguration.jsx:249` renders the chips under the
-          panel, inside the configurations tab, and guards on a non-empty list
-          so the row costs no space when the model declares no capability. */}
-      {activeTab === 0 && capabilities.length > 0 && (
-        <Box sx={styles.capabilitiesRow}>
-          <ModelCapabilitiesSection capabilities={capabilities} />
-        </Box>
+          panel, inside the configurations tab. `ModelCapabilitiesPanel` adds
+          the model picker the baseline never had (#80, item 4) and renders
+          nothing at all when there is neither a model to pick nor a
+          capability to show, so the row still costs no space then. */}
+      {activeTab === 0 && (
+        <ModelCapabilitiesPanel
+          capabilities={capabilities}
+          modelOptions={modelOptions}
+          selectedModel={selectedModel}
+          onSelectModel={onSelectModel}
+        />
       )}
     </Box>
   );
@@ -259,11 +264,6 @@ function getStyles(theme: ReturnType<typeof useTheme>) {
     copyIcon: {
       width: '1rem',
       height: '1rem',
-    },
-    capabilitiesRow: {
-      flexShrink: 0,
-      padding: '0 1.5rem 1rem',
-      backgroundColor: t.vars.palette.background.eliteaDefault,
     },
     loadingCenter: {
       flex: 1,

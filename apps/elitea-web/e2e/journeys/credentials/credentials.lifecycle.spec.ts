@@ -33,7 +33,7 @@ import { test, expect } from '@playwright/test';
 
 import { checkA11y } from '../../fixtures/axe';
 import { BASE_URL } from '../../../playwright.config';
-import { AUTOTEST_PREFIX } from '../../fixtures/api';
+import { AUTOTEST_PREFIX, DEFAULT_PROJECT_ID } from '../../fixtures/api';
 
 /**
  * The entry point into the credential-creation flow.
@@ -184,7 +184,44 @@ test('J19b: create a credential, verify it persisted, then delete it', async ({ 
   // /settings/create-configuration and buries the id in a breadcrumb string
   // (useConfigurationNavigation.ts:21-42) — a separate product defect, not
   // something to assert around.
+  //
+  // The DETAIL READ is waited for by response, not by the field it fills
+  // (#545). This journey's recorded webkit flake is exactly here: `Name`
+  // resolved 38 times to `<input value="">` and the run ended on
+  // `toHaveValue`. That message cannot say whether the read was refused, was
+  // slow, or landed and did not seed the form — three different defects with
+  // one signature. Asserting the response first makes each of them fail on its
+  // own line: a refused or absent read fails on the status, and a form that
+  // ignores a 200 it received fails on the value below.
+  //
+  // The wait is armed BEFORE the navigation that causes the request, because
+  // its budget is wall-clock from creation.
+  //
+  // THE PROJECT SEGMENT IS PART OF THE PREDICATE, and it is not decoration.
+  // Matching on the path prefix and the id alone also matched a request for
+  // NO project — `/configurations/configuration//{id}`, which the edit screen
+  // used to fire on its first render, while the selected-project store was
+  // still hydrating. Chromium abandons that request when the store resolves
+  // and the query key changes, and then has no body to give for the response
+  // this line captured: `Protocol error (Network.getResponseBody): No data
+  // found for resource with given identifier`. The app no longer makes that
+  // request (`features/credentials/api/useConfigurations.ts`'s
+  // `isResolvedId`, unit-tested there); naming the project here means a
+  // future stray fails on its own assertion instead of on this one's body.
+  const detailRead = page.waitForResponse(
+    (res) => res.request().method() === 'GET'
+      && new RegExp(`/configurations/configuration/${DEFAULT_PROJECT_ID}/${configId}(\\?|$)`).test(res.url()),
+    { timeout: 20_000 },
+  );
   await page.goto(`${BASE_URL}/app/settings/edit-configuration/${configId}`);
+  const detail = await detailRead;
+  expect(detail.status(), await detail.text()).toBe(200);
+  const stored = (await detail.json()) as { label?: string; elitea_title?: string };
+  expect(
+    stored.label ?? stored.elitea_title,
+    'the stored row must carry the name the create step sent',
+  ).toBe(unique);
+
   await expect(page.getByRole('textbox', { name: 'Name' })).toHaveValue(unique, { timeout: 20_000 });
   await expect(page.getByRole('textbox', { name: 'Api Base' })).toHaveValue('http://localhost/mock');
 

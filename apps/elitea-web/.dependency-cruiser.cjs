@@ -56,10 +56,25 @@ module.exports = {
     },
     {
       name: 'no-sideways-entities',
-      comment: 'R-L1 (§3.2): no sideways imports within entities/',
+      comment:
+        'R-L1 (§3.2): no sideways imports within entities/ — with ONE exception, ' +
+        'entities/provider-run. That slice carries no domain: it is the invoke → ' +
+        'poll → cancel loop EVERY sub-application behind a facade runs (ADR-0023 ' +
+        'decision 4), and it sits in entities/ only because the sibling fence ' +
+        'no-sideways-features forbade the two features that first needed it from ' +
+        'sharing one — its own header says so. A second sub-application (Inventory) ' +
+        'needs the same loop from its entity, and the alternatives are worse: a ' +
+        'copy of the poll contract per application is the drift ADR-0023 extracted ' +
+        'it to prevent, and moving the domain code up into features/ would put four ' +
+        'features back into sideways imports of each other. The exception is on the ' +
+        'TARGET only: nothing may import a domain entity sideways, and provider-run ' +
+        'itself imports no entity at all, so this cannot open a cycle.',
       severity: 'error',
-      from: { path: '^src/entities/([^/]+)/' },
-      to: { path: '^src/entities/', pathNot: '^src/entities/$1/' },
+      from: { path: '^src/entities/([^/]+)/', pathNot: '^src/entities/provider-run/' },
+      to: {
+        path: '^src/entities/',
+        pathNot: '^src/entities/($1|provider-run)/',
+      },
     },
     {
       name: 'no-deep-slice-import',

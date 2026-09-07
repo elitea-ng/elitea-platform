@@ -471,6 +471,18 @@ func expectedInputRoles(command *runtimev1.WorkerCommandV1) (map[string]string, 
 		return map[string]string{
 			agent.GetRequestEntryId(): executiondomain.AgentExecutionRequestRole,
 		}, nil
+	case executiondomain.ToolkitCallToolCapability:
+		call := command.GetToolkitCallTool()
+		if call == nil || call.GetSettingsEntryId() == "" || call.GetArgumentsEntryId() == "" {
+			return nil, errors.New("tool-run input bindings are required")
+		}
+		if call.GetSettingsEntryId() == call.GetArgumentsEntryId() {
+			return nil, errors.New("tool-run input binding is duplicated")
+		}
+		return map[string]string{
+			call.GetSettingsEntryId():  executiondomain.ToolkitCallToolSettingsRole,
+			call.GetArgumentsEntryId(): executiondomain.ToolkitCallToolArgumentsRole,
+		}, nil
 	default:
 		return nil, errors.New("unsupported command capability")
 	}

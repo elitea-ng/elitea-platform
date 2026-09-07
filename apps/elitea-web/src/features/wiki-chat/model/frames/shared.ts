@@ -85,3 +85,36 @@ export function field(value: unknown, name: string): unknown {
     ? (value as Record<string, unknown>)[name]
     : undefined;
 }
+
+/**
+ * Parse the structured `{event, data}` envelope, or report that there is not
+ * one.
+ *
+ * They are told apart by parsing and then checking for an `event` KEY — not by
+ * whether the parse succeeded. Valid JSON with no `event` is not a structured
+ * event and takes the plain path, which is why
+ * `plain-metadata-json-without-event` is in the oracle: a reader that branched
+ * on "did it parse" would render the raw JSON as a structured event of type
+ * `undefined`.
+ *
+ * IT LIVES HERE, not in the one family that used to own it, because the POLL
+ * ADAPTER reads the same envelope to lift answer tokens out of the event list
+ * before the reducer ever sees them (`lib/framesFromChatPoll.ts`, issue #701).
+ * Two spellings of "is this a structured event" would let one side route a
+ * frame the other did not, and the symptom is an answer fragment rendered as a
+ * thinking card — visible, wrong, and a failure nowhere.
+ */
+export function structuredEvent(raw: unknown): { event: string; data: unknown } | null {
+  let parsed: unknown = raw;
+  if (typeof raw === 'string') {
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+  const name = field(parsed, 'event');
+  return typeof name === 'string' && name !== ''
+    ? { event: name, data: field(parsed, 'data') }
+    : null;
+}

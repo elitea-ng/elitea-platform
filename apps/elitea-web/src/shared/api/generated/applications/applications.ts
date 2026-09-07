@@ -57,6 +57,7 @@ import type {
   ApplicationCreateRequest,
   ApplicationCreatedResponse,
   ApplicationDetail,
+  ApplicationDraft,
   ApplicationExportResponse,
   ApplicationList,
   ApplicationRelationList,
@@ -68,16 +69,30 @@ import type {
   ApplicationVersionDetailExpanded,
   AuthorDetail,
   BatchReplaceVersionReferencesParams,
+  CapabilityUnavailableResponse,
   DefaultIcon,
   DeleteApplicationVersionParams,
   DocumentLoadersResponse,
   ErrorResponse,
+  EvalDataset,
+  EvalDatasetCase,
+  EvalDatasetCaseWriteRequest,
+  EvalDatasetDetail,
+  EvalDatasetList,
+  EvalDatasetWriteRequest,
+  EvalRun,
+  EvalRunList,
+  EvalRunStartRequest,
+  EvalScorecard,
   ExportApplicationParams,
   ExportConverterRequest,
   ExportConverterResponse,
   ForkRequest,
   ForkResponse,
+  GenerateApplicationDraftRequest,
   GetApplicationIconsParams,
+  GetEvalDatasetParams,
+  GetEvalScorecardParams,
   GetProjectQuotaParams,
   GetRecommendationsParams,
   GroupsListResponse,
@@ -86,6 +101,8 @@ import type {
   ImportWizardRequest,
   ImportWizardResponse,
   ListApplicationsParams,
+  ListEvalDatasetsParams,
+  ListEvalRunsParams,
   ListProjectsParams,
   ListPublicApplicationsParams,
   N400Response,
@@ -95,6 +112,11 @@ import type {
   N409Response,
   N500Response,
   OkResponse,
+  PipelineInboundTrigger,
+  PipelineInboundTriggerRunAccepted,
+  PipelineInboundTriggerRunRequest,
+  PipelineSchedule,
+  PipelineScheduleUpdate,
   PredictLLMRequest,
   PredictLLMResponse,
   PredictLLMUnavailableResponse,
@@ -102,6 +124,9 @@ import type {
   ProjectContextUpdateRequest,
   ProjectGroupCreate,
   ProjectGroupsUpdate,
+  ProjectInfo,
+  ProjectInfoUpdateRequest,
+  ProjectInfoUpdateResponse,
   ProjectQuota,
   ProjectQuotaUpdate,
   ProjectStatistics,
@@ -114,6 +139,7 @@ import type {
   PublishValidationFailedResponse,
   PublishValidationResult,
   RecommendationsResponse,
+  RunPipelineInboundTriggerParams,
   SaveApplicationNewVersionBody,
   SetAgentAttachmentStorageBody,
   SetDefaultVersionRequest,
@@ -149,6 +175,3420 @@ const withQueryKey = <T extends object, K>(
   }
   return result;
 };
+
+export type listEvalDatasetsResponse200 = {
+  data: EvalDatasetList;
+  status: 200;
+};
+
+export type listEvalDatasetsResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type listEvalDatasetsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listEvalDatasetsResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listEvalDatasetsResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type listEvalDatasetsResponseSuccess = listEvalDatasetsResponse200 & {
+  headers: Headers;
+};
+export type listEvalDatasetsResponseError = (
+  | listEvalDatasetsResponse400
+  | listEvalDatasetsResponse401
+  | listEvalDatasetsResponse403
+  | listEvalDatasetsResponse500
+) & {
+  headers: Headers;
+};
+
+export type listEvalDatasetsResponse =
+  listEvalDatasetsResponseSuccess | listEvalDatasetsResponseError;
+
+export const getListEvalDatasetsUrl = (
+  projectId: string,
+  params?: ListEvalDatasetsParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/elitea_core/eval_datasets/prompt_lib/${projectId}?${stringifiedParams}`
+    : `/elitea_core/eval_datasets/prompt_lib/${projectId}`;
+};
+
+/**
+ * "Project-wide datasets, plus this agent's" when `agent_id` is sent, and
+ * the project-wide ones alone when it is not. It is NOT "everything in the
+ * schema": a dataset authored on another agent is that agent's, and
+ * listing it here would put every agent's evaluation cases in every other
+ * agent's editor.
+ *
+ * NOTE(#617): internal/api/v2/evaluation. Gated on
+ * `models.applications.evaluation.dataset.read`, granted by
+ * migrations/shared/0116_evaluation_dataset_run_permissions.sql.
+ * @summary List this project's evaluation datasets
+ */
+export const listEvalDatasets = async (
+  projectId: string,
+  params?: ListEvalDatasetsParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listEvalDatasetsResponse> => {
+  return eliteaFetch<listEvalDatasetsResponse>(
+    getListEvalDatasetsUrl(projectId, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListEvalDatasetsQueryKey = (
+  projectId: string,
+  params?: ListEvalDatasetsParams,
+) => {
+  return [
+    `/elitea_core/eval_datasets/prompt_lib/${projectId}`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getListEvalDatasetsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listEvalDatasets>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  params?: ListEvalDatasetsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listEvalDatasets>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListEvalDatasetsQueryKey(projectId, params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listEvalDatasets>>
+  > = ({ signal }) =>
+    listEvalDatasets(projectId, params, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listEvalDatasets>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListEvalDatasetsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listEvalDatasets>>
+>;
+export type ListEvalDatasetsQueryError =
+  N400Response | N401Response | N403Response | N500Response;
+
+export function useListEvalDatasets<
+  TData = Awaited<ReturnType<typeof listEvalDatasets>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  params: undefined | ListEvalDatasetsParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listEvalDatasets>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listEvalDatasets>>,
+          TError,
+          Awaited<ReturnType<typeof listEvalDatasets>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListEvalDatasets<
+  TData = Awaited<ReturnType<typeof listEvalDatasets>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  params?: ListEvalDatasetsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listEvalDatasets>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listEvalDatasets>>,
+          TError,
+          Awaited<ReturnType<typeof listEvalDatasets>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListEvalDatasets<
+  TData = Awaited<ReturnType<typeof listEvalDatasets>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  params?: ListEvalDatasetsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listEvalDatasets>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List this project's evaluation datasets
+ */
+
+export function useListEvalDatasets<
+  TData = Awaited<ReturnType<typeof listEvalDatasets>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  params?: ListEvalDatasetsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listEvalDatasets>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListEvalDatasetsQueryOptions(
+    projectId,
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type createEvalDatasetResponse201 = {
+  data: EvalDataset;
+  status: 201;
+};
+
+export type createEvalDatasetResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type createEvalDatasetResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type createEvalDatasetResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type createEvalDatasetResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type createEvalDatasetResponseSuccess = createEvalDatasetResponse201 & {
+  headers: Headers;
+};
+export type createEvalDatasetResponseError = (
+  | createEvalDatasetResponse400
+  | createEvalDatasetResponse401
+  | createEvalDatasetResponse403
+  | createEvalDatasetResponse500
+) & {
+  headers: Headers;
+};
+
+export type createEvalDatasetResponse =
+  createEvalDatasetResponseSuccess | createEvalDatasetResponseError;
+
+export const getCreateEvalDatasetUrl = (projectId: string) => {
+  return `/elitea_core/eval_datasets/prompt_lib/${projectId}`;
+};
+
+/**
+ * Answers the row that was STORED, including every server-applied
+ * default, so a client's cache after a create is what a reload would show.
+ * A create that echoed the request body back would report success for
+ * whatever the database silently altered.
+ * @summary Create an evaluation dataset
+ */
+export const createEvalDataset = async (
+  projectId: string,
+  evalDatasetWriteRequest: EvalDatasetWriteRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<createEvalDatasetResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+  return eliteaFetch<createEvalDatasetResponse>(
+    getCreateEvalDatasetUrl(projectId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(evalDatasetWriteRequest),
+    },
+  );
+};
+
+export const getCreateEvalDatasetQueryKey = (
+  projectId: string,
+  evalDatasetWriteRequest?: EvalDatasetWriteRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/eval_datasets/prompt_lib/${projectId}`,
+    evalDatasetWriteRequest,
+  ] as const;
+};
+
+export const getCreateEvalDatasetQueryOptions = <
+  TData = Awaited<ReturnType<typeof createEvalDataset>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  evalDatasetWriteRequest: EvalDatasetWriteRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createEvalDataset>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getCreateEvalDatasetQueryKey(projectId, evalDatasetWriteRequest);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof createEvalDataset>>
+  > = ({ signal }) =>
+    createEvalDataset(projectId, evalDatasetWriteRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof createEvalDataset>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type CreateEvalDatasetQueryResult = NonNullable<
+  Awaited<ReturnType<typeof createEvalDataset>>
+>;
+export type CreateEvalDatasetQueryError =
+  N400Response | N401Response | N403Response | N500Response;
+
+export function useCreateEvalDataset<
+  TData = Awaited<ReturnType<typeof createEvalDataset>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  evalDatasetWriteRequest: EvalDatasetWriteRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createEvalDataset>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof createEvalDataset>>,
+          TError,
+          Awaited<ReturnType<typeof createEvalDataset>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCreateEvalDataset<
+  TData = Awaited<ReturnType<typeof createEvalDataset>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  evalDatasetWriteRequest: EvalDatasetWriteRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createEvalDataset>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof createEvalDataset>>,
+          TError,
+          Awaited<ReturnType<typeof createEvalDataset>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCreateEvalDataset<
+  TData = Awaited<ReturnType<typeof createEvalDataset>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  evalDatasetWriteRequest: EvalDatasetWriteRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createEvalDataset>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Create an evaluation dataset
+ */
+
+export function useCreateEvalDataset<
+  TData = Awaited<ReturnType<typeof createEvalDataset>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  evalDatasetWriteRequest: EvalDatasetWriteRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createEvalDataset>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getCreateEvalDatasetQueryOptions(
+    projectId,
+    evalDatasetWriteRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getEvalDatasetResponse200 = {
+  data: EvalDatasetDetail;
+  status: 200;
+};
+
+export type getEvalDatasetResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type getEvalDatasetResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getEvalDatasetResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type getEvalDatasetResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type getEvalDatasetResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type getEvalDatasetResponseSuccess = getEvalDatasetResponse200 & {
+  headers: Headers;
+};
+export type getEvalDatasetResponseError = (
+  | getEvalDatasetResponse400
+  | getEvalDatasetResponse401
+  | getEvalDatasetResponse403
+  | getEvalDatasetResponse404
+  | getEvalDatasetResponse500
+) & {
+  headers: Headers;
+};
+
+export type getEvalDatasetResponse =
+  getEvalDatasetResponseSuccess | getEvalDatasetResponseError;
+
+export const getGetEvalDatasetUrl = (
+  projectId: string,
+  datasetId: string,
+  params?: GetEvalDatasetParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/elitea_core/eval_dataset/prompt_lib/${projectId}/${datasetId}?${stringifiedParams}`
+    : `/elitea_core/eval_dataset/prompt_lib/${projectId}/${datasetId}`;
+};
+
+/**
+ * An out-of-range `limit` is REFUSED and not clamped: a silent clamp
+ * answers 200 with a page the caller did not ask for, and a client paging
+ * by `offset += limit` would then skip rows it never saw.
+ * @summary Read one dataset with a page of its cases
+ */
+export const getEvalDataset = async (
+  projectId: string,
+  datasetId: string,
+  params?: GetEvalDatasetParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getEvalDatasetResponse> => {
+  return eliteaFetch<getEvalDatasetResponse>(
+    getGetEvalDatasetUrl(projectId, datasetId, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetEvalDatasetQueryKey = (
+  projectId: string,
+  datasetId: string,
+  params?: GetEvalDatasetParams,
+) => {
+  return [
+    `/elitea_core/eval_dataset/prompt_lib/${projectId}/${datasetId}`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getGetEvalDatasetQueryOptions = <
+  TData = Awaited<ReturnType<typeof getEvalDataset>>,
+  TError =
+    N400Response | N401Response | N403Response | ErrorResponse | N500Response,
+>(
+  projectId: string,
+  datasetId: string,
+  params?: GetEvalDatasetParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getEvalDataset>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGetEvalDatasetQueryKey(projectId, datasetId, params);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getEvalDataset>>> = ({
+    signal,
+  }) =>
+    getEvalDataset(projectId, datasetId, params, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      datasetId !== null &&
+      datasetId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getEvalDataset>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetEvalDatasetQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getEvalDataset>>
+>;
+export type GetEvalDatasetQueryError =
+  N400Response | N401Response | N403Response | ErrorResponse | N500Response;
+
+export function useGetEvalDataset<
+  TData = Awaited<ReturnType<typeof getEvalDataset>>,
+  TError =
+    N400Response | N401Response | N403Response | ErrorResponse | N500Response,
+>(
+  projectId: string,
+  datasetId: string,
+  params: undefined | GetEvalDatasetParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getEvalDataset>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getEvalDataset>>,
+          TError,
+          Awaited<ReturnType<typeof getEvalDataset>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetEvalDataset<
+  TData = Awaited<ReturnType<typeof getEvalDataset>>,
+  TError =
+    N400Response | N401Response | N403Response | ErrorResponse | N500Response,
+>(
+  projectId: string,
+  datasetId: string,
+  params?: GetEvalDatasetParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getEvalDataset>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getEvalDataset>>,
+          TError,
+          Awaited<ReturnType<typeof getEvalDataset>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetEvalDataset<
+  TData = Awaited<ReturnType<typeof getEvalDataset>>,
+  TError =
+    N400Response | N401Response | N403Response | ErrorResponse | N500Response,
+>(
+  projectId: string,
+  datasetId: string,
+  params?: GetEvalDatasetParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getEvalDataset>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Read one dataset with a page of its cases
+ */
+
+export function useGetEvalDataset<
+  TData = Awaited<ReturnType<typeof getEvalDataset>>,
+  TError =
+    N400Response | N401Response | N403Response | ErrorResponse | N500Response,
+>(
+  projectId: string,
+  datasetId: string,
+  params?: GetEvalDatasetParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getEvalDataset>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetEvalDatasetQueryOptions(
+    projectId,
+    datasetId,
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type updateEvalDatasetResponse200 = {
+  data: EvalDataset;
+  status: 200;
+};
+
+export type updateEvalDatasetResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type updateEvalDatasetResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type updateEvalDatasetResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type updateEvalDatasetResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type updateEvalDatasetResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type updateEvalDatasetResponseSuccess = updateEvalDatasetResponse200 & {
+  headers: Headers;
+};
+export type updateEvalDatasetResponseError = (
+  | updateEvalDatasetResponse400
+  | updateEvalDatasetResponse401
+  | updateEvalDatasetResponse403
+  | updateEvalDatasetResponse404
+  | updateEvalDatasetResponse500
+) & {
+  headers: Headers;
+};
+
+export type updateEvalDatasetResponse =
+  updateEvalDatasetResponseSuccess | updateEvalDatasetResponseError;
+
+export const getUpdateEvalDatasetUrl = (
+  projectId: string,
+  datasetId: string,
+) => {
+  return `/elitea_core/eval_dataset/prompt_lib/${projectId}/${datasetId}`;
+};
+
+/**
+ * `application_id` is NOT writable. Scope is set once, at authoring:
+ * moving a dataset between agents after runs have been scored against it
+ * would re-file that history under an agent it never ran on.
+ * @summary Rename or re-describe a dataset
+ */
+export const updateEvalDataset = async (
+  projectId: string,
+  datasetId: string,
+  evalDatasetWriteRequest: EvalDatasetWriteRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<updateEvalDatasetResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+  return eliteaFetch<updateEvalDatasetResponse>(
+    getUpdateEvalDatasetUrl(projectId, datasetId),
+    {
+      ...options,
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(evalDatasetWriteRequest),
+    },
+  );
+};
+
+export const getUpdateEvalDatasetQueryKey = (
+  projectId: string,
+  datasetId: string,
+  evalDatasetWriteRequest?: EvalDatasetWriteRequest,
+) => {
+  return [
+    "PUT",
+    `/elitea_core/eval_dataset/prompt_lib/${projectId}/${datasetId}`,
+    evalDatasetWriteRequest,
+  ] as const;
+};
+
+export const getUpdateEvalDatasetQueryOptions = <
+  TData = Awaited<ReturnType<typeof updateEvalDataset>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  datasetId: string,
+  evalDatasetWriteRequest: EvalDatasetWriteRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateEvalDataset>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getUpdateEvalDatasetQueryKey(projectId, datasetId, evalDatasetWriteRequest);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof updateEvalDataset>>
+  > = ({ signal }) =>
+    updateEvalDataset(projectId, datasetId, evalDatasetWriteRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      datasetId !== null &&
+      datasetId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof updateEvalDataset>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type UpdateEvalDatasetQueryResult = NonNullable<
+  Awaited<ReturnType<typeof updateEvalDataset>>
+>;
+export type UpdateEvalDatasetQueryError =
+  N400Response | N401Response | N403Response | N404Response | N500Response;
+
+export function useUpdateEvalDataset<
+  TData = Awaited<ReturnType<typeof updateEvalDataset>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  datasetId: string,
+  evalDatasetWriteRequest: EvalDatasetWriteRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateEvalDataset>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof updateEvalDataset>>,
+          TError,
+          Awaited<ReturnType<typeof updateEvalDataset>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUpdateEvalDataset<
+  TData = Awaited<ReturnType<typeof updateEvalDataset>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  datasetId: string,
+  evalDatasetWriteRequest: EvalDatasetWriteRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateEvalDataset>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof updateEvalDataset>>,
+          TError,
+          Awaited<ReturnType<typeof updateEvalDataset>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUpdateEvalDataset<
+  TData = Awaited<ReturnType<typeof updateEvalDataset>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  datasetId: string,
+  evalDatasetWriteRequest: EvalDatasetWriteRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateEvalDataset>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Rename or re-describe a dataset
+ */
+
+export function useUpdateEvalDataset<
+  TData = Awaited<ReturnType<typeof updateEvalDataset>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  datasetId: string,
+  evalDatasetWriteRequest: EvalDatasetWriteRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateEvalDataset>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getUpdateEvalDatasetQueryOptions(
+    projectId,
+    datasetId,
+    evalDatasetWriteRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type deleteEvalDatasetResponse204 = {
+  data: void;
+  status: 204;
+};
+
+export type deleteEvalDatasetResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type deleteEvalDatasetResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type deleteEvalDatasetResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type deleteEvalDatasetResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type deleteEvalDatasetResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type deleteEvalDatasetResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type deleteEvalDatasetResponseSuccess = deleteEvalDatasetResponse204 & {
+  headers: Headers;
+};
+export type deleteEvalDatasetResponseError = (
+  | deleteEvalDatasetResponse400
+  | deleteEvalDatasetResponse401
+  | deleteEvalDatasetResponse403
+  | deleteEvalDatasetResponse404
+  | deleteEvalDatasetResponse409
+  | deleteEvalDatasetResponse500
+) & {
+  headers: Headers;
+};
+
+export type deleteEvalDatasetResponse =
+  deleteEvalDatasetResponseSuccess | deleteEvalDatasetResponseError;
+
+export const getDeleteEvalDatasetUrl = (
+  projectId: string,
+  datasetId: string,
+) => {
+  return `/elitea_core/eval_dataset/prompt_lib/${projectId}/${datasetId}`;
+};
+
+/**
+ * REFUSES with 409 while a run references the dataset. The table gives
+ * `eval_runs.dataset_id` an ON DELETE CASCADE — it has to, or an agent
+ * carrying an evaluated dataset becomes undeletable — so this refusal is
+ * the only thing between a casual tidy-up and the loss of every score.
+ * @summary Delete a dataset and its cases
+ */
+export const deleteEvalDataset = async (
+  projectId: string,
+  datasetId: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<deleteEvalDatasetResponse> => {
+  return eliteaFetch<deleteEvalDatasetResponse>(
+    getDeleteEvalDatasetUrl(projectId, datasetId),
+    {
+      ...options,
+      method: "DELETE",
+    },
+  );
+};
+
+export const getDeleteEvalDatasetQueryKey = (
+  projectId: string,
+  datasetId: string,
+) => {
+  return [
+    "DELETE",
+    `/elitea_core/eval_dataset/prompt_lib/${projectId}/${datasetId}`,
+  ] as const;
+};
+
+export const getDeleteEvalDatasetQueryOptions = <
+  TData = Awaited<ReturnType<typeof deleteEvalDataset>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ErrorResponse
+    | N500Response,
+>(
+  projectId: string,
+  datasetId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteEvalDataset>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getDeleteEvalDatasetQueryKey(projectId, datasetId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof deleteEvalDataset>>
+  > = ({ signal }) =>
+    deleteEvalDataset(projectId, datasetId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      datasetId !== null &&
+      datasetId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof deleteEvalDataset>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type DeleteEvalDatasetQueryResult = NonNullable<
+  Awaited<ReturnType<typeof deleteEvalDataset>>
+>;
+export type DeleteEvalDatasetQueryError =
+  | N400Response
+  | N401Response
+  | N403Response
+  | N404Response
+  | ErrorResponse
+  | N500Response;
+
+export function useDeleteEvalDataset<
+  TData = Awaited<ReturnType<typeof deleteEvalDataset>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ErrorResponse
+    | N500Response,
+>(
+  projectId: string,
+  datasetId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteEvalDataset>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof deleteEvalDataset>>,
+          TError,
+          Awaited<ReturnType<typeof deleteEvalDataset>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDeleteEvalDataset<
+  TData = Awaited<ReturnType<typeof deleteEvalDataset>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ErrorResponse
+    | N500Response,
+>(
+  projectId: string,
+  datasetId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteEvalDataset>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof deleteEvalDataset>>,
+          TError,
+          Awaited<ReturnType<typeof deleteEvalDataset>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDeleteEvalDataset<
+  TData = Awaited<ReturnType<typeof deleteEvalDataset>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ErrorResponse
+    | N500Response,
+>(
+  projectId: string,
+  datasetId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteEvalDataset>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Delete a dataset and its cases
+ */
+
+export function useDeleteEvalDataset<
+  TData = Awaited<ReturnType<typeof deleteEvalDataset>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ErrorResponse
+    | N500Response,
+>(
+  projectId: string,
+  datasetId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteEvalDataset>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getDeleteEvalDatasetQueryOptions(
+    projectId,
+    datasetId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type addEvalDatasetCaseResponse201 = {
+  data: EvalDatasetCase;
+  status: 201;
+};
+
+export type addEvalDatasetCaseResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type addEvalDatasetCaseResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type addEvalDatasetCaseResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type addEvalDatasetCaseResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type addEvalDatasetCaseResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type addEvalDatasetCaseResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type addEvalDatasetCaseResponseSuccess =
+  addEvalDatasetCaseResponse201 & {
+    headers: Headers;
+  };
+export type addEvalDatasetCaseResponseError = (
+  | addEvalDatasetCaseResponse400
+  | addEvalDatasetCaseResponse401
+  | addEvalDatasetCaseResponse403
+  | addEvalDatasetCaseResponse404
+  | addEvalDatasetCaseResponse409
+  | addEvalDatasetCaseResponse500
+) & {
+  headers: Headers;
+};
+
+export type addEvalDatasetCaseResponse =
+  addEvalDatasetCaseResponseSuccess | addEvalDatasetCaseResponseError;
+
+export const getAddEvalDatasetCaseUrl = (
+  projectId: string,
+  datasetId: string,
+) => {
+  return `/elitea_core/eval_dataset_cases/prompt_lib/${projectId}/${datasetId}`;
+};
+
+/**
+ * A dataset holds at most ten cases, and the count and the insert are ONE
+ * statement so two concurrent writers cannot both see room. The cap is not
+ * cosmetic: a run performs two model calls per case, so it is what stands
+ * between a large paste and a bill nobody authorised. The refusal is a 409
+ * naming the limit, never a silent truncation — a dataset that reads as
+ * complete and is not would score an agent on a question it never saw.
+ *
+ * A CASE WRITE takes the dataset UPDATE permission, not one of its own.
+ * The reference declares no case permission, and a caller who may not edit
+ * a dataset must not be able to change what it asks.
+ * @summary Append one case to a dataset
+ */
+export const addEvalDatasetCase = async (
+  projectId: string,
+  datasetId: string,
+  evalDatasetCaseWriteRequest: EvalDatasetCaseWriteRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<addEvalDatasetCaseResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+  return eliteaFetch<addEvalDatasetCaseResponse>(
+    getAddEvalDatasetCaseUrl(projectId, datasetId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(evalDatasetCaseWriteRequest),
+    },
+  );
+};
+
+export const getAddEvalDatasetCaseQueryKey = (
+  projectId: string,
+  datasetId: string,
+  evalDatasetCaseWriteRequest?: EvalDatasetCaseWriteRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/eval_dataset_cases/prompt_lib/${projectId}/${datasetId}`,
+    evalDatasetCaseWriteRequest,
+  ] as const;
+};
+
+export const getAddEvalDatasetCaseQueryOptions = <
+  TData = Awaited<ReturnType<typeof addEvalDatasetCase>>,
+  TError =
+    N400Response | N401Response | N403Response | ErrorResponse | N500Response,
+>(
+  projectId: string,
+  datasetId: string,
+  evalDatasetCaseWriteRequest: EvalDatasetCaseWriteRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof addEvalDatasetCase>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getAddEvalDatasetCaseQueryKey(
+      projectId,
+      datasetId,
+      evalDatasetCaseWriteRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof addEvalDatasetCase>>
+  > = ({ signal }) =>
+    addEvalDatasetCase(projectId, datasetId, evalDatasetCaseWriteRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      datasetId !== null &&
+      datasetId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof addEvalDatasetCase>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type AddEvalDatasetCaseQueryResult = NonNullable<
+  Awaited<ReturnType<typeof addEvalDatasetCase>>
+>;
+export type AddEvalDatasetCaseQueryError =
+  N400Response | N401Response | N403Response | ErrorResponse | N500Response;
+
+export function useAddEvalDatasetCase<
+  TData = Awaited<ReturnType<typeof addEvalDatasetCase>>,
+  TError =
+    N400Response | N401Response | N403Response | ErrorResponse | N500Response,
+>(
+  projectId: string,
+  datasetId: string,
+  evalDatasetCaseWriteRequest: EvalDatasetCaseWriteRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof addEvalDatasetCase>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof addEvalDatasetCase>>,
+          TError,
+          Awaited<ReturnType<typeof addEvalDatasetCase>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useAddEvalDatasetCase<
+  TData = Awaited<ReturnType<typeof addEvalDatasetCase>>,
+  TError =
+    N400Response | N401Response | N403Response | ErrorResponse | N500Response,
+>(
+  projectId: string,
+  datasetId: string,
+  evalDatasetCaseWriteRequest: EvalDatasetCaseWriteRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof addEvalDatasetCase>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof addEvalDatasetCase>>,
+          TError,
+          Awaited<ReturnType<typeof addEvalDatasetCase>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useAddEvalDatasetCase<
+  TData = Awaited<ReturnType<typeof addEvalDatasetCase>>,
+  TError =
+    N400Response | N401Response | N403Response | ErrorResponse | N500Response,
+>(
+  projectId: string,
+  datasetId: string,
+  evalDatasetCaseWriteRequest: EvalDatasetCaseWriteRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof addEvalDatasetCase>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Append one case to a dataset
+ */
+
+export function useAddEvalDatasetCase<
+  TData = Awaited<ReturnType<typeof addEvalDatasetCase>>,
+  TError =
+    N400Response | N401Response | N403Response | ErrorResponse | N500Response,
+>(
+  projectId: string,
+  datasetId: string,
+  evalDatasetCaseWriteRequest: EvalDatasetCaseWriteRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof addEvalDatasetCase>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getAddEvalDatasetCaseQueryOptions(
+    projectId,
+    datasetId,
+    evalDatasetCaseWriteRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type updateEvalDatasetCaseResponse200 = {
+  data: EvalDatasetCase;
+  status: 200;
+};
+
+export type updateEvalDatasetCaseResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type updateEvalDatasetCaseResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type updateEvalDatasetCaseResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type updateEvalDatasetCaseResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type updateEvalDatasetCaseResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type updateEvalDatasetCaseResponseSuccess =
+  updateEvalDatasetCaseResponse200 & {
+    headers: Headers;
+  };
+export type updateEvalDatasetCaseResponseError = (
+  | updateEvalDatasetCaseResponse400
+  | updateEvalDatasetCaseResponse401
+  | updateEvalDatasetCaseResponse403
+  | updateEvalDatasetCaseResponse404
+  | updateEvalDatasetCaseResponse500
+) & {
+  headers: Headers;
+};
+
+export type updateEvalDatasetCaseResponse =
+  updateEvalDatasetCaseResponseSuccess | updateEvalDatasetCaseResponseError;
+
+export const getUpdateEvalDatasetCaseUrl = (
+  projectId: string,
+  datasetId: string,
+  caseId: string,
+) => {
+  return `/elitea_core/eval_dataset_case/prompt_lib/${projectId}/${datasetId}/${caseId}`;
+};
+
+/**
+ * `dataset_id` is in the storage predicate and not only in the path.
+ * Without it, a caller who knows any case id could edit it through any
+ * dataset's path and the 404 would never fire.
+ * @summary Rewrite one case
+ */
+export const updateEvalDatasetCase = async (
+  projectId: string,
+  datasetId: string,
+  caseId: string,
+  evalDatasetCaseWriteRequest: EvalDatasetCaseWriteRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<updateEvalDatasetCaseResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+  return eliteaFetch<updateEvalDatasetCaseResponse>(
+    getUpdateEvalDatasetCaseUrl(projectId, datasetId, caseId),
+    {
+      ...options,
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(evalDatasetCaseWriteRequest),
+    },
+  );
+};
+
+export const getUpdateEvalDatasetCaseQueryKey = (
+  projectId: string,
+  datasetId: string,
+  caseId: string,
+  evalDatasetCaseWriteRequest?: EvalDatasetCaseWriteRequest,
+) => {
+  return [
+    "PUT",
+    `/elitea_core/eval_dataset_case/prompt_lib/${projectId}/${datasetId}/${caseId}`,
+    evalDatasetCaseWriteRequest,
+  ] as const;
+};
+
+export const getUpdateEvalDatasetCaseQueryOptions = <
+  TData = Awaited<ReturnType<typeof updateEvalDatasetCase>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  datasetId: string,
+  caseId: string,
+  evalDatasetCaseWriteRequest: EvalDatasetCaseWriteRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateEvalDatasetCase>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getUpdateEvalDatasetCaseQueryKey(
+      projectId,
+      datasetId,
+      caseId,
+      evalDatasetCaseWriteRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof updateEvalDatasetCase>>
+  > = ({ signal }) =>
+    updateEvalDatasetCase(
+      projectId,
+      datasetId,
+      caseId,
+      evalDatasetCaseWriteRequest,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      datasetId !== null &&
+      datasetId !== undefined &&
+      caseId !== null &&
+      caseId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof updateEvalDatasetCase>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type UpdateEvalDatasetCaseQueryResult = NonNullable<
+  Awaited<ReturnType<typeof updateEvalDatasetCase>>
+>;
+export type UpdateEvalDatasetCaseQueryError =
+  N400Response | N401Response | N403Response | N404Response | N500Response;
+
+export function useUpdateEvalDatasetCase<
+  TData = Awaited<ReturnType<typeof updateEvalDatasetCase>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  datasetId: string,
+  caseId: string,
+  evalDatasetCaseWriteRequest: EvalDatasetCaseWriteRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateEvalDatasetCase>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof updateEvalDatasetCase>>,
+          TError,
+          Awaited<ReturnType<typeof updateEvalDatasetCase>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUpdateEvalDatasetCase<
+  TData = Awaited<ReturnType<typeof updateEvalDatasetCase>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  datasetId: string,
+  caseId: string,
+  evalDatasetCaseWriteRequest: EvalDatasetCaseWriteRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateEvalDatasetCase>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof updateEvalDatasetCase>>,
+          TError,
+          Awaited<ReturnType<typeof updateEvalDatasetCase>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUpdateEvalDatasetCase<
+  TData = Awaited<ReturnType<typeof updateEvalDatasetCase>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  datasetId: string,
+  caseId: string,
+  evalDatasetCaseWriteRequest: EvalDatasetCaseWriteRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateEvalDatasetCase>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Rewrite one case
+ */
+
+export function useUpdateEvalDatasetCase<
+  TData = Awaited<ReturnType<typeof updateEvalDatasetCase>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  datasetId: string,
+  caseId: string,
+  evalDatasetCaseWriteRequest: EvalDatasetCaseWriteRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateEvalDatasetCase>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getUpdateEvalDatasetCaseQueryOptions(
+    projectId,
+    datasetId,
+    caseId,
+    evalDatasetCaseWriteRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type deleteEvalDatasetCaseResponse204 = {
+  data: void;
+  status: 204;
+};
+
+export type deleteEvalDatasetCaseResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type deleteEvalDatasetCaseResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type deleteEvalDatasetCaseResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type deleteEvalDatasetCaseResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type deleteEvalDatasetCaseResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type deleteEvalDatasetCaseResponseSuccess =
+  deleteEvalDatasetCaseResponse204 & {
+    headers: Headers;
+  };
+export type deleteEvalDatasetCaseResponseError = (
+  | deleteEvalDatasetCaseResponse400
+  | deleteEvalDatasetCaseResponse401
+  | deleteEvalDatasetCaseResponse403
+  | deleteEvalDatasetCaseResponse404
+  | deleteEvalDatasetCaseResponse500
+) & {
+  headers: Headers;
+};
+
+export type deleteEvalDatasetCaseResponse =
+  deleteEvalDatasetCaseResponseSuccess | deleteEvalDatasetCaseResponseError;
+
+export const getDeleteEvalDatasetCaseUrl = (
+  projectId: string,
+  datasetId: string,
+  caseId: string,
+) => {
+  return `/elitea_core/eval_dataset_case/prompt_lib/${projectId}/${datasetId}/${caseId}`;
+};
+
+/**
+ * @summary Remove one case from a dataset
+ */
+export const deleteEvalDatasetCase = async (
+  projectId: string,
+  datasetId: string,
+  caseId: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<deleteEvalDatasetCaseResponse> => {
+  return eliteaFetch<deleteEvalDatasetCaseResponse>(
+    getDeleteEvalDatasetCaseUrl(projectId, datasetId, caseId),
+    {
+      ...options,
+      method: "DELETE",
+    },
+  );
+};
+
+export const getDeleteEvalDatasetCaseQueryKey = (
+  projectId: string,
+  datasetId: string,
+  caseId: string,
+) => {
+  return [
+    "DELETE",
+    `/elitea_core/eval_dataset_case/prompt_lib/${projectId}/${datasetId}/${caseId}`,
+  ] as const;
+};
+
+export const getDeleteEvalDatasetCaseQueryOptions = <
+  TData = Awaited<ReturnType<typeof deleteEvalDatasetCase>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  datasetId: string,
+  caseId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteEvalDatasetCase>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getDeleteEvalDatasetCaseQueryKey(projectId, datasetId, caseId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof deleteEvalDatasetCase>>
+  > = ({ signal }) =>
+    deleteEvalDatasetCase(projectId, datasetId, caseId, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      datasetId !== null &&
+      datasetId !== undefined &&
+      caseId !== null &&
+      caseId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof deleteEvalDatasetCase>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type DeleteEvalDatasetCaseQueryResult = NonNullable<
+  Awaited<ReturnType<typeof deleteEvalDatasetCase>>
+>;
+export type DeleteEvalDatasetCaseQueryError =
+  N400Response | N401Response | N403Response | N404Response | N500Response;
+
+export function useDeleteEvalDatasetCase<
+  TData = Awaited<ReturnType<typeof deleteEvalDatasetCase>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  datasetId: string,
+  caseId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteEvalDatasetCase>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof deleteEvalDatasetCase>>,
+          TError,
+          Awaited<ReturnType<typeof deleteEvalDatasetCase>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDeleteEvalDatasetCase<
+  TData = Awaited<ReturnType<typeof deleteEvalDatasetCase>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  datasetId: string,
+  caseId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteEvalDatasetCase>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof deleteEvalDatasetCase>>,
+          TError,
+          Awaited<ReturnType<typeof deleteEvalDatasetCase>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDeleteEvalDatasetCase<
+  TData = Awaited<ReturnType<typeof deleteEvalDatasetCase>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  datasetId: string,
+  caseId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteEvalDatasetCase>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Remove one case from a dataset
+ */
+
+export function useDeleteEvalDatasetCase<
+  TData = Awaited<ReturnType<typeof deleteEvalDatasetCase>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  datasetId: string,
+  caseId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteEvalDatasetCase>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getDeleteEvalDatasetCaseQueryOptions(
+    projectId,
+    datasetId,
+    caseId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listEvalRunsResponse200 = {
+  data: EvalRunList;
+  status: 200;
+};
+
+export type listEvalRunsResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type listEvalRunsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listEvalRunsResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listEvalRunsResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type listEvalRunsResponseSuccess = listEvalRunsResponse200 & {
+  headers: Headers;
+};
+export type listEvalRunsResponseError = (
+  | listEvalRunsResponse400
+  | listEvalRunsResponse401
+  | listEvalRunsResponse403
+  | listEvalRunsResponse500
+) & {
+  headers: Headers;
+};
+
+export type listEvalRunsResponse =
+  listEvalRunsResponseSuccess | listEvalRunsResponseError;
+
+export const getListEvalRunsUrl = (
+  projectId: string,
+  params?: ListEvalRunsParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/elitea_core/eval_runs/prompt_lib/${projectId}?${stringifiedParams}`
+    : `/elitea_core/eval_runs/prompt_lib/${projectId}`;
+};
+
+/**
+ * Newest first is not cosmetic: the reference's run-history panel computes
+ * a delta against the nearest OLDER scored run, so the order is what makes
+ * "the previous run" mean the same thing to the client and to a reader.
+ * @summary List evaluation runs, newest first
+ */
+export const listEvalRuns = async (
+  projectId: string,
+  params?: ListEvalRunsParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listEvalRunsResponse> => {
+  return eliteaFetch<listEvalRunsResponse>(
+    getListEvalRunsUrl(projectId, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListEvalRunsQueryKey = (
+  projectId: string,
+  params?: ListEvalRunsParams,
+) => {
+  return [
+    `/elitea_core/eval_runs/prompt_lib/${projectId}`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getListEvalRunsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listEvalRuns>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  params?: ListEvalRunsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof listEvalRuns>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListEvalRunsQueryKey(projectId, params);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof listEvalRuns>>> = ({
+    signal,
+  }) => listEvalRuns(projectId, params, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listEvalRuns>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListEvalRunsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listEvalRuns>>
+>;
+export type ListEvalRunsQueryError =
+  N400Response | N401Response | N403Response | N500Response;
+
+export function useListEvalRuns<
+  TData = Awaited<ReturnType<typeof listEvalRuns>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  params: undefined | ListEvalRunsParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof listEvalRuns>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listEvalRuns>>,
+          TError,
+          Awaited<ReturnType<typeof listEvalRuns>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListEvalRuns<
+  TData = Awaited<ReturnType<typeof listEvalRuns>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  params?: ListEvalRunsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof listEvalRuns>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listEvalRuns>>,
+          TError,
+          Awaited<ReturnType<typeof listEvalRuns>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListEvalRuns<
+  TData = Awaited<ReturnType<typeof listEvalRuns>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  params?: ListEvalRunsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof listEvalRuns>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List evaluation runs, newest first
+ */
+
+export function useListEvalRuns<
+  TData = Awaited<ReturnType<typeof listEvalRuns>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  params?: ListEvalRunsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof listEvalRuns>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListEvalRunsQueryOptions(projectId, params, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type startEvalRunResponse201 = {
+  data: EvalRun;
+  status: 201;
+};
+
+export type startEvalRunResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type startEvalRunResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type startEvalRunResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type startEvalRunResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type startEvalRunResponse501 = {
+  data: ErrorResponse;
+  status: 501;
+};
+
+export type startEvalRunResponseSuccess = startEvalRunResponse201 & {
+  headers: Headers;
+};
+export type startEvalRunResponseError = (
+  | startEvalRunResponse400
+  | startEvalRunResponse401
+  | startEvalRunResponse403
+  | startEvalRunResponse500
+  | startEvalRunResponse501
+) & {
+  headers: Headers;
+};
+
+export type startEvalRunResponse =
+  startEvalRunResponseSuccess | startEvalRunResponseError;
+
+export const getStartEvalRunUrl = (projectId: string) => {
+  return `/elitea_core/eval_runs/prompt_lib/${projectId}`;
+};
+
+/**
+ * Freezes a SNAPSHOT of the named dimensions onto the run and queues a
+ * bounded background job inside elitea-main. The row is written FIRST and
+ * queued second: if the process dies between the two, the recovery sweep
+ * finds a `created` row and runs it, where queueing first would leave a
+ * job with no row for a worker to claim.
+ *
+ * THE SNAPSHOT IS NOT A CACHE. A dimension is editable, and the score
+ * normalisation divides by the scale range and flips on polarity, so a
+ * scorecard that re-read the live library would silently re-scale a
+ * finished run.
+ *
+ * ENGINES ARE RESTRICTED TO `ai`. A dimension that allows only `code` or
+ * `human` is refused with 501 and a named reason: there is no code sandbox
+ * in elitea-main, and a code validation that silently passed would be the
+ * most dangerous fallback in the feature.
+ *
+ * NOTE(#617): gated on `models.applications.evaluation.run.create`. There
+ * is no `run.cancel` string in the product's vocabulary, so the cancel
+ * route takes this same permission — the right that started a run is the
+ * right that stops it.
+ * @summary Start an evaluation run over one dataset
+ */
+export const startEvalRun = async (
+  projectId: string,
+  evalRunStartRequest: EvalRunStartRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<startEvalRunResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+  return eliteaFetch<startEvalRunResponse>(getStartEvalRunUrl(projectId), {
+    ...options,
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...getHeaders(options?.headers),
+    },
+    body: JSON.stringify(evalRunStartRequest),
+  });
+};
+
+export const getStartEvalRunQueryKey = (
+  projectId: string,
+  evalRunStartRequest?: EvalRunStartRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/eval_runs/prompt_lib/${projectId}`,
+    evalRunStartRequest,
+  ] as const;
+};
+
+export const getStartEvalRunQueryOptions = <
+  TData = Awaited<ReturnType<typeof startEvalRun>>,
+  TError =
+    N400Response | N401Response | N403Response | N500Response | ErrorResponse,
+>(
+  projectId: string,
+  evalRunStartRequest: EvalRunStartRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof startEvalRun>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getStartEvalRunQueryKey(projectId, evalRunStartRequest);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof startEvalRun>>> = ({
+    signal,
+  }) =>
+    startEvalRun(projectId, evalRunStartRequest, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof startEvalRun>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type StartEvalRunQueryResult = NonNullable<
+  Awaited<ReturnType<typeof startEvalRun>>
+>;
+export type StartEvalRunQueryError =
+  N400Response | N401Response | N403Response | N500Response | ErrorResponse;
+
+export function useStartEvalRun<
+  TData = Awaited<ReturnType<typeof startEvalRun>>,
+  TError =
+    N400Response | N401Response | N403Response | N500Response | ErrorResponse,
+>(
+  projectId: string,
+  evalRunStartRequest: EvalRunStartRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof startEvalRun>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof startEvalRun>>,
+          TError,
+          Awaited<ReturnType<typeof startEvalRun>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useStartEvalRun<
+  TData = Awaited<ReturnType<typeof startEvalRun>>,
+  TError =
+    N400Response | N401Response | N403Response | N500Response | ErrorResponse,
+>(
+  projectId: string,
+  evalRunStartRequest: EvalRunStartRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof startEvalRun>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof startEvalRun>>,
+          TError,
+          Awaited<ReturnType<typeof startEvalRun>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useStartEvalRun<
+  TData = Awaited<ReturnType<typeof startEvalRun>>,
+  TError =
+    N400Response | N401Response | N403Response | N500Response | ErrorResponse,
+>(
+  projectId: string,
+  evalRunStartRequest: EvalRunStartRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof startEvalRun>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Start an evaluation run over one dataset
+ */
+
+export function useStartEvalRun<
+  TData = Awaited<ReturnType<typeof startEvalRun>>,
+  TError =
+    N400Response | N401Response | N403Response | N500Response | ErrorResponse,
+>(
+  projectId: string,
+  evalRunStartRequest: EvalRunStartRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof startEvalRun>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getStartEvalRunQueryOptions(
+    projectId,
+    evalRunStartRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getEvalRunResponse200 = {
+  data: EvalRun;
+  status: 200;
+};
+
+export type getEvalRunResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type getEvalRunResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getEvalRunResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type getEvalRunResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type getEvalRunResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type getEvalRunResponseSuccess = getEvalRunResponse200 & {
+  headers: Headers;
+};
+export type getEvalRunResponseError = (
+  | getEvalRunResponse400
+  | getEvalRunResponse401
+  | getEvalRunResponse403
+  | getEvalRunResponse404
+  | getEvalRunResponse500
+) & {
+  headers: Headers;
+};
+
+export type getEvalRunResponse =
+  getEvalRunResponseSuccess | getEvalRunResponseError;
+
+export const getGetEvalRunUrl = (projectId: string, runId: string) => {
+  return `/elitea_core/eval_run/prompt_lib/${projectId}/${runId}`;
+};
+
+/**
+ * THIS IS THE PROGRESS FEED. The reference follows a run over a socket
+ * namespace; there is no socket server here (#126 deleted it and #615
+ * recorded the decision), so the client POLLS this route. `progress`
+ * carries `{done, total}` and the status vocabulary tells it when to stop.
+ * @summary Read one run, with its progress
+ */
+export const getEvalRun = async (
+  projectId: string,
+  runId: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getEvalRunResponse> => {
+  return eliteaFetch<getEvalRunResponse>(getGetEvalRunUrl(projectId, runId), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetEvalRunQueryKey = (projectId: string, runId: string) => {
+  return [`/elitea_core/eval_run/prompt_lib/${projectId}/${runId}`] as const;
+};
+
+export const getGetEvalRunQueryOptions = <
+  TData = Awaited<ReturnType<typeof getEvalRun>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getEvalRun>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetEvalRunQueryKey(projectId, runId);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getEvalRun>>> = ({
+    signal,
+  }) => getEvalRun(projectId, runId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      runId !== null &&
+      runId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getEvalRun>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetEvalRunQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getEvalRun>>
+>;
+export type GetEvalRunQueryError =
+  N400Response | N401Response | N403Response | N404Response | N500Response;
+
+export function useGetEvalRun<
+  TData = Awaited<ReturnType<typeof getEvalRun>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getEvalRun>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getEvalRun>>,
+          TError,
+          Awaited<ReturnType<typeof getEvalRun>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetEvalRun<
+  TData = Awaited<ReturnType<typeof getEvalRun>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getEvalRun>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getEvalRun>>,
+          TError,
+          Awaited<ReturnType<typeof getEvalRun>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetEvalRun<
+  TData = Awaited<ReturnType<typeof getEvalRun>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getEvalRun>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Read one run, with its progress
+ */
+
+export function useGetEvalRun<
+  TData = Awaited<ReturnType<typeof getEvalRun>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getEvalRun>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetEvalRunQueryOptions(projectId, runId, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type cancelEvalRunResponse200 = {
+  data: EvalRun;
+  status: 200;
+};
+
+export type cancelEvalRunResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type cancelEvalRunResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type cancelEvalRunResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type cancelEvalRunResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type cancelEvalRunResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type cancelEvalRunResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type cancelEvalRunResponseSuccess = cancelEvalRunResponse200 & {
+  headers: Headers;
+};
+export type cancelEvalRunResponseError = (
+  | cancelEvalRunResponse400
+  | cancelEvalRunResponse401
+  | cancelEvalRunResponse403
+  | cancelEvalRunResponse404
+  | cancelEvalRunResponse409
+  | cancelEvalRunResponse500
+) & {
+  headers: Headers;
+};
+
+export type cancelEvalRunResponse =
+  cancelEvalRunResponseSuccess | cancelEvalRunResponseError;
+
+export const getCancelEvalRunUrl = (projectId: string, runId: string) => {
+  return `/elitea_core/eval_run_cancel/prompt_lib/${projectId}/${runId}`;
+};
+
+/**
+ * The ROW is written first and the in-process goroutine is signalled
+ * second. The write is what makes the cancel durable: a signal reaches
+ * only the replica executing the run, and a queued run has no goroutine at
+ * all. The worker's own finish refuses to move a row that is already
+ * terminal, so a cancellation cannot be overwritten by the walk that was
+ * already in flight.
+ *
+ * A run that has already finished answers 409, not 404: the run exists,
+ * and telling the caller it does not sends them looking for a missing row.
+ * @summary Stop a run
+ */
+export const cancelEvalRun = async (
+  projectId: string,
+  runId: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<cancelEvalRunResponse> => {
+  return eliteaFetch<cancelEvalRunResponse>(
+    getCancelEvalRunUrl(projectId, runId),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getCancelEvalRunQueryKey = (projectId: string, runId: string) => {
+  return [
+    "POST",
+    `/elitea_core/eval_run_cancel/prompt_lib/${projectId}/${runId}`,
+  ] as const;
+};
+
+export const getCancelEvalRunQueryOptions = <
+  TData = Awaited<ReturnType<typeof cancelEvalRun>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ErrorResponse
+    | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof cancelEvalRun>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getCancelEvalRunQueryKey(projectId, runId);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof cancelEvalRun>>> = ({
+    signal,
+  }) => cancelEvalRun(projectId, runId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      runId !== null &&
+      runId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof cancelEvalRun>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type CancelEvalRunQueryResult = NonNullable<
+  Awaited<ReturnType<typeof cancelEvalRun>>
+>;
+export type CancelEvalRunQueryError =
+  | N400Response
+  | N401Response
+  | N403Response
+  | N404Response
+  | ErrorResponse
+  | N500Response;
+
+export function useCancelEvalRun<
+  TData = Awaited<ReturnType<typeof cancelEvalRun>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ErrorResponse
+    | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof cancelEvalRun>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof cancelEvalRun>>,
+          TError,
+          Awaited<ReturnType<typeof cancelEvalRun>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCancelEvalRun<
+  TData = Awaited<ReturnType<typeof cancelEvalRun>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ErrorResponse
+    | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof cancelEvalRun>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof cancelEvalRun>>,
+          TError,
+          Awaited<ReturnType<typeof cancelEvalRun>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCancelEvalRun<
+  TData = Awaited<ReturnType<typeof cancelEvalRun>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ErrorResponse
+    | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof cancelEvalRun>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Stop a run
+ */
+
+export function useCancelEvalRun<
+  TData = Awaited<ReturnType<typeof cancelEvalRun>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ErrorResponse
+    | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof cancelEvalRun>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getCancelEvalRunQueryOptions(projectId, runId, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getEvalScorecardResponse200 = {
+  data: EvalScorecard;
+  status: 200;
+};
+
+export type getEvalScorecardResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type getEvalScorecardResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getEvalScorecardResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type getEvalScorecardResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type getEvalScorecardResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type getEvalScorecardResponseSuccess = getEvalScorecardResponse200 & {
+  headers: Headers;
+};
+export type getEvalScorecardResponseError = (
+  | getEvalScorecardResponse400
+  | getEvalScorecardResponse401
+  | getEvalScorecardResponse403
+  | getEvalScorecardResponse404
+  | getEvalScorecardResponse500
+) & {
+  headers: Headers;
+};
+
+export type getEvalScorecardResponse =
+  getEvalScorecardResponseSuccess | getEvalScorecardResponseError;
+
+export const getGetEvalScorecardUrl = (
+  projectId: string,
+  runId: string,
+  params?: GetEvalScorecardParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/elitea_core/eval_results/prompt_lib/${projectId}/${runId}?${stringifiedParams}`
+    : `/elitea_core/eval_results/prompt_lib/${projectId}/${runId}`;
+};
+
+/**
+ * READ-ONLY. There is no human-score write in this release, and the
+ * response OMITS `human_scores` rather than answering `[]` — an empty
+ * array tells a client "there are none" where the truth is "this
+ * deployment cannot have any". `unavailable` names each omission with its
+ * reason.
+ *
+ * `total` is a separate count and never `results.length`. The reference's
+ * pager uses `total`, `offset` and the page length together to decide
+ * whether it has covered every case, so a total that was really the page
+ * size would make a truncated scorecard claim to be complete.
+ * @summary Read a run's scorecard
+ */
+export const getEvalScorecard = async (
+  projectId: string,
+  runId: string,
+  params?: GetEvalScorecardParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getEvalScorecardResponse> => {
+  return eliteaFetch<getEvalScorecardResponse>(
+    getGetEvalScorecardUrl(projectId, runId, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetEvalScorecardQueryKey = (
+  projectId: string,
+  runId: string,
+  params?: GetEvalScorecardParams,
+) => {
+  return [
+    `/elitea_core/eval_results/prompt_lib/${projectId}/${runId}`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getGetEvalScorecardQueryOptions = <
+  TData = Awaited<ReturnType<typeof getEvalScorecard>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  params?: GetEvalScorecardParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getEvalScorecard>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGetEvalScorecardQueryKey(projectId, runId, params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getEvalScorecard>>
+  > = ({ signal }) =>
+    getEvalScorecard(projectId, runId, params, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      runId !== null &&
+      runId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getEvalScorecard>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetEvalScorecardQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getEvalScorecard>>
+>;
+export type GetEvalScorecardQueryError =
+  N400Response | N401Response | N403Response | N404Response | N500Response;
+
+export function useGetEvalScorecard<
+  TData = Awaited<ReturnType<typeof getEvalScorecard>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  params: undefined | GetEvalScorecardParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getEvalScorecard>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getEvalScorecard>>,
+          TError,
+          Awaited<ReturnType<typeof getEvalScorecard>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetEvalScorecard<
+  TData = Awaited<ReturnType<typeof getEvalScorecard>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  params?: GetEvalScorecardParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getEvalScorecard>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getEvalScorecard>>,
+          TError,
+          Awaited<ReturnType<typeof getEvalScorecard>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetEvalScorecard<
+  TData = Awaited<ReturnType<typeof getEvalScorecard>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  params?: GetEvalScorecardParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getEvalScorecard>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Read a run's scorecard
+ */
+
+export function useGetEvalScorecard<
+  TData = Awaited<ReturnType<typeof getEvalScorecard>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  params?: GetEvalScorecardParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getEvalScorecard>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetEvalScorecardQueryOptions(
+    projectId,
+    runId,
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
 
 export type predictLLMResponse200 = {
   data: PredictLLMResponse;
@@ -419,6 +3859,318 @@ export function usePredictLLM<
   const queryOptions = getPredictLLMQueryOptions(
     projectId,
     predictLLMRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type generateApplicationDraftResponse200 = {
+  data: ApplicationDraft;
+  status: 200;
+};
+
+export type generateApplicationDraftResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type generateApplicationDraftResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type generateApplicationDraftResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type generateApplicationDraftResponse413 = {
+  data: ErrorResponse;
+  status: 413;
+};
+
+export type generateApplicationDraftResponse422 = {
+  data: ErrorResponse;
+  status: 422;
+};
+
+export type generateApplicationDraftResponse502 = {
+  data: ErrorResponse;
+  status: 502;
+};
+
+export type generateApplicationDraftResponse503 = {
+  data: PredictLLMUnavailableResponse;
+  status: 503;
+};
+
+export type generateApplicationDraftResponseSuccess =
+  generateApplicationDraftResponse200 & {
+    headers: Headers;
+  };
+export type generateApplicationDraftResponseError = (
+  | generateApplicationDraftResponse400
+  | generateApplicationDraftResponse401
+  | generateApplicationDraftResponse403
+  | generateApplicationDraftResponse413
+  | generateApplicationDraftResponse422
+  | generateApplicationDraftResponse502
+  | generateApplicationDraftResponse503
+) & {
+  headers: Headers;
+};
+
+export type generateApplicationDraftResponse =
+  | generateApplicationDraftResponseSuccess
+  | generateApplicationDraftResponseError;
+
+export const getGenerateApplicationDraftUrl = (projectId: string) => {
+  return `/elitea_core/generate_application_draft/prompt_lib/${projectId}`;
+};
+
+/**
+ * These three draft routes stood in router.go's NOTE(#126) tombstone —
+ * registered behind a `RouterConfig.Predictor` nothing ever assigned, so
+ * they answered 404 in every deployment. They are pure LLM plays: one
+ * blocking turn through the same gateway hop `predict_llm` uses, no
+ * runtime and no task. The system prompt is in the Go source rather than
+ * in the service-prompt configuration store legacy read it from, so a
+ * deployment that has never seeded a service prompt still generates
+ * drafts.
+ *
+ * NOTE(#254): internal/api/v2/drafts/drafts.go GenerateApplicationDraft.
+ * Gated on `models.applications.applications.create`, the permission
+ * legacy's own generate_application_draft.py declares.
+ * @summary Draft an agent from a plain-text description
+ */
+export const generateApplicationDraft = async (
+  projectId: string,
+  generateApplicationDraftRequest: GenerateApplicationDraftRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<generateApplicationDraftResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+  return eliteaFetch<generateApplicationDraftResponse>(
+    getGenerateApplicationDraftUrl(projectId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(generateApplicationDraftRequest),
+    },
+  );
+};
+
+export const getGenerateApplicationDraftQueryKey = (
+  projectId: string,
+  generateApplicationDraftRequest?: GenerateApplicationDraftRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/generate_application_draft/prompt_lib/${projectId}`,
+    generateApplicationDraftRequest,
+  ] as const;
+};
+
+export const getGenerateApplicationDraftQueryOptions = <
+  TData = Awaited<ReturnType<typeof generateApplicationDraft>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ErrorResponse
+    | PredictLLMUnavailableResponse,
+>(
+  projectId: string,
+  generateApplicationDraftRequest: GenerateApplicationDraftRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof generateApplicationDraft>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGenerateApplicationDraftQueryKey(
+      projectId,
+      generateApplicationDraftRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof generateApplicationDraft>>
+  > = ({ signal }) =>
+    generateApplicationDraft(projectId, generateApplicationDraftRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof generateApplicationDraft>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GenerateApplicationDraftQueryResult = NonNullable<
+  Awaited<ReturnType<typeof generateApplicationDraft>>
+>;
+export type GenerateApplicationDraftQueryError =
+  | N400Response
+  | N401Response
+  | N403Response
+  | ErrorResponse
+  | PredictLLMUnavailableResponse;
+
+export function useGenerateApplicationDraft<
+  TData = Awaited<ReturnType<typeof generateApplicationDraft>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ErrorResponse
+    | PredictLLMUnavailableResponse,
+>(
+  projectId: string,
+  generateApplicationDraftRequest: GenerateApplicationDraftRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof generateApplicationDraft>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof generateApplicationDraft>>,
+          TError,
+          Awaited<ReturnType<typeof generateApplicationDraft>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGenerateApplicationDraft<
+  TData = Awaited<ReturnType<typeof generateApplicationDraft>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ErrorResponse
+    | PredictLLMUnavailableResponse,
+>(
+  projectId: string,
+  generateApplicationDraftRequest: GenerateApplicationDraftRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof generateApplicationDraft>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof generateApplicationDraft>>,
+          TError,
+          Awaited<ReturnType<typeof generateApplicationDraft>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGenerateApplicationDraft<
+  TData = Awaited<ReturnType<typeof generateApplicationDraft>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ErrorResponse
+    | PredictLLMUnavailableResponse,
+>(
+  projectId: string,
+  generateApplicationDraftRequest: GenerateApplicationDraftRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof generateApplicationDraft>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Draft an agent from a plain-text description
+ */
+
+export function useGenerateApplicationDraft<
+  TData = Awaited<ReturnType<typeof generateApplicationDraft>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ErrorResponse
+    | PredictLLMUnavailableResponse,
+>(
+  projectId: string,
+  generateApplicationDraftRequest: GenerateApplicationDraftRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof generateApplicationDraft>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGenerateApplicationDraftQueryOptions(
+    projectId,
+    generateApplicationDraftRequest,
     options,
   );
 
@@ -940,9 +4692,20 @@ export const getListPublicApplicationsUrl = (
 };
 
 /**
- * NOTE(W2): internal/api/v2/eliteacore/handler.go:1251-1317 — {rows,
- * total}; limit/offset are accepted but not read (hard LIMIT 50); the
- * handler reads ?category=.
+ * The public catalogue. Answers `{rows, total}` where `total` counts the
+ * FILTERED set, not the whole catalogue, so a client can page through it.
+ *
+ * Every parameter below is read by
+ * internal/api/v2/eliteacore/public_applications.go. A `sort_by`,
+ * `sort_order`, `agents_type` or `statuses` value outside its allowlist,
+ * or a `limit`/`offset` outside its range, is refused with 400 and a body
+ * naming the parameter — it is never silently ignored. The 400 is NOT
+ * declared as a response here: `eliteaFetch` throws on every non-2xx, so
+ * this codebase keeps generated response types 200-only (see
+ * apps/elitea-web/src/pages/agents/Latest.tsx).
+ *
+ * Trending (`trend_start_period`/`trend_end_period`) is the one pylon
+ * parameter still missing here.
  * @summary List published applications visible without project membership
  */
 export const listPublicApplications = async (
@@ -8372,12 +12135,19 @@ export type getDocumentLoadersResponse403 = {
   status: 403;
 };
 
+export type getDocumentLoadersResponse501 = {
+  data: CapabilityUnavailableResponse;
+  status: 501;
+};
+
 export type getDocumentLoadersResponseSuccess =
   getDocumentLoadersResponse200 & {
     headers: Headers;
   };
 export type getDocumentLoadersResponseError = (
-  getDocumentLoadersResponse401 | getDocumentLoadersResponse403
+  | getDocumentLoadersResponse401
+  | getDocumentLoadersResponse403
+  | getDocumentLoadersResponse501
 ) & {
   headers: Headers;
 };
@@ -8390,8 +12160,28 @@ export const getGetDocumentLoadersUrl = (projectId: string) => {
 };
 
 /**
- * NOTE(W2): static {items, total} envelope (NOT a bare array),
- * internal/api/v2/toolkits/handler.go:466-510.
+ * TWO handlers serve this ONE path, and the deployment chooses which.
+ *
+ * ELITEA_INDEX_TYPES_ENABLED=true composes the reviewed catalogue
+ * (internal/api/v2/indextypes, CurrentIndexTypesRoute), which
+ * production_router.go registers on the root router. chi prefers that
+ * explicit registration, so the reviewed route answers 200 with the
+ * document/image/code extension maps taken from the pinned SDK snapshot
+ * (internal/runtimecomposition/current_index_types_snapshot.json).
+ *
+ * The variable is "false" in the shipped chart
+ * (deploy/helm/elitea/values.yaml), so a default install reaches the
+ * compatibility handler instead, and that handler REFUSES with 501 and a
+ * machine-readable `code` (issue 615, internal/api/v2/toolkits/handler.go,
+ * IndexTypes). It used to answer 200 with six hand-written loader
+ * entries that no SDK, snapshot, database or configuration produced.
+ *
+ * NOTE(W2): the 200 envelope is a static {items, total} object, NOT a
+ * bare array.
+ *
+ * A generated client must handle BOTH answers. 501 is FINAL, not
+ * transient: apps/elitea-web/src/app/providers/queryClient.ts classifies
+ * it with `isFinalClientAnswer` and does not retry it.
  * @summary Get available document loader / index type configurations
  */
 export const getDocumentLoaders = async (
@@ -8413,7 +12203,7 @@ export const getGetDocumentLoadersQueryKey = (projectId: string) => {
 
 export const getGetDocumentLoadersQueryOptions = <
   TData = Awaited<ReturnType<typeof getDocumentLoaders>>,
-  TError = N401Response | N403Response,
+  TError = N401Response | N403Response | CapabilityUnavailableResponse,
 >(
   projectId: string,
   options?: {
@@ -8452,11 +12242,12 @@ export const getGetDocumentLoadersQueryOptions = <
 export type GetDocumentLoadersQueryResult = NonNullable<
   Awaited<ReturnType<typeof getDocumentLoaders>>
 >;
-export type GetDocumentLoadersQueryError = N401Response | N403Response;
+export type GetDocumentLoadersQueryError =
+  N401Response | N403Response | CapabilityUnavailableResponse;
 
 export function useGetDocumentLoaders<
   TData = Awaited<ReturnType<typeof getDocumentLoaders>>,
-  TError = N401Response | N403Response,
+  TError = N401Response | N403Response | CapabilityUnavailableResponse,
 >(
   projectId: string,
   options: {
@@ -8483,7 +12274,7 @@ export function useGetDocumentLoaders<
 };
 export function useGetDocumentLoaders<
   TData = Awaited<ReturnType<typeof getDocumentLoaders>>,
-  TError = N401Response | N403Response,
+  TError = N401Response | N403Response | CapabilityUnavailableResponse,
 >(
   projectId: string,
   options?: {
@@ -8510,7 +12301,7 @@ export function useGetDocumentLoaders<
 };
 export function useGetDocumentLoaders<
   TData = Awaited<ReturnType<typeof getDocumentLoaders>>,
-  TError = N401Response | N403Response,
+  TError = N401Response | N403Response | CapabilityUnavailableResponse,
 >(
   projectId: string,
   options?: {
@@ -8533,7 +12324,7 @@ export function useGetDocumentLoaders<
 
 export function useGetDocumentLoaders<
   TData = Awaited<ReturnType<typeof getDocumentLoaders>>,
-  TError = N401Response | N403Response,
+  TError = N401Response | N403Response | CapabilityUnavailableResponse,
 >(
   projectId: string,
   options?: {
@@ -11724,6 +15515,2482 @@ export function useUpdateProjectContext<
   const queryOptions = getUpdateProjectContextQueryOptions(
     projectId,
     projectContextUpdateRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getProjectInfoResponse200 = {
+  data: ProjectInfo;
+  status: 200;
+};
+
+export type getProjectInfoResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getProjectInfoResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type getProjectInfoResponse501 = {
+  data: CapabilityUnavailableResponse;
+  status: 501;
+};
+
+export type getProjectInfoResponseSuccess = getProjectInfoResponse200 & {
+  headers: Headers;
+};
+export type getProjectInfoResponseError = (
+  | getProjectInfoResponse401
+  | getProjectInfoResponse403
+  | getProjectInfoResponse501
+) & {
+  headers: Headers;
+};
+
+export type getProjectInfoResponse =
+  getProjectInfoResponseSuccess | getProjectInfoResponseError;
+
+export const getGetProjectInfoUrl = (projectId: string) => {
+  return `/elitea_core/project_info/prompt_lib/${projectId}/project-info`;
+};
+
+/**
+ * NOTE(W2): 200 comes from internal/api/v2/projectinfo/handler.go
+ * (CurrentProjectInfo) — `teammates_count` counts DISTINCT members of
+ * public.auth_core__project_user_role, excluding the
+ * `system_user_<id>@centry.user` account, and `icon_meta` is read from
+ * the tenant `configuration` row (type='project_icon').
+ *
+ * 501 comes from internal/api/v2/eliteacore/handler.go (ProjectInfo)
+ * when ELITEA_PROJECT_INFO_ENABLED is off. `code` is
+ * `project_info_not_available`. It is FINAL, not transient.
+ * @summary Read a project's teammate count and icon
+ */
+export const getProjectInfo = async (
+  projectId: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getProjectInfoResponse> => {
+  return eliteaFetch<getProjectInfoResponse>(getGetProjectInfoUrl(projectId), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetProjectInfoQueryKey = (projectId: string) => {
+  return [
+    `/elitea_core/project_info/prompt_lib/${projectId}/project-info`,
+  ] as const;
+};
+
+export const getGetProjectInfoQueryOptions = <
+  TData = Awaited<ReturnType<typeof getProjectInfo>>,
+  TError = N401Response | N403Response | CapabilityUnavailableResponse,
+>(
+  projectId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getProjectInfo>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetProjectInfoQueryKey(projectId);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getProjectInfo>>> = ({
+    signal,
+  }) => getProjectInfo(projectId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getProjectInfo>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetProjectInfoQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getProjectInfo>>
+>;
+export type GetProjectInfoQueryError =
+  N401Response | N403Response | CapabilityUnavailableResponse;
+
+export function useGetProjectInfo<
+  TData = Awaited<ReturnType<typeof getProjectInfo>>,
+  TError = N401Response | N403Response | CapabilityUnavailableResponse,
+>(
+  projectId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getProjectInfo>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getProjectInfo>>,
+          TError,
+          Awaited<ReturnType<typeof getProjectInfo>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetProjectInfo<
+  TData = Awaited<ReturnType<typeof getProjectInfo>>,
+  TError = N401Response | N403Response | CapabilityUnavailableResponse,
+>(
+  projectId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getProjectInfo>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getProjectInfo>>,
+          TError,
+          Awaited<ReturnType<typeof getProjectInfo>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetProjectInfo<
+  TData = Awaited<ReturnType<typeof getProjectInfo>>,
+  TError = N401Response | N403Response | CapabilityUnavailableResponse,
+>(
+  projectId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getProjectInfo>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Read a project's teammate count and icon
+ */
+
+export function useGetProjectInfo<
+  TData = Awaited<ReturnType<typeof getProjectInfo>>,
+  TError = N401Response | N403Response | CapabilityUnavailableResponse,
+>(
+  projectId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getProjectInfo>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetProjectInfoQueryOptions(projectId, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type updateProjectInfoResponse200 = {
+  data: ProjectInfoUpdateResponse;
+  status: 200;
+};
+
+export type updateProjectInfoResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type updateProjectInfoResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type updateProjectInfoResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type updateProjectInfoResponse500 = {
+  data: ErrorResponse;
+  status: 500;
+};
+
+export type updateProjectInfoResponseSuccess = updateProjectInfoResponse200 & {
+  headers: Headers;
+};
+export type updateProjectInfoResponseError = (
+  | updateProjectInfoResponse400
+  | updateProjectInfoResponse401
+  | updateProjectInfoResponse403
+  | updateProjectInfoResponse500
+) & {
+  headers: Headers;
+};
+
+export type updateProjectInfoResponse =
+  updateProjectInfoResponseSuccess | updateProjectInfoResponseError;
+
+export const getUpdateProjectInfoUrl = (projectId: string) => {
+  return `/elitea_core/project_info/prompt_lib/${projectId}/project-info`;
+};
+
+/**
+ * NOTE(W2): internal/api/v2/eliteacore/handler.go (UpdateProjectInfo).
+ *
+ * BOTH BODY FIELDS ARE OPTIONAL, AND ABSENT IS NOT NULL. An absent
+ * `icon_meta` leaves the icon alone; an explicit null CLEARS it. A PUT
+ * with neither field is a no-op that answers `{"ok": true}`.
+ *
+ * The response echoes only what it wrote: `name` appears when the project
+ * was renamed, `icon_meta` when the icon was written. A failed write is
+ * reported as a failure — this route used to discard every database error
+ * and still answer `{"ok": true}`.
+ * @summary Rename a project, set its icon, or both
+ */
+export const updateProjectInfo = async (
+  projectId: string,
+  projectInfoUpdateRequest?: ProjectInfoUpdateRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<updateProjectInfoResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+  return eliteaFetch<updateProjectInfoResponse>(
+    getUpdateProjectInfoUrl(projectId),
+    {
+      ...options,
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(projectInfoUpdateRequest),
+    },
+  );
+};
+
+export const getUpdateProjectInfoQueryKey = (
+  projectId: string,
+  projectInfoUpdateRequest?: ProjectInfoUpdateRequest,
+) => {
+  return [
+    "PUT",
+    `/elitea_core/project_info/prompt_lib/${projectId}/project-info`,
+    projectInfoUpdateRequest,
+  ] as const;
+};
+
+export const getUpdateProjectInfoQueryOptions = <
+  TData = Awaited<ReturnType<typeof updateProjectInfo>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  projectInfoUpdateRequest?: ProjectInfoUpdateRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateProjectInfo>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getUpdateProjectInfoQueryKey(projectId, projectInfoUpdateRequest);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof updateProjectInfo>>
+  > = ({ signal }) =>
+    updateProjectInfo(projectId, projectInfoUpdateRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof updateProjectInfo>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type UpdateProjectInfoQueryResult = NonNullable<
+  Awaited<ReturnType<typeof updateProjectInfo>>
+>;
+export type UpdateProjectInfoQueryError =
+  ErrorResponse | N401Response | N403Response;
+
+export function useUpdateProjectInfo<
+  TData = Awaited<ReturnType<typeof updateProjectInfo>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  projectInfoUpdateRequest: undefined | ProjectInfoUpdateRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateProjectInfo>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof updateProjectInfo>>,
+          TError,
+          Awaited<ReturnType<typeof updateProjectInfo>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUpdateProjectInfo<
+  TData = Awaited<ReturnType<typeof updateProjectInfo>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  projectInfoUpdateRequest?: ProjectInfoUpdateRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateProjectInfo>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof updateProjectInfo>>,
+          TError,
+          Awaited<ReturnType<typeof updateProjectInfo>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUpdateProjectInfo<
+  TData = Awaited<ReturnType<typeof updateProjectInfo>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  projectInfoUpdateRequest?: ProjectInfoUpdateRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateProjectInfo>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Rename a project, set its icon, or both
+ */
+
+export function useUpdateProjectInfo<
+  TData = Awaited<ReturnType<typeof updateProjectInfo>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  projectInfoUpdateRequest?: ProjectInfoUpdateRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateProjectInfo>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getUpdateProjectInfoQueryOptions(
+    projectId,
+    projectInfoUpdateRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getPipelineInboundTriggerResponse200 = {
+  data: PipelineInboundTrigger;
+  status: 200;
+};
+
+export type getPipelineInboundTriggerResponse403 = {
+  data: ErrorResponse;
+  status: 403;
+};
+
+export type getPipelineInboundTriggerResponseSuccess =
+  getPipelineInboundTriggerResponse200 & {
+    headers: Headers;
+  };
+export type getPipelineInboundTriggerResponseError =
+  getPipelineInboundTriggerResponse403 & {
+    headers: Headers;
+  };
+
+export type getPipelineInboundTriggerResponse =
+  | getPipelineInboundTriggerResponseSuccess
+  | getPipelineInboundTriggerResponseError;
+
+export const getGetPipelineInboundTriggerUrl = (
+  projectId: number,
+  versionId: number,
+) => {
+  return `/pipeline_triggers/prompt_lib/${projectId}/${versionId}`;
+};
+
+/**
+ * Reports whether this pipeline version has an inbound trigger, when it
+ * was made, when it was last used, and whether it is revoked.
+ *
+ * The URL it returns does NOT carry the secret. Handing back a live
+ * credential is a different act and has its own operation with the write
+ * permission on it, so a person with view-only access cannot copy a
+ * working webhook URL for a pipeline they cannot edit.
+ *
+ * A pipeline with no trigger answers 200 with `configured: false`, not
+ * 404: having no trigger is the normal state of almost every pipeline,
+ * and a 404 would make the settings tab render an error for it.
+ * @summary Read a pipeline version's inbound trigger
+ */
+export const getPipelineInboundTrigger = async (
+  projectId: number,
+  versionId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getPipelineInboundTriggerResponse> => {
+  return eliteaFetch<getPipelineInboundTriggerResponse>(
+    getGetPipelineInboundTriggerUrl(projectId, versionId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetPipelineInboundTriggerQueryKey = (
+  projectId: number,
+  versionId: number,
+) => {
+  return [`/pipeline_triggers/prompt_lib/${projectId}/${versionId}`] as const;
+};
+
+export const getGetPipelineInboundTriggerQueryOptions = <
+  TData = Awaited<ReturnType<typeof getPipelineInboundTrigger>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getPipelineInboundTrigger>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGetPipelineInboundTriggerQueryKey(projectId, versionId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getPipelineInboundTrigger>>
+  > = ({ signal }) =>
+    getPipelineInboundTrigger(projectId, versionId, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      versionId !== null &&
+      versionId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getPipelineInboundTrigger>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetPipelineInboundTriggerQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getPipelineInboundTrigger>>
+>;
+export type GetPipelineInboundTriggerQueryError = ErrorResponse;
+
+export function useGetPipelineInboundTrigger<
+  TData = Awaited<ReturnType<typeof getPipelineInboundTrigger>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getPipelineInboundTrigger>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getPipelineInboundTrigger>>,
+          TError,
+          Awaited<ReturnType<typeof getPipelineInboundTrigger>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetPipelineInboundTrigger<
+  TData = Awaited<ReturnType<typeof getPipelineInboundTrigger>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getPipelineInboundTrigger>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getPipelineInboundTrigger>>,
+          TError,
+          Awaited<ReturnType<typeof getPipelineInboundTrigger>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetPipelineInboundTrigger<
+  TData = Awaited<ReturnType<typeof getPipelineInboundTrigger>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getPipelineInboundTrigger>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Read a pipeline version's inbound trigger
+ */
+
+export function useGetPipelineInboundTrigger<
+  TData = Awaited<ReturnType<typeof getPipelineInboundTrigger>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getPipelineInboundTrigger>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetPipelineInboundTriggerQueryOptions(
+    projectId,
+    versionId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type rotatePipelineInboundTriggerResponse200 = {
+  data: PipelineInboundTrigger;
+  status: 200;
+};
+
+export type rotatePipelineInboundTriggerResponse403 = {
+  data: ErrorResponse;
+  status: 403;
+};
+
+export type rotatePipelineInboundTriggerResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type rotatePipelineInboundTriggerResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type rotatePipelineInboundTriggerResponseSuccess =
+  rotatePipelineInboundTriggerResponse200 & {
+    headers: Headers;
+  };
+export type rotatePipelineInboundTriggerResponseError = (
+  | rotatePipelineInboundTriggerResponse403
+  | rotatePipelineInboundTriggerResponse404
+  | rotatePipelineInboundTriggerResponse503
+) & {
+  headers: Headers;
+};
+
+export type rotatePipelineInboundTriggerResponse =
+  | rotatePipelineInboundTriggerResponseSuccess
+  | rotatePipelineInboundTriggerResponseError;
+
+export const getRotatePipelineInboundTriggerUrl = (
+  projectId: number,
+  versionId: number,
+) => {
+  return `/pipeline_triggers/prompt_lib/${projectId}/${versionId}`;
+};
+
+/**
+ * Mints a credential and returns it ONCE in `secret` and `secret_url`.
+ *
+ * Create and rotate are ONE operation on purpose. They differ only in
+ * whether a row was already there, they have the same permission, and
+ * they have the same effect on any holder of the previous secret. Two
+ * operations would be two chances to implement the rotation half
+ * differently from the creation half.
+ *
+ * Rotation is immediate and total: the previous secret stops working the
+ * moment this returns, and its vault entry is removed. That is what
+ * "rotate" has to mean for a credential somebody else holds.
+ * @summary Create or rotate a pipeline version's inbound trigger
+ */
+export const rotatePipelineInboundTrigger = async (
+  projectId: number,
+  versionId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<rotatePipelineInboundTriggerResponse> => {
+  return eliteaFetch<rotatePipelineInboundTriggerResponse>(
+    getRotatePipelineInboundTriggerUrl(projectId, versionId),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getRotatePipelineInboundTriggerQueryKey = (
+  projectId: number,
+  versionId: number,
+) => {
+  return [
+    "POST",
+    `/pipeline_triggers/prompt_lib/${projectId}/${versionId}`,
+  ] as const;
+};
+
+export const getRotatePipelineInboundTriggerQueryOptions = <
+  TData = Awaited<ReturnType<typeof rotatePipelineInboundTrigger>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof rotatePipelineInboundTrigger>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getRotatePipelineInboundTriggerQueryKey(projectId, versionId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof rotatePipelineInboundTrigger>>
+  > = ({ signal }) =>
+    rotatePipelineInboundTrigger(projectId, versionId, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      versionId !== null &&
+      versionId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof rotatePipelineInboundTrigger>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type RotatePipelineInboundTriggerQueryResult = NonNullable<
+  Awaited<ReturnType<typeof rotatePipelineInboundTrigger>>
+>;
+export type RotatePipelineInboundTriggerQueryError = ErrorResponse;
+
+export function useRotatePipelineInboundTrigger<
+  TData = Awaited<ReturnType<typeof rotatePipelineInboundTrigger>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof rotatePipelineInboundTrigger>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof rotatePipelineInboundTrigger>>,
+          TError,
+          Awaited<ReturnType<typeof rotatePipelineInboundTrigger>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRotatePipelineInboundTrigger<
+  TData = Awaited<ReturnType<typeof rotatePipelineInboundTrigger>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof rotatePipelineInboundTrigger>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof rotatePipelineInboundTrigger>>,
+          TError,
+          Awaited<ReturnType<typeof rotatePipelineInboundTrigger>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRotatePipelineInboundTrigger<
+  TData = Awaited<ReturnType<typeof rotatePipelineInboundTrigger>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof rotatePipelineInboundTrigger>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Create or rotate a pipeline version's inbound trigger
+ */
+
+export function useRotatePipelineInboundTrigger<
+  TData = Awaited<ReturnType<typeof rotatePipelineInboundTrigger>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof rotatePipelineInboundTrigger>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getRotatePipelineInboundTriggerQueryOptions(
+    projectId,
+    versionId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type revokePipelineInboundTriggerResponse200 = {
+  data: PipelineInboundTrigger;
+  status: 200;
+};
+
+export type revokePipelineInboundTriggerResponse403 = {
+  data: ErrorResponse;
+  status: 403;
+};
+
+export type revokePipelineInboundTriggerResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type revokePipelineInboundTriggerResponseSuccess =
+  revokePipelineInboundTriggerResponse200 & {
+    headers: Headers;
+  };
+export type revokePipelineInboundTriggerResponseError = (
+  | revokePipelineInboundTriggerResponse403
+  | revokePipelineInboundTriggerResponse404
+) & {
+  headers: Headers;
+};
+
+export type revokePipelineInboundTriggerResponse =
+  | revokePipelineInboundTriggerResponseSuccess
+  | revokePipelineInboundTriggerResponseError;
+
+export const getRevokePipelineInboundTriggerUrl = (
+  projectId: number,
+  versionId: number,
+) => {
+  return `/pipeline_triggers/prompt_lib/${projectId}/${versionId}`;
+};
+
+/**
+ * Makes the credential unusable and KEEPS the row. A revoked trigger is
+ * evidence: an operator asking "was this webhook still live last
+ * Tuesday?" gets an answer from a row that is present and revoked, and no
+ * answer at all from a row that is gone. The inbound endpoint refuses any
+ * row whose `revoked_at` is set.
+ *
+ * The stored secret is deleted, so it cannot be revealed again after
+ * revocation.
+ * @summary Revoke a pipeline version's inbound trigger
+ */
+export const revokePipelineInboundTrigger = async (
+  projectId: number,
+  versionId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<revokePipelineInboundTriggerResponse> => {
+  return eliteaFetch<revokePipelineInboundTriggerResponse>(
+    getRevokePipelineInboundTriggerUrl(projectId, versionId),
+    {
+      ...options,
+      method: "DELETE",
+    },
+  );
+};
+
+export const getRevokePipelineInboundTriggerQueryKey = (
+  projectId: number,
+  versionId: number,
+) => {
+  return [
+    "DELETE",
+    `/pipeline_triggers/prompt_lib/${projectId}/${versionId}`,
+  ] as const;
+};
+
+export const getRevokePipelineInboundTriggerQueryOptions = <
+  TData = Awaited<ReturnType<typeof revokePipelineInboundTrigger>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokePipelineInboundTrigger>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getRevokePipelineInboundTriggerQueryKey(projectId, versionId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof revokePipelineInboundTrigger>>
+  > = ({ signal }) =>
+    revokePipelineInboundTrigger(projectId, versionId, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      versionId !== null &&
+      versionId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof revokePipelineInboundTrigger>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type RevokePipelineInboundTriggerQueryResult = NonNullable<
+  Awaited<ReturnType<typeof revokePipelineInboundTrigger>>
+>;
+export type RevokePipelineInboundTriggerQueryError = ErrorResponse;
+
+export function useRevokePipelineInboundTrigger<
+  TData = Awaited<ReturnType<typeof revokePipelineInboundTrigger>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokePipelineInboundTrigger>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof revokePipelineInboundTrigger>>,
+          TError,
+          Awaited<ReturnType<typeof revokePipelineInboundTrigger>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRevokePipelineInboundTrigger<
+  TData = Awaited<ReturnType<typeof revokePipelineInboundTrigger>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokePipelineInboundTrigger>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof revokePipelineInboundTrigger>>,
+          TError,
+          Awaited<ReturnType<typeof revokePipelineInboundTrigger>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRevokePipelineInboundTrigger<
+  TData = Awaited<ReturnType<typeof revokePipelineInboundTrigger>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokePipelineInboundTrigger>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Revoke a pipeline version's inbound trigger
+ */
+
+export function useRevokePipelineInboundTrigger<
+  TData = Awaited<ReturnType<typeof revokePipelineInboundTrigger>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokePipelineInboundTrigger>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getRevokePipelineInboundTriggerQueryOptions(
+    projectId,
+    versionId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type revealPipelineInboundTriggerResponse200 = {
+  data: PipelineInboundTrigger;
+  status: 200;
+};
+
+export type revealPipelineInboundTriggerResponse403 = {
+  data: ErrorResponse;
+  status: 403;
+};
+
+export type revealPipelineInboundTriggerResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type revealPipelineInboundTriggerResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type revealPipelineInboundTriggerResponseSuccess =
+  revealPipelineInboundTriggerResponse200 & {
+    headers: Headers;
+  };
+export type revealPipelineInboundTriggerResponseError = (
+  | revealPipelineInboundTriggerResponse403
+  | revealPipelineInboundTriggerResponse409
+  | revealPipelineInboundTriggerResponse503
+) & {
+  headers: Headers;
+};
+
+export type revealPipelineInboundTriggerResponse =
+  | revealPipelineInboundTriggerResponseSuccess
+  | revealPipelineInboundTriggerResponseError;
+
+export const getRevealPipelineInboundTriggerUrl = (
+  projectId: number,
+  versionId: number,
+) => {
+  return `/pipeline_triggers/secret/prompt_lib/${projectId}/${versionId}`;
+};
+
+/**
+ * Returns the live credential so the settings tab can show the webhook URL
+ * again after the dialog that created it was closed.
+ *
+ * It is a GET carrying the WRITE permission, which is deliberate. Folding
+ * it into the plain read would put a credential into the response of the
+ * call the settings tab makes on every open, where it would sit in the
+ * browser's query cache and in any exported HAR — and would let a
+ * view-only member copy a working URL.
+ *
+ * A 409 means the row exists and its stored secret cannot be read. That is
+ * reported as "rotate it" rather than as a server error, because rotation
+ * is the only repair a person can perform and it always works.
+ * @summary Reveal a pipeline version's trigger credential
+ */
+export const revealPipelineInboundTrigger = async (
+  projectId: number,
+  versionId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<revealPipelineInboundTriggerResponse> => {
+  return eliteaFetch<revealPipelineInboundTriggerResponse>(
+    getRevealPipelineInboundTriggerUrl(projectId, versionId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getRevealPipelineInboundTriggerQueryKey = (
+  projectId: number,
+  versionId: number,
+) => {
+  return [
+    `/pipeline_triggers/secret/prompt_lib/${projectId}/${versionId}`,
+  ] as const;
+};
+
+export const getRevealPipelineInboundTriggerQueryOptions = <
+  TData = Awaited<ReturnType<typeof revealPipelineInboundTrigger>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revealPipelineInboundTrigger>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getRevealPipelineInboundTriggerQueryKey(projectId, versionId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof revealPipelineInboundTrigger>>
+  > = ({ signal }) =>
+    revealPipelineInboundTrigger(projectId, versionId, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      versionId !== null &&
+      versionId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof revealPipelineInboundTrigger>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type RevealPipelineInboundTriggerQueryResult = NonNullable<
+  Awaited<ReturnType<typeof revealPipelineInboundTrigger>>
+>;
+export type RevealPipelineInboundTriggerQueryError = ErrorResponse;
+
+export function useRevealPipelineInboundTrigger<
+  TData = Awaited<ReturnType<typeof revealPipelineInboundTrigger>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revealPipelineInboundTrigger>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof revealPipelineInboundTrigger>>,
+          TError,
+          Awaited<ReturnType<typeof revealPipelineInboundTrigger>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRevealPipelineInboundTrigger<
+  TData = Awaited<ReturnType<typeof revealPipelineInboundTrigger>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revealPipelineInboundTrigger>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof revealPipelineInboundTrigger>>,
+          TError,
+          Awaited<ReturnType<typeof revealPipelineInboundTrigger>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRevealPipelineInboundTrigger<
+  TData = Awaited<ReturnType<typeof revealPipelineInboundTrigger>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revealPipelineInboundTrigger>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Reveal a pipeline version's trigger credential
+ */
+
+export function useRevealPipelineInboundTrigger<
+  TData = Awaited<ReturnType<typeof revealPipelineInboundTrigger>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revealPipelineInboundTrigger>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getRevealPipelineInboundTriggerQueryOptions(
+    projectId,
+    versionId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getPipelineScheduleResponse200 = {
+  data: PipelineSchedule;
+  status: 200;
+};
+
+export type getPipelineScheduleResponse403 = {
+  data: ErrorResponse;
+  status: 403;
+};
+
+export type getPipelineScheduleResponseSuccess =
+  getPipelineScheduleResponse200 & {
+    headers: Headers;
+  };
+export type getPipelineScheduleResponseError =
+  getPipelineScheduleResponse403 & {
+    headers: Headers;
+  };
+
+export type getPipelineScheduleResponse =
+  getPipelineScheduleResponseSuccess | getPipelineScheduleResponseError;
+
+export const getGetPipelineScheduleUrl = (
+  projectId: number,
+  versionId: number,
+) => {
+  return `/pipeline_schedules/prompt_lib/${projectId}/${versionId}`;
+};
+
+/**
+ * Reports the cron expression, whether it is enabled, the computed next
+ * run, and the outcome of the last fire attempt.
+ *
+ * `last_result` is the tenant-visible half of failure visibility: an audit
+ * event answers "what happened on this platform" and is what an operator
+ * reads, while this column answers "is MY schedule working" and is what
+ * the person who made it can see.
+ * @summary Read a pipeline version's schedule
+ */
+export const getPipelineSchedule = async (
+  projectId: number,
+  versionId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getPipelineScheduleResponse> => {
+  return eliteaFetch<getPipelineScheduleResponse>(
+    getGetPipelineScheduleUrl(projectId, versionId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetPipelineScheduleQueryKey = (
+  projectId: number,
+  versionId: number,
+) => {
+  return [`/pipeline_schedules/prompt_lib/${projectId}/${versionId}`] as const;
+};
+
+export const getGetPipelineScheduleQueryOptions = <
+  TData = Awaited<ReturnType<typeof getPipelineSchedule>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getPipelineSchedule>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGetPipelineScheduleQueryKey(projectId, versionId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getPipelineSchedule>>
+  > = ({ signal }) =>
+    getPipelineSchedule(projectId, versionId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      versionId !== null &&
+      versionId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getPipelineSchedule>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetPipelineScheduleQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getPipelineSchedule>>
+>;
+export type GetPipelineScheduleQueryError = ErrorResponse;
+
+export function useGetPipelineSchedule<
+  TData = Awaited<ReturnType<typeof getPipelineSchedule>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getPipelineSchedule>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getPipelineSchedule>>,
+          TError,
+          Awaited<ReturnType<typeof getPipelineSchedule>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetPipelineSchedule<
+  TData = Awaited<ReturnType<typeof getPipelineSchedule>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getPipelineSchedule>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getPipelineSchedule>>,
+          TError,
+          Awaited<ReturnType<typeof getPipelineSchedule>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetPipelineSchedule<
+  TData = Awaited<ReturnType<typeof getPipelineSchedule>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getPipelineSchedule>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Read a pipeline version's schedule
+ */
+
+export function useGetPipelineSchedule<
+  TData = Awaited<ReturnType<typeof getPipelineSchedule>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getPipelineSchedule>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetPipelineScheduleQueryOptions(
+    projectId,
+    versionId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type savePipelineScheduleResponse200 = {
+  data: PipelineSchedule;
+  status: 200;
+};
+
+export type savePipelineScheduleResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type savePipelineScheduleResponse403 = {
+  data: ErrorResponse;
+  status: 403;
+};
+
+export type savePipelineScheduleResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type savePipelineScheduleResponseSuccess =
+  savePipelineScheduleResponse200 & {
+    headers: Headers;
+  };
+export type savePipelineScheduleResponseError = (
+  | savePipelineScheduleResponse400
+  | savePipelineScheduleResponse403
+  | savePipelineScheduleResponse404
+) & {
+  headers: Headers;
+};
+
+export type savePipelineScheduleResponse =
+  savePipelineScheduleResponseSuccess | savePipelineScheduleResponseError;
+
+export const getSavePipelineScheduleUrl = (
+  projectId: number,
+  versionId: number,
+) => {
+  return `/pipeline_schedules/prompt_lib/${projectId}/${versionId}`;
+};
+
+/**
+ * Saving SETS the schedule's author to the caller, and the author is who
+ * an unattended run executes as. Leaving the original author in place
+ * while someone else edited the cron would let a caller retarget another
+ * person's identity onto a new time.
+ *
+ * The author's permission is re-resolved at every FIRE, not here: a
+ * schedule whose author later loses access stops firing and records
+ * `skipped_unauthorized`, without anybody having to remember to disable
+ * it.
+ *
+ * The cron expression is validated with the parser that will run it. Five
+ * fields are required and names such as `@daily` are refused, because an
+ * expression the runner cannot parse would not error at run time — it
+ * would silently never fire, which on an unattended job looks exactly like
+ * a job with nothing to do.
+ * @summary Create or replace a pipeline version's schedule
+ */
+export const savePipelineSchedule = async (
+  projectId: number,
+  versionId: number,
+  pipelineScheduleUpdate: PipelineScheduleUpdate,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<savePipelineScheduleResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+  return eliteaFetch<savePipelineScheduleResponse>(
+    getSavePipelineScheduleUrl(projectId, versionId),
+    {
+      ...options,
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(pipelineScheduleUpdate),
+    },
+  );
+};
+
+export const getSavePipelineScheduleQueryKey = (
+  projectId: number,
+  versionId: number,
+  pipelineScheduleUpdate?: PipelineScheduleUpdate,
+) => {
+  return [
+    "PUT",
+    `/pipeline_schedules/prompt_lib/${projectId}/${versionId}`,
+    pipelineScheduleUpdate,
+  ] as const;
+};
+
+export const getSavePipelineScheduleQueryOptions = <
+  TData = Awaited<ReturnType<typeof savePipelineSchedule>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  pipelineScheduleUpdate: PipelineScheduleUpdate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof savePipelineSchedule>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getSavePipelineScheduleQueryKey(
+      projectId,
+      versionId,
+      pipelineScheduleUpdate,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof savePipelineSchedule>>
+  > = ({ signal }) =>
+    savePipelineSchedule(projectId, versionId, pipelineScheduleUpdate, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      versionId !== null &&
+      versionId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof savePipelineSchedule>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type SavePipelineScheduleQueryResult = NonNullable<
+  Awaited<ReturnType<typeof savePipelineSchedule>>
+>;
+export type SavePipelineScheduleQueryError = ErrorResponse;
+
+export function useSavePipelineSchedule<
+  TData = Awaited<ReturnType<typeof savePipelineSchedule>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  pipelineScheduleUpdate: PipelineScheduleUpdate,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof savePipelineSchedule>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof savePipelineSchedule>>,
+          TError,
+          Awaited<ReturnType<typeof savePipelineSchedule>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSavePipelineSchedule<
+  TData = Awaited<ReturnType<typeof savePipelineSchedule>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  pipelineScheduleUpdate: PipelineScheduleUpdate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof savePipelineSchedule>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof savePipelineSchedule>>,
+          TError,
+          Awaited<ReturnType<typeof savePipelineSchedule>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSavePipelineSchedule<
+  TData = Awaited<ReturnType<typeof savePipelineSchedule>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  pipelineScheduleUpdate: PipelineScheduleUpdate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof savePipelineSchedule>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Create or replace a pipeline version's schedule
+ */
+
+export function useSavePipelineSchedule<
+  TData = Awaited<ReturnType<typeof savePipelineSchedule>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  pipelineScheduleUpdate: PipelineScheduleUpdate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof savePipelineSchedule>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getSavePipelineScheduleQueryOptions(
+    projectId,
+    versionId,
+    pipelineScheduleUpdate,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type deletePipelineScheduleResponse200 = {
+  data: PipelineSchedule;
+  status: 200;
+};
+
+export type deletePipelineScheduleResponse403 = {
+  data: ErrorResponse;
+  status: 403;
+};
+
+export type deletePipelineScheduleResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type deletePipelineScheduleResponseSuccess =
+  deletePipelineScheduleResponse200 & {
+    headers: Headers;
+  };
+export type deletePipelineScheduleResponseError = (
+  deletePipelineScheduleResponse403 | deletePipelineScheduleResponse404
+) & {
+  headers: Headers;
+};
+
+export type deletePipelineScheduleResponse =
+  deletePipelineScheduleResponseSuccess | deletePipelineScheduleResponseError;
+
+export const getDeletePipelineScheduleUrl = (
+  projectId: number,
+  versionId: number,
+) => {
+  return `/pipeline_schedules/prompt_lib/${projectId}/${versionId}`;
+};
+
+/**
+ * The row is DELETED rather than tombstoned, unlike a revoked trigger. The
+ * two are not symmetric: a trigger is a credential somebody outside holds,
+ * so "when did it stop working" is a question about a third party, while a
+ * schedule is configuration its own author can re-create, and every fire
+ * it ever made is already an audit row.
+ * @summary Remove a pipeline version's schedule
+ */
+export const deletePipelineSchedule = async (
+  projectId: number,
+  versionId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<deletePipelineScheduleResponse> => {
+  return eliteaFetch<deletePipelineScheduleResponse>(
+    getDeletePipelineScheduleUrl(projectId, versionId),
+    {
+      ...options,
+      method: "DELETE",
+    },
+  );
+};
+
+export const getDeletePipelineScheduleQueryKey = (
+  projectId: number,
+  versionId: number,
+) => {
+  return [
+    "DELETE",
+    `/pipeline_schedules/prompt_lib/${projectId}/${versionId}`,
+  ] as const;
+};
+
+export const getDeletePipelineScheduleQueryOptions = <
+  TData = Awaited<ReturnType<typeof deletePipelineSchedule>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deletePipelineSchedule>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getDeletePipelineScheduleQueryKey(projectId, versionId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof deletePipelineSchedule>>
+  > = ({ signal }) =>
+    deletePipelineSchedule(projectId, versionId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      versionId !== null &&
+      versionId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof deletePipelineSchedule>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type DeletePipelineScheduleQueryResult = NonNullable<
+  Awaited<ReturnType<typeof deletePipelineSchedule>>
+>;
+export type DeletePipelineScheduleQueryError = ErrorResponse;
+
+export function useDeletePipelineSchedule<
+  TData = Awaited<ReturnType<typeof deletePipelineSchedule>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deletePipelineSchedule>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof deletePipelineSchedule>>,
+          TError,
+          Awaited<ReturnType<typeof deletePipelineSchedule>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDeletePipelineSchedule<
+  TData = Awaited<ReturnType<typeof deletePipelineSchedule>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deletePipelineSchedule>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof deletePipelineSchedule>>,
+          TError,
+          Awaited<ReturnType<typeof deletePipelineSchedule>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDeletePipelineSchedule<
+  TData = Awaited<ReturnType<typeof deletePipelineSchedule>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deletePipelineSchedule>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Remove a pipeline version's schedule
+ */
+
+export function useDeletePipelineSchedule<
+  TData = Awaited<ReturnType<typeof deletePipelineSchedule>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deletePipelineSchedule>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getDeletePipelineScheduleQueryOptions(
+    projectId,
+    versionId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type runPipelineInboundTriggerResponse202 = {
+  data: PipelineInboundTriggerRunAccepted;
+  status: 202;
+};
+
+export type runPipelineInboundTriggerResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type runPipelineInboundTriggerResponse401 = {
+  data: ErrorResponse;
+  status: 401;
+};
+
+export type runPipelineInboundTriggerResponse413 = {
+  data: ErrorResponse;
+  status: 413;
+};
+
+export type runPipelineInboundTriggerResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type runPipelineInboundTriggerResponseSuccess =
+  runPipelineInboundTriggerResponse202 & {
+    headers: Headers;
+  };
+export type runPipelineInboundTriggerResponseError = (
+  | runPipelineInboundTriggerResponse400
+  | runPipelineInboundTriggerResponse401
+  | runPipelineInboundTriggerResponse413
+  | runPipelineInboundTriggerResponse503
+) & {
+  headers: Headers;
+};
+
+export type runPipelineInboundTriggerResponse =
+  | runPipelineInboundTriggerResponseSuccess
+  | runPipelineInboundTriggerResponseError;
+
+export const getRunPipelineInboundTriggerUrl = (
+  projectId: number,
+  tokenId: string,
+  params?: RunPipelineInboundTriggerParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/pipeline_trigger/${projectId}/${tokenId}?${stringifiedParams}`
+    : `/pipeline_trigger/${projectId}/${tokenId}`;
+};
+
+/**
+ * The inbound trigger — issue 192. An external system calls this URL and
+ * one pipeline version runs.
+ *
+ * ## This route has NO SESSION
+ *
+ * It is mounted above the API's authentication group, beside the anonymous
+ * shared-chat routes. Its ONLY credential is the per-pipeline secret,
+ * presented as `Authorization: Bearer <secret>`, as
+ * `X-Elitea-Trigger-Token`, or as the `token` query parameter. The header
+ * forms are preferred: a URL is written to proxy and browser logs, and a
+ * credential in one outlives the request.
+ *
+ * ## Nothing the caller sends selects a tenant
+ *
+ * `project_id` says WHERE TO LOOK and nothing more. What runs comes out of
+ * the stored row: the application, the version and the identity are read
+ * from the database and never from the request. A caller who guesses
+ * another project's id finds no row holding their token's digest and gets
+ * the same 401 as a caller who guessed nothing.
+ *
+ * ## Every refusal is the same refusal
+ *
+ * Unknown token, wrong secret, revoked trigger, wrong project, deleted
+ * version, and a creator who has lost the run permission all answer 401
+ * with one sentence. A refusal that named which one it was would be an
+ * oracle for enumerating a deployment's pipelines. An operator debugging
+ * their own webhook reads the audit row, which records the same request
+ * with the reason attached.
+ *
+ * ## The run is the same run a person would have started
+ *
+ * Admission goes through the chat composer's own use case, over a
+ * conversation and participants shaped exactly as a typed turn's, so
+ * budgets, governance, tracing, cancel and the transcript are unchanged.
+ * The answer is 202 and an events URL: the run has not finished and will
+ * not finish inside this request.
+ * @summary Start a pipeline run from an external caller
+ */
+export const runPipelineInboundTrigger = async (
+  projectId: number,
+  tokenId: string,
+  pipelineInboundTriggerRunRequest?: PipelineInboundTriggerRunRequest,
+  params?: RunPipelineInboundTriggerParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<runPipelineInboundTriggerResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+  return eliteaFetch<runPipelineInboundTriggerResponse>(
+    getRunPipelineInboundTriggerUrl(projectId, tokenId, params),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(pipelineInboundTriggerRunRequest),
+    },
+  );
+};
+
+export const getRunPipelineInboundTriggerQueryKey = (
+  projectId: number,
+  tokenId: string,
+  pipelineInboundTriggerRunRequest?: PipelineInboundTriggerRunRequest,
+  params?: RunPipelineInboundTriggerParams,
+) => {
+  return [
+    "POST",
+    `/pipeline_trigger/${projectId}/${tokenId}`,
+    ...(params ? [params] : []),
+    pipelineInboundTriggerRunRequest,
+  ] as const;
+};
+
+export const getRunPipelineInboundTriggerQueryOptions = <
+  TData = Awaited<ReturnType<typeof runPipelineInboundTrigger>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  tokenId: string,
+  pipelineInboundTriggerRunRequest?: PipelineInboundTriggerRunRequest,
+  params?: RunPipelineInboundTriggerParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof runPipelineInboundTrigger>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getRunPipelineInboundTriggerQueryKey(
+      projectId,
+      tokenId,
+      pipelineInboundTriggerRunRequest,
+      params,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof runPipelineInboundTrigger>>
+  > = ({ signal }) =>
+    runPipelineInboundTrigger(
+      projectId,
+      tokenId,
+      pipelineInboundTriggerRunRequest,
+      params,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      tokenId !== null &&
+      tokenId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof runPipelineInboundTrigger>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type RunPipelineInboundTriggerQueryResult = NonNullable<
+  Awaited<ReturnType<typeof runPipelineInboundTrigger>>
+>;
+export type RunPipelineInboundTriggerQueryError = ErrorResponse;
+
+export function useRunPipelineInboundTrigger<
+  TData = Awaited<ReturnType<typeof runPipelineInboundTrigger>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  tokenId: string,
+  pipelineInboundTriggerRunRequest:
+    undefined | PipelineInboundTriggerRunRequest,
+  params: undefined | RunPipelineInboundTriggerParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof runPipelineInboundTrigger>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof runPipelineInboundTrigger>>,
+          TError,
+          Awaited<ReturnType<typeof runPipelineInboundTrigger>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRunPipelineInboundTrigger<
+  TData = Awaited<ReturnType<typeof runPipelineInboundTrigger>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  tokenId: string,
+  pipelineInboundTriggerRunRequest?: PipelineInboundTriggerRunRequest,
+  params?: RunPipelineInboundTriggerParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof runPipelineInboundTrigger>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof runPipelineInboundTrigger>>,
+          TError,
+          Awaited<ReturnType<typeof runPipelineInboundTrigger>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRunPipelineInboundTrigger<
+  TData = Awaited<ReturnType<typeof runPipelineInboundTrigger>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  tokenId: string,
+  pipelineInboundTriggerRunRequest?: PipelineInboundTriggerRunRequest,
+  params?: RunPipelineInboundTriggerParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof runPipelineInboundTrigger>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Start a pipeline run from an external caller
+ */
+
+export function useRunPipelineInboundTrigger<
+  TData = Awaited<ReturnType<typeof runPipelineInboundTrigger>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  tokenId: string,
+  pipelineInboundTriggerRunRequest?: PipelineInboundTriggerRunRequest,
+  params?: RunPipelineInboundTriggerParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof runPipelineInboundTrigger>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getRunPipelineInboundTriggerQueryOptions(
+    projectId,
+    tokenId,
+    pipelineInboundTriggerRunRequest,
+    params,
     options,
   );
 

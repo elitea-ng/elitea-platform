@@ -3,7 +3,6 @@ name: CI — Python
 on:
   pull_request:
     paths:
-      - "services/pylon-indexer/**"
       - "services/elitea-worker-python/**"
       - "libs/proto/gen/python/**"
       - "libs/proto/pyproject.toml"
@@ -17,6 +16,14 @@ on:
       - "scripts/contract/**"
       - "services/elitea-main/internal/runtimecomposition/current_index_types_snapshot.json"
       - "services/elitea-main/internal/runtimecomposition/current_toolkit_schema_snapshot.json"
+      # The catalogue snapshot is the SECOND projection of the same registry
+      # read: sync_toolkit_schema_snapshot.py writes and checks both files in
+      # one run, so a change to either must start this workflow.
+      - "services/elitea-main/internal/runtimecomposition/current_toolkit_catalogue_snapshot.json"
+      # The Python worker toolkit capability snapshot records which SDK
+      # toolkits THIS image can import. Its gate is a worker unit test, which
+      # runs in the job below with the image's own extras installed.
+      - "services/elitea-main/internal/runtimecomposition/current_python_worker_toolkit_capability_snapshot.json"
       - "services/elitea-main/internal/api/v2/indextypes/testdata/current_index_types_ui_response.json"
       # Issue #424. sync_current_available_sdk.py --check and
       # sync_worker_sdk_catalog.py --check now run in the "Runtime worker" job.
@@ -50,7 +57,6 @@ on:
     branches:
       - main
     paths:
-      - "services/pylon-indexer/**"
       - "services/elitea-worker-python/**"
       - "libs/proto/gen/python/**"
       - "libs/proto/pyproject.toml"
@@ -59,6 +65,14 @@ on:
       - "scripts/contract/**"
       - "services/elitea-main/internal/runtimecomposition/current_index_types_snapshot.json"
       - "services/elitea-main/internal/runtimecomposition/current_toolkit_schema_snapshot.json"
+      # The catalogue snapshot is the SECOND projection of the same registry
+      # read: sync_toolkit_schema_snapshot.py writes and checks both files in
+      # one run, so a change to either must start this workflow.
+      - "services/elitea-main/internal/runtimecomposition/current_toolkit_catalogue_snapshot.json"
+      # The Python worker toolkit capability snapshot records which SDK
+      # toolkits THIS image can import. Its gate is a worker unit test, which
+      # runs in the job below with the image's own extras installed.
+      - "services/elitea-main/internal/runtimecomposition/current_python_worker_toolkit_capability_snapshot.json"
       - "services/elitea-main/internal/api/v2/indextypes/testdata/current_index_types_ui_response.json"
       - "services/elitea-main/internal/application/configurations/current_available_snapshot.json"
       - "services/elitea-main/internal/runtimecomposition/current_sdk_configuration_catalog_snapshot.json"
@@ -79,47 +93,20 @@ permissions:
   contents: read
 
 jobs:
+  # This job used to be the pylon-indexer config validator, and the tier 3
+  # wiring check was a second step inside it. #339 deleted that service, so the
+  # validator went with it and the wiring check stayed — it never read anything
+  # under services/pylon-indexer, which is why it always carried
+  # `working-directory: ${{ github.workspace }}`.
+  #
+  # The job keeps its name and its id. Renaming it would rename a required
+  # check on every open pull request, which is a branch-protection edit
+  # disguised as a workflow edit.
   validate:
     name: Validate Configs
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: services/pylon-indexer
     steps:
       - uses: actions/checkout@v7
-
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.11"
-
-      - name: Install validators
-        run: pip install pyyaml yamllint
-
-      - name: YAML lint
-        run: |
-          yamllint -d "{extends: relaxed, rules: {line-length: {max: 200}}}" \
-            pylon.yml configs/
-
-      - name: Validate YAML structure
-        run: |
-          python -c "
-          import yaml, sys, pathlib
-          errors = []
-          for f in pathlib.Path('.').rglob('*.yml'):
-              try:
-                  yaml.safe_load(f.read_text())
-              except yaml.YAMLError as e:
-                  errors.append(f'{f}: {e}')
-          if errors:
-              print('\n'.join(errors))
-              sys.exit(1)
-          print('All YAML configs valid.')
-          "
-
-      - name: Verify Containerfile
-        run: |
-          grep -q "FROM ghcr.io/eliteaai/pylon" Containerfile
-          echo "Containerfile base image OK."
 
       - name: elitea-sdk tier 3 wiring
         # TIER 3 (deploy/scripts/sdk-client-check.sh) STAYS OPERATOR-RUN, and

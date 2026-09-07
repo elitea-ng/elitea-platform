@@ -41,9 +41,10 @@
  *     toolbar actions hidden, full-screen edit still available — that part
  *     cannot be turned off, `StyledInputEnhancer.tsx`'s own doc comment:
  *     "the toolbar's entire purpose is the full-screen escape hatch").
- *  6. See `./useToolNodeEditing.ts`'s own doc comment for the state of the
- *     dynamic tool-name discovery (#440 corrected it: the endpoint exists;
- *     what is left here is the wiring).
+ *  6. The dynamic tool-name discovery is wired (#440). This node reads the
+ *     catalogue with `entities/toolkit`'s `toolkitTools.useToolkitTools`,
+ *     hands the names to `./useToolNodeEditing.ts`, and shows a failed read
+ *     as its own state with a retry instead of an empty picker.
  *
  * The editing callbacks/`functionOptions` derivation live in
  * `./useToolNodeEditing.ts`, and the target/source handle pair in the
@@ -51,11 +52,14 @@
  * file under the §3.5 `complexity` budget (12).
  */
 import type { ReactNode } from 'react';
-import { memo } from 'react';
+import { memo, useCallback } from 'react';
 
 import { SingleSelect } from '@/shared/ui/SingleSelect';
 import { StyledInputEnhancer } from '@/shared/ui/StyledInputEnhancer';
+import { ToolListError } from '@/shared/ui/ToolListError';
 import { t } from '@/shared/i18n';
+
+import { toolkitTools } from '@/entities/toolkit';
 
 import { PipelineNodeTypes } from '../../../lib/flow-editor/constants/flowEditor.constants';
 import { useGetToolkitNameFromSchema } from '../../../lib/flow-editor/hooks/useGetToolkitNameFromSchema';
@@ -76,6 +80,47 @@ import { useEdges } from '@xyflow/react';
 
 const isNotApplicationTool = (tool: PipelineToolEntry): boolean => tool.type !== 'application';
 
+interface ToolNodeFunctionSelectProps {
+  readonly options: readonly { readonly label: string; readonly value: string }[];
+  readonly value: string;
+  readonly onChange: (value: string) => void;
+  readonly disabled: boolean;
+  /** A read that feeds this picker failed — the tool catalogue, or the toolkit type schemas (#440). */
+  readonly readFailed: boolean;
+  readonly onRetry: () => void;
+}
+
+/**
+ * The "Tool" picker, or the error that replaces it (#440).
+ *
+ * This node used to render nothing when the option list was empty, whatever
+ * the cause: a toolkit with no tools, and a lost read, looked the same. An
+ * empty list keeps one meaning now, and a failed read gets a visible state
+ * with a retry. A failed read that still produced options keeps the working
+ * picker, because the list on screen is real. Split out as its own component
+ * to keep `ToolNode` under the §3.5 complexity budget.
+ */
+function ToolNodeFunctionSelect({ options, value, onChange, disabled, readFailed, onRetry }: ToolNodeFunctionSelectProps): ReactNode {
+  if (options.length === 0 && readFailed) {
+    return (
+      <ToolListError
+        onRetry={onRetry}
+        testId="tool-node-tool-list-error"
+      />
+    );
+  }
+  if (options.length === 0) return null;
+  return (
+    <SingleSelect
+      label={t('pipelines.flowEditor.deprecated.toolNode.tool', 'Tool')}
+      value={value}
+      onChange={onChange}
+      options={[...options]}
+      disabled={disabled}
+    />
+  );
+}
+
 export interface ToolNodeProps {
   readonly id: string;
   readonly data?: { readonly isPerforming?: boolean } | undefined;
@@ -93,10 +138,22 @@ export const ToolNode = memo(function ToolNode(props: ToolNodeProps): ReactNode 
   const isPerforming = Boolean(data.isPerforming);
 
   const projectId = useSelectedProjectId();
-  const { toolkitTypeSchemas } = useToolkitTypeSchemas(projectId);
+  // `isError` has a reader now (#440): the type schemas supply the tool list
+  // of a statically-declared toolkit type, so a lost read empties this
+  // node's picker just as a lost catalogue read does.
+  const { toolkitTypeSchemas, isError: typeSchemasReadFailed, refetch: retryTypeSchemasRead } = useToolkitTypeSchemas(projectId);
   const { getToolkitNameFromSchema, getSelectedTools } = useGetToolkitNameFromSchema(toolkitTypeSchemas);
 
   const { toolkit, selectedToolkit, taskValue, toolValue } = useToolNodeState(id, yamlJsonObject, versionTools, getToolkitNameFromSchema);
+
+  // The catalogue tier: a toolkit that declares no `selected_tools` of its
+  // own publishes its tools at run time — the same gate `LoopToolSelect` uses.
+  const dynamicTools = toolkitTools.useToolkitTools({
+    projectId,
+    toolkitId: selectedToolkit?.id,
+    toolkitType: selectedToolkit?.type,
+    enabled: selectedToolkit !== undefined && (selectedToolkit.settings?.selected_tools ?? []).length === 0,
+  });
 
   const { onSelectToolkit, handleSetTask, handleSetTool, functionOptions } = useToolNodeEditing({
     id,
@@ -105,7 +162,15 @@ export const ToolNode = memo(function ToolNode(props: ToolNodeProps): ReactNode 
     getSelectedTools,
     yamlJsonObject,
     setYamlJsonObject,
+    dynamicToolNames: dynamicTools.toolNames,
   });
+
+  // Both reads feed the same picker, so one retry control must run both.
+  const onRetryToolList = useCallback(() => {
+    dynamicTools.refetch();
+    retryTypeSchemasRead();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `dynamicTools` is a fresh object every render; its `refetch` is the stable identity this depends on
+  }, [dynamicTools.refetch, retryTypeSchemasRead]);
 
   return (
     <NodeCard
@@ -132,15 +197,14 @@ export const ToolNode = memo(function ToolNode(props: ToolNodeProps): ReactNode 
         filterTypes={isNotApplicationTool}
         versionTools={versionTools}
       />
-      {functionOptions.length > 0 && (
-        <SingleSelect
-          label={t('pipelines.flowEditor.deprecated.toolNode.tool', 'Tool')}
-          value={toolValue}
-          onChange={handleSetTool}
-          options={[...functionOptions]}
-          disabled={runningOrDisabled}
-        />
-      )}
+      <ToolNodeFunctionSelect
+        options={functionOptions}
+        value={toolValue}
+        onChange={handleSetTool}
+        disabled={runningOrDisabled}
+        readFailed={dynamicTools.isError || typeSchemasReadFailed}
+        onRetry={onRetryToolList}
+      />
       <StyledInputEnhancer
         disabled={runningOrDisabled}
         autoComplete="off"

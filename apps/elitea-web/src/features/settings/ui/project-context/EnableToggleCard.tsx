@@ -13,12 +13,23 @@ export interface EnableToggleCardProps {
   enabled: boolean;
   onToggle: (checked: boolean) => void;
   disabled?: boolean;
+  /**
+   * Heading and body copy. Default to Project Context's, which is the only
+   * caller this card had; Settings › General's "Agent & Pipeline Builder"
+   * reuses the same card with its own words, exactly as the reference does
+   * (`project-general/AgentPipelineBuilder.jsx` passes `title`/`description`
+   * into this component).
+   */
+  title?: string;
+  description?: string;
 }
 
 export function EnableToggleCard({
   enabled,
   onToggle,
   disabled = false,
+  title,
+  description,
 }: EnableToggleCardProps) {
   const sx = cardStyles();
   return (
@@ -28,13 +39,14 @@ export function EnableToggleCard({
           variant="headingSmall"
           color="text.secondary"
         >
-          {t('entities.projectContext.enableToggleCard.title', 'Project Context')}
+          {title ?? t('entities.projectContext.enableToggleCard.title', 'Project Context')}
         </Typography>
         <Typography variant="bodySmall">
-          {t(
-            'entities.projectContext.enableToggleCard.description',
-            'Project-specific background information that the AI uses to generate more accurate and relevant responses, tailored to your workflows, data, and goals.',
-          )}
+          {description ??
+            t(
+              'entities.projectContext.enableToggleCard.description',
+              'Project-specific background information that the AI uses to generate more accurate and relevant responses, tailored to your workflows, data, and goals.',
+            )}
         </Typography>
       </Box>
       <BaseSwitch

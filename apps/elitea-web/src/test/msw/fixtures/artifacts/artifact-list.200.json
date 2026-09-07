@@ -1,7 +1,7 @@
 {
-  "recordedAt": "2026-08-08",
+  "recordedAt": "2026-09-06",
   "synthetic": true,
-  "note": "Shape recorded from the E2E stack (GET /api/v2/artifacts/objects/1/{bucket}, router.go:285 -> Handler.ListObjects, objects.go:250); keys/dates substituted for stable demo values. Replaces the pre-#138 fixture, which described the legacy root-level /artifacts/s3/{bucket} list.",
+  "note": "Shape re-verified 2026-09-06 against the served route GET /api/v2/artifacts/objects/{projectID}/{bucket} (elitea-main internal/api/router.go:596 -> Handler.ListObjects, internal/api/v2/artifacts/objects.go:258). The envelope {\"objects\": [...], \"common_prefixes\": [...]} is written at objects.go:305 and every field below is the handler's own object struct, objects.go:43-49. Keys/dates are stable demo values. Replaces the pre-#138 fixture, which described the legacy root-level /artifacts/s3/{bucket} list.",
   "body": {
     "common_prefixes": [],
     "objects": [

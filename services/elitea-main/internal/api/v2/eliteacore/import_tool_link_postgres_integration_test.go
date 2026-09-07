@@ -196,7 +196,10 @@ FROM p_1.entity_tool_mapping`).
 		t.Errorf("tool link rows = %d, want 1", count)
 	}
 
-	// The rows carry the caller, not user 1 (#505).
+	// The author columns carry the caller, not user 1 (#505). The owner column
+	// carries the DESTINATION PROJECT, and the destination schema is p_1
+	// (#533): `applications.owner_id` is the project, as it is on `skills` and
+	// on `elitea_tools`.
 	var applicationOwner, versionAuthor, toolkitAuthor int
 	if err := pool.QueryRow(ctx, `
 SELECT a.owner_id, v.author_id, t.author_id
@@ -205,17 +208,22 @@ JOIN p_1.application_versions v ON v.application_id = a.id
 CROSS JOIN p_1.elitea_tools t`).Scan(&applicationOwner, &versionAuthor, &toolkitAuthor); err != nil {
 		t.Fatalf("read the imported owners: %v", err)
 	}
-	for _, owner := range []struct {
+	for _, author := range []struct {
 		column string
 		value  int
 	}{
-		{"applications.owner_id", applicationOwner},
 		{"application_versions.author_id", versionAuthor},
 		{"elitea_tools.author_id", toolkitAuthor},
 	} {
-		if owner.value != importLinkPrincipal {
-			t.Errorf("%s = %d, want the caller %d", owner.column, owner.value, importLinkPrincipal)
+		if author.value != importLinkPrincipal {
+			t.Errorf("%s = %d, want the caller %d", author.column, author.value, importLinkPrincipal)
 		}
+	}
+	if applicationOwner != 1 {
+		t.Errorf("applications.owner_id = %d, want the destination project 1", applicationOwner)
+	}
+	if applicationOwner == importLinkPrincipal {
+		t.Error("applications.owner_id holds the caller; the fixture picks a principal that is not project 1 precisely so this is visible")
 	}
 }
 

@@ -3,7 +3,7 @@
  *
  * @public Wave-2 unit A13 surface.
  */
-import { OTHER_CATEGORY, TRENDING_CATEGORY, MY_LIKED_CATEGORY, LikeUpdateStrategy } from './constants';
+import { AGENT_ID, OTHER_CATEGORY, TRENDING_CATEGORY, MY_LIKED_CATEGORY, LikeUpdateStrategy } from './constants';
 import type { ApplicationData, LikeUpdateStrategyValue } from './types';
 
 /**
@@ -38,25 +38,6 @@ export const getCategoryForApplication = (app: ApplicationData): string => {
 };
 
 /**
- * Case-insensitive substring filter over agent names, driving the
- * agents-hub search box (adversarial-review fix, cluster A13-agents-hub,
- * finding 9). A local duplicate of `entities/app`'s `filterAppsByQuery`
- * (same one-line behaviour) rather than an import of it: that selector is
- * typed against `entities/app`'s own `App` shape (a different generated-
- * type extension than this cluster's `ApplicationData`), and `entities/*`
- * slices may not import sideways from one another
- * (`.dependency-cruiser.cjs`'s `no-sideways-entities` rule) — `pages/`
- * could import `entities/app` directly, but duplicating this one-liner
- * locally avoids taking on a whole sibling entity's public surface (and a
- * structural-vs-nominal type mismatch) for a single filter predicate.
- */
-export const filterApplicationsByQuery = (apps: ApplicationData[], query: string): ApplicationData[] => {
-  const needle = query.trim().toLowerCase();
-  if (needle === '') return apps;
-  return apps.filter(app => app.name.toLowerCase().includes(needle));
-};
-
-/**
  * Calculate the new like count based on the selected strategy.
  */
 export const calculateNewLikesCount = (
@@ -84,3 +65,39 @@ export const calculateNewLikesCount = (
       return currentLikes;
   }
 };
+
+/**
+ * The absolute `?agentId=` share link for one agent (#80's second adjacent
+ * gap; baseline `apps/elitea-ui/src/[fsd]/features/agent-hub/ui/
+ * AgentModal.jsx:68-76`).
+ *
+ * `catalogHref` is the ROUTER's own href for `/elitea-catalog`, passed in by
+ * the caller. The link must carry the app's basepath (`/app/` in production),
+ * and the router already knows it — `pages/` may not import `app/providers`'
+ * `getAppBasename` (layer rule: `app` is above `pages`), and a second copy of
+ * that rule would drift the moment `VITE_BASE_URI` changed.
+ *
+ * THE QUERY IS BUILT HERE, NOT BY THE ROUTER, and that is deliberate.
+ * TanStack Router's default search stringifier JSON-encodes any value that
+ * would otherwise parse back as something else, so `agentId: '42'` reaches the
+ * address bar as `agentId=%2242%22`. That round-trips correctly — `text()` in
+ * `routes/-search/params.ts` normalises either form — but this is a string a
+ * person pastes into a message, and the baseline's own link reads
+ * `?tab=agents&agentId=42`. Any query the router put on the href is dropped
+ * first, so the two cannot both appear.
+ *
+ * `origin` is passed in too, so this stays a pure function a test can pin
+ * without a browser.
+ */
+export function buildAgentShareLink(params: {
+  readonly origin: string;
+  readonly catalogHref: string;
+  /** The wire carries the id as a number on some rows and a string on others, so both are taken here rather than at the call site. */
+  readonly agentId: string | number | undefined | null;
+}): string {
+  const { agentId } = params;
+  if (agentId === undefined || agentId === null || agentId === '') return '';
+  const path = params.catalogHref.split('?')[0] ?? params.catalogHref;
+  const query = new URLSearchParams({ tab: 'agents', [AGENT_ID]: String(agentId) });
+  return `${params.origin}${path}?${query.toString()}`;
+}

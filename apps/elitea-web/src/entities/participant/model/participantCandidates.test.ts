@@ -28,6 +28,9 @@ function publicApplication(overrides: Partial<PublicApplicationSummary> = {}): P
     version_name: 'v1',
     agent_type: 'classic',
     meta: null,
+    tags: [],
+    likes: 0,
+    is_liked: false,
     ...overrides,
   };
 }

@@ -82,24 +82,31 @@ function LoadToolsAction({ canLoadTools, isLoadingTools, onLoadTools }: LoadTool
     ? t('features.toolkits.toolBase.toolActionsSelector.loading', 'Loading...')
     : t('features.toolkits.toolBase.toolActionsSelector.loadTools', 'Load Tools');
 
+  /*
+   * A REAL `<button>`.
+   *
+   * It used to be a `role="button"` span, because it rendered INSIDE
+   * `StyledAccordionSummary`'s own `<button>` and a nested `<button>` is
+   * invalid HTML. That swap did not fix the accessibility fault, it only
+   * changed its name: a focusable descendant of a button is an axe
+   * `nested-interactive` failure whatever tag it uses, and the MCP detail
+   * screen shipped exactly that one ("Element has focusable descendants",
+   * serious, WCAG 4.1.2).
+   *
+   * `BasicAccordion` now renders `summaryAction` beside the summary button
+   * rather than inside it, so the honest control is available again — and
+   * with it the keyboard behaviour the hand-rolled `onKeyDown` was
+   * approximating (Enter/Space, `disabled` semantics, focus ring).
+   */
+  const isDisabled = !canLoadTools || isLoadingTools;
   return (
     <Typography
       variant="labelSmall"
-      // A real `<button>`/`Box component="button"` cannot go here: this
-      // renders inside `StyledAccordionSummary`, which is itself a
-      // `<button>` (`BasicAccordion`'s own `AccordionItem.summaryAction`
-      // doc comment: "must not itself be (or contain) a literal
-      // `<button>` — nested `<button>`s are invalid HTML. Use a non-button
-      // interactive element instead... a `role="button"` element").
-      component="span"
-      // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- see comment above; a real <button> here would be invalid HTML (nested inside StyledAccordionSummary's own <button>).
-      role="button"
-      tabIndex={0}
-      sx={loadToolsButtonSx(!canLoadTools || isLoadingTools)}
+      component="button"
+      type="button"
+      disabled={isDisabled}
+      sx={loadToolsButtonSx(isDisabled)}
       onClick={onClick}
-      onKeyDown={(event) => {
-        if (event.key === 'Enter' || event.key === ' ') onClick();
-      }}
     >
       {label}
     </Typography>
@@ -213,6 +220,10 @@ function containerSx(shouldUseAccordionView: boolean) {
 function loadToolsButtonSx(disabled: boolean) {
   return (theme: Theme) => ({
     display: 'inline-block',
+    // The `<button>` reset: the element carries the summary row's own type
+    // scale (`variant="labelSmall"`), not the user-agent button font.
+    border: 'none',
+    font: 'inherit',
     color: !disabled ? theme.vars.palette.text.secondary : theme.vars.palette.text.button.disabled,
     cursor: !disabled ? 'pointer' : 'default',
     height: '1.75rem',

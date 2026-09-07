@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { canSaveSettings, parseSettingsDraft } from './settingsForm';
+import { canSaveSettings, parseSettingsDraft, withArtifactSource } from './settingsForm';
 
 describe('parseSettingsDraft', () => {
   it('accepts a document with a resolvable repository', () => {
@@ -78,6 +78,106 @@ describe('parseSettingsDraft', () => {
     const parsed = parseSettingsDraft('{"unrelated":true}');
     expect(parsed.problems).toHaveLength(1);
     expect(parsed.settings).not.toBeNull();
+  });
+
+  describe('a source that is an ARTIFACT FOLDER rather than a repository', () => {
+    // The facade accepts `artifact_configuration: {bucket, prefix}` INSTEAD of
+    // a code_toolkit, derives `repository: artifact://…` from it, and refuses
+    // a body naming both with a 400. A form that did not know the folder
+    // exists would refuse the whole feature at the first save.
+    it('saves a folder source with no "no repository" problem', () => {
+      const parsed = parseSettingsDraft('{"artifact_configuration":{"bucket":"docs","prefix":"handbook"}}');
+      expect(parsed.problems).toEqual([]);
+      expect(canSaveSettings(parsed)).toBe(true);
+    });
+
+    it('saves a whole bucket, with no folder at all', () => {
+      expect(canSaveSettings(parseSettingsDraft('{"artifact_configuration":{"bucket":"docs"}}'))).toBe(true);
+      expect(canSaveSettings(parseSettingsDraft('{"toolkit_configuration_artifact_configuration":{"bucket":"docs"}}')))
+        .toBe(true);
+    });
+
+    it('refuses a bad bucket, naming the bucket', () => {
+      const parsed = parseSettingsDraft('{"artifact_configuration":{"bucket":"My_Docs"}}');
+      expect(canSaveSettings(parsed)).toBe(false);
+      expect(parsed.problems.map((problem) => problem.field)).toEqual(['artifact_configuration.bucket']);
+      // NOT reported as a missing repository as well: the operator has named
+      // a source, and one cause must not produce two messages.
+      expect(parsed.problems[0]?.message).toMatch(/bucket name/i);
+    });
+
+    it('refuses a bad folder, naming the folder', () => {
+      const parsed = parseSettingsDraft('{"artifact_configuration":{"bucket":"docs","prefix":"a/../b"}}');
+      expect(canSaveSettings(parsed)).toBe(false);
+      expect(parsed.problems.map((problem) => problem.field)).toEqual(['artifact_configuration.prefix']);
+    });
+
+    it.each([
+      ['{"artifact_configuration":{"bucket":"docs"},"code_toolkit":9}', 'a code_toolkit'],
+      ['{"artifact_configuration":{"bucket":"docs"},"github_repository":"acme/x"}', 'a repository'],
+      ['{"artifact_configuration":{"bucket":"docs"},"repo":"acme/x"}', 'a repo alias'],
+    ])('refuses %s (a folder beside %s)', (draft) => {
+      // The facade answers 400 for the code_toolkit pair and silently
+      // overwrites the repository for the other. Both mean the operator does
+      // not get the wiki they described.
+      const parsed = parseSettingsDraft(draft);
+      expect(canSaveSettings(parsed)).toBe(false);
+      expect(parsed.problems.map((problem) => problem.field)).toEqual(['artifact_configuration']);
+      expect(parsed.problems[0]?.message).toMatch(/one source/i);
+    });
+
+    it('does not report two sources for a folder alone', () => {
+      // The identity resolver PREFERS the folder, so a check that asked it
+      // whether a repository is configured would answer yes about the folder
+      // itself and refuse every folder-only document.
+      expect(parseSettingsDraft('{"artifact_configuration":{"bucket":"docs","prefix":"a"}}').problems).toEqual([]);
+    });
+  });
+
+  describe('writing the source into a draft', () => {
+    it('adds the folder and removes every repository key', () => {
+      // Both cannot stand — the rule above refuses that document — so a
+      // picker that left the repository behind would produce exactly what the
+      // next save refuses, and the operator would finish the job by hand.
+      const next = withArtifactSource(
+        { code_toolkit: 9, github_repository: 'acme/x', repo: 'acme/x', llm_model: 'gpt-5' },
+        { bucket: 'docs', prefix: 'handbook' },
+      );
+      expect(next).toEqual({
+        llm_model: 'gpt-5',
+        artifact_configuration: { bucket: 'docs', prefix: 'handbook' },
+      });
+      expect(canSaveSettings(parseSettingsDraft(JSON.stringify(next)))).toBe(true);
+    });
+
+    it('removes the folder under BOTH spellings when a repository is chosen', () => {
+      const next = withArtifactSource(
+        {
+          artifact_configuration: { bucket: 'docs' },
+          toolkit_configuration_artifact_configuration: { bucket: 'docs' },
+          github_repository: 'acme/x',
+        },
+        null,
+      );
+      expect(next).toEqual({ github_repository: 'acme/x' });
+    });
+
+    it('writes the folder AS TYPED, only trimmed', () => {
+      // The reader canonicalises `handbook/` on its own. Rewriting the field
+      // under the operator would take the slash out of the box while they are
+      // still typing the path.
+      expect(withArtifactSource({}, { bucket: ' docs ', prefix: ' handbook/ ' })).toEqual({
+        artifact_configuration: { bucket: 'docs', prefix: 'handbook/' },
+      });
+    });
+
+    it('leaves the prefixed spelling behind for the canonical one', () => {
+      // The facade reads `artifact_configuration`; a document that kept the
+      // prefixed twin as well would carry one source under two names.
+      expect(
+        withArtifactSource({ toolkit_configuration_artifact_configuration: { bucket: 'old' } }, { bucket: 'docs', prefix: '' }),
+      ).toEqual({ artifact_configuration: { bucket: 'docs', prefix: '' } });
+    });
   });
 
   describe('the model settings the engine substitutes defaults for', () => {

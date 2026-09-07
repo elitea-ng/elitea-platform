@@ -269,7 +269,7 @@ func TestCreateProjectRouteKeepsANamedAdministrator(t *testing.T) {
 }
 
 /* ── #376: the route builds the reference tenant, and delete leaves the
-      deployment migratable ─────────────────────────────────────────────── */
+   deployment migratable ─────────────────────────────────────────────── */
 
 // TestCreateProjectRouteBuildsTheReferenceTenant compares the tenant the ROUTE
 // built against p_1, which the bootstrap and the migration corpus build between

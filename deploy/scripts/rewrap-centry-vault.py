@@ -12,8 +12,9 @@ itself does not change, so centry.secrets_data is never rewritten and no secret
 value is re-encrypted. That is what makes the conversion safe to repeat and
 cheap to verify.
 
-WHEN YOU NEED IT. A deployment that ran elitea-main or pylon-indexer without
-SECRETS_MASTER_KEY has unwrapped rows. Supplying the key to the stack makes
+WHEN YOU NEED IT. A deployment that ran elitea-main without SECRETS_MASTER_KEY
+has unwrapped rows. So does one that ran pylon-indexer without it, before #339
+deleted that service. Supplying the key to the stack makes
 those rows unreadable until they are wrapped. Rotating an exposed key has the
 same shape, with --from-key set to the old value.
 
@@ -33,11 +34,11 @@ same shape, with --from-key set to the old value.
 RUN IT ON A COPY FIRST. Take a dump, load it into another database, convert
 that, and read a secret back through the application. This script has no undo.
 
-The script needs `cryptography` and `psycopg2`. The pylon-indexer image already
-carries both:
+The script needs `cryptography` and `psycopg2`. The elitea-worker-python image
+carries both, and it is in every stack that has this table:
 
   podman run --rm --network <net> \
-    -v "$PWD/deploy/scripts:/scripts:ro" ghcr.io/eliteaai/pylon:1.2.25 \
+    -v "$PWD/deploy/scripts:/scripts:ro" ghcr.io/elitea-ng/elitea-worker-python:dev \
     python /scripts/rewrap-centry-vault.py --help
 
 It never prints a key or a secret value.

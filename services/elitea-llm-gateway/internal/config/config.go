@@ -63,6 +63,36 @@ const (
 	// gateway.project_budget.nats_fail_mode may narrow it.
 	DefaultNATSFailMode = "tiered_hybrid"
 
+	// RequireEnforcementAuto, RequireEnforcementOn and RequireEnforcementOff are
+	// the three values of LLM_BUDGET_REQUIRE_ENFORCEMENT (issue #304). They
+	// select what the gateway does at startup when the budget gate could not be
+	// wired.
+	//
+	//	auto (default)  refuse to start ONLY in the state that cannot recover
+	//	                and cannot be seen: enforcing budget rows exist in the
+	//	                database AND GATEWAY_NATS_URL is unset. Nothing re-dials
+	//	                a URL that was never given, and /readyz reports ready,
+	//	                so that pod bills nothing for its whole life and no
+	//	                probe says so.
+	//	on              refuse to start whenever the gate is not wired. This is
+	//	                the posture for a deployment that must never serve an
+	//	                unmetered request, and it accepts a CrashLoopBackOff
+	//	                while NATS is down.
+	//	off             never refuse. This is the documented local-development
+	//	                and bootstrap posture; the gateway logs one loud warning
+	//	                that names this setting.
+	//
+	// The mode does NOT change the "NATS configured, dial failed" case under
+	// auto. That state already reports not ready (/readyz, issue #304) and
+	// already recovers without a restart (issue #315). Turning it into an exit
+	// would trade a pod that comes back on its own for one that back-offs.
+	RequireEnforcementAuto = "auto"
+	RequireEnforcementOn   = "on"
+	RequireEnforcementOff  = "off"
+
+	// DefaultRequireEnforcement is the shipped posture.
+	DefaultRequireEnforcement = RequireEnforcementAuto
+
 	// DefaultPGFreshnessMin is how old the Postgres snapshot may be and still be
 	// trusted for the tiered-hybrid fallback (§8.5, LLM_BUDGET_PG_FRESHNESS_MIN).
 	// A snapshot older than this ⇒ NATS_DOWN_PG_STALE ⇒ 503.
@@ -186,6 +216,16 @@ type Config struct {
 	// "tiered_hybrid" (default) | "fail_open" | "fail_closed". A per-project
 	// gateway.project_budget.nats_fail_mode overrides it (NULL inherits this).
 	NATSFailMode string
+	// RequireBudgetEnforcement states what the process does when the budget
+	// gate could not be wired at startup: "auto" (default), "on" or "off"
+	// (LLM_BUDGET_REQUIRE_ENFORCEMENT, issue #304). See the RequireEnforcement*
+	// constants for what each one refuses.
+	//
+	// It is a STARTUP policy only. It never changes an admission decision, and
+	// it is not a fourth fail mode: LLM_BUDGET_NATS_FAIL_MODE decides what a
+	// running gateway does when NATS breaks, and it can only act on a
+	// connection that once succeeded.
+	RequireBudgetEnforcement string
 	// PGFreshnessMin bounds how stale the Postgres snapshot may be before the
 	// fallback degrades to 503 (§8.5, NATS_DOWN_PG_STALE).
 	PGFreshnessMin time.Duration
@@ -342,22 +382,23 @@ func FromEnv() Config {
 		CBFailureThreshold:  uint32Or("LLM_BUDGET_CB_FAILURE_THRESHOLD", DefaultCBFailureThreshold),
 		CBOpenDuration:      secondsOr("LLM_BUDGET_CB_OPEN_DURATION_SEC", DefaultCBOpenDuration),
 
-		NATSFailMode:            failModeOr("LLM_BUDGET_NATS_FAIL_MODE", DefaultNATSFailMode),
-		PGFreshnessMin:          minutesOr("LLM_BUDGET_PG_FRESHNESS_MIN", DefaultPGFreshnessMin),
-		NATSDegradedMaxDuration: minutesOr("LLM_BUDGET_NATS_DEGRADED_MAX_DURATION_MIN", DefaultNATSDegradedMaxDuration),
-		NATSDegradedCapUSD:      floatOr("LLM_BUDGET_NATS_DEGRADED_CAP_USD", 0),
-		ExpectedReplicas:        intOr("LLM_BUDGET_EXPECTED_REPLICAS", DefaultNATSReplicas),
-		TLSCertFile:             os.Getenv("GATEWAY_TLS_CERT_FILE"),
-		TLSKeyFile:              os.Getenv("GATEWAY_TLS_KEY_FILE"),
-		TLSCAFile:               os.Getenv("GATEWAY_TLS_CA_FILE"),
-		StreamGrace:             millisOr("LLM_STREAM_GRACE_MS", DefaultStreamGrace, MaxStreamGrace),
-		StreamDrainLimit:        intOr("LLM_STREAM_DRAIN_MAX_INFLIGHT", DefaultStreamDrainLimit),
-		SelfLLMOrigins:          csvOr("GATEWAY_SELF_LLM_ORIGINS"),
-		EgressAllowlist:         csvOr("GATEWAY_EGRESS_ALLOWLIST"),
-		LoopBreakerThreshold:    signedIntOr("LLM_LOOP_BREAKER_THRESHOLD", 0),
-		LoopBreakerWindow:       plainMillisOr("LLM_LOOP_BREAKER_WINDOW_MS", 0),
-		LoopBreakerOpenFor:      secondsOr("LLM_LOOP_BREAKER_OPEN_SEC", 0),
-		PublicProjectID:         intOr("ELITEA_AI_PROJECT_ID", 0),
+		NATSFailMode:             failModeOr("LLM_BUDGET_NATS_FAIL_MODE", DefaultNATSFailMode),
+		RequireBudgetEnforcement: requireEnforcementOr("LLM_BUDGET_REQUIRE_ENFORCEMENT", DefaultRequireEnforcement),
+		PGFreshnessMin:           minutesOr("LLM_BUDGET_PG_FRESHNESS_MIN", DefaultPGFreshnessMin),
+		NATSDegradedMaxDuration:  minutesOr("LLM_BUDGET_NATS_DEGRADED_MAX_DURATION_MIN", DefaultNATSDegradedMaxDuration),
+		NATSDegradedCapUSD:       floatOr("LLM_BUDGET_NATS_DEGRADED_CAP_USD", 0),
+		ExpectedReplicas:         intOr("LLM_BUDGET_EXPECTED_REPLICAS", DefaultNATSReplicas),
+		TLSCertFile:              os.Getenv("GATEWAY_TLS_CERT_FILE"),
+		TLSKeyFile:               os.Getenv("GATEWAY_TLS_KEY_FILE"),
+		TLSCAFile:                os.Getenv("GATEWAY_TLS_CA_FILE"),
+		StreamGrace:              millisOr("LLM_STREAM_GRACE_MS", DefaultStreamGrace, MaxStreamGrace),
+		StreamDrainLimit:         intOr("LLM_STREAM_DRAIN_MAX_INFLIGHT", DefaultStreamDrainLimit),
+		SelfLLMOrigins:           csvOr("GATEWAY_SELF_LLM_ORIGINS"),
+		EgressAllowlist:          csvOr("GATEWAY_EGRESS_ALLOWLIST"),
+		LoopBreakerThreshold:     signedIntOr("LLM_LOOP_BREAKER_THRESHOLD", 0),
+		LoopBreakerWindow:        plainMillisOr("LLM_LOOP_BREAKER_WINDOW_MS", 0),
+		LoopBreakerOpenFor:       secondsOr("LLM_LOOP_BREAKER_OPEN_SEC", 0),
+		PublicProjectID:          intOr("ELITEA_AI_PROJECT_ID", 0),
 
 		RealtimeBudgetRecheck:  secondsOr("LLM_REALTIME_BUDGET_RECHECK_SEC", DefaultRealtimeBudgetRecheck),
 		GovernanceRefresh:      secondsOr("LLM_GOVERNANCE_REFRESH_SEC", DefaultGovernanceRefresh),
@@ -513,6 +554,23 @@ func floatOr(key string, def float64) float64 {
 func failModeOr(key, def string) string {
 	switch os.Getenv(key) {
 	case "tiered_hybrid", "fail_open", "fail_closed":
+		return os.Getenv(key)
+	default:
+		return def
+	}
+}
+
+// requireEnforcementOr reads the startup enforcement policy, accepting only the
+// three valid values (issue #304).
+//
+// An unrecognised value falls back to def for the same reason failModeOr does,
+// and the reason is stronger here: the only value that WEAKENS the gateway is
+// "off", so a typo must never be read as it. "LLM_BUDGET_REQUIRE_ENFORCEMENT=0"
+// and "=false" therefore select the shipped "auto" posture, not the permissive
+// one; an operator who wants the permissive posture writes the word.
+func requireEnforcementOr(key, def string) string {
+	switch os.Getenv(key) {
+	case RequireEnforcementAuto, RequireEnforcementOn, RequireEnforcementOff:
 		return os.Getenv(key)
 	default:
 		return def

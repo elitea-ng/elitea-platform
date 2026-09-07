@@ -73,6 +73,29 @@ describe('useConfigurationDetail', () => {
     expect(result.current.fetchStatus).toBe('idle');
   });
 
+  /*
+   * THE FIRST RENDER OF A DEEP LINK, and the request it used to waste.
+   * `routes/-lib/useCredentialFormContext` hands this hook
+   * `state.project?.id ?? ''` while the selected-project store is still
+   * hydrating, so a blank id is a real, reachable input — not a
+   * hypothetical. It used to pass the `!== undefined` guard and fetch
+   * `/configurations/configuration//abc`. J19b measured the fallout.
+   */
+  it('stays disabled while the project id is still the empty string', () => {
+    configureGeneratedClient({ baseUrl: BASE });
+    let hit = false;
+    server.use(
+      http.get(`${BASE}/configurations/configuration/:projectId/abc`, () => {
+        hit = true;
+        return HttpResponse.json({ uid: 'abc' });
+      }),
+    );
+    const { wrapper } = createWrapper();
+    const { result } = renderHook(() => useConfigurationDetail('', 'abc'), { wrapper });
+    expect(result.current.fetchStatus).toBe('idle');
+    expect(hit).toBe(false);
+  });
+
   it('fetches once both ids are present', async () => {
     configureGeneratedClient({ baseUrl: BASE });
     server.use(http.get(`${BASE}/configurations/configuration/7/abc`, () => HttpResponse.json({ uid: 'abc', type: 'openai' })));

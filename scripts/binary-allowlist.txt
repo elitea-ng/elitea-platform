@@ -57,3 +57,12 @@ apps/elitea-web/e2e/snapshots/visual/*-snapshots/*.png
 # also admits a .webp nested deeper under empty-states/. The directory is flat
 # and holds only these six files.
 apps/elitea-web/src/assets/empty-states/*.webp
+
+# oapi-codegen output for the v2 spec. It is source text, not a blob: CI
+# regenerates it from services/elitea-main/internal/api/spec/v2.yaml and the
+# generated-drift gate fails when the checked-in copy differs, so it cannot
+# carry anything the spec does not. It crossed the 1 MiB textual ceiling when
+# the parity wave described the toolkit catalogue, support assistant and
+# Inventory facade operations (185 operations). Listed by exact path so the
+# ceiling still applies to every other generated file.
+services/elitea-main/internal/api/generated/api.gen.go

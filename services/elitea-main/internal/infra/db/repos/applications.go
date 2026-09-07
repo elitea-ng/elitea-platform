@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
@@ -174,15 +175,46 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 
 	selectArgs := append([]any{}, args...)
 	limitIdx := len(selectArgs) + 1
+	// The agent's PUBLISH state, computed per application.
+	//
+	// `Application.Status` was never selected, so every listed agent carried
+	// the empty string and `omitempty` dropped the key entirely. The web app's
+	// Drafts/Published/Moderation/Approval/Rejected tabs filter this exact
+	// field client-side (`pages/agents/PrivateAgentsList.tsx`), so all five
+	// were permanently empty and no publish could ever fill one.
+	//
+	// It is an EXISTS over the versions, not `av.status`: the row `DISTINCT ON
+	// (a.id)` keeps is whichever version the plan happens to reach first, so
+	// reading its status would make the tab an agent appears under depend on
+	// row order. An agent is published when ANY of its versions is, which is
+	// the same rule the editor's own publish/unpublish pair enforces.
+	//
+	// `embedded` is deliberately not published: those clones exist only to
+	// carry a PARENT agent's sub-agents through a publish, and listing them
+	// as published would put an agent in the Published tab because something
+	// else was published.
+	statusExpr := fmt.Sprintf(`CASE WHEN EXISTS (
+			SELECT 1 FROM %s.application_versions pv
+			WHERE pv.application_id = a.id AND pv.status = 'published'
+		) THEN 'published' ELSE 'draft' END`, s)
 	query := fmt.Sprintf(`
 		SELECT DISTINCT ON (a.id) a.id, a.name, COALESCE(a.description, ''), COALESCE(a.icon, ''),
 			a.owner_id, a.created_at, COALESCE(a.shared_id, 0),
 			COALESCE(a.meta, '{}'::jsonb)::text,
 			COALESCE(av.agent_type, '`+defaultAgentType+`'),
-			COALESCE(u.id, 0), COALESCE(u.email, ''), COALESCE(u.name, '')
+			COALESCE(u.id, 0), COALESCE(u.email, ''), COALESCE(u.name, ''),
+			`+statusExpr+`
 		FROM %s.applications a`, s) + join +
-		` LEFT JOIN public.auth_core__user u ON u.id = a.owner_id` + where +
-		fmt.Sprintf(` ORDER BY a.id DESC LIMIT $%d OFFSET $%d`, limitIdx, limitIdx+1)
+		// The author join reads `av.author_id`, the USER that wrote the
+		// version, and not `a.owner_id`, which is the owning PROJECT (#533).
+		// The old join gave the list the account whose user id happened to
+		// equal the project id — user 1 in nearly every deployment.
+		` LEFT JOIN public.auth_core__user u ON u.id = av.author_id` + where +
+		// `av.id ASC` picks the FIRST version of each application, whose author
+		// is the account that created the agent. DISTINCT ON keeps one row per
+		// application, and without this key the row it keeps — and so the
+		// author the list shows — is whichever version the plan reaches first.
+		fmt.Sprintf(` ORDER BY a.id DESC, av.id ASC LIMIT $%d OFFSET $%d`, limitIdx, limitIdx+1)
 	selectArgs = append(selectArgs, pageSize, (page-1)*pageSize)
 
 	rows, err := r.pool.Query(ctx, query, selectArgs...)
@@ -206,6 +238,7 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 			&app.OwnerID, &app.CreatedAt, &sharedID,
 			&metaStr, &app.AgentType,
 			&authorID, &authorEmail, &authorName,
+			&app.Status,
 		); err != nil {
 			return empty, fmt.Errorf("applications: list scan: %w", err)
 		}
@@ -244,9 +277,11 @@ func scanApplication(row rowScanner, projectID string) (applications.Application
 	); err != nil {
 		return applications.Application{}, err
 	}
-	// CreatedBy mirrors OwnerID: applications has one owner_id column and no
-	// separate creator. Both are populated so neither response field lies.
-	app.CreatedBy = app.OwnerID
+	// CreatedBy stays empty. It used to mirror OwnerID, which was true only
+	// while every writer in this service put the caller user id into
+	// `owner_id`. That column holds the owning PROJECT (#533), so the mirror
+	// now says that a project created the agent. The author of a version is
+	// application_versions.author_id, which the version reads carry.
 	app.ProjectID = projectID
 	return app, nil
 }
@@ -275,8 +310,17 @@ func (r *ApplicationsRepo) Create(ctx context.Context, req applications.CreateRe
 	if err != nil {
 		return applications.Application{}, err
 	}
-	if req.OwnerID <= 0 {
+	if req.AuthorID <= 0 {
 		return applications.Application{}, apierr.Unauthorized("an authenticated owner is required to create an application")
+	}
+	// `applications.owner_id` is the owning PROJECT and not the caller (#533).
+	// This statement wrote the principal, which made the agent invisible to
+	// every legacy read: the legacy runtime filters
+	// `Application.owner_id == project_id`. The principal is the author of the
+	// first version, below.
+	ownerID, err := tenantschema.OwnerID(req.ProjectID)
+	if err != nil {
+		return applications.Application{}, err
 	}
 	if req.Config != nil {
 		if err := rejectDerivedConfig(*req.Config); err != nil {
@@ -300,7 +344,7 @@ func (r *ApplicationsRepo) Create(ctx context.Context, req applications.CreateRe
 		VALUES ($1, $2, $3, $4)
 		RETURNING `+applicationColumns, s)
 	app, err := scanApplication(
-		tx.QueryRow(ctx, query, req.Name, req.Description, req.Icon, req.OwnerID),
+		tx.QueryRow(ctx, query, req.Name, req.Description, req.Icon, ownerID.Int64()),
 		req.ProjectID,
 	)
 	if err != nil {
@@ -310,7 +354,7 @@ func (r *ApplicationsRepo) Create(ctx context.Context, req applications.CreateRe
 	if req.InitialVersion != nil {
 		version := *req.InitialVersion
 		if version.AuthorID <= 0 {
-			version.AuthorID = req.OwnerID
+			version.AuthorID = req.AuthorID.Int64()
 		}
 		created, err := insertVersion(ctx, tx, s, app.ID, version)
 		if err != nil {

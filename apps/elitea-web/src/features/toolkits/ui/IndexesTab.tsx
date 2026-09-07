@@ -41,6 +41,27 @@
  * failure mode; the stale sentences are left in place in their own files
  * (they are that unit's record) and superseded here.
  *
+ * ─────────────────────────────────────────────────────────────────────────
+ * THE WORKER-CAPABILITY VERDICT (added 2026-09-07)
+ * ─────────────────────────────────────────────────────────────────────────
+ * `unavailableReason` is the served type schema's own
+ * `metadata.unavailable_reason`, written by
+ * `services/elitea-main/internal/api/v2/toolkits/type_catalogue.go:232-240`
+ * whenever the worker cannot import the toolkit class at all. When it is set
+ * this tab renders that sentence INSTEAD OF the indexes UI.
+ *
+ * Instead of, not beside: everything `IndexesContainer` offers ends in a run
+ * on a worker that has already said it cannot run this type. A create form
+ * whose `Index` button dispatches a job that dies in the worker, with the
+ * answer sitting unread in the same schema the form was built from, is the
+ * "absence reads as correctness" failure in its user-facing form. The list
+ * is dropped with it: the read goes to the project's PgVector store, which
+ * for an unrunnable type has never been written to, so it can only ever
+ * confirm the emptiness the sentence already explains.
+ *
+ * NOT hidden, though — see `../lib/helpers/indexesTabVisibility.ts` for why
+ * a vanishing tab explains less than a tab with a reason in it.
+ *
  * STILL A REAL GAP, not papered over: `mcp_tokens` in the run payload — see
  * `../lib/helpers/toolkitMessagePayload.ts`'s own disclosure. It is
  * structurally unreachable from this slice and only affects `mcp`-type
@@ -50,7 +71,10 @@ import type { ComponentType, ReactNode } from 'react';
 import { useCallback, useMemo, useState } from 'react';
 
 import Alert from '@mui/material/Alert';
+import AlertTitle from '@mui/material/AlertTitle';
 import Snackbar from '@mui/material/Snackbar';
+
+import { t } from '@/shared/i18n';
 
 import { addToolkitConversationParticipant, createToolkitConversation, useToolkitLlmModels } from '../api/toolkitChatSession';
 import type { ToolkitLlmModel } from '../api/toolkitChatSession';
@@ -161,11 +185,18 @@ export interface IndexesTabProps {
    * `pages/toolkits/lib/credentialPickerSlots.tsx`.
    */
   readonly renderCredentialsSelect?: IndexesContainerProps['renderCredentialsSelect'];
+  /**
+   * The worker-capability verdict off the served type schema. Set means the
+   * worker cannot run this toolkit type; the string is the server's own
+   * sentence, and an EMPTY string is still a verdict (unavailable, no reason
+   * given) — so this is tested against `undefined`, never for truthiness.
+   */
+  readonly unavailableReason?: string | undefined;
 }
 
 /** @public Rendered by `pages/toolkits/EditToolkit.tsx` as the Indexes tab panel. */
 export function IndexesTab(props: IndexesTabProps): ReactNode {
-  const { toolkitId, values, selectedIndexTools, chatUI, renderCredentialsSelect } = props;
+  const { toolkitId, values, selectedIndexTools, chatUI, renderCredentialsSelect, unavailableReason } = props;
 
   /**
    * `IndexActions` reads exactly two fields off `editToolDetail`: `type`,
@@ -279,6 +310,29 @@ export function IndexesTab(props: IndexesTabProps): ReactNode {
     return useGetCurrentToolkitSchemas({ isMCP: params.isMCP });
   }, []);
 
+  if (unavailableReason !== undefined) {
+    return (
+      <Alert
+        severity="info"
+        variant="outlined"
+        data-testid="indexes-unavailable"
+        sx={{ margin: '1.5rem' }}
+      >
+        <AlertTitle>{t('features.toolkits.indexesTab.unavailableTitle', 'Indexing is not available for this toolkit type')}</AlertTitle>
+        {/*
+          * The server's sentence verbatim. It names the type and the reason
+          * (a missing worker capability, an SDK import that failed), which a
+          * generic line here could not, and it is written for a human — see
+          * `type_catalogue.go`'s `unavailable_reason`. The fallback covers a
+          * verdict that arrives without one.
+          */}
+        {unavailableReason === ''
+          ? t('features.toolkits.indexesTab.unavailableGeneric', 'The worker that runs indexing jobs does not support this toolkit type.')
+          : unavailableReason}
+      </Alert>
+    );
+  }
+
   return (
     <>
       <IndexesContainer
@@ -294,6 +348,7 @@ export function IndexesTab(props: IndexesTabProps): ReactNode {
         ChatMessageList={ChatMessageList}
         ClearChatButton={ClearChatButton}
         renderCredentialsSelect={renderCredentialsSelect}
+        onError={onError}
       />
       {/*
         * No global toast host exists in this app (the gap `IndexActions.tsx`

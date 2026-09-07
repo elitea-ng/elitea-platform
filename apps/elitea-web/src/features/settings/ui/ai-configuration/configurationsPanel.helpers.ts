@@ -1,30 +1,25 @@
 /**
- * Pure helpers behind `ConfigurationsPanel` — option building, the `<<>>`
- * value shapes the selects match on, and the public-project gating.
+ * Pure helpers behind `ConfigurationsPanel` — the `<<>>` value shapes the
+ * selects match on, and the public-project gating.
  *
  * Split out of that component only because the file passed the 400-line
  * budget; nothing else imports these.
+ *
+ * The option BUILDER that used to live here is gone (#80). It read the
+ * CONFIGURATION rows and labelled each with `elitea_title`, which no
+ * `defaultValueOf` below can ever equal — that value is a MODEL name. The
+ * options now come from the model catalogue, through
+ * `../../lib/ai-configuration/useModelOptions`, which is what the baseline
+ * always read.
  */
 import { isPublicProject } from '@/entities/project';
 import { getConfig } from '@/shared/config';
 
-import { EMPTY_MODELS_RESPONSE, type ModelsApiResponse } from '../../api/ai-configuration/api';
-
-/* ── hook helper: build select options from a flat config list ──────────── */
-
-export function buildOptions(configs: readonly Record<string, unknown>[]): Array<{ value: string; label: string }> {
-  return (configs ?? []).map((cfg) => {
-    const name = (cfg.elitea_title as string) || (cfg.label as string) || (cfg.type as string) || '';
-    return {
-      value: `${String(name)}<<>>${String((cfg.project_id as string) ?? '')}`,
-      label: String(name),
-    };
-  });
-}
+import type { ModelsApiResponse } from '../../api/ai-configuration/api';
 
 /** `${default_model_name}<<>>${default_model_project_id}` — matches the
- * `<<>>`-joined value shape `buildOptions` produces, so the Select can
- * find the currently-selected option by value equality. */
+ * `<<>>`-joined value shape `useModelOptions`' `createOptions` produces, so
+ * the Select can find the currently-selected option by value equality. */
 export function defaultValueOf(data: ModelsApiResponse): string {
   return `${data.default_model_name ?? ''}<<>>${data.default_model_project_id ?? ''}`;
 }
@@ -59,15 +54,6 @@ export function computeProjectGating(projectId: string): { includeShared: boolea
   };
 }
 
-/** `useModelsQuery` resolves to `undefined` before the fetch settles —
- * mirrors the old app's inline default arg on `useListModelsQuery`'s
- * destructure (`ModelConfiguration.jsx:32-45`). A plain top-level helper
- * (rather than a `??`/default-destructure at each of the 6 call sites)
- * keeps `ConfigurationsPanel` itself under the complexity budget. */
-export function withDefaultModels(data: ModelsApiResponse | undefined): ModelsApiResponse {
-  return data ?? EMPTY_MODELS_RESPONSE;
-}
-
 /** Whether one of `configs` is the row named by `revealConfigurationId` (the
  * `?reveal=` search param — see `ConfigurationsPanel.tsx`'s prop doc comment).
  * `undefined` (no reveal in play) never matches. A top-level helper, not an
@@ -77,4 +63,3 @@ export function sectionHoldsRevealedRow(configs: readonly Record<string, unknown
   if (revealConfigurationId === undefined) return false;
   return configs.some((c) => String(c['id']) === revealConfigurationId);
 }
-

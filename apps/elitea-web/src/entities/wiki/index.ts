@@ -13,7 +13,10 @@
 export type { RepositoryIdentity, ToolkitSettings, WikiManifest } from './model/types';
 export { filterManifestsByRepo } from './lib/repoMatch';
 // Added in P5, when the settings feature became its first consumer.
-export { getConfiguredRepoIdentity } from './lib/toolkitSettings';
+export { getConfiguredRepoIdentity, getCodeToolkitReference } from './lib/toolkitSettings';
+// Added with the artifact-folder source: the settings form needs to know WHY
+// a folder was refused, the two panels only need the folder itself.
+export { getArtifactSource, readArtifactSource } from './lib/artifactSource';
 // Added with the real-engine run: the page view needs the same key the fetch
 // resolves, for the edit that saves back over it.
 export { wikiPageObjectKey } from './lib/pageKey';

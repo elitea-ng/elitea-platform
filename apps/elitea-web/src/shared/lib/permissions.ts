@@ -112,16 +112,22 @@ export const PERMISSIONS = {
     schedule: 'models.applications.index_meta.edit',
   },
   /**
-   * Agent Evaluation — the DIMENSION LIBRARY only.
+   * Agent Evaluation — the dimension library, the datasets and the runs.
    *
    * The baseline's `EVAL_PERMISSIONS` block carries seventeen strings across
-   * dimensions, suites, datasets, runs and human scores. The other thirteen are
-   * not declared here: no route in this deployment gates on them, nothing
-   * grants them, and a constant with no reader is what the dead-code gate
-   * exists to catch.
+   * dimensions, suites, datasets, runs and human scores. TEN are declared here,
+   * and the other seven are not: no route in this deployment gates on
+   * `suite.*`, `human_score.*` or `run.delete`, nothing grants them, and a
+   * constant with no reader is what the dead-code gate exists to catch. They
+   * arrive with the routes.
+   *
+   * There is deliberately no `runCancel`. The reference declares none, and the
+   * cancel route is gated on `run.create` — the right that started a run is the
+   * right that stops it.
    *
    * Gated in `internal/api/router.go`, granted by
-   * `migrations/shared/0100_evaluation_dimension_permissions.sql` — reads to
+   * `migrations/shared/0104_evaluation_dimension_permissions.sql` and
+   * `migrations/shared/0116_evaluation_dataset_run_permissions.sql` — reads to
    * admin/editor/viewer, writes to admin/editor.
    */
   evaluation: {
@@ -129,6 +135,12 @@ export const PERMISSIONS = {
     dimensionCreate: 'models.applications.evaluation.dimension.create',
     dimensionUpdate: 'models.applications.evaluation.dimension.update',
     dimensionDelete: 'models.applications.evaluation.dimension.delete',
+    datasetRead: 'models.applications.evaluation.dataset.read',
+    datasetCreate: 'models.applications.evaluation.dataset.create',
+    datasetUpdate: 'models.applications.evaluation.dataset.update',
+    datasetDelete: 'models.applications.evaluation.dataset.delete',
+    runRead: 'models.applications.evaluation.run.read',
+    runCreate: 'models.applications.evaluation.run.create',
   },
 } as const;
 

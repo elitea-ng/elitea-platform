@@ -247,15 +247,18 @@ main:
     # dark. Both halves project the same pinned SDK snapshot, so they cannot
     # disagree.
     #
-    # The capability needs production authentication, which this values file
-    # supplies through fileConfig.authConfig above. Without it cmd/elitea-main
-    # refuses to start with "ELITEA_INDEX_TYPES_ENABLED requires production
-    # authentication".
+    # The capability needs an authenticated deployment, which this values file
+    # supplies through fileConfig.authConfig above. Without one cmd/elitea-main
+    # refuses to start with "ELITEA_INDEX_TYPES_ENABLED requires an
+    # authenticated deployment".
     #
-    # Turning it OFF is a rollback, not a no-op: internal/api/router.go then
-    # serves this path from the toolkits handler, which answers a static
-    # six-loader list that no data backs, and apps/elitea-ui reads that as an
-    # empty file-type allow-list.
+    # Stated here rather than left to the derivation, because this file is the
+    # reference install: it says out loud what the capability set is.
+    #
+    # Turning it OFF removes the path. #394 deleted the prototype fallback from
+    # internal/api/router.go, so this route is the only handler for
+    # GET /elitea_core/index_types/prompt_lib/{projectID}, and "false" answers
+    # 404 where the published contract declares a body.
     ELITEA_INDEX_TYPES_ENABLED: "true"
 
     # ON here (#395). The attached-skills read now answers ONE body that both
@@ -264,14 +267,15 @@ main:
     # (skills, max_skills) that apps/elitea-ui reads. It was the missing items
     # key that kept this flag dark.
     #
-    # The capability needs production authentication, which this values file
-    # supplies through fileConfig.authConfig above. Without it cmd/elitea-main
-    # refuses to start with "ELITEA_APPLICATION_SKILLS_ENABLED requires
-    # production authentication", and _helpers.tpl refuses the manifest first.
+    # The capability needs an authenticated deployment, which this values file
+    # supplies through fileConfig.authConfig above. Without one cmd/elitea-main
+    # refuses to start with "ELITEA_APPLICATION_SKILLS_ENABLED requires an
+    # authenticated deployment", and _helpers.tpl refuses the manifest first.
     #
-    # Turning it OFF is a safe rollback: internal/api/router.go keeps serving
-    # this path from the skills handler, which answers the same rows in the same
-    # published envelope.
+    # Turning it OFF removes the path, the same way it does for the index-types
+    # flag above: #395 deleted the prototype fallback, so this route is the only
+    # handler for
+    # GET /elitea_core/application_skills/prompt_lib/{projectID}/{appVersionID}.
     ELITEA_APPLICATION_SKILLS_ENABLED: "true"
 
     # The gateway serves every model. Point this at the gateway Service and give

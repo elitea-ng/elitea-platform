@@ -44,6 +44,46 @@ async function openRoles(page: Page): Promise<void> {
   await expect(page.getByRole('table', { name: 'Permission matrix' })).toBeVisible({ timeout: 20_000 });
 }
 
+/**
+ * Read the matrix from the SERVER, then reload the page and expand the probe
+ * group, so the caller can assert both halves of a re-read.
+ *
+ * J30b's two re-reads used to be `toBeChecked()` on a checkbox after a bare
+ * reload, and that is this journey's entry in #545: a checkbox is the end of a
+ * chain — the server answers, the client unwraps the envelope, the matrix
+ * renders, the group is expanded — so its failure could not say whether the
+ * grant was missing from the server's answer or merely late on screen. Those
+ * are the two candidate causes #545 requires this journey to tell apart, and
+ * one assertion cannot.
+ *
+ * A DIRECT read, not a `waitForResponse` around the reload. The save
+ * invalidates the matrix query, so the current document issues its own refetch
+ * and such a wait matches THAT response — which the reload then discards,
+ * leaving `response.json()` to fail with "Response body is not available for a
+ * response that was navigated away from" (measured on J28, the sibling journey
+ * that was corrected the same way). The direct read answers the same question
+ * with no race, and the checkbox assertion after the reload is unchanged.
+ */
+async function reloadMatrix(page: Page): Promise<Record<string, unknown>[]> {
+  const response = await page.request.get(
+    `${BASE_URL}/api/v2/admin/permissions/administration/administration`,
+  );
+  expect(response.status(), await response.text()).toBe(200);
+  const rows = ((await response.json()) as { rows: Record<string, unknown>[] }).rows;
+
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.getByRole('table', { name: 'Permission matrix' })).toBeVisible({ timeout: 20_000 });
+  await expandProbeGroup(page);
+  return rows;
+}
+
+/** The `editor` cell of the seeded probe row, as the SERVER reported it. */
+function editorHoldsProbe(rows: Record<string, unknown>[]): unknown {
+  const row = rows.find((r) => r['name'] === SEEDED_PROBE);
+  expect(row, `the matrix must list ${SEEDED_PROBE}`).toBeTruthy();
+  return row?.['editor'];
+}
+
 async function expandProbeGroup(page: Page): Promise<void> {
   const expander = page.getByRole('button', { name: `Expand permission group: ${PROBE_GROUP}` });
   await expect(expander).toBeVisible({ timeout: 20_000 });
@@ -105,9 +145,10 @@ adminTest('J30b: granting a permission survives a reload, and revoking it takes 
   expect(saved.status(), 'the save must be authorised server-side').toBe(200);
   await expect(page.getByText('Permissions saved.')).toBeVisible();
 
-  await page.reload({ waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('table', { name: 'Permission matrix' })).toBeVisible({ timeout: 20_000 });
-  await expandProbeGroup(page);
+  expect(
+    editorHoldsProbe(await reloadMatrix(page)),
+    'the grant must survive a full reload, in the server\'s own answer',
+  ).toBe(true);
   await expect(editorCell(), 'the grant must survive a full reload').toBeChecked();
 
   // ── revoke, restoring the seeded state ───────────────────────────────────
@@ -122,11 +163,12 @@ adminTest('J30b: granting a permission survives a reload, and revoking it takes 
   ]);
   expect(reverted.status()).toBe(200);
 
-  await page.reload({ waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('table', { name: 'Permission matrix' })).toBeVisible({ timeout: 20_000 });
-  await expandProbeGroup(page);
   // A save that only ever ADDS would leave this checked. Revocation is the half
   // of the diff an operator relies on and the half nothing on screen confirms.
+  expect(
+    editorHoldsProbe(await reloadMatrix(page)),
+    'the revoke must survive a full reload, in the server\'s own answer',
+  ).not.toBe(true);
   await expect(editorCell(), 'the revoke must survive a full reload').not.toBeChecked();
   // The seeded grant on `viewer` is untouched — the write is keyed on the role.
   await expect(page.getByRole('checkbox', { name: `viewer: ${SEEDED_PROBE}` })).toBeChecked();

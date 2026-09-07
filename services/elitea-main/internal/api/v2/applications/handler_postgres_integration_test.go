@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/applications"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/secrets"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
@@ -26,8 +27,9 @@ import (
 // These tests drive the HTTP handler over the real repository against the
 // PostgreSQL service the Test job in .github/workflows/ci-go.yml provisions
 // (ELITEA_TEST_DATABASE_URL), so they cover the wiring the unit tests' mock
-// repository cannot: which user id reaches applications.owner_id, and whether
-// the version SQL matches the actual DDL.
+// repository cannot: which number reaches applications.owner_id and which
+// reaches application_versions.author_id (#533), and whether the version SQL
+// matches the actual DDL.
 
 const postgresIntegrationDatabaseURL = "ELITEA_TEST_DATABASE_URL"
 
@@ -174,7 +176,11 @@ func j14CreateBody(name string) map[string]any {
 	}
 }
 
-func TestHandlerPostgres_CreatePersistsTheAuthenticatedPrincipalAsOwner(t *testing.T) {
+// The create writes TWO kinds of number, and this test reads both back (#533).
+// `applications.owner_id` is the owning PROJECT, which is the project of the
+// route. `application_versions.author_id` is the authenticated principal, and
+// it must not fall back to the hardcoded user 1.
+func TestHandlerPostgres_CreateStoresTheProjectAsOwnerAndThePrincipalAsAuthor(t *testing.T) {
 	pool := newHandlerTestPool(t)
 	seedHandlerUser(t, pool, 42, "fortytwo@elitea.ai")
 	router := newHandlerTestServer(t, pool, auth.User{ID: "42", UserID: "42", Email: "fortytwo@elitea.ai"})
@@ -187,8 +193,8 @@ func TestHandlerPostgres_CreatePersistsTheAuthenticatedPrincipalAsOwner(t *testi
 	if applicationID == "" {
 		t.Fatalf("response carries no application id: %s", recorder.Body.String())
 	}
-	if created["owner_id"] != "42" {
-		t.Errorf("response owner_id = %v, want \"42\"", created["owner_id"])
+	if created["owner_id"] != "1" {
+		t.Errorf("response owner_id = %v, want the project of the route \"1\"", created["owner_id"])
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -200,11 +206,11 @@ func TestHandlerPostgres_CreatePersistsTheAuthenticatedPrincipalAsOwner(t *testi
 		WHERE a.id = $1`, applicationID).Scan(&ownerID, &authorID); err != nil {
 		t.Fatalf("read back: %v", err)
 	}
-	if ownerID != 42 {
-		t.Errorf("applications.owner_id = %d, want 42 — not the hardcoded user 1", ownerID)
+	if ownerID != 1 {
+		t.Errorf("applications.owner_id = %d, want the project of schema p_1, which is 1", ownerID)
 	}
 	if authorID != 42 {
-		t.Errorf("application_versions.author_id = %d, want 42", authorID)
+		t.Errorf("application_versions.author_id = %d, want the principal 42 — not the hardcoded user 1", authorID)
 	}
 }
 
@@ -524,6 +530,10 @@ func assertVariablesInResponse(t *testing.T, response map[string]any, want map[s
 // TestHandlerPostgres_UpdateReportsTheRowOwner pins that editing an
 // application does not transfer or misreport its ownership: the prototype
 // echoed whoever was making the request back as owner_id.
+//
+// The owner is the owning PROJECT (#533), so an edit by another member of the
+// same project must still report that project. A response that carried the
+// editor — user 12 — would fail here, which is the defect this test exists for.
 func TestHandlerPostgres_UpdateReportsTheRowOwner(t *testing.T) {
 	pool := newHandlerTestPool(t)
 	seedHandlerUser(t, pool, 11, "eleven@elitea.ai")
@@ -542,8 +552,8 @@ func TestHandlerPostgres_UpdateReportsTheRowOwner(t *testing.T) {
 	if recorder.Code != http.StatusCreated {
 		t.Fatalf("update status = %d, body = %s", recorder.Code, recorder.Body.String())
 	}
-	if updated["owner_id"] != "11" {
-		t.Errorf("update response owner_id = %v, want the row's owner \"11\"", updated["owner_id"])
+	if updated["owner_id"] != "1" {
+		t.Errorf("update response owner_id = %v, want the row's owning project \"1\"", updated["owner_id"])
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -552,8 +562,8 @@ func TestHandlerPostgres_UpdateReportsTheRowOwner(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT owner_id FROM p_1.applications WHERE id = $1`, applicationID).Scan(&ownerID); err != nil {
 		t.Fatal(err)
 	}
-	if ownerID != 11 {
-		t.Errorf("applications.owner_id = %d after an edit by user 12, want 11", ownerID)
+	if ownerID != 1 {
+		t.Errorf("applications.owner_id = %d after an edit by user 12, want the project 1", ownerID)
 	}
 }
 
@@ -927,10 +937,19 @@ func TestHandlerPostgres_ExpandedVersionDetailCarriesTheStoredTags(t *testing.T)
 	}
 
 	// The expanded read is the SDK's, and it checks X-SECRET against the
-	// project vault. This project has no vault, so pylon's own default
-	// value applies (see TestVersionPatchFallsBackToThePylonDefaultSecret).
+	// project vault. The project therefore needs the value provisioning writes
+	// for it: the literal "secret" is refused now (#408, see
+	// TestVersionPatchRefusesAProjectWithNoHeaderValue).
+	const headerValue = "expanded-tags-header-value"
+	storeContext, cancelStore := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancelStore()
+	if err := secrets.NewHandler(pool).StoreSecret(
+		storeContext, nil, "1", "secrets_header_value", headerValue,
+	); err != nil {
+		t.Fatalf("store the project secrets_header_value: %v", err)
+	}
 	request := httptest.NewRequest(http.MethodPatch, versionPath, bytes.NewReader(nil))
-	request.Header.Set("X-SECRET", "secret")
+	request.Header.Set("X-SECRET", headerValue)
 	patchRecorder := httptest.NewRecorder()
 	router.ServeHTTP(patchRecorder, request)
 	if patchRecorder.Code != http.StatusOK {

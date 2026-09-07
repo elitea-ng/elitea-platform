@@ -279,7 +279,9 @@
             "source": "generated",
             "responseSchema": "ApplicationExportResponse",
             "fixture": null,
-            "usedBy": []
+            "usedBy": [
+                "features/agent-lifecycle"
+            ]
         },
         {
             "id": "applications.forkAgent",
@@ -289,15 +291,17 @@
             "source": "generated",
             "responseSchema": "ForkResponse",
             "fixture": null,
-            "usedBy": []
+            "usedBy": [
+                "features/agent-lifecycle"
+            ]
         },
         {
             "id": "applications.generateAgentDraft",
             "method": "POST",
             "path": "/elitea_core/generate_application_draft/prompt_lib/{project_id}",
-            "operationId": null,
+            "operationId": "generateApplicationDraft",
             "source": "handwritten",
-            "responseSchema": "PredictResponse",
+            "responseSchema": "ApplicationDraft",
             "fixture": null,
             "usedBy": [
                 "features/agents"
@@ -425,7 +429,9 @@
             "source": "generated",
             "responseSchema": "ImportWizardResponse",
             "fixture": null,
-            "usedBy": []
+            "usedBy": [
+                "features/agent-lifecycle"
+            ]
         },
         {
             "id": "applications.listApplications",
@@ -475,7 +481,9 @@
             "source": "generated",
             "responseSchema": "PublishSuccessResponse",
             "fixture": null,
-            "usedBy": []
+            "usedBy": [
+                "features/agent-lifecycle"
+            ]
         },
         {
             "id": "applications.putProjectGroups",
@@ -535,7 +543,9 @@
             "source": "generated",
             "responseSchema": "UnpublishResponse",
             "fixture": null,
-            "usedBy": []
+            "usedBy": [
+                "features/agent-lifecycle"
+            ]
         },
         {
             "id": "applications.updateApplicationRelation",
@@ -609,7 +619,9 @@
             "source": "generated",
             "responseSchema": "PublishValidationResult",
             "fixture": null,
-            "usedBy": []
+            "usedBy": [
+                "features/agent-lifecycle"
+            ]
         },
         {
             "id": "artifacts.artifactList",
@@ -792,7 +804,8 @@
             "responseSchema": "SkillsList",
             "fixture": null,
             "usedBy": [
-                "features/skills"
+                "features/skills",
+                "features/agent-skills"
             ]
         },
         {
@@ -895,7 +908,7 @@
             "id": "skills.generateDraft",
             "method": "POST",
             "path": "/elitea_core/generate_skill_draft/prompt_lib/{projectId}",
-            "operationId": null,
+            "operationId": "generateSkillDraft",
             "source": "handwritten",
             "responseSchema": "SkillDraft",
             "fixture": null,
@@ -1893,6 +1906,19 @@
             ]
         },
         {
+            "id": "draft.generate",
+            "method": "POST",
+            "path": "/elitea_core/generate_project_context_draft/prompt_lib/{projectId}",
+            "operationId": "generateProjectContextDraft",
+            "source": "handwritten",
+            "responseSchema": "ProjectContextDraft",
+            "fixture": null,
+            "usedBy": [
+                "entities/project",
+                "features/settings"
+            ]
+        },
+        {
             "id": "folder.conversationsByDateGroup",
             "method": "GET",
             "path": "/elitea_core/folder/prompt_lib/{projectId}",
@@ -2295,6 +2321,355 @@
             "fixture": null,
             "usedBy": [
                 "pages/settings"
+            ]
+        },
+        {
+            "id": "agentSkills.listProjectSkills",
+            "method": "GET",
+            "path": "/elitea_core/skills/prompt_lib/{projectId}",
+            "operationId": null,
+            "source": "handwritten",
+            "responseSchema": "SkillsList",
+            "fixture": null,
+            "usedBy": [
+                "features/agent-skills"
+            ],
+            "$comment": "The generated listSkills exists (skills.listSkills) but its ListSkillsParams knows only page/page_size, while the handler also reads sort_by, sort_order, query, limit and offset (internal/api/v2/skills/handler.go). The agent-editor skill picker needs the search and the sort, so it builds the URL itself. Retire this entry when v2.yaml documents the five missing query parameters."
+        },
+        {
+            "id": "agentSkills.setSkillRelation",
+            "method": "PATCH",
+            "path": "/elitea_core/skill/prompt_lib/{projectId}/{skillId}",
+            "operationId": "setSkillRelation",
+            "source": "handwritten",
+            "responseSchema": "SkillAttachment",
+            "fixture": null,
+            "usedBy": [
+                "features/agent-skills"
+            ],
+            "$comment": "Attach (201) or detach (200) one skill on one agent VERSION. A `has_relation` key in the body selects a second operation inside the same handler (internal/api/v2/skills/handler.go updateSkillRelation), which one OpenAPI operation cannot express — skills.updateSkill covers only the plain update on the same URL."
+        },
+        {
+            "id": "inventory.invokeTool",
+            "method": "POST",
+            "path": "/inventory/tools/{projectId}/{toolkitName}/{toolName}/invoke",
+            "operationId": null,
+            "source": "handwritten",
+            "responseSchema": "InventoryInvocationAcceptedWire",
+            "fixture": null,
+            "usedBy": [
+                "entities/inventory"
+            ]
+        },
+        {
+            "id": "inventory.getInvocation",
+            "method": "GET",
+            "path": "/inventory/invocations/{projectId}/{toolkitName}/{toolName}/{invocationId}",
+            "operationId": null,
+            "source": "handwritten",
+            "responseSchema": "InventoryInvocationPollWire",
+            "fixture": null,
+            "usedBy": [
+                "entities/inventory"
+            ]
+        },
+        {
+            "id": "inventory.cancelInvocation",
+            "method": "DELETE",
+            "path": "/inventory/invocations/{projectId}/{toolkitName}/{toolName}/{invocationId}",
+            "operationId": null,
+            "source": "handwritten",
+            "responseSchema": null,
+            "fixture": null,
+            "usedBy": [
+                "entities/inventory"
+            ]
+        },
+        {
+            "$comment": "Canvas editor presence (#622). A HEARTBEAT: features/chat-messages/model/useCanvasPresence.ts sends it on mount, on a timer at a third of the server's ttl_seconds, on visibilitychange, and once with state:'left' on unmount. The answer is the roster, and the same roster arrives at every other tab as a `canvas.editors` frame on the project SSE stream (GET /elitea_core/events/prompt_lib/{projectId}), so this one call is both the write and the read. HANDWRITTEN YET NAMING AN operationId, the shape chatMessages.generateContentBlocking documents: v2.yaml describes it and orval generates a hook for it, but orval shapes every write endpoint as a useQuery gated by `enabled`, and this beat is sent from an effect and from a DOM listener, neither of which is a render. Keeping the id is what lets elitea-main's TestSpecRouterConformance/manifest_reverse_check match this entry to the spec.",
+            "id": "canvas.presenceHeartbeat",
+            "method": "POST",
+            "path": "/elitea_core/canvas/prompt_lib/{projectId}/{canvasId}/presence",
+            "operationId": "heartbeatCanvasPresence",
+            "source": "handwritten",
+            "responseSchema": "CanvasPresenceWire",
+            "fixture": null,
+            "usedBy": [
+                "features/chat-messages"
+            ]
+        },
+        {
+            "$comment": "Agent Evaluation slice 2 (#617). GENERATED, unlike the four dimension entries that are NOT in this manifest at all: slice 1 withdrew those because a manifest entry for an endpoint v2.yaml does not describe fails elitea-main's TestSpecRouterConformance/manifest_reverse_check, and the allowlist that would excuse it may only shrink. Slice 2 describes its thirteen operations in the spec, so they carry real generated functions and real entries. The dimension four stay hand-written and unlisted until somebody describes them - an additive spec change, and a separate one.",
+            "id": "evaluation.listDatasets",
+            "method": "GET",
+            "path": "/elitea_core/eval_datasets/prompt_lib/{projectId}",
+            "operationId": "listEvalDatasets",
+            "source": "generated",
+            "responseSchema": "EvalDatasetList",
+            "fixture": null,
+            "usedBy": [
+                "features/agent-evaluation"
+            ]
+        },
+        {
+            "id": "evaluation.createDataset",
+            "method": "POST",
+            "path": "/elitea_core/eval_datasets/prompt_lib/{projectId}",
+            "operationId": "createEvalDataset",
+            "source": "generated",
+            "responseSchema": "EvalDataset",
+            "fixture": null,
+            "usedBy": [
+                "features/agent-evaluation"
+            ]
+        },
+        {
+            "id": "evaluation.getDataset",
+            "method": "GET",
+            "path": "/elitea_core/eval_dataset/prompt_lib/{projectId}/{datasetId}",
+            "operationId": "getEvalDataset",
+            "source": "generated",
+            "responseSchema": "EvalDatasetDetail",
+            "fixture": null,
+            "usedBy": [
+                "features/agent-evaluation"
+            ]
+        },
+        {
+            "id": "evaluation.updateDataset",
+            "method": "PUT",
+            "path": "/elitea_core/eval_dataset/prompt_lib/{projectId}/{datasetId}",
+            "operationId": "updateEvalDataset",
+            "source": "generated",
+            "responseSchema": "EvalDataset",
+            "fixture": null,
+            "usedBy": [
+                "features/agent-evaluation"
+            ]
+        },
+        {
+            "id": "evaluation.deleteDataset",
+            "method": "DELETE",
+            "path": "/elitea_core/eval_dataset/prompt_lib/{projectId}/{datasetId}",
+            "operationId": "deleteEvalDataset",
+            "source": "generated",
+            "responseSchema": "EvalDataset",
+            "fixture": null,
+            "usedBy": [
+                "features/agent-evaluation"
+            ]
+        },
+        {
+            "id": "evaluation.addDatasetCase",
+            "method": "POST",
+            "path": "/elitea_core/eval_dataset_cases/prompt_lib/{projectId}/{datasetId}",
+            "operationId": "addEvalDatasetCase",
+            "source": "generated",
+            "responseSchema": "EvalDatasetCase",
+            "fixture": null,
+            "usedBy": [
+                "features/agent-evaluation"
+            ]
+        },
+        {
+            "id": "evaluation.updateDatasetCase",
+            "method": "PUT",
+            "path": "/elitea_core/eval_dataset_case/prompt_lib/{projectId}/{datasetId}/{caseId}",
+            "operationId": "updateEvalDatasetCase",
+            "source": "generated",
+            "responseSchema": "EvalDatasetCase",
+            "fixture": null,
+            "usedBy": [
+                "features/agent-evaluation"
+            ]
+        },
+        {
+            "id": "evaluation.deleteDatasetCase",
+            "method": "DELETE",
+            "path": "/elitea_core/eval_dataset_case/prompt_lib/{projectId}/{datasetId}/{caseId}",
+            "operationId": "deleteEvalDatasetCase",
+            "source": "generated",
+            "responseSchema": "EvalDatasetCase",
+            "fixture": null,
+            "usedBy": [
+                "features/agent-evaluation"
+            ]
+        },
+        {
+            "id": "evaluation.listRuns",
+            "method": "GET",
+            "path": "/elitea_core/eval_runs/prompt_lib/{projectId}",
+            "operationId": "listEvalRuns",
+            "source": "generated",
+            "responseSchema": "EvalRunList",
+            "fixture": null,
+            "usedBy": [
+                "features/agent-evaluation"
+            ]
+        },
+        {
+            "id": "evaluation.startRun",
+            "method": "POST",
+            "path": "/elitea_core/eval_runs/prompt_lib/{projectId}",
+            "operationId": "startEvalRun",
+            "source": "generated",
+            "responseSchema": "EvalRun",
+            "fixture": null,
+            "usedBy": [
+                "features/agent-evaluation"
+            ]
+        },
+        {
+            "$comment": "The PROGRESS FEED. There is no socket server in this platform (#126 deleted internal/api/socketio, #615 recorded the decision), so features/agent-evaluation polls this route while a run is active and stops at a terminal status. The reference's own hook documents the same fallback.",
+            "id": "evaluation.getRun",
+            "method": "GET",
+            "path": "/elitea_core/eval_run/prompt_lib/{projectId}/{runId}",
+            "operationId": "getEvalRun",
+            "source": "generated",
+            "responseSchema": "EvalRun",
+            "fixture": null,
+            "usedBy": [
+                "features/agent-evaluation"
+            ]
+        },
+        {
+            "id": "evaluation.cancelRun",
+            "method": "POST",
+            "path": "/elitea_core/eval_run_cancel/prompt_lib/{projectId}/{runId}",
+            "operationId": "cancelEvalRun",
+            "source": "generated",
+            "responseSchema": "EvalRun",
+            "fixture": null,
+            "usedBy": [
+                "features/agent-evaluation"
+            ]
+        },
+        {
+            "$comment": "READ-ONLY. The response OMITS `human_scores` and names the omission in `unavailable`, because this release has no human-score surface and `[]` would tell a client there are none where the truth is that this deployment cannot have any.",
+            "id": "evaluation.getScorecard",
+            "method": "GET",
+            "path": "/elitea_core/eval_results/prompt_lib/{projectId}/{runId}",
+            "operationId": "getEvalScorecard",
+            "source": "generated",
+            "responseSchema": "EvalScorecard",
+            "fixture": null,
+            "usedBy": [
+                "features/agent-evaluation"
+            ]
+        },
+        {
+            "$comment": "READ. Reports that a trigger exists and when it was last used. The URL it returns carries NO credential; revealing one is a separate operation with the write permission on it.",
+            "id": "pipelines.getTrigger",
+            "method": "GET",
+            "path": "/pipeline_triggers/prompt_lib/{projectId}/{versionId}",
+            "operationId": "getPipelineInboundTrigger",
+            "source": "generated",
+            "responseSchema": "PipelineInboundTrigger",
+            "fixture": null,
+            "usedBy": [
+                "pages/pipelines"
+            ]
+        },
+        {
+            "$comment": "A GET carrying the WRITE permission. It hands back a live credential, which is a different act from reporting that one exists.",
+            "id": "pipelines.revealTrigger",
+            "method": "GET",
+            "path": "/pipeline_triggers/secret/prompt_lib/{projectId}/{versionId}",
+            "operationId": "revealPipelineInboundTrigger",
+            "source": "generated",
+            "responseSchema": "PipelineInboundTrigger",
+            "fixture": null,
+            "usedBy": [
+                "pages/pipelines"
+            ]
+        },
+        {
+            "$comment": "Create AND rotate. They differ only in whether a row was already there, and two operations would be two chances to implement rotation differently from creation.",
+            "id": "pipelines.rotateTrigger",
+            "method": "POST",
+            "path": "/pipeline_triggers/prompt_lib/{projectId}/{versionId}",
+            "operationId": "rotatePipelineInboundTrigger",
+            "source": "generated",
+            "responseSchema": "PipelineInboundTrigger",
+            "fixture": null,
+            "usedBy": [
+                "pages/pipelines"
+            ]
+        },
+        {
+            "$comment": "The row is kept and stamped rather than deleted: a revoked trigger is the evidence that answers 'was this live last Tuesday'.",
+            "id": "pipelines.revokeTrigger",
+            "method": "DELETE",
+            "path": "/pipeline_triggers/prompt_lib/{projectId}/{versionId}",
+            "operationId": "revokePipelineInboundTrigger",
+            "source": "generated",
+            "responseSchema": "PipelineInboundTrigger",
+            "fixture": null,
+            "usedBy": [
+                "pages/pipelines"
+            ]
+        },
+        {
+            "$comment": "READ. `next_run` is computed by the parser that will fire the row, so the preview cannot disagree with the behaviour.",
+            "id": "pipelines.getSchedule",
+            "method": "GET",
+            "path": "/pipeline_schedules/prompt_lib/{projectId}/{versionId}",
+            "operationId": "getPipelineSchedule",
+            "source": "generated",
+            "responseSchema": "PipelineSchedule",
+            "fixture": null,
+            "usedBy": [
+                "pages/pipelines"
+            ]
+        },
+        {
+            "$comment": "Saving sets the schedule's author to the caller, and the author is who an unattended run executes as.",
+            "id": "pipelines.saveSchedule",
+            "method": "PUT",
+            "path": "/pipeline_schedules/prompt_lib/{projectId}/{versionId}",
+            "operationId": "savePipelineSchedule",
+            "source": "generated",
+            "responseSchema": "PipelineSchedule",
+            "fixture": null,
+            "usedBy": [
+                "pages/pipelines"
+            ]
+        },
+        {
+            "$comment": "Deleted rather than tombstoned, unlike a revoked trigger: a schedule is configuration its own author can re-create.",
+            "id": "pipelines.deleteSchedule",
+            "method": "DELETE",
+            "path": "/pipeline_schedules/prompt_lib/{projectId}/{versionId}",
+            "operationId": "deletePipelineSchedule",
+            "source": "generated",
+            "responseSchema": "PipelineSchedule",
+            "fixture": null,
+            "usedBy": [
+                "pages/pipelines"
+            ]
+        },
+        {
+            "$comment": "NO FIRST-PARTY CLIENT, and that is the point: this is the door an EXTERNAL system calls with the pipeline's own secret. The SPA shows the URL and never calls it.",
+            "id": "pipelines.runTrigger",
+            "method": "POST",
+            "path": "/pipeline_trigger/{projectId}/{tokenId}",
+            "operationId": "runPipelineInboundTrigger",
+            "source": "generated",
+            "responseSchema": "PipelineInboundTriggerRunAccepted",
+            "fixture": null,
+            "usedBy": []
+        },
+        {
+            "$comment": "WP16b/platform-parity-wave — the synchronous \"Test tool\" run, every toolkit tool but `index_data` (which keeps the SSE `toolkits.startIndexExecution` path above). `toolkits.Handler.TestTool` (services/elitea-main/internal/api/v2/toolkitrun/response.go), shadowed by nothing and reachable in every deployment (unlike the sibling `/test_toolkit_tool/{projectId}` path, which the index-start handler claims wherever a runtime is composed). DESCRIBED IN v2.yaml as `testToolkitTool`: this entry first said \"not in v2.yaml\", and the Go reverse check refused it, because the allowlist that holds undescribed endpoints is at its cap and may only shrink. STILL source handwritten: features/toolkits/api/toolkitTestRun.ts folds the six status codes into one settled-outcome union and never rejects, which the generated hook does not do. Answers 200 ok:true with the result, 200 ok:false with the tool's own error, 422 naming unsupported_toolkit/unknown_tool, 503 where no runtime is composed, or 504 with a task_id on a bounded-wait timeout.",
+            "id": "toolkits.testTool",
+            "method": "POST",
+            "path": "/elitea_core/test_tool/prompt_lib/{projectId}/{toolId}",
+            "operationId": "testToolkitTool",
+            "source": "handwritten",
+            "responseSchema": "ToolkitToolRunResult",
+            "fixture": null,
+            "usedBy": [
+                "features/toolkits"
             ]
         }
     ]

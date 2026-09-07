@@ -8,6 +8,9 @@ import type { SxProps, Theme } from '@mui/material/styles';
 import type { ApplicationDetail, ApplicationVersionDetail } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
 
+import { EntityLifecycleControls } from '@/features/agent-lifecycle';
+
+import { useForkTargetProjects } from '../lib/useForkTargetProjects';
 import { ChatWithPipelineButton } from './ChatWithPipelineButton';
 
 /**
@@ -33,9 +36,12 @@ export interface EditPipelineActionsProps {
   readonly activeVersion: ApplicationVersionDetail | undefined;
   /** The selected project — the Chat button creates its conversation there. */
   readonly projectId: string | undefined;
+  /** The list tab the editor was opened from; the share link points back at it. */
+  readonly tab: string | undefined;
 }
 
-export function EditPipelineActions({ applicationId, detail, activeVersion, projectId }: EditPipelineActionsProps): ReactNode {
+export function EditPipelineActions({ applicationId, detail, activeVersion, projectId, tab }: EditPipelineActionsProps): ReactNode {
+  const forkTargets = useForkTargetProjects(projectId);
   const [error, setError] = useState<string | undefined>(undefined);
 
   const handleChatError = useCallback(
@@ -59,6 +65,24 @@ export function EditPipelineActions({ applicationId, detail, activeVersion, proj
         name={detail?.name}
         activeVersion={activeVersion}
         onError={handleChatError}
+      />
+      {/*
+       * Share and Fork, the two lifecycle affordances a pipeline can actually
+       * use. It gets NO publish item: `Publish` refuses `agent_type =
+       * 'pipeline'` with 400 `pipeline_not_publishable`
+       * (internal/api/v2/eliteacore/handler.go), so the control is omitted
+       * rather than offered and refused. `EntityLifecycleControls` makes that
+       * choice from its `entity` prop.
+       */}
+      <EntityLifecycleControls
+        entity="pipelines"
+        projectId={projectId}
+        projects={forkTargets}
+        entityId={applicationId}
+        entityName={detail?.name ?? ''}
+        tab={tab}
+        activeVersionId={activeVersion?.id}
+        activeVersionStatus={activeVersion?.status}
       />
     </Box>
   );

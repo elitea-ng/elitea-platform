@@ -8,10 +8,14 @@
  * reload polls it again rather than showing an idle screen over a run that is
  * still going.
  *
- * `code_toolkit` IS REQUIRED BY THE FACADE (`configuration.parameters.
- * code_toolkit`, an integer naming a configuration). A toolkit without one is
- * refused HERE, naming the setting, rather than sent — the facade's 400 would
- * arrive as "the generation failed" with no field to fix.
+ * A GENERATION NEEDS ONE SOURCE, and there are two kinds. A repository
+ * toolkit arrives as `configuration.parameters.code_toolkit`, an integer
+ * naming a configuration. An artifact folder arrives as
+ * `artifact_configuration` inside the settings themselves and needs no
+ * reference at all. A toolkit naming NEITHER is refused HERE rather than
+ * sent — the facade's 400 would arrive as "the generation failed" with no
+ * field to fix — and a toolkit naming both is refused by the facade, which is
+ * why only one of them is ever put in the body.
  */
 import { useCallback, useMemo, useState } from 'react';
 
@@ -25,7 +29,7 @@ import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
 import Typography from '@mui/material/Typography';
 import { useQueryClient } from '@tanstack/react-query';
 
-import type { ToolkitSettings } from '@/entities/wiki';
+import { getArtifactSource, type ToolkitSettings } from '@/entities/wiki';
 import { invocationIdFrom } from '@/entities/provider-run';
 import { useWikiGeneration, type GenerationState } from '@/features/wiki-generation';
 import {
@@ -81,6 +85,27 @@ function codeToolkitOf(settings: ToolkitSettings): number | null {
   const raw = settings['code_toolkit'] ?? settings['toolkit_configuration_code_toolkit'];
   const id = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : NaN;
   return Number.isInteger(id) && id > 0 ? id : null;
+}
+
+/**
+ * The `configuration.parameters` a generation is started with.
+ *
+ * ONE SOURCE, NEVER TWO. A folder source travels in the settings themselves
+ * (`artifact_configuration`), and the facade refuses a body naming a
+ * `code_toolkit` beside one with a 400 — so the reference is dropped here
+ * rather than spread in, which is what a toolkit that used to name a
+ * repository still carries. Null means the settings name no source at all;
+ * only then does this panel refuse, naming the setting.
+ */
+function generationParameters(settings: ToolkitSettings): Record<string, unknown> | null {
+  if (getArtifactSource(settings) === null) {
+    const codeToolkit = codeToolkitOf(settings);
+    return codeToolkit === null ? null : { ...settings, code_toolkit: codeToolkit };
+  }
+  const parameters: Record<string, unknown> = { ...settings };
+  delete parameters['code_toolkit'];
+  delete parameters['toolkit_configuration_code_toolkit'];
+  return parameters;
 }
 
 export function WikiGenerationPanel({ projectId, toolkitId, settings, hasWiki }: WikiGenerationPanelProps): React.JSX.Element {
@@ -144,14 +169,14 @@ export function WikiGenerationPanel({ projectId, toolkitId, settings, hasWiki }:
   const start = useCallback(async () => {
     setConfirmOpen(false);
     setStartError(null);
-    const codeToolkit = codeToolkitOf(settings);
-    if (codeToolkit === null) {
-      setStartError(t('deepwiki.generate.noCodeToolkit', 'Set code_toolkit in the toolkit settings first: the provider needs a repository toolkit to clone from.'));
+    const parameters = generationParameters(settings);
+    if (parameters === null) {
+      setStartError(t('deepwiki.generate.noSource', 'The toolkit names no source. Set code_toolkit for a repository toolkit to clone, or choose an artifact folder to read.'));
       return;
     }
     try {
       const response = await invokeDeepWikiTool(Number(projectId), WIKI_TOOLKIT_NAME, TOOL, {
-        configuration: { parameters: { ...settings, code_toolkit: codeToolkit } },
+        configuration: { parameters },
         parameters: {
           query: 'GO',
           planner_type: planner,

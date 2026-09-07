@@ -117,6 +117,30 @@ export { AgentToolsPanel } from './ui/AgentToolsPanel';
 export { AgentTagEditor } from './ui/AgentTagEditor';
 
 /**
+ * The "Information" accordion — entity id, version id, the pipeline trigger
+ * rows (type/schedule/timezone/last run/webhook type), "Forked from", and the
+ * "Show" link onto the stored pipeline document.
+ *
+ * Another component that was written, unit-tested against a mocked
+ * `pipeline_trigger` endpoint, and mounted by NOBODY — the same class of
+ * defect `AgentTagEditor` above records, and the reason the pipeline editor
+ * had no way to show a person the ids they need to wire an external caller.
+ * The pipeline configuration form (`pages/pipelines/ui/
+ * EditPipelineConfigurationPanel.tsx`) is its first real call site.
+ *
+ * Exported as the component alone: every prop is a primitive the caller
+ * already holds, so a caller needs no type import. That keeps this curated
+ * API at 19 of its 20 §3.3 slots.
+ *
+ * `ApplicationEditorNotes` — its sibling in the same unmounted set — is
+ * deliberately NOT exported with it. `version_details.notes` has no column on
+ * `application_versions`, no property on `VersionWriteRequest`, and no branch
+ * in `UpdateVersion`: mounting it would give a person a text box whose
+ * content the very next save discards.
+ */
+export { ApplicationInformation } from './ui/ApplicationInformation';
+
+/**
  * Sub-unit A1a's ("Application data layer + version-lifecycle hooks")
  * contribution — the application/version data layer + tool change-diffing +
  * validation + chat-version-switch hooks (see each file's own doc comment

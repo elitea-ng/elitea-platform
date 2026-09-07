@@ -157,12 +157,17 @@ validate_model() {
     --arg main_database_config "$runtime_root/runtime/pylon-main-shared.yml" \
     --arg auth_database_config "$runtime_root/runtime/pylon-auth-core.yml" \
     --arg interface "$script_dir/runtime-interface-litellm.yml" \
-    --arg engine "$script_dir/runtime-engine-litellm.yml" \
     '
       .services["elitea-main"].environment.ELITEA_RUNTIME_INDEX_INGEST_COMMAND_STREAM
       == "commands.v1.index.ingest.indexing.shared.2.0"
       and .services["elitea-main"].environment.ELITEA_ARTIFACTS_ENABLED
-        == "false"
+        == "true"
+      and .services["elitea-main"].environment.STORAGE_BACKEND == "s3"
+      and .services["elitea-main"].environment.STORAGE_CONTAINER == "elitea-artifacts"
+      and .services["elitea-main"].environment.S3_ENDPOINT_URL
+        == "http://runtime-artifacts:9000"
+      and .services["runtime-artifacts"] != null
+      and .services["runtime-artifacts-bucket-init"] != null
       and .services["elitea-main"].environment.ELITEA_RUNTIME_INDEX_SCHEDULING_ENABLED
       == "true"
       and .services["elitea-main"].environment.ELITEA_RUNTIME_SCHEDULER_INSTANCE_ID
@@ -199,8 +204,7 @@ validate_model() {
         .source == $main_database_config and .target == "/data/configs/shared.yml")
       and any(.services.pylon_auth.volumes[];
         .source == $auth_database_config and .target == "/data/configs/auth_core.yml")
-      and any(.services.pylon_indexer.volumes[];
-        .source == $engine and .target == "/data/configs/runtime_engine_litellm.yml")
+      and (.services.pylon_indexer == null)
       and (.services["elitea-litellm"].build.context | endswith("/hybrid_auth"))
       and .services["runtime-index-v2-bootstrap"] != null
       and .services["index-v1-cutover-preflight"] != null
@@ -208,8 +212,17 @@ validate_model() {
 
   grep -q 'go-current-notification-events:' "$ELITEA_INDEX_ROUTE_FILE"
   grep -q '/api/v2/notifications/events/prompt_lib/' "$ELITEA_INDEX_ROUTE_FILE"
-  grep -q 'runtime-worker-current-artifacts:' "$ELITEA_INDEX_ROUTE_FILE"
+  # #337. The artifact plane resolves to elitea-main. Asserting the router
+  # NAME alone would pass on a router that still names current-main, so the
+  # service is asserted too — by the Go edge gate above, which resolves every
+  # router's service, and here by refusing the retired router name outright.
+  grep -q 'go-artifacts:' "$ELITEA_INDEX_ROUTE_FILE"
   grep -q '/artifacts/s3/' "$ELITEA_INDEX_ROUTE_FILE"
+  grep -q '/api/v2/artifacts/objects/' "$ELITEA_INDEX_ROUTE_FILE"
+  if grep -q 'runtime-worker-current-artifacts:' "$ELITEA_INDEX_ROUTE_FILE"; then
+    echo "the retired pylon artifact router is back in $ELITEA_INDEX_ROUTE_FILE" >&2
+    exit 2
+  fi
   grep -q 'go-current-notifications:' "$ELITEA_INDEX_ROUTE_FILE"
   grep -q '/api/v2/notifications/notifications/prompt_lib/' "$ELITEA_INDEX_ROUTE_FILE"
   grep -q '/api/v2/notifications/notification/prompt_lib/' "$ELITEA_INDEX_ROUTE_FILE"

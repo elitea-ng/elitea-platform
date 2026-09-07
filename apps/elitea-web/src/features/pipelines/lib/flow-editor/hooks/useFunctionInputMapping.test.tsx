@@ -7,7 +7,7 @@ import { server } from '@/test/setup';
 
 import { renderWithRouterAndProject } from '../../../__tests__/testUtils';
 import type { YamlPipelineDocument } from '../helpers/pipelineFlow.types';
-import type { UseFunctionInputMappingArgs, UseFunctionInputMappingResult } from './useFunctionInputMapping';
+import type { UseFunctionInputMappingArgs, UseFunctionInputMappingResult, VersionTool } from './useFunctionInputMapping';
 import { useFunctionInputMapping } from './useFunctionInputMapping';
 
 const BASE = '/api/v2';
@@ -26,6 +26,10 @@ describe('useFunctionInputMapping', () => {
     // disclosed "dynamic schema fetch missing" gap (file header, item 5) for a
     // non-MCP toolkit, since `properties` resolves to `{}` either way.
     server.use(http.get(`${BASE}/elitea_core/toolkits/prompt_lib/${PROJECT_ID}`, () => HttpResponse.json({})));
+    // The catalogue read (#440) runs for every toolkit without an explicit
+    // `selected_tools` list, which is every fixture below. A per-test
+    // `server.use` still wins: msw puts run-time handlers ahead of this one.
+    server.use(http.post(`${BASE}/elitea_core/toolkit_discover_tools/prompt_lib/${PROJECT_ID}/:toolkitType`, () => HttpResponse.json({ tools: [], total: 0 })));
   });
 
   afterEach(() => {
@@ -706,5 +710,84 @@ describe('useFunctionInputMapping', () => {
     const finalMapping = finalWritten.nodes?.find(node => node.id === 'McpNode')?.input_mapping;
     expect(finalMapping).toHaveProperty('foo');
     expect(finalMapping).not.toHaveProperty('emptyOptional');
+  });
+
+  /**
+   * #440. `dynamicToolNames` was a frozen empty array, so a toolkit that
+   * publishes its tools at run time left every node's tool picker empty, and
+   * a failed read looked exactly the same. The cases below discriminate the
+   * three outcomes: a list, a failure, and a real empty catalogue.
+   */
+  describe('dynamic tool catalogue (#440)', () => {
+    const DISCOVER = `${BASE}/elitea_core/toolkit_discover_tools/prompt_lib/${PROJECT_ID}/:toolkitType`;
+    const yamlJsonObject: YamlPipelineDocument = { nodes: [{ id: 'Node1', toolkit_name: 'custom_toolkit' }] };
+    const versionTools: readonly VersionTool[] = [{ type: 'custom', name: 'custom_toolkit', toolkit_name: 'custom_toolkit' }];
+
+    function renderProbe(tools: readonly VersionTool[] = versionTools): { readonly read: () => UseFunctionInputMappingResult | undefined } {
+      let latest: UseFunctionInputMappingResult | undefined;
+      renderWithRouterAndProject(
+        <HookProbe
+          id="Node1"
+          yamlJsonObject={yamlJsonObject}
+          setYamlJsonObject={vi.fn()}
+          versionTools={tools}
+          onResult={result => {
+            latest = result;
+          }}
+        />,
+        PROJECT_ID,
+      );
+      return { read: () => latest };
+    }
+
+    it('reports the tool names the backend publishes for the selected toolkit', async () => {
+      server.use(http.post(DISCOVER, () => HttpResponse.json({ tools: [{ id: '1', name: 'alpha_op', type: 'custom' }], total: 1 })));
+
+      const { read } = renderProbe();
+
+      await waitFor(() => expect(read()?.dynamicToolNames).toEqual(['alpha_op']));
+      expect(read()?.dynamicToolsReadFailed).toBe(false);
+    });
+
+    it('reports a failed read as its own signal, not as an empty tool list', async () => {
+      server.use(http.post(DISCOVER, () => HttpResponse.json({ error: 'read available tools failed' }, { status: 500 })));
+
+      const { read } = renderProbe();
+
+      await waitFor(() => expect(read()?.dynamicToolsReadFailed).toBe(true));
+      expect(read()?.dynamicToolNames).toEqual([]);
+    });
+
+    it('reports a successful read with no tools as an empty list, not as a failure', async () => {
+      let requestCount = 0;
+      server.use(
+        http.post(DISCOVER, () => {
+          requestCount += 1;
+          return HttpResponse.json({ tools: [], total: 0 });
+        }),
+      );
+
+      const { read } = renderProbe();
+
+      await waitFor(() => expect(requestCount).toBe(1));
+      await waitFor(() => expect(read()?.dynamicToolsReadFailed).toBe(false));
+      expect(read()?.dynamicToolNames).toEqual([]);
+    });
+
+    it('does not read the catalogue for a toolkit that carries its own selected_tools', async () => {
+      let requestCount = 0;
+      server.use(
+        http.post(DISCOVER, () => {
+          requestCount += 1;
+          return HttpResponse.json({ tools: [{ id: '1', name: 'should_not_appear', type: 'custom' }], total: 1 });
+        }),
+      );
+
+      const { read } = renderProbe([{ type: 'custom', name: 'custom_toolkit', toolkit_name: 'custom_toolkit', settings: { selected_tools: ['explicit_op'] } }]);
+
+      await waitFor(() => expect(read()?.selectedToolkit).toBeDefined());
+      expect(requestCount).toBe(0);
+      expect(read()?.dynamicToolNames).toEqual([]);
+    });
   });
 });

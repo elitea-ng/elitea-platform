@@ -50,7 +50,12 @@ EXEMPT=.github/image-scan-exempt.txt
 # closure (torch, transformers, faiss-cpu, tree-sitter grammars). ADR-0022 keeps
 # it out of the default bake group because it is torch-sized, and out of the
 # release because nothing deploys it yet.
-UNPUBLISHED="elitea-deepwiki-engine"
+#
+# elitea-inventory-engine is the same shape for the second provider: the
+# knowledge-graph engine's 126-package closure, which no deployment pulls yet.
+# The PLAIN elitea-inventory image IS published — it carries the sidecar and
+# its fixture runner, which is what the compose stacks and the E2E stack run.
+UNPUBLISHED="elitea-deepwiki-engine elitea-inventory-engine"
 
 die() { printf '::error::%s\n' "$1" >&2; exit 1; }
 

@@ -95,6 +95,11 @@ func NewInvokeRewriter(
 	rewriter.main = shared
 	rewriter.main.Field, rewriter.main.Output = "code_toolkit", "code_toolkit"
 	rewriter.main.Expand = rewriter.expandCodeToolkit
+	// A `Wikis` generation may name a FOLDER instead of a repository toolkit:
+	// a bucket in this project, read over the callback bearer minted below.
+	// Only this toolkit — a wiki query reads the wiki bucket, which is not a
+	// source at all.
+	rewriter.main.FolderSource = true
 
 	rewriter.wikisQuery = shared
 	rewriter.wikisQuery.Field, rewriter.wikisQuery.Output = "wikis_toolkit", "wikis_toolkit"

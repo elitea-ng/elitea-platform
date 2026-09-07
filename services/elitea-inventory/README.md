@@ -96,6 +96,45 @@ with a readable reason. `legacy` selects the engine and needs the `engine`
 extra; `fixture` answers canned results for a stack that proves the socket hop
 without the closure.
 
+### Fixture mode, and the graph it replays
+
+`ELITEA_INVENTORY_RUNNER=fixture` used to answer a sentence and an empty
+graph — enough to prove the socket hop, useless for looking at the Inventory
+application. It now replays the same canned graph (six entities, two source
+toolkits, five relations) the Go sub-application host's own fixture runner
+(`services/elitea-subapp-host/internal/apps/inventory/run/fixture.go`) serves
+on the E2E stack, which has no engine sidecar at all — the two-fixture-runner
+setup the DeepWiki port also has, and the trap the survey that scoped this
+work names: nothing forces the two to agree.
+
+The graph itself lives once, checked in, at
+`conformance/provider/fixtures/inventory/spi/graph.json`; the answers for a
+curated set of representative tool calls (search, an entity, its neighbours,
+impact analysis, cross-source relations, stats, ingestion, the sources list)
+are pinned the same way under `conformance/provider/fixtures/inventory/
+{ingestion,retrieval}/*.json`. `tests/unit/test_fixture_parity.py` loads every
+one of those files and asserts `elitea_inventory.fixture_graph` answers the
+same shape; `services/elitea-subapp-host/internal/apps/inventory/run/
+fixture_parity_test.go` loads the identical files against the Go runner. A
+change to the graph that only edits one language's copy fails exactly one of
+those two tests.
+
+`elitea_inventory.fixture_graph.FixtureGraph.load()` reads
+`<fixtures_dir>/spi/graph.json`. `ELITEA_INVENTORY_FIXTURES` names
+`<fixtures_dir>`; unset (the default) it is this package's own bundled copy,
+`src/elitea_inventory/fixtures/inventory` — a wheel cannot read outside
+itself, so that copy is what a built image serves with no other
+configuration. `tests/unit/test_fixture_graph.py` asserts the packaged copy
+and the conformance one are byte-identical.
+
+`deploy/docker-compose.standalone-full.yml`'s `elitea-inventory-engine`
+service bind-mounts `conformance/provider/fixtures/inventory` read-only at
+`/fixtures/inventory` and leaves `ELITEA_INVENTORY_FIXTURES` empty by
+default (so the packaged copy answers); set `INVENTORY_FIXTURES=/fixtures/
+inventory` before `deploy/scripts/standalone-stack.sh up` to read the
+repository's own copy instead — useful for iterating on the fixture data
+without rebuilding the image. See `deploy/README.md`'s compose section.
+
 ## The v1 scope, and what it deliberately does not port
 
 **Sources: `github` and `ado_repos` only.** The facade expands the source

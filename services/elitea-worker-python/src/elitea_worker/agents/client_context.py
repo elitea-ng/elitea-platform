@@ -31,11 +31,55 @@ class RuntimeExecutionClaim:
             raise InvalidInput("The execution claim identity is malformed.")
 
 
+# MAX_SECRETS_HEADER_VALUE_BYTES bounds one HTTP header value. The platform
+# generates 43 characters of base64url; the bound is large enough for a value an
+# operator set by hand and small enough that no request line grows without
+# limit.
+MAX_SECRETS_HEADER_VALUE_BYTES = 4 * 1024
+
+
+@dataclass(frozen=True, slots=True)
+class RedeemedRuntimeContext:
+    """What one claim redemption returns from the runtime-context route.
+
+    It carries two credentials, and they answer different things. ``auth_token``
+    is the execution's whole identity: with no token nothing runs.
+    ``secrets_header_value`` is the project's ``X-SECRET`` value, which
+    authenticates ONE route — the version-details read the sub-agent toolkit
+    makes (issue 408).
+
+    ``secrets_header_value`` is therefore allowed to be empty, and an empty
+    value is not a failure of the redemption. A project whose vault holds no
+    value, and a platform that is older than the field, both arrive here as an
+    empty string, and both mean the same thing: the SDK cannot authenticate a
+    version-details read, and that route refuses it with 403.
+    """
+
+    auth_token: str = field(repr=False)
+    secrets_header_value: str = field(default="", repr=False)
+
+    def __post_init__(self) -> None:
+        if not _bounded_text(self.auth_token, 64 * 1024):
+            raise DependencyUnavailable(
+                "The claim-scoped SDK client context is unavailable."
+            )
+        if self.secrets_header_value and not _bounded_text(
+            self.secrets_header_value, MAX_SECRETS_HEADER_VALUE_BYTES
+        ):
+            raise DependencyUnavailable(
+                "The claim-scoped SDK client context is unavailable."
+            )
+
+
 @dataclass(frozen=True, slots=True)
 class EliteaClientContext:
     project_id: int
     base_url: str
     auth_token: str = field(repr=False)
+    # The project's own X-SECRET value (issue 408). It is empty when the project
+    # has none; the SDK client is then built without the header, and the
+    # platform refuses the one route that reads it.
+    secrets_header_value: str = field(default="", repr=False)
 
     def __post_init__(self) -> None:
         if self.project_id < 1 or not _valid_base_url(self.base_url):
@@ -46,8 +90,16 @@ class EliteaClientContext:
             raise DependencyUnavailable(
                 "The claim-scoped SDK client context is unavailable."
             )
+        if self.secrets_header_value and not _bounded_text(
+            self.secrets_header_value, MAX_SECRETS_HEADER_VALUE_BYTES
+        ):
+            raise DependencyUnavailable(
+                "The claim-scoped SDK client context is unavailable."
+            )
 
-ClaimBoundTokenFetcher = Callable[[RuntimeExecutionClaim], Awaitable[str]]
+ClaimBoundTokenFetcher = Callable[
+    [RuntimeExecutionClaim], Awaitable[RedeemedRuntimeContext]
+]
 
 
 class ClaimBoundEliteaClientContextFactory:
@@ -72,21 +124,22 @@ class ClaimBoundEliteaClientContextFactory:
         if str(project_id) != claim.resource_project_id or project_id < 1:
             raise InvalidInput("The execution project identity is malformed.")
         try:
-            token = await self._token_fetcher(claim)
+            redeemed = await self._token_fetcher(claim)
         except WorkerError:
             raise
         except Exception as exc:
             raise DependencyUnavailable(
                 "The claim-scoped SDK client context is unavailable."
             ) from exc
-        if not isinstance(token, str):
+        if not isinstance(redeemed, RedeemedRuntimeContext):
             raise DependencyUnavailable(
                 "The claim-scoped SDK client context is unavailable."
             )
         return EliteaClientContext(
             project_id=project_id,
             base_url=self._base_url,
-            auth_token=token,
+            auth_token=redeemed.auth_token,
+            secrets_header_value=redeemed.secrets_header_value,
         )
 
 

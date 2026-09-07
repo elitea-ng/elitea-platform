@@ -18,6 +18,8 @@
  */
 import type { ReactElement } from 'react';
 
+import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
 import { AttachmentButton, ChatInternalToolsConfigButton, PlusChatButton } from '@/widgets/chat';
@@ -93,6 +95,34 @@ describe('buildChatBoxInputSlots — drop/paste attachment handle', () => {
 
     const props = (slots.attachmentButton as ReactElement).props as { attachmentButtonRef?: unknown };
     expect(props.attachmentButtonRef).toBe(attachmentButtonRef);
+  });
+});
+
+describe('buildChatBoxInputSlots — the staged-file chips', () => {
+  it('fills the attachmentList slot with real, deletable chips', async () => {
+    // The counterpart to the "+"-menu case above, and the same class of
+    // defect: `UserInput` renders staged files through `slots.attachmentList`,
+    // `FileList` was written to fill it, and nothing ever supplied it. The
+    // composer counted a picked file (the menu's "N left" ticked down) and
+    // uploaded it on send, but showed the user no chip and no way to remove it.
+    const slots = buildSlots(false);
+    const onDeleteAttachment = vi.fn();
+    const file = new File(['x'], 'brief.txt');
+
+    render(<>{slots.attachmentList({ attachments: [file], onDeleteAttachment, disabled: false })}</>);
+
+    expect(screen.getByTestId('chat-attachment-chip-0')).toHaveTextContent('brief.txt');
+    await userEvent.click(screen.getByTestId('chat-attachment-remove-0'));
+    expect(onDeleteAttachment).toHaveBeenCalledWith(0);
+  });
+
+  it('withholds the delete affordance while the turn is in flight', () => {
+    const slots = buildSlots(false);
+    const file = new File(['x'], 'brief.txt');
+
+    render(<>{slots.attachmentList({ attachments: [file], onDeleteAttachment: vi.fn(), disabled: true })}</>);
+
+    expect(screen.queryByTestId('chat-attachment-remove-0')).toBeNull();
   });
 });
 

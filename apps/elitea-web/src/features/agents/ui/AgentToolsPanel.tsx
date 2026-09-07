@@ -80,6 +80,16 @@ export interface AgentToolsPanelProps {
   readonly onToolsChanged?: (() => void) | undefined;
   /** Read-only viewer (public project): hides the attach menu and disables per-card actions, matching the baseline's `disabled`. */
   readonly readOnly?: boolean | undefined;
+  /**
+   * Forwarded to `ApplicationTools`, which narrows the MODULES grid to
+   * `attachments` alone and drops the "Show all" toggle for a pipeline
+   * (baseline `ApplicationTools.jsx:91-94`). That branch already existed and
+   * had no way in: this panel is the only mount point for `ApplicationTools`
+   * in the app, and it hardcoded the agent default, so the pipeline editor
+   * would have offered switches for agent-executor features its runtime never
+   * reads. Defaults to `false`, so the agent editor is unchanged.
+   */
+  readonly isPipeline?: boolean | undefined;
   /** `entities/application-form`'s `viewMode` string, threaded into `ToolCard`'s "open in new tab" URL. */
   readonly viewMode: string;
   readonly sx?: SxProps<Theme> | undefined;
@@ -128,7 +138,7 @@ function useToolsMirror(versionTools: readonly VersionToolRef[] | undefined): To
   return { tools, initialTools, onToolsChange: setTools, onToolRemoved };
 }
 
-export function AgentToolsPanel({ entity, versionTools, dirty, internalTools, onToolsChanged, readOnly = false, viewMode, sx }: AgentToolsPanelProps): ReactNode {
+export function AgentToolsPanel({ entity, versionTools, dirty, internalTools, onToolsChanged, readOnly = false, isPipeline = false, viewMode, sx }: AgentToolsPanelProps): ReactNode {
   const projectId = useSelectedProjectId();
   const mirror = useToolsMirror(versionTools);
   const rowDisabled = readOnly || isVersionLocked(entity.versionStatus);
@@ -172,6 +182,7 @@ export function AgentToolsPanel({ entity, versionTools, dirty, internalTools, on
       renderToolCard={renderToolCard}
       onToolsChanged={onToolsChanged}
       disabled={readOnly}
+      isPipeline={isPipeline}
       sx={sx}
     />
   );

@@ -363,6 +363,13 @@ export function EditApplication(): ReactNode {
           <EditApplicationEditorTabs
             projectId={projectId}
             applicationId={applicationId}
+            /*
+             * The version an evaluation run scores. It comes from the version
+             * controls, which is the same value the Save button writes to —
+             * resolving it a second time inside the evaluation feature could
+             * disagree with what the editor thinks is open.
+             */
+            applicationVersionId={versionControls.activeVersionId}
             configurationPanel={
               <EditApplicationConfigurationPanel
                 projectId={projectId}

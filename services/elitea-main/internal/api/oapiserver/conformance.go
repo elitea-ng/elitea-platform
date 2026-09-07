@@ -254,6 +254,37 @@ func MissingFromSpec(ops []SpecOperation, endpoints []ManifestEndpoint) []Manife
 	return missing
 }
 
+// pathCoveredBySpec reports whether the document describes this method+path.
+//
+// THE MANIFEST PATH IS RELATIVE TO THE API ROOT, AND THIS FUNCTION USED TO
+// FORGET IT. It compared the manifest path against op.CandidatePaths(), which
+// is `servers[0].url` + the document path — "/api/v2/secrets/secrets/{mode}/
+// {projectID}". No entry of endpoints.manifest.json carries that base (checked:
+// zero of them start with "/api/"), so the first segment compared "api" against
+// "secrets" and every comparison failed.
+//
+// Nothing looked broken, because the ONLY caller that reaches this arm is the
+// hand-written half of the manifest, and a hand-written entry that fails to
+// match is exactly what the reverse-check allowlist exists to hold. So the
+// allowlist's own rule — "the list may only shrink; the test fails on a line
+// the spec now covers" — could not fire. Measured when this was found: NINE
+// allowlisted ids were already described in v2.yaml, six of them the whole
+// secrets domain that issue 151 documented.
+//
+// The DOCUMENT path is compared instead. The base is still checked, by
+// every_spec_operation_resolves_to_a_route, which is where that question
+// belongs: a base that serves no operation is a defect of the DOCUMENT, not of
+// one manifest entry.
+//
+// THE COMPARISON IS EQUALITY, NOT segmentsMatch. Both sides are TEMPLATES here,
+// so a spec placeholder must face a manifest placeholder. segmentsMatch lets a
+// route placeholder swallow any literal, which is right when one side is a
+// concrete request path and wrong when both are templates: it read the spec's
+// GET /artifacts/buckets/{projectID}/{bucket} as covering the manifest's
+// GET /artifacts/buckets/default/{project_id}, where `default` is a pylon MODE
+// segment and not a bucket name. Deleting that allowlist line would have
+// recorded an endpoint as described that this document does not describe — the
+// same class of false claim the allowlist exists to prevent.
 func pathCoveredBySpec(ops []SpecOperation, method, path string) bool {
 	pathSegs := normalizeSegments(path)
 	m := strings.ToUpper(method)
@@ -261,15 +292,26 @@ func pathCoveredBySpec(ops []SpecOperation, method, path string) bool {
 		if op.Method != m {
 			continue
 		}
-		for _, cand := range op.CandidatePaths() {
-			// The spec side plays the "route" role here: its placeholders
-			// accept concrete manifest segments.
-			if segmentsMatch(normalizeSegments(cand), pathSegs) {
-				return true
-			}
+		if sameSegments(normalizeSegments(op.Path), pathSegs) {
+			return true
 		}
 	}
 	return false
+}
+
+// sameSegments reports whether two normalized path TEMPLATES have the same
+// shape. Placeholders have already collapsed to "{}", so this compares a
+// literal with a literal and a placeholder with a placeholder.
+func sameSegments(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // --- internals ---------------------------------------------------------------

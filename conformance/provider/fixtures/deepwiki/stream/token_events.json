@@ -1,0 +1,72 @@
+{
+  "_note": "The ANSWER TOKEN channel (issue #701). NEW product, not a port: the legacy plugin streamed tokens over socket.io, which ADR-0022 removed, and the poll SPI that replaced it had one event channel carrying progress text. There is therefore nothing to record and this fixture is a SPECIFICATION. It exists because the same rule set is implemented at THREE hops that must not drift - the Python engine sidecar (services/elitea-deepwiki/src/elitea_deepwiki/sidecar.py), the Go sub-application host (services/elitea-subapp-host/internal/engine and internal/spi), and the browser adapter (apps/elitea-web/src/features/wiki-chat/lib/framesFromChatPoll.ts) - and a token that is indistinguishable from progress at any one of them renders as a log line instead of as the answer, silently.",
+  "producer": "specification (ADR-0022 decision 3 follow-on; no legacy equivalent)",
+
+  "why_not_a_new_envelope": "conformance/provider/fixtures/deepwiki/spi/custom_events.json freezes the poll envelope as {'custom_events': [{'data': {'message': str}}]} and its port_requirement keeps it that way for the vendored UI. A token therefore travels as a STRUCTURED EVENT inside that same `message` string - the idiom the thinking log already uses for todo_update and tool_start - so no facade, no OpenAPI document and no generated client changes.",
+
+  "hops": {
+    "engine_socket": {
+      "transport": "POST /engine/invoke gives application/x-ndjson, one JSON object per line",
+      "progress_line": { "thinking": "Searching the wiki index" },
+      "token_line": { "token": "The wiki pages " },
+      "why_a_separate_key": "A token is not progress. Sharing the `thinking` key would make the two tellable apart only by parsing the message and hoping that no progress text ever looks like an llm_chunk envelope. The Go host reads whichever key is present and cannot confuse them."
+    },
+    "spi_poll": {
+      "transport": "GET /tools/{toolkit_name}/{tool_name}/invocations/{invocation_id} gives the read-once custom_events list",
+      "progress_event": { "data": { "message": "Searching the wiki index" } },
+      "token_event": { "data": { "message": "{\"event\":\"llm_chunk\",\"data\":{\"text\":\"The wiki pages \"}}" } },
+      "ordering": "Tokens and progress share ONE list and keep the order the engine emitted them in. That is what makes an answer that arrives around a tool call readable."
+    },
+    "browser_frame": {
+      "progress_frame": { "type": "agent_thinking_step", "response_metadata": { "message": "Searching the wiki index" } },
+      "token_frame": { "type": "agent_llm_chunk", "content": "The wiki pages " },
+      "why_content": "The chat reducer appends `frame.content` to ChatState.streamingText and reads a structured event out of `response_metadata.message`. A token routed through the metadata would be reduced as an UNKNOWN structured event and appended to the thinking log as a card - visible, wrong, and not a failure anywhere."
+    }
+  },
+
+  "event": {
+    "name": "llm_chunk",
+    "envelope": { "event": "llm_chunk", "data": { "text": "<fragment>" } },
+    "text_is_a_fragment": "The fragments of one answer are joined in arrival order with NO separator. A fragment carries its own spacing.",
+    "empty_text_is_dropped": "A fragment with no text says nothing. The poll drain already drops an event with an empty message, so an empty fragment must not reach the wire as one that looks non-empty."
+  },
+
+  "golden_sequence": {
+    "_note": "One `ask` run, hop by hop. Each implementation replays its own half and must produce the next hop's list, in this order. The Python engine (services/elitea-deepwiki/tests/unit/test_answer_tokens.py) and the Go host (services/elitea-subapp-host/internal/apps/deepwiki/run/stream_test.go) READ this file. The browser's test (apps/elitea-web/src/features/wiki-chat/lib/framesFromChatPoll.test.ts) carries the same sequence inline: the web suite reads nothing outside apps/elitea-web, so a shared read there would be a build-tool change rather than a test. Keep the two in step by hand — the sequence is six lines long and both spell out the same answer.",
+    "engine_lines": [
+      { "thinking": "Searching the wiki index" },
+      { "token": "The wiki pages " },
+      { "token": "live in the " },
+      { "thinking": "Composing the answer" },
+      { "token": "wiki-artifacts bucket." },
+      { "result": { "success": true, "answer": "The wiki pages live in the wiki-artifacts bucket." } }
+    ],
+    "custom_events": [
+      { "data": { "message": "Searching the wiki index" } },
+      { "data": { "message": "{\"event\":\"llm_chunk\",\"data\":{\"text\":\"The wiki pages \"}}" } },
+      { "data": { "message": "{\"event\":\"llm_chunk\",\"data\":{\"text\":\"live in the \"}}" } },
+      { "data": { "message": "Composing the answer" } },
+      { "data": { "message": "{\"event\":\"llm_chunk\",\"data\":{\"text\":\"wiki-artifacts bucket.\"}}" } }
+    ],
+    "chat_frames": [
+      { "type": "agent_thinking_step", "message": "Searching the wiki index" },
+      { "type": "agent_llm_chunk", "content": "The wiki pages " },
+      { "type": "agent_llm_chunk", "content": "live in the " },
+      { "type": "agent_thinking_step", "message": "Composing the answer" },
+      { "type": "agent_llm_chunk", "content": "wiki-artifacts bucket." }
+    ],
+    "streaming_text": "The wiki pages live in the wiki-artifacts bucket."
+  },
+
+  "state_rules": {
+    "cleared_on_completion": "A completed turn clears streamingText: the finished answer replaces it, and leaving it would show the same text twice.",
+    "kept_on_failure": "A failed or stopped turn KEEPS it. An interrupted stream that leaves the partial answer on screen is the DWIKI-012 criterion this channel exists for.",
+    "cleared_when_the_next_turn_opens": "Opening a turn clears it, so a kept partial answer belongs to the turn that produced it and to no later one."
+  },
+
+  "engine_producers": {
+    "ask": "streamed. plugin_implementation/ask_engine.py emits one llm_chunk per fragment of the final answer, the ask worker prints it as `[LLM_CHUNK] {json}`, and tool_operations.py turns that line into invocation_token(). All three are declared substitutions in services/elitea-deepwiki/tools/refresh_engine_copy.py.",
+    "deep_research": "NOT streamed, deliberately. Its report is written by sub-agents whose own final messages also reach the `messages` stream, so accumulating every content-without-tool-calls message there would join several reports into one. Deep research already streams its PLAN through todo_update, which is the progress a reader of a multi-minute run wants. Revisit only with a way to name the message that belongs to the report.",
+    "fixture": "both. The two fixture runners (run/fixture.go for the E2E stack, fixture_runner.py for the standalone one) stream the answer they are about to return, in fragments, so a browser journey can watch a partial answer arrive without a model."
+  }
+}

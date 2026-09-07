@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 )
 
@@ -17,13 +18,17 @@ import (
 // `secrets.get("secrets_header_value", "secret")`
 // (legacy/plugins/elitea_core/utils/secrets.py:4-9). A project whose vault
 // holds no value under this name therefore accepts the literal string
-// "secret", and api/v2/applications reproduces that fallback for parity.
+// "secret". api/v2/applications reproduced that fallback for parity until #408
+// closed it.
 //
-// This file removes the REASON for the fallback (#408). The provisioner writes
-// a random value into every new project vault, and
+// This file removes the REASON for the fallback (#408 steps 1 and 2). The
+// provisioner writes a random value into every new project vault, and
 // BackfillProjectSecretsHeaderValues writes one into every project vault that
-// already exists. The fallback itself stays until the SDK worker stops sending
-// the literal, which is work in another repository.
+// already exists. The fallback itself is now GONE (#408 step 3): a project with
+// no value refuses every caller of the version-details route
+// (internal/api/v2/applications/handler.go, secretHeaderRefusal), and the
+// worker carries the project's own value to the SDK instead of the literal
+// (internal/infra/storage/index_runtime_context.go).
 const SecretsHeaderValueName = "secrets_header_value"
 
 // secretsHeaderValueBytes is how much entropy one generated value carries. 32
@@ -90,6 +95,27 @@ func (h *Handler) EnsureProjectSecretsHeaderValue(ctx context.Context, projectID
 	return true, nil
 }
 
+// ResolveProjectSecretsHeaderValue reads one project's `X-SECRET` value by its
+// numeric id.
+//
+// It is the runtime's reader (storage.ProjectSecretsHeaderReader): the
+// worker gets the value with its claim-bound bearer token and puts it on every
+// SDK call, so the SDK stops sending the pylon literal "secret" (#408).
+//
+// It refuses a non-positive id rather than building a vault name from it. The
+// caller is the runtime, whose project id comes from an authorized claim, so a
+// zero here is a fault in that path and not a project.
+func (h *Handler) ResolveProjectSecretsHeaderValue(ctx context.Context, projectID int64) (string, error) {
+	if h == nil || projectID < 1 {
+		return "", fmt.Errorf("resolve the secrets header value: the project id %d is not valid", projectID)
+	}
+	value, err := h.ResolveSecretValue(ctx, strconv.FormatInt(projectID, 10), SecretsHeaderValueName)
+	if err != nil {
+		return "", fmt.Errorf("resolve the p_%d secrets header value: %w", projectID, err)
+	}
+	return value, nil
+}
+
 // SecretsHeaderBackfillReport counts what one backfill pass did. The caller
 // logs it, so an operator can state how many projects the pass touched.
 type SecretsHeaderBackfillReport struct {
@@ -100,8 +126,9 @@ type SecretsHeaderBackfillReport struct {
 	// AlreadySet is how many of them held one already.
 	AlreadySet int
 	// Skipped is how many of them could not be opened. Each one is logged
-	// with its vault id. A value greater than zero means those projects still
-	// accept the literal "secret", so the count must never be read as noise.
+	// with its vault id. A value greater than zero means those projects have
+	// no X-SECRET value, so the version-details route refuses every caller for
+	// them (#408). The count must never be read as noise.
 	Skipped int
 	// SkippedLocked reports that another replica held the advisory lock and
 	// this pass did nothing at all. Without it, "another replica is doing it"
@@ -244,7 +271,8 @@ func (h *Handler) BackfillProjectSecretsHeaderValues(ctx context.Context) (Secre
 			}
 			report.Skipped++
 			slog.WarnContext(ctx,
-				"the project vault would not open, so the project keeps the guessable X-SECRET default",
+				"the project vault would not open, so the project gets no X-SECRET value "+
+					"and the version details route refuses every caller for it",
 				"project_id", projectID,
 				"variable", MasterKeyEnvVar,
 				"error", ensureErr)

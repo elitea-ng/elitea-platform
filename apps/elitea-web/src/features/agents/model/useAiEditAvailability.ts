@@ -21,9 +21,11 @@ import {
  *     is served in its BLOCKING mode, which is the mode this affordance uses
  *     (#126 removed the group; this is its replacement). The switch is
  *     `hasBackendCapability('llmPredictBlocking')` and NOT the broader
- *     `aiGeneration`, which still covers only the three unrouted draft
- *     endpoints. A deployment that sets no `LLM_GATEWAY_URL` has no LLM to
- *     reach, so the flag remains the honest gate rather than a formality.
+ *     `aiGeneration`, which covers the three DRAFT endpoints — served since
+ *     #254 P1, and a different contract: they return a structured draft, not
+ *     a completion this affordance can paste into a field. A deployment that
+ *     sets no `LLM_GATEWAY_URL` has no LLM to reach, so the flag remains the
+ *     honest gate rather than a formality.
  *  2. **The prompt.** The base instruction the model is steered with is a
  *     Service Prompt, read from `/configurations/*`. Those routes only exist
  *     when `ELITEA_CONFIGURATIONS_ENABLED` is on — FALSE in a default

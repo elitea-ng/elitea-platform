@@ -40,6 +40,7 @@ import (
 	v2inventory "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/inventory"
 	v2mcp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/mcp"
 	notificationsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/notifications"
+	v2pipelinetriggers "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/pipelinetriggers"
 	predictapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/predict"
 	projectinfoapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/projectinfo"
 	v2projects "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/projects"
@@ -50,11 +51,15 @@ import (
 	socialapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/social"
 	v2support "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/supportassistant"
 	v2tags "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/tags"
+	toolkitrun "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkitrun"
 	v2toolkits "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkits"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/webhook"
 	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
 	identityapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/identity"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
+	schedulingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/scheduling"
 	socialapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/social"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/authcomposition"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
@@ -247,6 +252,23 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		return err
 	}
 	defer pool.Close()
+
+	// The `centry.audit_events` writer.
+	//
+	// It is built HERE, once, and given to BOTH the router (which mounts the
+	// audit middleware over the whole /api/v2 group) and the pipeline-trigger
+	// handler (whose inbound route sits ABOVE that group and so writes its own
+	// row). Two recorders would mean two background writers and two queues over
+	// one table; one recorder is also what makes an inbound refusal and an
+	// ordinary 403 land in the same trail with the same drop policy.
+	auditRecorder := audit.NewPostgresRecorder(pool, logger)
+	defer func() {
+		flushCtx, cancelFlush := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancelFlush()
+		if flushErr := auditRecorder.Flush(flushCtx); flushErr != nil {
+			logger.Warn("could not flush the audit trail on shutdown", "err", flushErr)
+		}
+	}()
 
 	// Object store. Production remains fail-closed: when the capability is
 	// enabled, startup requires a working S3/Azure/GCS backend. The mixed
@@ -678,9 +700,23 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if err != nil {
 		return fmt.Errorf("load current index-types settings: %w", err)
 	}
-	if currentIndexTypesSettings.Enabled &&
-		(formGraph == nil || principalValidator == nil || forwardedIdentityVerifier == nil) {
-		return errors.New("ELITEA_INDEX_TYPES_ENABLED requires production authentication")
+	// The gate is the credential plane, NOT the FormGraph — the same correction
+	// gap G2 made for ELITEA_CONFIGURATIONS_ENABLED below.
+	//
+	// This used to read `formGraph == nil || principalValidator == nil ||
+	// forwardedIdentityVerifier == nil`. All three are assigned only inside the
+	// `authEnabled` block, so ELITEA_AUTH_CONFIG_FILE was the ONLY way to
+	// satisfy it and an install with corporate single sign-on could not turn
+	// the capability on at all. That mattered more once the prototype fallback
+	// was deleted (#394): an OIDC install would answer 404 on a path the
+	// published contract declares.
+	//
+	// productionAuthenticationComposed asks what the route actually needs: one
+	// reader of the caller's credential plus a PrincipalValidator. A deployment
+	// with NO authentication still fails it, because apiGroupAuthConfig hands
+	// back the zero AuthConfig there.
+	if currentIndexTypesSettings.Enabled && !productionAuthenticationComposed(apiGroupAuth) {
+		return errors.New("ELITEA_INDEX_TYPES_ENABLED requires an authenticated deployment")
 	}
 	var currentIndexTypes *indextypesapi.CurrentIndexTypesRoute
 	if currentIndexTypesSettings.Enabled {
@@ -711,9 +747,12 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if err != nil {
 		return fmt.Errorf("load current application-skills settings: %w", err)
 	}
-	if currentApplicationSkillsSettings.Enabled &&
-		(formGraph == nil || principalValidator == nil || forwardedIdentityVerifier == nil) {
-		return errors.New("ELITEA_APPLICATION_SKILLS_ENABLED requires production authentication")
+	// Same correction, same reason, as the index-types gate above (#395). The
+	// attached-skills route is the ONLY handler for its path now that the
+	// prototype fallback is deleted, so a Form-only gate would leave an OIDC
+	// install with a 404 where the published contract declares a list.
+	if currentApplicationSkillsSettings.Enabled && !productionAuthenticationComposed(apiGroupAuth) {
+		return errors.New("ELITEA_APPLICATION_SKILLS_ENABLED requires an authenticated deployment")
 	}
 	var currentApplicationSkills *applicationskillsapi.CurrentApplicationSkillsRoute
 	if currentApplicationSkillsSettings.Enabled {
@@ -768,7 +807,20 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// The project vector-store collaborator the project-create route provisions
 	// with (#371). It is composed from the Configurations runtime, so it exists
 	// only where that runtime does; without it a created project cannot index.
-	var projectVectorStore *runtimecomposition.ProjectVectorStore
+	//
+	// DECLARED AS THE INTERFACE, never as the concrete pointer (#377). A nil
+	// `*runtimecomposition.ProjectVectorStore` assigned into an interface field
+	// is a TYPED NIL: `cfg.ProjectVectorStore != nil` in internal/api/router.go
+	// is then true, the provisioner takes the collaborator, and every step of
+	// the create pipeline runs until `project_pgvector` answers "project vector
+	// store is not configured" — so a deployment that composes no Configurations
+	// runtime could not create a project at all. It answered 500 and rolled the
+	// whole tenant back. Measured on the end-to-end stack by J31g.
+	//
+	// Same rule as toolkitSettingsValidator below: the concrete value is
+	// assigned inside the branch that composes it, and the variable is a nil
+	// INTERFACE everywhere else.
+	var projectVectorStore projectprovisioning.ProjectVectorStore
 	// The save-time credential gate for the toolkit write path (#613). It is
 	// composed from the same Configurations graph agent-version freezing uses,
 	// so it exists only where that graph does.
@@ -821,13 +873,18 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		// deliberately NOT used here: it keys off ELITEA_VAULT_MASTER_KEY_FILE,
 		// which no file under deploy/ sets, so it could not open the vault the
 		// handler had just created.
-		projectVectorStore, err = currentConfigurationsRoot.NewProjectVectorStore(
+		vectorStore, err := currentConfigurationsRoot.NewProjectVectorStore(
 			pool,
 			v2secrets.NewHandler(pool),
 			logger,
 		)
 		if err != nil {
 			return fmt.Errorf("compose project vector-store provisioning: %w", err)
+		}
+		// Through the concrete value, and only when there IS one. See the
+		// declaration above for what a typed nil costs here.
+		if vectorStore != nil {
+			projectVectorStore = vectorStore
 		}
 		toolkitSettingsResolver, err := currentConfigurationsRoot.NewToolkitSettingsValidator(pool)
 		if err != nil {
@@ -1306,6 +1363,41 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			return fmt.Errorf("compose DeepWiki facade: %w", err)
 		}
 	}
+	// The same endpoint serves every SDK toolkit type's settings schema and its
+	// metadata — the label, categories and icon the create page groups it by.
+	// This is a second pinned file rather than a larger first one: the argument
+	// schemas already measure 596 KB against a 1 MiB ceiling.
+	toolkitCatalogue, err := runtimecomposition.LoadPinnedCurrentToolkitCatalogueSnapshot()
+	if err != nil {
+		return fmt.Errorf("load pinned current toolkit catalogue snapshot: %w", err)
+	}
+	// Which of those types the deployment can actually run depends on the
+	// worker image it starts. The catalogue holds 52 types; the Python image
+	// imports 39 of them and the Rust worker materializes 22 families. A type
+	// the worker cannot run is served hidden, with the reason, so the operator
+	// can see why rather than hunting a tile that is simply absent.
+	workerImplementation, err := runtimecomposition.WorkerImplementationFromEnv(os.LookupEnv)
+	if err != nil {
+		return fmt.Errorf("read worker implementation: %w", err)
+	}
+	workerToolkitCapability, err := runtimecomposition.LoadPinnedWorkerToolkitCapability(
+		workerImplementation,
+	)
+	if err != nil {
+		return fmt.Errorf("load pinned worker toolkit capability: %w", err)
+	}
+	logger.Info(
+		"toolkit type catalogue composed",
+		"worker_implementation", workerImplementation,
+		"catalogued_types", toolkitCatalogue.EntryCount(),
+	)
+	// Both are loaded HERE, ahead of the runtime, rather than beside the router
+	// config they also feed: the tool-run producer composed inside the runtime
+	// block below asks the SAME pair whether a type is runnable, and a second
+	// answer to that question is how a deployment would offer a type it then
+	// refuses. Loading is pure — two embedded snapshots — so moving it earlier
+	// changes nothing but the order.
+
 	var currentIndexStart http.Handler
 	var currentAgentStart http.Handler
 	// The support assistant's half of the agent-execution wiring. It is
@@ -1319,6 +1411,18 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// and for the same typed-nil reason. `tools/call` runs an agent through the
 	// SAME use case; left nil it keeps answering the refusal it always has.
 	var mcpAgentStart v2mcp.AgentStartUseCase
+	// The tool-run halves, assigned ONLY inside the guard below and for the
+	// same typed-nil reason: a nil concrete value in a non-nil interface reads
+	// as "configured" downstream, and both consumers decide on `!= nil`.
+	var toolkitToolRun toolkitrun.UseCase
+	var mcpToolkitRun v2mcp.ToolkitRunUseCase
+	// The unattended pipeline entry points (issues 192, 193).
+	//
+	// ONE handler serves both the HTTP surface and the platform scheduler's
+	// `pipeline.schedule.scan.v1` job, which is why it is built here rather
+	// than inside the router: two handlers over one table would be two chances
+	// for the tick and the settings routes to disagree on a dependency.
+	var pipelineTriggers *v2pipelinetriggers.Handler
 	var currentAgentCancel http.Handler
 	var currentIndexCancel http.Handler
 	var currentIndexMeta http.Handler
@@ -1366,6 +1470,8 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			PermissionResolver:               legacyrbac.NewPostgresResolver(pool),
 			Logger:                           logger,
 			ObjectStore:                      objectStore,
+			ToolkitCatalogue:                 toolkitCatalogue,
+			WorkerToolkitCapability:          workerToolkitCapability,
 		})
 		if err != nil {
 			return fmt.Errorf("compose optional runtime: %w", err)
@@ -1427,11 +1533,27 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		// carry that: apiGroupAuthConfig picks the branch by testing the
 		// pointer.
 		if publicRoutes.IndexStart != nil {
-			currentIndexStart, err = indexingapi.NewCurrentIndexStartRoute(
-				publicRoutes.IndexStart,
-				apiGroupAuth,
-				legacyrbac.NewPostgresResolver(pool),
-			)
+			if publicRoutes.ToolkitCallTool != nil {
+				// The SAME path, the same credentials, the same permission —
+				// plus the synchronous branch its `await_response` refusal used
+				// to occupy (#340). This route is what a tool run actually
+				// reaches wherever the runtime is composed; see
+				// internal/application/toolkitcalltool/doc.go.
+				toolkitToolRun = publicRoutes.ToolkitCallTool
+				mcpToolkitRun = publicRoutes.ToolkitCallTool
+				currentIndexStart, err = indexingapi.NewCurrentIndexStartRouteWithToolRuns(
+					publicRoutes.IndexStart,
+					publicRoutes.ToolkitCallTool,
+					apiGroupAuth,
+					legacyrbac.NewPostgresResolver(pool),
+				)
+			} else {
+				currentIndexStart, err = indexingapi.NewCurrentIndexStartRoute(
+					publicRoutes.IndexStart,
+					apiGroupAuth,
+					legacyrbac.NewPostgresResolver(pool),
+				)
+			}
 			if err != nil {
 				return fmt.Errorf("compose current index-start route: %w", err)
 			}
@@ -1439,6 +1561,31 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		if publicRoutes.AgentStart != nil {
 			supportAssistantStart = publicRoutes.AgentStart
 			mcpAgentStart = publicRoutes.AgentStart
+			// The pipeline trigger and schedule handler. It runs pipelines
+			// through the SAME use case as chat, MCP and the support widget —
+			// see internal/api/v2/pipelinetriggers for why there is one
+			// admission path and not four.
+			pipelineTriggers = v2pipelinetriggers.NewPlatformHandler(
+				pool,
+				publicRoutes.AgentStart,
+				v2secrets.NewHandler(pool),
+				legacyrbac.NewPostgresResolver(pool),
+				auditRecorder,
+				logger,
+			)
+			// The schedule TICK. It rides elitea-main's platform scheduler —
+			// the same framework `index.schedule.scan.v1` uses — so the clock,
+			// the cross-replica occurrence lease and the claim fence are the
+			// framework's and are not re-implemented. See the package doc for
+			// why the tick is not in services/elitea-scheduler, and what was
+			// carried across from it (the maintenance gate and the
+			// no-catch-up-storm rule, both ported literally).
+			if scheduleErr := startPipelineScheduleRunner(
+				ctx, runtimePools.Admission, pipelineTriggers,
+				runtimeConfig.SchedulerInstanceID, logger,
+			); scheduleErr != nil {
+				return fmt.Errorf("compose pipeline schedule job: %w", scheduleErr)
+			}
 			currentAgentStart, err = agentexecutionapi.NewCurrentApplicationStartRoute(
 				publicRoutes.AgentStart,
 				// The browser's session cookie is this route's only credential
@@ -1611,6 +1758,35 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			"the route stays registered and answers 503")
 	}
 
+	// Agent Evaluation runs execute HERE, in this process: a bounded worker
+	// pool of goroutines driven by the run rows themselves. The reasoning for
+	// not using the runtime plane or the scheduler is in the package doc of
+	// internal/api/v2/evaluation (orchestrator.go).
+	//
+	// The judge and the agent turn both take `predictCompleter`, the SAME
+	// client /predict_llm and the three AI-draft routes take. There is no
+	// second LLM client in this service, and adding one would mean a second
+	// place that resolves credentials and a second egress path to keep
+	// SSRF-safe.
+	//
+	// A nil completer is a supported state and does NOT unregister the routes:
+	// runs are still stored and listed, every case fails with the reason
+	// "no LLM plane is composed", and the run finishes `errored` carrying it.
+	// An operator can then see the run, read why, and fix the deployment —
+	// which a 404 would not let them do (#126).
+	evalRunsRepo := evalRunsRepository(pool)
+	var evalOrchestrator v2evaluation.Enqueuer
+	if evalRunsRepo != nil {
+		orchestrator := v2evaluation.NewOrchestrator(
+			evalRunsRepo, v2evaluation.NewAIJudge(predictCompleter), predictCompleter, logger)
+		// Started with the PROCESS context, so the workers and the recovery
+		// sweep stop on SIGTERM. A run in flight then leaves its row `running`
+		// with a fresh heartbeat, and the next process re-queues it once the
+		// heartbeat goes stale — which is what makes a restart lose nothing.
+		orchestrator.Start(ctx)
+		evalOrchestrator = orchestrator
+	}
+
 	// The admin LLM Proxy section reads the gateway's own enforcement status.
 	// Same four settings again, for the third and last consumer of the hop, so
 	// an operator configures the gateway once. No identity secret: the gateway
@@ -1743,7 +1919,6 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if err != nil {
 		return fmt.Errorf("compose current toolkit settings definitions: %w", err)
 	}
-
 	// patSigner signs the personal access tokens /api/v2/auth/token returns.
 	//
 	// The form graph validates a personal access token with the bytes of
@@ -1767,6 +1942,8 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		EmailSettings:              emailResolver,
 		BrandingPackages:           brandingPackages,
 		ToolkitArgumentSchemas:     toolkitArgumentSchemas,
+		ToolkitCatalogue:           toolkitCatalogue,
+		ToolkitWorkerCapability:    workerToolkitCapability,
 		ToolkitSettingsDefinitions: toolkitSettingsDefinitions,
 		ToolkitSettingsValidator:   toolkitSettingsValidator,
 		ToolkitRegistry:            toolkitArgumentSchemas,
@@ -1808,6 +1985,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		// apart on tracing, budgets and cancellation.
 		SupportAssistantStart:      supportAssistantStart,
 		MCPAgentStart:              mcpAgentStart,
+		MCPToolkitRun:              mcpToolkitRun,
+		ToolkitToolRun:             toolkitToolRun,
+		PipelineTriggers:           pipelineTriggers,
+		AuditRecorder:              auditRecorder,
 		CurrentAgentCancel:         currentAgentCancel,
 		CurrentIndexCancel:         currentIndexCancel,
 		CurrentIndexMeta:           currentIndexMeta,
@@ -1855,6 +2036,13 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		// records — both halves correct, the wiring the defect, and 2475 green
 		// unit tests unable to see it.
 		EvalDimensionsRepo: evalDimensionsRepository(pool),
+		// Agent Evaluation slice 2, composed in the SAME change as its routes
+		// for the reason above. The orchestrator is started below, after the
+		// config is built, so that a nil pool leaves all three fields nil
+		// together and the thirteen routes are simply not registered.
+		EvalDatasetsRepo: evalDatasetsRepository(pool),
+		EvalRunsRepo:     evalRunsRepo,
+		EvalOrchestrator: evalOrchestrator,
 		// WebhookRepo is the sixth instance of the same defect, and it hid one
 		// step deeper than the other five. Its gate mounts a subrouter —
 		// `r.Mount("/webhooks/prompt_lib/{projectID}", webhook.NewHandler(...).Routes())`
@@ -1974,6 +2162,25 @@ func evalDimensionsRepository(pool *pgxpool.Pool) v2evaluation.Repository {
 		return nil
 	}
 	return dbrepos.NewEvalDimensionsRepo(pool)
+}
+
+func evalDatasetsRepository(pool *pgxpool.Pool) v2evaluation.DatasetRepository {
+	if pool == nil {
+		return nil
+	}
+	return dbrepos.NewEvalDatasetsRepo(pool)
+}
+
+// evalRunsRepository returns a nil INTERFACE and not a boxed nil pointer when
+// there is no pool. The router's `cfg.EvalRunsRepo != nil` gate is an interface
+// comparison, and a typed nil satisfies it — the route would then register and
+// call a method on a nil receiver, which is the /healthz panic recorded in the
+// gateway's own composition notes.
+func evalRunsRepository(pool *pgxpool.Pool) v2evaluation.RunRepository {
+	if pool == nil {
+		return nil
+	}
+	return dbrepos.NewEvalRunsRepo(pool)
 }
 
 func tagsRepository(pool *pgxpool.Pool) v2tags.Repository {
@@ -2180,13 +2387,15 @@ func (p *poolChecker) Ping(ctx context.Context) error {
 // this process wraps with SECRETS_MASTER_KEY, so no SQL migration can write it
 // — a migration could only store material the readers cannot open. This is the
 // first point after the pool and the master key are both settled, and it is
-// before the listeners accept a request, so no project serves a request with
-// the guessable default while the pass is still running.
+// before the listeners accept a request, so no project is asked for its
+// X-SECRET value while the pass is still running.
 //
-// IT NEVER STOPS THE SERVICE. A project that keeps the default `secret` value
-// is the state every project is in today, so a failed pass is no worse than no
-// pass. It is logged at error level with the counts it reached, because a
-// silent pass is exactly how the operator would come to believe work happened
+// IT NEVER STOPS THE SERVICE. A project the pass does not reach has no X-SECRET
+// value, and the version-details route then refuses every caller for it (#408
+// step 3) rather than accepting the guessable literal. That is a narrow, loud
+// and repairable outage on one route, so a failed pass must not keep the whole
+// service down. It is logged at error level with the counts it reached, because
+// a silent pass is exactly how the operator would come to believe work happened
 // that did not.
 //
 // IT IS CHEAP TO RE-RUN. Every project that holds a value is counted and left
@@ -2198,7 +2407,7 @@ func backfillProjectSecretsHeaderValues(ctx context.Context, pool *pgxpool.Pool,
 	report, err := v2secrets.NewHandler(pool).BackfillProjectSecretsHeaderValues(ctx)
 	if err != nil {
 		logger.ErrorContext(ctx, "the project X-SECRET backfill did not finish; "+
-			"the projects it did not reach still accept the default value",
+			"the version details route refuses every caller for the projects it did not reach",
 			"vaults", report.Vaults,
 			"written", report.Written,
 			"already_set", report.AlreadySet,
@@ -2225,4 +2434,77 @@ func backfillProjectSecretsHeaderValues(ctx context.Context, pool *pgxpool.Pool,
 		"written", report.Written,
 		"already_set", report.AlreadySet,
 		"skipped", report.Skipped)
+}
+
+// startPipelineScheduleRunner registers `pipeline.schedule.scan.v1` on the
+// platform scheduler and starts it.
+//
+// It builds its OWN registry and runner rather than joining the index scan's,
+// and that is a deliberate separation of failure domains rather than an
+// oversight. The index runner is configured `MaxParallel: 1, PageSize: 1`
+// because one index scan observes every project and a second concurrent claim
+// only makes the product runner release occurrences for retry. A pipeline
+// schedule pass has no such property, and more importantly a tenant workload
+// that is slow or wedged must not delay the platform's own indexing — the
+// coupling issue 193 names as the reason not to put tenant work in the ops
+// scheduler in the first place. Two runners over ONE occurrence store, keyed by
+// distinct job ids, keep the lease semantics and drop the coupling.
+func startPipelineScheduleRunner(
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	handler *v2pipelinetriggers.Handler,
+	instanceID string,
+	logger *slog.Logger,
+) error {
+	if pool == nil || handler == nil {
+		return nil
+	}
+	job, err := v2pipelinetriggers.NewScheduleJob(handler)
+	if err != nil {
+		return fmt.Errorf("construct pipeline schedule job: %w", err)
+	}
+	cadence, err := schedulingapp.ParseCron(v2pipelinetriggers.ScheduleJobCadence)
+	if err != nil {
+		return fmt.Errorf("parse pipeline schedule cadence: %w", err)
+	}
+	config := schedulingapp.Config{
+		// Not `instanceID` directly: the caller passes
+		// runtimeConfig.SchedulerInstanceID, which is EMPTY unless
+		// ELITEA_RUNTIME_INDEX_SCHEDULING_ENABLED is on, and an empty name
+		// makes NewRunner below refuse — which used to stop the whole process.
+		// See pipeline_schedule_instance.go.
+		InstanceID:      pipelineScheduleInstanceID(instanceID),
+		LeaseDuration:   2 * time.Minute,
+		MaxParallel:     1,
+		PageSize:        1,
+		MaxPagesPerTick: 2,
+	}
+	registry, err := schedulingapp.NewRegistry(config.LeaseDuration, schedulingapp.Job{
+		ID:       v2pipelinetriggers.ScheduleJobID,
+		Revision: v2pipelinetriggers.ScheduleJobRevision,
+		Mode:     schedulingapp.ModeDurableAdmission,
+		Schedule: cadence,
+		Timeout:  v2pipelinetriggers.ScheduleJobTimeout,
+		Handler:  job,
+	})
+	if err != nil {
+		return fmt.Errorf("register pipeline schedule job: %w", err)
+	}
+	occurrences, err := dbrepos.NewScheduleOccurrenceRepository(pool)
+	if err != nil {
+		return fmt.Errorf("construct pipeline schedule occurrence repository: %w", err)
+	}
+	runner, err := schedulingapp.NewRunner(occurrences, registry, config, logger)
+	if err != nil {
+		return fmt.Errorf("construct pipeline schedule runner: %w", err)
+	}
+	// Run returns only when ctx is cancelled, which is process shutdown. The
+	// error is logged rather than dropped: a runner that stopped early would
+	// otherwise take every tenant's schedules with it, silently.
+	go func() {
+		if err := runner.Run(ctx); err != nil && ctx.Err() == nil {
+			logger.Error("the pipeline schedule runner stopped", "err", err)
+		}
+	}()
+	return nil
 }

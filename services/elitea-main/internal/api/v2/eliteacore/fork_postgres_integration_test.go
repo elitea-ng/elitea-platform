@@ -75,8 +75,12 @@ FROM p_1.application_versions v
 JOIN p_1.applications a ON a.id = v.application_id`).Scan(&versionID, &ownerID, &llmText, &metaText); err != nil {
 		t.Fatalf("the fork wrote no version: %v", err)
 	}
-	if ownerID != importLinkPrincipal {
-		t.Errorf("applications.owner_id = %d, want the caller %d", ownerID, importLinkPrincipal)
+	// `applications.owner_id` is the DESTINATION PROJECT, and the destination
+	// schema is p_1 (#533). This route wrote the caller here, while the same
+	// request reads the SOURCE row's owner_id back as `parent_project_id`
+	// below: one column, two kinds of number, in one request.
+	if ownerID != 1 {
+		t.Errorf("applications.owner_id = %d, want the destination project 1", ownerID)
 	}
 
 	var llm map[string]any

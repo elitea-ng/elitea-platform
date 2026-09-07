@@ -25,6 +25,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/ownership"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpregistry"
@@ -884,10 +885,15 @@ func (h *Handler) Author(w http.ResponseWriter, r *http.Request) {
 			s := catalogueSchema(name)
 			var cnt int
 			// Each Scan failure leaves cnt=0, which is safe for counting
-			_ = h.pool.QueryRow(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM %s.applications a WHERE a.owner_id = $1 AND NOT EXISTS (SELECT 1 FROM %s.application_versions v WHERE v.application_id = a.id AND v.agent_type = 'pipeline')`, s, s), authorID).Scan(&cnt)
+			// The author of an agent is the author of its VERSIONS.
+			// `applications.owner_id` is the owning PROJECT (#533), so
+			// `a.owner_id = $1` counted the agents of the project whose id
+			// happens to equal this user id — a different set, and usually an
+			// empty one.
+			_ = h.pool.QueryRow(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM %s.applications a WHERE EXISTS (SELECT 1 FROM %s.application_versions av WHERE av.application_id = a.id AND av.author_id = $1) AND NOT EXISTS (SELECT 1 FROM %s.application_versions v WHERE v.application_id = a.id AND v.agent_type = 'pipeline')`, s, s, s), authorID).Scan(&cnt)
 			totalApps += cnt
 			cnt = 0
-			_ = h.pool.QueryRow(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM %s.applications a WHERE a.owner_id = $1 AND EXISTS (SELECT 1 FROM %s.application_versions v WHERE v.application_id = a.id AND v.agent_type = 'pipeline')`, s, s), authorID).Scan(&cnt)
+			_ = h.pool.QueryRow(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM %s.applications a WHERE EXISTS (SELECT 1 FROM %s.application_versions av WHERE av.application_id = a.id AND av.author_id = $1) AND EXISTS (SELECT 1 FROM %s.application_versions v WHERE v.application_id = a.id AND v.agent_type = 'pipeline')`, s, s, s), authorID).Scan(&cnt)
 			totalPipelines += cnt
 			cnt = 0
 			_ = h.pool.QueryRow(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM %s.elitea_tools WHERE author_id = $1`, s), authorID).Scan(&cnt)
@@ -1173,6 +1179,31 @@ func (h *Handler) Publish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The catalogue twin, in the SAME transaction as the clone.
+	//
+	// Without it a publish from any project other than the public one wrote a
+	// `published` row into a schema ELITEA Catalog never reads: the Published
+	// tab listed the agent and the catalogue stayed empty, with no error on
+	// either side. See catalog_mirror.go for why the twin carries no tool or
+	// skill attachments.
+	twin, mirrorErr := mirrorPublishedVersion(ctx, tx, s, projectID, appID, cloneID, body.VersionName, body.Category)
+	if mirrorErr != nil {
+		if errors.Is(mirrorErr, errCatalogVersionNameTaken) {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
+				"error": "validation_failed",
+				"validation_result": map[string]any{
+					"issues": []map[string]any{
+						{"rule": "version_name_exists_in_catalog", "field": "version_name", "issue": "version name already published to the catalog", "source": "deterministic"},
+					},
+				},
+			})
+			return
+		}
+		slog.ErrorContext(ctx, "publish: catalog mirror failed", "schema", s, "version_id", cloneID, "error", mirrorErr)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to publish agent to the catalog"})
+		return
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to publish agent"})
 		return
@@ -1181,12 +1212,27 @@ func (h *Handler) Publish(w http.ResponseWriter, r *http.Request) {
 	// Embed sub-agents: clone application_tools of type 'application' recursively
 	h.embedSubAgents(ctx, s, projectID, versionID, cloneID)
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	// `public_agent_id` and `public_version_id` name the rows in the AUTHOR's
+	// schema, which is what they have always named and what
+	// publish_tool_copy_postgres_integration_test.go and
+	// publish_skill_copy_postgres_integration_test.go read them for. The
+	// catalogue rows are a different pair, so they get their own two keys
+	// rather than a changed meaning of these.
+	//
+	// The catalogue keys are OMITTED when there is no twin — that is, when the
+	// author already stands in the public project and the clone above IS the
+	// catalogue row. A zero would read as "the catalogue has row 0".
+	response := map[string]any{
 		"public_agent_id":   strconv.Itoa(appID),
 		"public_version_id": strconv.Itoa(cloneID),
 		"version_name":      body.VersionName,
 		"source_version_id": strconv.Itoa(cloneID),
-	})
+	}
+	if twin.VersionID != 0 {
+		response["catalog_agent_id"] = strconv.Itoa(twin.ApplicationID)
+		response["catalog_version_id"] = strconv.Itoa(twin.VersionID)
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 // deleteEmbeddedSubAgents removes embedded sub-agent applications referenced by application_tools on versionID.
@@ -1408,6 +1454,13 @@ func (h *Handler) Unpublish(w http.ResponseWriter, r *http.Request) {
 	var meta map[string]any
 	_ = json.Unmarshal([]byte(metaStr), &meta) // DB jsonb column; malformed means nil meta
 
+	// The catalogue rows this unpublish must also take down. Collected per
+	// branch below and removed once, after the source revert, so that a
+	// failure to reach the catalogue is reported rather than swallowed: an
+	// agent that stays in ELITEA Catalog after its author unpublished it is
+	// the one outcome this route may not answer 200 for.
+	var revertedVersionIDs []int
+
 	switch status {
 	case "published", "embedded":
 		h.deleteEmbeddedSubAgents(ctx, s, versionID)
@@ -1415,6 +1468,9 @@ func (h *Handler) Unpublish(w http.ResponseWriter, r *http.Request) {
 		// Revert to draft
 		_, _ = h.pool.Exec(ctx, fmt.Sprintf(
 			`UPDATE %s.application_versions SET status = 'draft' WHERE id = $1`, s), versionID) // best-effort revert
+		if numericVersionID, convErr := strconv.Atoi(versionID); convErr == nil {
+			revertedVersionIDs = append(revertedVersionIDs, numericVersionID)
+		}
 	case "draft":
 		// Unpublish via the source draft version: find all published clones and delete them
 		var appID int
@@ -1441,12 +1497,21 @@ func (h *Handler) Unpublish(w http.ResponseWriter, r *http.Request) {
 			pubRows.Close()
 			for _, pvid := range pubVerIDs {
 				h.deleteEmbeddedSubAgents(ctx, s, pvid)
+				if numericVersionID, convErr := strconv.Atoi(pvid); convErr == nil {
+					revertedVersionIDs = append(revertedVersionIDs, numericVersionID)
+				}
 			}
 		}
 		_, _ = h.pool.Exec(ctx, fmt.Sprintf(
 			`UPDATE %s.application_versions SET status = 'draft' WHERE application_id = $1 AND status IN ('published', 'embedded')`, s), appID) // best-effort revert
 	default:
 		writeJSON(w, http.StatusConflict, map[string]any{"error": "version is not published"})
+		return
+	}
+
+	if err := removeCatalogTwins(ctx, h.pool, projectID, revertedVersionIDs); err != nil {
+		slog.ErrorContext(ctx, "unpublish: catalog twin removal failed", "project_id", projectID, "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to remove the agent from the catalog"})
 		return
 	}
 
@@ -1797,71 +1862,6 @@ func (h *Handler) VersionValidator(w http.ResponseWriter, r *http.Request) {
 	var valid bool
 	_ = h.pool.QueryRow(ctx, q, versionID, applicationID).Scan(&valid) // failure leaves valid=false, which is correct (not found)
 	writeJSON(w, http.StatusOK, map[string]any{"valid": valid})
-}
-
-func (h *Handler) PublicApplications(w http.ResponseWriter, r *http.Request) {
-	if h.pool == nil {
-		writeJSON(w, http.StatusOK, map[string]any{"rows": []any{}, "total": 0})
-		return
-	}
-	ctx := r.Context()
-
-	applicationID := chi.URLParam(r, "applicationID")
-	if applicationID != "" {
-		h.publicApplicationDetail(w, r, ctx, applicationID)
-		return
-	}
-
-	publicProjectID := publicProjectIDOrDefault()
-	schema := publicTenantSchema()
-
-	categoryFilter := r.URL.Query().Get("category")
-	var queryArgs []any
-	categoryClause := ""
-	if categoryFilter != "" {
-		if categoryFilter == "Other" {
-			categoryClause = ` AND (av.meta->>'category' IS NULL OR av.meta->>'category' = '' OR av.meta->>'category' = 'Other')`
-		} else {
-			categoryClause = ` AND av.meta->>'category' = $1`
-			queryArgs = append(queryArgs, categoryFilter)
-		}
-	}
-
-	rows, err := h.pool.Query(ctx, fmt.Sprintf(`
-		SELECT a.id, a.name, COALESCE(a.description, ''),
-			av.id as version_id, av.name as version_name, av.agent_type,
-			COALESCE(av.meta::text, '{}')
-		FROM %s.applications a
-		JOIN %s.application_versions av ON av.application_id = a.id
-		WHERE av.status = 'published'
-		AND COALESCE(av.meta->>'status', '') != 'embedded'`+categoryClause+`
-		ORDER BY a.id DESC
-		LIMIT 50`, schema, schema), queryArgs...)
-
-	items := make([]map[string]any, 0)
-	if err == nil {
-		defer rows.Close()
-		for rows.Next() {
-			var aID, vID int
-			var name, desc, vName, agentType string
-			var metaJSON []byte
-			if rows.Scan(&aID, &name, &desc, &vID, &vName, &agentType, &metaJSON) == nil {
-				var meta map[string]any
-				_ = json.Unmarshal(metaJSON, &meta) // DB jsonb column; malformed means nil meta
-				items = append(items, map[string]any{
-					"project_id":   publicProjectID,
-					"id":           strconv.Itoa(aID),
-					"name":         name,
-					"description":  desc,
-					"version_id":   strconv.Itoa(vID),
-					"version_name": vName,
-					"agent_type":   agentType,
-					"meta":         meta,
-				})
-			}
-		}
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"rows": items, "total": len(items)})
 }
 
 func (h *Handler) publicApplicationDetail(w http.ResponseWriter, r *http.Request, ctx context.Context, applicationID string) {
@@ -2720,11 +2720,21 @@ func (h *Handler) ExportImportPost(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		if destinationOwnerErr != nil {
+			errorAgents = append(errorAgents, map[string]any{"index": ae.entityIdx, "name": name, "msg": "Import function has been failed: " + destinationOwnerErr.Error()})
+			importedAgents = append(importedAgents, importedAgentInfo{appID: -1})
+			continue
+		}
+		// `applications.owner_id` is the DESTINATION PROJECT (#533), the same
+		// value the skill and the toolkit imports above write. This statement
+		// put the caller user id there, which made the agent invisible to every
+		// legacy read: the legacy runtime filters `Application.owner_id ==
+		// project_id`. The caller is the version author, one statement below.
 		var appID int
 		err := h.pool.QueryRow(ctx, fmt.Sprintf(`
 			INSERT INTO %s.applications (name, description, owner_id)
 			VALUES ($1, $2, $3) RETURNING id`, s),
-			name, desc, userID).Scan(&appID)
+			name, desc, destinationOwnerID.Int64()).Scan(&appID)
 		if err != nil {
 			errorAgents = append(errorAgents, map[string]any{"index": ae.entityIdx, "name": name, "msg": "Import function has been failed: " + err.Error()})
 			importedAgents = append(importedAgents, importedAgentInfo{appID: -1})
@@ -2783,7 +2793,7 @@ func (h *Handler) ExportImportPost(w http.ResponseWriter, r *http.Request) {
 			err = h.pool.QueryRow(ctx, fmt.Sprintf(`
 				INSERT INTO %s.application_versions (application_id, name, status, agent_type, instructions, welcome_message, llm_settings, conversation_starters, author_id, meta, pipeline_settings)
 				VALUES ($1, $2, 'draft', $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9::jsonb, '{}'::jsonb) RETURNING id`, s),
-				appID, vName, agentType, instructions, welcomeMsg, llmJSON, startersJSON, userID, metaJSON).Scan(&vID)
+				appID, vName, agentType, instructions, welcomeMsg, llmJSON, startersJSON, userID.Int64(), metaJSON).Scan(&vID)
 			if err != nil {
 				// Sibling of the tool-link defect below (#420). The bare
 				// `continue` dropped the version and told nobody. The insert
@@ -3023,7 +3033,7 @@ func (h *Handler) ExportImportPost(w http.ResponseWriter, r *http.Request) {
 		}
 		var toolID int
 		err := h.pool.QueryRow(ctx, importToolkitInsertSQL(s),
-			tkName, tkType, settingsJSON, toolkitOwnerID, userID, tkDesc).Scan(&toolID)
+			tkName, tkType, settingsJSON, toolkitOwnerID.Int64(), userID.Int64(), tkDesc).Scan(&toolID)
 		if err == nil {
 			if tk.importUUID != "" {
 				importUUIDToToolID[tk.importUUID] = toolID
@@ -3320,7 +3330,10 @@ func (h *Handler) Fork(w http.ResponseWriter, r *http.Request) {
 	// "you sent no skills" from "the skill you sent could not be linked".
 	importedSkills := map[string]importedSkill{}
 	_, bodyNamesSkills := body["skills"]
-	skillOwnerID, skillOwnerErr := tenantOwnerID(projectID)
+	// The destination project, resolved ONCE for the skills and for the agents.
+	// `owner_id` on `skills` and on `applications` is the OWNING PROJECT (#533),
+	// and both come from the same immutable path segment.
+	destinationOwnerID, destinationOwnerErr := tenantOwnerID(projectID)
 	for skillPosition, raw := range toAnySlice(body["skills"]) {
 		// The position in the concatenation the wizard resolves against: the
 		// applications it sent, followed by the skills it sent.
@@ -3338,14 +3351,14 @@ func (h *Handler) Fork(w http.ResponseWriter, r *http.Request) {
 		if skillName == "" {
 			skillName = fmt.Sprintf("skills entry %d", skillPosition)
 		}
-		if skillOwnerErr != nil {
+		if destinationOwnerErr != nil {
 			errorSkills = append(errorSkills, map[string]any{
 				"index": skillErrorIndex, "name": skillName,
-				"msg": "Fork function has been failed: " + skillOwnerErr.Error(),
+				"msg": "Fork function has been failed: " + destinationOwnerErr.Error(),
 			})
 			continue
 		}
-		created, err := h.importSkill(ctx, s, skillOwnerID, userID, skill)
+		created, err := h.importSkill(ctx, s, destinationOwnerID, userID, skill)
 		// A skill can be written and still fail, because the row is inserted
 		// before its versions are. It is then reported and registered rather
 		// than dropped, for the reason the import states at phase 0.
@@ -3384,11 +3397,22 @@ func (h *Handler) Fork(w http.ResponseWriter, r *http.Request) {
 		name, _ := app["name"].(string)
 		desc, _ := app["description"].(string)
 
+		if destinationOwnerErr != nil {
+			errorAgents = append(errorAgents, map[string]any{
+				"index": entityIdx, "name": name,
+				"msg": "Fork function has been failed: " + destinationOwnerErr.Error(),
+			})
+			continue
+		}
+		// `applications.owner_id` is the DESTINATION PROJECT (#533). This
+		// statement wrote the caller user id, and the same route reads the
+		// SOURCE row's owner_id back as `parent_project_id` below. One column
+		// held both kinds of number in one request.
 		var appID int
 		err := h.pool.QueryRow(ctx, fmt.Sprintf(`
 			INSERT INTO %s.applications (name, description, owner_id)
 			VALUES ($1, $2, $3) RETURNING id`, s),
-			name, desc, userID).Scan(&appID)
+			name, desc, destinationOwnerID.Int64()).Scan(&appID)
 		if err != nil {
 			slog.ErrorContext(ctx, "fork: application insert failed", "schema", s, "name", name, "error", err)
 			errorAgents = append(errorAgents, map[string]any{
@@ -3499,7 +3523,7 @@ func (h *Handler) Fork(w http.ResponseWriter, r *http.Request) {
 			if err := h.pool.QueryRow(ctx, fmt.Sprintf(`
 				INSERT INTO %s.application_versions (application_id, name, status, agent_type, instructions, welcome_message, llm_settings, conversation_starters, author_id, meta, pipeline_settings)
 				VALUES ($1, $2, 'draft', $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9::jsonb, '{}'::jsonb) RETURNING id`, s),
-				appID, vName, agentType, instructions, welcomeMsg, llmJSON, startersJSON, userID, metaJSON).Scan(&vID); err != nil {
+				appID, vName, agentType, instructions, welcomeMsg, llmJSON, startersJSON, userID.Int64(), metaJSON).Scan(&vID); err != nil {
 				slog.ErrorContext(ctx, "fork: application version insert failed",
 					"schema", s, "application_id", appID, "version_name", vName, "error", err)
 				errorAgents = append(errorAgents, map[string]any{
@@ -4653,6 +4677,23 @@ func (h *Handler) CreateCollection(w http.ResponseWriter, r *http.Request) {
 		userID, _ = strconv.Atoi(user.ID)
 	}
 
+	// `prompt_collections.owner_id` is the PROJECT and `author_id` is the USER
+	// (#533). The legacy runtime set both in one statement:
+	// `data["owner_id"], data["author_id"] = project_id, author_id`
+	// (elitea_core/api/v2/collections.py:105). This statement bound both
+	// columns to the SAME placeholder — `VALUES ($1, $2, $3, $3, ...)` — so
+	// every collection claimed that a user was its owning project.
+	ownerID, ownerErr := tenantOwnerID(projectID)
+	if ownerErr != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid project id"})
+		return
+	}
+	authorID, authorErr := ownership.NewUserID(int64(userID))
+	if authorErr != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "an authenticated principal is required"})
+		return
+	}
+
 	var body map[string]any
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request body"})
@@ -4662,10 +4703,8 @@ func (h *Handler) CreateCollection(w http.ResponseWriter, r *http.Request) {
 	desc, _ := body["description"].(string)
 
 	var id int
-	err := h.pool.QueryRow(ctx, fmt.Sprintf(`
-		INSERT INTO %s.prompt_collections (name, description, owner_id, author_id, status, meta)
-		VALUES ($1, $2, $3, $3, 'active', '{}')
-		RETURNING id`, s), name, desc, userID).Scan(&id)
+	err := h.pool.QueryRow(ctx, createCollectionInsertSQL(s),
+		name, desc, ownerID.Int64(), authorID.Int64()).Scan(&id)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return

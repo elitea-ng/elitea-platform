@@ -47,7 +47,7 @@ afterEach(() => {
 async function renderPlusButton(props: {
   readonly attachmentButtonRef: RefObject<AttachmentButtonHandle | null>;
   readonly onAttachFiles: (files: readonly File[]) => void;
-}): Promise<void> {
+}): Promise<{ readonly container: HTMLElement }> {
   configureGeneratedClient({ baseUrl: BASE });
   server.use(
     http.get(`${BASE}/elitea_core/platform_settings/prompt_lib`, () => HttpResponse.json({ mcp_enabled: true, mcp_in_menu_enabled: true })),
@@ -69,10 +69,11 @@ async function renderPlusButton(props: {
     // (`useToolkitTypeSchemas`'s own `enabled` gate), so no handler is needed.
     context: { auth: { getSelectedProjectId: () => undefined } },
   });
-  render(<RouterProvider router={router} />);
+  const view = render(<RouterProvider router={router} />);
   await waitFor(() => {
     expect(screen.getByTestId('plus-menu-button')).toBeInTheDocument();
   });
+  return { container: view.container };
 }
 
 describe('PlusChatButton — drop/paste attachment handle', () => {
@@ -97,5 +98,27 @@ describe('PlusChatButton — drop/paste attachment handle', () => {
 
     expect(onAttachFiles).toHaveBeenCalledTimes(1);
     expect(onAttachFiles.mock.calls[0]?.[0]).toEqual([file]);
+  });
+
+  /**
+   * The same always-mounted instance, seen from the page.
+   *
+   * It used to render the normal icon button inside a 0x0,
+   * `pointer-events: none` Box. That put a permanently dead "attach files"
+   * button in the accessibility tree, and with the menu closed it was the ONLY
+   * match for that name — so a screen reader, a test or an agent driving the
+   * browser found the dead control first, clicked it, got nothing, and
+   * concluded attachments were broken. Hiding it with `aria-hidden` merely
+   * traded that for an axe `aria-hidden-focus` violation, because it stayed
+   * focusable. `dropTargetOnly` renders no DOM for it at all.
+   */
+  it('gives the always-mounted drop target no DOM of its own', async () => {
+    const ref = createRef<AttachmentButtonHandle | null>();
+    const { container } = await renderPlusButton({ attachmentButtonRef: ref, onAttachFiles: vi.fn() });
+
+    expect(screen.queryByRole('button', { name: 'attach files' })).toBeNull();
+    expect(container.querySelector('input[type="file"]')).toBeNull();
+    // …and the handle it exists for is live anyway.
+    expect(ref.current).not.toBeNull();
   });
 });

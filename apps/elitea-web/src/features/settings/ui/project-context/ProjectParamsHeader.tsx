@@ -164,9 +164,12 @@ function ProjectAvatar({
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    fontSize: theme.typography.headingSmall.fontSize,
-    fontWeight: 600,
-    color: 'text.primary',
+    // The initial is 21px/500 on the live page — `headingLarge`'s step with
+    // the reference's own weight, not `headingSmall`/600. At 14px/600 the
+    // glyph read as a label inside a 56px circle rather than as an avatar.
+    fontSize: theme.typography.headingLarge.fontSize,
+    fontWeight: 500,
+    color: 'text.secondary',
     backgroundColor: 'action.selected',
   };
   if (iconUrl) {
@@ -188,9 +191,18 @@ function ProjectAvatar({
 }
 
 const styles = (): Record<string, SxProps<Theme>> => ({
-  root: {
-    padding: '1.5rem',
-  },
+  /*
+   * NO PADDING OF ITS OWN.
+   *
+   * This header's only caller is now Settings › General's "General"
+   * accordion, and the accordion already insets its body by 36px
+   * (`AccordionDetails`, `padding: 0 0 0 36px` — measured on the live page).
+   * The extra 1.5rem here pushed the avatar 24px further right than
+   * production's and made the panel 48px taller: measured, production's row
+   * is `[903, 117, 666, 56]` and this app drew `[927, 141, …]` inside a
+   * 104px-tall body.
+   */
+  root: {},
   headerContent: {
     display: 'flex',
     alignItems: 'center',

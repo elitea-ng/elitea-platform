@@ -131,9 +131,19 @@ test('J14: create agent, save, and persist it', async ({ page }) => {
  *    through the real PATCH and through the menu's own "Default" marker
  *    afterwards, NOT merely as an item on screen — an item wired to nothing
  *    would satisfy a presence-only check.
- *  - delete old: #307 mounted `DeleteVersionButton` beside the selector. Its
- *    presence is asserted here; the delete round trip itself stays out of
- *    this journey, which still has to reach `checkA11y` on a live agent.
+ *  - delete old: #147 moved the delete affordance INTO the same menu, where
+ *    the baseline puts it, and gave it a type-the-name confirm. The whole
+ *    round trip is asserted here — the item, the typed name, the real DELETE
+ *    and the version leaving the list.
+ *
+ * The one thing NOT asserted here is the server's 400 refusal
+ * ("Unpublish first. Cannot delete a published version."). Reaching it needs
+ * a PUBLISHED version, and publishing is not an affordance this app mounts
+ * yet. That branch is proved where it is produced and where it is shown:
+ * `services/elitea-main/internal/api/v2/applications/
+ * delete_version_postgres_integration_test.go` pins the status and the exact
+ * text, and `features/agents/ui/AgentVersionControls.test.tsx` pins that the
+ * same text reaches the dialog and leaves it open.
  */
 test('J15: a saved agent exposes a version selector listing its versions', async ({ page }) => {
   /*
@@ -258,12 +268,70 @@ test('J15: a saved agent exposes a version selector listing its versions', async
   await page.keyboard.press('Escape');
 
   /*
-   * JRNY-015 step 3 — DELETE OLD VERSION (#307 mounted the control). Only its
-   * presence is asserted: the delete round trip would leave this journey
-   * without the agent the `checkA11y` pass below runs against, and #307 owns
-   * that behaviour's own coverage.
+   * JRNY-015 step 3 — DELETE OLD VERSION (#147).
+   *
+   * A THIRD version is created first, and that is not padding. Both other
+   * versions are now undeletable by design: "base" is the agent's live
+   * version, and v2 is the default this journey just pinned. The step the
+   * journey names — delete the version that is no longer wanted — is only
+   * reachable on a version that is neither, so the journey has to make one.
    */
-  await expect(page.getByTestId('agent-version-delete')).toBeVisible({ timeout: 10_000 });
+  await page.getByRole('button', { name: /save as version/i }).click();
+  const thirdDialog = page.getByRole('dialog');
+  await expect(thirdDialog).toBeVisible({ timeout: 5_000 });
+  await thirdDialog.getByRole('textbox').fill('v3');
+  await thirdDialog.getByRole('button', { name: /^save$/i }).click();
+  await page.waitForURL(/\/agents\/[^/]+\/[^/]+\/\d+/, { timeout: 15_000 });
+
+  await versionTrigger.click();
+  const deleteItem = page.getByTestId('agent-version-delete');
+  await expect(deleteItem).toBeVisible({ timeout: 10_000 });
+  // Enabled on v3, and the two rules that hold it back elsewhere are the
+  // reason v3 exists.
+  await expect(deleteItem).not.toHaveAttribute('aria-disabled', 'true');
+
+  const deleteStatuses: number[] = [];
+  const onDeleteResponse = (response: import('@playwright/test').Response): void => {
+    if (response.request().method() === 'DELETE' && response.url().includes('/elitea_core/version/prompt_lib/')) {
+      deleteStatuses.push(response.status());
+    }
+  };
+  page.on('response', onDeleteResponse);
+
+  await deleteItem.click();
+  const deleteDialog = page.getByTestId('agent-version-delete-dialog');
+  await expect(deleteDialog).toBeVisible({ timeout: 5_000 });
+
+  // TYPE-TO-CONFIRM. Confirm is disabled until the version name matches, so
+  // the request cannot be sent by a stray click on an open dialog.
+  const deleteConfirm = deleteDialog.getByRole('button', { name: /^delete$/i });
+  await expect(deleteConfirm).toBeDisabled();
+  expect(deleteStatuses).toHaveLength(0);
+
+  await deleteDialog.getByRole('textbox').fill('v3');
+  await expect(deleteConfirm).toBeEnabled();
+  await deleteConfirm.click();
+
+  // The REQUEST is the assertion. A dialog that closed and sent nothing would
+  // satisfy every DOM check above.
+  await expect(() => expect(deleteStatuses.length).toBeGreaterThanOrEqual(1)).toPass({ timeout: 15_000 });
+  page.off('response', onDeleteResponse);
+  expect(
+    deleteStatuses.at(-1),
+    `version DELETE must succeed, got ${deleteStatuses.join(',')}`,
+  ).toBeLessThan(400);
+
+  // The escape: the URL pointed at the version that is now gone, so the page
+  // navigates back to the agent's default version rather than 404ing.
+  await expect(deleteDialog).toBeHidden({ timeout: 10_000 });
+  await page.waitForURL(/\/agents\/[^/]+\/[^/]+$/, { timeout: 15_000 });
+
+  // …and the menu stops offering it. This is the read-back, so a DELETE the
+  // server accepted and the list still shows would fail here.
+  await versionTrigger.click();
+  await expect(page.getByRole('menuitem', { name: /v3/i })).toHaveCount(0);
+  await expect(page.getByRole('menuitem', { name: /v2/i })).toBeVisible({ timeout: 10_000 });
+  await page.keyboard.press('Escape');
 
   await checkA11y(page);
 });

@@ -30,7 +30,7 @@
  * assertion the sessionStorage version could never make honestly, since it
  * would have passed with no admin backend in existence at all.
  */
-import { test as adminTest, expect } from '@playwright/test';
+import { test as adminTest, expect, type Page } from '@playwright/test';
 
 import { checkA11y } from '../../fixtures/axe';
 import { BASE_URL, STORAGE_STATE } from '../../../playwright.config';
@@ -78,6 +78,60 @@ function suspendFixture(projectName: string): string {
     : 'e2e-suspend-webkit@autotest.local';
 }
 
+/** One row of `GET /admin/auth_users/administration`, reduced to what J28 reads. */
+interface ListedUser {
+  readonly email: string;
+  readonly suspended: boolean;
+}
+
+/**
+ * Read the global user listing from the SERVER, as this browser.
+ *
+ * Deliberately a direct read rather than a `waitForResponse` around the
+ * reload. That shape looks tighter and is wrong here: the suspend mutation
+ * invalidates the list, so the CURRENT document issues its own refetch, the
+ * wait matches THAT response, and the reload then discards the document it
+ * belongs to — `response.json()` fails with "Response body is not available
+ * for a response that was navigated away from". Measured, on the second
+ * re-read of this journey.
+ *
+ * A direct read has no such race and answers the same question: what does the
+ * server say after the write. The reload and the badge assertion that follow
+ * it are untouched, so the pair still separates a write that did not land from
+ * a grid that did not paint.
+ */
+async function serverUsers(page: Page): Promise<ListedUser[]> {
+  const listing = await page.request.get(
+    `${BASE_URL}/api/v2/admin/auth_users/administration?limit=200&offset=0`,
+  );
+  expect(listing.status(), await listing.text()).toBe(200);
+  return ((await listing.json()) as { rows: ListedUser[] }).rows;
+}
+
+/**
+ * Put J28's own fixture row back to `suspended = false` through the API,
+ * before the journey asserts that baseline on screen.
+ */
+async function restoreSuspendFixture(page: Page, email: string): Promise<void> {
+  const row = ((await serverUsers(page)) as (ListedUser & { id: number })[]).find(
+    (r) => r.email === email,
+  );
+  expect(row, `the seed must carry ${email}`).toBeTruthy();
+  if (row?.suspended !== true) return;
+  const restored = await page.request.put(
+    `${BASE_URL}/api/v2/admin/user_suspend/administration/${row.id}`,
+    { data: { suspended: false } },
+  );
+  expect(restored.status(), await restored.text()).toBe(200);
+}
+
+/** What the server said about one address in that listing. */
+function suspendedInListing(rows: ListedUser[], email: string): boolean {
+  const row = rows.find((r) => r.email === email);
+  expect(row, `the listing must carry ${email}`).toBeTruthy();
+  return row?.suspended === true;
+}
+
 adminTest('J27: the admin SPA is served with injected config and lists database users', async ({ page }) => {
   const response = await page.goto(BASE_URL + '/admin/app/users', { waitUntil: 'domcontentloaded' });
 
@@ -123,12 +177,28 @@ adminTest('J27: the admin SPA is served with injected config and lists database 
 });
 
 adminTest('J28: suspending a user is written to the database and survives a reload', async ({ page }, testInfo) => {
-  await page.goto(BASE_URL + '/admin/app/users', { waitUntil: 'domcontentloaded' });
-
   // NOT the member persona — see `suspendFixture`'s note. Every assertion
   // below is the one this journey always made; only the row it acts on moved
   // off the identity the rest of the suite signs in as.
   const subject = suspendFixture(testInfo.project.name);
+
+  // The journey RESTORES the row it owns before asserting the baseline,
+  // rather than assuming the seed's value.
+  //
+  // The restore at the end of this test is the only thing that returns the row
+  // to `suspended = false`, so ANY failure between the suspend and that
+  // restore leaves the fixture suspended — and then this test's own
+  // precondition (`Active`, below) fails on every later run and on every
+  // retry, against a stack nobody re-seeded. Measured while hardening this
+  // journey: one aborted run made the next three fail here, on a line that had
+  // nothing to do with the abort.
+  //
+  // Restoring first is the same correction PR #794 made to the serial
+  // platform-config group for the same reason. It weakens nothing: the
+  // baseline is still ASSERTED below, on the row the server reports.
+  await restoreSuspendFixture(page, subject);
+
+  await page.goto(BASE_URL + '/admin/app/users', { waitUntil: 'domcontentloaded' });
   const subjectRow = page.getByRole('row').filter({ hasText: subject });
   await expect(subjectRow).toBeVisible({ timeout: 15_000 });
 
@@ -153,6 +223,19 @@ adminTest('J28: suspending a user is written to the database and survives a relo
   // A full reload, not a client-side refetch: this is the assertion a handler
   // that answers 200 and writes nothing (#130, #180) cannot pass, and the one
   // the deleted sessionStorage version of this journey only pretended to make.
+  //
+  // The reload's OWN listing is waited for and asserted, and the badge after
+  // it (#545). The badge alone was this journey's flake, and the comment above
+  // says why that mattered more here than elsewhere: the flake's shape — 200
+  // asserted, badge absent after the reload — is INDISTINGUISHABLE from the
+  // "answers 200 and writes nothing" defect the journey exists to catch. A
+  // journey that cannot tell its target bug from a timing wobble proves
+  // nothing on either.
+  //
+  // With the server read asserted first the two separate for good: a handler
+  // that wrote nothing fails on `suspended` in the listing, and a grid that did
+  // not paint a row the listing carries fails on the badge.
+  expect(suspendedInListing(await serverUsers(page), subject)).toBe(true);
   await page.reload({ waitUntil: 'domcontentloaded' });
   const afterReload = page.getByRole('row').filter({ hasText: subject });
   await expect(afterReload.getByText('Suspended')).toBeVisible({ timeout: 15_000 });
@@ -163,6 +246,7 @@ adminTest('J28: suspending a user is written to the database and survives a relo
     afterReload.getByRole('button', { name: 'Unsuspend user' }).click(),
   ]);
   expect(unsuspendResponse.status()).toBe(200);
+  expect(suspendedInListing(await serverUsers(page), subject)).toBe(false);
   await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(
     page.getByRole('row').filter({ hasText: subject }).getByText('Active'),

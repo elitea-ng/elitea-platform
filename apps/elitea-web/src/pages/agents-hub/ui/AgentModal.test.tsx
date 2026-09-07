@@ -24,6 +24,9 @@ const AGENT: ApplicationData = {
   version_name: 'v1',
   agent_type: 'agent',
   meta: null,
+  tags: [],
+  likes: 0,
+  is_liked: false,
 };
 
 /**
@@ -223,5 +226,71 @@ describe('AgentModal', () => {
 
     expect(await screen.findByText('Context')).toBeInTheDocument();
     expect(await screen.findByText('You are a helpful research assistant.')).toBeInTheDocument();
+  });
+});
+
+/**
+ * #80's second adjacent gap — the agent share link.
+ *
+ * `routes/_shell/elitea-catalog.tsx` validates `agentId`, `AgentHub` reads it
+ * back and opens the modal, and `routes/_shell/agents-hub.tsx` redirects the
+ * legacy path carrying the same key. Every one of those is the READ half. The
+ * WRITE half — the button that produces such a link — was dropped in the #71
+ * pull request along with the `AGENT_ID` constant, so the app could open a
+ * link nobody could make.
+ */
+describe('AgentModal — the share link', () => {
+  afterEach(() => {
+    Reflect.deleteProperty(globalThis.navigator, 'clipboard');
+  });
+
+  function stubClipboard(): ReturnType<typeof vi.fn<(value: string) => Promise<void>>> {
+    const writeText = vi.fn<(value: string) => Promise<void>>().mockResolvedValue(undefined);
+    // jsdom ships no `navigator.clipboard`, and the property is not writable.
+    Object.defineProperty(globalThis.navigator, 'clipboard', { value: { writeText }, configurable: true });
+    return writeText;
+  }
+
+  it('copies an absolute link carrying this agent’s id', async () => {
+    configureGeneratedClient({ baseUrl: '/api/v2' });
+    const writeText = stubClipboard();
+
+    withProviders(
+      <AgentModal
+        open
+        onClose={vi.fn()}
+        agent={AGENT}
+      />,
+    );
+
+    await userEvent.click(await screen.findByTestId('agent-modal-copy-link'));
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    const link = writeText.mock.calls[0]?.[0] ?? '';
+    // ABSOLUTE — the baseline builds `${protocol}//${host}${path}` because the
+    // whole point is a link somebody can paste elsewhere.
+    expect(link.startsWith(window.location.origin)).toBe(true);
+    // The catalogue path, the agents tab, and THIS agent's id — the exact
+    // three the read half needs. `agentId` is the key
+    // `routes/_shell/elitea-catalog.tsx` validates.
+    expect(link).toContain('/elitea-catalog');
+    expect(link).toContain('tab=agents');
+    expect(link).toContain('agentId=42');
+  });
+
+  it('offers no copy button for an agent with no id', async () => {
+    configureGeneratedClient({ baseUrl: '/api/v2' });
+
+    withProviders(
+      <AgentModal
+        open
+        onClose={vi.fn()}
+        agent={{ ...AGENT, id: '' }}
+      />,
+    );
+
+    await screen.findByText('Research Agent');
+    // A button that copies a link to nothing is worse than no button.
+    expect(screen.queryByTestId('agent-modal-copy-link')).not.toBeInTheDocument();
   });
 });

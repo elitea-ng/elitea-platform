@@ -9,6 +9,7 @@
 // and three SPA consumers (AuditTrail, ProjectUserActivity,
 // ScheduleHistoryDrawer). All of them read a table whose only writers were the
 // E2E seeder (apps/elitea-web/scripts/e2e-stack.sh) and test fixtures.
+// DISCLOSURE-CHECK: present `INSERT INTO centry.audit_events` in services/elitea-main/internal/audit/postgres.go
 // internal/api/generated/api.gen.go said so outright: "READ-ONLY from this
 // service. Never emitted today." A grep over EVERY file type (not just .go/.sql
 // — a previous investigation in this repo missed a writer that lived as shell
@@ -16,7 +17,29 @@
 //
 // So the Audit Trail page rendered an empty state in every real deployment, and
 // the empty state was indistinguishable from "nothing happened". This package
-// is the producer.
+// is the producer. The sentence above is HISTORY, not a live claim, and the
+// DISCLOSURE-CHECK probe over it says so in a form a machine can read: it holds
+// only while this package still writes the table.
+//
+// # WHERE THE OTHER TWO COPIES OF THAT CLAIM ARE, AND WHICH ONE COULD MOVE
+//
+// The claim was written in three places (issue 621).
+//
+//  1. services/elitea-main/api/openapi/v2.yaml, the AnalyticsKpis.unique_users
+//     description. CORRECTED. It generates the api.gen.go comment quoted above,
+//     so that copy moved with it.
+//  2. This file. It quotes the old claim as the state it replaces, and now
+//     carries the probe above.
+//  3. services/elitea-main/internal/infra/db/migrations/001_initial.sql:142,
+//     "Audit trail (unit A14). READ-ONLY from this service: the write path
+//     belongs to the legacy tracing plugin". NOT CORRECTED, AND IT MUST NOT BE.
+//     A migration is checksum-immutable: editing an applied file makes every
+//     deployment that ran it fail its manifest check. THIS COMMENT IS THE
+//     CORRECTION. What that line says about the TABLE remains true — the DDL
+//     mirrors the legacy SQLAlchemy model column for column, and a
+//     legacy-backed deployment already has the table — but "READ-ONLY from this
+//     service" stopped being true when this package landed. Read that line as a
+//     record of 001's own moment, and read this package for the writer.
 //
 // # The vocabulary is not invented
 //

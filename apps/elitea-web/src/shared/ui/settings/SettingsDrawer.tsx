@@ -10,6 +10,7 @@ import type { SxProps, Theme } from '@mui/material/styles';
 import { AnalyticsIcon } from '../icons/analytics-icon';
 import { BellIcon } from '../icons/bell-icon';
 import { BriefcaseIcon } from '../icons/briefcase-icon';
+import { CompassIcon } from '../icons/compass-icon';
 import { ConfigurationIcon } from '../icons/configuration-icon';
 import { DialIcon } from '../icons/dial-icon';
 import { EnvironmentIcon } from '../icons/environment-icon';
@@ -67,7 +68,11 @@ const ICON_COMPONENTS: Record<string, React.ComponentType> = {
   prompts: PromptIcon,
   environment: EnvironmentIcon,
   tokens: KeyIcon,
-  'project-params': BriefcaseIcon,
+  // The reference gives the briefcase to `project-general` and the compass to
+  // `project-context` (`SettingsDrawer.jsx:30-31`). This app's slug for the
+  // latter is `project-params`; the glyph follows the tab, not the slug.
+  'project-general': BriefcaseIcon,
+  'project-params': CompassIcon,
   secrets: LockIcon,
   users: HumanIcon,
   analytics: AnalyticsIcon,
@@ -264,11 +269,23 @@ const headerSx: SxProps<Theme> = (theme) => ({
   borderBottom: `0.0625rem solid ${theme.vars.palette.border.table ?? 'transparent'}`,
 });
 
+/*
+ * `headingSmall`, NOT a hand-written 1rem/500.
+ *
+ * The baseline renders this title as
+ * `<Typography variant="headingSmall">` (`SettingsDrawer.jsx:125`), which is
+ * 0.875rem/600. This port wrote 1rem/500 instead, so the drawer title was two
+ * steps off production in both axes: measured on a live deployment the title
+ * computes to `14px/600/24px`, and this app drew `16px/500/24px`. The extra
+ * 2px of line box also pushed the whole nav list down by 1px against the
+ * reference. Take the size and weight from the typography token so the two
+ * cannot drift apart again.
+ */
 const headerTextSx: SxProps<Theme> = (theme) => ({
   color: theme.vars.palette.text.secondary,
-  // oxlint-disable-next-line elitea/ad-hoc-font-size — ported from baseline
-  fontSize: '1rem',
-  fontWeight: 500,
+  fontSize: theme.typography.headingSmall.fontSize,
+  fontWeight: theme.typography.headingSmall.fontWeight,
+  lineHeight: theme.typography.headingSmall.lineHeight,
 });
 
 const menuContainerSx: SxProps<Theme> = {

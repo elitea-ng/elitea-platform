@@ -32,7 +32,29 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	applicationskillsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/applicationskills"
+	indextypesapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indextypes"
 )
+
+// reviewedRoutePermissions are the /elitea_core gates that do NOT live in
+// router.go.
+//
+// internal/api/production_router.go registers the reviewed routes at their
+// exact contract paths, and each of those routes builds its own
+// RequireResolvedPermissionsForProject middleware inside its package. The
+// regex below reads router.go only, so without this list a reviewed route
+// reads as "granted by 0068 and gating nothing".
+//
+// That is not hypothetical: #394 deleted the prototype index-types mount from
+// router.go, so `models.applications.index_types.details` moved entirely into
+// internal/api/v2/indextypes. #395 did the same for the attached-skills read.
+// The constants are read from the packages that declare them, so a rename
+// cannot make this list stale.
+var reviewedRoutePermissions = []string{
+	indextypesapi.CurrentIndexTypesPermission,
+	applicationskillsapi.CurrentApplicationSkillsPermission,
+}
 
 // projectPermissionCall matches the router's own gate helper, including the
 // toolkit block's `toolkitGate` alias, and captures the literal it is given.
@@ -65,6 +87,9 @@ func gatedPermissions(t *testing.T) []string {
 		if strings.Contains(src, "projectPermission("+expression+")") {
 			unique[permission] = struct{}{}
 		}
+	}
+	for _, permission := range reviewedRoutePermissions {
+		unique[permission] = struct{}{}
 	}
 
 	if len(unique) < 40 {

@@ -1,6 +1,10 @@
 package applications
 
-import "time"
+import (
+	"time"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/ownership"
+)
 
 type Author struct {
 	ID    string `json:"id"`
@@ -13,19 +17,25 @@ type Application struct {
 	// UUID is the applications.uuid column. It is a second, stable identity
 	// for the row; ID is the SERIAL primary key every other endpoint and the
 	// UI's /agents/$tab/$agentId route address the application by.
-	UUID         string         `json:"uuid,omitempty"`
-	ProjectID    string         `json:"project_id,omitempty"`
-	Name         string         `json:"name"`
-	Description  string         `json:"description,omitempty"`
-	Type         string         `json:"type,omitempty"`
-	Icon         string         `json:"icon,omitempty"`
-	Tags         []string       `json:"tags,omitempty"`
-	FolderID     string         `json:"folder_id,omitempty"`
-	Status       string         `json:"status,omitempty"`
-	Metadata     map[string]any `json:"metadata,omitempty"`
-	CreatedAt    time.Time      `json:"created_at"`
-	UpdatedAt    time.Time      `json:"updated_at,omitempty"`
-	CreatedBy    string         `json:"created_by,omitempty"`
+	UUID        string         `json:"uuid,omitempty"`
+	ProjectID   string         `json:"project_id,omitempty"`
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	Type        string         `json:"type,omitempty"`
+	Icon        string         `json:"icon,omitempty"`
+	Tags        []string       `json:"tags,omitempty"`
+	FolderID    string         `json:"folder_id,omitempty"`
+	Status      string         `json:"status,omitempty"`
+	Metadata    map[string]any `json:"metadata,omitempty"`
+	CreatedAt   time.Time      `json:"created_at"`
+	UpdatedAt   time.Time      `json:"updated_at,omitempty"`
+	// CreatedBy stays empty for an application. The table has no creator
+	// column: `owner_id` is the project. The list path leaves it empty as
+	// well, so an empty value is what every read of this type answers with.
+	CreatedBy string `json:"created_by,omitempty"`
+	// OwnerID is the owning PROJECT of the application, as
+	// `applications.owner_id` holds it (#533). It is not the creator. The
+	// creator of a version is Version.AuthorID.
 	OwnerID      string         `json:"owner_id"`
 	Authors      []Author       `json:"authors,omitempty"`
 	IsForked     bool           `json:"is_forked"`
@@ -139,10 +149,16 @@ type CreateRequest struct {
 	Icon        string   `json:"icon,omitempty"`
 	Tags        []string `json:"tags,omitempty"`
 	FolderID    string   `json:"folder_id,omitempty"`
-	// OwnerID is the authenticated principal's owning auth_core__user id. It
+	// AuthorID is the authenticated principal's owning auth_core__user id. It
 	// is never decoded from the request body — the transport layer sets it
 	// from the request context (auth.User.OwningUserID).
-	OwnerID int64 `json:"-"`
+	//
+	// It was called OwnerID, and the repository wrote it into
+	// `applications.owner_id`. That column holds the owning PROJECT (#533), so
+	// the name promised the wrong column and the writer stored the wrong kind
+	// of number. The value is the AUTHOR of the first version, and the type
+	// says which kind of number it is.
+	AuthorID ownership.UserID `json:"-"`
 	// InitialVersion, when set, is created in the SAME transaction as the
 	// application row. An application with no version row is invisible to
 	// List (which INNER JOINs application_versions), so a create that only

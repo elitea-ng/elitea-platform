@@ -1,0 +1,27 @@
+{{- if .Values.inventory.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  # Named explicitly, not from the release: the server certificate's DNS SANs
+  # name this Service and elitea-main verifies exactly that SAN.
+  name: {{ .Values.inventory.service.name }}
+  labels:
+    {{- include "elitea-inventory.labels" . | nindent 4 }}
+  {{- with .Values.inventory.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  # ClusterIP only. The provider refuses non-mTLS traffic and elitea-main is
+  # the only door — do not switch to LoadBalancer or NodePort, which would put
+  # a service that trusts its client certificate on a network where anyone can
+  # attempt the handshake.
+  type: ClusterIP
+  ports:
+    - name: https
+      port: {{ .Values.inventory.service.port }}
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "elitea-inventory.selectorLabels" . | nindent 4 }}
+{{- end }}

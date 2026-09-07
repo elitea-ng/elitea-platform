@@ -734,6 +734,11 @@ case "${1:-}" in
     # one trust root for both mTLS hops out of elitea-main.
     DEEPWIKI_CERT_SANS="DNS:elitea-deepwiki,DNS:localhost,IP:127.0.0.1" \
       "${REPO_ROOT}/deploy/scripts/gen-deepwiki-certs.sh"
+    # The second provider's server cert, off the same CA and beside the same
+    # client cert. Its own script, because a deployment may run one provider
+    # and not the other.
+    INVENTORY_CERT_SANS="DNS:elitea-inventory,DNS:localhost,IP:127.0.0.1" \
+      "${REPO_ROOT}/deploy/scripts/gen-inventory-certs.sh"
     exec "${REPO_ROOT}/deploy/scripts/gen-runtime-certs.sh"
     ;;
 
@@ -752,6 +757,10 @@ case "${1:-}" in
     fi
     if [ ! -f "${REPO_ROOT}/deploy/certs/deepwiki-server.crt" ]; then
       echo "ERROR: DeepWiki provider material missing. Run: $0 certs" >&2
+      exit 1
+    fi
+    if [ ! -f "${REPO_ROOT}/deploy/certs/inventory-server.crt" ]; then
+      echo "ERROR: Inventory provider material missing. Run: $0 certs" >&2
       exit 1
     fi
     # oidc-mock's published port must equal its container port (the issuer is
@@ -902,10 +911,26 @@ SQL
     # `actor_pat_issuance` and the execution dies before any model call, with no
     # hint that a database row is what was missing.
     #
-    # The E2E seeder creates users but no auth_core__token rows, so this is the
-    # only place it happens. The uuid is the credential the Go side re-signs with
-    # the PAT HS512 key from the runtime material; expires NULL means no expiry,
-    # which the issuer's query accepts.
+    # WHAT #620 CHANGED, AND WHY THIS STEP SURVIVED IT. Both browser planes now
+    # issue this row themselves, inside the transaction that provisions the
+    # account: internal/api/v2/auth for OIDC and SAML (#615), and
+    # internal/infra/identityrepo.PostgresRepository.Provision for Form (#620).
+    # A person who SIGNS IN therefore needs nothing from this step, and a
+    # form-only install no longer depends on it.
+    #
+    # This stack's users do not sign in. The E2E seeder INSERTs them, and
+    # `seed-llm` runs before any browser ever reaches the login page — it reads
+    # a PAT per personal-project owner to write that project's credential
+    # through the API (see SEED_LLM_SQL_EXCEPTIONS). Deleting this block makes
+    # `seed-llm` fail with "no project has both a tenant schema and a token that
+    # may write". So the block stays, and its scope is now exactly that: the
+    # accounts this stack manufactures without a login.
+    #
+    # The uuid is the credential the Go side re-signs with the PAT HS512 key
+    # from the runtime material; expires NULL means no expiry, which the
+    # issuer's query accepts. The name differs from the one a login issues
+    # (identityrepo.ActorPATName), which is what tells a seeded key from a
+    # signed-in one on /settings/tokens.
     echo "→ Issuing PATs for users without one…"
     $COMPOSE_BIN $COMPOSE_F exec -T postgres \
       psql -v ON_ERROR_STOP=1 -U elitea -d elitea <<'SQL'

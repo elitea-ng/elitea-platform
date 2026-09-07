@@ -68,7 +68,12 @@ interface SortSearch {
  * comment for the full citation trail):**
  *  - `ListApplicationsParams` has no `statuses` field — this fetches the
  *    project's `agents_type: 'classic'` page ONCE (see the cap below) and
- *    filters by `application.status` locally.
+ *    filters by `application.status` locally. That field is REAL as of the
+ *    lifecycle change: `List` now reports each agent's publish state
+ *    (`internal/infra/db/repos/applications.go`), where it previously selected
+ *    no status at all, so `row.status` was always absent and every status tab
+ *    was empty whatever the user did. See `useApplicationTabs.tsx` for which
+ *    of the six tabs the server can fill and which it still cannot.
  *  - **Silent 20-row cap, honestly disclosed here:** `ListApplicationsParams`
  *    (the ORVAL-generated request-param type, `shared/api/generated/model/
  *    listApplicationsParams.zod.ts`) has no `limit`/`offset` fields. The Go

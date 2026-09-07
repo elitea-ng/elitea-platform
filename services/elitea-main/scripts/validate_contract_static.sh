@@ -113,7 +113,7 @@ CHECKS=(
   "eliteacore/handler.go|ListUploadedIcons|rows|eliteacore.ListUploadedIcons → {rows}"
   "eliteacore/skill_icon.go|ListSkillIcons|rows|eliteacore.ListSkillIcons → {rows}"
   "eliteacore/handler.go|DefaultIcons|ARRAY|eliteacore.DefaultIcons → []"
-  "eliteacore/handler.go|PublicApplications|rows|eliteacore.PublicApplications → {rows}"
+  "eliteacore/public_applications.go|PublicApplications|rows|eliteacore.PublicApplications → {rows}"
   "eliteacore/handler.go|Notifications|rows|eliteacore.Notifications → {rows}"
   "eliteacore/handler.go|Users|rows|eliteacore.Users → {rows}"
   "eliteacore/handler.go|Roles|ARRAY|eliteacore.Roles → []"

@@ -15,6 +15,8 @@
  *                   own note and `scripts/chat-stream-e2e.sh`
  *   index-stream  — the #93 index journey, same stack plus `seed-index`;
  *                   see `scripts/index-stream-e2e.sh`
+ *   support-stack — the Support Assistant widget journey, same stack;
+ *                   see `scripts/support-e2e.sh`
  *
  * The `setup` project runs once before the browser projects; each browser
  * project depends on it so the storageState files are always fresh.
@@ -125,7 +127,8 @@ export const E2E_TIMEZONE = process.env['E2E_TZ'] ?? 'UTC';
  * project against the full standalone stack, which proves the same path
  * under production Form authentication.
  */
-const PROVIDER_BACKED_JOURNEYS = /journeys\/deepwiki\/deepwiki\.(generation|chat|admission|wiki-query)\.spec\.ts/;
+const PROVIDER_BACKED_JOURNEYS =
+  /journeys\/deepwiki\/deepwiki\.(generation|chat|admission|wiki-query|folder-source)\.spec\.ts/;
 
 /*
  * The admission journey (DWIKI-013) needs a stack that composes a PUBLIC
@@ -154,6 +157,52 @@ const WIKI_QUERY_JOURNEY = /journeys\/deepwiki\/deepwiki\.wiki-query\.spec\.ts/;
  * its own project and no other project picks it up.
  */
 const REAL_ENGINE_JOURNEY = /journeys\/deepwiki\/deepwiki\.real-engine\.spec\.ts/;
+
+/*
+ * The Support Assistant journey — the first E2E coverage of the in-app
+ * widget itself (`admin/admin.features.spec.ts` only ever drove its ADMIN
+ * section). A real turn is an agent execution, so it needs the FULL
+ * standalone stack the same way `chat-stream` does; it runs in the
+ * `support-stack` project only, against that stack
+ * (`scripts/support-e2e.sh`).
+ */
+const SUPPORT_JOURNEY = /journeys\/support\/support\.spec\.ts/;
+
+/*
+ * The one journey that needs the shared project to hold NO toolkits: J17.1,
+ * the empty-list redirect (`journeys/toolkits/toolkits.emptyList.spec.ts`).
+ *
+ * `fullyParallel` and a shared project 1 mean that emptiness is not a state
+ * this journey can wait for — `toolkits.catalogue.spec.ts` alone holds one
+ * toolkit per served category for the length of an eleven-minute test, and
+ * the journey reported `expect(received).toBe(0)` received 8. It is ORDER
+ * that makes the precondition true, so the file runs in its own project and
+ * both engine projects depend on it: after `setup`, before the first journey
+ * that can create a toolkit. See the file's own header.
+ */
+const EMPTY_TOOLKIT_LIST_JOURNEY = /journeys\/toolkits\/toolkits\.emptyList\.spec\.ts/;
+/*
+ * THE INVENTORY JOURNEYS (journeys/inventory, INV-001..010) HAVE NO CONSTANT
+ * HERE, AND THAT IS THE DECISION.
+ *
+ * They are picked up by the `journeys/.+\.spec\.ts` glob into chromium and
+ * webkit, and they run against the E2E STACK ONLY. That stack's
+ * `elitea-inventory` service is the Go subapp host with
+ * `ELITEA_INVENTORY_RUNNER=fixture`, whose canned graph
+ * (services/elitea-subapp-host/internal/apps/inventory/run/fixture.go) holds
+ * six entities and five relations — the data every one of those journeys
+ * asserts on.
+ *
+ * There is deliberately NO `inventory-stack` project against the standalone
+ * stack, the way DeepWiki has `deepwiki-stack`. The standalone stack reaches
+ * Inventory through the PYTHON sidecar's fixture runner
+ * (services/elitea-inventory/src/elitea_inventory/fixture_runner.py), which
+ * answers an EMPTY graph — so every data assertion would fail there, correctly,
+ * and a project that ran them would report a red suite for a stack doing
+ * exactly what it is configured to do. Nothing is added to `testIgnore` for the
+ * same reason in reverse: the journeys belong in the projects that CAN answer
+ * them, and excluding them from anywhere would only hide that they ran.
+ */
 
 const CHROMIUM_LAUNCH_OPTIONS = {
   args: ['--disable-web-security', '--allow-insecure-localhost', '--no-sandbox'],
@@ -188,28 +237,53 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'], launchOptions: CHROMIUM_LAUNCH_OPTIONS },
     },
 
-    // ── chromium ──────────────────────────────────────────────────────────
+    /*
+     * ── toolkits-empty — the empty-list redirect, before anything seeds ────
+     *
+     * Ordering IS this journey's fixture: it asserts that the shared project
+     * holds no toolkits and that the app redirects because of it, and every
+     * other toolkit/MCP journey creates rows in that project. Running it as a
+     * dependency of both engine projects is what gives it the state it is
+     * about — it runs after `setup` and before the first sibling starts, and
+     * it creates nothing, so the stack it hands on is the one it found.
+     *
+     * Chromium only: a redirect driven by a JSON count is not a rasteriser
+     * question, and a second engine would only widen the serial section every
+     * other journey waits behind.
+     */
     {
-      name: 'chromium',
-      testIgnore: [ADMISSION_JOURNEY, REAL_ENGINE_JOURNEY, WIKI_QUERY_JOURNEY],
+      name: 'toolkits-empty',
       use: {
         ...devices['Desktop Chrome'],
         storageState: STORAGE_STATE.member,
         launchOptions: CHROMIUM_LAUNCH_OPTIONS,
       },
       dependencies: ['setup'],
+      testMatch: EMPTY_TOOLKIT_LIST_JOURNEY,
+    },
+
+    // ── chromium ──────────────────────────────────────────────────────────
+    {
+      name: 'chromium',
+      testIgnore: [ADMISSION_JOURNEY, REAL_ENGINE_JOURNEY, WIKI_QUERY_JOURNEY, SUPPORT_JOURNEY, EMPTY_TOOLKIT_LIST_JOURNEY],
+      use: {
+        ...devices['Desktop Chrome'],
+        storageState: STORAGE_STATE.member,
+        launchOptions: CHROMIUM_LAUNCH_OPTIONS,
+      },
+      dependencies: ['setup', 'toolkits-empty'],
       testMatch: /journeys\/.+\.spec\.ts/,
     },
 
     // ── webkit (spec §6.2: "chromium + webkit") ───────────────────────────
     {
       name: 'webkit',
-      testIgnore: [ADMISSION_JOURNEY, REAL_ENGINE_JOURNEY, WIKI_QUERY_JOURNEY],
+      testIgnore: [ADMISSION_JOURNEY, REAL_ENGINE_JOURNEY, WIKI_QUERY_JOURNEY, SUPPORT_JOURNEY, EMPTY_TOOLKIT_LIST_JOURNEY],
       use: {
         ...devices['Desktop Safari'],
         storageState: STORAGE_STATE.member,
       },
-      dependencies: ['setup'],
+      dependencies: ['setup', 'toolkits-empty'],
       testMatch: /journeys\/.+\.spec\.ts/,
     },
 
@@ -271,6 +345,37 @@ export default defineConfig({
       },
       dependencies: ['setup'],
       testMatch: PROVIDER_BACKED_JOURNEYS,
+      fullyParallel: false,
+    },
+    {
+      /**
+       * The Support Assistant journey (`e2e/journeys/support/support.spec.ts`)
+       * — the first E2E coverage that opens the in-app widget rather than
+       * only its admin section. A real turn needs an agent to answer, which
+       * needs the FULL standalone stack the same way `chat-stream` does.
+       *
+       * `storageState: STORAGE_STATE.admin`: the seeding needs an admin
+       * session (create the agent, PUT the admin Features section for
+       * `support_assistant`), and the same session then opens the widget as
+       * an ordinary authenticated user — the support project enrols any
+       * caller as a viewer on first use, admin included, so one persona
+       * covers both jobs.
+       *
+       * `fullyParallel: false`: the file's three tests share state across
+       * the run (a conversation started in test 2 is read back in test 3)
+       * and a platform-wide admin section (test 1 must run BEFORE test 2
+       * turns the switch on). The top-level `fullyParallel: true` would
+       * otherwise let Playwright run them out of order or in different
+       * workers.
+       */
+      name: 'support-stack',
+      use: {
+        ...devices['Desktop Chrome'],
+        storageState: STORAGE_STATE.admin,
+        launchOptions: CHROMIUM_LAUNCH_OPTIONS,
+      },
+      dependencies: ['setup'],
+      testMatch: SUPPORT_JOURNEY,
       fullyParallel: false,
     },
     {

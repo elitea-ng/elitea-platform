@@ -37,13 +37,13 @@
  *    `isSchemaResolved` (below) keeps this from silently wiping an
  *    already-saved `input_mapping` to `{}` while unresolved.
  *
- *    **Exact fix, still out of this cluster's scope:** add an argument
- *    schema to the tool rows those two routes return (a BACKEND change —
- *    the column does not exist), then read it here through
- *    `toolkitTools.useToolkitTools` and gate it the way the baseline's
- *    `shouldFetchDynamicSchemas` did. `dynamicToolNames` (names only, no
- *    schema) CAN be filled from the endpoint today — that is a wiring gap,
- *    not a data gap, and `ui/select/LoopToolSelect.tsx` shows the shape.
+ *    **The names half is wired now.** `dynamicToolNames` no longer returns
+ *    a frozen empty array. It reads the catalogue through
+ *    `toolkitTools.useToolkitTools`, the same client `ui/select/
+ *    LoopToolSelect.tsx` uses, and it reports a failed read through
+ *    `dynamicToolsReadFailed` so the node UI can show an error instead of
+ *    an empty tool picker. `dynamicArgsSchemas` stays empty until the
+ *    backend change above lands.
  *
 
  * `isMcpToolkit` is inlined rather than imported from `entities/toolkit`:
@@ -54,6 +54,8 @@
  * selectors.ts`'s own citation for its version.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
+
+import { toolkitTools } from '@/entities/toolkit';
 
 import * as FlowEditorHelpers from '../helpers/flowEditor.helpers';
 import type { YamlInputMappingEntry, YamlPipelineDocument, YamlPipelineNode } from '../helpers/pipelineFlow.types';
@@ -102,7 +104,16 @@ export interface UseFunctionInputMappingResult {
   readonly inputMappings: Record<string, unknown>;
   readonly defaultValues: Record<string, unknown>;
   readonly selectedToolkit: VersionTool | undefined;
+  /** The tool names the backend publishes for the selected toolkit. Empty while no toolkit is selected, or when the toolkit carries its own `selected_tools` list. */
   readonly dynamicToolNames: readonly string[];
+  /**
+   * The catalogue read failed (#440). A caller must render this as its own
+   * state. An empty `dynamicToolNames` means the toolkit offers no tools; it
+   * must never stand in for a failed read.
+   */
+  readonly dynamicToolsReadFailed: boolean;
+  /** Reads the catalogue again. Connect it to the retry control of the error state. */
+  readonly retryDynamicToolsRead: () => void;
   readonly dynamicArgsSchemas: Readonly<Record<string, unknown>>;
   readonly selectedTool: string;
   readonly toolkit: string | undefined;
@@ -170,14 +181,28 @@ function filterRequiredOrNonEmpty(mapping: Record<string, unknown>, requiredInpu
 }
 
 /**
- * Real, disclosed gap (see file header, item 5): no generated endpoint
- * exists for a dynamic (non-static, non-MCP) tool's arg-schemas, so these
- * are always empty — module-level constants (not per-render `useMemo`
- * calls) to say so plainly: this is a permanent, structural absence of
- * data, not a reactive value that could change once dependencies settle.
+ * Real, disclosed gap (see file header, item 5): the two tool-catalogue
+ * routes carry no argument schema, so these stay empty — a module-level
+ * constant (not a per-render `useMemo`) to say so plainly: this is a
+ * structural absence of data, not a reactive value that could change once
+ * dependencies settle. The tool NAMES beside it are read from the backend;
+ * see `useToolkitTools` below.
  */
 const EMPTY_DYNAMIC_ARGS_SCHEMAS: Readonly<Record<string, unknown>> = {};
-const EMPTY_DYNAMIC_TOOL_NAMES: readonly string[] = [];
+
+/**
+ * Whether the catalogue read is the tier that feeds this node's tool picker.
+ *
+ * It is, for a selected toolkit that declares no `selected_tools` list of its
+ * own — the toolkit type that publishes its tools at run time, and the case
+ * the baseline fetched for. `ui/select/LoopToolSelect.tsx` uses the same gate.
+ * Split out of the hook body to keep it under the §3.5 complexity budget.
+ */
+function shouldReadToolCatalogue(toolkit: VersionTool | undefined): boolean {
+  if (toolkit === undefined) return false;
+  const selected = toolkit.settings?.['selected_tools'];
+  return !Array.isArray(selected) || selected.length === 0;
+}
 
 export function useFunctionInputMapping({ id, yamlJsonObject, setYamlJsonObject, versionTools }: UseFunctionInputMappingArgs): UseFunctionInputMappingResult {
   const projectId = useSelectedProjectId();
@@ -200,7 +225,15 @@ export function useFunctionInputMapping({ id, yamlJsonObject, setYamlJsonObject,
   );
 
   const dynamicArgsSchemas: Readonly<Record<string, unknown>> = EMPTY_DYNAMIC_ARGS_SCHEMAS;
-  const dynamicToolNames: readonly string[] = EMPTY_DYNAMIC_TOOL_NAMES;
+
+  // The dynamic catalogue (#440) — see `shouldReadToolCatalogue` for the gate.
+  const dynamicTools = toolkitTools.useToolkitTools({
+    projectId,
+    toolkitId: selectedToolkit?.id,
+    toolkitType: selectedToolkit?.type,
+    enabled: shouldReadToolCatalogue(selectedToolkit),
+  });
+  const dynamicToolNames = dynamicTools.toolNames;
 
   const mcpArgsSchemas = useMemo(() => {
     const acc: Record<string, unknown> = {};
@@ -312,6 +345,8 @@ export function useFunctionInputMapping({ id, yamlJsonObject, setYamlJsonObject,
     defaultValues,
     selectedToolkit,
     dynamicToolNames,
+    dynamicToolsReadFailed: dynamicTools.isError,
+    retryDynamicToolsRead: dynamicTools.refetch,
     dynamicArgsSchemas,
     selectedTool,
     toolkit,

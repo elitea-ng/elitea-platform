@@ -1,7 +1,7 @@
 {
-  "recordedAt": "2026-08-08",
+  "recordedAt": "2026-09-06",
   "synthetic": true,
-  "note": "Shape recorded from the E2E stack (POST /api/v2/artifacts/objects/1/{bucket}?overwrite=true -> 201, objects.go:404-410). uploadArtifactObject (shared/api/artifacts.ts) inspects response.ok/status and never this body; it is fixtured so the handler still answers with the real envelope.",
+  "note": "Shape re-verified 2026-09-06 against the served route POST /api/v2/artifacts/objects/{projectID}/{bucket}?overwrite=true -> 201 (elitea-main internal/api/router.go:596 -> Handler.UploadObject, internal/api/v2/artifacts/objects.go:424). The 201 body is written at objects.go:529-535 and holds exactly the five keys below. uploadArtifactObject (shared/api/artifacts.ts) inspects response.ok/status and never this body; it is fixtured so the handler still answers with the real envelope.",
   "body": {
     "key": "a.txt",
     "size_bytes": 10,

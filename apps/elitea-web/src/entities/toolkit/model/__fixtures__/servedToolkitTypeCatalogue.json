@@ -1,0 +1,733 @@
+{
+  "ado_boards": {
+    "metadata": {
+      "categories": [
+        "project management"
+      ],
+      "extra_categories": [
+        "work item management",
+        "issue tracking",
+        "agile boards"
+      ],
+      "icon_url": "ado-boards-icon.svg",
+      "label": "ADO boards"
+    }
+  },
+  "ado_plans": {
+    "metadata": {
+      "categories": [
+        "test management"
+      ],
+      "extra_categories": [
+        "test case management",
+        "qa"
+      ],
+      "icon_url": "ado-plans.svg",
+      "label": "ADO plans"
+    }
+  },
+  "ado_repos": {
+    "metadata": {
+      "categories": [
+        "code repositories"
+      ],
+      "extra_categories": [
+        "code",
+        "repository",
+        "version control"
+      ],
+      "icon_url": "ado-repos-icon.svg",
+      "label": "ADO repos"
+    }
+  },
+  "ado_wiki": {
+    "metadata": {
+      "categories": [
+        "documentation"
+      ],
+      "extra_categories": [
+        "knowledge base",
+        "documentation management",
+        "wiki"
+      ],
+      "icon_url": "ado-wiki-icon.svg",
+      "label": "ADO wiki"
+    }
+  },
+  "aha": {
+    "metadata": {
+      "categories": [
+        "project management"
+      ],
+      "extra_categories": [
+        "aha",
+        "roadmap",
+        "requirements management",
+        "ideas",
+        "product management"
+      ],
+      "icon_url": "aha.svg",
+      "label": "Aha!"
+    }
+  },
+  "application": {
+    "metadata": {
+      "label": "Agent"
+    }
+  },
+  "artifact": {
+    "metadata": {
+      "categories": [
+        "storage"
+      ],
+      "extra_categories": [
+        "artifact",
+        "file storage",
+        "bucket",
+        "files"
+      ],
+      "icon_url": null,
+      "label": "Artifact"
+    }
+  },
+  "aws": {
+    "metadata": {
+      "categories": [
+        "cloud"
+      ],
+      "extra_categories": [
+        "aws",
+        "amazon web services",
+        "cloud computing",
+        "infrastructure as a service"
+      ],
+      "hidden": true,
+      "icon_url": null,
+      "label": "Cloud AWS",
+      "unavailable": true,
+      "unavailable_reason": "the admitted Python worker image does not carry the dependencies of the aws toolkit"
+    }
+  },
+  "azure": {
+    "metadata": {
+      "hidden": true,
+      "icon_url": "azure-icon.svg",
+      "label": "Cloud Azure",
+      "unavailable": true,
+      "unavailable_reason": "the admitted Python worker image does not carry the dependencies of the azure toolkit"
+    }
+  },
+  "azure_search": {
+    "metadata": {
+      "categories": [
+        "other"
+      ],
+      "extra_categories": [
+        "azure cognitive search",
+        "vector database",
+        "knowledge base"
+      ],
+      "hidden": true,
+      "icon_url": null,
+      "label": "Azure Search",
+      "unavailable": true,
+      "unavailable_reason": "the admitted Python worker image does not carry the dependencies of the azure_search toolkit"
+    }
+  },
+  "bigquery": {
+    "metadata": {
+      "hidden": true,
+      "icon_url": "google.svg",
+      "label": "Cloud GCP",
+      "unavailable": true,
+      "unavailable_reason": "the admitted Python worker image does not carry the dependencies of the bigquery toolkit"
+    }
+  },
+  "bitbucket": {
+    "metadata": {
+      "categories": [
+        "code repositories"
+      ],
+      "extra_categories": [
+        "bitbucket",
+        "git",
+        "repository",
+        "code",
+        "version control"
+      ],
+      "icon_url": "bitbucket-icon.svg",
+      "label": "Bitbucket"
+    }
+  },
+  "carrier": {
+    "metadata": {
+      "categories": [
+        "testing"
+      ],
+      "extra_categories": [
+        "carrier",
+        "ticket management",
+        "log management"
+      ],
+      "icon_url": "carrier.svg",
+      "label": "Carrier"
+    }
+  },
+  "confluence": {
+    "metadata": {
+      "categories": [
+        "documentation"
+      ],
+      "extra_categories": [
+        "confluence",
+        "wiki",
+        "knowledge base",
+        "documentation",
+        "atlassian"
+      ],
+      "icon_url": null,
+      "label": "Confluence"
+    }
+  },
+  "custom": {
+    "metadata": {
+      "label": "Custom"
+    }
+  },
+  "data_analysis": {
+    "metadata": {
+      "categories": [
+        "internal_tool"
+      ],
+      "extra_categories": [
+        "data analysis",
+        "pandas",
+        "dataframes",
+        "data science"
+      ],
+      "hidden": true,
+      "icon_url": "data-analysis.svg",
+      "label": "Data Analysis"
+    }
+  },
+  "database": {
+    "metadata": {
+      "label": "Database"
+    }
+  },
+  "datasource": {
+    "metadata": {
+      "label": "Datasource"
+    }
+  },
+  "delta_lake": {
+    "metadata": {
+      "hidden": true,
+      "icon_url": "delta-lake.svg",
+      "label": "AWS Delta Lake",
+      "unavailable": true,
+      "unavailable_reason": "the admitted Python worker image does not carry the dependencies of the delta_lake toolkit"
+    }
+  },
+  "elastic": {
+    "metadata": {
+      "hidden": true,
+      "icon_url": null,
+      "label": "Elasticsearch"
+    }
+  },
+  "figma": {
+    "metadata": {
+      "categories": [
+        "other"
+      ],
+      "extra_categories": [
+        "figma",
+        "design",
+        "ui/ux",
+        "prototyping",
+        "collaboration"
+      ],
+      "icon_url": "figma-icon.svg",
+      "label": "Figma"
+    }
+  },
+  "gcp": {
+    "metadata": {
+      "hidden": true,
+      "icon_url": "google.svg",
+      "label": "Cloud GCP",
+      "unavailable": true,
+      "unavailable_reason": "the admitted Python worker image does not carry the dependencies of the gcp toolkit"
+    }
+  },
+  "github": {
+    "metadata": {
+      "categories": [
+        "code repositories"
+      ],
+      "extra_categories": [
+        "github",
+        "git",
+        "repository",
+        "code",
+        "version control"
+      ],
+      "icon_url": null,
+      "label": "GitHub"
+    }
+  },
+  "gitlab": {
+    "metadata": {
+      "categories": [
+        "code repositories"
+      ],
+      "extra_categories": [
+        "gitlab",
+        "git",
+        "repository",
+        "code",
+        "version control"
+      ],
+      "icon_url": null,
+      "label": "GitLab"
+    }
+  },
+  "gitlab_org": {
+    "metadata": {
+      "categories": [
+        "code repositories"
+      ],
+      "extra_categories": [
+        "gitlab",
+        "git",
+        "repository",
+        "code",
+        "version control"
+      ],
+      "icon_url": null,
+      "label": "GitLab Org"
+    }
+  },
+  "google_places": {
+    "metadata": {
+      "categories": [
+        "other"
+      ],
+      "extra_categories": [
+        "google",
+        "places",
+        "maps",
+        "location",
+        "geolocation"
+      ],
+      "hidden": true,
+      "icon_url": "gplaces-icon.svg",
+      "label": "Google Places",
+      "unavailable": true,
+      "unavailable_reason": "the admitted Python worker image does not carry the dependencies of the google_places toolkit"
+    }
+  },
+  "jira": {
+    "metadata": {
+      "categories": [
+        "project management"
+      ],
+      "extra_categories": [
+        "jira",
+        "atlassian",
+        "issue tracking",
+        "project management",
+        "task management"
+      ],
+      "icon_url": "jira-icon.svg",
+      "label": "Jira"
+    }
+  },
+  "keycloak": {
+    "metadata": {
+      "categories": [
+        "authentication",
+        "identity management"
+      ],
+      "hidden": true,
+      "icon_url": null,
+      "label": "Keycloak"
+    }
+  },
+  "kubernetes": {
+    "metadata": {
+      "hidden": true,
+      "icon_url": null,
+      "label": "Cloud Kubernetes",
+      "unavailable": true,
+      "unavailable_reason": "the admitted Python worker image does not carry the dependencies of the k8s toolkit"
+    }
+  },
+  "localgit": {
+    "metadata": {
+      "hidden": true,
+      "icon_url": null,
+      "label": "Local GIT",
+      "unavailable": true,
+      "unavailable_reason": "the admitted Python worker image does not carry the dependencies of the localgit toolkit"
+    }
+  },
+  "mcp": {
+    "metadata": {
+      "categories": [
+        "other"
+      ],
+      "extra_categories": [
+        "remote tools",
+        "sse",
+        "http"
+      ],
+      "icon_url": null,
+      "label": "Remote MCP"
+    }
+  },
+  "mcp_config": {
+    "metadata": {
+      "hidden": true,
+      "unavailable": true,
+      "unavailable_reason": "the toolkit declares no label and is not created directly"
+    }
+  },
+  "memory": {
+    "metadata": {
+      "categories": [
+        "other"
+      ],
+      "extra_categories": [
+        "long-term memory",
+        "langgraph store"
+      ],
+      "hidden": false,
+      "icon_url": "memory.svg",
+      "label": "Memory"
+    }
+  },
+  "openapi": {
+    "metadata": {
+      "categories": [
+        "integrations"
+      ],
+      "extra_categories": [
+        "api",
+        "openapi",
+        "swagger"
+      ],
+      "icon_url": "openapi.svg",
+      "label": "OpenAPI"
+    }
+  },
+  "postman": {
+    "metadata": {
+      "icon_url": "postman.svg",
+      "label": "Postman"
+    }
+  },
+  "pptx": {
+    "metadata": {
+      "categories": [
+        "office"
+      ],
+      "extra_categories": [
+        "presentation",
+        "office automation",
+        "document"
+      ],
+      "icon_url": "pptx.svg",
+      "label": "PPTX"
+    }
+  },
+  "qtest": {
+    "metadata": {
+      "categories": [
+        "test management"
+      ],
+      "extra_categories": [
+        "quality assurance",
+        "test case management",
+        "test planning"
+      ],
+      "icon_url": "qtest.svg",
+      "label": "QTest"
+    }
+  },
+  "rally": {
+    "metadata": {
+      "categories": [
+        "project management"
+      ],
+      "extra_categories": [
+        "agile management",
+        "test management",
+        "scrum",
+        "kanban"
+      ],
+      "hidden": true,
+      "icon_url": "rally.svg",
+      "label": "Rally",
+      "unavailable": true,
+      "unavailable_reason": "the admitted Python worker image does not carry the dependencies of the rally toolkit"
+    }
+  },
+  "report_portal": {
+    "metadata": {
+      "categories": [
+        "testing"
+      ],
+      "extra_categories": [
+        "test reporting",
+        "test automation"
+      ],
+      "icon_url": "reportportal-icon.svg",
+      "label": "Report Portal"
+    }
+  },
+  "salesforce": {
+    "metadata": {
+      "categories": [
+        "other"
+      ],
+      "extra_categories": [
+        "customer relationship management",
+        "cloud computing",
+        "marketing automation",
+        "salesforce"
+      ],
+      "icon_url": "salesforce-icon.svg",
+      "label": "Salesforce"
+    }
+  },
+  "sandbox": {
+    "metadata": {
+      "categories": [
+        "code",
+        "execution",
+        "internal_tool"
+      ],
+      "extra_categories": [
+        "python",
+        "pyodide",
+        "sandbox",
+        "code execution"
+      ],
+      "hidden": false,
+      "icon_url": "sandbox.svg",
+      "label": "Python Sandbox"
+    }
+  },
+  "service_now": {
+    "metadata": {
+      "categories": [
+        "other"
+      ],
+      "extra_categories": [
+        "incident management",
+        "problem management",
+        "change management",
+        "service catalog"
+      ],
+      "hidden": true,
+      "icon_url": "service-now.svg",
+      "label": "ServiceNow",
+      "unavailable": true,
+      "unavailable_reason": "the admitted Python worker image does not carry the dependencies of the service_now toolkit"
+    }
+  },
+  "sharepoint": {
+    "metadata": {
+      "categories": [
+        "office"
+      ],
+      "extra_categories": [
+        "microsoft",
+        "cloud storage",
+        "team collaboration",
+        "content management"
+      ],
+      "icon_url": "sharepoint.svg",
+      "label": "Sharepoint"
+    }
+  },
+  "slack": {
+    "metadata": {
+      "categories": [
+        "communication"
+      ],
+      "extra_categories": [
+        "slack",
+        "chat",
+        "messaging",
+        "collaboration"
+      ],
+      "hidden": true,
+      "icon_url": "slack-icon.svg",
+      "label": "Slack",
+      "unavailable": true,
+      "unavailable_reason": "the admitted Python worker image does not carry the dependencies of the slack toolkit"
+    }
+  },
+  "sonar": {
+    "metadata": {
+      "categories": [
+        "development"
+      ],
+      "extra_categories": [
+        "code quality",
+        "code security",
+        "code coverage",
+        "quality",
+        "sonarqube"
+      ],
+      "icon_url": "sonar-icon.svg",
+      "label": "Sonar"
+    }
+  },
+  "sql": {
+    "metadata": {
+      "categories": [
+        "development"
+      ],
+      "extra_categories": [
+        "sql",
+        "data management",
+        "data analysis"
+      ],
+      "icon_url": "sql-icon.svg",
+      "label": "SQL"
+    }
+  },
+  "testio": {
+    "metadata": {
+      "categories": [
+        "testing"
+      ],
+      "extra_categories": [
+        "test automation",
+        "test case management",
+        "test planning"
+      ],
+      "icon_url": "testio-icon.svg",
+      "label": "TestIO"
+    }
+  },
+  "testrail": {
+    "metadata": {
+      "categories": [
+        "test management"
+      ],
+      "extra_categories": [
+        "quality assurance",
+        "test case management",
+        "test planning"
+      ],
+      "icon_url": "testrail-icon.svg",
+      "label": "Testrail"
+    }
+  },
+  "vectorstore": {
+    "metadata": {
+      "hidden": true,
+      "icon_url": null,
+      "label": "VectorStore"
+    }
+  },
+  "xray_cloud": {
+    "metadata": {
+      "categories": [
+        "test management"
+      ],
+      "extra_categories": [
+        "test automation",
+        "test case management",
+        "test planning"
+      ],
+      "icon_url": "xray.svg",
+      "label": "XRAY cloud"
+    }
+  },
+  "yagmail": {
+    "metadata": {
+      "hidden": true,
+      "icon_url": null,
+      "label": "Yet Another Gmail",
+      "unavailable": true,
+      "unavailable_reason": "the admitted Python worker image does not carry the dependencies of the yagmail toolkit"
+    }
+  },
+  "zephyr": {
+    "metadata": {
+      "categories": [
+        "test management"
+      ],
+      "extra_categories": [
+        "test automation",
+        "test case management",
+        "test planning"
+      ],
+      "hidden": true,
+      "icon_url": "zephyr.svg",
+      "label": "Zephyr"
+    }
+  },
+  "zephyr_enterprise": {
+    "metadata": {
+      "categories": [
+        "test management"
+      ],
+      "extra_categories": [
+        "test automation",
+        "test case management",
+        "test planning"
+      ],
+      "icon_url": "zephyr.svg",
+      "label": "Zephyr Enterprise"
+    }
+  },
+  "zephyr_essential": {
+    "metadata": {
+      "categories": [
+        "test management"
+      ],
+      "extra_categories": [
+        "test automation",
+        "test case management",
+        "test planning"
+      ],
+      "icon_url": "zephyr.svg",
+      "label": "Zephyr Essential"
+    }
+  },
+  "zephyr_scale": {
+    "metadata": {
+      "categories": [
+        "test management"
+      ],
+      "extra_categories": [
+        "test automation",
+        "test case management",
+        "test planning"
+      ],
+      "icon_url": "zephyr.svg",
+      "label": "Zephyr Scale"
+    }
+  },
+  "zephyr_squad": {
+    "metadata": {
+      "categories": [
+        "test management"
+      ],
+      "extra_categories": [
+        "test automation",
+        "test case management",
+        "test planning"
+      ],
+      "icon_url": "zephyr.svg",
+      "label": "Zephyr Squad"
+    }
+  }
+}

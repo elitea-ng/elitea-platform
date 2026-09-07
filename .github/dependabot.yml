@@ -143,7 +143,6 @@ updates:
 
   - package-ecosystem: pip
     directories:
-      - /services/pylon-indexer
       - /libs/proto
     schedule:
       interval: weekly

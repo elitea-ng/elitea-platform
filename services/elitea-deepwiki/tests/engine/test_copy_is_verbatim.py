@@ -35,9 +35,27 @@ def engine_files() -> list[Path]:
 def test_manifest_pins_a_revision_and_a_plausible_tree():
     assert MANIFEST["source_revision"], "the legacy revision must be pinned"
     assert MANIFEST["source_path"] == "plugin_implementation"
-    # ~90.5k lines across ~100 files. A manifest that suddenly covered five
+    # ~90.5k lines across ~101 files. A manifest that suddenly covered five
     # files would still "pass" every digest check it listed.
-    assert MANIFEST["file_count"] >= 100
+    #
+    # COUNT BOTH SETS. A file that gains a declared in-place substitution
+    # LEAVES `files` for `transformed_files` — it is still guarded, by a
+    # digest in the other set — so a bound on `file_count` alone falls by one
+    # per transform and would have to be lowered each time, which is the
+    # opposite of what it is for.
+    in_place = sum(1 for entry in MANIFEST["transformed_files"].values() if entry.get("in_place"))
+    assert MANIFEST["file_count"] + in_place >= 101
+    # The GUARDED SET is counted, not `file_count` alone: an in-place
+    # transform moves a file out of `files` and into `transformed_files`,
+    # where it is still digest-checked. Counting only `files` would let a
+    # declared transform lower this floor one file at a time, which is the
+    # erosion the assertion exists to stop.
+    in_place = [
+        entry
+        for entry in MANIFEST["transformed_files"].values()
+        if entry.get("in_place")
+    ]
+    assert MANIFEST["file_count"] + len(in_place) >= 101
     assert MANIFEST["total_bytes"] > 3_000_000
 
 

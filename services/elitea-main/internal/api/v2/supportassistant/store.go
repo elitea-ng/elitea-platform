@@ -510,3 +510,79 @@ func escapeLikePattern(term string) string {
 	replaced = strings.ReplaceAll(replaced, "%", `\%`)
 	return strings.ReplaceAll(replaced, "_", `\_`)
 }
+
+// ---------------------------------------------------------------------------
+// the answering agent
+// ---------------------------------------------------------------------------
+
+// agentVersion is the ONE thing about the configured agent this package has to
+// know: which of its versions answers, and what kind of agent it is.
+//
+// It is read HERE rather than taken from the operator's configuration because
+// the Features page stores an AGENT id, not a version id. A turn is addressed
+// to a version: `ResolveCurrentApplicationTurn` joins `application_versions` on
+// `entity_settings ->> 'version_id'`. An agent id alone therefore resolves
+// nothing, which is exactly how this feature shipped broken.
+type agentVersion struct {
+	// ID is the `application_versions.id` the turn runs.
+	ID int64
+	// AgentType is the version's `agent_type`, carried into the participant's
+	// entity_settings the way the chat surface carries it. It is display and
+	// routing metadata for the transcript, not a second source of truth.
+	AgentType string
+}
+
+// errAgentVersionNotFound reports that the configured agent has no version in
+// the project the turn runs in. That covers BOTH real causes — an agent id that
+// names nothing, and an agent that lives in a different project — because from
+// the support project's tenant schema the two are the same absence.
+var errAgentVersionNotFound = errors.New("support assistant: the configured agent has no version in the support project")
+
+// agentVersionOf resolves which version of the configured agent answers.
+//
+// The order is the platform's own idea of "the agent's current version", in the
+// same precedence the applications API applies:
+//
+//  1. the version `applications.meta.default_version_id` names, which is what
+//     `ApplicationsRepo.SetDefaultVersion` writes when an operator pins one;
+//  2. the version named `latest`, then the one named `base`. BOTH names are in
+//     use: an imported or published agent carries `latest`, and an agent
+//     authored in this app carries `base` — measured on the standalone stack,
+//     where every seeded agent's only version is named `base`. A precedence
+//     that knew one name would answer "no version" for half the agents an
+//     operator can choose;
+//  3. the newest row, so an agent whose versions were renamed still answers.
+//
+// Reading it per turn rather than storing it on the participant is deliberate:
+// an operator who publishes a new version must have the next support message
+// use it, and a version id frozen into a mapping row at first use would pin the
+// assistant to whatever version existed on the day somebody first asked.
+func (s *store) agentVersionOf(ctx context.Context, projectID, agentID int64) (agentVersion, error) {
+	if s.pool == nil {
+		return agentVersion{}, errAgentVersionNotFound
+	}
+	schema := tenantSchema(projectID)
+	statement := fmt.Sprintf(`
+SELECT version.id, COALESCE(version.agent_type, '')
+FROM %s.application_versions AS version
+JOIN %s.applications AS application ON application.id = version.application_id
+WHERE version.application_id = $1
+ORDER BY CASE
+             WHEN application.meta ->> 'default_version_id' = version.id::text THEN 0
+             WHEN version.name = 'latest' THEN 1
+             WHEN version.name = 'base' THEN 2
+             ELSE 3
+         END,
+         version.created_at DESC, version.id DESC
+LIMIT 1`, schema, schema)
+
+	var resolved agentVersion
+	err := s.pool.QueryRow(ctx, statement, agentID).Scan(&resolved.ID, &resolved.AgentType)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return agentVersion{}, errAgentVersionNotFound
+	}
+	if err != nil {
+		return agentVersion{}, fmt.Errorf("support assistant: resolve agent version: %w", err)
+	}
+	return resolved, nil
+}

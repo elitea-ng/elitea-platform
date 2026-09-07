@@ -147,7 +147,14 @@ const fn field_rule(schema: Schema, field: u32) -> Option<FieldRule> {
         Schema::WorkerCommand => match field {
             1..=3 | 5 | 8..=14 | 16..=20 | 23..=25 => Some(length()),
             4 | 6..=7 | 21..=22 => Some(varint()),
-            32..=35 => Some(FieldRule {
+            // The capability_command oneof, every arm the protocol defines.
+            // Tag 36 (toolkit_call_tool) belongs to the Python worker, and this
+            // range must still admit it: a field the PROTOCOL declares is not a
+            // malformed wire tag, and reporting it as one would tell an
+            // operator the command is corrupt when the true answer is that this
+            // worker does not serve that capability. The capability refusal is
+            // made by select_agent_entrypoint, where it can say so.
+            32..=36 => Some(FieldRule {
                 wire_type: 2,
                 oneof: Some(1),
             }),

@@ -64,7 +64,17 @@ var facadeBudgets = map[string]budget{
 	// file is that feature (history.go); folding it into invoke.go to hold a
 	// file count would be the "deleting behaviour to satisfy a number" this
 	// gate's own header warns against.
-	"deepwiki": {files: 9, lines: 738,
+	// THE FOLDER SOURCE ADDED ONE LINE, AND THAT IS THE WHOLE FACADE COST.
+	// A wiki may now be generated from an artifact folder instead of a
+	// repository toolkit. Everything that feature needs of a facade — reading
+	// the source out of the body, elitea-main's own bucket and object-key
+	// rules, refusing a body that names two sources, and deriving the
+	// repository the provider reads — is in providerhost/material
+	// (artifact.go, ReferenceRewriter.folderInto), because none of it is
+	// DeepWiki's: any provider that indexes a directory can name one. What is
+	// DeepWiki's is the decision that its `Wikis` toolkit may, and a wiki
+	// query may not. That decision is the line.
+	"deepwiki": {files: 9, lines: 739,
 		why: "the first facade, which predates providerhost/* and owns its own mTLS proxy " +
 			"type, plus the wiki chat's transcript recorder (its shared half is in providerhost/run)"},
 }

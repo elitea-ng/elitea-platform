@@ -13,6 +13,14 @@ http:
     # Every uploaded icon and avatar then renders as a broken image. They keep
     # the strip-client-identity middleware of this router.
     #
+    # /healthz IS here, and it is PUBLIC on both layers (#569): this rule
+    # forwards it, and internal/api/main_public_rules.go admits it without a
+    # session (go.health.healthz). The cluster edge consults that policy
+    # before it forwards, and a liveness path that is routed but not public
+    # answers a probe with a 302 to the login form. The body is the minimal
+    # {"status":"ok"}. tests/deployedge/edge_public_policy_test.go holds the
+    # two layers together.
+    #
     # /readyz and /startupz are deliberately NOT here. Nothing probes them
     # through an edge. The Helm probes hit the pod, and the compose healthcheck
     # curls 127.0.0.1 in the container. The readiness body names each

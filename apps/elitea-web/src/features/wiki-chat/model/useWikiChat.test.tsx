@@ -223,6 +223,67 @@ describe('polling', () => {
     expect(calls).toBe(settledAt);
   });
 
+  it('grows the answer across polls and replaces it when the turn completes', async () => {
+    // The ANSWER TOKEN channel over the LOOP (issue #701). The events are
+    // read-once, so each poll carries only what arrived since the last one
+    // and the preview only reads right if every poll is accumulated. A
+    // reducer test cannot see a poll that was dropped.
+    const fragment = (text: string) => ({
+      data: { message: JSON.stringify({ event: 'llm_chunk', data: { text } }) },
+    });
+    // The terminal poll is queued only AFTER the preview has been read. The
+    // poller is faster than a `waitFor` tick, so queuing all three up front
+    // would let the run settle — and clear the preview — before the
+    // assertion ran, which is a test that passes for the wrong reason on a
+    // fast machine and fails on a slow one.
+    const { options, polls } = harness();
+    polls.push(
+      { status: 'InProgress', custom_events: [fragment('The router is ')] },
+      { status: 'InProgress', custom_events: [fragment('in api/router.go.')] },
+    );
+    const { result } = renderHook(() => useWikiChat(options));
+
+    act(() => {
+      result.current.send('where?');
+    });
+    await waitFor(() =>
+      expect(result.current.state.streamingText).toBe('The router is in api/router.go.'),
+    );
+
+    polls.push({ status: 'Completed', result: 'The router is in api/router.go.' });
+    await waitFor(() => expect(result.current.state.isLoading).toBe(false));
+    // Cleared by the completion: the finished answer replaces the preview,
+    // and leaving it would show the same text twice.
+    expect(result.current.state.streamingText).toBe('');
+    expect(result.current.state.messages.at(-1)).toMatchObject({
+      role: 'assistant',
+      content: 'The router is in api/router.go.',
+    });
+  });
+
+  it('leaves the partial answer on screen when the run is stopped', async () => {
+    // DWIKI-012's other half. An interrupted stream must keep what arrived —
+    // it is the only record of what the run had produced.
+    const { options, polls } = harness();
+    polls.push({
+      status: 'InProgress',
+      custom_events: [
+        { data: { message: JSON.stringify({ event: 'llm_chunk', data: { text: 'half an ans' } }) } },
+      ],
+    });
+    const { result } = renderHook(() => useWikiChat(options));
+
+    act(() => {
+      result.current.send('where?');
+    });
+    await waitFor(() => expect(result.current.state.streamingText).toBe('half an ans'));
+
+    polls.push({ status: 'Stopped', message: 'stopped by the user' });
+    await waitFor(() => expect(result.current.state.isLoading).toBe(false));
+    expect(result.current.state.streamingText).toBe('half an ans');
+    expect(result.current.state.messages.at(-1)).toMatchObject({ isError: true });
+  });
+
   it('persists the capability the ANSWER was produced with', async () => {
     const storage = memoryStorage();
     const { options, polls } = harness({ storage });

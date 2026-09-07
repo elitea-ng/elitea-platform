@@ -89,7 +89,7 @@ describe('useDeleteVersion', () => {
       deleted = await result.current.doDeleteVersion();
     });
 
-    expect(deleted).toBe(true);
+    expect(deleted).toEqual({ ok: true, errorMessage: undefined });
     await waitFor(() => expect(result.current.isDeletingVersion).toBe(false));
   });
 
@@ -102,10 +102,19 @@ describe('useDeleteVersion', () => {
       deleted = await result.current.doDeleteVersion(11);
     });
 
-    expect(deleted).toBe(true);
+    expect(deleted).toEqual({ ok: true, errorMessage: undefined });
   });
 
-  it('doDeleteVersion sets error/errorMessage and resolves false on failure', async () => {
+  /**
+   * #147 — the OUTCOME carries the message, not only the hook's state.
+   *
+   * The server's refusal must be readable in the same tick the call resolves.
+   * A caller reads its own `errorMessage` closure from the render BEFORE the
+   * failure, which is `undefined`, and that is why "Unpublish first." never
+   * reached a user. Both channels are asserted below; the outcome is the one
+   * a confirm dialog can act on.
+   */
+  it('doDeleteVersion reports the server\'s own refusal on the outcome and in state', async () => {
     server.use(
       http.delete('*/elitea_core/version/prompt_lib/:projectId/:applicationId/:versionId', () =>
         HttpResponse.json({ error: 'Unpublish first. Cannot delete a published version.' }, { status: 400 }),
@@ -118,8 +127,13 @@ describe('useDeleteVersion', () => {
       deleted = await result.current.doDeleteVersion();
     });
 
-    expect(deleted).toBe(false);
+    expect(deleted).toEqual({
+      ok: false,
+      errorMessage: 'Unpublish first. Cannot delete a published version.',
+    });
     await waitFor(() => expect(result.current.error).toBeDefined());
-    expect(result.current.errorMessage?.length).toBeGreaterThan(0);
+    // NOT the `eliteaFetch: 400 from <url>` diagnostic `EliteaApiError.message`
+    // carries — that string used to be the whole of what a user was shown.
+    expect(result.current.errorMessage).toBe('Unpublish first. Cannot delete a published version.');
   });
 });

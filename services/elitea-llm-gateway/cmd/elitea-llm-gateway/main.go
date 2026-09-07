@@ -247,6 +247,19 @@ func main() {
 		recordBudgetEnforcementEnabled(false)
 	}
 
+	// Issue #304: the startup gate. It runs HERE — after the wiring block above
+	// decided whether the gate exists, and long before the listener opens near
+	// the end of main — so a refused process answers no request at all.
+	//
+	// It reads plane.current() and not the local govStore because those two can
+	// already differ: install() is a compare-and-swap and the plane is what
+	// every later reader uses. See budget_startup_gate.go for the three states
+	// and which of them each mode refuses.
+	if err := budgetStartupGate(ctx, cfg, logger, plane.current() != nil, pool); err != nil {
+		logger.Error("FATAL: refusing to start", "err", err)
+		os.Exit(1)
+	}
+
 	// The NATS circuit-breaker state is invisible to Kubernetes readiness
 	// probes unless /readyz surfaces it: without this, a pod whose
 	// budget-enforcement path is dead (breaker open/half-open) stays in the

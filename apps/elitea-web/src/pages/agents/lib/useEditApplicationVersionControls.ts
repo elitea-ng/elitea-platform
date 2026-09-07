@@ -59,10 +59,31 @@ export interface EditApplicationVersionControlsState {
   readonly canSaveNewVersion: boolean;
   readonly handleSelectVersion: (version: EditApplicationVersionOption) => void;
   readonly handleNewVersionSaved: (created: ApplicationVersionDetail) => void;
-  /** #307 — version delete: the active version's name for the confirm dialog, plus what to do once it is gone. */
-  readonly versionDelete:
-    | { readonly applicationVersionId: number | undefined; readonly versionName: string; readonly onVersionDeleted: () => void }
-    | undefined;
+  /**
+   * #307/#147 — version delete: what to do once a version is gone, and where
+   * to report a refusal.
+   *
+   * The version itself is NOT named here. #147 moved the trigger into the
+   * version menu, which acts on whichever version that menu marks as
+   * selected; naming the page's active version here could only ever delete
+   * the one the user was already on.
+   *
+   * `onVersionDeleteError` was the missing half of #147: the server refuses a
+   * published or embedded version with 400 "Unpublish first. Cannot delete a
+   * published version.", this type did not declare the callback that carries
+   * it, and `DeleteEntityModal` had no error slot, so the refusal reached
+   * nobody.
+   *
+   * IT IS STILL NOT SUPPLIED HERE, and that is the fix rather than the gap.
+   * The message is now shown INSIDE the confirm dialog, which is where the
+   * user is standing when the refusal happens. This page has no banner and
+   * no toast to put a second copy in, so declaring the callback and passing
+   * a handler with nowhere to render would be one more dead wire. The
+   * pipelines twin (`pages/pipelines/lib/usePipelineVersionControls.ts`)
+   * DOES supply it, because that page already owns a version-error banner
+   * for its two other version writes.
+   */
+  readonly versionDelete: { readonly onVersionDeleted: () => void } | undefined;
 }
 
 /** `conversation_starters` is typed as a loose array on the form input; the write body takes `string[]`. */
@@ -183,11 +204,7 @@ export function useEditApplicationVersionControls(
 
   const versionDelete = useMemo(() => {
     if (activeVersion === undefined) return undefined;
-    return {
-      applicationVersionId: Number(activeVersion.id),
-      versionName: activeVersion.name,
-      onVersionDeleted: handleVersionDeleted,
-    };
+    return { onVersionDeleted: handleVersionDeleted };
   }, [activeVersion, handleVersionDeleted]);
 
   return {

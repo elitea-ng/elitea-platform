@@ -27,9 +27,9 @@ import { filterEmptyStrings, type AgentDraft, type SuggestedResource } from '../
  * (beyond the already-documented "no toolkit-validation endpoint" gap).
  * Only agent/pipeline association survives, via the REAL
  * `useUpdateApplicationRelation` endpoint. This is not a functional loss
- * in practice today: `../../lib/agentDraft.ts`'s `mapPredictResponseToAgentDraft`
- * (the only draft source until a real structured-draft endpoint exists —
- * see that file's own doc comment) always returns EMPTY
+ * in practice today: `../../lib/agentDraft.ts`'s `mapApplicationDraft`
+ * (the only draft source, and the endpoint it maps carries no resource
+ * suggestions — see that file's own doc comment) always returns EMPTY
  * `suggested_toolkits`/`suggested_mcp`/`suggested_skills` arrays, so
  * `selectedToolkitIds`/`selectedMcpIds`/`selectedSkillIds` are always empty
  * sets at the one real call site (`GenerateAgentModal.tsx`) — there is

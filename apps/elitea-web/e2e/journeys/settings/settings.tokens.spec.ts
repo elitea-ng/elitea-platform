@@ -171,15 +171,42 @@ test('J23: settings: create personal token', async ({ page }) => {
      * onClose -> onCancel -> navigate(), and the new row can only appear
      * because invalidateQueries refetched from the server.
      */
+    //
+    // The REFETCH is waited for by response, not by the row it produces
+    // (#545). `toHaveCount(1)` on the row carries the default 5 s budget and
+    // covers a chain of three steps — the invalidation fires, the server
+    // answers, the table renders — so its failure names none of them. It is
+    // this journey's recorded webkit flake.
+    //
+    // Armed before the Escape that causes it, and asserted on the BODY: a
+    // refetch that does not carry the token now fails here, naming the
+    // response, and only a table that failed to render a token the response
+    // carries reaches the row assertion. Neither assertion is weakened.
+    const refetched = page.waitForResponse(
+      (res) => res.request().method() === 'GET' && res.url().includes('/auth/token/'),
+      { timeout: 20_000 },
+    );
     await dialog.press('Escape');
     await expect(page).toHaveURL(/\/settings\/tokens(\?|$)/);
+    const listing = await refetched;
+    expect(listing.status(), await listing.text()).toBe(200);
+    expect(
+      ((await listing.json()) as { name: string }[]).map((t) => t.name),
+      'the refetch that follows the create must carry the new token',
+    ).toContain(uiName);
+
     const uiRow = page.getByRole('table').getByRole('row').filter({ hasText: uiName });
     await expect(uiRow).toHaveCount(1);
     await expect(uiRow.getByText(/^\.\.\..{4}$/)).toBeVisible();
 
     /* ── close the loop: delete round trip through the UI ────────────────── */
     await uiRow.getByRole('button', { name: 'Delete token', exact: true }).click();
+    const afterDelete = page.waitForResponse(
+      (res) => res.request().method() === 'GET' && res.url().includes('/auth/token/'),
+      { timeout: 20_000 },
+    );
     await page.getByRole('button', { name: 'Delete', exact: true }).click();
+    expect((await afterDelete).status()).toBe(200);
     // Wait for the table to SETTLE on the seeded row first: a bare
     // `toHaveCount(0)` on the deleted row is also satisfied by the transient
     // loading skeleton (TokensTable renders no table while isFetching), which

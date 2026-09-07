@@ -8,7 +8,6 @@ import type { ApplicationCreationInput } from '@/entities/application-form';
 import type { PipelineGraphDraft } from '@/features/pipelines';
 import { getGetApplicationQueryKey } from '@/shared/api/generated/applications/applications';
 import { t } from '@/shared/i18n';
-import type { AgentLlmSettings } from '@/shared/api/agentLlmSettings';
 import { disarmUnsavedChangesNavBlocker } from '@/widgets/app-shell';
 import type {
   ApplicationVersionDetail,
@@ -18,6 +17,7 @@ import type {
 
 import { carryPipelineGraphToVersion } from './carryPipelineGraphToVersion';
 import { toNewPipelineVersionBody, toVersionOptions, type EditPipelineVersionOption } from './editPipelineMappers';
+import type { EditPipelineVersionFields } from './useEditPipelineVersionFields';
 
 export interface PipelineVersionControlsArgs {
   readonly projectId: string | undefined;
@@ -33,13 +33,28 @@ export interface PipelineVersionControlsArgs {
    * typed but not yet saved must travel with it.
    */
   readonly control: Control<ApplicationCreationInput>;
-  /** The live model pick (`useEditPipelineLlmSettings`), which wins over the stored blob. */
-  readonly llmSettings: AgentLlmSettings | undefined;
+  /**
+   * The live version-level edits (`useEditPipelineVersionFields`), which win
+   * over the version's stored copy. Taking a version used to clone the
+   * server's welcome message, model, modules, step limit and variables, so an
+   * author who edited the form and then reached for "Save As Version" got a
+   * version without the edit they had just made.
+   */
+  readonly versionFields: EditPipelineVersionFields;
   /** `usePipelineGraphDraft`'s reader — called at click time, never during render. */
   readonly readGraphDraft: () => PipelineGraphDraft | undefined;
   /** Public-project viewer: the selector stays, the write affordances go (`ApplicationTabBar.jsx:65`). */
   readonly isReadOnly: boolean;
-  /** While the detail is in flight there is neither a version list nor an active version to show. */
+  /**
+   * The FIRST load only — there is neither a version list nor an active
+   * version to show yet.
+   *
+   * Not "a request is in flight": TanStack keeps the previous detail while it
+   * revalidates, and the page refetches after every save
+   * (`useRefetchPipelineAfterSave`), so a raw `isFetching` here took the whole
+   * version bar off screen each time an author saved. See the call site in
+   * `pages/pipelines/EditPipeline.tsx`.
+   */
   readonly isFetching: boolean;
   /**
    * Whether the live graph is one the native runtime would accept.
@@ -76,8 +91,6 @@ export interface PipelineVersionControlsState {
   readonly handleNewVersionSaved: (created: ApplicationVersionDetail) => void;
   readonly versionDelete:
     | {
-        readonly applicationVersionId: number | undefined;
-        readonly versionName: string;
         readonly onVersionDeleted: () => void;
         readonly onVersionDeleteError: (message: string) => void;
       }
@@ -134,7 +147,7 @@ const EMPTY_VERSION_BODY: Omit<VersionWriteRequest, 'name'> = {};
  */
 export function usePipelineVersionControls(args: PipelineVersionControlsArgs): PipelineVersionControlsState {
   const { projectId, applicationId, tab, versions, activeVersion } = args;
-  const { control, llmSettings, readGraphDraft, isReadOnly, isFetching, isGraphAdmissible } = args;
+  const { control, versionFields, readGraphDraft, isReadOnly, isFetching, isGraphAdmissible } = args;
 
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -163,8 +176,8 @@ export function usePipelineVersionControls(args: PipelineVersionControlsArgs): P
 
   const versionBody = useMemo(() => {
     if (activeVersion === undefined) return EMPTY_VERSION_BODY;
-    return toNewPipelineVersionBody(activeVersion, (watchedStarters ?? []).filter(isString), llmSettings);
-  }, [activeVersion, watchedStarters, llmSettings]);
+    return toNewPipelineVersionBody(activeVersion, (watchedStarters ?? []).filter(isString), versionFields);
+  }, [activeVersion, watchedStarters, versionFields]);
 
   const goToVersion = useCallback(
     (versionId: number) => {
@@ -290,18 +303,20 @@ export function usePipelineVersionControls(args: PipelineVersionControlsArgs): P
   const versionDelete = useMemo(() => {
     if (activeVersion === undefined) return undefined;
     return {
-      applicationVersionId: Number(activeVersion.id),
-      versionName: activeVersion.name,
       onVersionDeleted: handleVersionDeleted,
       /*
-       * `DeleteVersionButton` treats `onError` as its ONLY failure channel:
-       * on a refusal it deliberately leaves its confirm dialog open and
-       * renders nothing itself. Omitting this left a refused delete — the
-       * server answers "Published version can not be updated/deleted.
-       * Unpublish first." for a published or embedded version — with the
+       * The banner is the SECOND place the refusal appears. `DeleteVersionDialog`
+       * shows it inside the confirm dialog too (#147); before that slot
+       * existed this callback was the only channel, and omitting it left a
+       * refused delete — the server answers "Unpublish first. Cannot delete a
+       * published version." for a published or embedded version — with the
        * dialog just sitting there, spinner off, and every re-Confirm failing
        * silently. The banner and its `reportVersionError` setter were already
        * wired for the other two version writes; this was the third.
+       *
+       * The version to delete is no longer named here: #147 moved the
+       * trigger into the version menu, which acts on whichever version that
+       * menu marks as selected.
        */
       onVersionDeleteError: setVersionError,
     };

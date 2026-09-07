@@ -448,10 +448,14 @@ func seedRoundTripAgent(t *testing.T, pool *pgxpool.Pool) roundTripSeed {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
+	// `applications.owner_id` is the owning PROJECT, and this row lives in p_1
+	// (#533). The seed wrote the caller here, which tenant/0131 now refuses
+	// with a foreign key to centry.project. The caller is the version author,
+	// which the statement below writes.
 	var seed roundTripSeed
 	if err := pool.QueryRow(ctx, `
 INSERT INTO p_1.applications (name, description, owner_id)
-VALUES ('round trip agent', 'seeded', $1) RETURNING id`, importLinkPrincipal).Scan(&seed.applicationID); err != nil {
+VALUES ('round trip agent', 'seeded', 1) RETURNING id`).Scan(&seed.applicationID); err != nil {
 		t.Fatalf("seed application: %v", err)
 	}
 	if err := pool.QueryRow(ctx, `

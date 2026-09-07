@@ -619,6 +619,17 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: node scripts/check-contract-coverage.mjs
 
+      # ── Stale disclosures ───────────────────────────────────────────────
+      # Issue 621. A "NOT PORTED" / "NO PRODUCER" / "never emitted today"
+      # comment is a claim about the corpus at a moment in time, and nothing
+      # re-checked one when the corpus changed: auditing the port inventory in
+      # issue 615 disproved thirteen such rows. Every claim in
+      # scripts/stale-disclosure-scope.txt must carry a DISCLOSURE-CHECK probe
+      # that a machine can run. It reads services/, like the two gates above.
+      - name: Stale disclosures
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: node scripts/check-stale-disclosure.mjs
+
   build:
     # `build` and the old `gate-bundle-secret` job both ran `npm run build` on
     # their own runner and then read `dist/`. One build now feeds both checks.

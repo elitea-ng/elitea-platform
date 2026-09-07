@@ -6,10 +6,25 @@ import {
   pipelineDetailDisplayName,
   toFormValues,
   toNewPipelineVersionBody,
-  toVersionDraft,
+  toPipelineVersionSaveBody,
   toVersionOptions,
   toVersionSummaries,
 } from './editPipelineMappers';
+import type { EditPipelineVersionFields } from './useEditPipelineVersionFields';
+
+/** The version-level form state a save reads, with every field at its "nothing typed yet" value. */
+const NO_EDITS: EditPipelineVersionFields = {
+  welcomeMessage: '',
+  variables: [],
+  stepLimit: undefined,
+  internalTools: [],
+  llmSettings: undefined,
+  tags: [],
+};
+
+function edits(overrides: Partial<EditPipelineVersionFields>): EditPipelineVersionFields {
+  return { ...NO_EDITS, ...overrides };
+}
 
 describe('toVersionSummaries', () => {
   it('maps snake_case fields to the camelCase VersionSummary shape', () => {
@@ -59,59 +74,80 @@ describe('toFormValues', () => {
   });
 });
 
-describe('toVersionDraft', () => {
-  it('carries over name/instructions/variables/tools and the new conversation starters, forcing agentType to "pipeline"', () => {
-    const version = {
-      name: 'base',
-      instructions: 'Be helpful.',
-      variables: [{ name: 'x', value: '1' }],
-      tools: [{ id: 't1' }],
-      tags: [{ name: 'sales' }, { name: null }],
-      meta: { step_limit: 40, internal_tools: ['internal_mcp', 'other'] },
-    } as unknown as ApplicationVersionDetail;
+describe('toPipelineVersionSaveBody', () => {
+  const storedVersion = {
+    name: 'base',
+    agent_type: 'pipeline',
+    instructions: 'Be helpful.',
+    welcome_message: 'stored hello',
+    variables: [{ name: 'x', value: '1' }],
+    tools: [{ id: 't1' }],
+    tags: [{ id: 4, name: 'sales' }],
+    meta: { step_limit: 40, internal_tools: ['internal_mcp'] },
+  } as unknown as ApplicationVersionDetail;
 
-    expect(toVersionDraft(version, ['Hi there'])).toEqual({
+  it('sends the ten keys UpdateVersion writes, and no key it drops', () => {
+    const body = toPipelineVersionSaveBody(
+      storedVersion,
+      ['Hi there'],
+      edits({ welcomeMessage: 'live hello', variables: [{ name: 'x', value: '2' }], stepLimit: 12, internalTools: ['attachments'], tags: [{ id: 4, name: 'sales', data: null }] }),
+    );
+
+    expect(body).toEqual({
       name: 'base',
-      agentType: 'pipeline',
+      agent_type: 'pipeline',
       instructions: 'Be helpful.',
-      conversationStarters: ['Hi there'],
-      variables: [{ name: 'x', value: '1' }],
-      meta: { step_limit: 40, internal_tools: ['internal_mcp', 'other'] },
-      tags: ['sales'],
-      tools: [{ id: 't1' }],
-      pipelineSettings: undefined,
+      welcome_message: 'live hello',
+      conversation_starters: ['Hi there'],
+      variables: [{ name: 'x', value: '2' }],
+      meta: { step_limit: 12, internal_tools: ['attachments'] },
+      tags: [{ id: 4, name: 'sales' }],
     });
+    // `tools` is accepted by the schema and read by no branch of the handler.
+    expect(body).not.toHaveProperty('tools');
+    // `notes` has no column, no schema property and no handler branch.
+    expect(body).not.toHaveProperty('notes');
   });
 
-  // #135: `pipelineSettings` used to be hardcoded `undefined` and
-  // `instructions` always came from the STORED version, so a graph edit could
-  // not reach the wire even in principle.
-  it('prefers the live graph draft for instructions and carries its pipelineSettings', () => {
+  /**
+   * The defect this mapper replaced `toVersionDraft` for: the old draft path
+   * had no `tags` key at all, so a tag typed into the configuration form was
+   * rendered from the server response and dropped on save.
+   */
+  it('always sends tags, and strips the placeholder id a just-typed tag carries', () => {
+    const body = toPipelineVersionSaveBody(storedVersion, [], edits({ tags: [{ id: 0, name: 'new-tag', data: null }] }));
+    expect(body.tags).toEqual([{ name: 'new-tag' }]);
+
+    // Removing the LAST tag has to reach the wire: `UpdateVersion` reads the
+    // key's presence, so an empty array clears the stored set.
+    expect(toPipelineVersionSaveBody(storedVersion, [], NO_EDITS).tags).toEqual([]);
+  });
+
+  it('sends the LIVE welcome message, not the stored one', () => {
+    expect(toPipelineVersionSaveBody(storedVersion, [], edits({ welcomeMessage: 'typed' })).welcome_message).toBe('typed');
+  });
+
+  // #135: `pipeline_settings` used to be absent and `instructions` always came
+  // from the STORED version, so a graph edit could not reach the wire.
+  it('prefers the live graph draft for instructions and carries its pipeline_settings', () => {
     const version = { name: 'base', instructions: 'stale yaml', meta: {} } as unknown as ApplicationVersionDetail;
     const graph = {
-      instructions: 'entry_point: Agent 1\n',
+      instructions: 'entry_point: Agent_1\n',
       admission: { document: {}, parseFailed: false, issues: [], hasGraph: true, isAdmissible: true },
-      pipelineSettings: {
-        nodes: [{ id: 'Agent 1' }],
-        edges: [],
-        orientation: 'vertical',
-        layout_version: '1.0',
-      },
+      pipelineSettings: { nodes: [{ id: 'Agent_1' }], edges: [], orientation: 'vertical', layout_version: '1.0' },
     };
 
-    const draft = toVersionDraft(version, [], graph);
+    const body = toPipelineVersionSaveBody(version, [], NO_EDITS, graph);
 
-    expect(draft.instructions).toBe('entry_point: Agent 1\n');
-    expect(draft.pipelineSettings).toEqual(graph.pipelineSettings);
+    expect(body.instructions).toBe('entry_point: Agent_1\n');
+    expect(body.pipeline_settings).toEqual(graph.pipelineSettings);
   });
 
-  it('keeps the stored instructions and leaves pipelineSettings undefined when no graph draft is supplied', () => {
+  it('keeps the stored instructions and omits pipeline_settings entirely when no graph draft is supplied', () => {
     const version = { name: 'base', instructions: 'stale yaml', meta: {} } as unknown as ApplicationVersionDetail;
-
-    const draft = toVersionDraft(version, [], undefined);
-
-    expect(draft.instructions).toBe('stale yaml');
-    expect(draft.pipelineSettings).toBeUndefined();
+    const body = toPipelineVersionSaveBody(version, [], NO_EDITS);
+    expect(body.instructions).toBe('stale yaml');
+    expect(body).not.toHaveProperty('pipeline_settings');
   });
 
   /*
@@ -125,85 +161,66 @@ describe('toVersionDraft', () => {
    */
   it('falls back to an EMPTY meta.internal_tools (never internal_mcp) when the existing meta lacks the key', () => {
     const version = { name: 'base', meta: {} } as unknown as ApplicationVersionDetail;
-    const draft = toVersionDraft(version, []);
-    expect(draft.meta).toEqual({ step_limit: 25, internal_tools: [] });
+    expect(toPipelineVersionSaveBody(version, [], NO_EDITS).meta).toEqual({ step_limit: 25, internal_tools: [] });
   });
 
-  it('falls back to an EMPTY meta.internal_tools when the stored value is not an array', () => {
-    const version = {
+  it('merges over the stored meta so icon_meta and friends survive a save', () => {
+    const rich = {
       name: 'base',
-      meta: { internal_tools: 'internal_mcp' },
-    } as unknown as ApplicationVersionDetail;
-    expect(toVersionDraft(version, []).meta.internal_tools).toEqual([]);
-  });
-
-  // The other direction, and the reason the fallback is the ONLY thing that
-  // changed: a user who deliberately turned Elitea MCP Tools on must still
-  // find it on when the editor reloads their version.
-  it('round-trips an explicitly stored internal_mcp unchanged', () => {
-    const version = {
-      name: 'base',
-      meta: { internal_tools: ['internal_mcp'] },
-    } as unknown as ApplicationVersionDetail;
-    expect(toVersionDraft(version, []).meta.internal_tools).toEqual(['internal_mcp']);
-  });
-
-  it('defaults instructions/variables/tags/tools to empty when absent', () => {
-    const version = { name: 'base' } as ApplicationVersionDetail;
-    const draft = toVersionDraft(version, []);
-    expect(draft.instructions).toBe('');
-    expect(draft.variables).toEqual([]);
-    expect(draft.tags).toEqual([]);
-    expect(draft.tools).toEqual([]);
-  });
-
-  it('always sets agentType to "pipeline", regardless of the wire agent_type', () => {
-    const version = { name: 'base', agent_type: 'classic' } as unknown as ApplicationVersionDetail;
-    expect(toVersionDraft(version, []).agentType).toBe('pipeline');
-  });
-
-  it('always sets pipelineSettings to undefined (disclosed gap, not a fabricated value)', () => {
-    const version = { name: 'base' } as ApplicationVersionDetail;
-    expect(toVersionDraft(version, []).pipelineSettings).toBeUndefined();
-  });
-
-  it('reads the stored llm_settings back, with model_project_id as a number', () => {
-    const version = {
-      name: 'base',
-      llm_settings: { model_name: 'qwen3.5', model_project_id: '17', max_tokens: -1, temperature: 0.6 },
+      meta: { step_limit: 40, internal_tools: ['internal_mcp'], icon_meta: { id: 9 }, category: 'ops' },
     } as unknown as ApplicationVersionDetail;
 
-    expect(toVersionDraft(version, []).llmSettings).toEqual({
-      model_name: 'qwen3.5',
-      model_project_id: 17,
-      max_tokens: -1,
-      temperature: 0.6,
+    expect(toPipelineVersionSaveBody(rich, [], edits({ stepLimit: 40, internalTools: ['internal_mcp'] })).meta).toEqual({
+      step_limit: 40,
+      internal_tools: ['internal_mcp'],
+      icon_meta: { id: 9 },
+      category: 'ops',
     });
   });
 
-  // Same edit-wins-over-stored rule the agents twin applies in
-  // `toVersionWriteBody`: the page's model picker holds the live choice and a
-  // save that re-read the stored blob would drop it.
-  it('prefers the picked llm_settings over the stored one', () => {
+  /**
+   * `variables` is the one stored-meta key that must NOT be forwarded: both
+   * handlers rebuild `meta.variables` from the body's TOP-LEVEL list, and on
+   * the create path the carried copy WINS. Forwarding it resurrected deleted
+   * variables — secrets among them.
+   */
+  it('drops meta.variables, which the handler rebuilds from the top-level list', () => {
+    const withMetaVariables = {
+      name: 'base',
+      meta: { step_limit: 40, internal_tools: [], variables: [{ name: 'deleted_secret', value: 'hunter2' }] },
+    } as unknown as ApplicationVersionDetail;
+
+    const body = toPipelineVersionSaveBody(withMetaVariables, [], NO_EDITS);
+
+    expect(body.meta).not.toHaveProperty('variables');
+    expect(body.variables).toEqual([]);
+  });
+
+  it('always pins agent_type to "pipeline", regardless of the wire agent_type', () => {
+    const version = { name: 'base', agent_type: 'openai' } as unknown as ApplicationVersionDetail;
+    expect(toPipelineVersionSaveBody(version, [], NO_EDITS).agent_type).toBe('pipeline');
+  });
+
+  it('prefers the picked llm_settings over the stored one and forwards the stored blob verbatim with no pick', () => {
     const version = {
       name: 'base',
       llm_settings: { model_name: 'gpt-4o', model_project_id: 3, max_tokens: 4096 },
     } as unknown as ApplicationVersionDetail;
 
-    const draft = toVersionDraft(version, [], undefined, {
-      model_name: 'qwen3.5',
-      model_project_id: 17,
-      max_tokens: -1,
+    expect(
+      toPipelineVersionSaveBody(version, [], edits({ llmSettings: { model_name: 'qwen3.5', model_project_id: 17, max_tokens: -1 } })).llm_settings,
+    ).toEqual({ model_name: 'qwen3.5', model_project_id: 17, max_tokens: -1 });
+
+    expect(toPipelineVersionSaveBody(version, [], NO_EDITS).llm_settings).toEqual({
+      model_name: 'gpt-4o',
+      model_project_id: 3,
+      max_tokens: 4096,
     });
-    expect(draft.llmSettings).toEqual({ model_name: 'qwen3.5', model_project_id: 17, max_tokens: -1 });
   });
 
-  // `{}` is what every version written before the picker existed stores;
-  // `toVersionWriteRequest` then omits the key and the pipeline keeps running
-  // on the project's catalogue default.
-  it('leaves llmSettings undefined for a version that names no model', () => {
-    const version = { name: 'base', llm_settings: {} } as unknown as ApplicationVersionDetail;
-    expect(toVersionDraft(version, []).llmSettings).toBeUndefined();
+  it('omits llm_settings entirely for a version that names no model', () => {
+    const version = { name: 'base' } as ApplicationVersionDetail;
+    expect(toPipelineVersionSaveBody(version, [], NO_EDITS)).not.toHaveProperty('llm_settings');
   });
 });
 
@@ -252,10 +269,10 @@ describe('toNewPipelineVersionBody', () => {
    */
   it('pins agent_type to pipeline even when the stored version names something else', () => {
     const odd = { ...storedVersion, agent_type: 'openai' } as unknown as ApplicationVersionDetail;
-    expect(toNewPipelineVersionBody(odd, [], undefined).agent_type).toBe('pipeline');
+    expect(toNewPipelineVersionBody(odd, [], NO_EDITS).agent_type).toBe('pipeline');
 
     const blank = { ...storedVersion, agent_type: undefined } as ApplicationVersionDetail;
-    expect(toNewPipelineVersionBody(blank, [], undefined).agent_type).toBe('pipeline');
+    expect(toNewPipelineVersionBody(blank, [], NO_EDITS).agent_type).toBe('pipeline');
   });
 
   /**
@@ -267,20 +284,20 @@ describe('toNewPipelineVersionBody', () => {
    * internal tools on every save-as-version.
    */
   it('carries meta.step_limit and meta.internal_tools onto the new version', () => {
-    const body = toNewPipelineVersionBody(storedVersion, [], undefined);
+    const body = toNewPipelineVersionBody(storedVersion, [], edits({ stepLimit: 40, internalTools: ['internal_mcp'] }));
     expect(body.meta).toEqual({ step_limit: 40, internal_tools: ['internal_mcp'] });
   });
 
   it('defaults step_limit to 25 and internal_tools to [] for a version with no meta', () => {
     const bare = { ...storedVersion, meta: undefined } as unknown as ApplicationVersionDetail;
-    expect(toNewPipelineVersionBody(bare, [], undefined).meta).toEqual({ step_limit: 25, internal_tools: [] });
+    expect(toNewPipelineVersionBody(bare, [], NO_EDITS).meta).toEqual({ step_limit: 25, internal_tools: [] });
   });
 
   // Same edit-wins-over-stored rule the ordinary Save applies: the live
   // starters come off the form, not off the server's last-saved copy.
   it('clones the LIVE conversation starters, not the stored ones', () => {
     const withStored = { ...storedVersion, conversation_starters: ['old'] } as unknown as ApplicationVersionDetail;
-    expect(toNewPipelineVersionBody(withStored, ['typed but unsaved'], undefined).conversation_starters).toEqual([
+    expect(toNewPipelineVersionBody(withStored, ['typed but unsaved'], NO_EDITS).conversation_starters).toEqual([
       'typed but unsaved',
     ]);
   });
@@ -291,17 +308,17 @@ describe('toNewPipelineVersionBody', () => {
       llm_settings: { model_name: 'gpt-4o', model_project_id: 3 },
     } as unknown as ApplicationVersionDetail;
 
-    expect(toNewPipelineVersionBody(withModel, [], { model_name: 'qwen3.5', model_project_id: 17, max_tokens: -1 }).llm_settings).toEqual(
+    expect(toNewPipelineVersionBody(withModel, [], edits({ llmSettings: { model_name: 'qwen3.5', model_project_id: 17, max_tokens: -1 } })).llm_settings).toEqual(
       { model_name: 'qwen3.5', model_project_id: 17, max_tokens: -1 },
     );
-    expect(toNewPipelineVersionBody(withModel, [], undefined).llm_settings).toEqual({
+    expect(toNewPipelineVersionBody(withModel, [], NO_EDITS).llm_settings).toEqual({
       model_name: 'gpt-4o',
       model_project_id: 3,
     });
   });
 
   it('omits llm_settings entirely for a version that names no model', () => {
-    expect(toNewPipelineVersionBody(storedVersion, [], undefined)).not.toHaveProperty('llm_settings');
+    expect(toNewPipelineVersionBody(storedVersion, [], edits({ stepLimit: 40, internalTools: ['internal_mcp'] }))).not.toHaveProperty('llm_settings');
   });
 
   /**
@@ -324,7 +341,7 @@ describe('toNewPipelineVersionBody', () => {
       },
     } as unknown as ApplicationVersionDetail;
 
-    expect(toNewPipelineVersionBody(rich, [], undefined).meta).toEqual({
+    expect(toNewPipelineVersionBody(rich, [], edits({ stepLimit: 40, internalTools: ['internal_mcp'] })).meta).toEqual({
       step_limit: 40,
       internal_tools: ['internal_mcp'],
       icon_meta: { id: 9, name: 'robot.png' },
@@ -349,7 +366,7 @@ describe('toNewPipelineVersionBody', () => {
       meta: { step_limit: 40, internal_tools: [], variables: [{ name: 'deleted_secret', value: 'hunter2' }] },
     } as unknown as ApplicationVersionDetail;
 
-    const body = toNewPipelineVersionBody(withMetaVariables, [], undefined);
+    const body = toNewPipelineVersionBody(withMetaVariables, [], NO_EDITS);
 
     expect(body.meta).not.toHaveProperty('variables');
     expect(body.variables).toEqual([]);

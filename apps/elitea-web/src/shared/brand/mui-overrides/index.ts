@@ -1,5 +1,6 @@
 import type { EliteaComponents } from '../theme-types';
 
+import { MuiAccordion } from './MuiAccordion';
 import { MuiAlert } from './MuiAlert';
 import { MuiAppBar } from './MuiAppBar';
 import { MuiAutocomplete } from './MuiAutocomplete';
@@ -49,10 +50,11 @@ import { MuiTypography } from './MuiTypography';
  * Composition is a plain object literal so the set of wired keys is
  * greppable and the file stays a table of contents rather than logic.
  *
- * Unit T1 wired `MuiButton`/`MuiChip`. Unit S1 (this addition) wires 27 of
- * the remaining 28 keys named in OWNERSHIP.md (all but `MuiTreeItem`, see
- * above), plus `MuiTypography` (R-C2 — not one of the baseline's 30 keys;
- * see that file's own doc comment).
+ * Unit T1 wired `MuiButton`/`MuiChip`. Unit S1 wires 27 of the remaining 28
+ * keys named in OWNERSHIP.md (all but `MuiTreeItem`, see above), plus
+ * `MuiTypography` (R-C2 — not one of the baseline's 30 keys; see that
+ * file's own doc comment). The platform-parity wave adds `MuiAccordion` —
+ * not a baseline key either, see `MuiAccordion.ts`'s own doc comment.
  *
  * The trailing `as EliteaComponents` is one reviewed, necessary cast:
  * `Components<Theme>`'s entries are `MuiX?: ComponentsOverrides['MuiX']`
@@ -69,6 +71,7 @@ import { MuiTypography } from './MuiTypography';
  */
 export function muiOverrides(): EliteaComponents {
   return {
+    MuiAccordion,
     MuiAlert,
     MuiAppBar,
     MuiAutocomplete,

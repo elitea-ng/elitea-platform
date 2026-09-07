@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	toolkitrun "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkitrun"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/go-chi/chi/v5"
 )
@@ -29,11 +30,45 @@ func NewCurrentIndexStartRoute(
 	authConfig apimw.AuthConfig,
 	permissions auth.PermissionResolver,
 ) (*CurrentIndexStartRoute, error) {
+	return newCurrentIndexStartRoute(useCase, nil, authConfig, permissions)
+}
+
+// NewCurrentIndexStartRouteWithToolRuns binds the SAME path, the same
+// authentication and the same permission, and adds the synchronous tool-run
+// branch (#340).
+//
+// The permission is unchanged and correct for both branches:
+// `models.applications.tool.patch` is exactly what pylon's own
+// `test_toolkit_tool` endpoint checks. Nothing here widens who may run a tool.
+func NewCurrentIndexStartRouteWithToolRuns(
+	useCase StartUseCase,
+	toolRuns toolkitrun.UseCase,
+	authConfig apimw.AuthConfig,
+	permissions auth.PermissionResolver,
+) (*CurrentIndexStartRoute, error) {
+	if toolRuns == nil {
+		return nil, ErrInvalidCurrentIndexStartRoute
+	}
+	return newCurrentIndexStartRoute(useCase, toolRuns, authConfig, permissions)
+}
+
+func newCurrentIndexStartRoute(
+	useCase StartUseCase,
+	toolRuns toolkitrun.UseCase,
+	authConfig apimw.AuthConfig,
+	permissions auth.PermissionResolver,
+) (*CurrentIndexStartRoute, error) {
 	if useCase == nil || authConfig.PrincipalValidator == nil ||
 		authConfig.ForwardedIdentityVerifier == nil || permissions == nil {
 		return nil, ErrInvalidCurrentIndexStartRoute
 	}
-	start, err := NewStartHandler(useCase)
+	var start *StartHandler
+	var err error
+	if toolRuns == nil {
+		start, err = NewStartHandler(useCase)
+	} else {
+		start, err = NewStartHandlerWithToolRuns(useCase, toolRuns)
+	}
 	if err != nil {
 		return nil, ErrInvalidCurrentIndexStartRoute
 	}

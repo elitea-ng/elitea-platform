@@ -107,6 +107,13 @@ var registry = []App{
 		Descriptor: inventory.Descriptor,
 		Toolkits:   inventory.Toolkits,
 		Runners: map[string]RunnerFactory{
+			// The ingest-and-read path over a canned knowledge graph: what a
+			// browser journey runs against on a stack with no engine image.
+			// The merge, the source check, composition and the artifact
+			// upload are the production code; only the graph is canned.
+			"fixture": func(settings spi.Settings, step time.Duration) (spi.Runner, error) {
+				return inventoryrun.NewFixtureRunner(settings, step), nil
+			},
 			// The knowledge-graph engine, reached as a sidecar over a local
 			// socket (ADR-0023 H4c stage I3): the engine's dependency closure
 			// stays in Python; composition, upload and the SPI are this

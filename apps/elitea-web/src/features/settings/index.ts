@@ -22,11 +22,17 @@ import { useSecretPermissions } from './lib/secrets/useSecretPermissions';
 
 
 import { ProjectContextBody, ProjectContextToasts } from './ui/project-context/ProjectContextBody';
+import { AgentPipelineBuilder } from './ui/project-general/AgentPipelineBuilder';
+import { ProjectAIConfigurationSection } from './ui/project-general/ProjectAIConfigurationSection';
+import { hasSavedProjectContext } from './lib/project-context/hasSavedContent';
+import { ProjectContextEmptyState } from './ui/project-context/ProjectContextEmptyState';
+import { ProjectParamsHeader } from './ui/project-context/ProjectParamsHeader';
 import { projectContextStyles } from './ui/project-context/ProjectContext.styles';
 // Type-only, so it costs no export slot (same as `PromptConfig` above). The
 // page that persists an icon needs the shape the dialog emits.
 export type { SelectedProjectIcon } from './ui/project-context/ProjectIconDialog';
 
+import { formatLastLogin, selectLastLogin } from './lib/profile/lastLogin';
 import { useDefaultModel } from './lib/profile/useDefaultModel';
 import { ProfileFormContent } from './ui/profile/ProfileFormContent';
 import { ProfileIdentity } from './ui/profile/ProfileIdentity';
@@ -45,7 +51,7 @@ import { SettingsFormProvider } from './ui/ai-personality/SettingsFormProvider';
 import { MemoryFormContent } from './ui/memory/MemoryFormContent';
 
 import ConfigurationsPanel from './ui/ai-configuration/ConfigurationsPanel';
-import ModelCapabilitiesSection from './ui/ai-configuration/ModelCapabilitiesSection';
+import ModelCapabilitiesPanel from './ui/ai-configuration/ModelCapabilitiesPanel';
 import OpenAITemplate from './ui/ai-configuration/OpenAITemplate';
 import ProjectAIConfiguration from './ui/ai-configuration/ProjectAIConfiguration';
 import { RequestModelConnection } from './ui/ai-configuration/RequestModelConnection';
@@ -70,13 +76,23 @@ export const servicePromptsFeature = { ServicePromptsBody };
 export const secretsFeature = { SecretsTable, SecretValueCell, useSecretPermissions };
 
 /** Project-context tab (`pages/settings/ProjectContext.tsx`). */
-export const projectContextFeature = { ProjectContextBody, ProjectContextToasts, projectContextStyles };
+export const projectContextFeature = { ProjectContextBody, ProjectContextEmptyState, ProjectContextToasts, ProjectParamsHeader, hasSavedProjectContext, projectContextStyles };
+
+/**
+ * General tab (`pages/settings/ProjectGeneral.tsx`) — the PROJECT section's
+ * first tab and the tab `/settings` opens on.
+ *
+ * `ProjectParamsHeader` is NOT re-exported here: it lives in the
+ * project-context bundle because that is where the file sits, and General
+ * reaches it through `projectContextFeature`. One export per component.
+ */
+export const projectGeneralFeature = { AgentPipelineBuilder, ProjectAIConfigurationSection };
 
 /**
  * Profile + Personalization tabs (`pages/settings/Profile.tsx`,
  * `pages/settings/Personalization.tsx`).
  */
-export const profileFeature = { useDefaultModel, ProfileFormContent, ProfileIdentity, ProfileValidationSchema, deserializeProfileFormData, serializeProfileFormData };
+export const profileFeature = { useDefaultModel, ProfileFormContent, ProfileIdentity, ProfileValidationSchema, deserializeProfileFormData, serializeProfileFormData, formatLastLogin, selectLastLogin };
 
 /** Preferences tab (`pages/settings/Preferences.tsx`). */
 export const preferencesFeature = { PreferencesFormContent };
@@ -99,10 +115,11 @@ export const environmentFeature = { ENVIRONMENT_FIELD_DEFAULTS, ENVIRONMENT_FIEL
 /**
  * AI-configuration tab (`pages/settings/AIConfiguration.tsx`).
  *
- * `ModelCapabilitiesSection` + `useModelConfigurationLayer` are the baseline's
+ * `ModelCapabilitiesPanel` + `useModelConfigurationLayer` are the baseline's
  * `Configuration/ModelConfiguration.jsx` level, which the port had skipped
  * (issue #80): the chips component existed with no importer, and the helpers
- * it needs had no caller.
+ * it needs had no caller. The panel carries the model picker WITH the chips,
+ * so the page cannot mount one without the other.
  *
  * `RequestModelConnection` is the user-facing half of the moderation flow: a
  * member who cannot create a configuration asks an operator for a provider or
@@ -112,7 +129,7 @@ export const environmentFeature = { ENVIRONMENT_FIELD_DEFAULTS, ENVIRONMENT_FIEL
  */
 export const aiConfigurationFeature = {
   ConfigurationsPanel,
-  ModelCapabilitiesSection,
+  ModelCapabilitiesPanel,
   OpenAITemplate,
   ProjectAIConfiguration,
   RequestModelConnection,

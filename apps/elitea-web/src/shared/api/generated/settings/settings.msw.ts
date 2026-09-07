@@ -44,7 +44,18 @@ import { faker } from "@faker-js/faker";
 import { HttpResponse, delay, http } from "msw";
 import type { RequestHandlerOptions } from "msw";
 
-import type { EntitySettingsUpdateResponse, OkResponse } from "../model";
+import type {
+  EntitySettingsUpdateResponse,
+  OkResponse,
+  ProjectContextDraft,
+} from "../model";
+
+export const getGenerateProjectContextDraftResponseMock = (
+  overrideResponse: Partial<Extract<ProjectContextDraft, object>> = {},
+): ProjectContextDraft => ({
+  project_background: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  ...overrideResponse,
+});
 
 export const getPatchEntitySettingsResponseMock = (
   overrideResponse: Partial<Extract<OkResponse, object>> = {},
@@ -99,6 +110,32 @@ export const getReplaceParticipantSettingsResponseMock = (
   ...overrideResponse,
 });
 
+export const getGenerateProjectContextDraftMockHandler = (
+  overrideResponse?:
+    | ProjectContextDraft
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<ProjectContextDraft> | ProjectContextDraft),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/generate_project_context_draft/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGenerateProjectContextDraftResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getPatchEntitySettingsMockHandler = (
   overrideResponse?:
     | OkResponse
@@ -152,6 +189,7 @@ export const getReplaceParticipantSettingsMockHandler = (
   );
 };
 export const getSettingsMock = () => [
+  getGenerateProjectContextDraftMockHandler(),
   getPatchEntitySettingsMockHandler(),
   getReplaceParticipantSettingsMockHandler(),
 ];

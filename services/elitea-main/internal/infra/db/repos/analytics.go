@@ -48,6 +48,24 @@ package repos
 //     "toolkit usage" table built from it would silently exclude every tool
 //     call an agent made outside a chat.
 //
+//     NOTE(#618): `toolkit.call_tool.v1` (#340/#616) did NOT close this, and it
+//     is worth saying why, because it looks as if it should have.
+//     `elitea_runtime.execution_jobs` now carries one row per explicit tool run
+//     with a project and an `admitted_at`, which is two of the five columns
+//     ToolAnalytics needs. It carries NEITHER `toolkit_id` NOR `tool_name`:
+//     that capability deliberately owns no binding table, because it dispatches
+//     inline and its command scalars never need to survive the request (see
+//     internal/db/queries/runtime_toolkit_call_tool.sql). And it covers only
+//     tool runs a person or an MCP client asked for — the toolkit test button
+//     and `tools/call` — not the tool calls an AGENT makes inside a turn, which
+//     is the bulk of tool usage and the exact exclusion this bullet is about.
+//
+//     Closing #618 therefore needs a durable per-tool-call record — project,
+//     toolkit id, tool name, started/finished, outcome — written by BOTH the
+//     agent turn and the explicit run. That is a table, not an event, and no
+//     amount of producer-side signalling from this capability substitutes for
+//     it.
+//
 // It is answered with ErrNoSource, which the API layer turns into a FINAL
 // status rather than a retryable one. It is a product gap, not a fault.
 //
@@ -884,18 +902,60 @@ WHERE u.id = ANY($1)`
 // and one member can hold several roles in the same project — counting grants
 // would inflate the denominator and understate adoption.
 //
-// Guarded like userIdentities, and for the same reason: these tables belong to
-// a different corpus. When they are absent the caller omits total_project_users
+// # WHICH TABLE HOLDS MEMBERSHIP
+//
+// public.auth_core__project_user_role, and only that one. The earlier form of
+// this query joined public.auth_core__user_role to public.auth_core__project_role
+// on `pr.id = ur.role_id`, and those two ids name DIFFERENT things:
+// auth_core__user_role.role_id references auth_core__role, the CENTRAL role
+// table, which has no project column at all. The join therefore matched a user
+// whose central role id happened to equal a project role id of this project,
+// which is an accident of two SERIAL sequences.
+//
+// Measured on a fresh install: the owner of a personal project holds one
+// central grant, its id collides with a role of the FIRST project, and the
+// project's own member row is invisible to the query. The tile read
+// "AI ACTIVE 1 of 0 members" — one caller, no members, on a project whose
+// single member is the caller. The Users page has always read the right table
+// (eliteacore/handler.go's usersPageQuery); this figure did not.
+//
+// Project provisioning writes the owner's row into auth_core__project_user_role
+// (application/projectprovisioning/steps.go, createOwnerMembership), so a
+// personal project now measures 1 member, which is the truth.
+//
+// Guarded like userIdentities, and for the same reason: this table belongs to
+// a different corpus. When it is absent the caller omits total_project_users
 // and adoption_rate entirely rather than reporting a rate over a denominator it
 // invented.
 func projectAdoption(ctx context.Context, q analyticsQuerier, id int64, params analytics.QueryParams) (members, active int64, ok bool, err error) {
-	const query = `
+	// The two variants differ only in the SYSTEM-USER filter.
+	//
+	// Every project provisions a system account of its own and grants it a
+	// membership row (application/projectprovisioning/steps.go,
+	// createSystemUser). It is not a person, and the Users page hides it with
+	// exactly this predicate (eliteacore/handler.go, usersPageQuery). Counting
+	// it would put one member on this tile that the page beside it does not
+	// list — on a personal project, "1 of 2" where the truth is "1 of 1".
+	//
+	// The filter needs public.auth_core__user, and that table can be absent
+	// while the membership table is present. Losing the whole denominator over
+	// a display column would be the worse answer, so absence drops the FILTER
+	// and keeps the figure.
+	const filteredMembers = `
 WITH project_members AS (
-    SELECT DISTINCT ur.user_id
-    FROM public.auth_core__user_role AS ur
-    JOIN public.auth_core__project_role AS pr ON pr.id = ur.role_id
-    WHERE pr.project_id = $1
-)
+    SELECT DISTINCT pur.user_id
+    FROM public.auth_core__project_user_role AS pur
+    JOIN public.auth_core__user AS account ON account.id = pur.user_id
+    WHERE pur.project_id = $1
+      AND account.email NOT LIKE '%@centry.user'
+)`
+	const unfilteredMembers = `
+WITH project_members AS (
+    SELECT DISTINCT pur.user_id
+    FROM public.auth_core__project_user_role AS pur
+    WHERE pur.project_id = $1
+)`
+	const tail = `
 SELECT (SELECT count(*)::bigint FROM project_members),
        (SELECT count(DISTINCT l.user_id)::bigint
         FROM gateway.llm_request_logs AS l
@@ -905,17 +965,25 @@ SELECT (SELECT count(*)::bigint FROM project_members),
           AND l.user_id IN (SELECT user_id FROM project_members))`
 
 	// Asked BEFORE the statement below, for the reason userIdentities gives at
-	// length: the query names both tables in its FROM clause, so a missing one
+	// length: the query names the table in its FROM clause, so a missing one
 	// raises 42P01 at parse time, no in-query predicate can prevent it, and the
 	// resulting error would abort the shared transaction rather than being
 	// contained. The missingRelation check after it is the belt to this braces
 	// — the two statements are not atomic.
-	present, err := checkRelations(ctx, q, "public.auth_core__user_role", "public.auth_core__project_role")
+	present, err := checkRelations(ctx, q, "public.auth_core__project_user_role")
 	if err != nil {
 		return 0, 0, false, err
 	}
 	if !present {
 		return 0, 0, false, nil
+	}
+	accounts, err := checkRelations(ctx, q, "public.auth_core__user")
+	if err != nil {
+		return 0, 0, false, err
+	}
+	query := unfilteredMembers + tail
+	if accounts {
+		query = filteredMembers + tail
 	}
 
 	if err := q.QueryRow(ctx, query, id, params.From, params.To).Scan(&members, &active); err != nil {

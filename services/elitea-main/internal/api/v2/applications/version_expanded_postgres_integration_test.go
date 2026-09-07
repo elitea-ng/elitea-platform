@@ -55,6 +55,19 @@ const (
 
 func newExpandedFixture(t *testing.T, agentType string) *expandedFixture {
 	t.Helper()
+	return newExpandedFixtureWithHeaderValue(t, agentType, expandedHeaderValue)
+}
+
+// newExpandedFixtureWithHeaderValue builds the same project, and decides what
+// the project vault holds under `secrets_header_value`.
+//
+// An EMPTY headerValue seals an unrelated secret instead, which leaves the
+// vault readable and the header value absent. That is the exact narrow gap
+// issue #408 names: the vault opens, so `ResolveSecretValue` answers
+// ErrSecretNotFound rather than a decryption error, and pylon answers that
+// state with the literal "secret".
+func newExpandedFixtureWithHeaderValue(t *testing.T, agentType, headerValue string) *expandedFixture {
+	t.Helper()
 	pool := newHandlerTestPool(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	t.Cleanup(cancel)
@@ -70,10 +83,14 @@ func newExpandedFixture(t *testing.T, agentType string) *expandedFixture {
 	}
 	seedHandlerUser(t, pool, 7, "expanded@example.com")
 
+	// `applications.owner_id` is the owning PROJECT and this row lives in p_1,
+	// so it holds 1 (#533). User 7 is the version AUTHOR, below. The seed used
+	// to put the user in both columns, which tenant/0131 refuses with a foreign
+	// key to centry.project.
 	var applicationID, versionID int64
 	if err := pool.QueryRow(ctx, `
 		INSERT INTO p_1.applications (name, description, owner_id)
-		VALUES ('expanded-fixture', '', 7) RETURNING id`).Scan(&applicationID); err != nil {
+		VALUES ('expanded-fixture', '', 1) RETURNING id`).Scan(&applicationID); err != nil {
 		t.Fatalf("insert fixture application: %v", err)
 	}
 	// meta carries BOTH fork markers (is_forked must be true) and an icon.
@@ -99,10 +116,14 @@ func newExpandedFixture(t *testing.T, agentType string) *expandedFixture {
 	seedExpandedSkill(t, pool, versionID, "Blank", "No body.", "   ")
 
 	// The project vault holds the value pylon's check_secret_header compares.
+	storedName, storedValue := "secrets_header_value", headerValue
+	if headerValue == "" {
+		storedName, storedValue = "unrelated", "value"
+	}
 	if err := secrets.NewHandler(pool).StoreSecret(
-		ctx, nil, expandedProjectID, "secrets_header_value", expandedHeaderValue,
+		ctx, nil, expandedProjectID, storedName, storedValue,
 	); err != nil {
-		t.Fatalf("store the project secrets_header_value: %v", err)
+		t.Fatalf("store the project secret %q: %v", storedName, err)
 	}
 
 	router := newHandlerTestServer(t, pool, auth.User{ID: "7"})
@@ -305,35 +326,87 @@ func TestVersionPatchIgnoresTheRetiredEnvironmentSecret(t *testing.T) {
 	}
 }
 
-// A project whose vault holds no `secrets_header_value` accepts the literal
-// "secret", which is the default in pylon's check_secret_header. Without this
-// the SDK would break on every project that never set the key.
-func TestVersionPatchFallsBackToThePylonDefaultSecret(t *testing.T) {
+// A provisioned project refuses the pylon literal (#408).
+//
+// This is the acceptance criterion "prove a request carrying the old literal
+// `secret` is refused on a newly provisioned project". The fixture's vault
+// holds a value that is not the literal, exactly as
+// EnsureProjectSecretsHeaderValue writes one, so the literal is simply the
+// wrong value and gets pylon's 400.
+func TestVersionPatchRefusesThePylonLiteralOnAProvisionedProject(t *testing.T) {
+	fixture := newExpandedFixture(t, "openai")
+
+	recorder := fixture.patchVersion(t, "secret")
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("the pylon literal must be refused, got %d: %s",
+			recorder.Code, recorder.Body.String())
+	}
+	if _, present := decodeBody(t, recorder)["llm_settings"]; present {
+		t.Errorf("a refused call must not carry version data, got %s", recorder.Body.String())
+	}
+}
+
+// A READABLE vault with no `secrets_header_value` refuses every caller (#408).
+//
+// This test replaces TestVersionPatchFallsBackToThePylonDefaultSecret, which
+// required 200 for the literal "secret" and so pinned the defect. The literal
+// is what the SDK sends when nothing supplies XSECRET
+// (elitea-sdk/elitea_sdk/runtime/clients/client.py:94), and pylon's
+// check_secret_header accepts it on any project that never set the key.
+//
+// It is safe to refuse now because the worker carries the project's own value:
+// the runtime-context token response gained `secrets_header_value`
+// (internal/infra/storage/index_runtime_context.go) and the worker puts it in
+// the SDK client's api_extra_headers
+// (services/elitea-worker-python/src/elitea_worker/agents/client_context.py).
+func TestVersionPatchRefusesAProjectWithNoHeaderValue(t *testing.T) {
+	fixture := newExpandedFixtureWithHeaderValue(t, "openai", "")
+
+	// The vault opens, so this is the narrow ErrSecretNotFound gap and not an
+	// unreadable vault.
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if _, err := secrets.NewHandler(fixture.pool).ResolveSecretValue(
+		ctx, expandedProjectID, "unrelated",
+	); err != nil {
+		t.Fatalf("the fixture vault must be readable: %v", err)
+	}
+
+	for _, received := range []string{"secret", "", expandedHeaderValue} {
+		recorder := fixture.patchVersion(t, received)
+		if recorder.Code != http.StatusForbidden {
+			t.Fatalf("a project with no header value must refuse %q with 403, got %d: %s",
+				received, recorder.Code, recorder.Body.String())
+		}
+		body := decodeBody(t, recorder)
+		if body["error"] != "This project has no secrets_header_value secret. "+
+			"The version details route cannot authenticate a caller until the project has one." {
+			t.Errorf("expected the repair message, got %s", recorder.Body.String())
+		}
+		if _, present := body["llm_settings"]; present {
+			t.Errorf("a refused call must not carry version data, got %s", recorder.Body.String())
+		}
+	}
+}
+
+// A vault that will not open refuses too, and it says so differently: an
+// operator repairs a missing value and a broken key in different ways.
+func TestVersionPatchRefusesAnUnreadableVault(t *testing.T) {
 	fixture := newExpandedFixture(t, "openai")
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	// Remove the seeded value, leaving the vault in place.
-	if err := secrets.NewHandler(fixture.pool).StoreSecret(
-		ctx, nil, expandedProjectID, "unrelated", "value",
-	); err != nil {
-		t.Fatalf("write an unrelated secret: %v", err)
-	}
+	// Keep the key row and destroy the sealed data, which is what a vault
+	// written under a master key this deployment no longer sets looks like.
 	if _, err := fixture.pool.Exec(ctx,
-		`DELETE FROM centry.secrets_data WHERE id = $1`, "project-"+expandedProjectID); err != nil {
-		t.Fatalf("clear the project vault data: %v", err)
-	}
-	if _, err := fixture.pool.Exec(ctx,
-		`DELETE FROM centry.secrets_key WHERE id = $1`, "project-"+expandedProjectID); err != nil {
-		t.Fatalf("clear the project vault key: %v", err)
+		`UPDATE centry.secrets_data SET data = $2 WHERE id = $1`,
+		"project-"+expandedProjectID, []byte("not-a-fernet-token")); err != nil {
+		t.Fatalf("corrupt the project vault data: %v", err)
 	}
 
-	recorder := fixture.patchVersion(t, "secret")
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("expected the pylon default secret to be accepted, got %d: %s",
+	recorder := fixture.patchVersion(t, expandedHeaderValue)
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("an unreadable vault must refuse with 403, got %d: %s",
 			recorder.Code, recorder.Body.String())
-	}
-	if recorder2 := fixture.patchVersion(t, "still-wrong"); recorder2.Code != http.StatusBadRequest {
-		t.Fatalf("a wrong value must still be refused, got %d", recorder2.Code)
 	}
 }

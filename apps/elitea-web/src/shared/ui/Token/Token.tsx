@@ -6,6 +6,8 @@ import Typography from '@mui/material/Typography';
 import type { MarkedToken } from 'marked';
 
 import { DefaultMarkdown } from '../DefaultMarkdown';
+import type { SpokenRange } from '../lib/spokenRange';
+import { renderParagraphToken, renderTextToken } from '../lib/SpokenHighlight';
 import { t } from '@/shared/i18n';
 
 /** @public shared/ui component API — consumed once a features/widgets/pages caller exists (none does yet in this pass). */
@@ -13,6 +15,17 @@ export interface TokenProps {
   /** One node of a `marked.lexer()` token tree (a full token, or a child from `.tokens`/`.items`). */
   token: MarkedToken;
   renderHtml?: boolean;
+  /**
+   * The word being read aloud (issue #625 item 1) and this token's own
+   * `[startPos, …)` offset into the source — both come from `Markdown`'s
+   * top-level stamping pass, so a `Token` reached by RECURSION (a list item,
+   * a blockquote child, a table cell) never receives them and never
+   * highlights. That is a deliberate, documented limit, not a bug: those
+   * nested positions are not stamped, so guessing one would risk a
+   * highlight landing on the wrong word instead of just not lighting up.
+   */
+  spokenRange?: SpokenRange | undefined;
+  startPos?: number | undefined;
 }
 
 // The three-way split below (leaf-inline / simple-structural / container)
@@ -156,7 +169,12 @@ function renderSimpleToken(token: SimpleStructuralToken, renderHtml: boolean): R
 }
 
 /** heading/blockquote/list/list_item/table/paragraph/text — the cases that recurse into child tokens. */
-function renderContainerToken(token: ContainerToken, renderHtml: boolean): ReactNode {
+function renderContainerToken(
+  token: ContainerToken,
+  renderHtml: boolean,
+  spokenRange: SpokenRange | undefined,
+  startPos: number | undefined,
+): ReactNode {
   switch (token.type) {
     case 'heading':
       return (
@@ -303,26 +321,10 @@ function renderContainerToken(token: ContainerToken, renderHtml: boolean): React
       );
 
     case 'paragraph':
-      // Block mode: `marked.parse(token.text)` re-wraps the paragraph's own
-      // inline markdown source in a real `<p>` — no extra Box wrapper needed.
-      return (
-        <DefaultMarkdown
-          markdown={token.text}
-          renderHtml={renderHtml}
-        />
-      );
+      return renderParagraphToken(token, renderHtml, spokenRange, startPos);
 
     case 'text':
-      // Inline mode: a 'text' token here is a TIGHT list item's content
-      // wrapper (see 'list_item' above) — GFM renders tight-list content
-      // without a `<p>` wrapper, unlike a loose list's 'paragraph' tokens.
-      return (
-        <DefaultMarkdown
-          markdown={token.text}
-          inline
-          renderHtml={renderHtml}
-        />
-      );
+      return renderTextToken(token, renderHtml, spokenRange, startPos);
   }
 }
 
@@ -350,7 +352,7 @@ function renderContainerToken(token: ContainerToken, renderHtml: boolean): React
  *    (`headingLarge`/`Medium`/`Small`) instead of six distinct CSS rungs —
  *    the theme (`shared/brand/typography.ts`, unit T2) only has three.
  */
-export function Token({ token, renderHtml = true }: TokenProps): ReactNode {
+export function Token({ token, renderHtml = true, spokenRange, startPos }: TokenProps): ReactNode {
   if (isLeafInlineToken(token)) {
     // Defensive fallback for the inline-only token kinds ('strong'/'em'/
     // 'del'/'link'/'image'/'codespan'/'escape') that `MarkedToken`'s union
@@ -371,5 +373,5 @@ export function Token({ token, renderHtml = true }: TokenProps): ReactNode {
   if (isSimpleStructuralToken(token)) {
     return renderSimpleToken(token, renderHtml);
   }
-  return renderContainerToken(token, renderHtml);
+  return renderContainerToken(token, renderHtml, spokenRange, startPos);
 }

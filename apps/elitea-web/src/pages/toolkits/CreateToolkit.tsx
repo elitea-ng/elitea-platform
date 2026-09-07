@@ -15,6 +15,7 @@ import { CreateToolkitToolTabBar, ToolkitForm, ToolkitTypeSelector, type Toolkit
 import { t } from '@/shared/i18n';
 
 import { useToolkitCredentialPickerSlot } from './lib/credentialPickerSlots';
+import { useMcpLoadTools } from './lib/useMcpLoadTools';
 import { SHAREPOINT_AUTH_MODALS } from './lib/sharepointAuthModals';
 import { useSelectedProjectId } from './lib/useSelectedProjectId';
 import type { EditToolDetail } from './lib/toolkitFormTypes';
@@ -210,10 +211,6 @@ export function CreateToolkit({ isMCP = false, isApplication = false, deps }: Cr
    * `projectId`) and both slots must travel in one object.
    */
   const renderCredentialPicker = useToolkitCredentialPickerSlot(projectId);
-  const toolkitFormSlots = useMemo(
-    () => ({ sharepointAuthModals: SHAREPOINT_AUTH_MODALS, renderCredentialPicker }),
-    [renderCredentialPicker],
-  );
 
   const handleSelectTool = useCallback((detail: EditToolDetail) => {
     setEditToolDetail(detail);
@@ -235,6 +232,22 @@ export function CreateToolkit({ isMCP = false, isApplication = false, deps }: Cr
       saveValidation.clearSaveErrors();
     },
     [saveValidation],
+  );
+
+  /**
+   * The "Load Tools" wiring for a Remote or pre-built MCP toolkit. It has to be
+   * built AFTER `handleChangeToolDetail`, which it writes the discovered tool
+   * names through — see `./lib/useMcpLoadTools.tsx` for why the slot was inert
+   * until now.
+   */
+  const mcpLoadTools = useMcpLoadTools({ projectId, editToolDetail, onChangeToolDetail: handleChangeToolDetail });
+  const toolkitFormSlots = useMemo(
+    () => ({
+      sharepointAuthModals: SHAREPOINT_AUTH_MODALS,
+      renderCredentialPicker,
+      ...(mcpLoadTools !== undefined && { toolActionsExtra: mcpLoadTools }),
+    }),
+    [renderCredentialPicker, mcpLoadTools],
   );
 
   const handleSetFormField = useCallback((field: string, value: unknown) => {

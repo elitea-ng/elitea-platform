@@ -35,6 +35,8 @@ import { Route as ShellCredentialsTabRouteImport } from './routes/_shell/credent
 import { Route as ShellCredentialsCreateCredentialRouteImport } from './routes/_shell/credentials/create-credential'
 import { Route as ShellDeepwikiIndexRouteImport } from './routes/_shell/deepwiki.index'
 import { Route as ShellDeepwikiToolkitIdRouteImport } from './routes/_shell/deepwiki.$toolkitId'
+import { Route as ShellInventoryIndexRouteImport } from './routes/_shell/inventory.index'
+import { Route as ShellInventoryToolkitIdRouteImport } from './routes/_shell/inventory.$toolkitId'
 import { Route as ShellMcpsIndexRouteImport } from './routes/_shell/mcps/index'
 import { Route as ShellMcpsTabRouteImport } from './routes/_shell/mcps/$tab'
 import { Route as ShellMcpsCreateRouteImport } from './routes/_shell/mcps/create'
@@ -54,6 +56,7 @@ import { Route as ShellSettingsNotificationsRouteImport } from './routes/_shell/
 import { Route as ShellSettingsPersonalizationRouteImport } from './routes/_shell/settings/personalization'
 import { Route as ShellSettingsPreferencesRouteImport } from './routes/_shell/settings/preferences'
 import { Route as ShellSettingsProfileRouteImport } from './routes/_shell/settings/profile'
+import { Route as ShellSettingsProjectGeneralRouteImport } from './routes/_shell/settings/project-general'
 import { Route as ShellSettingsProjectParamsRouteImport } from './routes/_shell/settings/project-params'
 import { Route as ShellSettingsPromptsRouteImport } from './routes/_shell/settings/prompts'
 import { Route as ShellSettingsSecretsRouteImport } from './routes/_shell/settings/secrets'
@@ -223,6 +226,16 @@ const ShellDeepwikiToolkitIdRoute = ShellDeepwikiToolkitIdRouteImport.update({
   path: '/deepwiki/$toolkitId',
   getParentRoute: () => ShellRouteRoute,
 } as any)
+const ShellInventoryIndexRoute = ShellInventoryIndexRouteImport.update({
+  id: '/inventory/',
+  path: '/inventory/',
+  getParentRoute: () => ShellRouteRoute,
+} as any)
+const ShellInventoryToolkitIdRoute = ShellInventoryToolkitIdRouteImport.update({
+  id: '/inventory/$toolkitId',
+  path: '/inventory/$toolkitId',
+  getParentRoute: () => ShellRouteRoute,
+} as any)
 const ShellMcpsIndexRoute = ShellMcpsIndexRouteImport.update({
   id: '/mcps/',
   path: '/mcps/',
@@ -326,6 +339,12 @@ const ShellSettingsProfileRoute = ShellSettingsProfileRouteImport.update({
   path: '/profile',
   getParentRoute: () => ShellSettingsRouteRoute,
 } as any)
+const ShellSettingsProjectGeneralRoute =
+  ShellSettingsProjectGeneralRouteImport.update({
+    id: '/project-general',
+    path: '/project-general',
+    getParentRoute: () => ShellSettingsRouteRoute,
+  } as any)
 const ShellSettingsProjectParamsRoute =
   ShellSettingsProjectParamsRouteImport.update({
     id: '/project-params',
@@ -551,6 +570,7 @@ export interface FileRoutesByFullPath {
   '/credentials/$tab': typeof ShellCredentialsTabRouteWithChildren
   '/credentials/create-credential': typeof ShellCredentialsCreateCredentialRouteWithChildren
   '/deepwiki/$toolkitId': typeof ShellDeepwikiToolkitIdRoute
+  '/inventory/$toolkitId': typeof ShellInventoryToolkitIdRoute
   '/mcps/$tab': typeof ShellMcpsTabRouteWithChildren
   '/mcps/create': typeof ShellMcpsCreateRouteWithChildren
   '/pipelines/$tab': typeof ShellPipelinesTabRouteWithChildren
@@ -567,6 +587,7 @@ export interface FileRoutesByFullPath {
   '/settings/personalization': typeof ShellSettingsPersonalizationRoute
   '/settings/preferences': typeof ShellSettingsPreferencesRoute
   '/settings/profile': typeof ShellSettingsProfileRoute
+  '/settings/project-general': typeof ShellSettingsProjectGeneralRoute
   '/settings/project-params': typeof ShellSettingsProjectParamsRoute
   '/settings/prompts': typeof ShellSettingsPromptsRoute
   '/settings/secrets': typeof ShellSettingsSecretsRoute
@@ -584,6 +605,7 @@ export interface FileRoutesByFullPath {
   '/artifacts/': typeof ShellArtifactsIndexRoute
   '/credentials/': typeof ShellCredentialsIndexRoute
   '/deepwiki/': typeof ShellDeepwikiIndexRoute
+  '/inventory/': typeof ShellInventoryIndexRoute
   '/mcps/': typeof ShellMcpsIndexRoute
   '/pipelines/': typeof ShellPipelinesIndexRoute
   '/settings/': typeof ShellSettingsIndexRoute
@@ -633,6 +655,7 @@ export interface FileRoutesByTo {
   '/credentials/$tab': typeof ShellCredentialsTabRouteWithChildren
   '/credentials/create-credential': typeof ShellCredentialsCreateCredentialRouteWithChildren
   '/deepwiki/$toolkitId': typeof ShellDeepwikiToolkitIdRoute
+  '/inventory/$toolkitId': typeof ShellInventoryToolkitIdRoute
   '/mcps/$tab': typeof ShellMcpsTabRouteWithChildren
   '/mcps/create': typeof ShellMcpsCreateRouteWithChildren
   '/pipelines/$tab': typeof ShellPipelinesTabRouteWithChildren
@@ -649,6 +672,7 @@ export interface FileRoutesByTo {
   '/settings/personalization': typeof ShellSettingsPersonalizationRoute
   '/settings/preferences': typeof ShellSettingsPreferencesRoute
   '/settings/profile': typeof ShellSettingsProfileRoute
+  '/settings/project-general': typeof ShellSettingsProjectGeneralRoute
   '/settings/project-params': typeof ShellSettingsProjectParamsRoute
   '/settings/prompts': typeof ShellSettingsPromptsRoute
   '/settings/secrets': typeof ShellSettingsSecretsRoute
@@ -666,6 +690,7 @@ export interface FileRoutesByTo {
   '/artifacts': typeof ShellArtifactsIndexRoute
   '/credentials': typeof ShellCredentialsIndexRoute
   '/deepwiki': typeof ShellDeepwikiIndexRoute
+  '/inventory': typeof ShellInventoryIndexRoute
   '/mcps': typeof ShellMcpsIndexRoute
   '/pipelines': typeof ShellPipelinesIndexRoute
   '/settings': typeof ShellSettingsIndexRoute
@@ -718,6 +743,7 @@ export interface FileRoutesById {
   '/_shell/credentials/$tab': typeof ShellCredentialsTabRouteWithChildren
   '/_shell/credentials/create-credential': typeof ShellCredentialsCreateCredentialRouteWithChildren
   '/_shell/deepwiki/$toolkitId': typeof ShellDeepwikiToolkitIdRoute
+  '/_shell/inventory/$toolkitId': typeof ShellInventoryToolkitIdRoute
   '/_shell/mcps/$tab': typeof ShellMcpsTabRouteWithChildren
   '/_shell/mcps/create': typeof ShellMcpsCreateRouteWithChildren
   '/_shell/pipelines/$tab': typeof ShellPipelinesTabRouteWithChildren
@@ -734,6 +760,7 @@ export interface FileRoutesById {
   '/_shell/settings/personalization': typeof ShellSettingsPersonalizationRoute
   '/_shell/settings/preferences': typeof ShellSettingsPreferencesRoute
   '/_shell/settings/profile': typeof ShellSettingsProfileRoute
+  '/_shell/settings/project-general': typeof ShellSettingsProjectGeneralRoute
   '/_shell/settings/project-params': typeof ShellSettingsProjectParamsRoute
   '/_shell/settings/prompts': typeof ShellSettingsPromptsRoute
   '/_shell/settings/secrets': typeof ShellSettingsSecretsRoute
@@ -751,6 +778,7 @@ export interface FileRoutesById {
   '/_shell/artifacts/': typeof ShellArtifactsIndexRoute
   '/_shell/credentials/': typeof ShellCredentialsIndexRoute
   '/_shell/deepwiki/': typeof ShellDeepwikiIndexRoute
+  '/_shell/inventory/': typeof ShellInventoryIndexRoute
   '/_shell/mcps/': typeof ShellMcpsIndexRoute
   '/_shell/pipelines/': typeof ShellPipelinesIndexRoute
   '/_shell/settings/': typeof ShellSettingsIndexRoute
@@ -803,6 +831,7 @@ export interface FileRouteTypes {
     | '/credentials/$tab'
     | '/credentials/create-credential'
     | '/deepwiki/$toolkitId'
+    | '/inventory/$toolkitId'
     | '/mcps/$tab'
     | '/mcps/create'
     | '/pipelines/$tab'
@@ -819,6 +848,7 @@ export interface FileRouteTypes {
     | '/settings/personalization'
     | '/settings/preferences'
     | '/settings/profile'
+    | '/settings/project-general'
     | '/settings/project-params'
     | '/settings/prompts'
     | '/settings/secrets'
@@ -836,6 +866,7 @@ export interface FileRouteTypes {
     | '/artifacts/'
     | '/credentials/'
     | '/deepwiki/'
+    | '/inventory/'
     | '/mcps/'
     | '/pipelines/'
     | '/settings/'
@@ -885,6 +916,7 @@ export interface FileRouteTypes {
     | '/credentials/$tab'
     | '/credentials/create-credential'
     | '/deepwiki/$toolkitId'
+    | '/inventory/$toolkitId'
     | '/mcps/$tab'
     | '/mcps/create'
     | '/pipelines/$tab'
@@ -901,6 +933,7 @@ export interface FileRouteTypes {
     | '/settings/personalization'
     | '/settings/preferences'
     | '/settings/profile'
+    | '/settings/project-general'
     | '/settings/project-params'
     | '/settings/prompts'
     | '/settings/secrets'
@@ -918,6 +951,7 @@ export interface FileRouteTypes {
     | '/artifacts'
     | '/credentials'
     | '/deepwiki'
+    | '/inventory'
     | '/mcps'
     | '/pipelines'
     | '/settings'
@@ -969,6 +1003,7 @@ export interface FileRouteTypes {
     | '/_shell/credentials/$tab'
     | '/_shell/credentials/create-credential'
     | '/_shell/deepwiki/$toolkitId'
+    | '/_shell/inventory/$toolkitId'
     | '/_shell/mcps/$tab'
     | '/_shell/mcps/create'
     | '/_shell/pipelines/$tab'
@@ -985,6 +1020,7 @@ export interface FileRouteTypes {
     | '/_shell/settings/personalization'
     | '/_shell/settings/preferences'
     | '/_shell/settings/profile'
+    | '/_shell/settings/project-general'
     | '/_shell/settings/project-params'
     | '/_shell/settings/prompts'
     | '/_shell/settings/secrets'
@@ -1002,6 +1038,7 @@ export interface FileRouteTypes {
     | '/_shell/artifacts/'
     | '/_shell/credentials/'
     | '/_shell/deepwiki/'
+    | '/_shell/inventory/'
     | '/_shell/mcps/'
     | '/_shell/pipelines/'
     | '/_shell/settings/'
@@ -1223,6 +1260,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ShellDeepwikiToolkitIdRouteImport
       parentRoute: typeof ShellRouteRoute
     }
+    '/_shell/inventory/': {
+      id: '/_shell/inventory/'
+      path: '/inventory'
+      fullPath: '/inventory/'
+      preLoaderRoute: typeof ShellInventoryIndexRouteImport
+      parentRoute: typeof ShellRouteRoute
+    }
+    '/_shell/inventory/$toolkitId': {
+      id: '/_shell/inventory/$toolkitId'
+      path: '/inventory/$toolkitId'
+      fullPath: '/inventory/$toolkitId'
+      preLoaderRoute: typeof ShellInventoryToolkitIdRouteImport
+      parentRoute: typeof ShellRouteRoute
+    }
     '/_shell/mcps/': {
       id: '/_shell/mcps/'
       path: '/mcps'
@@ -1354,6 +1405,13 @@ declare module '@tanstack/react-router' {
       path: '/profile'
       fullPath: '/settings/profile'
       preLoaderRoute: typeof ShellSettingsProfileRouteImport
+      parentRoute: typeof ShellSettingsRouteRoute
+    }
+    '/_shell/settings/project-general': {
+      id: '/_shell/settings/project-general'
+      path: '/project-general'
+      fullPath: '/settings/project-general'
+      preLoaderRoute: typeof ShellSettingsProjectGeneralRouteImport
       parentRoute: typeof ShellSettingsRouteRoute
     }
     '/_shell/settings/project-params': {
@@ -1646,6 +1704,7 @@ interface ShellSettingsRouteRouteChildren {
   ShellSettingsPersonalizationRoute: typeof ShellSettingsPersonalizationRoute
   ShellSettingsPreferencesRoute: typeof ShellSettingsPreferencesRoute
   ShellSettingsProfileRoute: typeof ShellSettingsProfileRoute
+  ShellSettingsProjectGeneralRoute: typeof ShellSettingsProjectGeneralRoute
   ShellSettingsProjectParamsRoute: typeof ShellSettingsProjectParamsRoute
   ShellSettingsPromptsRoute: typeof ShellSettingsPromptsRoute
   ShellSettingsSecretsRoute: typeof ShellSettingsSecretsRoute
@@ -1670,6 +1729,7 @@ const ShellSettingsRouteRouteChildren: ShellSettingsRouteRouteChildren = {
   ShellSettingsPersonalizationRoute: ShellSettingsPersonalizationRoute,
   ShellSettingsPreferencesRoute: ShellSettingsPreferencesRoute,
   ShellSettingsProfileRoute: ShellSettingsProfileRoute,
+  ShellSettingsProjectGeneralRoute: ShellSettingsProjectGeneralRoute,
   ShellSettingsProjectParamsRoute: ShellSettingsProjectParamsRoute,
   ShellSettingsPromptsRoute: ShellSettingsPromptsRoute,
   ShellSettingsSecretsRoute: ShellSettingsSecretsRoute,
@@ -1916,6 +1976,7 @@ interface ShellRouteRouteChildren {
   ShellCredentialsTabRoute: typeof ShellCredentialsTabRouteWithChildren
   ShellCredentialsCreateCredentialRoute: typeof ShellCredentialsCreateCredentialRouteWithChildren
   ShellDeepwikiToolkitIdRoute: typeof ShellDeepwikiToolkitIdRoute
+  ShellInventoryToolkitIdRoute: typeof ShellInventoryToolkitIdRoute
   ShellMcpsTabRoute: typeof ShellMcpsTabRouteWithChildren
   ShellMcpsCreateRoute: typeof ShellMcpsCreateRouteWithChildren
   ShellPipelinesTabRoute: typeof ShellPipelinesTabRouteWithChildren
@@ -1930,6 +1991,7 @@ interface ShellRouteRouteChildren {
   ShellArtifactsIndexRoute: typeof ShellArtifactsIndexRoute
   ShellCredentialsIndexRoute: typeof ShellCredentialsIndexRoute
   ShellDeepwikiIndexRoute: typeof ShellDeepwikiIndexRoute
+  ShellInventoryIndexRoute: typeof ShellInventoryIndexRoute
   ShellMcpsIndexRoute: typeof ShellMcpsIndexRoute
   ShellPipelinesIndexRoute: typeof ShellPipelinesIndexRoute
   ShellSkillsIndexRoute: typeof ShellSkillsIndexRoute
@@ -1960,6 +2022,7 @@ const ShellRouteRouteChildren: ShellRouteRouteChildren = {
   ShellCredentialsCreateCredentialRoute:
     ShellCredentialsCreateCredentialRouteWithChildren,
   ShellDeepwikiToolkitIdRoute: ShellDeepwikiToolkitIdRoute,
+  ShellInventoryToolkitIdRoute: ShellInventoryToolkitIdRoute,
   ShellMcpsTabRoute: ShellMcpsTabRouteWithChildren,
   ShellMcpsCreateRoute: ShellMcpsCreateRouteWithChildren,
   ShellPipelinesTabRoute: ShellPipelinesTabRouteWithChildren,
@@ -1974,6 +2037,7 @@ const ShellRouteRouteChildren: ShellRouteRouteChildren = {
   ShellArtifactsIndexRoute: ShellArtifactsIndexRoute,
   ShellCredentialsIndexRoute: ShellCredentialsIndexRoute,
   ShellDeepwikiIndexRoute: ShellDeepwikiIndexRoute,
+  ShellInventoryIndexRoute: ShellInventoryIndexRoute,
   ShellMcpsIndexRoute: ShellMcpsIndexRoute,
   ShellPipelinesIndexRoute: ShellPipelinesIndexRoute,
   ShellSkillsIndexRoute: ShellSkillsIndexRoute,

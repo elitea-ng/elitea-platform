@@ -15,21 +15,19 @@ import { BaseBtn } from '@/shared/ui/BaseBtn';
 import { InfoLabelWithTooltip } from '@/shared/ui/InfoLabelWithTooltip';
 
 import { useDefaultModelSaving } from '../../lib/ai-configuration/useDefaultModelSaving';
+import { useModelOptions } from '../../lib/ai-configuration/useModelOptions';
 import {
   StoredConnectionHealthProvider,
   collectConfigurationIds,
   useStoredConnectionHealth,
 } from '../../lib/ai-configuration/useStoredConnectionHealth';
 
-import { useModelsQuery } from '../../api/ai-configuration/api';
 import AddModelButton from './AddModelButton';
 import {
-  buildOptions,
   computeProjectGating,
   defaultValueOf,
   sectionHoldsRevealedRow,
   tierDefaultValueOf,
-  withDefaultModels,
 } from './configurationsPanel.helpers';
 import ConfigurationSection, {
   type AdditionalDefaultSetting,
@@ -75,14 +73,27 @@ export default memo(function ConfigurationsPanel({
     [projectId],
   );
 
-  /* Real per-section default models — old app: 6× `useListModelsQuery`
-     (`ModelConfiguration.jsx:42-78`). */
-  const llmDefaults = withDefaultModels(useModelsQuery(projectId, 'llm', includeShared).data);
-  const embeddingDefaults = withDefaultModels(useModelsQuery(projectId, 'embedding', includeShared).data);
-  const vectorStorageDefaults = withDefaultModels(useModelsQuery(projectId, 'vectorstorage', includeShared).data);
-  const imageDefaults = withDefaultModels(useModelsQuery(projectId, 'image_generation', includeShared).data);
-  const asrDefaults = withDefaultModels(useModelsQuery(projectId, 'asr', includeShared).data);
-  const ttsDefaults = withDefaultModels(useModelsQuery(projectId, 'tts', includeShared).data);
+  /*
+   * THE OPTIONS AND THE DEFAULTS COME FROM ONE PLACE (#80). Both are the
+   * MODEL CATALOGUE — `GET /configurations/models/{projectId}` — which is what
+   * the baseline's `useModelOptions` reads and what the POST that saves a
+   * default expects.
+   *
+   * They used to disagree. The options were built from the CONFIGURATION rows
+   * and labelled with `elitea_title`, while every `defaultValueOf` below is
+   * `${default_model_name}<<>>${default_model_project_id}` — a model name. No
+   * option ever equalled the select's value, so the Default select could not
+   * show the model that was the default, and a section with no configuration
+   * rows (production project 1 has none for embedding or vector storage) had
+   * no options at all. See `useModelOptions` for the measurements.
+   */
+  const models = useModelOptions({ projectId, includeShared });
+  const llmDefaults = models.sectionData.llm;
+  const embeddingDefaults = models.sectionData.embedding;
+  const vectorStorageDefaults = models.sectionData.vectorstorage;
+  const imageDefaults = models.sectionData.image_generation;
+  const asrDefaults = models.sectionData.asr;
+  const ttsDefaults = models.sectionData.tts;
 
   const { saveErrors, handleDefaultChange } = useDefaultModelSaving(projectId);
 
@@ -114,19 +125,6 @@ export default memo(function ConfigurationsPanel({
     [],
   );
 
-  /* Compute select options directly — the config arrays come from a prop that
-     may change reference every render, so useMemo would be useless (dep always changes).
-     The child <ConfigurationSection> components are memoized, so unstable arrays here
-     do not cause unnecessary re-renders downstream. */
-  const modelOptions = buildOptions(llmConfigs);
-  const lowTierOptions = buildOptions(llmConfigs.filter((c) => (c.data as Record<string, unknown>)?.low_tier));
-  const highTierOptions = buildOptions(llmConfigs.filter((c) => (c.data as Record<string, unknown>)?.high_tier));
-  const embeddingOptions = buildOptions(embeddingConfigs);
-  const vectorStorageOptions = buildOptions(vectorStorageConfigs);
-  const imageOptions = buildOptions(imageConfigs);
-  const asrOptions = buildOptions(asrConfigs);
-  const ttsOptions = buildOptions(ttsConfigs);
-
   /* LLM section needs extra low-tier / high-tier selects */
   const llmAdditionalSettings: AdditionalDefaultSetting[] = useMemo(
     () => [
@@ -140,7 +138,7 @@ export default memo(function ConfigurationsPanel({
           ),
         ),
         value: tierDefaultValueOf(llmDefaults.high_tier_default_model_name, llmDefaults.high_tier_default_model_project_id),
-        options: highTierOptions,
+        options: models.highTierModelOptions,
         onChange: handleDefaultChange('llm_high_tier'),
         ...(saveErrors['llm_high_tier'] !== undefined ? { error: saveErrors['llm_high_tier'] } : {}),
       },
@@ -154,12 +152,12 @@ export default memo(function ConfigurationsPanel({
           ),
         ),
         value: tierDefaultValueOf(llmDefaults.low_tier_default_model_name, llmDefaults.low_tier_default_model_project_id),
-        options: lowTierOptions,
+        options: models.lowTierModelOptions,
         onChange: handleDefaultChange('llm_low_tier'),
         ...(saveErrors['llm_low_tier'] !== undefined ? { error: saveErrors['llm_low_tier'] } : {}),
       },
     ],
-    [renderInfoLabel, highTierOptions, lowTierOptions, handleDefaultChange, llmDefaults, saveErrors],
+    [renderInfoLabel, models.highTierModelOptions, models.lowTierModelOptions, handleDefaultChange, llmDefaults, saveErrors],
   );
 
   // Scrolls the revealed card into view (its section can open below the fold).
@@ -227,7 +225,7 @@ export default memo(function ConfigurationsPanel({
             ),
           )}
           defaultSettingValue={defaultValueOf(llmDefaults)}
-          defaultSettingOptions={modelOptions}
+          defaultSettingOptions={models.modelOptions}
           onChangeDefaultSetting={handleDefaultChange('llm')}
           defaultSettingError={saveErrors['llm']}
           additionalDefaultSettings={llmAdditionalSettings}
@@ -249,7 +247,7 @@ export default memo(function ConfigurationsPanel({
             ),
           )}
           defaultSettingValue={defaultValueOf(embeddingDefaults)}
-          defaultSettingOptions={embeddingOptions}
+          defaultSettingOptions={models.embeddingModelOptions}
           onChangeDefaultSetting={handleDefaultChange('embedding')}
           defaultSettingError={saveErrors['embedding']}
         />
@@ -270,7 +268,7 @@ export default memo(function ConfigurationsPanel({
             ),
           )}
           defaultSettingValue={defaultValueOf(vectorStorageDefaults)}
-          defaultSettingOptions={vectorStorageOptions}
+          defaultSettingOptions={models.vectorStorageOptions}
           onChangeDefaultSetting={handleDefaultChange('vectorstorage')}
           defaultSettingError={saveErrors['vectorstorage']}
         />
@@ -291,7 +289,7 @@ export default memo(function ConfigurationsPanel({
             ),
           )}
           defaultSettingValue={defaultValueOf(imageDefaults)}
-          defaultSettingOptions={imageOptions}
+          defaultSettingOptions={models.imageGenerationOptions}
           onChangeDefaultSetting={handleDefaultChange('image_generation')}
           defaultSettingError={saveErrors['image_generation']}
         />
@@ -312,7 +310,7 @@ export default memo(function ConfigurationsPanel({
             ),
           )}
           defaultSettingValue={defaultValueOf(asrDefaults)}
-          defaultSettingOptions={asrOptions}
+          defaultSettingOptions={models.asrOptions}
           onChangeDefaultSetting={handleDefaultChange('asr')}
           defaultSettingError={saveErrors['asr']}
         />
@@ -333,7 +331,7 @@ export default memo(function ConfigurationsPanel({
             ),
           )}
           defaultSettingValue={defaultValueOf(ttsDefaults)}
-          defaultSettingOptions={ttsOptions}
+          defaultSettingOptions={models.ttsOptions}
           onChangeDefaultSetting={handleDefaultChange('tts')}
           defaultSettingError={saveErrors['tts']}
         />

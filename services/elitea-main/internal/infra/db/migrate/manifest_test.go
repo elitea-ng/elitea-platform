@@ -399,7 +399,66 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// deployment, and migrations are checksum-immutable.
 	//
 	// Written as 0111 and renumbered at merge: 0111 and 0112 were taken above.
-	require.EqualValues(t, 113, Head(shared))
+	//
+	// 114: shared/0114_toolkit_type_policy.sql, the store behind the new
+	// `Admin › Toolkits` page: centry.toolkit_type_policy (one deployment-wide
+	// decision per toolkit type — enabled, disabled, or restricted to granted
+	// projects — with a required reason and a recorded decider) and
+	// centry.toolkit_type_project_grant (the per-project exception, in either
+	// direction, cascading off the policy row).
+	//
+	// BOTH TABLES RECORD DEVIATIONS ONLY. There is no bootstrap INSERT, and an
+	// empty pair of tables serves the FULL default catalogue. An allow-list
+	// seeded at install would make a fresh deployment offer no toolkit at all,
+	// and the failure would read as a broken catalogue rather than a missing
+	// seed.
+	//
+	// It also grants `toolkit_catalogue.type.manage` to the administration-mode
+	// super_admin, admin and system. A NEW string, CHOSEN rather than recovered
+	// — the legacy platform has no add-or-remove-a-type surface, so there is no
+	// pylon declaration to transcribe — and deliberately not a reuse of
+	// `runtime.plugins`: that grant already reaches the guardrails deny-list
+	// editor, which stops a type WORKING, while this decides what the product
+	// OFFERS and to which projects.
+	//
+	// A new file for 0110's reason: 0060 returns early on any configured
+	// deployment, and migrations are checksum-immutable.
+	//
+	// 0115 (WP16, issues #340/#616) admits the worker's fourth capability,
+	// `toolkit.call_tool.v1`, into the kernel's capability allowlists so a
+	// single toolkit tool can run on the existing runtime plane. The producer
+	// in elitea-main is a follow-up; the acceptance lands first so the
+	// worker's manifest and the kernel agree on the capability name.
+	//
+	// 116: shared/0116_evaluation_dataset_run_permissions.sql, the six
+	// default-mode grants Agent Evaluation slice 2 needs — the dataset CRUD
+	// four plus `run.read` and `run.create`. It is the RBAC half of the slice;
+	// the tables are tenant/0132.
+	//
+	// It is the SECOND file here, after 0104, to seed permissions the pylon
+	// catalogue does not declare, and for the same verified reason: Agent
+	// Evaluation is not in the plugin corpus this repository carries. The
+	// search was repeated for this slice rather than inherited — `eval_dataset`,
+	// `eval_run`, `eval_result`, `eval_suite` and `eval_dimension` across
+	// legacy/plugins/* and legacy/centry/*/plugins/* return only three vestiges
+	// of a feature that was planned and never built. So the names come from the
+	// product's own UI constants and the routes gate through exported
+	// constants rather than router.go's `projectPermission` helper. The grant
+	// gate still binds; only the pylon-provenance assertion, which would be
+	// false, does not.
+	//
+	// `run.delete`, `suite.*` and `human_score.*` are declared by the reference
+	// and NOT granted here, because this slice serves no route for them: a
+	// grant nothing gates is a string nothing would notice was misspelled.
+	//
+	// A new file for 0110's reason: 0060 returns early on any configured
+	// deployment, and migrations are checksum-immutable.
+	//
+	// RENUMBERED from 0115 at merge — 0115 was free when it was written and the
+	// toolkit call-tool capability above claimed it first. 0102, 0103 and 0104
+	// carry the same note for the same reason: two streams each correctly claim
+	// the next free number, and only the merge can see the collision.
+	require.EqualValues(t, 116, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
@@ -451,7 +510,43 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// `eval_bindings`, `eval_datasets`, `eval_dataset_cases`, `eval_runs`,
 	// `eval_results` and `eval_human_scores` are deliberately absent and must
 	// arrive with the code that reads them.
-	require.EqualValues(t, 130, Head(tenant))
+	//
+	// 131: tenant/0131_owner_id_meanings_and_guards.sql, the second half of
+	// issue #533. 0128 wrote the meanings onto the columns and added no
+	// constraint, so `applications.owner_id` stayed DISPUTED: the legacy
+	// runtime reads it as a project and every writer here stored a user. 0131
+	// settles it as the PROJECT, repairs the rows that hold a user id, and
+	// gives the PROJECT-kind columns a FOREIGN KEY to centry.project(id). It
+	// also states the meaning of both `prompt_collections` columns, which 0128
+	// deliberately left blank, and it replaces the NO ACTION foreign key that
+	// 0130 put on eval_dimensions.application_id with the same key ON DELETE
+	// CASCADE, so an agent with a dimension can still be deleted.
+	//
+	// 132: tenant/0132_eval_datasets_runs.sql, Agent Evaluation slice 2 — the
+	// four tables the smallest end-to-end slice needs: eval_datasets,
+	// eval_dataset_cases, eval_runs and eval_results. 0130's header listed all
+	// seven remaining tables as "must arrive with the code that reads them";
+	// this file brings four of them with that code. eval_suites, eval_bindings
+	// and eval_human_scores stay absent, and the run carries a per-run
+	// `snapshot` instead of a suite: a dimension is editable, so a scorecard
+	// that re-read the live library would silently re-scale a finished run
+	// (the normalisation divides by the scale range and flips on polarity).
+	//
+	// Every foreign key to `applications` is ON DELETE CASCADE from the start,
+	// which is 0131's decision applied rather than re-litigated: 0130's NO
+	// ACTION key made an agent carrying an evaluation row undeletable and
+	// stopped a project delete on the same row, and 0131 had to repair it.
+	// `ON DELETE SET NULL` is not the alternative here, because a NULL
+	// application_id means "a project-wide dataset" — SET NULL would promote
+	// one agent's dataset into the whole project's library.
+	//
+	// 133: tenant/0133_pipeline_triggers_and_schedules.sql, the storage for the
+	// two unattended pipeline entry points legacy had and this stack did not —
+	// an inbound signed trigger (issue 192) and a per-pipeline cron (issue
+	// 193). It introduces NO permission, so it has no shared sibling: the read
+	// is `models.applications.version.details` and every write is
+	// `models.applications.version.update`, both already seeded.
+	require.EqualValues(t, 133, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own

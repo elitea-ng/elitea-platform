@@ -65,12 +65,26 @@ type Tool struct {
 	// ResolveCurrentApplicationTurn), so a target with no version cannot be
 	// admitted at all.
 	applicationVersionID int64
+	// toolkitID and toolkitToolName are the toolkit half's discriminator, and
+	// they are BOTH required to run one (#616): the producer needs the saved
+	// `elitea_tools` row to redeem settings from, and the SDK tool name, which
+	// is NOT the published MCP name — that one is `<toolkit>_<tool>` with
+	// pylon's sanitiser applied, and no toolkit has a tool called that.
+	toolkitID       int64
+	toolkitToolName string
 }
 
 // runnableAgent reports whether this descriptor names an agent this service can
-// execute. A toolkit tool answers false — see ToolkitExecutionUnavailableReason.
+// execute. A toolkit tool answers false — see runnableToolkitTool.
 func (t Tool) runnableAgent() bool {
 	return t.applicationID > 0 && t.applicationVersionID > 0
+}
+
+// runnableToolkitTool reports whether this descriptor names a toolkit tool this
+// service can run. The two predicates are mutually exclusive by construction:
+// each listing query populates one pair of fields and never the other.
+func (t Tool) runnableToolkitTool() bool {
+	return t.toolkitID > 0 && t.toolkitToolName != ""
 }
 
 // toolSource is the seam the HTTP layer depends on, so the protocol handling in
@@ -253,7 +267,7 @@ func (p postgresToolSource) toolkitTools(ctx context.Context, schema string, too
 		return nil, errNoPool
 	}
 	query := fmt.Sprintf(`
-		SELECT name, type, COALESCE(description, ''), COALESCE(settings -> 'selected_tools', '[]'::jsonb)
+		SELECT id, name, type, COALESCE(description, ''), COALESCE(settings -> 'selected_tools', '[]'::jsonb)
 		FROM %s.elitea_tools
 		WHERE meta #>> '{mcp_options,available_by_mcp}' = 'true'`, schema)
 	args := []any{}
@@ -271,14 +285,17 @@ func (p postgresToolSource) toolkitTools(ctx context.Context, schema string, too
 
 	var tools []Tool
 	for rows.Next() {
+		var id int64
 		var name, toolkitType, description string
 		var selected []byte
-		if err := rows.Scan(&name, &toolkitType, &description, &selected); err != nil {
+		if err := rows.Scan(&id, &name, &toolkitType, &description, &selected); err != nil {
 			return nil, err
 		}
 		for _, tool := range selectedToolNames(selected) {
 			tools = append(tools, Tool{
-				Name: toolIdentifier(name + "_" + tool),
+				toolkitID:       id,
+				toolkitToolName: tool,
+				Name:            toolIdentifier(name + "_" + tool),
 				// pylon's exact sentence. It is the only description a toolkit
 				// tool has: the per-tool text lives in the SDK's argument
 				// schemas, which this service does not hold (see below).

@@ -38,17 +38,10 @@
  *    it.
  */
 import type { Project } from '@/entities/project';
-import { isPublicProject, sortProjectsByName } from '@/entities/project';
+import { isPersonalProjectName, isPublicProject, sortProjectsByName } from '@/entities/project';
 
 /** pylon's stored name for the shared public project (`PROJECT_PUBLIC_NAME`). */
 const PUBLIC_STORAGE_NAME = 'promptlib_public';
-
-/**
- * pylon's stored name for a personal project
- * (`PROJECT_PERSONAL_NAME_TEMPLATE`, `project_user_<uid>`) — the same rule the
- * admin projects listing uses to answer `is_personal`.
- */
-const PERSONAL_STORAGE_NAME = /^project_user_\d+$/;
 
 /** Swaps a reserved storage name for its user-facing label, leaving any real name alone. */
 function withDisplayName(project: Project, reserved: boolean, label: string): Project {
@@ -65,7 +58,7 @@ export function orderedProjectOptions(
       return withDisplayName(project, project.name === PUBLIC_STORAGE_NAME, 'Public');
     }
     if (personalProjectId !== undefined && String(project.id) === personalProjectId) {
-      return withDisplayName(project, PERSONAL_STORAGE_NAME.test(project.name), 'Private');
+      return withDisplayName(project, isPersonalProjectName(project.name), 'Private');
     }
     return project;
   });

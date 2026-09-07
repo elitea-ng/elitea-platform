@@ -267,7 +267,7 @@ func TestCurrentProviderCredentialTypeCoversGatewayProviderTable(t *testing.T) {
 // two of its reads fail silently when the catalogue has no entry for the type:
 //
 //   - `sectionFor` (api/v2/configurations/handler.go) resolves the `section`
-//     column from the entry. No entry stores `section = ''`, and the gateway
+//     column from the entry. No entry stores `section = ”`, and the gateway
 //     reads `WHERE section = 'ai_credentials'`. The credential never arrives.
 //   - `sealConfigurationSecrets` (api/v2/configurations/secret_sealing.go)
 //     reads the entry's data schema to find the password fields. No schema

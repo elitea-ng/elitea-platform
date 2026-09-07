@@ -99,4 +99,3 @@ func DrainBody(r *http.Request) []byte {
 	r.Body = io.NopCloser(bytes.NewReader(body))
 	return body
 }
-

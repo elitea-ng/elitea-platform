@@ -15,13 +15,16 @@
  * §3.5 component-props budget — see sibling `ActionView.tsx`/`entities/agents`
  * for the same established grouping pattern elsewhere in this Wave.
  *
- * Not ported: per-word TTS highlight sync (`spokenRange` translated into the
- * rendered markdown) — `shared/ui/Markdown` has no `spokenRange` prop yet,
- * unlike the baseline's richer markdown renderer; the read-aloud button
- * itself (`onAutoSpeak`) is fully wired. Canvas message items and the
- * References accordion are also not rendered — `entities/message`'s wire
- * type does not model canvas fields yet, and References wasn't part of this
- * fix round's scope.
+ * Per-word TTS highlight sync (issue #625 item 1): `tts.spokenRange` reaches
+ * `shared/ui/Markdown` now, but only for the row `tts.speakingMessageId`
+ * names — `spokenRange` is one global offset range, not scoped to a message
+ * id, so every other row must see `undefined` rather than highlight an
+ * unrelated offset at the same position. `speakingSegments` still has no
+ * reader; nothing in this pass needed it.
+ *
+ * Not ported: canvas message items and the References accordion —
+ * `entities/message`'s wire type does not model canvas fields yet, and
+ * References wasn't part of this fix round's scope.
  */
 import type { ReactNode } from 'react';
 import { useCallback, useEffect, useMemo } from 'react';
@@ -70,7 +73,7 @@ export interface ApplicationAnswerTts {
   readonly speakingMessageId?: string;
   /** Not yet consumed, see module doc. */
   readonly speakingSegments?: readonly unknown[];
-  /** Not yet consumed, see module doc. */
+  /** The word being read aloud, as an offset range — see module doc for the `speakingMessageId` gate. */
   readonly spokenRange?: { readonly start: number; readonly end: number };
 }
 
@@ -160,7 +163,7 @@ export function ApplicationAnswer({
   author: { participantName, isSwarmChild = false, swarmAgentName = '' } = {},
   status: { isLoading = false, isStreaming = false, isRegenerating = false } = {},
   actions: { onCopy, onDelete, onRegenerate, shouldDisableRegenerate = false } = {},
-  tts: { onAutoSpeak, speakingMessageId } = {},
+  tts: { onAutoSpeak, speakingMessageId, spokenRange } = {},
   continuation: { onContinueMcpExecution, onContinueTokenLimitExecution, hideContinueButton = false } = {},
   hitl: { hitlInterrupt, hitlInterrupts, onHitlResume } = {},
 }: ApplicationAnswerProps): ReactNode {
@@ -168,6 +171,10 @@ export function ApplicationAnswer({
   const isLoadingOrRegenerating = isLoading || isRegenerating;
   const exception = answer.exception;
   const canRenderContent = !isLoadingOrRegenerating;
+  // `spokenRange` is one global range, not scoped to a message id — it only
+  // means something for the row TTS is CURRENTLY reading. Every other answer
+  // row renders the same prop and must not highlight an unrelated offset.
+  const currentSpokenRange = speakingMessageId === messageId ? spokenRange : undefined;
   const requiresConfirmationSignal = getRequiresConfirmation(answer);
 
   const textItems = useMemo(() => getTextMessageItems(answer.messageItems), [answer.messageItems]);
@@ -294,9 +301,19 @@ export function ApplicationAnswer({
             marginTop: nonSwarmChildActions.length > 0 || !!exception ? '0.5rem' : 0,
           })}
         >
-          {canRenderContent && !!answer.content && textItems.length === 0 && <Markdown>{answer.content}</Markdown>}
+          {canRenderContent && !!answer.content && textItems.length === 0 && (
+            <Markdown spokenRange={currentSpokenRange}>{answer.content}</Markdown>
+          )}
 
-          {canRenderContent && textItems.map((item) => <Markdown key={item.key}>{item.content}</Markdown>)}
+          {canRenderContent &&
+            textItems.map((item) => (
+              <Markdown
+                key={item.key}
+                spokenRange={currentSpokenRange}
+              >
+                {item.content}
+              </Markdown>
+            ))}
 
           {!!exception && <ErrorTrace error={exception} />}
 

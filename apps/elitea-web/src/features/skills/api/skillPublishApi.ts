@@ -25,6 +25,7 @@
  */
 import {
   attachPublicSkill as attachPublicSkillRequest,
+  listAgentsWithSkill as listAgentsWithSkillRequest,
   listPublicSkills as listPublicSkillsRequest,
   listSkillCategories as listSkillCategoriesRequest,
   publishSkill as publishSkillRequest,
@@ -34,6 +35,7 @@ import {
 import { EliteaApiError } from '@/shared/api/generated/mutator';
 
 import type {
+  AgentWithSkill,
   AttachOutcome,
   PublicSkillListPage,
   PublicSkillSummary,
@@ -179,6 +181,22 @@ export async function fetchPublicSkills(request: PublicSkillQuery = {}): Promise
   const page = unwrap<{ readonly rows?: readonly PublicSkillSummary[]; readonly total?: number }>(response);
   const rows = page?.rows ?? [];
   return { rows, total: page?.total ?? rows.length };
+}
+
+/**
+ * Agent versions in this project that already carry the public skill, through
+ * the fork lineage the server walks (`internal/api/v2/skillpublish/attach.go`
+ * `AgentsWithSkill`). The attach dialog reads this so it never offers a
+ * second attach to a version that has the skill already — the write route
+ * answers that with a 409, not a fabricated success.
+ */
+export async function fetchAgentsWithSkill(
+  projectId: string,
+  publicSkillId: number | undefined,
+): Promise<readonly AgentWithSkill[]> {
+  if (projectId === '' || publicSkillId === undefined) return [];
+  const response = await listAgentsWithSkillRequest(projectId, publicSkillId);
+  return unwrap<{ readonly rows?: readonly AgentWithSkill[] }>(response)?.rows ?? [];
 }
 
 export async function attachPublicSkill(

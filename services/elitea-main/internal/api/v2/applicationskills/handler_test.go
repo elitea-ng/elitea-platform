@@ -462,7 +462,6 @@ func TestCurrentApplicationSkillsRouteRejectsIncompleteComposition(t *testing.T)
 	}{
 		"missing reader":      {authConfig: authConfig, permissions: permissions},
 		"missing principal":   {reader: reader, authConfig: apimw.AuthConfig{ForwardedIdentityVerifier: peer}, permissions: permissions},
-		"missing peer proof":  {reader: reader, authConfig: apimw.AuthConfig{PrincipalValidator: principal}, permissions: permissions},
 		"missing permissions": {reader: reader, authConfig: authConfig},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -479,6 +478,25 @@ func TestCurrentApplicationSkillsRouteRejectsIncompleteComposition(t *testing.T)
 			}
 		})
 	}
+
+	// NOTE(#395): "missing peer proof" stood in the table above. A missing
+	// ForwardedIdentityVerifier is the shape an OIDC or SAML install has, and
+	// apimw.Auth authenticates that caller through the session cookie or the
+	// bearer token. Refusing it kept the capability Form-only, and the route is
+	// the only handler for its path now. PrincipalValidator stays mandatory.
+	t.Run("composes without a peer verifier", func(t *testing.T) {
+		route, err := handler.NewCurrentApplicationSkillsRoute(
+			reader,
+			apimw.AuthConfig{PrincipalValidator: principal},
+			permissions,
+		)
+		if err != nil {
+			t.Fatalf("an OIDC-only composition was refused: %v", err)
+		}
+		if route == nil {
+			t.Fatal("an OIDC-only composition returned no route")
+		}
+	})
 
 	var nilRoute *handler.CurrentApplicationSkillsRoute
 	response := httptest.NewRecorder()
@@ -714,9 +732,9 @@ func TestCurrentApplicationSkillsRouteAnswersThePublishedSkillsListContract(
 		item.CreatedAt != "2026-03-04T05:06:07Z" {
 		t.Fatalf("item=%+v", item)
 	}
-	// One page, sized by the attached set — the same numbers
-	// SkillsRepo.ListForApplicationVersion answers on this path where the
-	// capability is off, so the same request gets the same body either way.
+	// One page, sized by the attached set — the same numbers the prototype
+	// handler answered before #395 deleted it, so a client that read them from
+	// the old route keeps reading the same values.
 	if envelope.Total != 1 || envelope.Page != 1 || envelope.PageSize != 1 ||
 		envelope.TotalPages != 1 || envelope.MaxSkills != 5 {
 		t.Fatalf(

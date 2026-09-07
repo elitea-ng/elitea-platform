@@ -10,6 +10,12 @@ services:
       ELITEA_RUNTIME_INDEX_INGEST_COMMAND_STREAM: ""
       ELITEA_RUNTIME_INDEX_INGEST_CONSUMER_GROUP: ""
       ELITEA_RUNTIME_INDEX_INGEST_STREAM_MAX_ENTRIES: ""
+      # This overlay is what selects the native worker, so it is also what tells
+      # elitea-main which toolkit types the running worker can build. The native
+      # worker materializes 22 families and SKIPS anything else with a warning,
+      # so without this the create page would offer tiles that attach to an
+      # agent and then quietly do nothing.
+      ELITEA_WORKER_IMPLEMENTATION: "rust"
 
   elitea-worker:
     image: ghcr.io/elitea-ng/elitea-worker-rust:standalone

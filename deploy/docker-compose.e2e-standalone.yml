@@ -200,6 +200,20 @@ services:
       S3_SECRET_KEY: "elitea-dev-secret"
       S3_REGION: "us-east-1"
       S3_FORCE_PATH_STYLE: "true"
+      # ── Current index types and attached skills (issues #394, #395) ─────
+      # ON, and this stack is where the widened gate is proved. Both routes
+      # used to demand a Form authentication document; this stack has none, so
+      # they could not be enabled here at all. #394 and #395 changed the gate
+      # to productionAuthenticationComposed — one reader of the caller's
+      # credential plus a PrincipalValidator — which the OIDC session plane
+      # above supplies.
+      #
+      # They are ON rather than OFF because each reviewed route is now the ONLY
+      # handler for its path: the prototype fallbacks are deleted from
+      # internal/api/router.go. With these off, the skill-mention dropdowns
+      # (src/features/chat-input/lib/hooks/useChatSkillMention.ts) read a 404.
+      ELITEA_INDEX_TYPES_ENABLED: "true"
+      ELITEA_APPLICATION_SKILLS_ENABLED: "true"
       # ── The DeepWiki facade, on the OIDC-only stack (ADR-0023 H0) ────────
       # The facade takes the API group's credential set, and under OIDC-only
       # auth that carries the LocalValidator for APPLICATION_SECRET_KEY-signed
@@ -215,6 +229,19 @@ services:
       ELITEA_DEEPWIKI_IDENTITY_SECRET: "e2e-deepwiki-identity"
       ELITEA_DEEPWIKI_GIT_ALLOWLIST: "github.com,*.github.com"
       ELITEA_DEEPWIKI_CALLBACK_BASE_URL: "http://elitea-main:8080"
+      # ── The Inventory facade, on the same OIDC-only stack ────────────────
+      # Same credential set, same reasoning: the API group's LocalValidator
+      # reads back the APPLICATION_SECRET_KEY-signed callback bearer the
+      # provider presents on its graph upload.
+      ELITEA_INVENTORY_ENABLED: "true"
+      ELITEA_INVENTORY_BASE_URL: "https://elitea-inventory:8080"
+      ELITEA_INVENTORY_SERVER_NAME: "elitea-inventory"
+      ELITEA_INVENTORY_CLIENT_CERT_FILE: /certs/client.crt
+      ELITEA_INVENTORY_CLIENT_KEY_FILE: /certs/client.key
+      ELITEA_INVENTORY_CA_FILE: /certs/ca.crt
+      ELITEA_INVENTORY_IDENTITY_SECRET: "e2e-inventory-identity"
+      ELITEA_INVENTORY_GIT_ALLOWLIST: "github.com,*.github.com"
+      ELITEA_INVENTORY_CALLBACK_BASE_URL: "http://elitea-main:8080"
     volumes:
       - ./certs:/certs:ro
     depends_on:
@@ -227,6 +254,8 @@ services:
       rustfs-bucket-init:
         condition: service_completed_successfully
       elitea-deepwiki:
+        condition: service_healthy
+      elitea-inventory:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "/elitea-main", "-healthcheck"]
@@ -258,6 +287,40 @@ services:
       ELITEA_DEEPWIKI_GIT_ALLOWLIST: "github.com,*.github.com"
       ELITEA_DEEPWIKI_SCRATCH_PATH: /tmp/deepwiki
       ELITEA_DEEPWIKI_SERVICE_LOCATION_URL: "https://elitea-deepwiki:8080"
+    volumes:
+      - ./certs:/certs:ro
+    healthcheck:
+      test: ["CMD", "/elitea-subapp-host", "healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  # ── The Inventory provider, the SPI over the GO fixture runner ───────────
+  # The same binary as the service above under a different ELITEA_SUBAPP, and
+  # ONE container rather than two: RUNNER=fixture is the host's own canned
+  # knowledge graph, so this stack needs no engine image at all. That is what
+  # this arm buys over the standalone stack's host-plus-sidecar pair — a
+  # browser journey reaches a deterministic Inventory result with nothing
+  # Python in the picture.
+  #
+  # The two fixture runners (this one, and the Python one the standalone
+  # stack's sidecar serves) are kept in step BY HAND.
+  elitea-inventory:
+    image: ghcr.io/eliteaai/elitea-subapp-host:${E2E_IMAGE_TAG:-e2e}
+    build:
+      context: ..
+      dockerfile: services/elitea-subapp-host/Containerfile
+    environment:
+      ELITEA_SUBAPP: inventory
+      ELITEA_INVENTORY_RUNNER: "fixture"
+      ELITEA_INVENTORY_FIXTURE_STEP_SECONDS: "1"
+      ELITEA_INVENTORY_TLS_CERTFILE: /certs/inventory-server.crt
+      ELITEA_INVENTORY_TLS_KEYFILE: /certs/inventory-server.key
+      ELITEA_INVENTORY_TLS_CA_FILE: /certs/ca.crt
+      ELITEA_INVENTORY_IDENTITY_SECRET: "e2e-inventory-identity"
+      ELITEA_INVENTORY_SCRATCH_PATH: /tmp/inventory
+      ELITEA_INVENTORY_SERVICE_LOCATION_URL: "https://elitea-inventory:8080"
     volumes:
       - ./certs:/certs:ro
     healthcheck:

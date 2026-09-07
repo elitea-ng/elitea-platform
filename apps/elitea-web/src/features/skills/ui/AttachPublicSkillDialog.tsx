@@ -13,6 +13,13 @@
  * the HTTP status: the route answers 200 even when an individual attachment
  * failed, so a dialog that read the status alone would report success for an
  * attach that attached nothing.
+ *
+ * Issue #625 item 3 adds the piece the port dropped: `agents_with_skill`
+ * (`internal/api/router.go` skill-publish routes) told the reference which
+ * agent versions already carry this skill, through the fork lineage, so the
+ * dialog could mark them rather than let a second attach hit the server's 409.
+ * That endpoint had a generated client and zero call sites before this; the
+ * version picker below is the one.
  */
 import type { ReactNode } from 'react';
 import { useEffect, useState } from 'react';
@@ -32,8 +39,8 @@ import { BaseModal } from '@/shared/ui/BaseModal';
 import { unwrapList } from '@/shared/api/unwrap';
 
 import { publishErrorMessage } from '../api/skillPublishApi';
-import { useAttachPublicSkill, type AttachSkillArgs } from '../model/usePublicSkills';
-import type { AttachOutcome, PublicSkillSummary } from '../model/publishTypes';
+import { useAgentsWithSkill, useAttachPublicSkill, type AttachSkillArgs } from '../model/usePublicSkills';
+import type { AgentWithSkill, AttachOutcome, PublicSkillSummary } from '../model/publishTypes';
 
 interface AgentRow {
   readonly id?: string | number;
@@ -69,7 +76,7 @@ function RowSelect({
   readonly id: string;
   readonly label: string;
   readonly value: string;
-  readonly options: readonly { readonly value: string; readonly label: string }[];
+  readonly options: readonly SelectOption[];
   readonly disabled?: boolean;
   readonly onChange: (value: string) => void;
 }): ReactNode {
@@ -89,6 +96,7 @@ function RowSelect({
           <MenuItem
             key={option.value}
             value={option.value}
+            disabled={option.disabled === true}
           >
             {option.label}
           </MenuItem>
@@ -101,6 +109,8 @@ function RowSelect({
 interface SelectOption {
   readonly value: string;
   readonly label: string;
+  /** Already carries the skill (issue #625 item 3) — shown, not hidden, and not selectable. */
+  readonly disabled?: boolean;
 }
 
 /**
@@ -115,6 +125,7 @@ function useAttachTargets(
   projectId: string | undefined,
   open: boolean,
   agentId: string,
+  attachedVersionIds: ReadonlySet<number>,
 ): { readonly agents: readonly SelectOption[]; readonly versions: readonly SelectOption[] } {
   const agents = useListApplications(
     projectId ?? '',
@@ -134,8 +145,42 @@ function useAttachTargets(
 
   return {
     agents: agentRows.map((agent) => ({ value: String(agent.id ?? ''), label: agent.name ?? '' })),
-    versions: versionRows.map((version) => ({ value: String(version.id), label: version.name ?? '' })),
+    versions: versionRows.map((version) => markIfAlreadyAttached(version, attachedVersionIds)),
   };
+}
+
+/**
+ * One version option, marked "already attached" (disabled, suffixed label)
+ * when `agents_with_skill` named its id — the write route answers a second
+ * attach with 409, so this dialog never offers one.
+ */
+function markIfAlreadyAttached(version: AgentVersionRow, attachedVersionIds: ReadonlySet<number>): SelectOption {
+  const value = String(version.id);
+  const label = version.name ?? '';
+  if (!attachedVersionIds.has(Number(value))) return { value, label };
+  return {
+    value,
+    label: `${label} ${t('skills.attach.alreadyAttachedSuffix', '(already attached)')}`,
+    disabled: true,
+  };
+}
+
+/** The `entity_version_id`s `agents_with_skill` named, as a lookup set. */
+export function alreadyAttachedVersionIds(rows: readonly AgentWithSkill[]): ReadonlySet<number> {
+  const ids = new Set<number>();
+  for (const row of rows) {
+    if (row.entity_version_id !== undefined) ids.add(row.entity_version_id);
+  }
+  return ids;
+}
+
+/** The distinct agent names `agents_with_skill` named, in first-seen order. */
+export function alreadyAttachedAgentNames(rows: readonly AgentWithSkill[]): readonly string[] {
+  const seen = new Set<string>();
+  for (const row of rows) {
+    if (row.name !== undefined && row.name !== '') seen.add(row.name);
+  }
+  return [...seen];
 }
 
 /**
@@ -203,7 +248,11 @@ export function AttachPublicSkillDialog({
   }, [open, skill?.id]);
 
   const attach = useAttachPublicSkill(projectId);
-  const targets = useAttachTargets(projectId, open, agentId);
+  const agentsWithSkill = useAgentsWithSkill(projectId, skill?.id, open);
+  const attachedRows = agentsWithSkill.data ?? [];
+  const attachedVersionIds = alreadyAttachedVersionIds(attachedRows);
+  const attachedAgentNames = alreadyAttachedAgentNames(attachedRows);
+  const targets = useAttachTargets(projectId, open, agentId, attachedVersionIds);
 
   const confirm = (): void => {
     setMessage(undefined);
@@ -236,6 +285,16 @@ export function AttachPublicSkillDialog({
               'The skill is copied into this project once, then attached to the agent version you choose.',
             )}
           </Typography>
+          {attachedAgentNames.length > 0 && (
+            <Alert
+              severity="info"
+              data-testid="attach-public-skill-already-attached"
+            >
+              {t('skills.attach.alreadyAttachedBanner', 'Already attached to: {{names}}', {
+                names: attachedAgentNames.join(', '),
+              })}
+            </Alert>
+          )}
           <RowSelect
             id="attach-skill-agent"
             label={t('skills.attach.agent', 'Agent')}

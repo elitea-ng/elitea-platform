@@ -43,6 +43,24 @@ jobs:
           bash -n deploy/centry-hybrid/prepare-runtime.sh
           test -s deploy/centry-hybrid/pov-compose.yml
           test -s deploy/centry-hybrid/traefik/index-routes.yml
+          test -s deploy/centry-hybrid/rollback/index-v1.yml
+      # Issue #339. cutover-rehearsal.sh walks the index-plane cutover against a
+      # live stack, and its whole value is that it REFUSES: it stops at the
+      # first stage that does not hold. A script like that fails in one
+      # direction only — by refusing nothing — and every run then reads as a
+      # successful rehearsal. `bash -n` above cannot see that.
+      #
+      # The suite drives the dry-run plan and each refusal, against a COPY of
+      # the hybrid directory that it edits, so a case that must fail is produced
+      # rather than assumed. It needs no stack, no network and no Centry
+      # checkout. It lives here because no workflow has a path filter that
+      # selects deploy/centry-hybrid/**, and this one has no path filter at all.
+      #
+      # The suite carries its own floor on the number of assertions that
+      # reported a result, so a copy that stopped running its cases is red here
+      # rather than reporting "0 failed".
+      - name: The index cutover rehearsal still refuses what it must
+        run: bash deploy/centry-hybrid/scripts/cutover-rehearsal-test.sh
       # Issue #485. `services/elitea-main/tests/reliability/index_5681/run.sh` is
       # an operator wrapper, and NO workflow can run it: it demands 29
       # environment variables that name the legacy centry stack

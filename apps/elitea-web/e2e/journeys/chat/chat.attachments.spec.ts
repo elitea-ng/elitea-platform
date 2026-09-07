@@ -13,22 +13,21 @@
  * afterwards, and the status codes + JSON bodies elitea-main really returns
  * (202 chunk ack / 201 final array).
  *
+ * CLOSED, and now asserted (this header used to record both as product gaps):
+ *  - The PRE-SEND PREVIEW exists. `ChatBox` passes the staged list to
+ *    `NewChatInput` and `buildChatBoxInputSlots` fills `slots.attachmentList`
+ *    with `FileList`, so a picked file shows as a named, removable chip
+ *    (`chat-attachment-chip-<i>`) before the message is sent — J12c below.
+ *    Until that wiring landed the only pre-send signal was the attach row's
+ *    remaining-capacity counter, and a user who picked a file saw nothing.
+ *  - `isUploading`/`uploadProgress` now reach `UserInputFooter`, so the
+ *    determinate `UploadProgressIndicator` can render. The percent itself is
+ *    still asserted through the WIRE (two chunk requests, 202 then 201) and
+ *    not the UI: on a loopback stack a 6 MiB upload finishes faster than a
+ *    poll can catch an intermediate frame, so a UI assertion on it would be a
+ *    flake, not a check.
+ *
  * PRODUCT GAPS deliberately NOT asserted around (verified 2026-08-08):
- *  - There is no pre-send attachment preview: ChatBox never passes
- *    `slots.attachmentList`, so `normalizeUserInputProps` renders null.
- *    The only pre-send signals the product emits are the attach row's
- *    remaining-capacity counter and its disabled state — this file asserts
- *    those. (The counter used to live in a hover tooltip on a bare paperclip
- *    button; on the chat surface that control is now the first row of the
- *    "+" menu and the count is visible text on it.)
- *  - Upload PROGRESS PERCENT is dead in the chat page. `UserInputFooter`
- *    renders `<UploadProgressIndicator progress={isUploading ? uploadProgress
- *    : undefined}>`, but ChatBox.tsx never passes an `attachments` prop to
- *    NewChatInput carrying `isUploading`/`uploadProgress` (it passes only
- *    `{attachments, onAttachFiles}` for the button, ChatBox.tsx:374), so the
- *    determinate variant with its `aria-valuenow` + "<n>%" label can never
- *    render here. Chunk-level progress is therefore asserted through the
- *    wire protocol (two chunk requests, 202 then 201) instead of the UI.
  *  - Uploaded attachments never appear in the transcript: the optimistic
  *    user message carries no attachments and elitea-main does not persist a
  *    `chat_messages_attachment` row (see conversations/attachments.go), so
@@ -112,8 +111,25 @@ function attachInput(page: import('@playwright/test').Page) {
     .locator('input[type="file"]');
 }
 
+/**
+ * Closes the "+" menu if it is open.
+ *
+ * `openAttachRow` leaves it open because the hidden file input only exists
+ * while it is rendered. Once a file is staged the composer grows by a chip
+ * row, and the menu's Popper — anchored to the "+" button — then sits OVER the
+ * text area and swallows every pointer event aimed at it. Closing it is what a
+ * user does before typing anyway.
+ */
+async function closeAttachMenu(page: import('@playwright/test').Page): Promise<void> {
+  const row = page.getByTestId('plus-menu-attachments');
+  if ((await row.count()) === 0) return;
+  await page.getByTestId('plus-menu-button').click();
+  await expect(row).toHaveCount(0);
+}
+
 /** Types a question and sends it. Send stays disabled while the question is empty. */
 async function send(page: import('@playwright/test').Page, question: string): Promise<void> {
+  await closeAttachMenu(page);
   await page.getByTestId('chat-message-input').click();
   await page.keyboard.type(question);
   const sendButton = page.getByTestId('chat-send-button');
@@ -155,6 +171,11 @@ test('J12: attach a small file to a chat message', async ({ page }) => {
     // choreography any more — the counter is visible text on the row, so it
     // is readable without provoking a tooltip.
     await expect(attach).toContainText(`${MAX_ATTACHMENTS - 1} left`);
+
+    // ...and the user can SEE it. The counter alone proves the state changed;
+    // the chip proves the composer told the user which file is riding this
+    // message. See J12c for the removal half.
+    await expect(page.getByTestId('chat-attachment-chip-0')).toContainText('e2e-small-file-attach.txt');
 
     // Arm the upload watcher BEFORE sending: the send creates the conversation
     // over REST first, then uploads into it (resolveConversationForSend →
@@ -255,6 +276,60 @@ test('J12b: attaching MAX_ATTACHMENTS files disables further attachment', async 
     await checkA11y(page);
   } finally {
     for (const f of files) fs.unlinkSync(f);
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Journey 12c: the staged file is visible, named and removable BEFORE sending
+// ─────────────────────────────────────────────────────────────────────────────
+/**
+ * The defect this guards is a wiring one, and it survived a full unit suite.
+ * `useAttachmentState` held the file, `FileList` knew how to draw it, and the
+ * send path uploaded it — but nothing joined them: `ChatBox` passed no
+ * `attachments` prop to `NewChatInput`, and `NewChatInput` passed no
+ * `attachmentList` slot to `UserInput`. Every component was correct on its own
+ * and the composer still showed the user nothing.
+ *
+ * Two files, not one, because the removal assertion has to distinguish "the
+ * right chip went" from "the list went".
+ */
+test('J12c: staged files show as removable chips before the message is sent', async ({ page }) => {
+  const keep = path.join(os.tmpdir(), 'e2e-chip-keep.txt');
+  const drop = path.join(os.tmpdir(), 'e2e-chip-drop.txt');
+  fs.writeFileSync(keep, 'keep me');
+  fs.writeFileSync(drop, 'drop me');
+
+  try {
+    await page.goto(BASE_URL + '/app/chat');
+    const attach = await openAttachRow(page);
+    await attachInput(page).setInputFiles([keep, drop]);
+    await expect(attach).toContainText(`${MAX_ATTACHMENTS - 2} left`);
+
+    // Close the "+" menu before touching a chip: the menu is a Popper behind a
+    // ClickAwayListener, so the first mousedown anywhere outside it closes the
+    // menu, and an assertion on the row afterwards would be asserting on an
+    // unmounted element rather than on the product.
+    await closeAttachMenu(page);
+
+    const first = page.getByTestId('chat-attachment-chip-0');
+    const second = page.getByTestId('chat-attachment-chip-1');
+    await expect(first).toContainText('e2e-chip-keep.txt');
+    await expect(second).toContainText('e2e-chip-drop.txt');
+
+    // Remove the SECOND one. `onDeleteAttachment(index)` splices by index, so
+    // a fix that removed the wrong entry (or cleared the list) fails here.
+    await second.getByTestId('chat-attachment-remove-1').click();
+    await expect(page.getByTestId('chat-attachment-chip-1')).toHaveCount(0);
+    await expect(page.getByTestId('chat-attachment-chip-0')).toContainText('e2e-chip-keep.txt');
+
+    // The capacity counter and the chip list agree — they read the same state,
+    // and disagreement is how the original defect hid.
+    await expect(await openAttachRow(page)).toContainText(`${MAX_ATTACHMENTS - 1} left`);
+
+    await checkA11y(page);
+  } finally {
+    fs.unlinkSync(keep);
+    fs.unlinkSync(drop);
   }
 });
 
@@ -395,242 +470,287 @@ const PROBE_URL = `${SSE_URL}?${PROBE_QUERY}`;
 /** Every request to that url, with the probe marker or without it. */
 const SSE_ROUTE = new RegExp(`${SSE_PATH_PREFIX}${DEFAULT_PROJECT_ID}(\\?|$)`);
 
-/**
- * J26.1 — the platform contract: the stream is mounted, and a transport-level
- * drop is recovered by the browser with no application code involved.
+/*
+ * The two notification-stream journeys, SERIALISED against each other.
  *
- * Driven through a real `EventSource` in the page rather than through the
- * sidebar's own subscription. The sidebar's half is J26.2 below, which asserts
- * the same stream from the app's side. The server, the auth cookie, the RBAC
- * check and the reconnect are all real here; only the subscriber is the
- * test's own.
+ * `fullyParallel` splits a spec file across workers, so J26.1 and J26.2 used
+ * to run at the same time on the same persona. J26.2 always holds a stream —
+ * it is the sidebar's own subscription — and J26.1 needs one slot of the four
+ * `events.go` admits per principal, so the file was competing with itself for
+ * the resource #545 records J26.1 failing to get. Serialising the pair removes
+ * the one contender this file creates; pages in other files remain, and J26.1
+ * keeps its retry loop for them.
  *
- * THE SIDEBAR'S STREAM IS REFUSED FOR THE LIFE OF THIS TEST, and that is what
- * keeps this journey deterministic on webkit.
- *
- * `events.go` admits at most FOUR concurrent streams per principal
- * (`newCurrentNotificationAdmission(64, 4)`), and answers the fifth with 429
- * plus `Retry-After: 2`. An HTTP status fails an `EventSource` for good, so
- * the probe reported `ready: false` with no reconnect left to make.
- *
- * The suite runs four parallel workers as ONE persona, and every worker's page
- * mounts `NotificationButton`. The member principal therefore already sits at
- * the cap. The probe was the fifth stream, and the page's own sidebar stream
- * was the fourth.
- *
- * Measured on 2026-08-21 against the real stack: hold three member streams
- * open, run this test alone, and it fails at `outcome.ready` every time. It
- * flaked the same way on `main` before this change set (run 32283253507).
- *
- * Aborting the sidebar's stream costs the server nothing, because the request
- * never leaves the browser. It leaves the probe as this page's ONLY stream,
- * which is the same budget every other journey uses.
- *
- * The body then re-attempts the whole scenario until a deadline, for the
- * refusal it cannot prevent — another worker can still hold the last slot.
+ * Only these two are in the group. The rest of the file stays parallel: a
+ * serial group re-enters from its FIRST test on every retry, so widening it to
+ * the whole file would make one failed upload journey report the two stream
+ * journeys as "did not run".
  */
-test('J26.1: the notification SSE stream is mounted, and a dropped connection is re-opened automatically', async ({ page }) => {
-  test.setTimeout(90_000);
-
-  // Only the PROBE's own requests are counted. Counting the sidebar's too
-  // would let its retries satisfy the reconnect assertion below on their own.
-  const probeRequests: string[] = [];
-  const probeStatuses: number[] = [];
-  page.on('request', (request: Request) => {
-    if (request.url().includes(PROBE_QUERY)) probeRequests.push(request.url());
-  });
-  // An `EventSource` shows its consumer no status. Record the wire status so a
-  // refusal names itself instead of arriving as a bare `false`.
-  page.on('response', (response) => {
-    if (response.url().includes(PROBE_QUERY)) probeStatuses.push(response.status());
-  });
-
-  // Drop the FIRST probe attempt at the transport level. `route.abort()` is a
-  // connection failure, not an HTTP status — precisely the case WHATWG says
-  // EventSource must retry. A status would be terminal, and a test built on one
-  // would assert the opposite of this journey while looking identical.
-  let dropped = 0;
-  await page.route(SSE_ROUTE, async (route) => {
-    if (!route.request().url().includes(PROBE_QUERY)) {
-      await route.abort();
-      return;
-    }
-    if (dropped === 0) {
-      dropped += 1;
-      await route.abort();
-      return;
-    }
-    await route.continue();
-  });
-
-  await page.goto(BASE_URL + '/app/chat');
+test.describe('notification stream', () => {
+  test.describe.configure({ mode: 'serial' });
 
   /**
-   * The scenario repeats until a deadline, and the re-attempt covers ONE
-   * thing: the admission gate.
+   * J26.1 — the platform contract: the stream is mounted, and a transport-level
+   * drop is recovered by the browser with no application code involved.
    *
-   * The gate answers a refused stream with 429 and `Retry-After: 2`. That
-   * refusal is not the condition under test, and the browser cannot recover
-   * from it — an HTTP status fails an `EventSource` for good. Each attempt
-   * proves the reconnect on its own, because the assertions below read the
-   * LAST attempt's counters only.
+   * Driven through a real `EventSource` in the page rather than through the
+   * sidebar's own subscription. The sidebar's half is J26.2 below, which asserts
+   * the same stream from the app's side. The server, the auth cookie, the RBAC
+   * check and the reconnect are all real here; only the subscriber is the
+   * test's own.
    *
-   * A refusal resolves in under a second, so the deadline buys many attempts
-   * while another worker holds the last slot. A broken reconnect instead
-   * spends the whole per-attempt budget, so the deadline stops after two. The
-   * test fails in both of those cases, and it fails inside its own timeout.
+   * THE SIDEBAR'S STREAM IS REFUSED FOR THE LIFE OF THIS TEST, and that is what
+   * keeps this journey deterministic on webkit.
+   *
+   * `events.go` admits at most FOUR concurrent streams per principal
+   * (`newCurrentNotificationAdmission(64, 4)`), and answers the fifth with 429
+   * plus `Retry-After: 2`. An HTTP status fails an `EventSource` for good, so
+   * the probe reported `ready: false` with no reconnect left to make.
+   *
+   * The suite runs four parallel workers as ONE persona, and every worker's page
+   * mounts `NotificationButton`. The member principal therefore already sits at
+   * the cap. The probe was the fifth stream, and the page's own sidebar stream
+   * was the fourth.
+   *
+   * Measured on 2026-08-21 against the real stack: hold three member streams
+   * open, run this test alone, and it fails at `outcome.ready` every time. It
+   * flaked the same way on `main` before this change set (run 32283253507).
+   *
+   * Aborting the sidebar's stream costs the server nothing, because the request
+   * never leaves the browser. It leaves the probe as this page's ONLY stream,
+   * which is the same budget every other journey uses.
+   *
+   * The body then re-attempts the whole scenario until a deadline, for the
+   * refusal it cannot prevent — another worker can still hold the last slot.
+   *
+   * ── #545: this journey is NOT a read-after-write race ────────────────────
+   *
+   * #545 groups it with five journeys that write and then read their own state.
+   * This one does not. Its failure is contention for a per-principal resource,
+   * and the gate was measured directly against the E2E stack rather than read
+   * off the source: four concurrent streams on the member cookie are admitted,
+   * the fifth is answered 429, and a slot is free again in the SAME SECOND the
+   * client goes away (`kill` the four, the next stream is 200). So there is no
+   * leaked slot and no stale state to wait out — while the window is full it is
+   * genuinely full, and while it is not the probe is admitted at once.
+   *
+   * What the file itself contributes to that window is fixable, and is fixed
+   * here. `fullyParallel` splits a spec file across workers, so J26.2 — which
+   * drives the sidebar's own subscription and therefore always holds a stream —
+   * used to run BESIDE this one on the same persona. The two stream journeys of
+   * this file are serialised below, which removes the one contender the file
+   * creates for itself. Pages in other files remain, and the retry loop remains
+   * for them; its deadline now spends the test's budget rather than half of it.
    */
-  const deadline = Date.now() + 40_000;
-  const budgetMs = 20_000;
-  let outcome = { ready: false, errors: 0, readyState: 0 };
-  for (;;) {
-    dropped = 0;
-    probeRequests.length = 0;
-    probeStatuses.length = 0;
-    outcome = await page.evaluate(
-      async ({ url, budget }) =>
-        new Promise<{ ready: boolean; errors: number; readyState: number }>((resolve) => {
-          const source = new EventSource(url, { withCredentials: true });
-          let errors = 0;
-          const finish = (ready: boolean): void => {
-            const readyState = source.readyState;
-            source.close();
-            resolve({ ready, errors, readyState });
-          };
-          source.addEventListener('error', () => {
-            errors += 1;
-            // CLOSED means the browser gave up (an HTTP status) — report it
-            // rather than sitting out the budget, so the failure names itself.
-            if (source.readyState === EventSource.CLOSED) finish(false);
-          });
-          // The opening handshake of services/elitea-main/internal/api/v2/
-          // notifications/events.go. Receiving it proves a real stream
-          // from elitea-main, not a 404 the client tolerates in silence.
-          source.addEventListener('notifications_ready', () => finish(true));
-          setTimeout(() => finish(false), budget);
-        }),
-      { url: PROBE_URL, budget: budgetMs },
-    );
-    if (outcome.ready || Date.now() >= deadline) break;
-    // The gate's own `Retry-After`, plus a margin for the slot to be released.
-    await page.waitForTimeout(3_000);
-  }
 
-  expect(dropped).toBe(1);
-  // The abort produced an error event, and the browser retried anyway: more
-  // than one PROBE request is the only end-to-end evidence of the reconnect,
-  // since no application code runs for it.
-  expect(outcome.errors).toBeGreaterThan(0);
-  expect(probeRequests.length).toBeGreaterThan(1);
-  expect(
-    outcome.ready,
-    `probe stream statuses: ${probeStatuses.join(', ') || 'none'} (429 means the per-principal stream cap is full)`,
-  ).toBe(true);
-});
+  test('J26.1: the notification SSE stream is mounted, and a dropped connection is re-opened automatically', async ({ page }) => {
+    test.setTimeout(90_000);
 
-/**
- * J26.2 — the app's OWN subscription. Was red, for a reason that had nothing
- * to do with SSE wiring; fixed in #166/#167.
- *
- * `NotificationButton` passes `personal_project_id` (→ useNotificationsSSE),
- * and `app/session-store.ts` used to fill that field with the USER ID, with a
- * comment saying so: `/forward-auth/info` (internal/api/v2/auth/session.go)
- * returns only `authenticated`/`user_id`/`email`, so there was no project id
- * to send. The stream's authorize() resolves
- * `models.notifications.notifications.list` against whatever project id is in
- * the URL, so the sidebar asked about a project the user is not a member of
- * and got 403 — terminal for EventSource, no retry, one console warning.
- *
- * The field now comes from `GET /social/author` — the same endpoint the old
- * SPA reads it from (`slices/settings.js`'s `authorDetails` matcher) — and
- * that handler resolves it from the database instead of returning a hardcoded
- * "1" in every fallback branch (#167). Every branch of that resolver is
- * membership-checked, which is what makes this assertion hold rather than
- * happening to hold on a single-project deployment.
- *
- * THE ADMISSION GATE APPLIES HERE TOO, and unlike J26.1 this journey cannot
- * dodge it — the stream under test IS the sidebar's own.
- *
- * `events.go` admits four concurrent streams per principal and answers the
- * fifth with 429 (see J26.1's header). The suite runs parallel workers as ONE
- * persona and every page that reaches `/app/chat` mounts `NotificationButton`,
- * so the member principal sits at the cap and a page that arrives mid-overlap
- * is refused. Measured 2026-08-26 against the real stack: five pages on one
- * context yield statuses `[200], [200], [200], [200], [429, 429]`. Run alone
- * this test passed; run beside its neighbours it failed on `responses[0]`
- * being 429, which reads exactly like a broken subscription and is not one.
- *
- * So the scenario re-attempts until a slot frees, exactly as J26.1 does, and
- * each attempt starts from `about:blank` so the previous attempt's stream is
- * released rather than competing with the next one. What it does NOT do is
- * accept "429 or 200" — that would gut the assertion. A refusal only buys
- * another attempt; the last attempt still has to produce a real 200, and a
- * 403 (the #166/#167 regression this journey exists for) still fails, with
- * its status named.
- */
-test('J26.2: the sidebar live-push subscription connects', async ({ page }) => {
-  test.setTimeout(90_000);
+    // Only the PROBE's own requests are counted. Counting the sidebar's too
+    // would let its retries satisfy the reconnect assertion below on their own.
+    const probeRequests: string[] = [];
+    const probeStatuses: number[] = [];
+    page.on('request', (request: Request) => {
+      if (request.url().includes(PROBE_QUERY)) probeRequests.push(request.url());
+    });
+    // An `EventSource` shows its consumer no status. Record the wire status so a
+    // refusal names itself instead of arriving as a bare `false`.
+    page.on('response', (response) => {
+      if (response.url().includes(PROBE_QUERY)) probeStatuses.push(response.status());
+    });
 
-  const requests: string[] = [];
-  const failures: string[] = [];
-  const responses: Array<{ url: string; status: number }> = [];
-  page.on('request', (request: Request) => {
-    if (request.url().includes(SSE_PATH_PREFIX)) requests.push(request.url());
-  });
-  // Chromium surfaces the rejected stream as a 403 RESPONSE; WebKit surfaces it
-  // as a failed request ('cancelled') with no response at all. Both are watched
-  // so this fails fast and by name on either engine — measured, not assumed: a
-  // stream that really establishes yields a 200 response on both.
-  page.on('requestfailed', (request: Request) => {
-    if (request.url().includes(SSE_PATH_PREFIX)) {
-      failures.push(`${request.url()} (${request.failure()?.errorText ?? 'unknown'})`);
-    }
-  });
-  page.on('response', (response) => {
-    if (response.url().includes(SSE_PATH_PREFIX)) {
-      responses.push({ url: response.url(), status: response.status() });
-    }
-  });
-
-  const deadline = Date.now() + 45_000;
-  for (;;) {
-    // The assertions below read the LAST attempt only, so each attempt starts
-    // from an empty record. Same arrays throughout: the listeners above are
-    // bound once, to these.
-    requests.length = 0;
-    failures.length = 0;
-    responses.length = 0;
+    // Drop the FIRST probe attempt at the transport level. `route.abort()` is a
+    // connection failure, not an HTTP status — precisely the case WHATWG says
+    // EventSource must retry. A status would be terminal, and a test built on one
+    // would assert the opposite of this journey while looking identical.
+    let dropped = 0;
+    await page.route(SSE_ROUTE, async (route) => {
+      if (!route.request().url().includes(PROBE_QUERY)) {
+        await route.abort();
+        return;
+      }
+      if (dropped === 0) {
+        dropped += 1;
+        await route.abort();
+        return;
+      }
+      await route.continue();
+    });
 
     await page.goto(BASE_URL + '/app/chat');
 
-    // The client half is live regardless: the sidebar really does open a
-    // stream. This part passes even when the stream is refused, and is what
-    // makes the assertions below specific — the subscription exists, the
-    // question is only whether it is authorized.
-    await expect.poll(() => requests.length, { timeout: 20_000 }).toBeGreaterThan(0);
-    // Wait for the attempt to SETTLE (admitted, refused, or dropped) rather
-    // than reading a stream that is still opening.
-    await expect
-      .poll(() => responses.length + failures.length, { timeout: 15_000 })
-      .toBeGreaterThan(0);
+    /**
+     * The scenario repeats until a deadline, and the re-attempt covers ONE
+     * thing: the admission gate.
+     *
+     * The gate answers a refused stream with 429 and `Retry-After: 2`. That
+     * refusal is not the condition under test, and the browser cannot recover
+     * from it — an HTTP status fails an `EventSource` for good. Each attempt
+     * proves the reconnect on its own, because the assertions below read the
+     * LAST attempt's counters only.
+     *
+     * A refusal resolves in under a second, so the deadline buys many attempts
+     * while another worker holds the last slot. A broken reconnect instead
+     * spends the whole per-attempt budget, so the deadline stops after two. The
+     * test fails in both of those cases, and it fails inside its own timeout.
+     */
+    // 65 s of a 90 s test, rather than 40. A refusal resolves in under a
+    // second, so the extra 25 s buys ~8 more attempts at a full window and
+    // costs nothing when the first attempt is admitted; a broken reconnect
+    // still spends its own 20 s budget and stops on the third attempt, inside
+    // the test timeout.
+    const deadline = Date.now() + 65_000;
+    const budgetMs = 20_000;
+    let outcome = { ready: false, errors: 0, readyState: 0 };
+    for (;;) {
+      dropped = 0;
+      probeRequests.length = 0;
+      probeStatuses.length = 0;
+      outcome = await page.evaluate(
+        async ({ url, budget }) =>
+          new Promise<{ ready: boolean; errors: number; readyState: number }>((resolve) => {
+            const source = new EventSource(url, { withCredentials: true });
+            let errors = 0;
+            const finish = (ready: boolean): void => {
+              const readyState = source.readyState;
+              source.close();
+              resolve({ ready, errors, readyState });
+            };
+            source.addEventListener('error', () => {
+              errors += 1;
+              // CLOSED means the browser gave up (an HTTP status) — report it
+              // rather than sitting out the budget, so the failure names itself.
+              if (source.readyState === EventSource.CLOSED) finish(false);
+            });
+            // The opening handshake of services/elitea-main/internal/api/v2/
+            // notifications/events.go. Receiving it proves a real stream
+            // from elitea-main, not a 404 the client tolerates in silence.
+            source.addEventListener('notifications_ready', () => finish(true));
+            setTimeout(() => finish(false), budget);
+          }),
+        { url: PROBE_URL, budget: budgetMs },
+      );
+      if (outcome.ready || Date.now() >= deadline) break;
+      // The gate's own `Retry-After`, plus a margin for the slot to be released.
+      await page.waitForTimeout(3_000);
+    }
 
-    // 403 is NOT retried: it is the regression this journey guards, it will
-    // not clear on a later attempt, and it should fail fast rather than burn
-    // the whole deadline first.
-    const status = responses[0]?.status;
-    if (status === 200 || status === 403 || Date.now() >= deadline) break;
+    expect(dropped).toBe(1);
+    // The abort produced an error event, and the browser retried anyway: more
+    // than one PROBE request is the only end-to-end evidence of the reconnect,
+    // since no application code runs for it.
+    expect(outcome.errors).toBeGreaterThan(0);
+    expect(probeRequests.length).toBeGreaterThan(1);
+    expect(
+      outcome.ready,
+      `probe stream statuses: ${probeStatuses.join(', ') || 'none'} (429 means the per-principal stream cap is full)`,
+    ).toBe(true);
+  });
 
-    // Drop this page's own stream before re-attempting, so the retry competes
-    // with the other workers only and not with itself.
-    await page.goto('about:blank');
-    await page.waitForTimeout(3_000);
-  }
+  /**
+   * J26.2 — the app's OWN subscription. Was red, for a reason that had nothing
+   * to do with SSE wiring; fixed in #166/#167.
+   *
+   * `NotificationButton` passes `personal_project_id` (→ useNotificationsSSE),
+   * and `app/session-store.ts` used to fill that field with the USER ID, with a
+   * comment saying so: `/forward-auth/info` (internal/api/v2/auth/session.go)
+   * returns only `authenticated`/`user_id`/`email`, so there was no project id
+   * to send. The stream's authorize() resolves
+   * `models.notifications.notifications.list` against whatever project id is in
+   * the URL, so the sidebar asked about a project the user is not a member of
+   * and got 403 — terminal for EventSource, no retry, one console warning.
+   *
+   * The field now comes from `GET /social/author` — the same endpoint the old
+   * SPA reads it from (`slices/settings.js`'s `authorDetails` matcher) — and
+   * that handler resolves it from the database instead of returning a hardcoded
+   * "1" in every fallback branch (#167). Every branch of that resolver is
+   * membership-checked, which is what makes this assertion hold rather than
+   * happening to hold on a single-project deployment.
+   *
+   * THE ADMISSION GATE APPLIES HERE TOO, and unlike J26.1 this journey cannot
+   * dodge it — the stream under test IS the sidebar's own.
+   *
+   * `events.go` admits four concurrent streams per principal and answers the
+   * fifth with 429 (see J26.1's header). The suite runs parallel workers as ONE
+   * persona and every page that reaches `/app/chat` mounts `NotificationButton`,
+   * so the member principal sits at the cap and a page that arrives mid-overlap
+   * is refused. Measured 2026-08-26 against the real stack: five pages on one
+   * context yield statuses `[200], [200], [200], [200], [429, 429]`. Run alone
+   * this test passed; run beside its neighbours it failed on `responses[0]`
+   * being 429, which reads exactly like a broken subscription and is not one.
+   *
+   * So the scenario re-attempts until a slot frees, exactly as J26.1 does, and
+   * each attempt starts from `about:blank` so the previous attempt's stream is
+   * released rather than competing with the next one. What it does NOT do is
+   * accept "429 or 200" — that would gut the assertion. A refusal only buys
+   * another attempt; the last attempt still has to produce a real 200, and a
+   * 403 (the #166/#167 regression this journey exists for) still fails, with
+   * its status named.
+   */
+  test('J26.2: the sidebar live-push subscription connects', async ({ page }) => {
+    test.setTimeout(90_000);
 
-  expect(failures, `the sidebar's notification stream was dropped: ${failures.join(', ')}`).toEqual([]);
-  expect(
-    responses[0]?.status,
-    `sidebar stream statuses: ${responses.map((r) => r.status).join(', ') || 'none'} (429 means the per-principal stream cap stayed full for the whole deadline; 403 is the authorize() regression this journey guards)`,
-  ).toBe(200);
+    const requests: string[] = [];
+    const failures: string[] = [];
+    const responses: Array<{ url: string; status: number }> = [];
+    page.on('request', (request: Request) => {
+      if (request.url().includes(SSE_PATH_PREFIX)) requests.push(request.url());
+    });
+    // Chromium surfaces the rejected stream as a 403 RESPONSE; WebKit surfaces it
+    // as a failed request ('cancelled') with no response at all. Both are watched
+    // so this fails fast and by name on either engine — measured, not assumed: a
+    // stream that really establishes yields a 200 response on both.
+    page.on('requestfailed', (request: Request) => {
+      if (request.url().includes(SSE_PATH_PREFIX)) {
+        failures.push(`${request.url()} (${request.failure()?.errorText ?? 'unknown'})`);
+      }
+    });
+    page.on('response', (response) => {
+      if (response.url().includes(SSE_PATH_PREFIX)) {
+        responses.push({ url: response.url(), status: response.status() });
+      }
+    });
+
+    const deadline = Date.now() + 45_000;
+    for (;;) {
+      // The assertions below read the LAST attempt only, so each attempt starts
+      // from an empty record. Same arrays throughout: the listeners above are
+      // bound once, to these.
+      requests.length = 0;
+      failures.length = 0;
+      responses.length = 0;
+
+      await page.goto(BASE_URL + '/app/chat');
+
+      // The client half is live regardless: the sidebar really does open a
+      // stream. This part passes even when the stream is refused, and is what
+      // makes the assertions below specific — the subscription exists, the
+      // question is only whether it is authorized.
+      await expect.poll(() => requests.length, { timeout: 20_000 }).toBeGreaterThan(0);
+      // Wait for the attempt to SETTLE (admitted, refused, or dropped) rather
+      // than reading a stream that is still opening.
+      await expect
+        .poll(() => responses.length + failures.length, { timeout: 15_000 })
+        .toBeGreaterThan(0);
+
+      // 403 is NOT retried: it is the regression this journey guards, it will
+      // not clear on a later attempt, and it should fail fast rather than burn
+      // the whole deadline first.
+      const status = responses[0]?.status;
+      if (status === 200 || status === 403 || Date.now() >= deadline) break;
+
+      // Drop this page's own stream before re-attempting, so the retry competes
+      // with the other workers only and not with itself.
+      await page.goto('about:blank');
+      await page.waitForTimeout(3_000);
+    }
+
+    expect(failures, `the sidebar's notification stream was dropped: ${failures.join(', ')}`).toEqual([]);
+    expect(
+      responses[0]?.status,
+      `sidebar stream statuses: ${responses.map((r) => r.status).join(', ') || 'none'} (429 means the per-principal stream cap stayed full for the whole deadline; 403 is the authorize() regression this journey guards)`,
+    ).toBe(200);
+  });
 });
 
 /**

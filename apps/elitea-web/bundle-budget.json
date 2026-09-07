@@ -15,7 +15,19 @@
     },
     "admin": {
       "html": "index.html",
-      "initialKB": 300,
+      "initialNote": [
+        "310, not 300: measured 2026-09-07 on feat/platform-parity-wave (PR #823).",
+        "main's admin initial set was 295.3 KiB gzip; the wave's 300.3 KiB is that",
+        "plus 4.9 KiB of src/shared/i18n/en.json, which grew from 52.8 to 57.7 KiB",
+        "gzip with the toolkit catalogue, support assistant, Inventory, Settings",
+        "parity and lifecycle strings. The admin entry ships the whole catalogue",
+        "(one bundle, no namespace split — see shared/i18n/README.md), so every",
+        "app-side string lands in admin's initial set. Splitting the catalogue",
+        "per entry is the fix that brings this back to 300; until then the",
+        "budget records the measured cost rather than hiding it behind an ",
+        "allowlist."
+      ],
+      "initialKB": 310,
       "routeChunkKB": 250
     },
     "maintenance": {

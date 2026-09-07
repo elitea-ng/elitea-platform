@@ -1,0 +1,14 @@
+{
+  "_comment": "get_related_entities (alias get_entity_neighbors) for code:place-order — one incoming edge (from code:checkout-service, 'defines') and two outgoing (to code:order-model 'returns', to code:payment-client 'calls'), in relation-list order.",
+  "tool": "get_related_entities",
+  "params": { "entity_id": "code:place-order", "output_format": "json" },
+  "expected": {
+    "entity_id": "code:place-order",
+    "related": [
+      { "entity_id": "code:checkout-service", "relation_type": "defines", "direction": "incoming" },
+      { "entity_id": "code:order-model", "relation_type": "returns", "direction": "outgoing" },
+      { "entity_id": "code:payment-client", "relation_type": "calls", "direction": "outgoing" }
+    ],
+    "total": 3
+  }
+}

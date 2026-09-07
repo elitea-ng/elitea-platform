@@ -8,11 +8,11 @@ import (
 )
 
 type DecommissionReport struct {
-	Ready       bool              `json:"ready"`
-	Timestamp   time.Time         `json:"timestamp"`
-	TotalEPs    int               `json:"total_endpoints"`
-	MigratedEPs int               `json:"migrated_endpoints"`
-	Remaining   []EndpointState   `json:"remaining,omitempty"`
+	Ready       bool               `json:"ready"`
+	Timestamp   time.Time          `json:"timestamp"`
+	TotalEPs    int                `json:"total_endpoints"`
+	MigratedEPs int                `json:"migrated_endpoints"`
+	Remaining   []EndpointState    `json:"remaining,omitempty"`
 	Steps       []DecommissionStep `json:"steps"`
 }
 

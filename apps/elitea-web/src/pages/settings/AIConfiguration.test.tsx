@@ -266,3 +266,110 @@ describe('AIConfiguration — the ModelConfiguration layer', () => {
     await waitFor(() => expect(screen.queryByText('Model Capabilities')).not.toBeInTheDocument());
   });
 });
+
+/**
+ * #80, item 4 — the chips describe the SELECTED model, not only the
+ * auto-selected default.
+ *
+ * The chips were mounted against a model nothing could change, so
+ * "`getModelCapabilities` works" and "the page shows this model's
+ * capabilities" were the same statement. A second model with a DIFFERENT
+ * capability set is what makes them two statements.
+ */
+const TWO_MODEL_CATALOGUE = {
+  total: 2,
+  items: [
+    {
+      name: 'gpt-4o',
+      display_name: 'GPT-4o',
+      project_id: PROJECT_ID,
+      shared: false,
+      default: true,
+      supports_reasoning: true,
+      supports_vision: true,
+    },
+    {
+      name: 'text-embedding-3-small',
+      display_name: 'Embedding Small',
+      project_id: PROJECT_ID,
+      shared: false,
+      default: false,
+      supports_reasoning: false,
+      supports_vision: false,
+    },
+  ],
+  default_model_name: 'gpt-4o',
+  default_model_project_id: PROJECT_ID,
+};
+
+describe('AIConfiguration — the model picker', () => {
+  function mockTwoModels(): void {
+    server.use(
+      http.get(`${BASE}/configurations/models/${PROJECT_ID}`, () => HttpResponse.json(TWO_MODEL_CATALOGUE)),
+    );
+  }
+
+  it('starts on the project default model', async () => {
+    setConfig();
+    configureGeneratedClient({ baseUrl: BASE });
+    mockBackend();
+    mockTwoModels();
+
+    renderPage();
+
+    const picker = await screen.findByLabelText('Model');
+    await waitFor(() => expect(picker).toHaveTextContent('GPT-4o'));
+    expect(await screen.findByText('Reasoning')).toBeInTheDocument();
+  });
+
+  it('changes the chips when a different model is picked', async () => {
+    setConfig();
+    configureGeneratedClient({ baseUrl: BASE });
+    mockBackend();
+    mockTwoModels();
+
+    renderPage();
+
+    // The default's chips first, so the change below is a change and not the
+    // initial state.
+    expect(await screen.findByText('Reasoning')).toBeInTheDocument();
+    expect(await screen.findByText('Vision')).toBeInTheDocument();
+
+    await userEvent.click(await screen.findByLabelText('Model'));
+    await userEvent.click(await screen.findByRole('option', { name: 'Embedding Small' }));
+
+    // The second model declares neither flag, so the whole section goes.
+    await waitFor(() => expect(screen.queryByText('Reasoning')).not.toBeInTheDocument());
+    expect(screen.queryByText('Vision')).not.toBeInTheDocument();
+    expect(screen.queryByText('Model Capabilities')).not.toBeInTheDocument();
+    // …and the picker keeps the model the user chose, so the page is not
+    // silently back on the default.
+    expect(await screen.findByLabelText('Model')).toHaveTextContent('Embedding Small');
+  });
+
+  it('copies the SELECTED model, not the default, once the picker moves', async () => {
+    setConfig();
+    configureGeneratedClient({ baseUrl: BASE });
+    mockBackend();
+    mockTwoModels();
+
+    const writeText = vi.fn<(value: string) => Promise<void>>().mockResolvedValue(undefined);
+    Object.defineProperty(globalThis.navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+    });
+
+    renderPage();
+
+    await userEvent.click(await screen.findByLabelText('Model'));
+    await userEvent.click(await screen.findByRole('option', { name: 'Embedding Small' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Copy configuration' }));
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    const payload = JSON.parse(writeText.mock.calls[0]?.[0] ?? '{}') as Record<string, unknown>;
+    expect((payload['configuration_options'] as Record<string, unknown>)['model_name']).toBe(
+      'text-embedding-3-small',
+    );
+    expect(payload['model_capabilities']).toEqual([]);
+  });
+});

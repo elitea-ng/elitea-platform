@@ -9,6 +9,8 @@ import (
 
 	executionapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/executions"
 	indexingapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indexing"
+	secretsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/secrets"
+	toolkitrun "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkitrun"
 	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
 	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
@@ -88,6 +90,14 @@ type Dependencies struct {
 	// leaves current index scheduling enabled but omits that separate
 	// capability from the shared scheduler registry.
 	ObjectStore storage.ObjectStore
+
+	// ToolkitCatalogue and WorkerToolkitCapability are the SAME two objects
+	// internal/api/v2/toolkits already holds, threaded in so a tool run and the
+	// type catalogue answer "can this deployment run this type" from one place.
+	// Both nil is the reading of absence the catalogue itself applies: every
+	// type is runnable, as it was before the projection existed.
+	ToolkitCatalogue        *CurrentToolkitCatalogueSnapshot
+	WorkerToolkitCapability *WorkerToolkitCapability
 }
 
 func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtime, error) {
@@ -213,6 +223,16 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		IsolationClass:    indexIsolationClass,
 		Priority:          1,
 		DeadlineTTL:       indexDeadlineTTL,
+		LimitsRevision:    limitsRevision,
+		MaxOutstanding:    config.MaxOutstanding,
+	}
+	toolkitCallToolDispatchPolicy := repos.ToolkitCallToolDispatchPolicy{
+		StreamName:        config.IndexIngestCommandStream,
+		CapabilityVersion: toolkitCallToolCapabilityVersion,
+		ResourceClass:     toolkitCallToolResourceClass,
+		IsolationClass:    toolkitCallToolIsolationClass,
+		Priority:          1,
+		DeadlineTTL:       toolkitCallToolDeadlineTTL,
 		LimitsRevision:    limitsRevision,
 		MaxOutstanding:    config.MaxOutstanding,
 	}
@@ -357,6 +377,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		return nil, err
 	}
 	var indexPublisher publisherRunner
+	var toolkitCallToolProducer *redisdispatch.ToolkitCallToolProducer
 	if config.IndexIngestDispatchEnabled {
 		indexLimits := limits
 		indexLimits.MaxRedisEntryBytes = productionIndexRedisEntrySize
@@ -398,6 +419,28 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		})
 		if err != nil {
 			return nil, err
+		}
+		// The tool-run producer, on the SAME stream and the same appender. The
+		// worker dispatches by capability_id from one Redis stream
+		// (serve.py:781-813), so a second stream would need a second worker to
+		// consume it and would deliver nothing on every deployment there is.
+		//
+		// There is NO outbox publisher beside it. A tool run is dispatched
+		// inline by the request that admitted it — see
+		// internal/application/toolkitcalltool/doc.go — so a background poller
+		// would have nothing to publish.
+		toolkitCallToolProducer, err = redisdispatch.NewToolkitCallToolProducer(
+			redisdispatch.ToolkitCallToolProducerConfig{
+				Stream:                 config.IndexIngestCommandStream,
+				ConsumerGroup:          config.IndexIngestConsumerGroup,
+				ValidationStream:       config.CommandStream,
+				ProtocolRevision:       protocolRevision,
+				EnvelopeSchemaRevision: envelopeSchemaRevision,
+				CapabilityVersion:      toolkitCallToolCapabilityVersion,
+				Limits:                 indexLimits,
+			}, signer, indexAppender)
+		if err != nil {
+			return nil, fmt.Errorf("construct tool-run Redis producer: %w", err)
 		}
 	}
 	var agentJobs *repos.AgentExecutionJobsRepository
@@ -838,6 +881,11 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			}
 		}
 	}
+	// toolkitCallToolResults is built HERE rather than inside the tool-run
+	// runtime below, because the output listener is composed before the index
+	// graph the run service needs. It writes only `output_inbox`, so it depends
+	// on nothing but the output pool.
+	var toolkitCallToolResults *repos.ToolkitCallToolResultsRepository
 	if config.IndexIngestDispatchEnabled {
 		indexResults, err := repos.NewIndexIngestResultsRepository(dependencies.OutputPool, repos.IndexIngestOutputPolicy{
 			LimitsRevision:    limitsRevision,
@@ -851,26 +899,37 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if err != nil {
 			return nil, err
 		}
-		if config.AgentExecutionDispatchEnabled {
-			outputServer, outputServerErr = output.NewServerWithIndexAgentAndNodeEvents(
-				outputServerConfig,
-				outputPeerAuthorizer,
-				validationOutput,
-				runtimeFailures,
-				indexOutput,
-				agentOutputIngestor,
-				nodeEventOutputIngestor,
-			)
-		} else {
-			outputServer, outputServerErr = output.NewServerWithIndexIngestAndNodeEvents(
-				outputServerConfig,
-				outputPeerAuthorizer,
-				validationOutput,
-				runtimeFailures,
-				indexOutput,
-				nodeEventOutputIngestor,
-			)
+		// The tool-run terminal arm rides the SAME listener and the SAME worker
+		// as index ingest, which is why it is composed under this flag: a
+		// deployment whose worker runs an index is the deployment whose worker
+		// can run one of that toolkit's tools.
+		toolkitCallToolResults, err = repos.NewToolkitCallToolResultsRepository(dependencies.OutputPool)
+		if err != nil {
+			return nil, fmt.Errorf("construct tool-run result repository: %w", err)
 		}
+		toolkitCallToolOutput, err := outputapp.NewToolkitCallToolService(
+			toolkitCallToolResults, outputClaims, toolkitCallToolResults,
+		)
+		if err != nil {
+			return nil, err
+		}
+		// Assigned through a nil INTERFACE where a capability is absent, never
+		// a typed nil: ingestMessage decides on `== nil`, and a typed nil would
+		// pass that check and then call a method on a nil pointer.
+		var agents output.AgentExecutionIngestor
+		if config.AgentExecutionDispatchEnabled {
+			agents = agentOutputIngestor
+		}
+		outputServer, outputServerErr = output.NewServerWithCapabilities(
+			outputServerConfig,
+			outputPeerAuthorizer,
+			validationOutput,
+			runtimeFailures,
+			indexOutput,
+			agents,
+			nodeEventOutputIngestor,
+			output.WithToolkitCallTool(toolkitCallToolOutput),
+		)
 	} else if config.AgentExecutionDispatchEnabled {
 		outputServer, outputServerErr = output.NewServerWithAgentAndNodeEvents(
 			outputServerConfig,
@@ -898,6 +957,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	}
 	var contentServer *storage.ContentServer
 	var indexStart indexingapi.StartUseCase
+	var toolkitCallTool toolkitrun.UseCase
 	var currentIndex *currentIndexRuntime
 	var projectSystemTokens storage.ProjectSystemTokenIssuer
 	if config.IndexSchedulingEnabled {
@@ -907,18 +967,26 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	}
 	var runtimeToken *storage.EliteaClientTokenService
 	if config.IndexIngestDispatchEnabled || config.AgentExecutionDispatchEnabled {
+		// projectSecretsHeader is what stops the SDK sending the literal
+		// "secret" (#408). The worker asks for it with its bearer token and
+		// puts it on every call it makes back to this service, so the
+		// version-details route can refuse a project that has no value instead
+		// of accepting a value printed in the pylon source.
+		projectSecretsHeader := secretsapi.NewHandler(dependencies.ContentPool)
 		if projectSystemTokens != nil {
 			runtimeToken, err = storage.NewEliteaClientTokenServiceWithSchedules(
 				contentRepository,
 				dependencies.ActorTokenIssuer,
 				projectSystemTokens,
 				dependencies.ProjectTokenValidator,
+				projectSecretsHeader,
 			)
 		} else {
 			runtimeToken, err = storage.NewEliteaClientTokenService(
 				contentRepository,
 				dependencies.ActorTokenIssuer,
 				dependencies.ProjectTokenValidator,
+				projectSecretsHeader,
 			)
 		}
 		if err != nil {
@@ -1033,6 +1101,22 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			return nil, err
 		}
 		indexStart = currentIndex.start
+		// The tool-run producer, composed on the index graph's own toolkit
+		// reader and settings resolver.
+		toolkitCallToolRuntime, toolRunErr := newCurrentToolkitCallToolRuntime(
+			dependencies.AdmissionPool,
+			toolkitCallToolResults,
+			currentIndex,
+			dependencies.ToolkitCatalogue,
+			dependencies.WorkerToolkitCapability,
+			toolkitCallToolProducer,
+			toolkitCallToolDispatchPolicy,
+			0,
+		)
+		if toolRunErr != nil {
+			return nil, toolRunErr
+		}
+		toolkitCallTool = toolkitCallToolRuntime.run
 		indexPublishers := []publisherRunner{
 			publisherRoot,
 			currentIndex.initializer,
@@ -1331,6 +1415,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		replayWaiter,
 		indexStart,
 		agentStart,
+		toolkitCallTool,
 		int(dependencies.ReplayPool.Config().MaxConns),
 	)
 	if err != nil {

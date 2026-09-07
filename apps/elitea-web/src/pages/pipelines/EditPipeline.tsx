@@ -10,7 +10,6 @@ import { FormProvider } from 'react-hook-form';
 import { ConfigurationTab, resetPipelineDraft, usePipelineVersionSync } from '@/features/pipelines';
 import type { AgentLlmSettings } from '@/shared/api/agentLlmSettings';
 import { t } from '@/shared/i18n';
-import { AgentModelSettings } from '@/widgets/agent-model-settings';
 import { disarmUnsavedChangesNavBlocker, useUnsavedChangesNavBlocker } from '@/widgets/app-shell';
 
 import { pipelineDetailDisplayName, toVersionSummaries } from './lib/editPipelineMappers';
@@ -18,7 +17,7 @@ import { isPublicPipelinesProject } from './lib/isPublicPipelinesProject';
 import {
   buildPipelineConfigurationTabSlots,
   PipelineConfigurationTabBoundary,
-} from './lib/pipelineConfigurationTabGaps';
+} from './lib/pipelineConfigurationTabSlots';
 import { useRefetchPipelineAfterSave } from './lib/useRefetchPipelineAfterSave';
 import { usePipelineChatAdapter } from './lib/usePipelineChatAdapter';
 import { usePipelineChatSlotContext } from './lib/usePipelineChatSlotContext';
@@ -26,7 +25,9 @@ import { usePipelineEditorUser } from './lib/usePipelineEditorUser';
 import { useCorrectUserNameInUrl } from './lib/useCorrectUserNameInUrl';
 import { useEditPipelineConfigurationTabBridge } from './lib/useEditPipelineConfigurationTabBridge';
 import { useEditPipelineData } from './lib/useEditPipelineData';
+import { useEditPipelineEditorBridge } from './lib/useEditPipelineEditorBridge';
 import { useEditPipelineForm } from './lib/useEditPipelineForm';
+import { useEditPipelineVersionFields } from './lib/useEditPipelineVersionFields';
 import { useIsVersionNotFound } from './lib/useIsVersionNotFound';
 import { useSelectedProjectId } from './lib/useSelectedProjectId';
 import { EditPipelineActions } from './ui/EditPipelineActions';
@@ -99,79 +100,45 @@ function parseApplicationId(agentId: string | undefined): number | undefined {
 
 /**
  * Ported from `apps/elitea-ui/src/pages/Pipelines/EditPipeline.jsx` —
- * ROUTE-020 `/pipelines/:tab/:agentId` (+ optional `/:version`,
- * ROUTE-069; spec §8.1). Structurally the pipelines-domain mirror of
- * `pages/agents/EditApplication.tsx` (Wave-2 unit A1g) — a Pipeline
- * literally IS an Application row, and this page fetches/saves through the
- * exact same `entities/application-form`/generated-client seam.
+ * ROUTE-020 `/pipelines/:tab/:agentId` (+ optional `/:version`, ROUTE-069;
+ * spec §8.1). Structurally the pipelines-domain mirror of
+ * `pages/agents/EditApplication.tsx` — a Pipeline literally IS an
+ * Application row, and this page fetches and saves through the same seam.
  *
- * The application-detail/version fetch (`useEditPipelineData`) and the RHF
- * form + imperative save (`useEditPipelineForm`) both live in `./lib/` —
- * split out purely to stay under the §3.5 400-line budget and the oxlint
- * cyclomatic-complexity budget (12).
+ * The detail/version fetch (`useEditPipelineData`), the version-level form
+ * state (`useEditPipelineVersionFields`) and the RHF form + imperative save
+ * (`useEditPipelineForm`) all live in `./lib/`, split out purely to stay
+ * under the §3.5 400-line and complexity-12 budgets.
  *
- * **Composition gaps, disclosed:**
- *  - The baseline's `ConfigurationTab` (`Components/ConfigurationTab.jsx`,
- *    `EditorPanel.jsx`, `FlowWrapper.jsx`, `GeneralFormPanel.jsx`,
- *    `ChatPanel.jsx`, `AddNodeMenu.jsx`) landed later, from a sibling A2
- *    sub-unit, as `features/pipelines/ui/ConfigurationTab.tsx` — exported
- *    from that slice's `index.ts` specifically so this page could reach it
- *    (adversarial-review fix: this page used to render an unconditional
- *    empty placeholder `<Box>` here even after `ConfigurationTab` existed,
- *    leaving the entire standalone pipeline editor blank). It is now
- *    mounted for real below, wrapped in `PipelineConfigurationTabBoundary`
- *    (`./lib/pipelineConfigurationTabGaps.tsx`). Two of the three sub-gaps
- *    that module used to disclose are now CLOSED, and their stated reasons
- *    were stale rather than merely optimistic — read its corrected header:
- *    the test-chat slot renders the real `widgets/chat-box` `ChatBox`
- *    (`./ui/PipelineTestChat.tsx`), the `adapter` is real
- *    (`./lib/usePipelineChatAdapter.ts`), and the boundary's "nobody mounts
- *    a `SocketClientContext.Provider`" claim was simply false —
- *    `app/providers/AppProviders.tsx` mounts one around every page. What
- *    remains a genuine gap is the configuration FORM's agent-domain panels.
- *  - `ApplicationTabBar`/`ApplicationControls`
- *    (`@/[fsd]/entities/application-tab-bar/ui`) were NOT promoted into any
+ * **The configuration form is real.** The left pane used to render
+ * "Configuration form is not available yet", on the stated grounds that the
+ * `features/agents` panels it needs were not on that slice's public API.
+ * They were, and had been since the AGENT editor mounted them; see
+ * `./ui/EditPipelineConfigurationPanel.tsx` for what it composes and for the
+ * one section (EDITOR NOTES) that is still withheld because the backend
+ * persists no `notes` field anywhere.
+ *
+ * **Composition notes, all measured rather than assumed:**
+ *  - `ApplicationTabBar`/`ApplicationControls` were never promoted into an
  *    `entities/` slice (verified: no `entities/application-tab-bar`
- *    directory exists in this worktree). This page reuses the promoted
- *    `CreateApplicationTabBar` for save/discard instead, same substitution
- *    `pages/agents/EditApplication.tsx` already made — the baseline's real
- *    consumer of `useDiscardPipelineChanges`'s baseline counterpart
- *    (`useDiscardApplicationChanges`) is in fact `ApplicationTabBar`
- *    (grepped directly), so wiring it here is the closest faithful home
- *    available.
- *  - Nav-blocking-when-dirty (`useNavBlocker`, baseline) is CLOSED (#133).
- *    It was disclosed here as dropped for want of a promoted equivalent;
- *    in fact `widgets/app-shell`'s `NavBlockerDialog` held a real app-wide
- *    TanStack `useBlocker` all along and only lacked a setter outside the
- *    chat process. Armed below off `formState.isDirty || isYamlDirty` —
- *    see that call site for the one residual it discloses.
- *  - The flow GRAPH now round-trips (#135): `usePipelineVersionSync` seeds
- *    the editor stores from this version's `instructions` YAML + saved
- *    `pipeline_settings`, and `useEditPipelineForm` reads the live graph back
- *    out through `usePipelineGraphDraft` on save. `tags`/`tools` still have
- *    no field on this endpoint — see `entities/application-form/model/
- *    mutations.ts`'s own doc comment for what remains of that gap.
+ *    directory exists here). This page reuses `CreateApplicationTabBar` for
+ *    save/discard, the same substitution `pages/agents/EditApplication.tsx`
+ *    makes.
+ *  - Nav-blocking-when-dirty is armed below off the RHF form, the
+ *    version-level fields AND the flow editor's YAML — anything one of the
+ *    three can lose, the guard has to see.
+ *  - The flow GRAPH round-trips (#135): `usePipelineVersionSync` seeds the
+ *    editor stores from this version's `instructions` YAML + stored
+ *    `pipeline_settings`, and `useEditPipelineForm` reads the live graph
+ *    back out through `usePipelineGraphDraft` on save.
  *
- * **Read-only (public-viewer) gating, save-failure feedback, and the
- * detail-404 page** (adversarial-review fixes, reproduced verbatim from
- * `pages/agents/EditApplication.tsx`'s own equivalent fix, Wave-2 unit
- * A1g): the baseline's `useViewMode()` hides the Save/Save-New-Version
- * buttons whenever the currently selected project is the public project
- * (`ApplicationTabBar.jsx:65`); this page reproduces that default via the
- * same `isPublicPipelinesProject` check `Pipelines.tsx`/`usePipelinesData.ts`
- * (this unit) already use for the identical "is the current viewing context
- * public" question — no override is threaded through a `viewMode` search
- * param because nothing in this unit's own navigation call sites
- * (`Latest`/`MyLiked`/`Trending`/`PrivatePipelinesList`) ever sets one, so
- * reading it here would not change the actual, reachable behaviour. A
- * failed save now surfaces via `useEditPipelineForm`'s `saveError`, rendered
- * as an inline `role="alert"` banner (this app has no toast infrastructure
- * — see that hook's own doc comment). A 404/400 on the pipeline-DETAIL
- * fetch itself now renders the same dedicated not-found `NoResultsMessage`
- * this file already used for an unknown version id, instead of falling
- * through to the normal edit-page shell — old app: `EditPipeline.jsx`'s
- * `shouldShowNotFoundPage = (isError && isNotFoundError(error)) ||
- * isVersionNotFound` → `<Page404 />`.
+ * **Read-only (public-viewer) gating, save-failure feedback and the
+ * detail-404 page**: the baseline's `useViewMode()` hides the write
+ * affordances whenever the selected project is the public one
+ * (`ApplicationTabBar.jsx:65`); `isPublicPipelinesProject` reproduces that
+ * default. A failed save surfaces as an inline `role="alert"` banner (this
+ * app has no toast infrastructure). A 404/400 on the detail fetch renders
+ * the dedicated not-found page rather than an empty editor shell.
  */
 export function EditPipeline(): ReactNode {
   const projectId = useSelectedProjectId();
@@ -204,13 +171,20 @@ export function EditPipeline(): ReactNode {
   // so a save could only ever have written an empty graph back.
   usePipelineVersionSync({ isCreateMode: false, versionDetails: activeVersion, versionId: activeVersion?.id });
 
-  const { form, handleSave, isSaving, saveError, llmSettings, isDirty, admissionRefused } = useEditPipelineForm(
+  // The version-level fields the configuration form edits (welcome message,
+  // chat starters' siblings, variables, step limit, modules, model, tags).
+  // Held outside the RHF form because `applicationCreationSchema` validates
+  // none of them; see that hook for why `instructions` is NOT among them.
+  const versionFields = useEditPipelineVersionFields(activeVersion);
+  const { form, handleSave, isSaving, saveError, isDirty, admissionRefused } = useEditPipelineForm(
     detail,
     activeVersion,
     projectId,
     applicationId,
+    versionFields,
   );
-  const { setFieldValue, versionDetails } = useEditPipelineConfigurationTabBridge(activeVersion, form.setValue);
+  const editor = useEditPipelineEditorBridge(form, versionFields, activeVersion === undefined ? undefined : Number(activeVersion.id));
+  const { setFieldValue, versionDetails } = useEditPipelineConfigurationTabBridge(activeVersion, form.setValue, versionFields);
   useRefetchPipelineAfterSave(isSaving, saveError, projectId, applicationId, explicitVersionId);
   // The real `ChatConversationAdapter`, and the signed-in user the test chat's
   // conversation names as its author — both page-owned because `pages/` is the
@@ -275,39 +249,49 @@ export function EditPipeline(): ReactNode {
    * page is still mounted; the disarm must precede the navigation or the
    * just-reset form's blocker prompts a second time.
    */
-  const llmSettingsReset = llmSettings.reset;
+  const versionFieldsReset = versionFields.reset;
   const navigate = useNavigate();
   const handleDiscarded = useCallback(() => {
     resetPipelineDraft();
-    llmSettingsReset();
+    versionFieldsReset();
     disarmUnsavedChangesNavBlocker();
     void navigate({ to: '/pipelines/$tab', params: { tab: params.tab ?? 'latest' } });
-  }, [llmSettingsReset, navigate, params.tab]);
+  }, [versionFieldsReset, navigate, params.tab]);
 
-  const setLlmSettings = llmSettings.setValue;
-  const handleModelSettingsChange = useCallback((next: AgentLlmSettings) => setLlmSettings(next), [setLlmSettings]);
+  const applyVersionField = versionFields.applyFieldChange;
+  const handleModelSettingsChange = useCallback(
+    (next: AgentLlmSettings) => {
+      applyVersionField('version_details.llm_settings', next);
+    },
+    [applyVersionField],
+  );
   // Everything the test-chat slot needs to name the pipeline it talks to.
   const chatSlotContext = usePipelineChatSlotContext({ projectId, applicationId: params.agentId, detail, activeVersion, user: chatUser });
 
   /*
-   * The model picker rides in `ConfigurationTab`'s configuration-form slot —
-   * the left panel, where the baseline puts model settings — rather than
-   * above the editor, because that slot IS the configuration form and the
-   * rest of it is still a disclosed gap (`./lib/pipelineConfigurationTabGaps
-   * .tsx`). It is the only version-level field this page can edit today.
+   * The real configuration form, rendered into `ConfigurationTab`'s
+   * configuration-form slot — the left panel, where the baseline puts it.
+   *
+   * NOT memoised, deliberately. `GeneralFormPanel`/`ChatPanel` call their
+   * render props straight through and hold them in no dependency array, so a
+   * fresh slots object costs one re-render of components that were going to
+   * re-render anyway — while a `useMemo` over it would need every one of this
+   * panel's nine inputs in its dependency array, which is both a §3.5 breach
+   * and a list that silently goes stale.
    */
-  const configurationTabSlots = useMemo(
-    () =>
-      buildPipelineConfigurationTabSlots(
-        <AgentModelSettings
-          projectId={projectId}
-          value={llmSettings.value}
-          onChange={handleModelSettingsChange}
-          disabled={isReadOnlyView || isFetching}
-        />,
-        chatSlotContext,
-      ),
-    [projectId, llmSettings.value, handleModelSettingsChange, isReadOnlyView, isFetching, chatSlotContext],
+  const configurationTabSlots = buildPipelineConfigurationTabSlots(
+    {
+      projectId,
+      applicationId,
+      activeVersion,
+      editor,
+      versionFields,
+      isEditorDisabled: isReadOnlyView || isFetching,
+      isDirty,
+      isReadOnly: isReadOnlyView,
+      onModelSettingsChange: handleModelSettingsChange,
+    },
+    chatSlotContext,
   );
 
   // Both dead ends render from `./ui/EditPipelineNotFound.tsx` — same copy,
@@ -336,10 +320,20 @@ export function EditPipeline(): ReactNode {
             versions={versions}
             activeVersion={activeVersion}
             isReadOnly={isReadOnlyView}
-            isFetching={isFetching}
-            llmSettings={llmSettings.value}
+            /* `isEditorLoading`, NOT `isFetching` — the same distinction, and
+               the same measured cost, that `editorIsLoading` above records for
+               the canvas. `useRefetchPipelineAfterSave` refetches the detail
+               after EVERY save, and while that request is in flight a raw
+               `isFetching` unmounted this whole header row: the version
+               selector, "Save As Version", Share/Fork and the Save bar all
+               left the screen and came back. Journey J16b measured the
+               consequence as a 30s wait for a "Save As Version" button that
+               was not in the document — an author who saves and then takes a
+               version sees the control they are reaching for disappear. */
+            isFetching={isEditorLoading}
+            versionFields={versionFields.fields}
           />
-          {!isFetching && !isReadOnlyView && (
+          {!isEditorLoading && !isReadOnlyView && (
             <>
               {/* The Chat action — the only way to actually TALK to this
                   pipeline; see `./ui/ChatWithPipelineButton.tsx` for the
@@ -349,6 +343,7 @@ export function EditPipeline(): ReactNode {
                 detail={detail}
                 activeVersion={activeVersion}
                 projectId={projectId}
+                tab={params.tab}
               />
               <EditPipelineSaveBar
                 onSave={handleSave}

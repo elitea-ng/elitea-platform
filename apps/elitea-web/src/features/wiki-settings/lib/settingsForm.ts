@@ -17,7 +17,12 @@
  * settings are hints because a document without them is legal and may well
  * work — see ENGINE_FALLBACK_* below for what it costs when it does not.
  */
-import { getConfiguredRepoIdentity, type ToolkitSettings } from '@/entities/wiki';
+import {
+  getCodeToolkitReference,
+  getConfiguredRepoIdentity,
+  readArtifactSource,
+  type ToolkitSettings,
+} from '@/entities/wiki';
 
 /**
  * The models the DeepWiki engine asks the platform gateway for when the
@@ -105,13 +110,31 @@ export function parseSettingsDraft(draft: string): ParsedSettings {
   }
 
   const settings = parsed as ToolkitSettings;
-  const problems: SettingsProblem[] = [];
+  return { settings, problems: sourceProblems(settings), hints: modelHints(settings) };
+}
 
+/**
+ * What is wrong with the SOURCE the document names.
+ *
+ * A WIKI HAS ONE SOURCE, and it may be a folder rather than a repository. The
+ * three rules are one rule seen from three sides, and they are mutually
+ * exclusive by construction: a folder that does not parse is reported as a
+ * folder and not as a missing repository, and a document naming both sources
+ * is reported once.
+ */
+function sourceProblems(settings: ToolkitSettings): SettingsProblem[] {
+  const problems: SettingsProblem[] = [];
+  const folder = readArtifactSource(settings);
+  if (folder.status === 'invalid') {
+    problems.push({ field: folder.field, message: folder.message });
+  }
+  if (folder.status !== 'absent' && namesRepositorySource(settings)) {
+    problems.push({ field: ARTIFACT_SOURCE_FIELD, message: TWO_SOURCES });
+  }
   // The one check the legacy screen did not make. Without a resolvable
   // repository a generation runs and finds nothing, and the operator learns
   // that minutes later from an empty wiki.
-  const identity = getConfiguredRepoIdentity(null, settings, null);
-  if (!identity?.repository) {
+  if (folder.status === 'absent' && !getConfiguredRepoIdentity(null, settings, null)?.repository) {
     problems.push({
       field: 'repository',
       message:
@@ -119,8 +142,41 @@ export function parseSettingsDraft(draft: string): ParsedSettings {
         'or an Azure DevOps organization/project/repository_id.',
     });
   }
+  return problems;
+}
 
-  return { settings, problems, hints: modelHints(settings) };
+/** The canonical toolkit parameter naming a folder source. */
+const ARTIFACT_SOURCE_FIELD = 'artifact_configuration';
+
+/**
+ * WHY THIS COMBINATION IS A PROBLEM AND NOT A PRECEDENCE.
+ *
+ * The facade refuses a body naming both a `code_toolkit` and an
+ * `artifact_configuration` with a 400 ("a wiki has one source"), and it
+ * OVERWRITES a repository named beside a folder with the one it derives. So a
+ * document holding both either cannot start a generation, or starts one from
+ * material the operator did not choose. A form that saved it would move that
+ * discovery to the generation that ran and produced the wrong wiki.
+ */
+const TWO_SOURCES =
+  'The settings name both a repository source and an artifact folder. A wiki has one ' +
+  'source: remove code_toolkit and the repository fields, or remove artifact_configuration.';
+
+/**
+ * Does the document name a repository source BESIDE the folder?
+ *
+ * The identity resolver prefers a folder, so the repository half is invisible
+ * to it while a folder is present. The folder keys are stripped to ask the
+ * question the resolver would have answered without them; the suffix match
+ * covers the `toolkit_configuration_` alias without a second copy of the
+ * entity's key list.
+ */
+function namesRepositorySource(settings: ToolkitSettings): boolean {
+  if (getCodeToolkitReference(settings) !== null) return true;
+  const withoutFolder = Object.fromEntries(
+    Object.entries(settings).filter(([key]) => !key.endsWith(ARTIFACT_SOURCE_FIELD)),
+  );
+  return Boolean(getConfiguredRepoIdentity(null, withoutFolder, null)?.repository);
 }
 
 /**
@@ -148,6 +204,57 @@ function modelHints(settings: ToolkitSettings): SettingsHint[] {
     hints.push({ field: 'embedding_model', fallback: ENGINE_FALLBACK_EMBEDDING_MODEL });
   }
   return hints;
+}
+
+/**
+ * Every key that names a REPOSITORY source, under each spelling the entity's
+ * identity and reference readers accept.
+ *
+ * The list is here rather than in the entity because it exists for one job:
+ * writing a folder source into a draft that already named a repository. It is
+ * derived from `getCodeToolkitReference` and `getRepositoryFromSettings` —
+ * the ADO organization and project are NOT in it, because neither yields an
+ * identity without one of the four repository names.
+ */
+const REPOSITORY_SOURCE_KEYS = [
+  'code_toolkit',
+  'toolkit_configuration_code_toolkit',
+  'code_repository',
+  'toolkit_configuration_code_repository',
+  'github_repository',
+  'toolkit_configuration_github_repository',
+  'repository',
+  'repo',
+  'repository_id',
+  'toolkit_configuration_repository_id',
+];
+
+/**
+ * The settings with their source replaced: a folder, or no folder at all.
+ *
+ * WRITING A FOLDER REMOVES THE REPOSITORY KEYS. The two cannot both stand —
+ * see TWO_SOURCES — so a picker that added the folder and left the repository
+ * would produce exactly the document the next rule refuses, and the operator
+ * would have to finish the job by hand in the JSON. Removing them is visible:
+ * the draft the editor shows IS the document that will be saved.
+ *
+ * The prefix is written AS TYPED, only trimmed. The reader canonicalises
+ * `docs/` to `docs` on its own, and rewriting the field under the operator
+ * would take the slash back out of the box while they are still typing a path.
+ */
+export function withArtifactSource(
+  settings: ToolkitSettings,
+  source: { readonly bucket: string; readonly prefix: string } | null,
+): ToolkitSettings {
+  const next: Record<string, unknown> = { ...settings };
+  delete next['toolkit_configuration_artifact_configuration'];
+  if (source === null) {
+    delete next[ARTIFACT_SOURCE_FIELD];
+    return next;
+  }
+  for (const key of REPOSITORY_SOURCE_KEYS) delete next[key];
+  next[ARTIFACT_SOURCE_FIELD] = { bucket: source.bucket.trim(), prefix: source.prefix.trim() };
+  return next;
 }
 
 /** A draft is savable when it parses and has no problems. */

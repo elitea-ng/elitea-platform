@@ -126,13 +126,16 @@ export function ObjectField({
     );
   }
 
+  // The hint is the `summaryAction`, never the title: a `<button>` inside the
+  // summary's own is J18's `nested-interactive` axe failure (`BasicAccordion`).
   return (
     <Box sx={accordionContainerSx}>
       <BasicAccordion
         items={[
           {
-            title: description ? labelWithHint(label, description, required) : objectFieldTitle(label, title),
+            title: `${objectFieldTitle(label, title)}${description && required ? ' *' : ''}`,
             content: editor,
+            ...(description ? { summaryAction: <InfoTooltip title={description} /> } : {}),
           },
         ]}
         slotSx={{ summary: { paddingRight: 0 } }}

@@ -135,7 +135,7 @@ func (s *Scheduler) tick(ctx context.Context) {
 	// so the window is re-checked every minute and work resumes on the first
 	// tick after it closes. No schedule is stamped while suppressed, so each
 	// one is due exactly once when it lifts. See maintenance.go.
-	if s.maintenanceActive(ctx) {
+	if s.MaintenanceActive(ctx) {
 		slog.Info("scheduler: maintenance mode is active; not dispatching",
 			"instance", s.cfg.InstanceID)
 		return

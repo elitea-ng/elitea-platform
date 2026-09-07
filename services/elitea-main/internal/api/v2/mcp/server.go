@@ -243,6 +243,23 @@ func (h *Handler) callTool(r *http.Request, schema string, s scope, message rpcM
 	if err := json.Unmarshal(message.Params, &params); err != nil || strings.TrimSpace(params.Name) == "" {
 		return newError(message.ID, codeInvalidParams, "tools/call requires a 'name' parameter")
 	}
+	// The SAME `arguments` member, undecoded, read in a SECOND pass.
+	//
+	// It cannot be a second field of the struct above: two fields carrying the
+	// same JSON tag at the same level are BOTH dropped by encoding/json, which
+	// silently emptied `task` and turned every agent call into "requires a
+	// non-empty 'task' argument".
+	//
+	// A TOOLKIT tool's schema is an open object (toolkitToolSchema) because this
+	// service does not hold the SDK's per-tool argument schemas, so there is no
+	// field set to decode into: the arguments pass through unchanged to the
+	// worker, which is exactly the contract the listing publishes. The typed
+	// `Arguments` above stays for the agent half, whose schema really does have
+	// exactly one property.
+	var rawParams struct {
+		Arguments json.RawMessage `json:"arguments"`
+	}
+	_ = json.Unmarshal(message.Params, &rawParams)
 
 	// The name is resolved against the SAME listing tools/list serves, in the
 	// same scope. Without that, a call scoped to one toolkit could name a tool
@@ -268,6 +285,28 @@ func (h *Handler) callTool(r *http.Request, schema string, s scope, message rpcM
 		return newError(message.ID, codeInvalidParams, "unknown tool: "+params.Name)
 	}
 
+	// A TOOLKIT tool (#616). Decided BEFORE the agent guard below: the two
+	// halves are composed independently, so a deployment that can run toolkits
+	// and not agents must not be told the agent's sentence.
+	if target.runnableToolkitTool() {
+		if h.toolRuns == nil {
+			// NO RUNTIME for this half. The sentence is unchanged from what
+			// this endpoint has always given — see
+			// ToolkitExecutionUnavailableReason.
+			return newResult(message.ID, errorResult(ToolkitExecutionUnavailableReason))
+		}
+		projectID, ok := runProjectID(r)
+		if !ok {
+			return newError(message.ID, codeInvalidParams, "invalid project id")
+		}
+		actorUserID, refusal := h.authorizeRun(r, projectID)
+		if refusal != nil {
+			return newResult(message.ID, refusal)
+		}
+		return newResult(message.ID, h.runToolkitTool(
+			r.Context(), projectID, actorUserID, target, rawParams.Arguments,
+		))
+	}
 	// NO RUNTIME. The composition root had no AgentStart use case to give this
 	// handler, which is what `runtime.enabled` being off looks like from here.
 	// The answer is the sentence this endpoint has always given, unchanged —
@@ -275,7 +314,8 @@ func (h *Handler) callTool(r *http.Request, schema string, s scope, message rpcM
 	if h.start == nil {
 		return newResult(message.ID, errorResult(ToolExecutionUnavailableReason))
 	}
-	// A TOOLKIT tool. The half this change does not attempt.
+	// Neither an agent this service can run nor a toolkit tool it can run. The
+	// only remaining shape is a descriptor with no target at all.
 	if !target.runnableAgent() {
 		return newResult(message.ID, errorResult(ToolkitExecutionUnavailableReason))
 	}

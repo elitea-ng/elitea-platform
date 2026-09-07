@@ -1,0 +1,57 @@
+# Restore the version-1 index plane in the mixed deployment (#339).
+#
+# THIS FILE IS THE ROLLBACK STEP, and it exists so that a reversal is one
+# command rather than a search through history for what a deleted service used
+# to declare. `deploy/centry-hybrid/pov-compose.yml` puts pylon_indexer in the
+# `index-v1` profile, which Compose then does not start; this overlay restores
+# the mounts, health check and dependency that service had, and the profile is
+# what selects it.
+#
+# APPLY IT LIKE THIS — after the two files pov-compose.yml already merges, and
+# with BOTH profiles, because the rest of the stack is in `runtime`:
+#
+#   docker compose \
+#     --project-directory <centry> \
+#     --env-file <centry>/envs/default.env \
+#     --env-file <centry>/envs/override.env \
+#     -f <centry>/docker-compose.yml \
+#     -f <centry>/hybrid_auth/docker-compose.pov.yml \
+#     -f <centry>/hybrid_auth/docker-compose.indexing-checkpoint.yml \
+#     -f deploy/centry-hybrid/pov-compose.yml \
+#     -f deploy/centry-hybrid/rollback/index-v1.yml \
+#     --profile runtime --profile index-v1 \
+#     up -d
+#
+# Machines here use podman: `podman compose`, not `docker compose`.
+#
+# WHEN IT IS VALID, and this is the part that is not a preference.
+# deploy/INDEX_V2_CUTOVER.md, "Stage B": rollback may restore the stopped
+# version-1 release on its unchanged old route BEFORE version-2 admission
+# reopens. AFTER any version-2 command has been admitted, binary rollback to
+# version 1 is PROHIBITED — freeze admission, drain or terminally reconcile
+# version 2, then roll forward. Never attach a version-1 process to a version-2
+# stream or consumer group.
+#
+# So this file is the reversal for a cutover that failed BEFORE traffic moved.
+# It is not a recovery path for work that version 2 has already accepted.
+#
+# `compose.sh` does not reference this file. Applying it is an explicit operator
+# act, and the validation in `compose.sh config` asserts the retired state — so
+# a stack running this overlay fails that check, on purpose. That is the signal
+# that a rollback is in force, not a defect.
+services:
+  pylon_indexer:
+    profiles: [index-v1]
+    volumes:
+      - ${ELITEA_PLATFORM_DIR:?set ELITEA_PLATFORM_DIR}/deploy/centry-hybrid/rollback/runtime-engine-litellm.yml:/data/configs/runtime_engine_litellm.yml:ro
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - curl -fsS --max-time 2 http://elitea-litellm:8081/health/liveness >/dev/null
+      interval: 3s
+      timeout: 3s
+      retries: 60
+      start_period: 15s
+    depends_on:
+      elitea-litellm:
+        condition: service_healthy

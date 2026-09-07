@@ -35,6 +35,7 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"sync"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -66,7 +67,16 @@ type contextKey struct{}
 // Enrichment is what a handler can add to the record in flight. Every method is
 // safe on a nil receiver, so a handler never needs to check whether logging is
 // on.
+//
+// The mutex is not decoration. A streamed request settles its usage from the
+// stream drain, and that drain can outlive the request on a detached goroutine
+// (stream_drain.go). A write from there races the middleware's read, and it
+// arrives after the row is already gone to the writer. `sealed` makes that late
+// write a deterministic no-op instead of a race: the row states what the
+// gateway knew when it answered.
 type Enrichment struct {
+	mu         sync.Mutex
+	sealed     bool
 	provider   string
 	model      string
 	streaming  bool
@@ -87,12 +97,22 @@ func (e *Enrichment) SetModel(provider, model string) {
 	if e == nil {
 		return
 	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.sealed {
+		return
+	}
 	e.provider, e.model = provider, model
 }
 
 // SetStreaming marks the response as streamed.
 func (e *Enrichment) SetStreaming(streaming bool) {
 	if e == nil {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.sealed {
 		return
 	}
 	e.streaming = streaming
@@ -107,6 +127,11 @@ func (e *Enrichment) SetError(code string) {
 	if e == nil {
 		return
 	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.sealed {
+		return
+	}
 	e.errorCode = code
 }
 
@@ -115,7 +140,41 @@ func (e *Enrichment) SetTokens(prompt, completion int64) {
 	if e == nil {
 		return
 	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.sealed {
+		return
+	}
 	e.promptToks, e.outputToks = prompt, completion
+}
+
+// snapshot is the sealed value of an Enrichment. It is a separate type because
+// Enrichment holds a mutex, and a mutex must not be copied.
+type snapshot struct {
+	provider   string
+	model      string
+	streaming  bool
+	errorCode  string
+	promptToks int64
+	outputToks int64
+}
+
+// seal takes the final values and closes the handle to further writes.
+//
+// The middleware calls it once, from the defer that emits the row. A write
+// after it is dropped, because there is no row left to write it to.
+func (e *Enrichment) seal() snapshot {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.sealed = true
+	return snapshot{
+		provider:   e.provider,
+		model:      e.model,
+		streaming:  e.streaming,
+		errorCode:  e.errorCode,
+		promptToks: e.promptToks,
+		outputToks: e.outputToks,
+	}
 }
 
 // ErrorCodeSetter is how the gateway's error writer attaches its own
@@ -230,6 +289,7 @@ func Middleware(recorder *Recorder) func(http.Handler) http.Handler {
 			// middleware; swallowing it here would turn a crash into a
 			// silently-empty response.
 			defer func() {
+				final := enrichment.seal()
 				recorder.Record(Record{
 					OccurredAt:  started,
 					ProjectID:   r.Header.Get(headerProjectID),
@@ -238,12 +298,12 @@ func Middleware(recorder *Recorder) func(http.Handler) http.Handler {
 					Method:      r.Method,
 					Status:      recording.status,
 					Duration:    recorder.now().Sub(started),
-					Provider:    enrichment.provider,
-					Model:       enrichment.model,
-					Streaming:   enrichment.streaming,
-					ErrorCode:   errorCodeFor(enrichment, recording),
-					PromptToks:  enrichment.promptToks,
-					OutputToks:  enrichment.outputToks,
+					Provider:    final.provider,
+					Model:       final.model,
+					Streaming:   final.streaming,
+					ErrorCode:   errorCodeFor(&final, recording),
+					PromptToks:  final.promptToks,
+					OutputToks:  final.outputToks,
 					ExecutionID: r.Header.Get(headerExecutionID),
 				})
 			}()
@@ -285,7 +345,7 @@ func routePattern(r *http.Request) string {
 // refuses without going through writeError, would otherwise be a 500 with no
 // classification, and a log that shows failures with no reason is only half the
 // answer.
-func errorCodeFor(enrichment *Enrichment, recording *statusRecorder) string {
+func errorCodeFor(enrichment *snapshot, recording *statusRecorder) string {
 	if enrichment.errorCode != "" {
 		return enrichment.errorCode
 	}

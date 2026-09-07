@@ -4,14 +4,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Box from '@mui/material/Box';
 import type { SxProps, Theme } from '@mui/material/styles';
 
-import {
-  EditViewTabsEnum,
-  IndexStatuses,
-  IndexViewsEnum,
-  IndexesToolsEnum,
-  RUNNABLE_INDEX_STATUSES,
-} from '../../lib/constants/indexDetails.constants';
-import { adjustIndexDataSchema, getMockToolkitIndexConversation, type IndexChatMessage, type JsonSchemaLike } from '../../lib/helpers/indexChat.helpers';
+import { t } from '@/shared/i18n';
+import { ToolListError } from '@/shared/ui/ToolListError';
+
+import { EditViewTabsEnum, IndexStatuses, IndexViewsEnum, IndexesToolsEnum } from '../../lib/constants/indexDetails.constants';
+import { adjustIndexDataSchema, getMockToolkitIndexConversation, type IndexChatMessage } from '../../lib/helpers/indexChat.helpers';
 import { toDisplayString } from '../../lib/helpers/displayString.local';
 import { useIndexNameValidation } from '../../lib/hooks/useIndexNameValidation.hooks';
 import type { IndexRow } from '../../model/indexesStore';
@@ -25,8 +22,16 @@ import type { IndexConfigToolsConfig, ToolFormFieldProps } from './IndexConfig';
 import { IndexNameWrapper } from './IndexNameWrapper';
 import { IndexViewToggler } from './IndexViewToggler';
 import { IndexViews } from './IndexViews';
-import { computeDefaultConfigValues, computeIndexConfigWrapperSx, validateToolkitForm, useIndexDetailsTabSync, TOOLKIT_CHAT_MODE_CREATE_INDEX } from './IndexDetails.helpers';
-import type { UseToolkitChatParams, UseToolkitChatResult } from './IndexDetails.helpers';
+import {
+  computeDefaultConfigValues,
+  computeDisableHistoryTabReason,
+  computeDisableRunTabReason,
+  computeIndexConfigWrapperSx,
+  validateToolkitForm,
+  useIndexDetailsTabSync,
+  TOOLKIT_CHAT_MODE_CREATE_INDEX,
+} from './IndexDetails.helpers';
+import type { SelectedToolSchemaRead, UseToolkitChatParams, UseToolkitChatResult } from './IndexDetails.helpers';
 
 /** Re-exported for backward compatibility — `IndexesContainer.test.tsx`/`IndexDetails.test.tsx` (and any other consumer) import these two types from this module path; the underlying definitions moved to `IndexDetails.helpers.ts` (see that file's own doc comment) purely to keep this file under the 400-line budget. */
 export type { UseToolkitChatParams, UseToolkitChatResult };
@@ -80,7 +85,8 @@ export interface IndexDetailsProps {
   readonly values: Record<string, unknown>;
 
   readonly useToolkitChat: (params: UseToolkitChatParams) => UseToolkitChatResult;
-  readonly useSelectedToolSchema: (params: { toolkitType: string; toolOptionType: string | null }) => JsonSchemaLike | null;
+  /** #440: a RESULT OBJECT, not the bare schema — see `SelectedToolSchemaRead`. A lost read must not look like a tool that takes no arguments. */
+  readonly useSelectedToolSchema: (params: { toolkitType: string; toolOptionType: string | null }) => SelectedToolSchemaRead;
   readonly useToolkitSchemas: (params: { isMCP: boolean }) => UseToolkitSchemasResult;
   readonly ToolFormField: ComponentType<ToolFormFieldProps>;
   readonly LLMModelSelector: ComponentType<LLMModelSelectorProps>;
@@ -141,28 +147,8 @@ export function IndexDetails(props: IndexDetailsProps): ReactNode {
   const [toolInputVariables, setToolInputVariables] = useState<Record<string, unknown>>({});
   const { clearIndexNameError, indexNameError, updateIndexNameError, isIndexNameValid } = useIndexNameValidation();
 
-  const disableRunTabReason = useMemo(() => {
-    const state = index.metadata['state'];
-    if (!state) return 'No index selected';
-
-    const notSucceed = !RUNNABLE_INDEX_STATUSES.includes(toDisplayString(state));
-    const runnableTools: readonly string[] = [IndexesToolsEnum.searchIndexData, IndexesToolsEnum.stepbackSearchIndex, IndexesToolsEnum.stepbackSummaryIndex];
-    const notSelectedTools = !selectedIndexTools.some((st) => runnableTools.includes(st));
-
-    if (notSucceed) return 'Not valid index state for running tools';
-    if (notSelectedTools) return 'No run tools are selected in the toolkit';
-    return null;
-  }, [index, selectedIndexTools]);
-
-  const disableHistoryTabReason = useMemo(() => {
-    const state = index.metadata['state'];
-    if (!state) return 'No index selected';
-
-    const historyLength = (index.metadata['history'] as readonly unknown[] | undefined)?.length ?? 0;
-    if (state === IndexStatuses.progress) return 'Indexing in progress. History is unavailable until indexing is complete';
-    if (historyLength === 0) return 'No history items available for this index';
-    return null;
-  }, [index]);
+  const disableRunTabReason = useMemo(() => computeDisableRunTabReason(index, selectedIndexTools), [index, selectedIndexTools]);
+  const disableHistoryTabReason = useMemo(() => computeDisableHistoryTabReason(index), [index]);
 
   const defaultActiveEditTab = disableRunTabReason ? EditViewTabsEnum.configuration : EditViewTabsEnum.run;
   const defaultRunTool = isCreateView ? IndexesToolsEnum.indexData : IndexesToolsEnum.searchIndexData;
@@ -172,7 +158,7 @@ export function IndexDetails(props: IndexDetailsProps): ReactNode {
 
   const toolSchemaName = activeEditTab === EditViewTabsEnum.configuration || isCreateView ? IndexesToolsEnum.indexData : selectedRunTool;
 
-  const indexDataSchema = useSelectedToolSchema({ toolkitType: toDisplayString(values['type']), toolOptionType: toolSchemaName });
+  const { toolSchema: indexDataSchema, isError: toolSchemaReadFailed, refetch: retryToolSchemaRead } = useSelectedToolSchema({ toolkitType: toDisplayString(values['type']), toolOptionType: toolSchemaName });
 
   const adjustedIndexDataSchema = useMemo(() => {
     const adjustment =
@@ -326,6 +312,8 @@ export function IndexDetails(props: IndexDetailsProps): ReactNode {
 
       <Box sx={mainContentSx}>
         <Box sx={computeIndexConfigWrapperSx(isFullScreenChat)}>
+          {/* #440: a lost schema read is its own state — without it the form below renders no fields, which is what a tool with no arguments looks like. */}
+          {toolSchemaReadFailed && <ToolListError onRetry={retryToolSchemaRead} testId="index-tool-schema-error" message={t('features.toolkits.indexDetails.toolSchemaError', 'The tool settings did not load. Try again.')} />}
           {isCreateView ? (
             <IndexViews
               activeView={IndexViewsEnum.create}
@@ -357,6 +345,9 @@ export function IndexDetails(props: IndexDetailsProps): ReactNode {
                 initializeDefaultConfigValues={initializeDefaultConfigValues}
                 toolInputVariables={toolInputVariables}
                 onChangeInputVariables={onChangeInputVariables}
+                // Sibling of the `isCreateView` branch above (both omitted, this button was permanently disabled for every EXISTING index).
+                isValidForm={isValidForm}
+                isRunningTool={isRunning}
                 index={index}
                 ToolFormField={ToolFormField}
               />

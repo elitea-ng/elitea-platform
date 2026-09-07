@@ -45,11 +45,11 @@
 # even when it can read/write objects. Whichever way it is created, it must be
 # named by `main.env.STORAGE_CONTAINER` before the first sync.
 #
-# NOT REQUIRED, and deleted: pylon-indexer. Index ingest is served by the Go
-# runtime plane through the agent worker, on the same command stream and
+# GONE, and not only from this chart: pylon-indexer. Index ingest is served by
+# the Go runtime plane through the agent worker, on the same command stream and
 # consumer group as agent execution, so one worker serves both capabilities.
-# The Python indexer appears in no pylon-free stack. It does still run in the
-# LEGACY deploy/docker-compose.yml, which is why its image is still published.
+# Issue #339 deleted the service, its Containerfile, its bake target and its
+# publish entry, so there is no longer an image to deploy anywhere.
 
 # ── Images ──────────────────────────────────────────────────────────────────
 #
@@ -618,6 +618,19 @@ main:
       mountPath: /run/elitea-deepwiki
       defaultMode: 0444
       volume: {}
+    # The Inventory hop's client material (ADR-0023 H4c). Same shape, same
+    # 0444 reasoning, and a SEPARATE mount from DeepWiki's: a deployment may
+    # run one provider and not the other, and each hop's material must be
+    # revocable on its own.
+    #
+    # secretName is normally inventory.mtls.clientSecretName — the Secret the
+    # inventory subtree's facade-client Certificate issues.
+    inventoryClientMaterial:
+      enabled: false
+      secretName: ""
+      mountPath: /run/elitea-inventory
+      defaultMode: 0444
+      volume: {}
     brandPack:
       enabled: false
       configMapName: ""
@@ -756,42 +769,32 @@ main:
     # fails, several layers away from anything that names a vault.
     ELITEA_VAULT_MASTER_KEY_FILE: ""
 
-    # --- Capabilities OFF in a DEFAULT install ---------------------------------
-    # ELITEA_INDEX_TYPES_ENABLED no longer has a contract problem (#394): the
-    # index-types read answers the published DocumentLoadersResponse keys
-    # (items, total) beside the Pylon keys (document_types, image_types,
-    # code_types), so both shipped clients accept the body.
+    # --- Capabilities DERIVED from this deployment -----------------------------
+    # ELITEA_INDEX_TYPES_ENABLED and ELITEA_APPLICATION_SKILLS_ENABLED are EMPTY
+    # here, and empty means "follow this deployment". The ConfigMap fills each
+    # one from elitea-main.indexTypesEnabled / elitea-main.applicationSkillsEnabled:
+    # "true" when the install authenticates (Form document or OIDC issuer),
+    # "false" when it does not. A value stated here always wins.
     #
-    # It stays "false" HERE for the same reason ELITEA_CONFIGURATIONS_ENABLED,
-    # ELITEA_PROJECT_INFO_ENABLED and ELITEA_APPLICATION_SKILLS_ENABLED do: the
-    # capability needs production authentication, this default install builds
-    # none, and cmd/elitea-main refuses to start without it.
-    # values-standalone.yaml turns it on, together with
-    # fileConfig.authConfig.enabled.
+    # Neither flag has a contract problem any more. The index-types read answers
+    # the published DocumentLoadersResponse keys (items, total) beside the Pylon
+    # keys (document_types, image_types, code_types). The attached-skills read
+    # answers the published SkillsList keys (items, total, page, page_size,
+    # total_pages) beside the Pylon keys (skills, max_skills). Both shipped
+    # clients accept one body (#394, #395).
     #
-    # OFF is a real gap here, unlike the skills flag above. internal/api/
-    # router.go serves this path from the toolkits handler in that case, and
-    # that handler REFUSES: 501 with `code: index_types_not_available`. It used
-    # to answer 200 with a static six-loader list that no data backs, which is
-    # worse than the refusal — a client cannot tell an invented catalogue from
-    # a real one, and nothing on the screen looks broken. Turn production
-    # authentication on to close the gap.
-    ELITEA_INDEX_TYPES_ENABLED: "false"
-
-    # ELITEA_APPLICATION_SKILLS_ENABLED no longer has a contract problem (#395):
-    # the attached-skills read answers the published SkillsList keys beside the
-    # Pylon ones, so both shipped clients accept the body.
+    # These used to ship "false", and that is no longer a safe default. #394 and
+    # #395 deleted the prototype fallbacks from internal/api/router.go, so each
+    # reviewed route is the ONLY handler for its path. "false" is a 404 on a path
+    # the published contract declares, not a degraded answer.
     #
-    # It stays "false" HERE for the same reason ELITEA_CONFIGURATIONS_ENABLED and
-    # ELITEA_PROJECT_INFO_ENABLED do: the capability needs production
-    # authentication, this default install builds none, and cmd/elitea-main
-    # refuses to start without it. values-standalone.yaml turns it on, together
-    # with fileConfig.authConfig.enabled.
-    #
-    # OFF is not a gap. internal/api/router.go serves this path from the skills
-    # handler in that case, and answers the same rows in the same published
-    # envelope.
-    ELITEA_APPLICATION_SKILLS_ENABLED: "false"
+    # A literal "true" is equally wrong here: the default values file builds no
+    # authentication, and cmd/elitea-main refuses to start with
+    # "ELITEA_INDEX_TYPES_ENABLED requires an authenticated deployment".
+    # elitea-main.validateCapabilities refuses the same pair while the chart
+    # renders, so an operator reads the reason on the terminal.
+    ELITEA_INDEX_TYPES_ENABLED: ""
+    ELITEA_APPLICATION_SKILLS_ENABLED: ""
 
     # --- Project event stream (#152) -------------------------------------------
     # Transport for GET /api/v2/events/prompt_lib/{projectID}. The router has a
@@ -1077,6 +1080,29 @@ main:
     # disagree would mean an invocation that starts and then fails.
     ELITEA_DEEPWIKI_GIT_ALLOWLIST: ""
 
+    # --- Inventory facade (ADR-0023 H4c) -----------------------------------
+    #
+    # Off by default, like DeepWiki's and for the same reason: a deployment
+    # that does not run the elitea-inventory provider must not register the
+    # three /api/v2/inventory routes at all. Turning this on WITHOUT the three
+    # mTLS files below is a startup failure, not a degraded mount — the
+    # provider terminates mTLS with CERT_REQUIRED and would refuse every
+    # request, so a facade that came up anyway would be three routes answering
+    # 503 while the flag says the feature is on.
+    ELITEA_INVENTORY_ENABLED: ""
+    # The provider's origin. Must be https: it serves nothing over plain HTTP.
+    ELITEA_INVENTORY_BASE_URL: ""
+    # Client certificate material for the hop, mounted from a Secret by
+    # fileConfig.inventoryClientMaterial above. These are PATHS, not key
+    # material, so they belong in env and not in `secrets:` below.
+    ELITEA_INVENTORY_CLIENT_CERT_FILE: ""
+    ELITEA_INVENTORY_CLIENT_KEY_FILE: ""
+    ELITEA_INVENTORY_CA_FILE: ""
+    # Overrides the SNI/verification name when the Service DNS name differs
+    # from the certificate's subject. Empty means "use the base URL's host".
+    ELITEA_INVENTORY_SERVER_NAME: ""
+    ELITEA_INVENTORY_TIMEOUT_SECONDS: ""
+
     # --- The Inventory facade's source expansion (ADR-0023 H4c I2) ---
     #
     # ONE ALLOWLIST VARIABLE PER APP, not one shared with DeepWiki. The two
@@ -1180,6 +1206,14 @@ main:
     # headers, and the provider then has only the mTLS hop to go on.
     ELITEA_DEEPWIKI_IDENTITY_SECRET:
       secretName: elitea-deepwiki-secrets
+      key: identity-secret
+      optional: true
+    # The Inventory identity secret. The same rule and its own value: it signs
+    # the headers the Inventory provider verifies and must hold the SAME value
+    # on both sides. A shared secret between the two providers would let one
+    # provider's compromised key sign for the other.
+    ELITEA_INVENTORY_IDENTITY_SECRET:
+      secretName: elitea-inventory-secrets
       key: identity-secret
       optional: true
     # Outbound e-mail relay password (ADR-0024 WP7). Optional: a deployment
@@ -1646,8 +1680,8 @@ scheduler:
   # Service: nothing calls in, the process polls and consumes.
   #
   # READ services/elitea-scheduler/RETIREMENT.md AND THIS CHART'S README BEFORE
-  # INSTALLING. In short: this binary carries THREE independent responsibilities
-  # and the two that matter are not the scheduler loop —
+  # INSTALLING. In short: this binary carries FOUR independent responsibilities
+  # and the three that matter are not the scheduler loop —
   #   1. the legacy centry.schedule poller (NOT the owner of product schedule
   #      occurrences; elitea-main's scheduling kernel is). It starts
   #      UNCONDITIONALLY — there is no env flag to turn it off (main.go always
@@ -1658,14 +1692,20 @@ scheduler:
   #   2. the price-catalog sync worker (PRICE_SYNC_ENABLED, off by default);
   #   3. the budget write-back consumer (BUDGET_WRITEBACK_ENABLED, off by
   #      default) that drains GATEWAY_BUDGET_DELTAS into
-  #      gateway.llm_budget_accumulators.
-  # (2) and (3) are the reason the image cannot simply be deleted; they have no
-  # relocation decision yet.
+  #      gateway.llm_budget_accumulators;
+  #   4. the audit-event retention sweep (AUDIT_RETENTION_DAYS, ON by default),
+  #      which is the ONLY bound on the growth of centry.audit_events. It is not
+  #      a centry.schedule row and cannot make a second clock — see
+  #      RETIREMENT.md.
+  # (2), (3) and (4) are the reason the image cannot simply be deleted; they
+  # have no relocation decision yet.
 
   # Single replica. The poller's mutual exclusion is a Redis tick lock, so extra
   # replicas are not incorrect, but they buy nothing: every tick is executed once
   # regardless, and the price-sync/write-back workers are likewise
-  # single-consumer shaped. Scale out only with a specific measured reason.
+  # single-consumer shaped. The retention sweep takes no lock at all — its
+  # batches use FOR UPDATE SKIP LOCKED, so two sweepers take disjoint rows.
+  # Scale out only with a specific measured reason.
   replicaCount: 1
 
   image:
@@ -1771,6 +1811,48 @@ scheduler:
     BUDGET_WRITEBACK_BATCH_SIZE: "500"
     BUDGET_WRITEBACK_ACK_WAIT: "30s"
     BUDGET_WRITEBACK_MAX_DELIVER: "10"
+
+    # Audit-event retention sweep (issue #619).
+    #
+    # `centry.audit_events` received its first product writer in issue #615 —
+    # an audit middleware that emits for administrative and security-relevant
+    # requests — and no bound on its growth. This is that bound: bounded,
+    # batched DELETEs of rows older than the window, run by
+    # services/elitea-scheduler/internal/auditretention.
+    #
+    # ON by default. A retention sweeper that ships disabled is a retention
+    # sweeper that does not exist, and this chart has carried flags no
+    # deployment sets before (issues #394 and #395).
+    #
+    # AUDIT_RETENTION_DAYS is the only knob most operators touch, and it is also
+    # the OFF switch: 0 or less disables the sweep, which the daemon reports at
+    # WARN so that "this table is unbounded" is a line in the log rather than an
+    # absence from it. There is no separate enable flag, because two settings
+    # that must agree are two settings that can disagree.
+    #
+    # 365 days, because the window has to outlast the longest question an
+    # operator asks of an audit trail. A shorter default would destroy evidence
+    # on the first upgrade in every deployment that did not read the release
+    # note.
+    #
+    # A POSITIVE window below 7 days is REFUSED, not applied: the sweeper logs
+    # at ERROR and does not start. A one-day window is far more likely to be a
+    # typo than a policy, and acting on the typo destroys a trail that no later
+    # edit of this file brings back.
+    AUDIT_RETENTION_DAYS: "365"
+    # How often a pass starts. One pass is bounded by the two settings below, so
+    # a shorter interval only means the bound is met sooner.
+    AUDIT_RETENTION_INTERVAL: "1h"
+    # Rows per DELETE statement, so no single statement locks an unbounded
+    # number of rows. `ix_audit_events_timestamp` supports the scan.
+    AUDIT_RETENTION_BATCH_SIZE: "1000"
+    # Statements per pass — 50 × 1000 = 50 000 rows per hour. The ceiling exists
+    # so the FIRST pass on a deployment that has never swept cannot spend hours
+    # inside the database; the remainder goes on the next pass, and the log says
+    # the pass did not drain. Raise it if that warning repeats for days. If it
+    # keeps repeating with the ceiling raised, the next step is monthly RANGE
+    # partitioning of the table on `timestamp` — not a bigger number here.
+    AUDIT_RETENTION_MAX_BATCHES: "50"
 
     # Tracing (issue #250): same OTLP collector endpoint and kill switch as
     # the `main.env` map — see that chart's values.yaml for the
@@ -1973,8 +2055,9 @@ llmGateway:
     # origin check any page could open this route with the user's ambient
     # credentials. Empty admits only a handshake whose Origin matches the
     # gateway's own host, or one with no Origin at all — which is every
-    # non-browser client, including the pylon-indexer relay this route exists
-    # for. Name a browser origin only on purpose; the startup log states which
+    # non-browser client, including the SDK worker this route exists for
+    # (pylon-indexer was that client until #339 deleted it). Name a browser
+    # origin only on purpose; the startup log states which
     # mode is armed.
     LLM_REALTIME_ALLOWED_ORIGINS: ""
     # scale-1 default; HA operators MUST override to the real replica count.
@@ -2013,6 +2096,29 @@ llmGateway:
     # Continuous NATS outage ceiling (integer minutes). Once NATS has been down longer
     # than this the FSM forces closed (503) regardless of snapshot freshness. Default: 10.
     LLM_BUDGET_NATS_DEGRADED_MAX_DURATION_MIN: "10"
+
+    # ISSUE #304 — what the process does at STARTUP when the budget gate could
+    # not be wired. It is not a fourth fail mode: LLM_BUDGET_NATS_FAIL_MODE
+    # above decides what a RUNNING gateway does when NATS breaks, and it can
+    # only act on a connection that once succeeded.
+    #
+    #   auto (default)  Refuse to start when GATEWAY_NATS_URL is empty AND the
+    #                   database holds an enforcing budget row. That state
+    #                   cannot recover — nothing re-dials a URL that was never
+    #                   given — and /readyz reports ready, so nothing else
+    #                   reports it. A CONFIGURED NATS that did not answer keeps
+    #                   the current behaviour: /readyz reports not ready and the
+    #                   background loop re-dials (issue #315).
+    #   on              Refuse to start whenever the budget gate is not wired.
+    #                   Choose this when the deployment must never serve one
+    #                   unmetered request, and accept a CrashLoopBackOff for as
+    #                   long as NATS is down.
+    #   off             Never refuse. It needs llmGateway.acknowledgeUnenforcedBudgets
+    #                   below, because it accepts unmetered spend.
+    #
+    # The binary reads any OTHER value as "auto"; the chart refuses to render
+    # one, so a values file cannot say "false" and mean "off".
+    LLM_BUDGET_REQUIRE_ENFORCEMENT: "auto"
 
     # BFF.6 — circular-routing guard #1 (spec §2.6): the platform's own /llm
     # origins, comma-separated. Any credential api_base matching one of these is
@@ -2242,6 +2348,16 @@ llmGateway:
   # address. Private reachability follows from an entry that NAMES a private
   # host or block, and never from the mere presence of an allowlist.
   egressPosture: ""
+
+  # acknowledgeUnenforcedBudgets — issue #304. It is read ONLY when
+  # env.LLM_BUDGET_REQUIRE_ENFORCEMENT above is "off".
+  #
+  # "off" removes the binary's own startup refusal, so the gateway starts and
+  # serves /llm even when it can enforce no ceiling and record no spend. That is
+  # a supported posture — a bootstrap install, or a deployment that runs no
+  # budgets — and it is not one an operator should reach by copying a values
+  # file. This key is the statement that the spend is accepted.
+  acknowledgeUnenforcedBudgets: false
 
   networkPolicy:
     enabled: false
@@ -2553,6 +2669,167 @@ deepwiki:
       # No CPU limit, deliberately, as elsewhere in this chart: throttling an
       # indexing pass makes a generation slow rather than making it fail, and
       # the memory limit is what actually bounds the blast radius.
+      memory: 4Gi
+
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: ["ALL"]
+
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# The Inventory provider service (ADR-0023 H4c) — the knowledge-graph builder
+# and retriever. Enable it beside main.env.ELITEA_INVENTORY_ENABLED with its
+# base URL, callback origin and the three client-certificate paths; the chart
+# refuses a half-configured install rather than rendering one that boots and
+# then fails.
+#
+# It has NO database of its own, unlike DeepWiki: there is no storage package,
+# no migrations and no migrate Job. A graph's home is the platform artifact
+# bucket, reached with the callback bearer the facade mints per invocation.
+inventory:
+  enabled: false
+  replicaCount: 1
+
+  # The provider pod is up to TWO containers (ADR-0023 H2): the Go
+  # sub-application host, which serves the SPI, composes and uploads, and — for
+  # runner=legacy — the Python engine sidecar, which runs the knowledge-graph
+  # engine for it over a Unix socket the two share. `image` is the host;
+  # `engine.image` is the Python image, which must be the `-engine` variant for
+  # the legacy runner to run anything.
+  image:
+    repository: ghcr.io/elitea-ng/elitea-subapp-host
+    # Empty means the chart-wide image.tag.
+    tag: ""
+    pullPolicy: IfNotPresent
+  imagePullSecrets: []
+  engine:
+    image:
+      repository: ghcr.io/elitea-ng/elitea-inventory
+      # Empty means the chart-wide image.tag with `-engine` appended — the
+      # image that carries the engine's dependency closure. The guard in
+      # _helpers.tpl refuses a runner=legacy install whose engine tag lacks
+      # that suffix: the plain image carries the engine SOURCE and its FIXTURE
+      # runner only, and every engine tool would fail at invocation time.
+      tag: ""
+      pullPolicy: IfNotPresent
+    # What the SIDECAR runs: legacy (the engine) or fixture (a canned
+    # knowledge graph, for a stack that proves the hop without the engine).
+    runner: legacy
+    socketDir: /run/inventory
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        memory: 4Gi
+
+  service:
+    # Named explicitly, not release-derived: the server certificate's SANs name
+    # this Service and elitea-main verifies exactly that name.
+    name: elitea-inventory-svc
+    port: 8443
+    annotations: {}
+
+  env:
+    ELITEA_SUBAPP: inventory
+    # The HOST's runner. `legacy` reaches the engine sidecar over the socket
+    # below and renders that sidecar; `fixture` serves the host's OWN canned
+    # knowledge graph in one container, which is what a stack that only needs
+    # deterministic results wants; `unavailable` refuses every tool and says
+    # so. The guard refuses `legacy` with no socket and a socket with no
+    # `legacy`, because either is a service that looks healthy and serves
+    # nothing.
+    ELITEA_INVENTORY_RUNNER: "legacy"
+    ELITEA_INVENTORY_ENGINE_SOCKET: /run/inventory/engine.sock
+    ELITEA_INVENTORY_SCRATCH_PATH: /var/scratch/inventory
+    # The origin elitea-main proxies to. Must agree with
+    # main.env.ELITEA_INVENTORY_BASE_URL.
+    ELITEA_INVENTORY_SERVICE_LOCATION_URL: https://elitea-inventory-svc:8443
+
+  # NO git allowlist here, and that is a difference from DeepWiki rather than
+  # an omission. DeepWiki CLONES from a URL in the request, so the destination
+  # is the provider's to allow or refuse as well as the facade's. Inventory
+  # reads its source through the ELITEA SDK's toolkit, whose destination is the
+  # toolkit's stored configuration — expanded by the facade, from a toolkit the
+  # caller can already see. There is no request-supplied clone URL for a
+  # provider-side allowlist to check, and one that always passed would look
+  # like an egress control while being none. main.env.
+  # ELITEA_INVENTORY_GIT_ALLOWLIST is the real one, checked before the vault is
+  # opened.
+
+  # Sensitive values from Kubernetes Secrets.
+  secrets:
+    # The HMAC key that verifies the identity headers elitea-main signs. It
+    # must hold the SAME value as main's ELITEA_INVENTORY_IDENTITY_SECRET —
+    # this side verifies what that side signs, and a mismatch fails every
+    # request with a signature error.
+    ELITEA_INVENTORY_IDENTITY_SECRET:
+      secretName: elitea-inventory-secrets
+      key: identity-secret
+      optional: true
+
+  # Ephemeral source-read and graph-build space. Nothing durable lives here:
+  # the graph is uploaded to the artifact bucket, and a replica that dies
+  # mid-ingestion loses only work that is being redone anyway. Size it for the
+  # largest repository set this deployment expects to ingest.
+  scratch:
+    mountPath: /var/scratch/inventory
+    sizeLimit: 8Gi
+
+  # mTLS for the elitea-main -> inventory hop. cert-manager issues a server
+  # cert (this Deployment mounts it) and a facade client cert (elitea-main
+  # mounts it) from the SAME internal CA issuer the DeepWiki hop uses — one
+  # trust root out of elitea-main, two certificates that rotate on their own.
+  mtls:
+    enabled: true
+    serverSecretName: elitea-inventory-server-tls
+    clientSecretName: elitea-main-inventory-client-tls
+    duration: 2160h    # 90d
+    renewBefore: 360h  # 15d
+    issuerRef:
+      # A cluster-shared internal (private-CA) issuer — NOT created by this
+      # chart. The same issuer the llmGateway and DeepWiki hops use.
+      name: elitea-internal-ca
+      kind: ClusterIssuer
+    mountPath: /etc/inventory/tls
+
+  # probes: with mtls.enabled (the default) these paths are NOT used — the
+  # listener requires a verified client certificate, which a kubelet probe
+  # cannot present, so the Deployment probes the socket instead.
+  probes:
+    liveness:
+      path: /health
+      periodSeconds: 10
+      failureThreshold: 3
+    readiness:
+      path: /ready
+      periodSeconds: 5
+      failureThreshold: 2
+
+  serviceAccount:
+    create: true
+    name: ""
+    annotations: {}
+
+  terminationGracePeriodSeconds: 60
+
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      # No CPU limit, deliberately, as elsewhere in this chart: throttling an
+      # ingestion pass makes it slow rather than making it fail, and the memory
+      # limit is what actually bounds the blast radius.
       memory: 4Gi
 
   podSecurityContext:

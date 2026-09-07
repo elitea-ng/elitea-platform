@@ -66,7 +66,7 @@ describe('useGetSelectedToolSchema', () => {
     );
     const { box } = renderSelectedToolSchema({ toolkitType: 'github', toolOptionType: null, availableMcpTools: undefined });
     await waitFor(() => expect(requestCount).toBe(1));
-    expect(box.current).toBeNull();
+    expect(box.current?.toolSchema).toBeNull();
   });
 
   it('returns null when the toolkit type has no schema loaded', async () => {
@@ -79,7 +79,7 @@ describe('useGetSelectedToolSchema', () => {
     );
     const { box } = renderSelectedToolSchema({ toolkitType: 'github', toolOptionType: 'list_issues', availableMcpTools: undefined });
     await waitFor(() => expect(requestCount).toBe(1));
-    expect(box.current).toBeNull();
+    expect(box.current?.toolSchema).toBeNull();
   });
 
   it('resolves the static args_schemas entry for the selected tool', async () => {
@@ -100,7 +100,7 @@ describe('useGetSelectedToolSchema', () => {
     );
 
     const { box } = renderSelectedToolSchema({ toolkitType: 'github', toolOptionType: 'list_issues', availableMcpTools: undefined });
-    await waitFor(() => expect(box.current).toEqual({ properties: { repo: { type: 'string' } }, required: ['repo'] }));
+    await waitFor(() => expect(box.current?.toolSchema).toEqual({ properties: { repo: { type: 'string' } }, required: ['repo'] }));
   });
 
   it('falls back to a pre-loaded MCP args_schema when there is no static entry', async () => {
@@ -112,7 +112,7 @@ describe('useGetSelectedToolSchema', () => {
       availableMcpTools: [{ value: 'search_repos', args_schema: { properties: { q: { type: 'string' } } } }],
     });
 
-    await waitFor(() => expect(box.current).toEqual({ properties: { q: { type: 'string' } } }));
+    await waitFor(() => expect(box.current?.toolSchema).toEqual({ properties: { q: { type: 'string' } } }));
   });
 
   it('normalises an MCP schema wrapped in inputSchema into the flat JSON-Schema-like shape', async () => {
@@ -134,7 +134,7 @@ describe('useGetSelectedToolSchema', () => {
     });
 
     await waitFor(() =>
-      expect(box.current).toEqual({
+      expect(box.current?.toolSchema).toEqual({
         properties: { q: { type: 'string' } },
         required: ['q'],
         title: 'Search repos',
@@ -163,6 +163,40 @@ describe('useGetSelectedToolSchema', () => {
 
     const { box } = renderSelectedToolSchema({ toolkitType: 'openapi_tool', toolOptionType: 'dynamic_op', availableMcpTools: undefined });
     await waitFor(() => expect(requestCount).toBe(1));
-    expect(box.current).toBeNull();
+    expect(box.current?.toolSchema).toBeNull();
+    // The read SUCCEEDED and carried no schema. That is not a failure.
+    expect(box.current?.isError).toBe(false);
+  });
+
+  /**
+   * #440. `null` used to be the only outcome this hook could report, so an
+   * argument form with no fields meant either "this tool takes no arguments"
+   * or "the read that carries the arguments was lost". The pair below keeps
+   * the two apart: same `toolSchema === null`, different `isError`.
+   */
+  it('reports a failed schema read as its own signal, beside the same null schema', async () => {
+    server.use(http.get('/api/v2/elitea_core/toolkits/prompt_lib/:projectId', () => HttpResponse.json({ error: 'schemas unavailable' }, { status: 500 })));
+
+    const { box } = renderSelectedToolSchema({ toolkitType: 'github', toolOptionType: 'list_issues', availableMcpTools: undefined });
+
+    await waitFor(() => expect(box.current?.isError).toBe(true));
+    expect(box.current?.toolSchema).toBeNull();
+  });
+
+  it('reads the schemas again when the caller retries', async () => {
+    let requestCount = 0;
+    server.use(
+      http.get('/api/v2/elitea_core/toolkits/prompt_lib/:projectId', () => {
+        requestCount += 1;
+        return HttpResponse.json({ error: 'schemas unavailable' }, { status: 500 });
+      }),
+    );
+
+    const { box } = renderSelectedToolSchema({ toolkitType: 'github', toolOptionType: 'list_issues', availableMcpTools: undefined });
+
+    await waitFor(() => expect(box.current?.isError).toBe(true));
+    expect(requestCount).toBe(1);
+    box.current?.refetch();
+    await waitFor(() => expect(requestCount).toBe(2));
   });
 });

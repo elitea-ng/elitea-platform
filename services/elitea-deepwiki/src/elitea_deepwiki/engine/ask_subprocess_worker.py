@@ -94,6 +94,19 @@ def _emit_thinking_step(step_type: str, title: str, content: str, metadata: Opti
     _print(f"[THINKING_STEP] {json.dumps(step)}")
 
 
+def _answer_streaming(llm_settings: Dict[str, Any]) -> bool:
+    """Whether the model streams its answer (issue #701).
+
+    ON by default. The agentic Ask loop already reads the model through
+    LangGraph's `messages` stream, so this turns one whole message into a
+    run of fragments the engine publishes as `llm_chunk` events, and the
+    wiki chat shows the answer as it is written. A deployment whose model
+    endpoint cannot stream turns it off with `llm_settings.streaming:
+    false` rather than with a code change.
+    """
+    return bool(llm_settings.get("streaming", True))
+
+
 def _build_llm_and_embeddings(llm_settings: Dict[str, Any], embedding_model: Any):
     """Build LLM and embeddings from settings."""
     from langchain_openai import ChatOpenAI
@@ -136,7 +149,7 @@ def _build_llm_and_embeddings(llm_settings: Dict[str, Any], embedding_model: Any
             max_tokens=max_tokens,
             temperature=0.1,
             max_retries=max_retries,
-            streaming=False,
+            streaming=_answer_streaming(llm_settings),
             default_headers=default_headers,
         )
         embeddings_base_url = api_base if api_base.endswith("/v1") else api_base.rstrip("/") + "/v1"
@@ -151,7 +164,7 @@ def _build_llm_and_embeddings(llm_settings: Dict[str, Any], embedding_model: Any
             base_url=api_base,
             organization=organization,
             max_retries=max_retries,
-            streaming=False,
+            streaming=_answer_streaming(llm_settings),
             max_tokens=max_tokens,
         )
         embeddings_base_url = api_base
@@ -475,6 +488,11 @@ async def run_ask_agentic_async(payload: Dict[str, Any]) -> Dict[str, Any]:
                         "status": "completed",
                         "output": preview[:200] if preview else '',
                     })
+
+            elif event_type == 'llm_chunk':
+                fragment = data.get('text') or ''
+                if fragment:
+                    _print(f"[LLM_CHUNK] {json.dumps({'text': fragment})}")
 
             elif event_type == 'ask_complete':
                 final_answer = data.get('answer', '')
