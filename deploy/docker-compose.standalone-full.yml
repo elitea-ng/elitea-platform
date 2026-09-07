@@ -1194,7 +1194,17 @@ services:
       dockerfile: services/elitea-subapp-host/Containerfile
     environment:
       ELITEA_SUBAPP: inventory
-      ELITEA_INVENTORY_RUNNER: "legacy"
+      # `legacy` reaches the engine sidecar over the socket, which is what this
+      # stack exists to exercise. `INVENTORY_RUNNER=fixture` switches the Go
+      # host to its OWN canned graph instead, and it is a variable rather than
+      # a constant for one measured reason: the sidecar here serves the PYTHON
+      # fixture runner, which answers a sentence and an EMPTY graph
+      # (services/elitea-inventory/src/elitea_inventory/fixture_runner.py), so
+      # every Inventory screen on this stack renders empty. An operator
+      # demonstrating the Inventory application on the standalone stack sets
+      # INVENTORY_RUNNER=fixture and gets the six-entity graph the E2E stack
+      # serves. The default is unchanged.
+      ELITEA_INVENTORY_RUNNER: "${INVENTORY_RUNNER:-legacy}"
       ELITEA_INVENTORY_ENGINE_SOCKET: /run/inventory/engine.sock
       ELITEA_INVENTORY_FIXTURE_STEP_SECONDS: "${INVENTORY_FIXTURE_STEP_SECONDS:-1}"
       ELITEA_INVENTORY_TLS_CERTFILE: /certs/inventory-server.crt

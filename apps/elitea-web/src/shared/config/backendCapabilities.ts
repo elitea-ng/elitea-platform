@@ -29,6 +29,7 @@
 export type BackendCapability =
   | 'aiGeneration'
   | 'deepwiki'
+  | 'inventory'
   | 'llmPredictBlocking'
   | 'llmPredictStreaming'
   | 'pipelineTriggers';
@@ -77,10 +78,23 @@ export type BackendCapability =
  * deployment without one browses and reads wikis and cannot generate, and the
  * generation surface reports that. It is a deployment fact, not a capability —
  * the same distinction as `llmPredictBlocking` above.
+ *
+ * `inventory` gates the native Inventory screens, and is ON in the same change
+ * that mounts `/inventory` and `/inventory/$toolkitId` — the rule this module
+ * states at the top.
+ *
+ * IT IS ON, AND NOT "ON WHEN THE PROVIDER IS THERE", which is the distinction
+ * this module keeps making. Every Inventory screen reads through the facade,
+ * so a deployment that sets no `ELITEA_INVENTORY_ENABLED` answers 503 to each
+ * of them and the screens report the provider's own refusal. That is a
+ * deployment fact a user's administrator can change. Hiding the routes for it
+ * would instead make the feature unreachable with nothing on screen saying
+ * why — the failure this module exists to prevent, in the other direction.
  */
 const SERVED: Readonly<Record<BackendCapability, boolean>> = {
   aiGeneration: false,
   deepwiki: true,
+  inventory: true,
   llmPredictBlocking: true,
   llmPredictStreaming: false,
   pipelineTriggers: false,

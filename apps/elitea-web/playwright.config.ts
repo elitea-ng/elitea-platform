@@ -167,6 +167,28 @@ const REAL_ENGINE_JOURNEY = /journeys\/deepwiki\/deepwiki\.real-engine\.spec\.ts
  * (`scripts/support-e2e.sh`).
  */
 const SUPPORT_JOURNEY = /journeys\/support\/support\.spec\.ts/;
+/*
+ * THE INVENTORY JOURNEYS (journeys/inventory, INV-001..010) HAVE NO CONSTANT
+ * HERE, AND THAT IS THE DECISION.
+ *
+ * They are picked up by the `journeys/.+\.spec\.ts` glob into chromium and
+ * webkit, and they run against the E2E STACK ONLY. That stack's
+ * `elitea-inventory` service is the Go subapp host with
+ * `ELITEA_INVENTORY_RUNNER=fixture`, whose canned graph
+ * (services/elitea-subapp-host/internal/apps/inventory/run/fixture.go) holds
+ * six entities and five relations — the data every one of those journeys
+ * asserts on.
+ *
+ * There is deliberately NO `inventory-stack` project against the standalone
+ * stack, the way DeepWiki has `deepwiki-stack`. The standalone stack reaches
+ * Inventory through the PYTHON sidecar's fixture runner
+ * (services/elitea-inventory/src/elitea_inventory/fixture_runner.py), which
+ * answers an EMPTY graph — so every data assertion would fail there, correctly,
+ * and a project that ran them would report a red suite for a stack doing
+ * exactly what it is configured to do. Nothing is added to `testIgnore` for the
+ * same reason in reverse: the journeys belong in the projects that CAN answer
+ * them, and excluding them from anywhere would only hide that they ran.
+ */
 
 const CHROMIUM_LAUNCH_OPTIONS = {
   args: ['--disable-web-security', '--allow-insecure-localhost', '--no-sandbox'],

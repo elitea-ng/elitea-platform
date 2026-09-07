@@ -361,7 +361,10 @@ func fixtureRunIngestion(_, _ string, params Params) map[string]any {
 }
 
 func fixtureRemoveSourceEntities(_, _ string, params Params) map[string]any {
-	label := strings.TrimSpace(str(firstTruthy(params["source_toolkit"], params["source"], "")))
+	// `toolkit_id` FIRST, because that is the argument the descriptor declares
+	// for this tool. The other two are what the legacy handler also accepted.
+	label := strings.TrimSpace(str(firstTruthy(
+		params["toolkit_id"], params["source_toolkit"], params["source"], "")))
 	if label == "" {
 		label = SourceLabelFor(params)
 	}
@@ -447,8 +450,7 @@ func fixtureSearch(_, _ string, params Params) map[string]any {
 }
 
 func fixtureEntity(_, _ string, params Params) map[string]any {
-	entity, found := fixtureLookup(str(firstTruthy(
-		params["entity_id"], params["entity"], params["id"], "")))
+	entity, found := fixtureLookup(fixtureEntityRef(params))
 	if !found {
 		return fixtureNotFound(params, "entity")
 	}
@@ -458,8 +460,7 @@ func fixtureEntity(_, _ string, params Params) map[string]any {
 }
 
 func fixtureEntityContent(_, _ string, params Params) map[string]any {
-	entity, found := fixtureLookup(str(firstTruthy(
-		params["entity_id"], params["entity"], params["id"], "")))
+	entity, found := fixtureLookup(fixtureEntityRef(params))
 	if !found {
 		return fixtureNotFound(params, "entity")
 	}
@@ -485,7 +486,7 @@ func fixtureEntitiesByIDs(_, _ string, params Params) map[string]any {
 }
 
 func fixtureRelated(_, _ string, params Params) map[string]any {
-	id := str(firstTruthy(params["entity_id"], params["entity"], params["id"], ""))
+	id := fixtureEntityRef(params)
 	if _, found := fixtureLookup(id); !found {
 		return fixtureNotFound(params, "entity")
 	}
@@ -509,7 +510,7 @@ func fixtureRelated(_, _ string, params Params) map[string]any {
 }
 
 func fixtureImpact(_, _ string, params Params) map[string]any {
-	id := str(firstTruthy(params["entity_id"], params["entity"], params["id"], ""))
+	id := fixtureEntityRef(params)
 	if _, found := fixtureLookup(id); !found {
 		return fixtureNotFound(params, "entity")
 	}
@@ -734,13 +735,28 @@ func fixtureAnswer(params Params, document map[string]any, text string) map[stri
 // caller ship a screen that renders a missing entity as an empty one.
 func fixtureNotFound(params Params, what string) map[string]any {
 	id := strings.TrimSpace(str(firstTruthy(
-		params["entity_id"], params["entity"], params["id"],
+		params["entity_id"], params["entity_name"], params["entity"], params["id"],
 		params["preset"], params["preset_name"], "")))
 	return map[string]any{
 		"success":        false,
 		"error":          fmt.Sprintf("No %s %q in this graph.", what, id),
 		"error_category": "resource_not_found",
 	}
+}
+
+// fixtureEntityRef is which entity a call is about, under every name the
+// contract uses for it.
+//
+// `entity_name` IS THE DESCRIPTOR'S NAME for four of these tools — get_entity,
+// get_entity_content, impact_analysis and get_related_entities all declare it
+// — and this runner used to read only `entity_id`/`entity`/`id`. A caller that
+// followed the descriptor got `resource_not_found` for an entity the graph
+// holds, which reads on a screen as "no such entity" on the row the user just
+// clicked. `get_entity_neighbors` declares `entity_id`, so both are read here
+// and no caller has to know which tool it is talking to.
+func fixtureEntityRef(params Params) string {
+	return str(firstTruthy(
+		params["entity_id"], params["entity_name"], params["entity"], params["id"], ""))
 }
 
 func fixtureEntityRow(entity FixtureEntity) map[string]any {

@@ -2334,7 +2334,41 @@
             "usedBy": [
                 "features/agent-skills"
             ],
-            "$comment": "Attach (201) or detach (200) one skill on one agent VERSION. A `has_relation` key in the body selects a second operation inside the same handler (internal/api/v2/skills/handler.go updateSkillRelation), which one OpenAPI operation cannot express — skills.updateSkill covers only the plain update on the same URL."
+            "$comment": "Attach (201) or detach (200) one skill on one agent VERSION. A `has_relation` key in the body selects a second operation inside the same handler (internal/api/v2/skills/handler.go updateSkillRelation), which one OpenAPI operation cannot express — skills.updateSkill covers only the plain update on the same URL.",
+            "id": "inventory.invokeTool",
+            "method": "POST",
+            "path": "/inventory/tools/{projectId}/{toolkitName}/{toolName}/invoke",
+            "operationId": null,
+            "source": "handwritten",
+            "responseSchema": "InventoryInvocationAcceptedWire",
+            "fixture": null,
+            "usedBy": [
+                "entities/inventory"
+            ]
+        },
+        {
+            "id": "inventory.getInvocation",
+            "method": "GET",
+            "path": "/inventory/invocations/{projectId}/{toolkitName}/{toolName}/{invocationId}",
+            "operationId": null,
+            "source": "handwritten",
+            "responseSchema": "InventoryInvocationPollWire",
+            "fixture": null,
+            "usedBy": [
+                "entities/inventory"
+            ]
+        },
+        {
+            "id": "inventory.cancelInvocation",
+            "method": "DELETE",
+            "path": "/inventory/invocations/{projectId}/{toolkitName}/{toolName}/{invocationId}",
+            "operationId": null,
+            "source": "handwritten",
+            "responseSchema": null,
+            "fixture": null,
+            "usedBy": [
+                "entities/inventory"
+            ]
         }
     ]
 }

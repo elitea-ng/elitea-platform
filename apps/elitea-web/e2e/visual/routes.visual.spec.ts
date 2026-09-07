@@ -526,6 +526,63 @@ const ROUTES: readonly VisualRoute[] = [
     },
     landmark: (page) => page.getByTestId('wiki-chat-drawer'),
   },
+  {
+    // @covers /inventory
+    // @covers /inventory/$toolkitId
+    // The Sources tab, which is where the workspace opens: the configured
+    // source, its ingestion status, and the control that ingests it.
+    name: 'inventory-sources',
+    // The toolkit page itself: project 90300 seeds TWO Inventory toolkits (the
+    // read-only one and the one the ingestion journey mutates), so
+    // /app/inventory renders the chooser, not a workspace.
+    path: '/app/inventory/9101',
+    // The inventory's own project, not the persona's — the same reasoning the
+    // wiki shots record. Without it the baseline photographs a project with no
+    // Inventory toolkit, and its empty state is what a stalled listing shows
+    // as well.
+    project: { id: '90300', name: 'e2e-inventory' },
+    // THE SOURCE TOOLKIT'S NAME, which is joined from two reads: the project's
+    // toolkit listing (for the label) and `get_sources_status` (for the state
+    // beside it). Neither resolves under a stall, and the panel does not
+    // render at all until the status invocation has completed — the pending
+    // branch shows "Reading the source status…" instead.
+    // Measured: loaded YES, stalled no.
+    landmark: (page) => page.getByTestId('inventory-source-row'),
+    light: true,
+  },
+  {
+    // @covers /inventory/$toolkitId
+    // The Graph tab: the filters, the entity list and the detail pane.
+    name: 'inventory-graph',
+    path: '/app/inventory/9101',
+    project: { id: '90300', name: 'e2e-inventory' },
+    prepare: async (page) => {
+      await page.getByTestId('inventory-tab-graph').click();
+    },
+    // AN ENTITY NAME OUT OF THE INGESTED GRAPH. Every other candidate on this
+    // screen fails the rule: the tab labels, the filter captions and the
+    // "Select an entity" invitation are all present while the read is still in
+    // flight, and the empty state ("No entities") is what a stalled read shows
+    // as well as an empty graph.
+    // Measured: loaded YES, stalled no.
+    landmark: (page) => page.getByText('CheckoutService'),
+  },
+  {
+    // @covers /inventory/$toolkitId
+    // The Statistics tab: the counts, the breakdowns and the maintenance
+    // controls.
+    name: 'inventory-stats',
+    path: '/app/inventory/9101',
+    project: { id: '90300', name: 'e2e-inventory' },
+    prepare: async (page) => {
+      await page.getByTestId('inventory-tab-stats').click();
+    },
+    // A BREAKDOWN CHIP, which only a completed `get_stats` can produce: the
+    // panel renders "Reading the statistics…" until then, and an empty
+    // breakdown renders "Nothing to break down yet." instead of a chip.
+    // Measured: loaded YES, stalled no.
+    landmark: (page) => page.getByTestId('inventory-stats-by-type').getByText(/class/),
+  },
 ];
 
 for (const route of ROUTES) {
