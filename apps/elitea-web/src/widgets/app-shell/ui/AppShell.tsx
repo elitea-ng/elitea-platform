@@ -6,6 +6,7 @@ import { useRouterState } from '@tanstack/react-router';
 
 import { getConfig } from '@/shared/config';
 import { usePlatformAnnouncements } from '@/shared/lib/hooks/usePlatformAnnouncements';
+import { readPersistedProject } from '@/shared/lib/selectedProjectPersistence';
 import { SupportAssistantWidget } from '@/widgets/support-assistant';
 import {
   Sidebar,
@@ -160,10 +161,39 @@ export function AppShell({ children }: AppShellProps): ReactNode {
   // false — not stuck true — when the underlying query is disabled, so an
   // unusable `publicProjectId` degrades to the fallback rather than
   // deadlocking the auto-selection.
+  //
+  // A STORED, STILL-VALID SELECTION WINS. `project` is the value this effect
+  // was RENDERED with, and `useSelectedProject`'s hydration effect — which
+  // reads `el.project.*` and selects out of it — is registered EARLIER in this
+  // same component, so it runs earlier in the SAME passive-effect flush. Its
+  // `setProject` schedules a render; it does not change the `project` this
+  // closure already captured. So `project === null` here means one of two
+  // different things, and only one of them is "nothing is selected":
+  //
+  //   * nothing was stored, or
+  //   * storage WAS read a moment ago, in the flush this effect is in, and
+  //     the re-render carrying the answer has not happened yet.
+  //
+  // The second case only arises when both lists are answered by the time the
+  // shell first commits — a warm react-query cache, i.e. a remount rather than
+  // a cold page load — and there this effect overwrote the restored selection
+  // AND its `el.project.*` keys with the personal project. Reading storage
+  // again HERE removes the difference between the two cases: the guard reads
+  // the same source the hydration effect does, at the moment the decision is
+  // actually made.
+  //
+  // The stored id must still be one the server lists. An id from a deleted
+  // project, or from another deployment, is not a selection to defend — it
+  // names nothing this session can open — so it falls back to the personal
+  // project exactly as an absent id does. `projects` is only consulted once it
+  // has settled (`projectsLoading` above), so a list still in flight never
+  // reads as "your project is gone".
   useEffect(() => {
     if (project !== null) return;
     if (!personalProjectId) return;
     if (projectsLoading) return;
+    const persisted = readPersistedProject();
+    if (persisted !== null && projects.some((candidate) => String(candidate.id) === persisted.id)) return;
     const personalProject = projects.find((candidate) => String(candidate.id) === personalProjectId);
     selectProject(personalProjectId, personalProject?.name ?? PERSONAL_PROJECT_FALLBACK_NAME);
   }, [project, personalProjectId, projects, projectsLoading, selectProject]);

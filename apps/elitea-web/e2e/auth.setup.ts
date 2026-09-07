@@ -18,6 +18,12 @@ import * as path from 'path';
 import { test as setup, expect } from '@playwright/test';
 
 import { BASE_URL, STORAGE_STATE } from '../playwright.config';
+import {
+  DEFAULT_PROJECT_ID,
+  DEFAULT_PROJECT_NAME,
+  ensureProjectSelected,
+  shellChoseAProject,
+} from './fixtures/project';
 
 setup.describe('Auth setup', () => {
   setup.beforeAll(() => {
@@ -27,21 +33,21 @@ setup.describe('Auth setup', () => {
   });
 
   setup('authenticate as member persona', async ({ page }) => {
-    setup.setTimeout(60_000);
-    await performOidcLogin(page, 'e2e-member@autotest.local', STORAGE_STATE.member);
+    setup.setTimeout(90_000);
+    await performOidcLogin(page, 'e2e-member@autotest.local', STORAGE_STATE.member, 'seeded');
   });
 
   setup('authenticate as admin persona', async ({ page }) => {
-    setup.setTimeout(60_000);
-    await performOidcLogin(page, 'e2e-admin@autotest.local', STORAGE_STATE.admin);
+    setup.setTimeout(90_000);
+    await performOidcLogin(page, 'e2e-admin@autotest.local', STORAGE_STATE.admin, 'seeded');
   });
 
   // The #284 chat driver. Its personal project is what the /llm hop resolves
   // the provider credential from, which is why it cannot be one of the two
   // personas above — see `playwright.config.ts`'s STORAGE_STATE.chat.
   setup('authenticate as chat-driver persona', async ({ page }) => {
-    setup.setTimeout(60_000);
-    await performOidcLogin(page, 'e2e-chat@autotest.local', STORAGE_STATE.chat);
+    setup.setTimeout(90_000);
+    await performOidcLogin(page, 'e2e-chat@autotest.local', STORAGE_STATE.chat, 'personal');
   });
 });
 
@@ -56,6 +62,7 @@ async function performOidcLogin(
   page: import('@playwright/test').Page,
   email: string,
   storageStatePath: string,
+  project: PersonaProject,
 ): Promise<void> {
   // Navigate to the OIDC login endpoint — elitea-main redirects to the mock's
   // authorize page (the SPA does no automatic server redirect of its own).
@@ -106,42 +113,99 @@ async function performOidcLogin(
   // leaves every downstream journey without an identity to assert against.
   expect(infoBody.user_id, `OIDC session for ${email} carries no user_id`).toBeTruthy();
 
-  // Seed the selected project into localStorage/sessionStorage so tests start
-  // with an active project — prevents the create button from being disabled.
-  // AppShell normally auto-selects via GET /social/author → personal_project_id,
-  // but that async waterfall may not complete before tests access the create
-  // button. We write the default project (id=1) directly so the store hydrates
-  // from storage immediately on the next page load.
-  //
-  // We do this while on the BASE_URL domain so the evaluate runs in the right
-  // storage origin. The SPA may still be redirecting after the OIDC callback —
-  // navigate to /app/ to stabilize, then write storage.
+  // Open the app on the BASE_URL origin — both because the storage this
+  // function is about belongs to that origin, and because the SPA may still be
+  // completing the redirect that followed the callback.
   await page.goto(BASE_URL + '/app/', { waitUntil: 'domcontentloaded', timeout: 20_000 });
 
-  // The project written here must be the one the APP would settle on, not a
-  // constant: `AppShell` also resolves `/social/author → personal_project_id`,
-  // and when the two disagree the selected project depends on which resolves
-  // first. A persona that owns a personal project (the #284 chat driver) then
-  // lands in project 1 on some runs and its own project on others — measured,
-  // and it surfaces three layers away as a 403 on a chat route rather than as
-  // a project-selection problem.
-  const author = await page.request.get(BASE_URL + '/api/v2/social/author/');
-  const personalProjectId = author.ok()
-    ? ((await author.json()) as { personal_project_id?: string }).personal_project_id
-    : undefined;
-  const projectId = personalProjectId ?? '1';
-  const projectName = projectId === '1' ? 'Default Project' : `project_user_${projectId}`;
+  // ── PIN THE PERSONA'S PROJECT, THROUGH THE PRODUCT'S OWN SWITCHER ────────
+  //
+  // WHAT WENT WRONG WITHOUT THIS. The block that stood here read
+  // `GET /social/author`, took `personal_project_id ?? '1'`, and wrote the
+  // answer straight into both storage areas. Two races decided what it wrote,
+  // and each one had a different answer per continuous-integration job:
+  //
+  //   1. `GET /social/author` provisions the personal project and waits at
+  //      most three seconds for it (`defaultPersonalProjectWait`,
+  //      services/elitea-main/internal/api/v2/social/handler.go). Sign-in
+  //      itself now starts the same work (`ensurePersonalProject`,
+  //      internal/api/v2/auth/signin.go), so this read answers the new
+  //      project's id when provisioning is quick and `""` when it is not. The
+  //      persona was therefore pinned to project 1 on one job and to its own
+  //      personal project on the next, out of the same code.
+  //   2. The `/app/` visit above boots the shell, which selects a project of
+  //      its own and PERSISTS it. That write lands whenever the two lists it
+  //      waits on are answered — before or after the write here, unpredictably
+  //      — so the storage state could carry the app's choice rather than ours.
+  //
+  // Measured on the 1.60.0 smoke run: the `E2E (chromium)` job recorded
+  // project 1 for the member persona and its personal project for the admin
+  // one, while both `E2E (webkit)` shards and the visual job recorded the
+  // personal project for the member persona. Fifty journeys and forty-three
+  // screenshots then failed on the project they were taken in, in three jobs
+  // out of four, from one commit.
+  //
+  // The fix is to stop guessing. The shell is allowed to settle first — its
+  // own write happens BEFORE anything here — and then the project this persona
+  // is supposed to work in is chosen through the switcher, the way a user
+  // chooses it, which is also the only writer of `el.project.*` the app
+  // supports. What the recorded state carries is then an assertion, not a race.
+  await shellChoseAProject(page);
 
-  await page.evaluate(
-    ([id, name]) => {
-      localStorage.setItem('el.project.id', id);
-      localStorage.setItem('el.project.name', name);
-      sessionStorage.setItem('el.project.id', id);
-      sessionStorage.setItem('el.project.name', name);
-    },
-    [projectId, projectName] as const,
-  );
+  if (project === 'seeded') {
+    await ensureProjectSelected(page, DEFAULT_PROJECT_NAME);
+    const stored = await page.evaluate(() => localStorage.getItem('el.project.id'));
+    expect(stored, `${email} must be pinned to the seeded project`).toBe(DEFAULT_PROJECT_ID);
+  } else {
+    // The chat driver works INSIDE its personal project — that is what the
+    // `/llm` hop resolves the provider credential from (#290), and it is why
+    // this persona exists at all. So the pin is its personal project, and the
+    // one thing worth asserting is that the shell really settled there rather
+    // than on the shared project every other persona uses.
+    const personalProjectId = await readPersonalProjectId(page);
+    expect(personalProjectId, `${email} must own a personal project`).toBeTruthy();
+    await expect
+      .poll(() => page.evaluate(() => localStorage.getItem('el.project.id')), { timeout: 30_000 })
+      .toBe(personalProjectId);
+  }
 
   // Save the authenticated state (cookies + localStorage).
   await page.context().storageState({ path: storageStatePath });
+}
+
+/**
+ * Which project a persona is recorded in.
+ *
+ *  - `seeded`   — project 1, "Default Project": the project the seed fills and
+ *                 that every journey and every visual baseline is written
+ *                 against.
+ *  - `personal` — the caller's own `project_user_<uid>`. Only the chat driver
+ *                 wants this; see `playwright.config.ts`'s STORAGE_STATE.chat.
+ */
+type PersonaProject = 'seeded' | 'personal';
+
+/**
+ * The caller's `personal_project_id`, asked for until the server names one.
+ *
+ * The same poll the shell itself runs (`widgets/app-shell/model/
+ * usePersonalProjectId.ts`): `""` is not an error and not a terminal answer on
+ * a first sign-in, it means provisioning has not finished, and the only way to
+ * learn that it changed is to ask again.
+ */
+async function readPersonalProjectId(
+  page: import('@playwright/test').Page,
+): Promise<string | undefined> {
+  let id: string | undefined;
+  await expect
+    .poll(
+      async () => {
+        const author = await page.request.get(BASE_URL + '/api/v2/social/author/');
+        if (!author.ok()) return '';
+        id = ((await author.json()) as { personal_project_id?: string }).personal_project_id;
+        return id ?? '';
+      },
+      { timeout: 30_000 },
+    )
+    .not.toBe('');
+  return id;
 }

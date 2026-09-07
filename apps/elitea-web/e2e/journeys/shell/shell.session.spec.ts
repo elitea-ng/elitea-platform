@@ -146,6 +146,13 @@ test('J7: project switch from the sidebar', async ({ page }) => {
   // that some button exists.
   const trigger = page.getByRole('button', { name: /Project:/ });
   await expect(trigger).toBeVisible({ timeout: 20_000 });
+  // THE PERSONA'S LANDING PROJECT, ASSERTED AND NOT ARRANGED HERE. This is the
+  // one place in the suite that reads back what `auth.setup.ts` pinned, so it
+  // is deliberately left as an assertion: selecting the project first would
+  // make it pass whatever the storage state carried. It failed on
+  // "Project: Private" the moment sign-in began provisioning a personal
+  // project for every account and the setup's pin became a race — which is
+  // exactly the report this line is here to make.
   await expect(trigger).toHaveAccessibleName(/Project:\s*Default Project/, { timeout: 20_000 });
 
   await checkA11y(page);

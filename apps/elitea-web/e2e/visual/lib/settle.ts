@@ -15,6 +15,7 @@
 import { expect, type Locator, type Page } from '@playwright/test';
 
 import { BASE_URL } from '../../../playwright.config';
+import { DEFAULT_PROJECT_NAME, ensureProjectSelected } from '../../fixtures/project';
 
 /**
  * Regions whose content is legitimately different on every run — timestamps,
@@ -71,7 +72,7 @@ export function volatileRegions(page: Page): Locator[] {
  */
 export async function shellSettled(
   page: Page,
-  projectName = 'Default Project',
+  projectName = DEFAULT_PROJECT_NAME,
 ): Promise<void> {
   await expect(page.getByRole('link', { name: 'Credentials', exact: true })).toBeVisible({
     timeout: 20_000,
@@ -86,9 +87,16 @@ export async function shellSettled(
   // `VisualRoute.project`) would have waited twenty seconds for a name that was
   // never going to appear, and then failed on its landmark instead, which
   // reports the wrong cause.
-  await expect(page.locator('button').filter({ hasText: projectName }).first()).toBeVisible({
-    timeout: 20_000,
-  });
+  //
+  // IT SELECTS, IT DOES NOT ONLY WAIT. Waiting alone made every shot in this
+  // suite depend on what `auth.setup.ts` happened to record for the persona,
+  // and when sign-in began provisioning a personal project for every account
+  // that recorded value stopped being project 1 — forty-three shots then failed
+  // here, on the project they were about to photograph rather than on anything
+  // the screen had done. The baselines are of project 1 (and of the two seeded
+  // fixtures the routes that name them use), so the project is now CHOSEN here,
+  // through the switcher, and the wait becomes the assertion that it took.
+  await ensureProjectSelected(page, projectName);
 }
 
 /**
@@ -438,21 +446,14 @@ export interface VisualProject {
  * `brand.visual.spec.ts` (ADR-0024 WP6) both photograph the seeded wiki.
  */
 export async function selectProject(page: Page, project: VisualProject | undefined): Promise<string> {
-  if (!project) return 'Default Project';
+  const projectName = project?.name ?? DEFAULT_PROJECT_NAME;
 
+  // `undefined` used to return here without opening anything, on the reading
+  // that the persona was already in the seeded project. That reading is what
+  // the storage state was for, and it stopped holding. It costs one shell load
+  // to stop assuming it, and the caller's `shellSettled()` would have paid for
+  // a full page load anyway when the assumption was wrong.
   await page.goto(BASE_URL + '/app/', { waitUntil: 'domcontentloaded' });
-  await shellSettled(page);
-
-  const trigger = page.getByRole('button', { name: /Project:/ });
-  await expect(trigger).toBeVisible({ timeout: 20_000 });
-  await trigger.click();
-
-  const listbox = page.getByRole('listbox');
-  await expect(listbox).toBeVisible({ timeout: 10_000 });
-  await listbox.getByRole('option', { name: project.name }).click();
-
-  await expect(trigger).toHaveAccessibleName(new RegExp(`Project:\\s*${project.name}`), {
-    timeout: 20_000,
-  });
-  return project.name;
+  await shellSettled(page, projectName);
+  return projectName;
 }
