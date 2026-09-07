@@ -446,6 +446,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	var agentJobs *repos.AgentExecutionJobsRepository
 	var agentStart *agentexecutionapp.CurrentApplicationStartService
 	var agentCancel *agentexecutionapp.CurrentAgentCancellationService
+	var agentTaskStatus *agentexecutionapp.CurrentAgentTaskStatusService
 	var agentPublisher publisherRunner
 	var agentMaterializer *storage.CurrentConfigurationsMaterializer
 	// Both are built inside the agent-execution block below but consumed with
@@ -518,6 +519,17 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		agentCancel, cancelErr = agentexecutionapp.NewCurrentAgentCancellationService(agentCancellation)
 		if cancelErr != nil {
 			return nil, fmt.Errorf("construct current agent cancellation service: %w", cancelErr)
+		}
+		// The read twin of the canceller (issue 254 P2). It is built in the same
+		// block and from the same pool, so the poll surface exists exactly when
+		// the stop surface does.
+		agentTaskState, statusErr := repos.NewCurrentAgentTaskStatusRepository(dependencies.AdmissionPool)
+		if statusErr != nil {
+			return nil, fmt.Errorf("construct current agent task status repository: %w", statusErr)
+		}
+		agentTaskStatus, statusErr = agentexecutionapp.NewCurrentAgentTaskStatusService(agentTaskState)
+		if statusErr != nil {
+			return nil, fmt.Errorf("construct current agent task status service: %w", statusErr)
 		}
 		agentVersions, targetErr := newCurrentAgentVersionFreezer(
 			dependencies.AdmissionPool,
@@ -1440,6 +1452,9 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	}
 	if agentCancel != nil {
 		publicRoutes.AgentCancel = agentCancel
+	}
+	if agentTaskStatus != nil {
+		publicRoutes.AgentTaskStatus = agentTaskStatus
 	}
 
 	closeRedis = false

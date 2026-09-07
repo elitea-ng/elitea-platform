@@ -131,6 +131,62 @@ func TestProductionRouterMountsCurrentAgentCancelOnlyWhenComposed(t *testing.T) 
 	}
 }
 
+func TestProductionRouterMountsCurrentApplicationTaskOnlyWhenComposed(t *testing.T) {
+	// Both verbs ride ONE handler, so a mount that registered only the DELETE —
+	// the shape the legacy SPA's dead mutation would still have exercised —
+	// would leave the poll answering 405 while the stop worked, and nothing
+	// else in this suite would notice.
+	handler := http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusTeapot)
+	})
+	path := "/api/v2/elitea_core/application_task/prompt_lib/2/10000000-0000-4000-8000-000000000051"
+	for _, test := range []struct {
+		name   string
+		router http.Handler
+		method string
+		want   int
+	}{
+		{
+			name:   "status",
+			router: reviewedRoutesRouter(RouterConfig{CurrentApplicationTask: handler}),
+			method: http.MethodGet,
+			want:   http.StatusTeapot,
+		},
+		{
+			name:   "cancel",
+			router: reviewedRoutesRouter(RouterConfig{CurrentApplicationTask: handler}),
+			method: http.MethodDelete,
+			want:   http.StatusTeapot,
+		},
+		{
+			name:   "wrong method",
+			router: reviewedRoutesRouter(RouterConfig{CurrentApplicationTask: handler}),
+			method: http.MethodPost,
+			want:   http.StatusMethodNotAllowed,
+		},
+		{
+			name:   "uncomposed status",
+			router: reviewedRoutesRouter(RouterConfig{}),
+			method: http.MethodGet,
+			want:   http.StatusNotFound,
+		},
+		{
+			name:   "uncomposed cancel",
+			router: reviewedRoutesRouter(RouterConfig{}),
+			method: http.MethodDelete,
+			want:   http.StatusNotFound,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			test.router.ServeHTTP(response, httptest.NewRequest(test.method, path, nil))
+			if response.Code != test.want {
+				t.Fatalf("status=%d want=%d body=%q", response.Code, test.want, response.Body.String())
+			}
+		})
+	}
+}
+
 type productionChatConfigReader struct{}
 
 func (productionChatConfigReader) GetCurrentChatConfig(

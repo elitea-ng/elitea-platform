@@ -202,6 +202,13 @@ func (e pgxExecutor) ResolveCurrentAuthorizationContinuation(
 	return sqlcgen.New(e.queryer).ResolveCurrentAuthorizationContinuation(ctx, arg)
 }
 
+func (e pgxExecutor) GetCurrentAgentTaskStatus(
+	ctx context.Context,
+	arg sqlcgen.GetCurrentAgentTaskStatusParams,
+) (sqlcgen.GetCurrentAgentTaskStatusRow, error) {
+	return sqlcgen.New(e.queryer).GetCurrentAgentTaskStatus(ctx, arg)
+}
+
 func (e pgxExecutor) CancelCurrentAgentExecution(
 	ctx context.Context,
 	arg sqlcgen.CancelCurrentAgentExecutionParams,

@@ -11314,15 +11314,28 @@ paths:
               schema:
                 $ref: '#/components/schemas/PublishValidationResult'
 
-  # APPLICATIONS — task cancellation
-  # NOTE(W1, waiver W-008): the former DELETE
-  # /elitea_core/application_task/prompt_lib/{project_id}/{task_id}
-  # (stopApplicationTask) was removed. The router has never served DELETE on
-  # that path (only GET, internal/api/router.go:430); the old SPA defines the
-  # mutation (src/api/applications.js:338) but useStopApplicationTaskMutation
-  # is imported by zero components, and the live stop paths use
-  # DELETE /task/prompt_lib/{projectID}/{taskID}, which the router serves.
-  # Dead surface — not ported to the new app.
+  # APPLICATIONS — task poll and cancellation
+  # NOTE(W1, waiver W-008, superseded by issue 254 P2): the former
+  # stopApplicationTask operation on
+  # /elitea_core/application_task/prompt_lib/{project_id}/{task_id} was removed
+  # here as dead surface — the old SPA defines the mutation
+  # (src/api/applications.js:338) but useStopApplicationTaskMutation is
+  # imported by zero components.
+  #
+  # The path IS served again, by internal/api/v2/agentexecution
+  # (CurrentApplicationTaskPath), mounted in production_router.go under the
+  # runtime plane. GET polls the run bound to a response message and DELETE
+  # stops it through the same use case
+  # DELETE /task/prompt_lib/{projectID}/{responseMessageID} runs. The path
+  # parameter is the RESPONSE MESSAGE UUID, not a pylon arbiter task id.
+  #
+  # Both operations are deliberately still absent from this document, for the
+  # reason the chat_config note below gives and one more of their own: every
+  # sibling route of the runtime plane — the message start, the regeneration,
+  # continue_predict and the task cancel — is undescribed too, so describing
+  # the poll alone would tell a client it can watch a run it has no described
+  # way to start. Describe them together, or not at all. No client in this
+  # workspace calls either verb.
 
   # APPLICATIONS — versions
   /elitea_core/version/prompt_lib/{project_id}/{application_id}/{version_id}:

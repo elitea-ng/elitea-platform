@@ -1459,7 +1459,7 @@
       "acceptance": [
         "GIVEN the old client declares a stop-application-task request that no component ever invokes",
         "WHEN the reimplementation ships",
-        "THEN this request is not ported: it is dead surface, and the router does not serve it",
+        "THEN this request is not ported: it is dead surface with no caller in the new app",
         "AND live task stopping continues to work through the served stop-task route, which has its own manifest item"
       ],
       "verify": {
@@ -1474,7 +1474,7 @@
         "min": 88
       },
       "waiver": {
-        "reason": "W-008: dead surface — endpoint has zero importers in the old SPA and is not served by the Go router; live stop paths use the served stop-task route",
+        "reason": "W-008: dead surface — endpoint has zero importers in the old SPA and none in the new app; live stop paths use the served stop-task route. The Go router serves the path again as of issue 254 P2 (internal/api/v2/agentexecution), so the waiver is about the UI, not about the route",
         "decidedBy": "unit W1 contract correction (decision record 2026-07-26, flagged for operator veto)",
         "date": "2026-07-26",
         "replacesBehaviour": "old SPA declared DELETE /elitea_core/application_task/prompt_lib/{projectId}/{taskId} but never called it"
