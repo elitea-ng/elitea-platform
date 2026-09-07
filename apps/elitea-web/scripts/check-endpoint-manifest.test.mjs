@@ -527,7 +527,16 @@ const GENERATED_OPERATION_COUNT = 211;
  */
 /* 219 -> 227: the eight pipeline trigger and schedule entries. See the note on
  * GENERATED_OPERATION_COUNT for why the eighth has an empty `usedBy`. */
-const MANIFEST_ENTRY_COUNT = 227;
+/*
+ * 227 -> 228, when the toolkit "Test tool" action moved off `chat_predict`
+ * onto the synchronous REST run (WP16b/platform-parity-wave, `toolkits.
+ * testTool`, `POST /elitea_core/test_tool/prompt_lib/{projectId}/{toolId}`).
+ * GENERATED_OPERATION_COUNT is unchanged: the route is mounted by hand
+ * alongside the other toolkit routes, not described in v2.yaml, so orval
+ * generates no client for it — the same `source: 'handwritten'` case the
+ * "199 -> 202" Inventory entries above are for.
+ */
+const MANIFEST_ENTRY_COUNT = 228;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

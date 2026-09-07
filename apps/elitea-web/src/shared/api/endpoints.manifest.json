@@ -2658,6 +2658,19 @@
             "responseSchema": "PipelineInboundTriggerRunAccepted",
             "fixture": null,
             "usedBy": []
+        },
+        {
+            "$comment": "WP16b/platform-parity-wave — the synchronous \"Test tool\" run, every toolkit tool but `index_data` (which keeps the SSE `toolkits.startIndexExecution` path above). `toolkits.Handler.TestTool` (services/elitea-main/internal/api/v2/toolkitrun/response.go), shadowed by nothing and reachable in every deployment (unlike the sibling `/test_toolkit_tool/{projectId}` path, which the index-start handler claims wherever a runtime is composed). Not in v2.yaml — mounted by hand alongside the other toolkit routes — so this is the ONLY description of it; source handwritten, operationId null. Answers 200 ok:true with the result, 200 ok:false with the tool's own error, 422 naming unsupported_toolkit/unknown_tool, or 504 with a task_id on a bounded-wait timeout.",
+            "id": "toolkits.testTool",
+            "method": "POST",
+            "path": "/elitea_core/test_tool/prompt_lib/{projectId}/{toolId}",
+            "operationId": null,
+            "source": "handwritten",
+            "responseSchema": "unknown",
+            "fixture": null,
+            "usedBy": [
+                "features/toolkits"
+            ]
         }
     ]
 }

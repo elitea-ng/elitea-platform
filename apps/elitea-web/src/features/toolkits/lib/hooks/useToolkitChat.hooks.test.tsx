@@ -147,8 +147,11 @@ function renderToolkitChatWithRerender(
   return { box };
 }
 
-/** `startIndexExecution`'s route (issue #93) — POST test_toolkit_tool. */
+/** `startIndexExecution`'s route (issue #93) — POST test_toolkit_tool. Only ever reached for `index_data` (`useToolkitChatDispatch.hooks.ts`'s "Decision 1"). */
 const START_PATH = `${BASE}/elitea_core/test_toolkit_tool/prompt_lib/proj-1`;
+
+/** `testToolkitTool`'s route (`../../api/toolkitTestRun.ts`) — reached by every OTHER tool (`baseParams`'s default `runTool: 'search_index'` included). `toolkitId` here is `baseParams`'s default `'tk-1'`. */
+const TEST_TOOL_PATH = `${BASE}/elitea_core/test_tool/prompt_lib/proj-1/tk-1`;
 
 beforeEach(() => {
   configureGeneratedClient({ baseUrl: BASE });
@@ -159,6 +162,10 @@ beforeEach(() => {
   // honest — they must pass because the response says "no execution to
   // follow", not because the request blew up.
   server.use(http.post(START_PATH, () => HttpResponse.json({})));
+  // Default for every test that is not ABOUT the REST test-tool outcomes
+  // below: a settled, empty success. Individual tests override this with
+  // `server.use(...)` for the outcome they are actually asserting on.
+  server.use(http.post(TEST_TOOL_PATH, () => HttpResponse.json({ ok: true, result: {}, tool_name: 'search_index', task_id: '' })));
 });
 
 afterEach(() => {
@@ -251,13 +258,19 @@ describe('useToolkitChat', () => {
     await waitFor(() => expect(box.current?.chatHistory).toHaveLength(1));
   });
 
-  it('handleRunTool creates a conversation, builds the payload, and emits chat_predict with tool_call_input', async () => {
+  it('handleRunTool creates a conversation and POSTs the REST test-tool body (tool_name/tool_params), never chat_predict', async () => {
     const client = createTestSocketClient();
     const createConversation = vi.fn().mockResolvedValue({ data: { id: 'conv-1', uuid: 'uuid-1', participants: [] } });
     const addParticipant = vi.fn().mockResolvedValue({ data: [{ entity_name: 'toolkit', entity_meta: { id: 'tk-1' } }] });
-    const buildMessagePayload = vi.fn().mockReturnValue({ user_input: 'x', project_id: 'proj-1' });
+    let testToolBody: unknown;
+    server.use(
+      http.post(TEST_TOOL_PATH, async ({ request }) => {
+        testToolBody = await request.json();
+        return HttpResponse.json({ ok: true, result: { hits: 3 }, tool_name: 'search_index' });
+      }),
+    );
 
-    const { box } = renderToolkitChat(baseParams({ createConversation, addParticipant, buildMessagePayload }), client);
+    const { box } = renderToolkitChat(baseParams({ createConversation, addParticipant }), client);
     await waitFor(() => expect(box.current).toBeDefined());
 
     act(() => {
@@ -265,26 +278,17 @@ describe('useToolkitChat', () => {
     });
 
     await waitFor(() => expect(createConversation).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(client.getEmitted('chat_predict')).toHaveLength(1));
-
-    const emitted = client.getEmitted('chat_predict')[0]?.payload as { tool_call_input: { tool_name: string; tool_params: unknown } };
-    expect(emitted.tool_call_input).toEqual({ tool_name: 'search_index', tool_params: { query: 'x' } });
+    await waitFor(() => expect(testToolBody).toEqual({ tool_name: 'search_index', tool_params: { query: 'x' } }));
+    expect(client.getEmitted('chat_predict')).toHaveLength(0);
   });
 
   /**
-   * THE RUN WITH NO TRANSPORT — see `./useToolkitChatDispatch.hooks.ts`'
-   * "fourth case".
-   *
-   * `search_index` is not `index_data`, so the Go start route refuses it
-   * (`internal/api/v2/indexing/start_handler.go:87-90`) and socket.io is the
-   * only path left. When `VITE_SOCKET_SERVER` is absent the app is given the
-   * NULL socket client, whose emit is a documented no-op and whose connection
-   * state is permanently `'disconnected'`
-   * (`shared/api/socket/client.ts:86-113`). The run then did nothing and said
-   * nothing, and the chat panel waited for a reply no server had been asked
-   * for.
+   * The REST test-tool run (`../../api/toolkitTestRun.ts`) never touches the
+   * socket at all — connection state is irrelevant to it, unlike the OLD
+   * `chat_predict`-only path this replaces (`./useToolkitChatDispatch.hooks.ts`'
+   * "fourth case", which still stands for `index_data`).
    */
-  it('reports a search run that has no transport, instead of emitting into a void', async () => {
+  it('runs a non-index_data tool over REST regardless of socket connection state, and never touches the socket', async () => {
     const client = createTestSocketClient();
     client.setConnectionState('disconnected');
     const onError = vi.fn();
@@ -296,31 +300,104 @@ describe('useToolkitChat', () => {
       box.current?.handleRunTool();
     });
 
-    await waitFor(() => expect(onError).toHaveBeenCalledTimes(1));
-    expect(String(onError.mock.calls[0]?.[0])).toContain('none is configured for this deployment');
-    // The emit still fires — this reports the run, it does not cancel it. A
-    // deployment that DOES serve socket.io behaves exactly as before.
-    await waitFor(() => expect(client.getEmitted('chat_predict')).toHaveLength(1));
+    await waitFor(() => expect(box.current?.isRunning).toBe(false));
+    expect(onError).not.toHaveBeenCalled();
+    expect(client.getEmitted('chat_predict')).toHaveLength(0);
   });
 
-  it.each([['connected'], ['connecting'], ['reconnecting']] as const)(
-    'stays silent while the socket is %s, so a reconnect is not reported as a missing server',
-    async (state) => {
-      const client = createTestSocketClient();
-      client.setConnectionState(state);
+  /**
+   * The four outcomes `services/elitea-main/internal/api/v2/toolkitrun/
+   * response.go` maps a settled REST test-tool run onto — see
+   * `../../api/toolkitTestRun.ts`'s own module doc comment for the exact
+   * status/body pairing this exercises against.
+   */
+  describe('REST test-tool outcomes (every tool but index_data)', () => {
+    it('OK (200 ok:true): appends the result to the transcript, no Snackbar', async () => {
       const onError = vi.fn();
-
-      const { box } = renderToolkitChat(baseParams({ onError }), client);
+      server.use(http.post(TEST_TOOL_PATH, () => HttpResponse.json({ ok: true, result: { hits: 3 }, tool_name: 'search_index' })));
+      const { box } = renderToolkitChat(baseParams({ onError }));
       await waitFor(() => expect(box.current).toBeDefined());
 
-      act(() => {
-        box.current?.handleRunTool();
-      });
+      act(() => box.current?.handleRunTool());
 
-      await waitFor(() => expect(client.getEmitted('chat_predict')).toHaveLength(1));
+      await waitFor(() => expect(box.current?.isRunning).toBe(false));
+      expect(String(box.current?.chatHistory.at(-1)?.content)).toContain('"hits": 3');
       expect(onError).not.toHaveBeenCalled();
-    },
-  );
+    });
+
+    it('TOOL_ERROR (200 ok:false): appends the tool\'s own sentence to the transcript, no Snackbar', async () => {
+      const onError = vi.fn();
+      server.use(http.post(TEST_TOOL_PATH, () => HttpResponse.json({ ok: false, error: 'the API key was rejected', tool_name: 'search_index' })));
+      const { box } = renderToolkitChat(baseParams({ onError }));
+      await waitFor(() => expect(box.current).toBeDefined());
+
+      act(() => box.current?.handleRunTool());
+
+      await waitFor(() => expect(box.current?.isRunning).toBe(false));
+      expect(String(box.current?.chatHistory.at(-1)?.content)).toContain('the API key was rejected');
+      expect(onError).not.toHaveBeenCalled();
+    });
+
+    it('UNSUPPORTED_TOOLKIT (422): reports the refusal on the Snackbar, no transcript message', async () => {
+      const onError = vi.fn();
+      server.use(
+        http.post(TEST_TOOL_PATH, () =>
+          HttpResponse.json({ ok: false, reason: 'unsupported_toolkit', error: 'this image cannot build "custom"' }, { status: 422 }),
+        ),
+      );
+      const { box } = renderToolkitChat(baseParams({ onError }));
+      await waitFor(() => expect(box.current).toBeDefined());
+
+      act(() => box.current?.handleRunTool());
+
+      await waitFor(() => expect(onError).toHaveBeenCalledTimes(1));
+      expect(String(onError.mock.calls[0]?.[0])).toContain('this image cannot build "custom"');
+      // `startNewToolkitConversation` already cleared the welcome message
+      // before dispatch (`setChatHistory([])`); a refusal appends nothing.
+      expect(box.current?.chatHistory).toHaveLength(0);
+    });
+
+    it('UNKNOWN_TOOL (422): reports the refusal on the Snackbar, no transcript message', async () => {
+      const onError = vi.fn();
+      server.use(
+        http.post(TEST_TOOL_PATH, () => HttpResponse.json({ ok: false, reason: 'unknown_tool', error: 'no tool named "search_index"' }, { status: 422 })),
+      );
+      const { box } = renderToolkitChat(baseParams({ onError }));
+      await waitFor(() => expect(box.current).toBeDefined());
+
+      act(() => box.current?.handleRunTool());
+
+      await waitFor(() => expect(onError).toHaveBeenCalledTimes(1));
+      expect(String(onError.mock.calls[0]?.[0])).toContain('no tool named "search_index"');
+    });
+
+    it('bounded wait passed (504): reports the task id on the Snackbar so the caller can poll', async () => {
+      const onError = vi.fn();
+      server.use(
+        http.post(TEST_TOOL_PATH, () =>
+          HttpResponse.json({ ok: false, task_id: 'job-42', reason: 'timeout', error: 'the tool did not finish within the bounded wait' }, { status: 504 }),
+        ),
+      );
+      const { box } = renderToolkitChat(baseParams({ onError }));
+      await waitFor(() => expect(box.current).toBeDefined());
+
+      act(() => box.current?.handleRunTool());
+
+      await waitFor(() => expect(onError).toHaveBeenCalledTimes(1));
+      expect(String(onError.mock.calls[0]?.[0])).toContain('job-42');
+    });
+
+    it('an unrecognised server failure (500) still reaches the Snackbar rather than being swallowed', async () => {
+      const onError = vi.fn();
+      server.use(http.post(TEST_TOOL_PATH, () => HttpResponse.json({ ok: false, error: 'unexpected' }, { status: 500 })));
+      const { box } = renderToolkitChat(baseParams({ onError }));
+      await waitFor(() => expect(box.current).toBeDefined());
+
+      act(() => box.current?.handleRunTool());
+
+      await waitFor(() => expect(onError).toHaveBeenCalledTimes(1));
+    });
+  });
 
   it('does not run when isValidForm is false and the tool is not the indexing tool', async () => {
     const client = createTestSocketClient();
@@ -353,11 +430,17 @@ describe('useToolkitChat', () => {
 
     await waitFor(() => expect(box.current?.isRunning).toBe(false));
     expect(createConversation).toHaveBeenCalledTimes(1);
-    // The emit still fires with a null conversation (no exception propagated).
-    await waitFor(() => expect(client.getEmitted('chat_predict')).toHaveLength(1));
+    // The REST test-tool run does not depend on `currentConversation` at all
+    // (`../../api/toolkitTestRun.ts` takes no conversation input), so it
+    // still runs with a null one; no exception propagates and no socket
+    // emit ever fires.
+    expect(client.getEmitted('chat_predict')).toHaveLength(0);
   });
 
-  it('records a chat-history error message when the emit step itself throws (buildMessagePayload throws)', async () => {
+  it('records a chat-history error message when the dispatch step itself throws (buildMessagePayload throws on the index_data path)', async () => {
+    // `buildMessagePayload` is only called on the `index_data` branch now
+    // (`useToolkitChatDispatch.hooks.ts`'s "fifth case" — every other tool
+    // never builds this payload at all), so this exercises `handleIndexData`.
     const client = createTestSocketClient();
     const buildMessagePayload = vi.fn().mockImplementation(() => {
       throw new Error('payload build failed');
@@ -366,7 +449,7 @@ describe('useToolkitChat', () => {
     await waitFor(() => expect(box.current).toBeDefined());
 
     act(() => {
-      box.current?.handleRunTool();
+      box.current?.handleIndexData();
     });
 
     await waitFor(() => expect(box.current?.isRunning).toBe(false));
@@ -515,7 +598,7 @@ describe('useToolkitChat', () => {
     });
   });
 
-  describe('describeRunError (executeRunTool catch branch)', () => {
+  describe('describeRunError (executeRunTool catch branch — exercised via handleIndexData, the only tool that still calls buildMessagePayload)', () => {
     it('records a chat-history error message built from a plain string error', async () => {
       const client = createTestSocketClient();
       const buildMessagePayload = vi.fn().mockImplementation(() => {
@@ -525,7 +608,7 @@ describe('useToolkitChat', () => {
       const { box } = renderToolkitChat(baseParams({ buildMessagePayload }), client);
       await waitFor(() => expect(box.current).toBeDefined());
 
-      act(() => box.current?.handleRunTool());
+      act(() => box.current?.handleIndexData());
 
       await waitFor(() => expect(box.current?.isRunning).toBe(false));
       expect(String(box.current?.chatHistory.at(-1)?.content)).toContain('plain string failure');
@@ -540,7 +623,7 @@ describe('useToolkitChat', () => {
       const { box } = renderToolkitChat(baseParams({ buildMessagePayload }), client);
       await waitFor(() => expect(box.current).toBeDefined());
 
-      act(() => box.current?.handleRunTool());
+      act(() => box.current?.handleIndexData());
 
       await waitFor(() => expect(box.current?.isRunning).toBe(false));
       expect(String(box.current?.chatHistory.at(-1)?.content)).toContain(JSON.stringify({ code: 'E_BAD' }));
@@ -557,7 +640,7 @@ describe('useToolkitChat', () => {
       const { box } = renderToolkitChat(baseParams({ buildMessagePayload }), client);
       await waitFor(() => expect(box.current).toBeDefined());
 
-      act(() => box.current?.handleRunTool());
+      act(() => box.current?.handleIndexData());
 
       await waitFor(() => expect(box.current?.isRunning).toBe(false));
       expect(String(box.current?.chatHistory.at(-1)?.content)).toContain('Unknown error');
@@ -582,13 +665,17 @@ describe('useToolkitChat', () => {
 
   describe('socket-driven onRunFinish/onStartTask (chat_predict start_task / streaming-finish messages)', () => {
     it('traces the started task (outside test-tools mode) when a start_task message arrives', async () => {
+      // `handleIndexData` (not `handleRunTool`): only `index_data` still
+      // rides the REST-start-then-socket-fallback path this test is about
+      // (`useToolkitChatDispatch.hooks.ts`'s "fourth case") — every other
+      // tool now settles over REST directly (the "fifth case").
       const client = createTestSocketClient();
       const traceNewIndex = vi.fn();
       const index = { id: 'idx-1', metadata: { state: 'created' } };
       const { box } = renderToolkitChat(baseParams({ modes: [], index, traceNewIndex }), client);
       await waitFor(() => expect(box.current).toBeDefined());
 
-      act(() => box.current?.handleRunTool());
+      act(() => box.current?.handleIndexData());
       await waitFor(() => expect(client.getEmitted('chat_predict')).toHaveLength(1));
 
       act(() => {
@@ -604,7 +691,7 @@ describe('useToolkitChat', () => {
       const { box } = renderToolkitChat(baseParams({ modes: ['test_tools'], traceNewIndex }), client);
       await waitFor(() => expect(box.current).toBeDefined());
 
-      act(() => box.current?.handleRunTool());
+      act(() => box.current?.handleIndexData());
       await waitFor(() => expect(client.getEmitted('chat_predict')).toHaveLength(1));
 
       act(() => {
@@ -647,31 +734,24 @@ describe('useToolkitChat', () => {
     });
 
     it('does NOT refetch the index list when the finished run was a non-indexing tool (runningToolRef mismatch, setTimeout guard returns early)', async () => {
+      // `handleRunTool` runs `runTool` ('search_index'), never
+      // `IndexesToolsEnum.indexData` — and, since it is not `index_data`,
+      // this settles over the REST test-tool run (the "fifth case"), never
+      // the socket, so the finish comes from `onTestToolOutcome` directly
+      // rather than a simulated `chat_predict` message.
       const client = createTestSocketClient();
       const refetchIndexesList = vi.fn();
+      server.use(http.post(TEST_TOOL_PATH, () => HttpResponse.json({ ok: true, result: {}, tool_name: 'search_index' })));
       const { box } = renderToolkitChat(baseParams({ modes: [], refetchIndexesList }), client);
       await waitFor(() => expect(box.current).toBeDefined());
 
-      // `handleRunTool` runs `runTool` ('search_index'), never `IndexesToolsEnum.indexData`.
       act(() => box.current?.handleRunTool());
-      await waitFor(() => expect(client.getEmitted('chat_predict')).toHaveLength(1));
-
-      act(() => {
-        client.simulateServerEvent('chat_predict', { message_id: 'run-1', type: 'start_task', content: { task_id: 'task-1' } });
-      });
-      act(() => {
-        client.simulateServerEvent('chat_predict', {
-          message_id: 'run-1',
-          type: 'agent_response',
-          content: 'all done',
-          response_metadata: { finish_reason: 'stop' },
-        });
-      });
 
       await waitFor(() => expect(box.current?.isRunning).toBe(false));
       // Give the 500ms debounce time to fire and confirm it never calls through.
       await new Promise((resolve) => setTimeout(resolve, 700));
       expect(refetchIndexesList).not.toHaveBeenCalled();
+      expect(client.getEmitted('chat_predict')).toHaveLength(0);
     });
   });
 
@@ -822,12 +902,17 @@ describe('useToolkitChat', () => {
       expect(traceNewIndex).toHaveBeenCalledWith('idx-1', { task_id: 'exec-1' });
     });
 
-    it('never attempts the REST start for a non-index_data tool — the Go handler admits index_data only', async () => {
+    it('never attempts the REST start (nor the socket) for a non-index_data tool — it settles over the REST test-tool run instead', async () => {
       let started = false;
+      let testToolCalled = false;
       server.use(
         http.post(START_PATH, () => {
           started = true;
           return HttpResponse.json({ task_id: 'exec-1' });
+        }),
+        http.post(TEST_TOOL_PATH, () => {
+          testToolCalled = true;
+          return HttpResponse.json({ ok: true, result: {}, tool_name: 'search_index' });
         }),
       );
       const client = createTestSocketClient();
@@ -836,8 +921,9 @@ describe('useToolkitChat', () => {
 
       act(() => box.current?.handleRunTool());
 
-      await waitFor(() => expect(client.getEmitted('chat_predict')).toHaveLength(1));
+      await waitFor(() => expect(testToolCalled).toBe(true));
       expect(started).toBe(false);
+      expect(client.getEmitted('chat_predict')).toHaveLength(0);
       expect(sse.getSources()).toHaveLength(0);
     });
 

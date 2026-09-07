@@ -65,12 +65,33 @@
  * `pendingFallbackRef` unset, so a later stream failure can never queue a
  * socket-fallback emit for this run: retrying over socket.io would itself
  * be the duplicate run this branch exists to prevent.
+ *
+ * ─────────────────────────────────────────────────────────────────────────
+ * A FIFTH CASE: EVERY NON-`index_data` TOOL NOW HAS A REAL REST CONTRACT
+ * ─────────────────────────────────────────────────────────────────────────
+ * The "fourth case" above stands for `index_data` — it genuinely has no
+ * synchronous contract; `start_handler.go` refuses anything else with
+ * `await_response=false`. Every OTHER tool does now: `../../api/
+ * toolkitTestRun.ts`'s `testToolkitTool` calls
+ * `POST /test_tool/prompt_lib/{projectId}/{toolId}`
+ * (`toolkits.Handler.TestTool`), reachable in every deployment, and answers
+ * with the tool's result (or a typed refusal) in the SAME request — no
+ * stream, no socket, no missing-transport report.
+ *
+ * `search_index_data`/`stepback_search_index`/`stepback_summary_index` (the
+ * IndexDetails "Run" tab's own tools, the ones the fourth case's own header
+ * named as the socket-only casualties) and every `TestTools.tsx` tool alike
+ * go through this path now — `onTestToolOutcome` is how the settled result
+ * or refusal reaches `useToolkitChat.hooks.ts`, which owns the chat
+ * transcript and the Snackbar `onError` channel.
  */
 import { useCallback, useRef } from 'react';
 
 import { useSocketClient, type SocketClient } from '@/shared/api/socket/client';
 import { t } from '@/shared/i18n';
 
+import type { TestToolkitToolOutcome } from '../../api/toolkitTestRun';
+import { testToolkitTool } from '../../api/toolkitTestRun';
 import { startIndexExecution } from '../../indexes/api/indexesApi';
 import { IndexesToolsEnum } from '../../indexes/lib/constants/indexDetails.constants';
 import { isBoundedIndexExecutionTaskId, parseIndexStartConflictTaskId } from '../../indexes/lib/helpers/indexExecution.helpers';
@@ -90,6 +111,8 @@ export interface UseToolkitRunDispatchParams {
   readonly setExecutionId: (executionId: string | undefined) => void;
   /** Reports a run that could not be dispatched at all. Optional: a caller that does not pass it gets exactly the previous, silent behaviour. */
   readonly onError?: ((message: string) => void) | undefined;
+  /** Every settled or refused REST test-tool run (any tool but `index_data` — see this file's "fifth case"). `useToolkitChat.hooks.ts` owns turning it into a transcript message or a Snackbar. */
+  readonly onTestToolOutcome: (outcome: TestToolkitToolOutcome) => void;
 }
 
 export interface UseToolkitRunDispatchResult {
@@ -124,7 +147,7 @@ function reportMissingTransport(socket: SocketClient, onError: ((message: string
 }
 
 export function useToolkitRunDispatch(params: UseToolkitRunDispatchParams): UseToolkitRunDispatchResult {
-  const { projectId, toolkitId, selectedModel, llmSettings, buildMessagePayload, onStartTask, setExecutionId, onError } = params;
+  const { projectId, toolkitId, selectedModel, llmSettings, buildMessagePayload, onStartTask, setExecutionId, onError, onTestToolOutcome } = params;
   const socket = useSocketClient();
 
   /**
@@ -151,6 +174,10 @@ export function useToolkitRunDispatch(params: UseToolkitRunDispatchParams): UseT
   const onErrorRef = useRef(onError);
   onErrorRef.current = onError;
 
+  /** Same latest-ref pattern as `onErrorRef` above, and for the same reason: keeping `onTestToolOutcome` out of `startToolRun`'s already-capped dependency array. */
+  const onTestToolOutcomeRef = useRef(onTestToolOutcome);
+  onTestToolOutcomeRef.current = onTestToolOutcome;
+
   const runSocketFallback = useCallback(() => {
     const emit = pendingFallbackRef.current;
     if (!emit) return;
@@ -161,6 +188,18 @@ export function useToolkitRunDispatch(params: UseToolkitRunDispatchParams): UseT
 
   const startToolRun = useCallback(
     async (currentConversation: CreatedConversation | null, tool: string, relevantInputVariables: Readonly<Record<string, unknown>>) => {
+      pendingFallbackRef.current = null;
+
+      // Fifth case (see header): every tool but `index_data` has a real
+      // synchronous REST contract now — one request, one settled outcome,
+      // no stream and no socket fallback to park.
+      if (tool !== IndexesToolsEnum.indexData) {
+        setExecutionId(undefined);
+        const outcome = await testToolkitTool({ projectId, toolkitId, toolName: tool, toolParams: relevantInputVariables });
+        onTestToolOutcomeRef.current(outcome);
+        return;
+      }
+
       const toolkitParticipant = findToolkitParticipant(currentConversation);
       const payload = buildMessagePayload({
         conversation_uuid: currentConversation?.uuid,
@@ -174,12 +213,11 @@ export function useToolkitRunDispatch(params: UseToolkitRunDispatchParams): UseT
       const emitOverSocket = (): void => {
         socket.emit('chat_predict', { ...payload, tool_call_input: { tool_name: tool, tool_params: relevantInputVariables } });
       };
-      pendingFallbackRef.current = null;
 
       // Decision 1: only `index_data` has a Go contract to start (see
       // header), and only with a toolkit id — `toolkit_config.toolkit_id` is
       // required and the handler 422s without a positive one.
-      if (tool === IndexesToolsEnum.indexData && toolkitId !== undefined && toolkitId !== '') {
+      if (toolkitId !== undefined && toolkitId !== '') {
         try {
           const started = await startIndexExecution({
             projectId,

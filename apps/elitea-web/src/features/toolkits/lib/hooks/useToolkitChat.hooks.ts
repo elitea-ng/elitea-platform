@@ -88,13 +88,16 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import type { TestToolkitToolOutcome } from '../../api/toolkitTestRun';
 import { EditViewTabsEnum, IndexesToolsEnum, IndexStatuses } from '../../indexes/lib/constants/indexDetails.constants';
-import { generateMockMessageTemplate, generateWelcomeMessage } from '../../indexes/lib/helpers/indexChat.helpers';
+import { generateWelcomeMessage } from '../../indexes/lib/helpers/indexChat.helpers';
 import { canStartToolkitRun } from '../../indexes/lib/helpers/indexExecution.helpers';
 import { useIndexHistory } from '../../indexes/lib/hooks/useIndexHistory.hooks';
 import { ToolkitChatModesEnum } from '../constants/toolkitChat.constants';
+import { buildTestToolChatMessage, describeTestToolRefusal } from '../helpers/testToolOutcome.helpers';
 import type { CreatedConversation } from '../helpers/toolkitConversation.helpers';
 import { createToolkitConversationWithParticipant, generateLlmSettings } from '../helpers/toolkitConversation.helpers';
+import { buildRunToolErrorMessage } from '../helpers/toolRunError.helpers';
 import { useSelectedProjectId } from './useSelectedProjectId';
 import { useToolkitRunDispatch } from './useToolkitChatDispatch.hooks';
 import { useToolkitChatSocket } from './useToolkitChatSocket.hooks';
@@ -111,25 +114,6 @@ function resolveRunInputVariables(
     return index.metadata.index_configuration ?? {};
   }
   return toolInputVariables ?? {};
-}
-
-function describeRunError(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  if (typeof error === 'string') return error;
-  try {
-    return JSON.stringify(error);
-  } catch {
-    return 'Unknown error';
-  }
-}
-
-/** The catch-block half of `executeRunTool`, split out to stay under the §3.5 complexity budget. */
-function buildRunToolErrorMessage(tool: string, error: unknown): ToolkitChatMessage {
-  const errorMessage = describeRunError(error);
-  return generateMockMessageTemplate(
-    `❌ Failed to execute tool "${tool}"\n\n**Error:** ${errorMessage}\n\nPlease check your toolkit configuration and try again.`,
-    'toolkit',
-  );
 }
 
 /** Whether an in-progress index's conversation should be recovered on mount — split out of the hook body to stay under the §3.5 complexity budget. */
@@ -231,6 +215,21 @@ export function useToolkitChat(params: UseToolkitChatParams): UseToolkitChatResu
     },
     [index?.id, isTestToolsMode, traceNewIndex],
   );
+  /** The dispatch hook's "fifth case" (REST test-tool, every tool but `index_data`) reports here: a settled run becomes a transcript message, a refusal becomes a Snackbar — see `../helpers/testToolOutcome.helpers.ts`. */
+  const onTestToolOutcome = useCallback(
+    (outcome: TestToolkitToolOutcome) => {
+      const tool = runningToolRef.current ?? runTool;
+      const message = buildTestToolChatMessage(tool, outcome);
+      if (message) {
+        setChatHistory((prev) => [...prev, message]);
+      } else {
+        onError?.(describeTestToolRefusal(tool, outcome) ?? '');
+      }
+      onRunFinish(outcome.kind === 'ok' ? 'finished' : outcome.kind);
+    },
+    [onError, onRunFinish, runTool],
+  );
+
   /** SSE-first run dispatch with the socket.io fallback, and the no-transport report — see `./useToolkitChatDispatch.hooks.ts`. */
   const { startToolRun, runSocketFallback } = useToolkitRunDispatch({
     projectId,
@@ -241,6 +240,7 @@ export function useToolkitChat(params: UseToolkitChatParams): UseToolkitChatResu
     onStartTask,
     setExecutionId,
     onError,
+    onTestToolOutcome,
   });
 
   useToolkitChatSocket({

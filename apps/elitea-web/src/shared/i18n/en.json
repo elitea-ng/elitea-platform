@@ -3945,5 +3945,13 @@
   "features.toolkits.indexesList.missingVectorStore": "Indexes need a vector store. Create a PgVector configuration in Settings → AI Providers, then select it in this toolkit’s Configuration tab.",
   "features.toolkits.indexesTab.unavailableGeneric": "The worker that runs indexing jobs does not support this toolkit type.",
   "features.toolkits.indexesTab.unavailableTitle": "Indexing is not available for this toolkit type",
-  "features.toolkits.toolkitChat.noRunTransport": "This run needs a live connection to the toolkit runtime, and none is configured for this deployment. Only indexing (“Index data”) can run here."
+  "features.toolkits.toolkitChat.noRunTransport": "This run needs a live connection to the toolkit runtime, and none is configured for this deployment. Only indexing (“Index data”) can run here.",
+  "features.toolkits.toolkitChat.testTool.failure": "The tool could not be run: {{message}}",
+  "features.toolkits.toolkitChat.testTool.resultHeading": "Tool result:",
+  "features.toolkits.toolkitChat.testTool.timeout": "The tool is still running (task {{taskId}}). Its result is not ready yet.",
+  "features.toolkits.toolkitChat.testTool.timeoutNoTask": "The tool did not finish in time. It may still be running.",
+  "features.toolkits.toolkitChat.testTool.toolError": "Tool \"{{toolName}}\" reported an error:\n\n{{message}}",
+  "features.toolkits.toolkitChat.testTool.truncated": "The result was too large to display.",
+  "features.toolkits.toolkitChat.testTool.unknownTool": "Tool \"{{toolName}}\" is not available on this toolkit: {{message}}",
+  "features.toolkits.toolkitChat.testTool.unsupportedToolkit": "This toolkit type cannot run tools on this deployment: {{message}}"
 }

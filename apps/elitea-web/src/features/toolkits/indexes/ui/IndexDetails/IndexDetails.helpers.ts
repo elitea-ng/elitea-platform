@@ -2,9 +2,32 @@ import { useEffect } from 'react';
 import type { SxProps, Theme } from '@mui/material/styles';
 
 import type { JsonSchemaLike } from '../../lib/helpers/indexChat.helpers';
+import { toDisplayString } from '../../lib/helpers/displayString.local';
 import type { IndexRow } from '../../model/indexesStore';
-import { EditViewTabsEnum, IndexViewsEnum } from '../../lib/constants/indexDetails.constants';
+import { EditViewTabsEnum, IndexStatuses, IndexViewsEnum, IndexesToolsEnum, RUNNABLE_INDEX_STATUSES } from '../../lib/constants/indexDetails.constants';
 import type { ChatDisplayMessage } from './IndexChat';
+
+/** `disableRunTabReason`'s computation, split out of `IndexDetails.tsx`'s `useMemo` body — same 400-line-budget reason as the rest of this file. */
+export function computeDisableRunTabReason(index: IndexRow, selectedIndexTools: readonly string[]): string | null {
+  const state = index.metadata['state'];
+  if (!state) return 'No index selected';
+
+  const runnableTools: readonly string[] = [IndexesToolsEnum.searchIndexData, IndexesToolsEnum.stepbackSearchIndex, IndexesToolsEnum.stepbackSummaryIndex];
+  if (!RUNNABLE_INDEX_STATUSES.includes(toDisplayString(state))) return 'Not valid index state for running tools';
+  if (!selectedIndexTools.some((st) => runnableTools.includes(st))) return 'No run tools are selected in the toolkit';
+  return null;
+}
+
+/** `disableHistoryTabReason`'s computation, split out of `IndexDetails.tsx`'s `useMemo` body — same 400-line-budget reason as the rest of this file. */
+export function computeDisableHistoryTabReason(index: IndexRow): string | null {
+  const state = index.metadata['state'];
+  if (!state) return 'No index selected';
+
+  const historyLength = (index.metadata['history'] as readonly unknown[] | undefined)?.length ?? 0;
+  if (state === IndexStatuses.progress) return 'Indexing in progress. History is unavailable until indexing is complete';
+  if (historyLength === 0) return 'No history items available for this index';
+  return null;
+}
 
 /**
  * `IndexDetails.tsx`'s (unit A4a) pure, non-JSX helper logic — split into

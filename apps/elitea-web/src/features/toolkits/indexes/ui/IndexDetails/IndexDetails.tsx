@@ -7,13 +7,7 @@ import type { SxProps, Theme } from '@mui/material/styles';
 import { t } from '@/shared/i18n';
 import { ToolListError } from '@/shared/ui/ToolListError';
 
-import {
-  EditViewTabsEnum,
-  IndexStatuses,
-  IndexViewsEnum,
-  IndexesToolsEnum,
-  RUNNABLE_INDEX_STATUSES,
-} from '../../lib/constants/indexDetails.constants';
+import { EditViewTabsEnum, IndexStatuses, IndexViewsEnum, IndexesToolsEnum } from '../../lib/constants/indexDetails.constants';
 import { adjustIndexDataSchema, getMockToolkitIndexConversation, type IndexChatMessage } from '../../lib/helpers/indexChat.helpers';
 import { toDisplayString } from '../../lib/helpers/displayString.local';
 import { useIndexNameValidation } from '../../lib/hooks/useIndexNameValidation.hooks';
@@ -28,7 +22,15 @@ import type { IndexConfigToolsConfig, ToolFormFieldProps } from './IndexConfig';
 import { IndexNameWrapper } from './IndexNameWrapper';
 import { IndexViewToggler } from './IndexViewToggler';
 import { IndexViews } from './IndexViews';
-import { computeDefaultConfigValues, computeIndexConfigWrapperSx, validateToolkitForm, useIndexDetailsTabSync, TOOLKIT_CHAT_MODE_CREATE_INDEX } from './IndexDetails.helpers';
+import {
+  computeDefaultConfigValues,
+  computeDisableHistoryTabReason,
+  computeDisableRunTabReason,
+  computeIndexConfigWrapperSx,
+  validateToolkitForm,
+  useIndexDetailsTabSync,
+  TOOLKIT_CHAT_MODE_CREATE_INDEX,
+} from './IndexDetails.helpers';
 import type { SelectedToolSchemaRead, UseToolkitChatParams, UseToolkitChatResult } from './IndexDetails.helpers';
 
 /** Re-exported for backward compatibility — `IndexesContainer.test.tsx`/`IndexDetails.test.tsx` (and any other consumer) import these two types from this module path; the underlying definitions moved to `IndexDetails.helpers.ts` (see that file's own doc comment) purely to keep this file under the 400-line budget. */
@@ -145,28 +147,8 @@ export function IndexDetails(props: IndexDetailsProps): ReactNode {
   const [toolInputVariables, setToolInputVariables] = useState<Record<string, unknown>>({});
   const { clearIndexNameError, indexNameError, updateIndexNameError, isIndexNameValid } = useIndexNameValidation();
 
-  const disableRunTabReason = useMemo(() => {
-    const state = index.metadata['state'];
-    if (!state) return 'No index selected';
-
-    const notSucceed = !RUNNABLE_INDEX_STATUSES.includes(toDisplayString(state));
-    const runnableTools: readonly string[] = [IndexesToolsEnum.searchIndexData, IndexesToolsEnum.stepbackSearchIndex, IndexesToolsEnum.stepbackSummaryIndex];
-    const notSelectedTools = !selectedIndexTools.some((st) => runnableTools.includes(st));
-
-    if (notSucceed) return 'Not valid index state for running tools';
-    if (notSelectedTools) return 'No run tools are selected in the toolkit';
-    return null;
-  }, [index, selectedIndexTools]);
-
-  const disableHistoryTabReason = useMemo(() => {
-    const state = index.metadata['state'];
-    if (!state) return 'No index selected';
-
-    const historyLength = (index.metadata['history'] as readonly unknown[] | undefined)?.length ?? 0;
-    if (state === IndexStatuses.progress) return 'Indexing in progress. History is unavailable until indexing is complete';
-    if (historyLength === 0) return 'No history items available for this index';
-    return null;
-  }, [index]);
+  const disableRunTabReason = useMemo(() => computeDisableRunTabReason(index, selectedIndexTools), [index, selectedIndexTools]);
+  const disableHistoryTabReason = useMemo(() => computeDisableHistoryTabReason(index), [index]);
 
   const defaultActiveEditTab = disableRunTabReason ? EditViewTabsEnum.configuration : EditViewTabsEnum.run;
   const defaultRunTool = isCreateView ? IndexesToolsEnum.indexData : IndexesToolsEnum.searchIndexData;
@@ -363,6 +345,9 @@ export function IndexDetails(props: IndexDetailsProps): ReactNode {
                 initializeDefaultConfigValues={initializeDefaultConfigValues}
                 toolInputVariables={toolInputVariables}
                 onChangeInputVariables={onChangeInputVariables}
+                // Sibling of the `isCreateView` branch above (both omitted, this button was permanently disabled for every EXISTING index).
+                isValidForm={isValidForm}
+                isRunningTool={isRunning}
                 index={index}
                 ToolFormField={ToolFormField}
               />
