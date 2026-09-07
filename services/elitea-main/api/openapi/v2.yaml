@@ -2245,7 +2245,7 @@ components:
     Application:
       type: object
       required: [id, name, created_at, updated_at, owner_id, is_forked, meta,
-                 has_interrupt]
+                 has_interrupt, tags]
       properties:
         id: { type: string }
         project_id: { type: string }
@@ -2256,6 +2256,12 @@ components:
         tags:
           type: array
           items: { type: string }
+          description: >
+            Tag NAMES, deduplicated and sorted, taken from every version of
+            the application (repos/applications.go List, tagsExpr). ALWAYS
+            present: an application with no tags carries an empty array, not
+            null and not an absent key (issue 841). Only the LIST response
+            fills it; Get and Create build their own maps.
         folder_id: { type: string }
         status: { type: string }
         metadata:
@@ -2292,11 +2298,12 @@ components:
         has_interrupt: { type: boolean }
         agent_type: { type: string }
       description: >
-        NOTE(W2): internal/domain/applications/types.go:11-31 — required set =
-        json tags WITHOUT omitempty (id, name, created_at, owner_id, is_forked,
-        meta, has_interrupt) PLUS updated_at, whose omitempty is ineffective
-        on a time.Time (always marshaled; zero sentinel when unscanned).
-        Every other omitempty field is optional (absent when zero-valued).
+        NOTE(W2): internal/domain/applications/types.go:15-50 — required set =
+        json tags WITHOUT omitempty (id, name, tags, created_at, owner_id,
+        is_forked, meta, has_interrupt) PLUS updated_at, whose omitempty is
+        ineffective on a time.Time (always marshaled; zero sentinel when
+        unscanned). Every other omitempty field is optional (absent when
+        zero-valued).
 
     ApplicationList:
       type: object
@@ -10718,8 +10725,8 @@ paths:
       operationId: listApplications
       summary: List applications for a project
       description: |
-        NOTE(W2): internal/api/v2/applications/handler.go:71-107 — the
-        response is the domain ListResponse (types.go:86-92). The handler
+        NOTE(W2): internal/api/v2/applications/handler.go:83-119 — the
+        response is the domain ListResponse (types.go:105-111). The handler
         also reads query/search, tags, folder_id, agents_type.
       tags: [applications]
       parameters:
@@ -10732,6 +10739,11 @@ paths:
         - name: tags
           in: query
           schema: { type: string }
+          description: >
+            Comma-separated tag filter. Each entry matches a tag NAME or a tag
+            ID. The entries combine with AND: a listed application carries
+            every named tag on one of its versions. Blank entries are ignored
+            (repos/applications.go splitTagFilter).
         - name: folder_id
           in: query
           schema: { type: string }

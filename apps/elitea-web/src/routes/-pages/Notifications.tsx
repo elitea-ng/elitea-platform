@@ -63,12 +63,14 @@ import type { SxProps, Theme } from '@mui/material/styles';
 
 import { useRouteContext } from '@tanstack/react-router';
 
+import { DeleteEntityModal } from '@/shared/ui/DeleteEntityModal';
 import { DrawerPageHeader } from '@/shared/ui/settings/DrawerPageHeader';
 import { t } from '@/shared/i18n';
 import { RoutePending } from '@/routes/-ui/RouteStatus';
 import { hasUnreadAmongSelected } from '@/entities/notification';
 import { NotificationsListBody } from '@/features/notifications/ui/NotificationsListBody';
 import { NotificationsTable } from '@/features/notifications/ui/NotificationsTable';
+import { NotificationsToast, type NotificationToastKind } from '@/features/notifications/ui/NotificationsToast';
 import {
   NOTIFICATION_DEFAULT_PAGE_SIZE,
   NOTIFICATION_DEFAULT_SORT,
@@ -145,6 +147,8 @@ export function NotificationsPage() {
   const [pageSize, setPageSize] = useState<number>(NOTIFICATION_DEFAULT_PAGE_SIZE);
   const [sort, setSort] = useState<NotificationSort>(NOTIFICATION_DEFAULT_SORT);
   const [search, setSearch] = useState('');
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [toast, setToast] = useState<NotificationToastKind>();
   const debouncedSearch = useDebouncedValue(search, SEARCH_DEBOUNCE_MS);
 
   const { data, isFetching, isError, error } = useNotificationsList(
@@ -174,23 +178,48 @@ export function NotificationsPage() {
     setSelectedIds((prev) => (prev.size === rows.length ? new Set() : new Set(rows.map((r) => r.id))));
   }, [rows]);
 
-  const handleDeleteSelected = useCallback(() => {
+  /*
+   * A bulk delete asks first, and BOTH bulk actions report their result.
+   *
+   * The reference confirms the delete through `DeleteEntityButton`
+   * (`NotificationTableToolbar.jsx:63-73`, `shouldRequestInputName={false}`)
+   * and toasts every outcome of both actions
+   * (`NotificationTable.jsx:145-185`). This page deleted on the first click
+   * and dropped every result: a refused mutation looked exactly like a
+   * successful one, because the selection was cleared before the request
+   * even resolved (issue 841).
+   *
+   * The selection is cleared in `onSuccess` for the same reason. A failed
+   * delete that clears the selection tells the reader the rows are gone.
+   */
+  const handleConfirmDelete = useCallback(() => {
     if (selectedIds.size === 0 || !personalProjectId) return;
-    bulkDelete.mutate({
-      projectId: personalProjectId,
-      ids: Array.from(selectedIds),
-    });
-    setSelectedIds(new Set());
+    setDeleteOpen(false);
+    bulkDelete.mutate(
+      { projectId: personalProjectId, ids: Array.from(selectedIds) },
+      {
+        onSuccess: () => {
+          setSelectedIds(new Set());
+          setToast('deleted');
+        },
+        onError: () => setToast('error'),
+      },
+    );
   }, [selectedIds, personalProjectId, bulkDelete]);
 
   const handleMarkToggle = useCallback(() => {
     if (selectedIds.size === 0 || !personalProjectId) return;
-    bulkMarkSeen.mutate({
-      projectId: personalProjectId,
-      ids: Array.from(selectedIds),
-      isSeen: shouldMarkSelectionAsRead,
-    });
-    setSelectedIds(new Set());
+    const markAsRead = shouldMarkSelectionAsRead;
+    bulkMarkSeen.mutate(
+      { projectId: personalProjectId, ids: Array.from(selectedIds), isSeen: markAsRead },
+      {
+        onSuccess: () => {
+          setSelectedIds(new Set());
+          setToast(markAsRead ? 'read' : 'unread');
+        },
+        onError: () => setToast('error'),
+      },
+    );
   }, [selectedIds, personalProjectId, bulkMarkSeen, shouldMarkSelectionAsRead]);
 
   const handleSearchChange = useCallback((value: string) => {
@@ -250,6 +279,7 @@ export function NotificationsPage() {
           <Box sx={styles.actions}>
             <Button
               variant="secondary"
+              data-testid="notification-mark-toggle-button"
               disabled={selectedIds.size === 0}
               onClick={handleMarkToggle}
             >
@@ -258,8 +288,9 @@ export function NotificationsPage() {
             <Button
               variant="secondary"
               color="alarm"
+              data-testid="notification-delete-button"
               disabled={selectedIds.size === 0}
-              onClick={handleDeleteSelected}
+              onClick={() => setDeleteOpen(true)}
             >
               {t('routes.settings.notifications.deleteSelected', 'Delete')}
             </Button>
@@ -299,6 +330,19 @@ export function NotificationsPage() {
           />
         )}
       </Box>
+      <DeleteEntityModal
+        open={deleteOpen}
+        onClose={() => setDeleteOpen(false)}
+        onConfirm={handleConfirmDelete}
+        confirming={bulkDelete.isPending}
+        shouldRequestInputName={false}
+        name={t('routes.settings.notifications.deleteEntityName', 'selected notifications')}
+        copy={{ title: t('routes.settings.notifications.deleteTitle', 'Delete selected notifications') }}
+      />
+      <NotificationsToast
+        kind={toast}
+        onClose={() => setToast(undefined)}
+      />
     </Paper>
   );
 }

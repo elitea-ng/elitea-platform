@@ -249,4 +249,14 @@ describe('Toolkits', () => {
     expect(await screen.findByText('MCPs')).toBeInTheDocument();
     expect(screen.getByTestId('mcps-list-panel')).toBeInTheDocument();
   });
+
+  /** COMPOSITION ROOT — see `pages/agents/Applications.test.tsx` (issue 841). */
+  it('renders its one tab inside the shared page header, on both surfaces', async () => {
+    server.use(getListToolkitInstancesMockHandler({ rows: [], total: 0 }));
+    renderToolkitsPage(<Toolkits />, '/toolkits/all', 'proj-1');
+
+    const header = await screen.findByTestId('page-header');
+    expect(header).toContainElement(screen.getByTestId('toolkits-tab-all'));
+    expect(screen.getByRole('tablist', { name: 'Toolkits' })).toBeInTheDocument();
+  });
 });

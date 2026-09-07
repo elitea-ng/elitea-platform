@@ -14,10 +14,10 @@
 import type { ReactNode } from 'react';
 
 import Box from '@mui/material/Box';
-import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
 import { t } from '@/shared/i18n';
+import { PageHeader } from '@/widgets/page-header';
 
 import { CredentialsList } from './CredentialsList';
 
@@ -31,7 +31,12 @@ export interface CredentialsProps {
 export function Credentials({ projectId, onSelectCredential, onCreateNew }: CredentialsProps): ReactNode {
   return (
     <Box sx={containerSx}>
-      <Typography variant="headingLarge">{t('credentials.page.title', 'Credentials')}</Typography>
+      <PageHeader
+        title={t('credentials.page.title', 'Credentials')}
+        titleComponent="h1"
+        showBorder={false}
+        sx={headerSx}
+      />
       <CredentialsList
         projectId={projectId}
         onSelectCredential={onSelectCredential}
@@ -42,3 +47,5 @@ export function Credentials({ projectId, onSelectCredential, onCreateNew }: Cred
 }
 
 const containerSx: SxProps<Theme> = (theme: Theme) => ({ display: 'flex', flexDirection: 'column', gap: theme.spacing(2), padding: theme.spacing(3) });
+/** The page already pads its content column, so the header keeps no padding of its own. */
+const headerSx: SxProps<Theme> = { padding: 0 };

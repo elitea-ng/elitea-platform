@@ -28,6 +28,7 @@ const APPLICATION_LIST: ApplicationList = {
       is_forked: false,
       meta: null,
       has_interrupt: false,
+      tags: [],
       status: 'published',
     },
     {
@@ -39,6 +40,7 @@ const APPLICATION_LIST: ApplicationList = {
       is_forked: false,
       meta: null,
       has_interrupt: false,
+      tags: [],
       status: 'draft',
     },
   ],

@@ -7,9 +7,8 @@ import { useNavigate, useParams } from '@tanstack/react-router';
 
 import { EntityImportButton, useEntityImport } from '@/features/agent-lifecycle';
 import { t } from '@/shared/i18n';
-import { BaseTab } from '@/shared/ui/BaseTab';
-import { BaseTabs } from '@/shared/ui/BaseTabs';
 import { EntityListRail } from '@/shared/ui/EntityRail';
+import { PageHeader } from '@/widgets/page-header';
 import { useSidebarCollapsedStore } from '@/widgets/sidebar';
 
 import { isPublicPipelinesProject } from './lib/isPublicPipelinesProject';
@@ -24,16 +23,6 @@ const pageSx: SxProps<Theme> = {
   flexDirection: 'column',
 };
 
-const tabBarSx: SxProps<Theme> = {
-  flexShrink: 0,
-  borderBottom: 1,
-  borderColor: 'divider',
-  padding: '0 1.5rem',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  gap: '1rem',
-};
 
 const tabPanelSx: SxProps<Theme> = {
   flex: 1,
@@ -121,38 +110,37 @@ export function Pipelines(): ReactNode {
 
   return (
     <Box sx={pageSx}>
-      <Box sx={tabBarSx}>
-        <BaseTabs
-          value={selectedIndex === -1 ? false : selectedIndex}
-          onChange={handleChangeTab}
-          aria-label={t('pages.pipelines.pipelines.tabsAriaLabel', 'Pipelines')}
-        >
-          {visibleTabs.map((tab) => (
-            <BaseTab
-              key={tab.value}
-              label={tab.count === undefined ? tab.label : `${tab.label} (${tab.count})`}
-              data-testid={`pipelines-tab-${tab.value}`}
-            />
-          ))}
-        </BaseTabs>
-        {/*
+      <PageHeader
+        tabs={{
+          items: visibleTabs.map((tab) => ({
+            value: tab.value,
+            label: tab.count === undefined ? tab.label : `${tab.label} (${tab.count})`,
+          })),
+          selectedIndex: selectedIndex === -1 ? false : selectedIndex,
+          onChange: handleChangeTab,
+          ariaLabel: t('pages.pipelines.pipelines.tabsAriaLabel', 'Pipelines'),
+          testIdPrefix: 'pipelines-tab',
+        }}
+        /*
          * Import (validation-matrix gap 12). Production carries this control
          * on the Agents, Pipelines and Skills list headers; this app had it on
          * Skills only, so an agent could be exported and never brought back —
          * `POST /elitea_core/import_wizard/prompt_lib/{project}` was generated
          * and had `"usedBy": []`. Hidden for the PUBLIC project's lists, which
          * are read-only catalogues, matching the create button's own rule.
-         */}
-        {!isPublicProject && (
-          <EntityImportButton
-            testIdPrefix="pipelines"
-            isImporting={entityImport.run.isPending}
-            onImport={async (document) => {
-              await entityImport.run.mutateAsync(document);
-            }}
-          />
-        )}
-      </Box>
+         */
+        slots={{
+          actions: isPublicProject ? undefined : (
+            <EntityImportButton
+              testIdPrefix="pipelines"
+              isImporting={entityImport.run.isPending}
+              onImport={async (document) => {
+                await entityImport.run.mutateAsync(document);
+              }}
+            />
+          ),
+        }}
+      />
       <Box
         sx={tabPanelSx}
         role="tabpanel"

@@ -607,7 +607,7 @@
   "entities.projectContext.content.title": "Project Context",
   "entities.projectContext.enableToggleCard.description": "Project-specific background information that the AI uses to generate more accurate and relevant responses, tailored to your workflows, data, and goals.",
   "entities.projectContext.enableToggleCard.title": "Project Context",
-  "entities.projectContext.generateButton.label": "Generate with AI",
+  "entities.projectContext.generateButton.label": "Build with AI",
   "entities.projectContext.generateModal.apply": "Apply",
   "entities.projectContext.generateModal.backToPrompt": "Back to prompt",
   "entities.projectContext.generateModal.cancel": "Cancel",
@@ -4007,5 +4007,12 @@
   "pages.admin.tasks.tableLabel": "Background jobs",
   "pages.admin.tasks.title": "Tasks",
   "pages.admin.tasks.truncated": "Only the most recent jobs are listed. Narrow the filters to reach older ones.",
-  "pages.admin.tasks.unavailable": "This deployment cannot report its background jobs."
+  "pages.admin.tasks.unavailable": "This deployment cannot report its background jobs.",
+  "routes.settings.notifications.deleteEntityName": "selected notifications",
+  "routes.settings.notifications.deleteTitle": "Delete selected notifications",
+  "routes.settings.notifications.toastDeleted": "The selected notifications have been successfully deleted.",
+  "routes.settings.notifications.toastError": "The action could not be completed.",
+  "routes.settings.notifications.toastRead": "Notifications marked as read",
+  "routes.settings.notifications.toastUnread": "Notifications marked as unread",
+  "entities.projectContext.content.copyTitle": "Copy to clipboard"
 }
