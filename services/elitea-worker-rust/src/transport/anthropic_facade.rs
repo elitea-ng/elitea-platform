@@ -700,6 +700,17 @@ impl AnthropicStreamState {
             ContentBlock::ToolUse(tool)
                 if valid_tool_call_id(&tool.id)
                     && valid_tool_name(&tool.name)
+                    && !self.allowed_tools.contains(&tool.name) =>
+            {
+                return Err(model_error(
+                    ErrorCategory::Unsupported,
+                    super::model_facade::TOOL_NOT_ADMITTED_CODE,
+                    "the model requested a tool outside the admitted toolset",
+                ));
+            }
+            ContentBlock::ToolUse(tool)
+                if valid_tool_call_id(&tool.id)
+                    && valid_tool_name(&tool.name)
                     && self.allowed_tools.contains(&tool.name)
                     && tool
                         .input

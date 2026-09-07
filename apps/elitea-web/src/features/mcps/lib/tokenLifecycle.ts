@@ -30,6 +30,7 @@ import {
 import { clearRefreshPending, configureRefreshTrigger, markRefreshPending } from './tokenRefresh';
 import { generateSessionId } from './crypto';
 import type { StoredMcpToken } from './types';
+import { stillOwnsToken, withRefreshOwnership } from './refreshOwnership';
 
 interface ResolvedCredentials {
   clientId: string | null;
@@ -84,6 +85,11 @@ function applyStoredCredentialFallback(tokenInfo: StoredMcpToken, credentials: R
 
 /** Saved credentials -> toolkit API fallback -> stored token metadata, in that order (baseline: `mcpAuth.helpers.js`'s proactive-refresh credential resolution). */
 async function resolveRefreshCredentials(serverUrl: string, tokenInfo: StoredMcpToken): Promise<ResolvedCredentials> {
+  if (tokenInfo.used_dcr) return {
+    clientId: tokenInfo.client_id ?? null,
+    clientSecret: tokenInfo.client_secret ?? null,
+    tokenEndpoint: tokenInfo.token_endpoint ?? null,
+  };
   const base = resolveCredentials(serverUrl, tokenInfo);
   const withToolkitFallback = await applyToolkitCredentialFallback(tokenInfo, base);
   return applyStoredCredentialFallback(tokenInfo, withToolkitFallback);
@@ -91,7 +97,7 @@ async function resolveRefreshCredentials(serverUrl: string, tokenInfo: StoredMcp
 
 /** Applies a successful refresh response to storage — a no-op when the response carried no `access_token` (baseline treats that as a silent failure, not an error). */
 function applyRefreshedTokenResult(serverUrl: string, tokenInfo: StoredMcpToken, credentials: ResolvedCredentials, tokenJson: McpOAuthTokenResponse): void {
-  if (!tokenJson.access_token) return;
+  if (!tokenJson.access_token || !stillOwnsToken(serverUrl, tokenInfo)) return;
 
   const canonicalServer = canonicalizeServerUrl(serverUrl);
   const sessionId = tokenJson.session_id ?? tokenInfo.session_id ?? generateSessionId();
@@ -104,44 +110,35 @@ function applyRefreshedTokenResult(serverUrl: string, tokenInfo: StoredMcpToken,
     tokenJson.refresh_token ?? tokenInfo.refresh_token,
     { token_endpoint: credentials.tokenEndpoint ?? undefined, client_id: credentials.clientId ?? undefined, client_secret: credentials.clientSecret ?? undefined },
   );
-  // eslint-disable-next-line no-console -- parity: baseline's success trace.
-  console.debug(`Proactively refreshed MCP token for ${serverUrl}`);
 }
 
-/** Issues the actual refresh request once credentials resolved a usable `tokenEndpoint`; a no-op (logged) otherwise, matching the baseline's give-up-rather-than-guess behaviour. */
+/** Refresh only at the configured endpoint. Keep one active grant per credential key. */
 async function performProactiveRefresh(serverUrl: string, tokenInfo: StoredMcpToken, credentials: ResolvedCredentials): Promise<void> {
-  if (!credentials.tokenEndpoint) {
-    // eslint-disable-next-line no-console -- parity: baseline logs and gives up rather than guessing a token endpoint.
-    console.debug(`Skipping proactive refresh for ${serverUrl}: no token_endpoint`);
-    return;
-  }
+  if (!credentials.tokenEndpoint) return;
 
-  const tokenJson = await refreshMcpOAuthToken({
-    projectId: tokenInfo.project_id ?? 1,
-    refresh_token: tokenInfo.refresh_token as string,
-    token_endpoint: credentials.tokenEndpoint,
-    client_id: credentials.clientId ?? undefined,
-    client_secret: credentials.clientSecret ?? undefined,
-    toolkit_id: tokenInfo.toolkit_id,
-    // Same requirement as `oauthFlow.ts`'s initial exchange (see that
-    // file's own doc comment for the evidence chain) — a proactive refresh
-    // of a DCR-issued token must also tell the backend proxy not to load a
-    // DB-configured `client_secret` for it, on every grant, not just the
-    // first one.
-    used_dcr: tokenInfo.used_dcr || undefined,
+  await withRefreshOwnership(serverUrl, async () => {
+    requireCurrentAuthorization(serverUrl, tokenInfo);
+    const tokenJson = await refreshMcpOAuthToken({
+      projectId: tokenInfo.project_id ?? 1,
+      refresh_token: tokenInfo.refresh_token as string,
+      token_endpoint: credentials.tokenEndpoint ?? undefined,
+      client_id: credentials.clientId ?? undefined,
+      client_secret: credentials.clientSecret ?? undefined,
+      toolkit_id: tokenInfo.toolkit_id,
+      // DCR credentials belong to this grant, not to the stored toolkit client.
+      used_dcr: tokenInfo.used_dcr || undefined,
+    });
+
+    applyRefreshedTokenResult(serverUrl, tokenInfo, credentials, tokenJson);
+    return tokenJson;
   });
-
-  applyRefreshedTokenResult(serverUrl, tokenInfo, credentials, tokenJson);
 }
 
 /**
- * Fire-and-forget proactive refresh for a near-expiry token — resolves
- * credentials (saved -> toolkit API fallback -> stored token metadata),
- * exchanges the refresh_token, and persists the result. Never throws to
- * its caller (best-effort, matches baseline `mcpAuth.helpers.js`'s queue
- * processor, which swallows this function's rejections).
+ * Refresh stored credentials without discarding a still-valid token on transient failure.
+ * Execution callers await completion. The background queue can ignore the returned promise.
  */
-export function triggerProactiveRefresh(serverUrl: string): void {
+export async function triggerProactiveRefresh(serverUrl: string): Promise<void> {
   markRefreshPending(serverUrl);
 
   const tokenInfo = getTokenInfo(serverUrl);
@@ -150,20 +147,17 @@ export function triggerProactiveRefresh(serverUrl: string): void {
     return;
   }
 
-  void (async () => {
-    try {
-      const credentials = await resolveRefreshCredentials(serverUrl, tokenInfo);
-      await performProactiveRefresh(serverUrl, tokenInfo, credentials);
-    } catch (error) {
-      // eslint-disable-next-line no-console -- parity: proactive refresh failure does not log the user out (token may still be valid).
-      console.warn(`Proactive MCP token refresh error for ${serverUrl}:`, error instanceof Error ? error.message : error);
-    } finally {
-      clearRefreshPending(serverUrl);
-    }
-  })();
+  try {
+    const credentials = await resolveRefreshCredentials(serverUrl, tokenInfo);
+    await performProactiveRefresh(serverUrl, tokenInfo, credentials);
+  } catch {
+    // Keep a still-valid token on transient failure. Never log provider errors or credential keys.
+  } finally {
+    clearRefreshPending(serverUrl);
+  }
 }
 
-configureRefreshTrigger(triggerProactiveRefresh);
+configureRefreshTrigger((key) => { void triggerProactiveRefresh(key); });
 
 export interface RefreshAccessTokenOptions {
   serverUrl: string;
@@ -187,8 +181,20 @@ function toWireFlag(used: boolean | undefined): boolean | undefined {
   return used || undefined;
 }
 
+function clearFailedRefresh(serverUrl: string, token: StoredMcpToken | null): void {
+  if (stillOwnsToken(serverUrl, token)) logout(serverUrl);
+}
+
+function requireCurrentAuthorization(serverUrl: string, token: StoredMcpToken | null): void {
+  if (!stillOwnsToken(serverUrl, token)) throw new Error('Authorization changed during token refresh');
+}
+
 /** User-visible (awaited) refresh — clears the stored token on failure (it may have been revoked), unlike the silent proactive path. */
-export async function refreshAccessToken(options: RefreshAccessTokenOptions): Promise<McpOAuthTokenResult> {
+export function refreshAccessToken(options: RefreshAccessTokenOptions): Promise<McpOAuthTokenResult> {
+  return withRefreshOwnership(options.serverUrl, () => refreshOwnedAccessToken(options));
+}
+
+async function refreshOwnedAccessToken(options: RefreshAccessTokenOptions): Promise<McpOAuthTokenResult> {
   const { serverUrl, tokenEndpoint, clientId, clientSecret, projectId, toolkitId } = options;
 
   const refreshToken = getRefreshToken(serverUrl);
@@ -214,13 +220,15 @@ export async function refreshAccessToken(options: RefreshAccessTokenOptions): Pr
       used_dcr: toWireFlag(existingTokenInfo?.used_dcr),
     });
   } catch (error) {
-    logout(serverUrl);
+    clearFailedRefresh(serverUrl, existingTokenInfo);
     throw error instanceof Error ? error : new Error('Token refresh failed');
   }
 
   if (!tokenJson.access_token) {
     throw new Error('No access token received from token refresh');
   }
+
+  requireCurrentAuthorization(serverUrl, existingTokenInfo);
 
   const sessionId = tokenJson.session_id ?? existingTokenInfo?.session_id ?? generateSessionId();
 
@@ -255,10 +263,8 @@ export async function getValidAccessToken(options: RefreshAccessTokenOptions): P
   if (needsRefresh(serverUrl) && tokenEndpoint) {
     try {
       const result = await refreshAccessToken(options);
-      return result.access_token;
-    } catch (error) {
-      // eslint-disable-next-line no-console -- parity: baseline logs and degrades to the existing token rather than surfacing.
-      console.warn('Failed to refresh MCP OAuth token:', error instanceof Error ? error.message : error);
+      return getAccessToken(serverUrl) === result.access_token ? result.access_token : getAccessToken(serverUrl);
+    } catch {
       return getAccessToken(serverUrl);
     }
   }

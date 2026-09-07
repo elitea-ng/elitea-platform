@@ -327,6 +327,7 @@ where
             let (run, error) = (*failure).into_parts();
             tracing::warn!(
                 error_code = error.code().as_str(),
+                upstream_error_code = error.upstream_code(),
                 "native agent runtime failed to start"
             );
             return Box::pin(finalize(
@@ -573,6 +574,7 @@ where
                         tracing::warn!(
                             error = %error,
                             error_code = error.code().as_str(),
+                            upstream_error_code = error.upstream_code(),
                             "native agent event stream failed"
                         );
                         return NativeStreamOutcome::Failure(

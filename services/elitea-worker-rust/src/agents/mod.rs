@@ -15,6 +15,7 @@ pub mod protocol;
 mod replay_history;
 pub mod request;
 pub mod result;
+mod runner_history;
 pub(crate) mod runtime;
 pub(crate) mod sensitive_tools;
 pub(crate) mod session;

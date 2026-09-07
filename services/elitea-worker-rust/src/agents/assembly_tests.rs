@@ -307,8 +307,8 @@ fn every_unimplemented_effect_surface_is_rejected_before_redemption() {
             1 => {
                 request
                     .payload
-                    .mcp_tokens
-                    .insert("server".to_owned(), json!("secret-reference"));
+                    .user_declined_mcp_servers
+                    .push(json!({"server_url": "https://issuer.example"}));
             }
             2 => request.payload.hitl_resume = true,
             3 => request.payload.invoked_skills.push(json!("review")),
@@ -741,6 +741,40 @@ fn regeneration_is_admitted_as_a_durable_session_rebuild() {
         error.code(),
         NativeAgentAssemblyErrorCode::UnsupportedCapability
     );
+}
+
+#[test]
+fn session_tokens_do_not_turn_fresh_or_regenerated_agents_into_guard_resumes() {
+    for kind in [AgentExecutionKind::Adhoc, AgentExecutionKind::Application] {
+        for regenerate in [false, true] {
+            let mut request = ordinary_request(kind);
+            request.payload.is_regenerate = regenerate;
+            request.payload.mcp_tokens.insert(
+                "credential:https://issuer.example".to_owned(),
+                json!({"access_token": "test-session-token"}),
+            );
+            let admitted = AuthorizedNativeAssembly::new(
+                &request,
+                test_runtime_context_authority(),
+                AuthorizedNativeCommandBinding::fixture(),
+            )
+            .admit_llm_agent(&empty_tool_policy())
+            .expect("session credentials do not require an interrupt");
+            assert_eq!(admitted.is_resume(), regenerate);
+        }
+    }
+}
+
+#[test]
+fn output_continuation_cannot_add_session_authority() {
+    let mut request = ordinary_request(AgentExecutionKind::Adhoc);
+    request.payload.should_continue = true;
+    request.payload.truncated_content = Some("partial".to_owned());
+    request.payload.mcp_tokens.insert(
+        "credential:https://issuer.example".to_owned(),
+        json!({"access_token":"test-token"}),
+    );
+    assert!(OrdinaryNoToolProfile::validate_output_continuation(&request).is_err());
 }
 
 /// The authored step limit lives on the version AND on the input, and this

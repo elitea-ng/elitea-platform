@@ -597,7 +597,6 @@ fn has_continuation(request: &AgentExecutionRequest) -> bool {
         || payload.hitl_action.is_some()
         || payload.hitl_value.is_some()
         || !payload.hitl_decisions.is_empty()
-        || !payload.mcp_tokens.is_empty()
         || !payload.ignored_mcp_servers.is_empty()
         || !payload.user_declined_mcp_servers.is_empty()
 }
@@ -746,19 +745,20 @@ impl NativeAgentRuntimeErrorCode {
 
 /// Redacted ADK execution failure.
 ///
-/// The upstream value is retained for future typed classification but is not
+/// The upstream value is retained for typed classification but is not
 /// exposed through `Debug`, `Display`, or `Error::source`: provider, tool, and
-/// request data can occur inside an ADK error chain.
+/// request data can occur inside an ADK error chain. Only its static code is
+/// available to the lifecycle's operator log.
 pub(crate) struct NativeAgentRuntimeError {
     code: NativeAgentRuntimeErrorCode,
-    _upstream: Option<Box<AdkError>>,
+    upstream: Option<Box<AdkError>>,
 }
 
 impl NativeAgentRuntimeError {
     fn invalid_state() -> Self {
         Self {
             code: NativeAgentRuntimeErrorCode::InvalidState,
-            _upstream: None,
+            upstream: None,
         }
     }
 
@@ -769,27 +769,31 @@ impl NativeAgentRuntimeError {
     fn start_failed(error: AdkError) -> Self {
         Self {
             code: NativeAgentRuntimeErrorCode::StartFailed,
-            _upstream: Some(Box::new(error)),
+            upstream: Some(Box::new(error)),
         }
     }
 
     fn start_deferred() -> Self {
         Self {
             code: NativeAgentRuntimeErrorCode::StartFailed,
-            _upstream: None,
+            upstream: None,
         }
     }
 
     fn event_failed(error: AdkError) -> Self {
         Self {
             code: NativeAgentRuntimeErrorCode::EventFailed,
-            _upstream: Some(Box::new(error)),
+            upstream: Some(Box::new(error)),
         }
     }
 
     #[must_use]
     pub(crate) const fn code(&self) -> NativeAgentRuntimeErrorCode {
         self.code
+    }
+
+    pub(crate) fn upstream_code(&self) -> Option<&'static str> {
+        self.upstream.as_ref().map(|error| error.code)
     }
 }
 
@@ -990,5 +994,37 @@ impl Drop for NativeAgentRun {
                 self.runner
                     .interrupt_identity(&self.app_name, &self.user_id, &self.session_id);
         }
+    }
+}
+
+#[cfg(test)]
+mod error_redaction_tests {
+    use super::*;
+
+    #[test]
+    fn runtime_failure_exposes_only_static_upstream_code() {
+        for wrap in [
+            NativeAgentRuntimeError::start_failed,
+            NativeAgentRuntimeError::event_failed,
+        ] {
+            let upstream = AdkError::new(
+                adk_rust::ErrorComponent::Model,
+                adk_rust::ErrorCategory::Unavailable,
+                "model_gateway.provider_error",
+                "private provider body with credentials",
+            );
+            let error = wrap(upstream);
+            assert_eq!(error.upstream_code(), Some("model_gateway.provider_error"));
+            assert!(!format!("{error} {error:?}").contains("private provider"));
+            assert!(std::error::Error::source(&error).is_none());
+        }
+        assert_eq!(
+            NativeAgentRuntimeError::invalid_state().upstream_code(),
+            None
+        );
+        assert_eq!(
+            NativeAgentRuntimeError::start_deferred().upstream_code(),
+            None
+        );
     }
 }

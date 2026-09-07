@@ -51,7 +51,7 @@ pub(crate) fn bind_authorization_model_tools(
         Arc::new(AuthorizationTool {
             name: name.clone(),
             description: format!(
-                "Authorize the '{}' toolkit. Call this tool when its capabilities are needed. Its protected operations are unavailable until authorization succeeds.",
+                "Authorize the '{}' toolkit. Call this tool when the user's current task needs this toolkit. Do not ask the user to name this internal tool. A Skip decision from an earlier user turn does not apply to the current turn. Protected operations are unavailable until authorization succeeds.",
                 requirement.toolkit_name()
             ),
             requirement: requirement.clone(),

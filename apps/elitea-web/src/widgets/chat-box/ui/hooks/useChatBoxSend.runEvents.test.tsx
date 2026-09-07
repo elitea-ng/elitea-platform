@@ -97,6 +97,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  window.sessionStorage.clear();
   registry.restore();
   delete globals['elitea_ui_config'];
   resetConfigForTests();
@@ -104,6 +105,52 @@ afterEach(() => {
 });
 
 describe('useChatBoxSend — the flow editor’s run-event feed', () => {
+  it('awaits session refresh and carries access tokens on start and regeneration', async () => {
+    const tokenKey = 'credential:https://issuer.example';
+    window.sessionStorage.setItem('el.mcp.tokens', JSON.stringify({
+      [tokenKey]: {
+        access_token: 'old-token', refresh_token: 'refresh-token', issued_at: Date.now() - 10000,
+        expires_at: Date.now() - 1, project_id: '7', toolkit_id: '27', client_id: 'client',
+        token_endpoint: 'https://issuer.example/token', session_id: 'session',
+      },
+    }));
+    const order: string[] = [];
+    const bodies: Record<string, unknown>[] = [];
+    server.use(
+      http.post(`${BASE}/elitea_core/mcp_oauth_proxy/7`, () => {
+        order.push('refresh');
+        return HttpResponse.json({ access_token: 'fresh-token', refresh_token: 'rotated-token', expires_in: 3600 });
+      }),
+      http.post(`${BASE}/elitea_core/messages/prompt_lib/7/${CONVERSATION_UUID}`, async ({ request }) => {
+        order.push('start');
+        bodies.push(await request.json() as Record<string, unknown>);
+        return HttpResponse.json({ task_id: 'exec-1', events_url: EVENTS_URL, response_message_id: 'resp-1' });
+      }),
+      http.post(`${BASE}/elitea_core/regenerate/prompt_lib/7/resp-1`, async ({ request }) => {
+        order.push('regenerate');
+        bodies.push(await request.json() as Record<string, unknown>);
+        return HttpResponse.json({ task_id: 'exec-2', events_url: '/api/v2/executions/7/exec-2/events', response_message_id: 'resp-1' });
+      }),
+    );
+    const { api, Probe } = harness();
+    render(withQueryClient(<Probe />));
+    await act(async () => {
+      await api.current?.startStreamedExecution({
+        conversationUuid: CONVERSATION_UUID, payload: { question: 'echo marker', question_id: 'q-1', participant_id: 42 },
+      });
+    });
+    await act(async () => {
+      await api.current?.regenerateStreamedExecution({ messageId: 'resp-1', questionId: 'q-1', question: 'echo marker' });
+    });
+    expect(order).toEqual(['refresh', 'start', 'regenerate']);
+    const expected = { [tokenKey]: { access_token: 'fresh-token', session_id: 'session' } };
+    expect(bodies[0]?.['mcp_tokens']).toEqual(expected);
+    const regenerationPayload = bodies[1]?.['payload'] as Record<string, unknown> | undefined;
+    expect(regenerationPayload?.['mcp_tokens']).toEqual(expected);
+    expect(JSON.stringify(bodies)).not.toContain('refresh-token');
+    expect(JSON.stringify(bodies)).not.toContain('rotated-token');
+  });
+
   it('forwards a graph frame to onAgentEvent and withholds a per-token chunk', async () => {
     const { api, agentEvents, Probe } = harness();
     render(withQueryClient(<Probe />));

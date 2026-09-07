@@ -109,6 +109,7 @@ type CurrentApplicationStartRequest struct {
 	QuestionID          string
 	UserInput           string
 	InteractionUUID     string
+	MCPTokens           json.RawMessage
 	// Attachments carries `payload.attachments` from the start body: the
 	// files the composer uploaded before sending, already split into
 	// (bucket, name) by the route. #606.
@@ -119,7 +120,8 @@ func (request CurrentApplicationStartRequest) Validate() error {
 	if request.ProjectID <= 0 || request.ActorUserID <= 0 || request.TargetParticipantID <= 0 ||
 		!validUUID(request.ConversationUUID) || !validUUID(request.QuestionID) ||
 		!validCurrentAgentText(request.UserInput, maxCurrentAgentUserInputBytes) ||
-		(request.InteractionUUID != "" && !validUUID(request.InteractionUUID)) {
+		(request.InteractionUUID != "" && !validUUID(request.InteractionUUID)) ||
+		!validCurrentMCPTokens(request.MCPTokens) {
 		return ErrInvalidCurrentAgentStart
 	}
 	return nil
@@ -316,7 +318,7 @@ func currentApplicationInput(
 		Llm: llm, ChatHistory: bytes.Clone(target.ChatHistory),
 		UserInput: userInput, ThreadId: &threadID, Tools: []byte(`[]`),
 		Application: application, InternalTools: internalTools,
-		McpTokens: []byte(`{}`), IgnoredMcpServers: []byte(`[]`),
+		McpTokens: currentMCPTokens(request.MCPTokens), IgnoredMcpServers: []byte(`[]`),
 		UserDeclinedMcpServers: []byte(`[]`), HitlDecisions: []byte(`[]`),
 		ExecutionGeneration: &executionGeneration, Meta: []byte(`{}`),
 		ConversationId: &conversationID, ContextSettings: []byte(`{}`),

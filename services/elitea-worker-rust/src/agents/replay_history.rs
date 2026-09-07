@@ -1,8 +1,46 @@
 //! Keep replay control events private and present one call/result pair per ID.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
-use adk_rust::{AdkError, Content, LlmRequest, Part};
+use adk_rust::schema_adapter::SchemaAdapter;
+use adk_rust::{AdkError, Content, Llm, LlmRequest, LlmResponseStream, Part};
+use async_trait::async_trait;
+
+mod recovery;
+
+/// Normalize provider history on every turn, including restored sessions.
+/// Keep this inside replay adapters. They need the original pending batch.
+pub(super) fn provider_model(inner: Arc<dyn Llm>) -> Arc<dyn Llm> {
+    Arc::new(ReplayHistoryModel { inner })
+}
+
+struct ReplayHistoryModel {
+    inner: Arc<dyn Llm>,
+}
+
+#[async_trait]
+impl Llm for ReplayHistoryModel {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    fn schema_adapter(&self) -> &dyn SchemaAdapter {
+        self.inner.schema_adapter()
+    }
+
+    fn uses_interactions_api(&self) -> bool {
+        self.inner.uses_interactions_api()
+    }
+
+    async fn generate_content(
+        &self,
+        request: LlmRequest,
+        stream: bool,
+    ) -> adk_rust::Result<LlmResponseStream> {
+        recovery::generate(Arc::clone(&self.inner), model_history(request)?, stream).await
+    }
+}
 
 /// ADK persists the original call and its exact replay. Providers require one.
 /// Keep the last call occurrence. Never merge changed arguments or repeated results.
@@ -13,6 +51,10 @@ pub(super) fn model_continuation(
     request
         .contents
         .retain(|content| content.role != marker.role || content.parts != marker.parts);
+    model_history(request)
+}
+
+fn model_history(mut request: LlmRequest) -> adk_rust::Result<LlmRequest> {
     let mut calls = HashMap::new();
     let mut results = HashMap::new();
     for (index, content) in request.contents.iter().enumerate() {
@@ -52,9 +94,38 @@ pub(super) fn model_continuation(
             Part::FunctionCall { id: Some(id), .. } => last_calls.get(id) == Some(&index),
             _ => true,
         });
+        for part in &mut content.parts {
+            if let Part::FunctionResponse {
+                function_response, ..
+            } = part
+            {
+                normalize_legacy_skip(&mut function_response.response);
+            }
+        }
     }
     request.contents.retain(|content| !content.parts.is_empty());
     Ok(request)
+}
+
+/// Project the old worker directive without rewriting durable events.
+/// Only the exact retired decision shape matches; ordinary tool data stays intact.
+fn normalize_legacy_skip(response: &mut serde_json::Value) {
+    if response["type"] != "mcp_auth_decision"
+        || response["status"] != "declined"
+        || response["denial_reason"] != "user_declined"
+        || response["next_step"]
+            != "Do not retry this toolkit unless the user explicitly asks to authorize it."
+    {
+        return;
+    }
+    let Some(result) = response.as_object_mut() else {
+        return;
+    };
+    result.remove("auth_context");
+    result.remove("server_url");
+    result.insert("scope".into(), "current_run".into());
+    result.insert("next_step".into(), "use_other_tools_or_report".into());
+    result.insert("message".into(), "The user skipped this toolkit for that run. No protected operation was executed. A later user turn can request this toolkit again through its authorization tool.".into());
 }
 
 fn invalid_replay() -> AdkError {
@@ -144,6 +215,36 @@ mod tests {
             ],
         ] {
             assert!(model_continuation(LlmRequest::new("fixture", contents), &marker).is_err());
+        }
+    }
+
+    #[test]
+    fn old_skip_directive_is_scoped_without_mutating_unrelated_tool_data() {
+        let legacy = json!({
+            "type": "mcp_auth_decision", "status": "declined",
+            "tool_name": "fixture_auth", "denial_reason": "user_declined",
+            "next_step": "Do not retry this toolkit unless the user explicitly asks to authorize it.",
+            "auth_context": {"resource_metadata": {"provided_settings": {"client_id": "fixture"}}},
+            "server_url": "https://resource.example.invalid"
+        });
+        let mut projected = legacy.clone();
+        normalize_legacy_skip(&mut projected);
+        assert_eq!(projected["scope"], "current_run");
+        assert_eq!(projected["tool_name"], "fixture_auth");
+        assert!(projected.get("auth_context").is_none());
+        assert!(projected.get("server_url").is_none());
+        let once = projected.clone();
+        normalize_legacy_skip(&mut projected);
+        assert_eq!(projected, once);
+        assert!(legacy.get("auth_context").is_some());
+        for mut unrelated in [
+            json!({"status": "declined"}),
+            json!({"next_step": "authorize"}),
+            json!(null),
+        ] {
+            let original = unrelated.clone();
+            normalize_legacy_skip(&mut unrelated);
+            assert_eq!(unrelated, original);
         }
     }
 }

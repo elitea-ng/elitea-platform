@@ -213,3 +213,35 @@ fn a_different_configuration_on_the_same_resource_does_not_inherit_skip() {
     assert!(!catalog.is_declined("read_other"));
     assert!(catalog.encode_declined_scope().unwrap().is_none());
 }
+
+#[test]
+fn skip_result_is_run_scoped_and_has_no_discovery_metadata() {
+    for family in ["mcp", "openapi", "sharepoint"] {
+        let requirement = requirement(family, "fixture toolkit", "configuration-a");
+        let result = delegated_authorization_declined_result(&requirement, "authorize_fixture");
+        assert_eq!(result["type"], "mcp_auth_decision");
+        assert_eq!(result["status"], "declined");
+        assert_eq!(result["scope"], "current_run");
+        assert_eq!(result["toolkit_name"], "fixture toolkit");
+        assert_eq!(result["next_step"], "use_other_tools_or_report");
+        let encoded = result.to_string();
+        for excluded in [
+            "auth_context",
+            "server_url",
+            "resource_metadata",
+            "provided_settings",
+            "explicitly asks",
+        ] {
+            assert!(
+                !encoded.contains(excluded),
+                "unexpected field or instruction: {excluded}"
+            );
+        }
+        assert!(
+            result["message"]
+                .as_str()
+                .unwrap()
+                .contains("later user turn")
+        );
+    }
+}

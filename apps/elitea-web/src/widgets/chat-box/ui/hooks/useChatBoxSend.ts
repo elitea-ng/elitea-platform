@@ -4,9 +4,7 @@ import { useCallback } from "react";
 import { useChatStreamTransport, type ChatMessage } from "@/features/chat-messages";
 import { conversationApi } from "@/entities/conversation";
 import { useAddParticipantMutation } from "@/entities/participant";
-// Deep, still-legal import: `UploadedAttachment` is deliberately not on the
-// entities barrel (its 20 slots are exactly spent — see that file's own note
-// naming this exact path).
+import { getExecutionTokens } from "@/features/mcps";
 import type { useUploadAttachments } from "@/entities/conversation";
 
 // Derived from the barrel-exported hook rather than deep-imported from its
@@ -190,6 +188,7 @@ export function useChatBoxSend(
         (target as { readonly id?: unknown } | null | undefined)?.id,
       );
       const body = buildStartBody({
+        mcpTokens: await getExecutionTokens(projectIdString),
         conversationUuid,
         projectId: projectIdString,
         payload,
@@ -263,6 +262,7 @@ export function useChatBoxSend(
       const isApplicationTurn =
         resolveStartContract(target) === conversationApi.contracts.application;
       const body = buildRegenerateBody({
+        mcpTokens: await getExecutionTokens(projectIdString),
         conversationUuid: params.conversationUuid,
         projectId: projectIdString,
         responseMessageId: input.messageId,

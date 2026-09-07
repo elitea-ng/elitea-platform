@@ -1427,7 +1427,7 @@ impl LazyNestedAgent {
                 self.profile.model_project_id(),
                 invocation,
             )
-            .map(|model| model.adk_model())
+            .map(|model| model.provider_model())
             .map_err(model_error)
     }
 

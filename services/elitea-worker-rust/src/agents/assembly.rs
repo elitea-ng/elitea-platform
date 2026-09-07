@@ -389,15 +389,21 @@ fn validate_common_profile(
         CommonProfileMode::DirectGuardrailContinuation | CommonProfileMode::McpAuthorization
     );
     let regeneration = mode == CommonProfileMode::Regenerate;
+    // Fresh turns and regeneration can reuse session credentials without resuming a guard.
+    let allows_session_tokens = allows_mcp_authority
+        || matches!(
+            mode,
+            CommonProfileMode::Fresh | CommonProfileMode::Regenerate
+        );
     let output_continuation = mode == CommonProfileMode::OutputContinuation;
     let valid_truncated_content = payload
         .truncated_content
         .as_deref()
         .is_some_and(|value| value.len() <= 64 * 1_024 && !value.contains('\0'));
-    if (!allows_mcp_authority
-        && (!payload.mcp_tokens.is_empty()
-            || !payload.ignored_mcp_servers.is_empty()
-            || !payload.user_declined_mcp_servers.is_empty()))
+    if (!allows_session_tokens && !payload.mcp_tokens.is_empty())
+        || (!allows_mcp_authority
+            && (!payload.ignored_mcp_servers.is_empty()
+                || !payload.user_declined_mcp_servers.is_empty()))
         || payload.checkpoint_id.is_some()
         || payload.is_regenerate != regeneration
         || payload.supports_vision

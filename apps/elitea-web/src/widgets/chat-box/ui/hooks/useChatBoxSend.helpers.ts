@@ -91,6 +91,7 @@ export function resolveStartContract(target: unknown): string {
 }
 
 export function buildStartBody(params: {
+  readonly mcpTokens?: Readonly<Record<string, unknown>>;
   readonly conversationUuid: string;
   readonly projectId: string | undefined;
   readonly payload: Record<string, unknown>;
@@ -107,6 +108,7 @@ export function buildStartBody(params: {
     conversation_uuid: params.conversationUuid,
     question_id: payload['question_id'],
     interaction_uuid: crypto.randomUUID(),
+    mcp_tokens: params.mcpTokens ?? {},
     payload: { user_input: question, ...(payload['attachments'] ? { attachments: payload['attachments'] } : {}) },
   };
   if (params.isApplicationTurn) {
@@ -125,6 +127,7 @@ export function buildStartBody(params: {
 }
 
 export function buildRegenerateBody(params: {
+  readonly mcpTokens?: Readonly<Record<string, unknown>>;
   readonly conversationUuid: string;
   readonly projectId: string | undefined;
   readonly responseMessageId: string;
@@ -144,7 +147,7 @@ export function buildRegenerateBody(params: {
     payload: {
       user_input: params.question,
       attachments_info: [],
-      mcp_tokens: {},
+      mcp_tokens: params.mcpTokens ?? {},
       ...(!params.isApplicationTurn
         ? {
             llm_settings: {

@@ -382,11 +382,10 @@ async fn tool_history_round_trip(retire_tool: bool) {
             .unwrap();
         let mut unbound = tool_request(vec![Content::new("user").with_text("try again")]);
         unbound.tools.clear();
-        assert!(
-            drain(bound.generate_for_test(unbound).await.unwrap())
-                .await
-                .is_err()
-        );
+        let error = drain(bound.generate_for_test(unbound).await.unwrap())
+            .await
+            .expect_err("a retired tool is never emitted");
+        assert_eq!(error.code, super::model_facade::TOOL_NOT_ADMITTED_CODE);
     }
 
     let captured = captured.lock().expect("captured requests");

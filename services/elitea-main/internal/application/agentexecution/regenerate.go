@@ -67,6 +67,7 @@ type CurrentRegenerationRequest struct {
 	RegenerationID         string
 	RequestedParticipantID int64
 	LLMSettings            json.RawMessage
+	MCPTokens              json.RawMessage
 }
 
 func (request CurrentRegenerationRequest) Validate() error {
@@ -74,7 +75,7 @@ func (request CurrentRegenerationRequest) Validate() error {
 		request.RequestedParticipantID < 0 ||
 		!validUUID(request.ConversationUUID) || !validUUID(request.QuestionID) ||
 		!validUUID(request.ResponseMessageID) || !validUUID(request.RegenerationID) ||
-		!validJSONObject(request.LLMSettings) {
+		!validJSONObject(request.LLMSettings) || !validCurrentMCPTokens(request.MCPTokens) {
 		return ErrInvalidCurrentAgentStart
 	}
 	return nil
@@ -219,6 +220,7 @@ func (service *CurrentApplicationStartService) currentRegenerationInput(
 	switch target.Kind {
 	case CurrentRegenerationApplication:
 		start := CurrentApplicationStartRequest{
+			MCPTokens: request.MCPTokens,
 			ProjectID: request.ProjectID, ActorUserID: request.ActorUserID,
 			ConversationUUID:    target.ConversationUUID,
 			TargetParticipantID: target.TargetParticipantID,
@@ -250,6 +252,7 @@ func (service *CurrentApplicationStartService) currentRegenerationInput(
 		return input, turn, executiondomain.AgentApplicationCapability, nil
 	case CurrentRegenerationAdhoc:
 		start := CurrentAdhocStartRequest{
+			MCPTokens: request.MCPTokens,
 			ProjectID: request.ProjectID, ActorUserID: request.ActorUserID,
 			ConversationUUID:    target.ConversationUUID,
 			TargetParticipantID: target.TargetParticipantID,

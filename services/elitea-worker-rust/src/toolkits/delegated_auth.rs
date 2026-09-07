@@ -345,19 +345,15 @@ pub(crate) fn delegated_authorization_declined_result(
     json!({
         "type": "mcp_auth_decision",
         "status": "declined",
-        "server_url": requirement.server_url(),
+        "scope": "current_run",
         "tool_name": tool_name,
+        "toolkit_name": requirement.toolkit_name(),
         "toolkit_type": requirement.toolkit_type(),
         "message": format!(
-            "Authorization for the {} toolkit was declined; the requested tool was not executed.",
+            "The user skipped the {} toolkit for this run. No protected operation was executed. Use other tools or report the limitation. A later user turn can request this toolkit again through its authorization tool.",
             requirement.toolkit_name()
         ),
-        "next_step": "Do not retry this toolkit unless the user explicitly asks to authorize it.",
-        "auth_context": {
-            "resource_metadata_url": requirement.resource_metadata_url(),
-            "www_authenticate": requirement.www_authenticate(),
-            "resource_metadata": requirement.resource_metadata(),
-        },
+        "next_step": "use_other_tools_or_report",
         "denial_reason": "user_declined",
     })
 }

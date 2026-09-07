@@ -82,6 +82,7 @@ type CurrentAdhocStartRequest struct {
 	UserInput           string
 	InteractionUUID     string
 	LLMSettings         json.RawMessage
+	MCPTokens           json.RawMessage
 	// Attachments carries `payload.attachments` from the start body: the
 	// files the composer uploaded before sending, already split into
 	// (bucket, name) by the route. #606.
@@ -93,7 +94,7 @@ func (request CurrentAdhocStartRequest) Validate() error {
 		!validUUID(request.ConversationUUID) || !validUUID(request.QuestionID) ||
 		!validCurrentAgentText(request.UserInput, maxCurrentAgentUserInputBytes) ||
 		(request.InteractionUUID != "" && !validUUID(request.InteractionUUID)) ||
-		!validJSONObject(request.LLMSettings) {
+		!validJSONObject(request.LLMSettings) || !validCurrentMCPTokens(request.MCPTokens) {
 		return ErrInvalidCurrentAgentStart
 	}
 	return nil
@@ -320,7 +321,7 @@ func currentAdhocInput(
 		SchemaRevision: "elitea.runtime.agent-execution-input.v1",
 		Llm:            llm, ChatHistory: bytes.Clone(target.ChatHistory), UserInput: userInput,
 		ThreadId: &threadID, Tools: toolsJSON, Application: application,
-		InternalTools: internalTools, McpTokens: []byte(`{}`),
+		InternalTools: internalTools, McpTokens: currentMCPTokens(request.MCPTokens),
 		IgnoredMcpServers: []byte(`[]`), UserDeclinedMcpServers: []byte(`[]`),
 		HitlDecisions: []byte(`[]`), ExecutionGeneration: &executionGeneration,
 		Meta: []byte(`{}`), ConversationId: &conversationID, Persona: persona,

@@ -33,7 +33,7 @@ export type { McpLogoutButtonProps } from './ui/McpLogoutButton';
 
 // model — the one hook a caller composing its own MCP-login affordance needs.
 export { useMcpLogin } from './model/useMcpLogin';
-export type { UseMcpLoginOptions, UseMcpLoginResult, McpLoginAuthConfig } from './model/useMcpLogin';
+export type { UseMcpLoginOptions, McpLoginAuthConfig } from './model/useMcpLogin';
 export { useMcpTokenChange } from './model/useMcpTokenChange';
 
 // lib — the storage/flow primitives a non-UI caller (e.g. a chat tool-action
@@ -41,4 +41,5 @@ export { useMcpTokenChange } from './model/useMcpTokenChange';
 // needs without pulling in React.
 export { getAccessToken } from './lib/storage';
 export { getAllTokens } from './lib/tokenRefresh';
+export { getExecutionTokens } from './lib/executionTokens';
 export { startMcpAuthFlow } from './lib/oauthFlow';

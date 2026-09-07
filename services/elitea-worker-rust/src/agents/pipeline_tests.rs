@@ -1314,6 +1314,27 @@ fn authorized_pipeline_admission_is_distinct_from_direct_agent_admission() {
 }
 
 #[test]
+fn pipeline_session_tokens_preserve_fresh_and_regeneration_intent() {
+    for regenerate in [false, true] {
+        let mut pipeline = pipeline_request();
+        pipeline.payload.is_regenerate = regenerate;
+        pipeline.payload.mcp_tokens.insert(
+            "credential:https://issuer.example".to_owned(),
+            json!({"access_token": "test-session-token"}),
+        );
+        let admitted = authorized(&pipeline)
+            .admit_pipeline()
+            .expect("session credentials must not imply an interrupt resume");
+        let (_, _, _, _, start, _, _, _) = admitted.into_parts();
+        if regenerate {
+            assert!(matches!(start, PipelineNativeStart::Regenerate));
+        } else {
+            assert!(matches!(start, PipelineNativeStart::Fresh));
+        }
+    }
+}
+
+#[test]
 fn pipeline_resume_admits_distinct_node_and_tool_decision_envelopes_before_checkpoint_join() {
     let mut pipeline = pipeline_request();
     pipeline.payload.should_continue = true;

@@ -1447,7 +1447,7 @@ async fn run_delegated_authorization_resume(
 ) {
     // One toolkit authorization decision covers the whole pending tool batch.
     let attempts = 1;
-    let (runtime_context, context_calls) = runtime_context_client_for_redemptions(attempts + 1);
+    let (runtime_context, context_calls) = runtime_context_client_for_redemptions(attempts + 2);
     let mut outcomes = vec![TestModelGatewayOutcome::Response(
         mcp_authorization_response(),
     )];
@@ -1465,6 +1465,20 @@ async fn run_delegated_authorization_resume(
         }
     }
     outcomes.push(TestModelGatewayOutcome::Response(model_response()));
+    if authorize {
+        outcomes.push(TestModelGatewayOutcome::Response(named_mcp_batch_response(
+            "lookup_release",
+            count,
+            "call_next_turn",
+        )));
+        outcomes.push(TestModelGatewayOutcome::Response(model_response()));
+    } else {
+        outcomes.push(TestModelGatewayOutcome::Response(named_mcp_batch_response(
+            &mcp_authorization_tool_name(),
+            1,
+            "call_later_turn",
+        )));
+    }
     let (model_gateway, captured) =
         test_model_gateway_client(outcomes, test_model_gateway_config())
             .expect("delegated authorization model gateway");
@@ -1581,17 +1595,75 @@ async fn run_delegated_authorization_resume(
         if authorize { count } else { 0 }
     );
 
-    let captured = captured.lock().expect("captured model requests");
-    assert_eq!(
-        captured.len(),
-        if authorize {
-            3
-        } else if count > 1 {
-            4
-        } else {
-            2
+    if authorize {
+        let mut next = ordinary_request(kind);
+        next.binding.request_content_digest = [15; 32];
+        next.payload.user_input = super::request::UserInput::Text("next authorized turn".into());
+        attach_remote_mcp_tool(&mut next);
+        select_both_mcp_operations(&mut next);
+        next.payload.mcp_tokens = resume_request.payload.mcp_tokens.clone();
+        let mut invocation = assembler
+            .assemble(AuthorizedNativeAssembly::new(
+                &next,
+                test_runtime_context_authority(),
+                AuthorizedNativeCommandBinding::fixture(),
+            ))
+            .await
+            .expect("fresh authorized assembly");
+        invocation
+            .project_start(chrono::Utc::now())
+            .expect("fresh authorized projection start");
+        let (mut run, mut projector, completion) =
+            invocation.start().expect("fresh authorized start");
+        while let Some(event) = run.next_event().await.expect("fresh authorized event") {
+            projector
+                .project(&event)
+                .expect("fresh authorized projection");
         }
-    );
+        completion
+            .select()
+            .await
+            .expect("fresh authorized completion");
+        assert!(!projector.is_paused());
+        assert_eq!(tool_calls.load(Ordering::Acquire), count * 2);
+    } else {
+        let mut next = ordinary_request(kind);
+        next.binding.request_content_digest = [15; 32];
+        next.payload.user_input =
+            super::request::UserInput::Text("Use the attached toolkit".into());
+        attach_remote_mcp_tool(&mut next);
+        select_both_mcp_operations(&mut next);
+        let mut invocation = assembler
+            .assemble(AuthorizedNativeAssembly::new(
+                &next,
+                test_runtime_context_authority(),
+                AuthorizedNativeCommandBinding::fixture(),
+            ))
+            .await
+            .expect("fresh turn after Skip");
+        invocation
+            .project_start(chrono::Utc::now())
+            .expect("fresh projection start after Skip");
+        let (mut run, mut projector, _completion) =
+            invocation.start().expect("fresh start after Skip");
+        while let Some(event) = run.next_event().await.expect("fresh event after Skip") {
+            projector
+                .project(&event)
+                .expect("fresh projection after Skip");
+        }
+        assert!(
+            projector.is_paused(),
+            "a later turn can request authorization again"
+        );
+        assert_eq!(tool_calls.load(Ordering::Acquire), 0);
+    }
+
+    let captured = captured.lock().expect("captured model requests");
+    assert_eq!(captured.len(), if authorize || count > 1 { 5 } else { 3 });
+    for request in captured.iter() {
+        let body = serde_json::from_slice(&request.body).expect("provider request JSON");
+        assert_complete_tool_history(&body);
+    }
     let initial: serde_json::Value = serde_json::from_slice(&captured[0].body).unwrap();
     assert_eq!(initial["tools"].as_array().unwrap().len(), 1);
     assert_eq!(
@@ -1634,6 +1706,8 @@ async fn run_delegated_authorization_resume(
         .expect("declined result JSON");
         assert_eq!(declined["type"], "mcp_auth_decision");
         assert_eq!(declined["status"], "declined");
+        assert_eq!(declined["scope"], "current_run");
+        assert!(declined.get("auth_context").is_none());
     }
 }
 

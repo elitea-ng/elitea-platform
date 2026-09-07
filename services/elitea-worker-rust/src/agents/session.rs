@@ -976,6 +976,10 @@ struct PipelineStateServices {
 pub(crate) trait BoundOrdinaryAgentModel: Send + 'static {
     fn adk_model(&self) -> Arc<dyn Llm>;
 
+    fn provider_model(&self) -> Arc<dyn Llm> {
+        super::replay_history::provider_model(self.adk_model())
+    }
+
     fn take_completed_text(self) -> Result<String, NativeAgentAssemblyError>;
 
     fn durable_completion(&self) -> Option<Arc<dyn DurableModelCompletion>> {
@@ -994,17 +998,23 @@ pub(crate) trait DurableModelCompletion: Send + Sync {
     fn snapshot(&self) -> adk_rust::Result<Option<String>>;
 }
 
-struct CompletionPersistingSessionService {
+struct RunnerSessionService {
     inner: Arc<dyn SessionService>,
-    completion: Arc<dyn DurableModelCompletion>,
+    completion: Option<Arc<dyn DurableModelCompletion>>,
 }
 
-impl CompletionPersistingSessionService {
-    fn new(inner: Arc<dyn SessionService>, completion: Arc<dyn DurableModelCompletion>) -> Self {
+impl RunnerSessionService {
+    fn new(
+        inner: Arc<dyn SessionService>,
+        completion: Option<Arc<dyn DurableModelCompletion>>,
+    ) -> Self {
         Self { inner, completion }
     }
 
     fn durable_event(&self, mut event: Event) -> adk_rust::Result<Event> {
+        let Some(completion) = &self.completion else {
+            return Ok(event);
+        };
         if event.llm_response.partial || !event.llm_response.turn_complete {
             return Ok(event);
         }
@@ -1017,7 +1027,7 @@ impl CompletionPersistingSessionService {
         if already_has_text {
             return Ok(event);
         }
-        let Some(text) = self.completion.snapshot()? else {
+        let Some(text) = completion.snapshot()? else {
             tracing::warn!(
                 event = "agent_session_terminal_completion_unavailable",
                 event_id = %event.id,
@@ -1044,13 +1054,16 @@ impl CompletionPersistingSessionService {
 }
 
 #[async_trait]
-impl SessionService for CompletionPersistingSessionService {
+impl SessionService for RunnerSessionService {
     async fn create(&self, req: CreateRequest) -> adk_rust::Result<Box<dyn Session>> {
         self.inner.create(req).await
     }
 
     async fn get(&self, req: GetRequest) -> adk_rust::Result<Box<dyn Session>> {
-        self.inner.get(req).await
+        self.inner
+            .get(req)
+            .await
+            .map(super::runner_history::project)
     }
 
     async fn list(&self, req: ListRequest) -> adk_rust::Result<Vec<Box<dyn Session>>> {
@@ -1223,7 +1236,7 @@ pub(crate) async fn assemble_pipeline_native(
     let runner = adk_rust::runner::Runner::builder()
         .app_name(APP_NAME)
         .agent(agent)
-        .session_service(state.sessions)
+        .session_service(Arc::new(RunnerSessionService::new(state.sessions, None)))
         .build()
         .map_err(|_| invalid_configuration())?;
     let projector = AgentEventProjector::with_tool_catalogs(
@@ -1469,13 +1482,13 @@ where
         regenerate,
     } = plan;
     let context_compaction =
-        context_management.prepare_runner_composition(Some(model.adk_model()))?;
+        context_management.prepare_runner_composition(Some(model.provider_model()))?;
     let parallel = execution_mode == NativeToolExecutionMode::ParallelApplications;
     if parallel && runtime.has_confirmation_guards() {
         return Err(invalid_configuration());
     }
     let (agent, projector) = build_runtime_agent(
-        model.adk_model(),
+        model.provider_model(),
         generation_config,
         max_iterations,
         projection,
@@ -1507,15 +1520,10 @@ where
         session_bootstrap = if created { "seeded" } else { "restored" },
         "prepared the ADK session for the native agent runner"
     );
-    let runner_sessions: Arc<dyn SessionService> = model.durable_completion().map_or_else(
-        || Arc::clone(&sessions),
-        |completion| {
-            Arc::new(CompletionPersistingSessionService::new(
-                Arc::clone(&sessions),
-                completion,
-            ))
-        },
-    );
+    let runner_sessions = Arc::new(RunnerSessionService::new(
+        sessions,
+        model.durable_completion(),
+    ));
     let mut runner_builder = adk_rust::runner::Runner::builder()
         .app_name(APP_NAME)
         .agent(agent)
@@ -1824,7 +1832,7 @@ where
         regenerate: _,
     } = plan;
     let context_compaction =
-        context_management.prepare_runner_composition(Some(model.adk_model()))?;
+        context_management.prepare_runner_composition(Some(model.provider_model()))?;
     let stored = sessions
         .get(GetRequest {
             app_name: APP_NAME.to_owned(),
@@ -1836,7 +1844,7 @@ where
         .await
         .map_err(|_| dependency_unavailable())?;
     let prepared =
-        prepare_direct_resume(model.adk_model(), stored.as_ref(), runtime, start).await?;
+        prepare_direct_resume(model.provider_model(), stored.as_ref(), runtime, start).await?;
     let (agent, projector) = build_runtime_agent(
         prepared.model,
         generation_config,
@@ -1848,7 +1856,10 @@ where
     let mut runner_builder = adk_rust::runner::Runner::builder()
         .app_name(APP_NAME)
         .agent(agent)
-        .session_service(sessions);
+        .session_service(Arc::new(RunnerSessionService::new(
+            sessions,
+            model.durable_completion(),
+        )));
     if let Some(compaction) = context_compaction {
         runner_builder = runner_builder.context_compaction(compaction);
     }

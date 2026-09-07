@@ -979,7 +979,7 @@ impl PipelineLlmAgentFactory for NativePipelineLlmAgentFactory {
         }
         let selected_toolsets = binding.into_toolsets();
         let (model, selected_toolsets) =
-            prepare_pipeline_llm_replay(model.adk_model(), selected_toolsets, replay);
+            prepare_pipeline_llm_replay(model.provider_model(), selected_toolsets, replay);
         let (model, selected_toolsets) = crate::toolkits::bind_authorization_model_tools(
             model,
             selected_toolsets,

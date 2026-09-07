@@ -22,6 +22,9 @@ pub(crate) use super::openai_compatible_facade::{
     ModelGatewayConfig as ModelFacadeConfig, ModelReasoningEffort,
 };
 
+/// No tool call leaves the facade when a requested name is not declared.
+pub(crate) const TOOL_NOT_ADMITTED_CODE: &str = "model_facade.tool_not_admitted";
+
 /// Explicit provider dialect selected from the frozen model configuration.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ModelAdapterKind {

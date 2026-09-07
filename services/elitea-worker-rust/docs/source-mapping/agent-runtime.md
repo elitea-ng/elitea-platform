@@ -346,6 +346,36 @@ exporter-thread reactor panic that aborted the release process when the async
 HTTP exporter flushed on a non-Tokio thread. Backend retention, sampling,
 metrics and Kubernetes activation remain deployment-owned.
 
+#### OBS-RUST-01: detailed runtime diagnostics
+
+Status: deferred follow-up, recorded on 2026-09-07. Return after the current functional compatibility gaps close.
+This follow-up does not replace any remaining runtime, authorization, or production-activation gate.
+
+The browser can show `The runtime operation failed` without enough information to identify the failed boundary.
+The current slice adds the static upstream ADK error code to the existing lifecycle log.
+Full span traces, stack backtraces, and richer public error projection are not implemented by that change.
+
+Scope and ownership:
+
+- Rust worker: preserve typed causes, retryability, and execution, invocation, child, interrupt, and model-request correlation.
+- Rust worker: evaluate `SpanTrace` for async span context and `std::backtrace::Backtrace` for captured stack diagnostics.
+- Rust worker: capture diagnostics at the failure boundary before propagation loses the useful context.
+- Main and gateway: preserve safe error categories and trace correlation across transport, persistence, and replay.
+- UI: show an actionable safe explanation and a copyable correlation identifier, without exposing internal traces.
+- Operator configuration: control capture, sampling, size bounds, retention, and access to detailed diagnostics.
+
+Acceptance criteria:
+
+- Distinguish invalid state, authorization, provider rejection, stream parsing, timeout, cancellation, resource limits, and internal failures.
+- Correlate nested and parallel failures with the owning child across pause, resume, and worker replacement.
+- Test redaction of prompts, arguments, results, credentials, tokens, private URLs, and provider bodies in every diagnostic path.
+- Prevent duplicate reporting while retaining the original failure category and relevant context.
+- Measure capture overhead and enforce diagnostic size bounds before enabling detailed traces by default.
+- Verify safe error display and operator correlation through browser-to-Main-to-worker failure injection.
+
+Treat the current platform as a behavior reference, not a logging implementation to copy.
+Update source mappings and verification evidence when this follow-up is implemented.
+
 ### Agent input field projection
 
 Every wire field is declared in `libs/proto/elitea/runtime/v1/agent.proto`,
@@ -594,6 +624,8 @@ materialization unported.
 
 ## Known gates
 
+- Return to [OBS-RUST-01](#obs-rust-01-detailed-runtime-diagnostics) after the current functional compatibility gaps close.
+  Detailed diagnostic capture and richer safe UI errors remain deferred.
 - The restricted Redis retirement adapter now consumes opaque terminal proof
   inside the same verified command, full execution identity, outbox ID and
   exact signed-envelope binding. The real restricted redis-rs/Rustls client and

@@ -1650,7 +1650,7 @@ impl OpenAiStreamState {
                 if !self.allowed_tools.contains(&builder.name) {
                     return Err(model_error(
                         ErrorCategory::Unsupported,
-                        "model_gateway.tool_call",
+                        super::model_facade::TOOL_NOT_ADMITTED_CODE,
                         "the model requested a tool outside the admitted toolset",
                     ));
                 }
