@@ -63,6 +63,15 @@ tags:
       The DeepWiki provider service facade (ADR-0022). elitea-main is the only
       door: it resolves credentials, signs identity, and proxies to the
       provider over mTLS.
+  - name: inventory
+    description: |
+      The Inventory provider service facade (ADR-0022, ADR-0023 H4c). It is the
+      SECOND facade over the same provider SPI, and it mounts the same route
+      table (internal/providerhost/routes/routes.go) behind the same mTLS hop
+      and the same per-project permission guard.
+
+      Inventory has no REST read surface. Every read is an invocation: the
+      caller starts one, polls it, and reads the answer from the terminal poll.
   - name: admin
     description: User, role, and moderation management
   - name: analytics
@@ -334,6 +343,136 @@ components:
         appears only on a poll that drained some, and a tool may add its own
         keys. Constraining it would make the facade reject a body it only
         relays.
+
+    # ---- Inventory facade --------------------------------------------------
+    # The second facade over the frozen provider SPI. The three schemas below
+    # are deliberately NOT $refs to the DeepWiki ones: the two facades share a
+    # route table, not a payload. Inventory's invoke body carries a `sources`
+    # list the facade expands into credential material
+    # (internal/api/v2/inventory/sources.go), which DeepWiki's does not, and a
+    # shared schema would have to describe the union and pin neither.
+
+    InventoryInvokeRequest:
+      type: object
+      description: |
+        The provider's invocation envelope, as the browser writes it.
+        `configuration.parameters` carries the Inventory toolkit's own settings
+        (bucket, llm_model, embedding_model, sources) and `parameters` the
+        tool's arguments; a tool argument overrides a configured value only
+        when it is truthy, which is the provider's own merge rule
+        (services/elitea-subapp-host/internal/apps/inventory/run/params.go:85).
+
+        Credentials are NOT supplied here. For the three tools that name a
+        source toolkit — run_ingestion, delta_update, remove_source_entities —
+        the facade resolves that toolkit from the project, projects the fields
+        one SDK loader reads, and injects them before proxying
+        (internal/api/v2/inventory/sources.go:53, 172-190). The provider never holds a
+        vault key.
+      properties:
+        configuration:
+          type: object
+          properties:
+            parameters:
+              type: object
+              additionalProperties: true
+              x-elitea-passthrough: >-
+                NOTE(W2): toolkit-level configuration, whose key set is the
+                PROVIDER's descriptor and not this spec's. The facade reads
+                only `sources` and `source_configs` out of it and re-encodes
+                every sibling untouched
+                (internal/providerhost/material/source.go:191-247, wired at
+                internal/api/v2/inventory/sources.go:172-190). A closed shape
+                here would drop a field the provider's own toolkit_config
+                declares, which is a payload the caller wrote correctly and
+                the facade silently truncated.
+          additionalProperties: true
+          x-elitea-passthrough: >-
+            NOTE(W2): the envelope around `parameters`. The facade replaces
+            only that key and re-encodes every sibling verbatim
+            (internal/providerhost/material/source.go:237-247), so a sibling the
+            provider gains later travels without a change here.
+        parameters:
+          type: object
+          additionalProperties: true
+          x-elitea-passthrough: >-
+            NOTE(W2): the TOOL's own arguments, whose names come from the
+            provider descriptor's args_schema and differ per tool
+            (toolkit_id and full_rebuild for run_ingestion, query for the
+            read tools). The facade forwards them untouched; only
+            `configuration.parameters` is rewritten
+            (internal/providerhost/material/source.go:191-247).
+      additionalProperties: true
+      x-elitea-passthrough: >-
+        NOTE(W2): the provider's frozen invocation envelope, recorded in
+        conformance/provider/fixtures/inventory/invoke/run_ingestion.in.json.
+        Unrecognised top-level keys are re-encoded verbatim rather than
+        dropped, which is what makes this facade a proxy rather than a
+        re-serialiser (internal/providerhost/material/invoke.go:121-223).
+
+    InventoryInvocationAccepted:
+      type: object
+      description: |
+        The invocation id to poll, and the literal status `Started`.
+
+        Invocation is asynchronous for every Inventory tool, including the
+        reads: the descriptor advertises `sync_invocation_supported` and the
+        provider has never honoured it.
+      properties:
+        invocation_id: { type: string }
+        status:
+          type: string
+          enum: [Started]
+      required: [invocation_id, status]
+
+    InventoryInvocationStatus:
+      type: object
+      description: |
+        One of the provider's three shapes, passed through unchanged: pending
+        (`Started`), running (`InProgress`, with any `custom_events` drained by
+        this read), or terminal. A failed TOOL is HTTP 200 with
+        `status: "Error"`; only transport failures use the error envelope.
+
+        `custom_events` are read-once. An ingestion's progress lines reach the
+        screen through this field alone, so a caller that misses a poll does
+        not see those lines again.
+      properties:
+        invocation_id: { type: string }
+        status:
+          type: string
+          enum: [Started, InProgress, Completed, Error, Stopped]
+        result:
+          type: string
+          description: |
+            A JSON *string* holding the list of result objects. It is a string
+            on the wire, not an object — the provider's frozen contract.
+        result_type:
+          type: string
+          enum: [String]
+        error_category: { type: string }
+        error_type: { type: string }
+        custom_events:
+          type: array
+          description: |
+            Progress events accumulated since the previous poll. Read-once.
+          items:
+            type: object
+            properties:
+              data:
+                type: object
+                properties:
+                  message: { type: string }
+      required: [status]
+      additionalProperties: true
+      x-elitea-passthrough: >-
+        NOTE(W2): the poll body is forwarded VERBATIM by the shared hop
+        (internal/providerhost/proxy/proxy.go:145-170, reached from
+        internal/providerhost/routes/routes.go:117-123); this route does no
+        rewriting at all. The permissive tail exists because the terminal
+        projection varies
+        by tool — `result_type` is absent while running, `custom_events`
+        appears only on a poll that drained some, and each of the eleven tools
+        may add its own keys. Constraining it would make the facade reject a
+        body it only relays.
 
     # NOTE(W2): the former `Struct` / `GenericResponse` / `PaginatedResponse` /
     # `AdminPaginatedResponse` / `ArrayResponse` generic shells and the
@@ -14241,6 +14380,199 @@ paths:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '503':
           description: DeepWiki is not enabled, or the provider is unreachable
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  # ---- Inventory facade (ADR-0022, ADR-0023 H4c) --------------------------
+  # Three of the facade's four routes. `GET /inventory/slots/{project_id}` is
+  # mounted (production_router.go:172) and is deliberately NOT described: no
+  # client calls it, and this document describes the surface the app uses.
+  #
+  # These operations were hand-called through `eliteaFetch` while the document
+  # stayed silent about them, which made the reverse conformance check fail:
+  # the app's endpoint manifest named three endpoints v2.yaml did not cover,
+  # and the allowlist that would otherwise absorb them may only shrink.
+
+  /inventory/tools/{project_id}/{toolkit_name}/{tool_name}/invoke:
+    post:
+      operationId: invokeInventoryTool
+      summary: Start an Inventory tool invocation
+      description: |
+        Proxies `POST /tools/{toolkit_name}/{tool_name}/invoke` on the Inventory
+        provider service over mTLS, with HMAC-signed identity headers. The
+        provider refuses non-mTLS traffic and strips any identity header a
+        client supplies, so elitea-main is the only door.
+
+        EVERY Inventory read is an invocation. The provider serves no REST read
+        surface, so "which types does this graph hold" is this call followed by
+        polling until a terminal status.
+
+        Two toolkit families answer here: `inventory`, which owns and ingests
+        the graph, and `inventory_search`, the read-only face other agents get.
+
+        For run_ingestion, delta_update and remove_source_entities the facade
+        resolves the named source toolkit's credentials and injects them before
+        proxying (internal/api/v2/inventory/sources.go:53). The other eight
+        tools forward unrewritten.
+
+        Guarded by `models.applications.inventory.invoke` in the `default`
+        permission mode. This is also the only one of the four routes the
+        admission hook can refuse: what is already running must stay pollable
+        and cancellable after a provider is turned off.
+      tags: [inventory]
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema: { type: integer }
+        - name: toolkit_name
+          in: path
+          required: true
+          schema: { type: string }
+        - name: tool_name
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/InventoryInvokeRequest' }
+      responses:
+        '200':
+          description: Accepted; poll the invocation id
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InventoryInvocationAccepted' }
+        '400':
+          description: |
+            Malformed invocation envelope, or a source this facade cannot
+            expand.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '403':
+          description: |
+            Caller lacks the Inventory invoke permission for this project, the
+            named toolkit is not one of this Inventory toolkit's configured
+            sources, or this deployment may not clone from that repository
+            host.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '503':
+          description: |
+            Inventory is not enabled in this deployment, the provider is
+            unreachable, or the source credentials could not be resolved.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /inventory/invocations/{project_id}/{toolkit_name}/{tool_name}/{invocation_id}:
+    get:
+      operationId: getInventoryInvocation
+      summary: Poll an Inventory invocation
+      description: |
+        Proxies the provider's
+        `GET /tools/{toolkit_name}/{tool_name}/invocations/{invocation_id}`.
+
+        The path carries the toolkit and tool segments because the provider's
+        does: that is the form its SPI declares
+        (conformance/provider/spi/contract.json).
+
+        The body is forwarded verbatim in all its shapes. A failed TOOL is
+        HTTP 200 with `status: "Error"`; only transport failures use the error
+        envelope. `custom_events` are drained by reading, so an ingestion's
+        progress lines reach a caller once and only once.
+
+        Guarded by `models.applications.inventory.read`. Polling and cancelling
+        share this path and do NOT share a permission: polling is a read.
+      tags: [inventory]
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema: { type: integer }
+        - name: toolkit_name
+          in: path
+          required: true
+          schema: { type: string }
+        - name: tool_name
+          in: path
+          required: true
+          schema: { type: string }
+        - name: invocation_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Invocation status, or its terminal result
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InventoryInvocationStatus' }
+        '403':
+          description: Caller lacks the Inventory read permission for this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '404':
+          description: |
+            No such invocation. An unknown toolkit, an unknown tool and an
+            unknown id are indistinguishable here, as they are on the provider.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '503':
+          description: Inventory is not enabled, or the provider is unreachable
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+    delete:
+      operationId: cancelInventoryInvocation
+      summary: Cancel an Inventory invocation
+      description: |
+        Proxies the provider's `DELETE` on the same path. Cancellation is
+        cooperative: it sets a stop flag the running work observes at its next
+        checkpoint. The invocation does not vanish — the next poll reports it
+        as stopped.
+
+        Guarded by `models.applications.inventory.invoke`, not by the read
+        permission the poll uses.
+      tags: [inventory]
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema: { type: integer }
+        - name: toolkit_name
+          in: path
+          required: true
+          schema: { type: string }
+        - name: tool_name
+          in: path
+          required: true
+          schema: { type: string }
+        - name: invocation_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '204':
+          description: Cancellation requested
+        '403':
+          description: Caller lacks the Inventory invoke permission for this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '404':
+          description: No such invocation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '503':
+          description: Inventory is not enabled, or the provider is unreachable
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }

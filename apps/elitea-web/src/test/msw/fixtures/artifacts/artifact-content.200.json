@@ -1,6 +1,6 @@
 {
-  "recordedAt": "2026-08-08",
+  "recordedAt": "2026-09-06",
   "synthetic": true,
-  "note": "Synthetic: GET /api/v2/artifacts/objects/{projectID}/{bucket}/{key...} response body (router.go:288 -> Handler.DownloadObject). The body is the object's own bytes, so any content is representative.",
+  "note": "Shape re-verified 2026-09-06 against the served route GET /api/v2/artifacts/objects/{projectID}/{bucket}/{key...} (elitea-main internal/api/router.go:596 -> Handler.DownloadObject, internal/api/v2/artifacts/objects.go:677). The handler streams the object's own bytes, so any content is representative.",
   "body": "hello artifact content"
 }
