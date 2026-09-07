@@ -2438,6 +2438,8 @@
   "shared.ui.tabGroupButton.ariaLabel": "View toggle",
   "shared.ui.viewRunHistoryButton.label": "View run history",
   "skills.attach.agent": "Agent",
+  "skills.attach.alreadyAttachedBanner": "Already attached to: {{names}}",
+  "skills.attach.alreadyAttachedSuffix": "(already attached)",
   "skills.attach.confirm": "Attach",
   "skills.attach.explain": "The skill is copied into this project once, then attached to the agent version you choose.",
   "skills.attach.failed": "Failed to attach the skill.",

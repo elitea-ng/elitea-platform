@@ -12,7 +12,12 @@ import { server } from '@/test/setup';
 
 import { PublicSkillsCatalog, publishedVersionIdOf } from '../ui/PublicSkillsCatalog';
 import { PERMISSIONS } from '@/shared/lib/permissions';
-import { attachRequestOf, reportOutcome } from '../ui/AttachPublicSkillDialog';
+import {
+  alreadyAttachedAgentNames,
+  alreadyAttachedVersionIds,
+  attachRequestOf,
+  reportOutcome,
+} from '../ui/AttachPublicSkillDialog';
 import { renderWithProviders } from './testUtils';
 
 const BASE = '/api/v2';
@@ -62,6 +67,11 @@ beforeEach(() => {
     http.get(`${BASE}/elitea_core/application/prompt_lib/:projectId/:applicationId`, () =>
       HttpResponse.json({ id: '3', name: 'Helper', versions: [{ id: 77, name: 'latest' }] }),
     ),
+    // Empty by default — most tests are not about this endpoint. The
+    // "already attached" tests below override it per-case.
+    http.get(`${BASE}/elitea_core/agents_with_skill/prompt_lib/:projectId/:skillId`, () =>
+      HttpResponse.json({ total: 0, rows: [] }),
+    ),
     http.post(`${BASE}/elitea_core/attach_public_skill/prompt_lib/:projectId`, async ({ request }) => {
       attachBodies.push(await request.json());
       return HttpResponse.json({ results: [{ agent_version_id: 77, ok: true }] });
@@ -101,6 +111,36 @@ describe('attachRequestOf', () => {
       publicVersionId: 6,
       agentVersionIds: [77],
     });
+  });
+});
+
+describe('alreadyAttachedVersionIds', () => {
+  it('collects the entity_version_id of every row, dropping rows with none', () => {
+    const ids = alreadyAttachedVersionIds([
+      { application_id: 1, name: 'A', entity_version_id: 77 },
+      { application_id: 2, name: 'B', entity_version_id: 90 },
+      { application_id: 3, name: 'C' },
+    ]);
+    expect(ids.has(77)).toBe(true);
+    expect(ids.has(90)).toBe(true);
+    expect(ids.size).toBe(2);
+  });
+
+  it('is an empty set for no rows', () => {
+    expect(alreadyAttachedVersionIds([]).size).toBe(0);
+  });
+});
+
+describe('alreadyAttachedAgentNames', () => {
+  it('dedupes names, in first-seen order, dropping blanks', () => {
+    expect(
+      alreadyAttachedAgentNames([
+        { application_id: 1, name: 'Helper', entity_version_id: 77 },
+        { application_id: 1, name: 'Helper', entity_version_id: 78 },
+        { application_id: 2, name: 'Reviewer', entity_version_id: 90 },
+        { application_id: 3, name: '', entity_version_id: 91 },
+      ]),
+    ).toEqual(['Helper', 'Reviewer']);
   });
 });
 
@@ -148,5 +188,44 @@ describe('PublicSkillsCatalog', () => {
       agent_version_ids: [77],
       entity_type: 'agent',
     });
+  });
+
+  it('marks the agent version agents_with_skill already named, rather than let a second attach 409', async () => {
+    server.use(
+      http.get(`${BASE}/elitea_core/agents_with_skill/prompt_lib/:projectId/:skillId`, () =>
+        HttpResponse.json({
+          total: 1,
+          rows: [{ application_id: 3, name: 'Helper', entity_version_id: 77 }],
+        }),
+      ),
+    );
+    const user = userEvent.setup();
+    renderWithProviders(<PublicSkillsCatalog projectId={PROJECT} permissions={FORK} />);
+
+    await user.click(await screen.findByText('PR Reviewer'));
+    expect(await screen.findByTestId('attach-public-skill-already-attached')).toHaveTextContent(
+      'Already attached to: Helper',
+    );
+
+    await user.click(await screen.findByLabelText('Agent'));
+    await user.click(await screen.findByRole('option', { name: 'Helper' }));
+    await user.click(await screen.findByLabelText('Agent version'));
+
+    const option = await screen.findByRole('option', { name: 'latest (already attached)' });
+    expect(option).toHaveAttribute('aria-disabled', 'true');
+  });
+
+  it('shows no banner and no disabled option when agents_with_skill names nothing', async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<PublicSkillsCatalog projectId={PROJECT} permissions={FORK} />);
+
+    await user.click(await screen.findByText('PR Reviewer'));
+    await user.click(await screen.findByLabelText('Agent'));
+    await user.click(await screen.findByRole('option', { name: 'Helper' }));
+    await user.click(await screen.findByLabelText('Agent version'));
+
+    expect(screen.queryByTestId('attach-public-skill-already-attached')).not.toBeInTheDocument();
+    const option = await screen.findByRole('option', { name: 'latest' });
+    expect(option).not.toHaveAttribute('aria-disabled', 'true');
   });
 });
