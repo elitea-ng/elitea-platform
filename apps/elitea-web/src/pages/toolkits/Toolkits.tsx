@@ -13,8 +13,7 @@ import type { ToolkitInstance } from '@/shared/api/generated/model';
 import { unwrapListPage } from '@/shared/api/unwrap';
 import { getConfig } from '@/shared/config';
 import { t } from '@/shared/i18n';
-import { BaseTab } from '@/shared/ui/BaseTab';
-import { BaseTabs } from '@/shared/ui/BaseTabs';
+import { PageHeader } from '@/widgets/page-header';
 import { EntityCard, entityTypeIcon } from '@/shared/ui/EntityCardList';
 
 import { useSelectedProjectId } from './lib/useSelectedProjectId';
@@ -23,7 +22,6 @@ import { ToolkitsAuthorCard } from './ui/ToolkitsAuthorCard';
 const PAGE_SIZE = 20;
 
 const pageSx: SxProps<Theme> = { height: '100%', display: 'flex', flexDirection: 'column' };
-const tabBarSx: SxProps<Theme> = { flexShrink: 0, borderBottom: 1, borderColor: 'divider', padding: '0 1.5rem' };
 const tabPanelSx: SxProps<Theme> = { flex: 1, minHeight: 0, overflowY: 'auto' };
 const listSx: SxProps<Theme> = { height: '100%' };
 
@@ -333,17 +331,9 @@ export function Toolkits({ isMCP = false }: ToolkitsProps): ReactNode {
 
   return (
     <Box sx={pageSx}>
-      <Box sx={tabBarSx}>
-        <BaseTabs
-          value={0}
-          aria-label={title}
-        >
-          <BaseTab
-            label={title}
-            data-testid="toolkits-tab-all"
-          />
-        </BaseTabs>
-      </Box>
+      <PageHeader
+        tabs={{ items: [{ value: 'all', label: title }], selectedIndex: 0, ariaLabel: title, testIdPrefix: 'toolkits-tab' }}
+      />
       <Box
         sx={tabPanelSx}
         role="tabpanel"

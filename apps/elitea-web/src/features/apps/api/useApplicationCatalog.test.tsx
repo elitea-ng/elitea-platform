@@ -20,6 +20,7 @@ function application(overrides: Record<string, unknown>) {
     is_forked: false,
     meta: null,
     has_interrupt: false,
+    tags: [],
     ...overrides,
   };
 }

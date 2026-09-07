@@ -21,13 +21,21 @@
  *     to ask for `?limit=100&offset=0` and search the answer, and the queue
  *     sorts oldest-first — so its own newest row fell off the end once the
  *     table passed 100 rows, and the failure read as a lost request.
+ *  3. No journey ENDS A SESSION it does not own. `auth.setup.ts` mints one
+ *     server-side session per persona and all four workers replay its cookie;
+ *     since shared migration 0117 a logout REVOKES that row, so one journey
+ *     signing out on the shared state signs out the whole suite. Measured on
+ *     the 1.60.0 smoke run: 21 chromium journeys failed downstream of J4,
+ *     none for a reason of its own, and the refusal a revoked session
+ *     produces — `401 missing authorization header` — reads exactly like a
+ *     route that was never wired.
  *
  * Each rule is checked twice: against the real file, and against the shape the
  * file had before the correction. A rule with no failing case is a rule that
  * can be satisfied by returning "clean" for everything — the whole reason
  * `check-gates-selftest.mjs` exists.
  */
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -37,6 +45,8 @@ const APP = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const read = (relative) => readFileSync(join(APP, relative), 'utf8');
 
+const JOURNEYS = 'e2e/journeys';
+const REDIRECT_SPEC = 'e2e/journeys/shell/shell.redirect.spec.ts';
 const FEATURES_SPEC = 'e2e/journeys/admin/admin.features.spec.ts';
 const APP_REQUESTS_SPEC = 'e2e/journeys/admin/admin.app-requests.spec.ts';
 const SEED_SCRIPT = 'scripts/e2e-stack.sh';
@@ -111,6 +121,62 @@ export function teardownBody(source) {
   const rest = source.slice(start);
   const end = rest.indexOf('\n});');
   return end < 0 ? rest : rest.slice(0, end);
+}
+
+/* ── rule 3 ─────────────────────────────────────────────────────────────── */
+
+/**
+ * The `test(...)` blocks that end a session while running on the SHARED
+ * persona state.
+ *
+ * A test ends a session when its body reaches `/forward-auth/logout` or clicks
+ * the "Log out" control. It OWNS the session when it takes the `browser`
+ * fixture and makes its own context, which is what `e2e/fixtures/session.ts`
+ * exists for. A test that takes `page` is running on the file the setup
+ * project wrote, and every other worker holds the same cookie.
+ *
+ * Read as source rather than run as a journey for the same reason rules 1 and
+ * 2 are: this is a property of the SUITE. The failure it prevents does not
+ * appear in the offending test at all — that one passes — it appears in
+ * whatever ran after it, as an authentication error with no cause nearby.
+ */
+export function sessionEndingTestsOnSharedState(source) {
+  const offenders = [];
+  // Split on the start of each `test(` / `adminTest(` block at column zero.
+  const blocks = source.split(/\n(?=\w*[Tt]est\()/);
+  for (const block of blocks) {
+    const opening = /^\w*[Tt]est\(\s*(['"`])(.*?)\1\s*,\s*async\s*\(\{([^}]*)\}/s.exec(block);
+    if (opening === null) continue;
+    const [, , title, fixtures] = opening;
+    const body = block
+      .split('\n')
+      .map((line) => line.trim())
+      // A comment that QUOTES the endpoint is how the correction explains
+      // itself; a rule that read comments as code could only be satisfied by
+      // deleting the account of what went wrong.
+      .filter((line) => !line.startsWith('*') && !line.startsWith('//') && !line.startsWith('/*'))
+      .join('\n');
+    const endsASession =
+      body.includes('/forward-auth/logout') || /name:\s*'Log out'/.test(body);
+    if (!endsASession) continue;
+    const ownsItsSession = fixtures.includes('browser') && body.includes('browser.newContext(');
+    if (!ownsItsSession) offenders.push(title);
+  }
+  return offenders;
+}
+
+/** Every journey spec under `e2e/journeys`, as `[relative path, source]`. */
+function journeySpecs() {
+  const found = [];
+  const walk = (relative) => {
+    for (const entry of readdirSync(join(APP, relative), { withFileTypes: true })) {
+      const child = `${relative}/${entry.name}`;
+      if (entry.isDirectory()) walk(child);
+      else if (entry.name.endsWith('.spec.ts')) found.push([child, read(child)]);
+    }
+  };
+  walk(JOURNEYS);
+  return found;
 }
 
 /* ── the rules, on the real files and on the shape they replaced ────────── */
@@ -208,5 +274,45 @@ describe('#544 — the app-requests journey must not read only the first page', 
     expect(seed).toContain('DELETE FROM centry.moderation_state');
     // …and keeps the two rows journeys 34 and 34c assert against.
     expect(seed).toContain("NOT IN ('e2e_app_request_probe_chromium', 'e2e_app_request_probe_webkit')");
+  });
+});
+
+describe('#830 — a logout must not sign out every other worker', () => {
+  it('no journey ends a session it did not create', () => {
+    const offenders = journeySpecs().flatMap(([path, source]) =>
+      sessionEndingTestsOnSharedState(source).map((title) => `${path} › ${title}`),
+    );
+    expect(offenders).toEqual([]);
+  });
+
+  it('J4 signs in through the provider before it signs out', () => {
+    const source = read(REDIRECT_SPEC);
+    expect(source).toContain("signInThroughOidc(page, 'e2e-member@autotest.local')");
+    expect(source).toContain("browser.newContext({ storageState: undefined })");
+  });
+
+  it('rejects the shape J4 had, which took the shared page fixture', () => {
+    const before = [
+      "test('J4: logout clears user state and el.* storage', async ({ page }) => {",
+      "  await page.goto(BASE_URL + '/app/settings/profile');",
+      "  const logoutItem = page.getByRole('button', { name: 'Log out', exact: true });",
+      '  await logoutItem.click();',
+      '});',
+    ].join('\n');
+    expect(sessionEndingTestsOnSharedState(before)).toEqual([
+      'J4: logout clears user state and el.* storage',
+    ]);
+  });
+
+  it('accepts a test that makes its own context', () => {
+    const after = [
+      "test('J4: logout clears user state and el.* storage', async ({ browser }) => {",
+      '  const context = await browser.newContext({ storageState: undefined });',
+      '  const page = await context.newPage();',
+      "  const logoutItem = page.getByRole('button', { name: 'Log out', exact: true });",
+      '  await logoutItem.click();',
+      '});',
+    ].join('\n');
+    expect(sessionEndingTestsOnSharedState(after)).toEqual([]);
   });
 });

@@ -51,3 +51,30 @@ type PermissionResolver interface {
 		projectID string,
 	) (PermissionResolution, error)
 }
+
+// MembershipPermissionResolver answers "does this principal hold the
+// permission ANYWHERE" — the union of what they hold across every project they
+// are a member of.
+//
+// It exists for the routes whose ANSWER is already scoped to the caller's own
+// memberships, and which therefore have no single project to resolve against.
+// The project list is the first one: its query returns the caller's projects
+// only, but its gate resolved against the public project in the URL, so an
+// account that is not a member of the public project read 403 instead of its
+// own projects (#830).
+//
+// The mode contract is that of PermissionResolver. In the CENTRAL modes
+// (administration, developer) no project takes part in the answer, so an
+// implementation must resolve them exactly as ResolvePermissions does. In
+// DEFAULT mode the answer is the union over the caller's memberships.
+//
+// The ErrPermissionDenied contract above holds unchanged: a principal with no
+// membership at all is not a refusal, it is an EMPTY permission set, and the
+// gate turns that into 403.
+type MembershipPermissionResolver interface {
+	ResolveMembershipPermissions(
+		ctx context.Context,
+		principal User,
+		mode string,
+	) (PermissionResolution, error)
+}

@@ -70,6 +70,10 @@ var baseGates = map[string]int{
 	"RequireResolvedPermissions":           2,
 	"RequireCentralPermissions":            2,
 	"RequireResolvedPermissionsForProject": 3,
+	// #830 added this one. A gate this map does not name is a gate this file
+	// stops reading, and the route behind it goes back to being invisible on a
+	// clean database — the exact failure the file exists to prevent.
+	"RequireResolvedMembershipPermissions": 2,
 }
 
 // modeArgIndex maps a gate to the index of its permission-mode argument.
@@ -87,6 +91,7 @@ var modeArgIndex = map[string]int{
 	"RequireResolvedPermissions":           1,
 	"RequireCentralPermissions":            1,
 	"RequireResolvedPermissionsForProject": 1,
+	"RequireResolvedMembershipPermissions": 1,
 }
 
 // grantModes are the role modes a migration can grant to.

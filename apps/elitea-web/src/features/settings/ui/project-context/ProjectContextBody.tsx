@@ -158,6 +158,7 @@ export function ProjectContextBody({
               variant="contained"
               color="primary"
               disabled={!editorState.canEdit || !editorState.isDirty || editorState.isSaving}
+              data-testid="project-context-save-button"
               onClick={() => void saveActions.handleSave()}
             >
               {t('entities.projectContext.content.save', 'Save')}
@@ -166,6 +167,7 @@ export function ProjectContextBody({
               variant="secondary"
               color="secondary"
               disabled={!editorState.canEdit || !editorState.isDirty}
+              data-testid="project-context-discard-button"
               onClick={() => saveActions.handleDiscard()}
             >
               {t('entities.projectContext.content.discard', 'Discard')}
@@ -182,6 +184,13 @@ export interface ProjectContextToastsProps {
   showErrorToast: boolean;
   onCloseSave: () => void;
   onCloseError: () => void;
+  /**
+   * What went wrong. Defaults to the save failure, which used to be the only
+   * thing that could fail here. The markdown import reports through this
+   * pair now too, and "Failed to save Project Context" is the wrong sentence
+   * for a file that is too long (issue 841).
+   */
+  errorMessage?: string | undefined;
 }
 
 export function ProjectContextToasts({
@@ -189,6 +198,7 @@ export function ProjectContextToasts({
   showErrorToast,
   onCloseSave,
   onCloseError,
+  errorMessage,
 }: ProjectContextToastsProps) {
   return (
     <>
@@ -209,7 +219,7 @@ export function ProjectContextToasts({
         anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
       >
         <Alert onClose={onCloseError} severity="error" variant="filled">
-          {t('entities.projectContext.content.saveError', 'Failed to save Project Context')}
+          {errorMessage ?? t('entities.projectContext.content.saveError', 'Failed to save Project Context')}
         </Alert>
       </Snackbar>
     </>

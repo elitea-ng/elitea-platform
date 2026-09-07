@@ -224,11 +224,57 @@ type AgentBreakdown struct {
 }
 
 type ToolAnalytics struct {
-	ToolkitID   string  `json:"toolkit_id"`
+	ToolkitID string `json:"toolkit_id"`
+	// ToolkitName is the toolkit the call ran against, as the producer knew it.
+	// It travels beside ToolkitID because the two producers know different
+	// halves of that identity: an explicit run holds the saved toolkit's row id
+	// and an agent turn holds only the name its tool metadata carried. A row
+	// with a name and no id is a real measurement, not a broken one.
+	ToolkitName string  `json:"toolkit_name"`
 	ToolName    string  `json:"tool_name"`
 	RunCount    int64   `json:"run_count"`
+	ErrorCount  int64   `json:"error_count"`
 	AvgDuration float64 `json:"avg_duration_ms"`
 	ErrorRate   float64 `json:"error_rate"`
+}
+
+// ToolBreakdown is the Tools tab, and it is a struct rather than a bare
+// []ToolAnalytics for the reason AgentBreakdown is: Available.
+//
+// # Why an availability flag and not an empty list
+//
+// The tool dimension is a TABLE ADDED LATE. Before shared migration 0119
+// nothing in this platform recorded a tool call in a form a project-wide read
+// could group by — the explicit run's execution_jobs row carries no toolkit id
+// and no tool name, and the agent turn's trace step is per-tenant, covers chat
+// turns only, and carries no toolkit id either. Neither is a producer that can
+// be read after the fact, so there is nothing to backfill and none is invented.
+//
+// A window that ends before that migration was applied therefore has NO tool
+// data, which is a different sentence from "no tool ran". Rendering it as an
+// empty list would report a month of constant tool use as zero, with nothing on
+// screen able to tell the difference — the 200-with-a-fallback-body this
+// codebase keeps being burned by. When Available is false, Tools is nil and the
+// handler emits no items key at all.
+type ToolBreakdown struct {
+	// Available reports whether this deployment was recording tool calls for
+	// the whole of the requested window.
+	//
+	// False means "no data for this window": a window that ends before shared
+	// migration 0119 ran, or a database that has not run it. It does NOT mean
+	// "no tool ran".
+	Available bool `json:"tool_dimension_available"`
+
+	// Tools is the per-tool table, busiest first. Nil when Available is false.
+	// Empty (and present) when the deployment WAS recording and no tool ran in
+	// the window — a real and different state, and the one an empty list is
+	// allowed to say.
+	Tools []ToolAnalytics `json:"-"`
+
+	// Truncated is true when the table was cut to the busiest N tools, stated
+	// for the reason AgentBreakdown.Truncated is: the client normalises shares
+	// by summing what it received.
+	Truncated bool `json:"truncated"`
 }
 
 // UserActivity is one member's LLM usage in the window.

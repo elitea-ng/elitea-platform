@@ -304,6 +304,30 @@
       }
     },
     {
+      // R-A1 sanctioned path: the STANDALONE maintenance splash entry.
+      //
+      // `src/entries/maintenance` is built by `vite build --mode maintenance`
+      // into ONE document (viteSingleFile) that an ingress serves in place of
+      // the application. It has no AppProviders and no react-query by design,
+      // and the typed client R-A1 points at brings the query cache, the
+      // re-auth flow and the whole generated surface with it — into a page
+      // whose job is to render one paragraph when the platform is down.
+      //
+      // The one request it makes is a GET of the PUBLIC settings document, so
+      // an operator's splash copy can change without a redeploy. It sends no
+      // credentials beyond the same-origin cookie, reads no error into the
+      // page, and treats every failure as "nothing published".
+      "files": ["src/entries/maintenance/lib/publishedCopy.ts"],
+      "rules": {
+        "no-restricted-globals": [
+          "error",
+          { "name": "XMLHttpRequest", "message": "R-A4: XMLHttpRequest lives only in shared/api/upload.ts" },
+          { "name": "localStorage", "message": "§5.4: storage goes through shared/lib/storage.ts under the el.* namespace" },
+          { "name": "sessionStorage", "message": "§5.4: storage goes through shared/lib/storage.ts" }
+        ]
+      }
+    },
+    {
       // §5.4 sanctioned path: the storage wrapper itself.
       "files": ["src/shared/lib/storage.ts"],
       "rules": {

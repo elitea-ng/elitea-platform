@@ -52,6 +52,27 @@ describe('CreateToolkit', () => {
     await waitFor(() => expect(screen.queryByText('Choose the toolkit type')).not.toBeInTheDocument());
   });
 
+  /**
+   * The E2E locator, at unit level.
+   *
+   * `e2e/journeys/toolkits/*` and `e2e/fixtures/api.ts:1097` all reach the
+   * create page through `getByPlaceholder('Search toolkits')` — the chooser's
+   * `CategoryFilter` search box, chosen because a stub route with a bare
+   * heading has no form control. That placeholder is therefore a CONTRACT of
+   * this page, not an implementation detail of `CategoryFilter`, and nothing
+   * below the page level pins it: `ToolkitTypeSelector.test.tsx` addresses the
+   * same box by its `aria-label` instead, so the placeholder could be dropped
+   * with every unit test still green and five journeys failing at once.
+   */
+  it('offers the chooser search box the journeys address it by', async () => {
+    server.use(http.get('/api/v2/elitea_core/toolkits/prompt_lib/:projectId', () => HttpResponse.json({ github: { metadata: { label: 'GitHub' } } })));
+
+    renderToolkitsRoute(<CreateToolkit deps={{ createToolkit: vi.fn() }} />, '/toolkits/create', { projectId: 'proj-1' });
+
+    expect(await screen.findByPlaceholderText('Search toolkits')).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'GitHub' })).toBeInTheDocument();
+  });
+
   it('shows "New MCP" when isMCP is true', async () => {
     server.use(http.get('/api/v2/elitea_core/toolkits/prompt_lib/:projectId', () => HttpResponse.json({})));
     const createToolkit = vi.fn();

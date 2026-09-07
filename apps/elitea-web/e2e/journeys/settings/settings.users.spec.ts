@@ -818,4 +818,129 @@ test.describe('#130 write path', () => {
       }
     });
   });
+
+  /**
+   * J22i — the BULK invite: many addresses, one role, one submit, and an
+   * answer per address.
+   *
+   * Serial with the rest of the write path, and with its own sweep, for the
+   * same reason `batch edit` has one: the two addresses it adds would land in
+   * every other row count in this file and in the `settings-users` visual
+   * baseline.
+   *
+   * The batch is deliberately MIXED — one address nobody has, one that is
+   * already a member — so the server answers 400 with the per-address array.
+   * That is the shape the whole feature turns on: a 400 here does NOT mean the
+   * request was rejected, because each address is written in its own
+   * transaction. A build that rolled the batch back on the first failure, or a
+   * client that treated the 400 as a total failure, both pass every
+   * single-address case in this file and fail this one.
+   */
+  test.describe('bulk invite', () => {
+    /** Two addresses of J22i's own. Never reuse the personas — see `batch edit`. */
+    const BULK_NEW = `${AUTOTEST_PREFIX}bulk-new@autotest.local`;
+    /** Already a member when the batch is submitted, so its row is `already_member`. */
+    const BULK_EXISTING = `${AUTOTEST_PREFIX}bulk-existing@autotest.local`;
+    /** Never a valid address, so its row is `invalid_email` and it is never written. */
+    const BULK_MALFORMED = `${AUTOTEST_PREFIX}bulk-not-an-email`;
+
+    test.beforeAll(async ({ browser }) => {
+      const context = await browser.newContext({ storageState: STORAGE_STATE.member });
+      await removeMembersByEmail(context.request, [BULK_NEW, BULK_EXISTING]);
+      // BULK_EXISTING must already be a member for its row to be the
+      // "already a member" case rather than a second invite.
+      await inviteMembers(context.request, [BULK_EXISTING], ['viewer']);
+      await context.close();
+    });
+
+    test.afterAll(async ({ browser }) => {
+      const context = await browser.newContext({ storageState: STORAGE_STATE.member });
+      await removeMembersByEmail(context.request, [BULK_NEW, BULK_EXISTING]);
+      const remaining = (await apiMembers(context.request)).map((row) => row.email);
+      for (const email of [BULK_NEW, BULK_EXISTING]) {
+        expect(remaining).not.toContain(email);
+      }
+      await context.close();
+    });
+
+    test('J22i: a mixed batch invites the good addresses and names what happened to every one', async ({
+      page,
+    }) => {
+      test.setTimeout(90_000);
+
+      await page.goto(BASE_URL + '/app/settings/users');
+      await expect(page.getByRole('grid')).toBeVisible({ timeout: 15_000 });
+
+      // Precondition off the server, so the post-state cannot be satisfied by
+      // a batch that never ran.
+      const before = await apiMembers(page.request);
+      expect(before.map((row) => row.email)).toContain(BULK_EXISTING);
+      expect(before.map((row) => row.email)).not.toContain(BULK_NEW);
+
+      await page.goto(BASE_URL + '/app/settings/users?inviteUsers=1');
+      const dlg = inviteDialog(page);
+      await expect(dlg).toBeVisible({ timeout: 15_000 });
+
+      // ONE field, THREE addresses, mixed separators. A comma-only split would
+      // read the newline-joined pair as a single malformed address.
+      await dlg
+        .getByRole('textbox', { name: /emails/i })
+        .first()
+        .fill(`${BULK_NEW}, ${BULK_EXISTING}\n${BULK_MALFORMED}`);
+
+      // Every address is chipped, so an operator can see what was parsed.
+      await expect(dlg.getByTestId(`invite-email-chip-${BULK_NEW}`)).toBeVisible();
+      await expect(dlg.getByTestId(`invite-email-chip-${BULK_EXISTING}`)).toBeVisible();
+      await expect(dlg.getByTestId(`invite-email-chip-${BULK_MALFORMED}`)).toBeVisible();
+
+      // The malformed address blocks the submit, exactly as J22b's single one
+      // does. Remove it and the batch becomes sendable — which is also the
+      // proof that the chip and the disabled button agree about which address
+      // is bad.
+      await expect(dlg.getByRole('button', { name: /^invite$/i })).toBeDisabled();
+      await dlg
+        .getByRole('textbox', { name: /emails/i })
+        .first()
+        .fill(`${BULK_NEW}, ${BULK_EXISTING}`);
+
+      await pickInviteRole(page, 'viewer');
+      // The picked role is rendered back. It was not, before this journey:
+      // `SingleSelect` was mounted with `value=""`.
+      await expect(dlg.getByTestId('invite-role-chip-viewer')).toBeVisible();
+
+      const inviteBtn = dlg.getByRole('button', { name: /^invite$/i });
+      await expect(inviteBtn).toBeEnabled();
+      await inviteBtn.click();
+
+      // The per-address answer is RENDERED. Before the bulk port the dialog
+      // closed here and the array went nowhere.
+      const results = dlg.getByTestId('invite-results');
+      await expect(results).toBeVisible({ timeout: 15_000 });
+      await expect(results.getByTestId(`invite-result-${BULK_NEW}`)).toContainText('Invited');
+      await expect(results.getByTestId(`invite-result-${BULK_EXISTING}`)).toContainText(
+        'Already a member',
+      );
+
+      // RE-READ #1: straight off the server. The good address landed even
+      // though the call answered 400.
+      const after = await apiMembers(page.request);
+      const written = after.find((row) => row.email === BULK_NEW);
+      expect(
+        written,
+        `the batch answered per-address results but ${BULK_NEW} is not a member`,
+      ).toBeTruthy();
+      expect(written?.roles).toEqual(['viewer']);
+      // The existing member keeps exactly the roles it had — an
+      // `already_member` row must not re-grant anything.
+      expect(after.find((row) => row.email === BULK_EXISTING)?.roles).toEqual(['viewer']);
+      expect(after).toHaveLength(before.length + 1);
+      expect(after.map((row) => row.email)).not.toContain(BULK_MALFORMED);
+
+      // RE-READ #2: a full page load, so the row can only come from the server.
+      await page.goto(BASE_URL + '/app/settings/users');
+      const row = page.getByRole('grid').getByRole('row').filter({ hasText: BULK_NEW });
+      await expect(row).toHaveCount(1, { timeout: 15_000 });
+      await expect(row.getByRole('gridcell', { name: 'viewer', exact: true })).toBeVisible();
+    });
+  });
 });

@@ -21,6 +21,7 @@ function applicationsList(total: number) {
       is_forked: false,
       meta: null,
       has_interrupt: false,
+      tags: [],
     })),
     total,
     page: 1,
@@ -181,5 +182,15 @@ describe('Apps (ROUTE-036/039)', () => {
 
     await waitFor(() => expect(router.state.location.pathname).toBe('/apps/create/inventory'));
     expect(await screen.findByTestId('create-app-type-probe')).toHaveTextContent('inventory');
+  });
+
+  /** COMPOSITION ROOT — see `pages/agents/Applications.test.tsx` (issue 841). */
+  it('renders both tabs inside the shared page header', async () => {
+    server.use(getListApplicationsMockHandler(applicationsList(1)));
+    renderAppsRoute('/apps/applications', { projectId: 'proj-1' });
+
+    const header = await screen.findByTestId('page-header');
+    expect(header).toContainElement(screen.getByRole('tablist', { name: 'Apps' }));
+    expect(header).toContainElement(screen.getByRole('tab', { name: /App Catalog/ }));
   });
 });

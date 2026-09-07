@@ -8,6 +8,13 @@
 import { test, expect } from '@playwright/test';
 
 import { checkA11y } from '../../fixtures/axe';
+import {
+  DEFAULT_PROJECT_NAME,
+  ensureProjectSelected,
+  projectSwitcher,
+  shellChoseAProject,
+} from '../../fixtures/project';
+import { signInThroughOidc } from '../../fixtures/session';
 import { BASE_URL } from '../../../playwright.config';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -119,9 +126,24 @@ test('J2: OIDC login honours target_to deep link', async ({ browser }) => {
   // the URL assertions above would also pass for an unauthenticated shell
   // that was simply served the bundle at that path (which is exactly what
   // this stack does — see the note above).
-  await expect(page.getByRole('button', { name: /Project:\s*Default Project/ })).toBeVisible({
-    timeout: 20_000,
-  });
+  //
+  // A FRESH CONTEXT LANDS WHEREVER THE APP PUTS IT. This journey creates its
+  // own context precisely so it drives the whole login, so it inherits none of
+  // `auth.setup.ts`'s pinning: nothing is in storage, and `AppShell` selects
+  // the caller's own personal project — which sign-in now provisions for every
+  // account (`ensurePersonalProject`, internal/api/v2/auth/signin.go). The
+  // assertion here used to read "Project: Default Project" and started failing
+  // on "Private", which is the app doing exactly what production should do for
+  // a first-time user rather than anything about `target_to`.
+  //
+  // So the project is CHOSEN, and then asserted. Both halves still prove the
+  // session: an unauthenticated shell has no project list to choose from.
+  await shellChoseAProject(page);
+  await ensureProjectSelected(page, DEFAULT_PROJECT_NAME);
+  await expect(projectSwitcher(page)).toHaveAccessibleName(
+    new RegExp(`Project:\\s*${DEFAULT_PROJECT_NAME}`),
+    { timeout: 20_000 },
+  );
 
   await checkA11y(page);
   await context.close();
@@ -130,7 +152,20 @@ test('J2: OIDC login honours target_to deep link', async ({ browser }) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // Journey 4: Logout → all el.* storage cleared
 // ─────────────────────────────────────────────────────────────────────────────
-test('J4: logout clears user state and el.* storage', async ({ page }) => {
+test('J4: logout clears user state and el.* storage', async ({ browser }) => {
+  // THIS JOURNEY OWNS THE SESSION IT DESTROYS — read this before replacing the
+  // context below with the shared `page` fixture it used to take.
+  //
+  // Since shared migration 0117 the `elitea_session` cookie names a ROW and
+  // `/forward-auth/logout` REVOKES it (`internal/api/v2/auth/session.go`).
+  // `auth.setup.ts` mints one session per persona and all four workers replay
+  // its cookie, so a logout driven on the shared state signs out the whole
+  // suite: every later API helper gets `401 missing authorization header` and
+  // every later page load is navigated to the identity provider by the shell's
+  // session probe. Measured on the 1.60.0 smoke run — 21 chromium journeys
+  // failed downstream of this one test, none of them for a reason of their
+  // own. See `e2e/fixtures/session.ts`.
+  //
   // JRNY-004's three acceptance lines, each asserted separately below:
   // the user state is cleared, the login screen is reached, and all
   // application storage keys are removed.
@@ -170,6 +205,10 @@ test('J4: logout clears user state and el.* storage', async ({ page }) => {
   // covers the storage sweep in jsdom and names THIS journey as the half that
   // proves the browser really leaves the app, so the page it opens has to be
   // the page the control is on.
+  const context = await browser.newContext({ storageState: undefined });
+  const page = await context.newPage();
+  await signInThroughOidc(page, 'e2e-member@autotest.local');
+
   await page.goto(BASE_URL + '/app/settings/profile', { waitUntil: 'domcontentloaded' });
 
   // Wait for the logout control to be interactive before touching storage.
@@ -312,4 +351,6 @@ test('J4: logout clears user state and el.* storage', async ({ page }) => {
   expect(probe.control).toHaveLength(2);
   // ...and no key of the namespace survived the logout.
   expect(probe.surviving).toEqual([]);
+
+  await context.close();
 });

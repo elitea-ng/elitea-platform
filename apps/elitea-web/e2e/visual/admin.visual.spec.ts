@@ -236,6 +236,25 @@ const ADMIN_ROUTES: readonly AdminVisualRoute[] = [
     landmark: (page) => page.getByRole('table', { name: 'Schedules' }),
   },
   {
+    // @covers /admin/app/tasks
+    name: 'admin-tasks',
+    path: '/admin/app/tasks',
+    // The row COUNT, not the table and not the empty text.
+    //
+    // This stack runs no background jobs, so the union is empty and the table
+    // is not mounted at all — there is nothing with a table role to wait for.
+    // The empty text would be wrong for the opposite reason: it renders only
+    // once the query has resolved, but so does `Jobs: 0`, and the count is the
+    // one element present in BOTH the empty and the populated screen, so this
+    // landmark keeps working the day the stack does run a job.
+    //
+    // No mask: every value on the empty screen is a constant. A populated one
+    // would need `Started`/`Finished` masked, and this note is here so that
+    // fact is not rediscovered.
+    // Measured: loaded YES, stalled no.
+    landmark: (page) => page.getByTestId('admin-tasks-count'),
+  },
+  {
     // @covers /admin/app/app-requests
     name: 'admin-app-requests',
     path: '/admin/app/app-requests',

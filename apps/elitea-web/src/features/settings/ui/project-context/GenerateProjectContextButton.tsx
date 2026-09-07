@@ -98,9 +98,14 @@ export function GenerateProjectContextButton({
         size="small"
         startIcon={<AiSparkleIcon />}
         onClick={handleOpen}
+        data-testid="project-context-generate-with-ai-button"
         sx={buttonSx}
       >
-        {t('entities.projectContext.generateButton.label', 'Generate with AI')}
+        {/* "Build with AI", the one string the reference uses for this
+          * control on BOTH screens (`GenerateProjectContextButton.jsx:14`).
+          * The empty state already said it; the editor toolbar said
+          * "Generate with AI", so one affordance had two names (issue 841). */}
+        {t('entities.projectContext.generateButton.label', 'Build with AI')}
       </BaseBtn>
       <GenerateProjectContextModal
         open={isOpen}

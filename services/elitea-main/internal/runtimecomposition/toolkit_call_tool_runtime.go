@@ -1,6 +1,7 @@
 package runtimecomposition
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"time"
@@ -76,6 +77,7 @@ func newCurrentToolkitCallToolRuntime(
 	producer *redisdispatch.ToolkitCallToolProducer,
 	policy repos.ToolkitCallToolDispatchPolicy,
 	deadline time.Duration,
+	records *repos.ToolCallRecordsRepository,
 ) (*currentToolkitCallToolRuntime, error) {
 	if admissionPool == nil || results == nil || index == nil ||
 		index.toolkits == nil || index.settings == nil || producer == nil {
@@ -124,9 +126,48 @@ func newCurrentToolkitCallToolRuntime(
 		},
 		currentRuntimeID,
 		deadline,
+		toolkitcalltoolapp.WithRunRecorder(toolRunRecorderAdapter{records: records}),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("construct tool-run service: %w", err)
 	}
 	return &currentToolkitCallToolRuntime{run: run, jobs: jobs, results: results}, nil
+}
+
+// toolRunRecorderAdapter turns one settled explicit tool run into the shared
+// analytics record (issue 618).
+//
+// It lives here rather than as a method on the repository because the shape it
+// translates belongs to the application package: the repository owns a row and
+// the tool-run service owns a run, and neither should have to import the other
+// to say so.
+type toolRunRecorderAdapter struct {
+	records *repos.ToolCallRecordsRepository
+}
+
+var _ toolkitcalltoolapp.RunRecorder = toolRunRecorderAdapter{}
+
+func (a toolRunRecorderAdapter) RecordToolRun(
+	ctx context.Context,
+	record toolkitcalltoolapp.ToolRunRecord,
+) error {
+	if a.records == nil {
+		return nil
+	}
+	return a.records.Record(ctx, repos.ToolCallRecord{
+		ProjectID: record.ProjectID,
+		Source:    repos.ToolCallSourceExplicitRun,
+		// The execution id IS the natural key: an idempotent re-admission of
+		// the same run returns the same id, so a replay updates one row rather
+		// than counting the call twice.
+		SourceRef:   record.ExecutionID,
+		ToolkitID:   record.ToolkitID,
+		ToolkitType: record.ToolkitType,
+		ToolName:    record.ToolName,
+		StartedAt:   record.StartedAt,
+		FinishedAt:  record.FinishedAt,
+		IsError:     record.IsError,
+		ActorUserID: record.ActorUserID,
+		ExecutionID: record.ExecutionID,
+	})
 }

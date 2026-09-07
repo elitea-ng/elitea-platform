@@ -24,9 +24,12 @@ package middleware
 // it load and having it render the splash itself is strictly better:
 //
 //   - the splash is themed, translated and accessible like the rest of the
-//     product, rather than being an HTML document an operator pastes into a
-//     textarea (which is also an XSS surface pointed at every user, and is why
-//     `splash_template` is not ported);
+//     product, rather than being a whole HTML document served in place of it.
+//     pylon's `splash_template` IS ported, as the `maintenance_html` platform
+//     setting, but as a BODY the product's own splash renders inside its page:
+//     the server refuses executable markup on the way in
+//     (v2/admin/config_values.go's validateSplashHTML) and every renderer
+//     sanitises on the way out, which the pylon hook did neither of;
 //   - an ADMIN can reach the admin panel and turn the switch back off during the
 //     window, which under the pylon hook depended on a static shared bypass
 //     token in plugin config;

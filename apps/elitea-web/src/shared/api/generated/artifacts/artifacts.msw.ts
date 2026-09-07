@@ -48,6 +48,8 @@ import type {
   BatchDeleteObjectsResponse,
   Bucket,
   BucketListResponse,
+  BucketPermissionListResponse,
+  BucketPermissionRow,
   ListObjectsResponse,
   PresignUploadPartResponse,
   TransferGrantResponse,
@@ -268,6 +270,54 @@ export const getCompleteMultipartUploadResponseMock = (
   media_type: faker.string.alpha({ length: { min: 10, max: 20 } }),
   etag: faker.string.alpha({ length: { min: 10, max: 20 } }),
   created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
+
+export const getListBucketPermissionsResponseMock = (
+  overrideResponse: Partial<Extract<BucketPermissionListResponse, object>> = {},
+): BucketPermissionListResponse => ({
+  total: faker.number.int(),
+  rows: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    user_id: faker.number.int(),
+    name: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    email: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    bucket_permissions: {
+      [faker.string.alphanumeric(5)]: faker.helpers.arrayElements([
+        "read",
+        "write",
+      ] as const),
+    },
+  })),
+  ...overrideResponse,
+});
+
+export const getSetBucketPermissionsResponseMock = (
+  overrideResponse: Partial<Extract<BucketPermissionRow, object>> = {},
+): BucketPermissionRow => ({
+  user_id: faker.number.int(),
+  name: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  email: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  bucket_permissions: {
+    [faker.string.alphanumeric(5)]: faker.helpers.arrayElements([
+      "read",
+      "write",
+    ] as const),
+  },
   ...overrideResponse,
 });
 
@@ -675,6 +725,81 @@ export const getAbortMultipartUploadMockHandler = (
     options,
   );
 };
+
+export const getListBucketPermissionsMockHandler = (
+  overrideResponse?:
+    | BucketPermissionListResponse
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) =>
+        Promise<BucketPermissionListResponse> | BucketPermissionListResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/artifacts/bucket_permissions/:projectID",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListBucketPermissionsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getSetBucketPermissionsMockHandler = (
+  overrideResponse?:
+    | BucketPermissionRow
+    | ((
+        info: Parameters<Parameters<typeof http.put>[1]>[0],
+      ) => Promise<BucketPermissionRow> | BucketPermissionRow),
+  options?: RequestHandlerOptions,
+) => {
+  return http.put(
+    "*/artifacts/bucket_permissions/:projectID",
+    async (info: Parameters<Parameters<typeof http.put>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getSetBucketPermissionsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getDeleteBucketPermissionMockHandler = (
+  overrideResponse?:
+    | void
+    | ((
+        info: Parameters<Parameters<typeof http.delete>[1]>[0],
+      ) => Promise<void> | void),
+  options?: RequestHandlerOptions,
+) => {
+  return http.delete(
+    "*/artifacts/bucket_permissions/:projectID",
+    async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
+      await delay(0);
+      if (typeof overrideResponse === "function") {
+        await overrideResponse(info);
+      }
+
+      return new HttpResponse(null, { status: 204 });
+    },
+    options,
+  );
+};
 export const getArtifactsMock = () => [
   getListBucketsMockHandler(),
   getCreateBucketMockHandler(),
@@ -692,4 +817,7 @@ export const getArtifactsMock = () => [
   getPresignUploadPartMockHandler(),
   getCompleteMultipartUploadMockHandler(),
   getAbortMultipartUploadMockHandler(),
+  getListBucketPermissionsMockHandler(),
+  getSetBucketPermissionsMockHandler(),
+  getDeleteBucketPermissionMockHandler(),
 ];

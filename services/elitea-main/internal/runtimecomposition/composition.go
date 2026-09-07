@@ -1103,6 +1103,13 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		indexStart = currentIndex.start
 		// The tool-run producer, composed on the index graph's own toolkit
 		// reader and settings resolver.
+		// The analytics record (issue 618). It is composed here, on the
+		// admission pool, because the explicit run's record must commit on the
+		// same database its execution_jobs row does.
+		toolCallRecords, recordsErr := repos.NewToolCallRecordsRepository(dependencies.AdmissionPool)
+		if recordsErr != nil {
+			return nil, recordsErr
+		}
 		toolkitCallToolRuntime, toolRunErr := newCurrentToolkitCallToolRuntime(
 			dependencies.AdmissionPool,
 			toolkitCallToolResults,
@@ -1112,6 +1119,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			toolkitCallToolProducer,
 			toolkitCallToolDispatchPolicy,
 			0,
+			toolCallRecords,
 		)
 		if toolRunErr != nil {
 			return nil, toolRunErr

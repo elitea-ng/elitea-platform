@@ -479,3 +479,162 @@ func contains(haystack, needle string) bool {
 		return false
 	})()
 }
+
+/* ── the analytics record (issue 618) ─────────────────────────────────── */
+
+type stubRecorder struct {
+	records []ToolRunRecord
+	err     error
+}
+
+func (s *stubRecorder) RecordToolRun(_ context.Context, record ToolRunRecord) error {
+	s.records = append(s.records, record)
+	return s.err
+}
+
+func newRecordingService(
+	t *testing.T,
+	settlements SettlementReader,
+	recorder RunRecorder,
+	deadline time.Duration,
+) *RunService {
+	t.Helper()
+	service, err := NewRunService(
+		&stubResolver{inputs: testInputs()}, stubVerdict{supported: true},
+		&stubAdmissions{run: testAdmitted()}, &stubDispatcher{}, settlements,
+		DispatchPolicy{
+			CapabilityVersion: "1", ResourceClass: "indexing", IsolationClass: "project",
+			Priority: 1, LimitsRevision: "limits-v1",
+		},
+		func() (string, error) { return "generated", nil },
+		deadline,
+		WithRunRecorder(recorder),
+	)
+	if err != nil {
+		t.Fatalf("compose run service: %v", err)
+	}
+	service.now = func() time.Time { return time.Unix(2, 0).UTC() }
+	return service
+}
+
+// The EXPLICIT half of issue 618's producer: a tool run a person or an MCP
+// client asked for leaves a durable record carrying the identity the analytics
+// read groups by. Before this, execution_jobs held the run with neither a
+// toolkit id nor a tool name on it.
+func TestRunToolRecordsASettledRunForAnalytics(t *testing.T) {
+	recorder := &stubRecorder{}
+	service := newRecordingService(t, &stubSettlements{
+		settlement: settledPayload(t, runtimev1.ToolkitCallToolStatusV1_TOOLKIT_CALL_TOOL_STATUS_V1_OK, `{}`, ""),
+		found:      true,
+	}, recorder, time.Second)
+
+	if _, err := service.RunTool(context.Background(), validRequest()); err != nil {
+		t.Fatal(err)
+	}
+	if len(recorder.records) != 1 {
+		t.Fatalf("expected one record, got %d", len(recorder.records))
+	}
+	record := recorder.records[0]
+	if record.ProjectID != 1 || record.ActorUserID != 7 || record.ToolkitID != 19 ||
+		record.ToolName != "list_issues" || record.ToolkitType != "github" {
+		t.Fatalf("record identity: %+v", record)
+	}
+	if record.ExecutionID != "exec-1" {
+		t.Fatalf("the record must name the execution it describes: %+v", record)
+	}
+	// The clock comes from the ADMISSION, which is durable and survives an
+	// idempotent replay, not from this process reading its own clock twice.
+	if !record.StartedAt.Equal(time.Unix(1, 0).UTC()) {
+		t.Fatalf("started_at = %s, want the admitted_at", record.StartedAt)
+	}
+	if !record.FinishedAt.Equal(time.Unix(2, 0).UTC()) {
+		t.Fatalf("finished_at = %s, want the settlement moment", record.FinishedAt)
+	}
+	if record.IsError {
+		t.Fatal("a successful run must not be recorded as an error")
+	}
+}
+
+// A tool that answered with an error still RAN, so it is still a call. Recording
+// only successes would make the tab's error rate structurally zero.
+func TestRunToolRecordsAToolErrorAsAnError(t *testing.T) {
+	recorder := &stubRecorder{}
+	service := newRecordingService(t, &stubSettlements{
+		settlement: settledPayload(t, runtimev1.ToolkitCallToolStatusV1_TOOLKIT_CALL_TOOL_STATUS_V1_TOOL_ERROR, ``, "boom"),
+		found:      true,
+	}, recorder, time.Second)
+
+	if _, err := service.RunTool(context.Background(), validRequest()); err != nil {
+		t.Fatal(err)
+	}
+	if len(recorder.records) != 1 || !recorder.records[0].IsError {
+		t.Fatalf("a tool error must be recorded as one: %+v", recorder.records)
+	}
+}
+
+// A run whose bounded wait expired is DURABLE and still going. It is recorded
+// with no finish time rather than dropped: dropping it would make a hanging tool
+// disappear from the tab that should show it.
+func TestRunToolRecordsAPendingRunWithoutAFinishTime(t *testing.T) {
+	recorder := &stubRecorder{}
+	service := newRecordingService(t, &stubSettlements{found: false}, recorder, 80*time.Millisecond)
+
+	if _, err := service.RunTool(context.Background(), validRequest()); !errors.Is(err, ErrToolRunDeadlineExceeded) {
+		t.Fatalf("expected the bounded wait to expire, got %v", err)
+	}
+	if len(recorder.records) != 1 {
+		t.Fatalf("expected one record, got %d", len(recorder.records))
+	}
+	record := recorder.records[0]
+	if !record.FinishedAt.IsZero() {
+		t.Fatalf("a run still going must carry no finish time: %+v", record)
+	}
+	if record.IsError {
+		t.Fatal("a run that has not settled is not a failure")
+	}
+}
+
+// Nothing ran, so nothing is recorded. The refusal happens before any durable
+// write, and a record here would invent a call.
+func TestRunToolRecordsNothingWhenTheToolNeverRan(t *testing.T) {
+	recorder := &stubRecorder{}
+	service, err := NewRunService(
+		&stubResolver{inputs: testInputs()}, stubVerdict{supported: false, reason: "no image"},
+		&stubAdmissions{run: testAdmitted()}, &stubDispatcher{}, &stubSettlements{},
+		DispatchPolicy{
+			CapabilityVersion: "1", ResourceClass: "indexing", IsolationClass: "project",
+			Priority: 1, LimitsRevision: "limits-v1",
+		},
+		func() (string, error) { return "generated", nil },
+		time.Second,
+		WithRunRecorder(recorder),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.RunTool(context.Background(), validRequest()); !errors.Is(err, ErrUnsupportedToolkitType) {
+		t.Fatalf("expected the type refusal, got %v", err)
+	}
+	if len(recorder.records) != 0 {
+		t.Fatalf("a refused run must not be recorded: %+v", recorder.records)
+	}
+}
+
+// A recorder failure must not fail the run. The tool has already executed and
+// its result is in hand; refusing to hand it back because a statistics row did
+// not commit would turn a reporting gap into an outage.
+func TestRunToolSurvivesARecorderFailure(t *testing.T) {
+	recorder := &stubRecorder{err: errors.New("record unavailable")}
+	service := newRecordingService(t, &stubSettlements{
+		settlement: settledPayload(t, runtimev1.ToolkitCallToolStatusV1_TOOLKIT_CALL_TOOL_STATUS_V1_OK, `{"ok":true}`, ""),
+		found:      true,
+	}, recorder, time.Second)
+
+	outcome, err := service.RunTool(context.Background(), validRequest())
+	if err != nil {
+		t.Fatalf("a recorder failure must not fail the run: %v", err)
+	}
+	if outcome.Status != RunStatusOK || outcome.ResultJSON != `{"ok":true}` {
+		t.Fatalf("the tool result was altered by a recorder failure: %+v", outcome)
+	}
+}

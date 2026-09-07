@@ -661,6 +661,15 @@ CROSS JOIN (VALUES
     ('configuration.artifacts.buckets.view'),
     ('configuration.artifacts.buckets.edit'),
     ('configuration.artifacts.buckets.delete'),
+    -- The per-bucket ACCESS LIST routes (`/api/v2/artifacts/bucket_permissions/
+    -- {projectID}`) are gated on the two strings the artifacts plugin declares
+    -- for them, which are DISTINCT from the four above: pylon keeps the access
+    -- map inside an `s3_api_credentials` row, so it gates it on that resource.
+    -- Shared migration 0118 grants both centrally; project 1 carries
+    -- per-project rows, which SUPPRESS that central fallback, so they have to
+    -- be listed here as well or the "Manage access" dialog 403s.
+    ('configuration.artifacts.s3_credentials.view'),
+    ('configuration.artifacts.s3_credentials.edit'),
     -- #496 gated the whole /api/v2/configurations mount, which until then
     -- applied no permission of any kind. Project 1 carries per-project rows,
     -- so the central default-mode fallback shared/0072 seeds is SUPPRESSED
@@ -790,13 +799,31 @@ ON CONFLICT (project_id, user_id, role_id) DO NOTHING;
 -- `project_not_resolved` and an agent turn streams `agent_llm_start` straight
 -- to `pipeline_finish` with no token ever produced: admitted, streamed, empty.
 --
--- A SEPARATE persona rather than giving `e2e-member`/`e2e-admin` a personal
--- project, and that separation is load-bearing: the app auto-selects the
--- signed-in user's personal project over the one `auth.setup.ts` writes to
--- localStorage. Handing the existing personas one silently moves every journey
--- off project 1 — measured: the chat page began issuing
--- `…/conversations/prompt_lib/90102`, so every journey asserting a project-1
--- URL would break for a reason unrelated to its own subject.
+-- A SEPARATE persona rather than driving chat as `e2e-member`/`e2e-admin`.
+--
+-- THE PERSONAS ALL HAVE A PERSONAL PROJECT NOW, AND THIS SEED NO LONGER
+-- DECIDES THAT. Sign-in provisions one for every account that reaches it
+-- (`ensurePersonalProject`, services/elitea-main/internal/api/v2/auth/
+-- signin.go), which is the product behaviour: a new user lands in Private.
+-- So the property this comment used to rely on — that only the chat driver
+-- owns a `project_user_%` row — is gone, and anything written on top of it is
+-- gone with it.
+--
+-- What is still true is why the chat driver is a persona of its own: the
+-- permissions below are granted INSIDE its personal project, and the `/llm`
+-- hop resolves the caller's personal project for the provider credential
+-- (#290). Granting the same list inside `e2e-member`'s personal project would
+-- widen a persona that ~230 journeys share, for one journey's benefit.
+--
+-- WHY THE OTHER PERSONAS STILL WORK IN PROJECT 1. Every journey and every
+-- visual baseline is written against the seeded project 1, and the app selects
+-- the caller's personal project when nothing is selected. `auth.setup.ts`
+-- therefore PINS project 1 for those two personas — through the switcher, the
+-- product's own path — and records that in the storage state, instead of
+-- deriving it from whether a personal project happens to exist yet. It used to
+-- derive it, and the answer changed per continuous-integration job (the
+-- provisioning wait is bounded at three seconds), which moved fifty journeys
+-- and forty-three screenshots off project 1 in three jobs out of four.
 --
 -- The resolver needs BOTH halves — a `project_user_<uid>` project AND a
 -- project-role assignment on it — so the pair is created together; the project
@@ -837,12 +864,14 @@ ON CONFLICT (project_id, user_id, role_id) DO NOTHING;
 --     the project in its URL, while the embedding hop underneath it resolves
 --     the CALLER's PERSONAL project for the provider credential — so the one
 --     caller who can drive an index run end to end is a caller who has both.
---     Only this persona has a personal project at all (measured: the sole
---     `project_user_%` row belongs to it), and only project 1 grants
---     `tool.patch` — the two never met, which is why an index run used to die
---     on `project_not_resolved` before the permission was even consulted.
---   * Giving `e2e-member`/`e2e-admin` a personal project instead is the option
---     the comment above already rules out, for a reason that has not changed.
+--     Only this persona has a personal project the SEED can name (sign-in
+--     provisions one for the others, with an id nothing here can predict), and
+--     only project 1 grants `tool.patch` — the two never met, which is why an
+--     index run used to die on `project_not_resolved` before the permission
+--     was even consulted.
+--   * Granting the same list inside `e2e-member`/`e2e-admin`'s personal
+--     project is the option the comment above rules out: it widens a persona
+--     ~230 journeys share, and the seed cannot address those projects anyway.
 --   * A fourth persona would need its own OIDC login, storageState, Playwright
 --     project, `social_users` row, vault blob and tenant schema — and would
 --     still end up with exactly this permission list. Widening one autotest

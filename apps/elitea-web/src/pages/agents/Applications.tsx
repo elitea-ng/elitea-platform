@@ -7,9 +7,8 @@ import { useNavigate, useParams } from '@tanstack/react-router';
 
 import { EntityImportButton, useEntityImport } from '@/features/agent-lifecycle';
 import { t } from '@/shared/i18n';
-import { BaseTab } from '@/shared/ui/BaseTab';
-import { BaseTabs } from '@/shared/ui/BaseTabs';
 import { EntityListRail } from '@/shared/ui/EntityRail';
+import { PageHeader } from '@/widgets/page-header';
 import { useSidebarCollapsedStore } from '@/widgets/sidebar';
 
 import { isPublicAgentsProject } from './lib/isPublicAgentsProject';
@@ -24,16 +23,6 @@ const pageSx: SxProps<Theme> = {
   flexDirection: 'column',
 };
 
-const tabBarSx: SxProps<Theme> = {
-  flexShrink: 0,
-  borderBottom: 1,
-  borderColor: 'divider',
-  padding: '0 1.5rem',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  gap: '1rem',
-};
 
 const tabPanelSx: SxProps<Theme> = {
   flex: 1,
@@ -74,19 +63,19 @@ interface AgentsRouteParams {
  *    `trend_start_period` filter has no server-side support at all, so
  *    there is nothing for a working date picker to control.
  *
- * **The rail is real; the tag FILTER on this page is not — disclosed.** The
- * "Tags" panel lists this project's real tags and writes the selection into
- * the shell-wide `tags[]` search param (linkable, restored on reload), but
- * no application list narrows by it, because elitea-main cannot support it
- * at either end: the applications repo never populates a row's `tags` on a
- * list response (`internal/infra/db/repos/applications.go` — the field is
- * absent, and the version maps hardcode `"tags": []any{}`), and the `tags`
- * request param the handler does read into `ListRequest.Tags`
- * (`internal/api/v2/applications/handler.go:108`) is consumed by nothing.
- * Filtering client-side over rows that carry no tags would empty the list on
- * the first chip click — a worse lie than an unfiltered one. `pages/skills`
- * DOES filter for real (skills rows carry their tags), which is what this
- * looks like once the server catches up.
+ * **The rail and its tag filter are both real (issue 841).** The "Tags"
+ * panel lists this project's real tags and writes the selection into the
+ * shell-wide `tags[]` search param (linkable, restored on reload), and
+ * `PrivateAgentsList`/`PrivatePipelinesList` send that selection to the
+ * server as the `tags` request param.
+ *
+ * It was decorative until the server caught up at both ends: the
+ * applications repo populated no row's `tags` on a list response, and the
+ * `tags` param the handler read into `ListRequest.Tags` reached a query that
+ * never mentioned it. `internal/infra/db/repos/applications.go` `List` now
+ * aggregates the tag names of every version onto the row and applies the
+ * filter with AND matching, so the cards carry their tags and a chip click
+ * narrows the list.
  */
 export function Applications(): ReactNode {
   const navigate = useNavigate();
@@ -117,38 +106,37 @@ export function Applications(): ReactNode {
 
   return (
     <Box sx={pageSx}>
-      <Box sx={tabBarSx}>
-        <BaseTabs
-          value={selectedIndex === -1 ? false : selectedIndex}
-          onChange={handleChangeTab}
-          aria-label={t('pages.agents.applications.tabsAriaLabel', 'Agents')}
-        >
-          {visibleTabs.map((tab) => (
-            <BaseTab
-              key={tab.value}
-              label={tab.count === undefined ? tab.label : `${tab.label} (${tab.count})`}
-              data-testid={`agents-tab-${tab.value}`}
-            />
-          ))}
-        </BaseTabs>
-        {/*
+      <PageHeader
+        tabs={{
+          items: visibleTabs.map((tab) => ({
+            value: tab.value,
+            label: tab.count === undefined ? tab.label : `${tab.label} (${tab.count})`,
+          })),
+          selectedIndex: selectedIndex === -1 ? false : selectedIndex,
+          onChange: handleChangeTab,
+          ariaLabel: t('pages.agents.applications.tabsAriaLabel', 'Agents'),
+          testIdPrefix: 'agents-tab',
+        }}
+        /*
          * Import (validation-matrix gap 12). Production carries this control
          * on the Agents, Pipelines and Skills list headers; this app had it on
          * Skills only, so an agent could be exported and never brought back —
          * `POST /elitea_core/import_wizard/prompt_lib/{project}` was generated
          * and had `"usedBy": []`. Hidden for the PUBLIC project's lists, which
          * are read-only catalogues, matching the create button's own rule.
-         */}
-        {!isPublicProject && (
-          <EntityImportButton
-            testIdPrefix="agents"
-            isImporting={entityImport.run.isPending}
-            onImport={async (document) => {
-              await entityImport.run.mutateAsync(document);
-            }}
-          />
-        )}
-      </Box>
+         */
+        slots={{
+          actions: isPublicProject ? undefined : (
+            <EntityImportButton
+              testIdPrefix="agents"
+              isImporting={entityImport.run.isPending}
+              onImport={async (document) => {
+                await entityImport.run.mutateAsync(document);
+              }}
+            />
+          ),
+        }}
+      />
       <Box
         sx={tabPanelSx}
         role="tabpanel"

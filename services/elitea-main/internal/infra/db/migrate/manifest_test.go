@@ -458,7 +458,53 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// toolkit call-tool capability above claimed it first. 0102, 0103 and 0104
 	// carry the same note for the same reason: two streams each correctly claim
 	// the next free number, and only the merge can see the collision.
-	require.EqualValues(t, 116, Head(shared))
+	// 117: shared/0117_browser_sessions.sql, the server-side browser session
+	// table. The `elitea_session` cookie used to be a self-contained signed
+	// token, so nothing on the server knew a session existed: logout only
+	// deleted the browser's copy, there was no idle deadline, and SAML single
+	// logout had no session index to name. The row is now the session and the
+	// cookie carries only its opaque id.
+	//
+	// It lives in `elitea_auth`, beside 0095's identity providers and 0096's
+	// SCIM tables, and it takes NO foreign key to `auth_core__user`: that table
+	// belongs to the legacy runtime, and a shared migration that claims it
+	// breaks the repository seeds.
+	//
+	// 118: shared/0118_artifact_bucket_permissions.sql, the per-bucket access
+	// list the artifacts plugin calls `bucket_permissions`, plus the two
+	// default-mode grants its routes gate on
+	// (`configuration.artifacts.s3_credentials.view` and `.edit`).
+	//
+	// TWO CONCERNS IN ONE FILE, like 0072. The table and the grants are one
+	// feature: the routes that read and write the table are gated on strings no
+	// file in this corpus grants, so shipping the table without the grants
+	// leaves every ACL route answering 403 on a clean database — the class
+	// internal/api/router_permission_grant_gate_test.go names. Splitting them
+	// would take two numbers for one indivisible change.
+	//
+	// A new file for 0110's reason: 0060 returns early on any configured
+	// deployment, and migrations are checksum-immutable.
+	//
+	// 119: shared/0119_tool_call_records.sql, the durable per-tool-call record
+	// the Analytics Tools tab is built on. Two producers write it — the
+	// explicit tool run (toolkit.call_tool.v1, whose execution_jobs row carries
+	// a project but neither toolkit id nor tool name) and the agent turn's
+	// tool-call trace step (which carries a tool name but no toolkit id, and
+	// covers chat turns only). Either one alone under-reports by an unknown
+	// factor, which is why issue 618 stayed refused until a table existed.
+	//
+	// It is SHARED rather than tenant for the three reasons the analytics
+	// header gives: one project column, one clock, one statement. Nothing is
+	// backfilled — a window ending before this migration was applied is
+	// reported unavailable, and the read finds that moment in
+	// elitea_runtime.schema_migrations.
+	//
+	// It took 119 rather than 118 because the artifact-ACL package above ran
+	// concurrently off the same base and 0118 was reserved for it at dispatch,
+	// so the two streams could not both claim the next free number and discover
+	// it only at merge — the collision 0102, 0103, 0104 and 0115 each carry a
+	// note about. Both numbers are used, and the reservation worked.
+	require.EqualValues(t, 119, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

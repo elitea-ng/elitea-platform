@@ -45,6 +45,7 @@ import { HttpResponse, delay, http } from "msw";
 import type { RequestHandlerOptions } from "msw";
 
 import type {
+  BackgroundJobListResponse,
   BrandingAsset,
   BrandingPackageReport,
   BrandingSettings,
@@ -56,6 +57,7 @@ import type {
   ModeRoleRemoveResult,
   ModerationRequestList,
   ModerationRequestRow,
+  OkResponse,
   PlatformSettings,
   PublishedAgentsListing,
   Role,
@@ -99,6 +101,15 @@ export const getUserCreateResponseMock = (): UserInviteResult[] =>
     ]),
     invitation_delivered: faker.helpers.arrayElement([
       faker.datatype.boolean(),
+      undefined,
+    ]),
+    outcome: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([
+        "invited",
+        "already_member",
+        "invalid_email",
+        "failed",
+      ] as const),
       undefined,
     ]),
   }));
@@ -163,6 +174,57 @@ export const getInviteUserGloballyResponseMock = (
   invitation_delivery: faker.string.alpha({ length: { min: 10, max: 20 } }),
   ...overrideResponse,
 });
+
+export const getListBackgroundJobsResponseMock = (
+  overrideResponse: Partial<Extract<BackgroundJobListResponse, object>> = {},
+): BackgroundJobListResponse => ({
+  total: faker.number.int(),
+  rows: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    task_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    kind: faker.helpers.arrayElement([
+      "index",
+      "agent",
+      "toolkit",
+      "execution",
+      "schedule",
+      "eval",
+    ] as const),
+    name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    status: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    started_at: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([
+        faker.date.past().toISOString().slice(0, 19) + "Z",
+        null,
+      ]),
+      undefined,
+    ]),
+    finished_at: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([
+        faker.date.past().toISOString().slice(0, 19) + "Z",
+        null,
+      ]),
+      undefined,
+    ]),
+    project_id: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([faker.number.int(), null]),
+      undefined,
+    ]),
+    user: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    cancellable: faker.datatype.boolean(),
+  })),
+  truncated: faker.datatype.boolean(),
+  ...overrideResponse,
+});
+
+export const getCancelBackgroundJobResponseMock = (
+  overrideResponse: Partial<Extract<OkResponse, object>> = {},
+): OkResponse => ({ ok: faker.datatype.boolean(), ...overrideResponse });
 
 export const getGetBrandingSettingsResponseMock = (
   overrideResponse: Partial<Extract<BrandingSettings, object>> = {},
@@ -994,6 +1056,58 @@ export const getInviteUserGloballyMockHandler = (
   );
 };
 
+export const getListBackgroundJobsMockHandler = (
+  overrideResponse?:
+    | BackgroundJobListResponse
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<BackgroundJobListResponse> | BackgroundJobListResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/admin/background_jobs/administration",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListBackgroundJobsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getCancelBackgroundJobMockHandler = (
+  overrideResponse?:
+    | OkResponse
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<OkResponse> | OkResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/admin/background_jobs/administration/:kind/:jobID\\:cancel",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getCancelBackgroundJobResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getGetBrandingSettingsMockHandler = (
   overrideResponse?:
     | BrandingSettings
@@ -1428,6 +1542,8 @@ export const getAdminMock = () => [
   getAssignUserModeRoleMockHandler(),
   getRemoveUserModeRoleMockHandler(),
   getInviteUserGloballyMockHandler(),
+  getListBackgroundJobsMockHandler(),
+  getCancelBackgroundJobMockHandler(),
   getGetBrandingSettingsMockHandler(),
   getSaveBrandingSettingsMockHandler(),
   getUploadBrandingAssetMockHandler(),

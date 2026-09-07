@@ -52,3 +52,28 @@ export function buildLoginUrl(plane: AuthPlane, returnTo: string): string {
   const target = returnTo.startsWith('/') ? returnTo : `/${returnTo}`;
   return `${loginPathForPlane(plane)}?${TARGET_TO_PARAM}=${encodeURIComponent(target)}`;
 }
+
+/**
+ * The login URL the app shell navigates to when the server states that the
+ * session expired.
+ *
+ * `named` is the `login_url` `/forward-auth/info` answered with. It is USED —
+ * the server knows which browser plane is mounted — but its `target_to` is
+ * REPLACED with the page the browser is actually on. The probe is an XHR
+ * issued from wherever the user happens to be, so the server sees no page to
+ * return to; the client is the only side that knows.
+ *
+ * A server answer this client cannot parse falls back to `buildLoginUrl`, so
+ * the expiry path and the boot path cannot disagree about the login start.
+ */
+export function buildExpiryLoginUrl(named: string, returnTo: string): string {
+  try {
+    const url = new URL(named, window.location.origin);
+    url.searchParams.set(TARGET_TO_PARAM, returnTo);
+    return url.pathname + url.search;
+  } catch {
+    // Handled (§3.6): a malformed hint is not a reason to strand the user on a
+    // page whose every request now fails.
+    return buildLoginUrl('oidc', returnTo);
+  }
+}

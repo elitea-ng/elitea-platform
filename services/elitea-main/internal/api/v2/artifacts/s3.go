@@ -173,7 +173,22 @@ func s3Bucket(r *http.Request) string {
 // the same reason requireBucket does: the write verbs below need the bucket's
 // database ID (object metadata upsert/delete) and its expires_at, and looking
 // it up a second time could observe a different row.
-func (h *Handler) requireS3Bucket(w http.ResponseWriter, r *http.Request, projectID int64, bucket string) (repos.BucketRow, bool) {
+func (h *Handler) requireS3Bucket(w http.ResponseWriter, r *http.Request, projectID int64, bucket, need string) (repos.BucketRow, bool) {
+	// The per-bucket access list, checked first and in the S3 vocabulary. The
+	// SDK reaches the same objects through these routes as the native ones, so
+	// an exception that refuses a verb there must refuse it here; an S3
+	// representation that is a softer way in is not a representation, it is a
+	// second policy. AccessDenied is the code legacy's own S3 routes answer
+	// with (routes/s3.py:88-90).
+	allowed, err := h.authorizeBucket(r.Context(), projectID, bucket, need)
+	if err != nil {
+		h.writeInternalS3(w, r, "authorize bucket", err)
+		return repos.BucketRow{}, false
+	}
+	if !allowed {
+		writeError(w, http.StatusForbidden, "AccessDenied", denyMessage(need))
+		return repos.BucketRow{}, false
+	}
 	row, err := h.repo.GetBucket(r.Context(), projectID, bucket)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
@@ -196,7 +211,7 @@ func (h *Handler) ListObjectsS3(w http.ResponseWriter, r *http.Request) {
 
 	// Same bucket resolution as the native route. A listing can only ever
 	// fail on the bucket, never on a key.
-	if _, ok := h.requireS3Bucket(w, r, projectID, bucket); !ok {
+	if _, ok := h.requireS3Bucket(w, r, projectID, bucket, accessRead); !ok {
 		return
 	}
 
@@ -289,7 +304,7 @@ func (h *Handler) DownloadObjectS3(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, ok := h.requireS3Bucket(w, r, projectID, bucket); !ok {
+	if _, ok := h.requireS3Bucket(w, r, projectID, bucket, accessRead); !ok {
 		return
 	}
 
@@ -387,7 +402,7 @@ func (h *Handler) UploadObjectS3(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	bucketRow, ok := h.requireS3Bucket(w, r, projectID, bucket)
+	bucketRow, ok := h.requireS3Bucket(w, r, projectID, bucket, accessWrite)
 	if !ok {
 		return
 	}
@@ -469,7 +484,7 @@ func (h *Handler) DeleteObjectS3(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	bucketRow, ok := h.requireS3Bucket(w, r, projectID, bucket)
+	bucketRow, ok := h.requireS3Bucket(w, r, projectID, bucket, accessWrite)
 	if !ok {
 		return
 	}
@@ -539,7 +554,7 @@ func (h *Handler) StatObjectS3(w http.ResponseWriter, r *http.Request) {
 	// envelope, which a HEAD must not carry. A missing bucket therefore
 	// reaches the SDK as a bare 404, which it reports as {"exists": False} —
 	// true, if less specific than the listing's NoSuchBucket.
-	if _, ok := h.requireBucketNoBody(w, r, projectID, bucket); !ok {
+	if _, ok := h.requireBucketNoBody(w, r, projectID, bucket, accessRead); !ok {
 		return
 	}
 

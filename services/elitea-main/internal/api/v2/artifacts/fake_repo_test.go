@@ -33,6 +33,23 @@ type fakeRepo struct {
 	// grants backs CreateTransferGrant/GetTransferGrant/MarkTransferGrantConsumed
 	// (S15), keyed by grant ID.
 	grants map[string]repos.TransferGrantRow
+	// exceptions backs the per-bucket access list, keyed by
+	// (projectID, userID) then bucket name. An ABSENT bucket key is "no
+	// exception" and a PRESENT one with an empty slice is "no access": the
+	// double must keep the two apart, because collapsing them is exactly the
+	// mistake the production semantics forbid.
+	exceptions map[fakeMemberKey]map[string][]string
+	// admins holds the (projectID, userID) pairs IsProjectAdmin answers true
+	// for.
+	admins map[fakeMemberKey]bool
+}
+
+// fakeMemberKey identifies one member of one project. A struct key rather
+// than a formatted string, so no test can accidentally collide two members
+// through the separator.
+type fakeMemberKey struct {
+	projectID int64
+	userID    int64
 }
 
 type fakeObjectRecord struct {
@@ -54,6 +71,9 @@ func newFakeRepo() *fakeRepo {
 		counts:   make(map[int64]int64),
 		objects:  make(map[string]fakeObjectRecord),
 		grants:   make(map[string]repos.TransferGrantRow),
+
+		exceptions: make(map[fakeMemberKey]map[string][]string),
+		admins:     make(map[fakeMemberKey]bool),
 	}
 }
 
@@ -328,6 +348,123 @@ func (r *fakeRepo) MarkTransferGrantConsumed(_ context.Context, id string) error
 	row.ConsumedAt = &now
 	r.grants[id] = row
 	return nil
+}
+
+// setException seeds one member's exception for one bucket. A nil slice means
+// "no access" (the legacy `[]`), which is not the same as calling this at all.
+func (r *fakeRepo) setException(projectID, userID int64, bucket string, permissions []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	key := fakeMemberKey{projectID, userID}
+	if r.exceptions[key] == nil {
+		r.exceptions[key] = map[string][]string{}
+	}
+	if permissions == nil {
+		permissions = []string{}
+	}
+	r.exceptions[key][bucket] = permissions
+}
+
+// setProjectAdmin makes IsProjectAdmin answer true for one member.
+func (r *fakeRepo) setProjectAdmin(projectID, userID int64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.admins[fakeMemberKey{projectID, userID}] = true
+}
+
+func (r *fakeRepo) ListBucketPermissions(_ context.Context, projectID int64) ([]repos.BucketPermissionRow, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	rows := []repos.BucketPermissionRow{}
+	userIDs := []int64{}
+	byUser := map[int64]map[string][]string{}
+	for key, buckets := range r.exceptions {
+		if key.projectID != projectID || len(buckets) == 0 {
+			continue
+		}
+		byUser[key.userID] = buckets
+		userIDs = append(userIDs, key.userID)
+	}
+	sort.Slice(userIDs, func(i, j int) bool { return userIDs[i] < userIDs[j] })
+	for _, userID := range userIDs {
+		copied := map[string][]string{}
+		for bucket, permissions := range byUser[userID] {
+			copied[bucket] = append([]string{}, permissions...)
+		}
+		rows = append(rows, repos.BucketPermissionRow{
+			UserID:            userID,
+			Name:              fmt.Sprintf("user %d", userID),
+			Email:             fmt.Sprintf("user%d@example.com", userID),
+			BucketPermissions: copied,
+		})
+	}
+	return rows, nil
+}
+
+func (r *fakeRepo) GetBucketPermission(
+	_ context.Context, projectID, userID int64, bucket string,
+) ([]string, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	buckets, ok := r.exceptions[fakeMemberKey{projectID, userID}]
+	if !ok {
+		return nil, false, nil
+	}
+	permissions, ok := buckets[bucket]
+	if !ok {
+		return nil, false, nil
+	}
+	return append([]string{}, permissions...), true, nil
+}
+
+func (r *fakeRepo) ListUserBucketPermissions(
+	_ context.Context, projectID, userID int64,
+) (map[string][]string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := map[string][]string{}
+	for bucket, permissions := range r.exceptions[fakeMemberKey{projectID, userID}] {
+		out[bucket] = append([]string{}, permissions...)
+	}
+	return out, nil
+}
+
+func (r *fakeRepo) ReplaceUserBucketPermissions(
+	_ context.Context, projectID, userID int64, permissions map[string][]string,
+) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	replacement := map[string][]string{}
+	for bucket, verbs := range permissions {
+		if verbs == nil {
+			verbs = []string{}
+		}
+		replacement[bucket] = append([]string{}, verbs...)
+	}
+	r.exceptions[fakeMemberKey{projectID, userID}] = replacement
+	return nil
+}
+
+func (r *fakeRepo) DeleteUserBucketPermission(
+	_ context.Context, projectID, userID int64, bucket string,
+) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	buckets, ok := r.exceptions[fakeMemberKey{projectID, userID}]
+	if !ok {
+		return false, nil
+	}
+	if _, ok := buckets[bucket]; !ok {
+		return false, nil
+	}
+	delete(buckets, bucket)
+	return true, nil
+}
+
+func (r *fakeRepo) IsProjectAdmin(_ context.Context, projectID, userID int64) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.admins[fakeMemberKey{projectID, userID}], nil
 }
 
 var _ artifacts.Repository = (*fakeRepo)(nil)

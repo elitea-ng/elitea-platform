@@ -100,6 +100,30 @@
             "usedBy": []
         },
         {
+            "id": "admin.listBackgroundJobs",
+            "method": "GET",
+            "path": "/admin/background_jobs/administration",
+            "operationId": "listBackgroundJobs",
+            "source": "generated",
+            "responseSchema": "BackgroundJobListResponse",
+            "fixture": null,
+            "usedBy": [
+                "pages/admin"
+            ]
+        },
+        {
+            "id": "admin.cancelBackgroundJob",
+            "method": "POST",
+            "path": "/admin/background_jobs/administration/{kind}/{jobID}:cancel",
+            "operationId": "cancelBackgroundJob",
+            "source": "generated",
+            "responseSchema": "OkResponse",
+            "fixture": null,
+            "usedBy": [
+                "pages/admin"
+            ]
+        },
+        {
             "id": "analytics.getAnalyticsAgentDetail",
             "method": "GET",
             "path": "/elitea_core/analytics_agent_detail/prompt_lib/{project_id}",
@@ -2012,6 +2036,42 @@
             "operationId": null,
             "source": "handwritten",
             "responseSchema": "ConfigurationPageWire",
+            "fixture": null,
+            "usedBy": [
+                "features/artifacts"
+            ]
+        },
+        {
+            "id": "artifacts.listBucketPermissions",
+            "method": "GET",
+            "path": "/artifacts/bucket_permissions/{projectID}",
+            "operationId": "listBucketPermissions",
+            "source": "generated",
+            "responseSchema": "BucketPermissionListResponse",
+            "fixture": null,
+            "usedBy": [
+                "features/artifacts"
+            ]
+        },
+        {
+            "id": "artifacts.setBucketPermissions",
+            "method": "PUT",
+            "path": "/artifacts/bucket_permissions/{projectID}",
+            "operationId": "setBucketPermissions",
+            "source": "generated",
+            "responseSchema": "BucketPermissionRow",
+            "fixture": null,
+            "usedBy": [
+                "features/artifacts"
+            ]
+        },
+        {
+            "id": "artifacts.deleteBucketPermission",
+            "method": "DELETE",
+            "path": "/artifacts/bucket_permissions/{projectID}",
+            "operationId": "deleteBucketPermission",
+            "source": "generated",
+            "responseSchema": null,
             "fixture": null,
             "usedBy": [
                 "features/artifacts"

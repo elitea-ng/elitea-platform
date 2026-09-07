@@ -173,6 +173,7 @@ describe('EditPipelineToolsPanel', () => {
               is_forked: false,
               meta: {},
               has_interrupt: false,
+              tags: [],
             },
           ],
           total: 1,

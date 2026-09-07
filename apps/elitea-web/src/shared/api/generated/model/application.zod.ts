@@ -50,7 +50,11 @@ export const Application = zod
     description: zod.string().optional(),
     type: zod.string().optional(),
     icon: zod.string().optional(),
-    tags: zod.array(zod.string()).optional(),
+    tags: zod
+      .array(zod.string())
+      .describe(
+        "Tag NAMES, deduplicated and sorted, taken from every version of the application (repos\/applications.go List, tagsExpr). ALWAYS present: an application with no tags carries an empty array, not null and not an absent key (issue 841). Only the LIST response fills it; Get and Create build their own maps.\n",
+      ),
     folder_id: zod.string().optional(),
     status: zod.string().optional(),
     metadata: zod.record(zod.string(), zod.unknown()).optional(),
@@ -69,7 +73,7 @@ export const Application = zod
     agent_type: zod.string().optional(),
   })
   .describe(
-    "NOTE(W2): internal\/domain\/applications\/types.go:11-31 — required set = json tags WITHOUT omitempty (id, name, created_at, owner_id, is_forked, meta, has_interrupt) PLUS updated_at, whose omitempty is ineffective on a time.Time (always marshaled; zero sentinel when unscanned). Every other omitempty field is optional (absent when zero-valued).\n",
+    "NOTE(W2): internal\/domain\/applications\/types.go:15-50 — required set = json tags WITHOUT omitempty (id, name, tags, created_at, owner_id, is_forked, meta, has_interrupt) PLUS updated_at, whose omitempty is ineffective on a time.Time (always marshaled; zero sentinel when unscanned). Every other omitempty field is optional (absent when zero-valued).\n",
   );
 
 export type Application = zod.input<typeof Application>;

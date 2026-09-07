@@ -33,6 +33,7 @@ describe('AnalyticsTools', () => {
     server.use(
       http.get(`${BASE}/elitea_core/analytics_tools/prompt_lib/7`, () =>
         HttpResponse.json({
+          tool_dimension_available: true,
           items: [{ toolkit_id: 'tk1', tool_name: 'web_search', run_count: 8, avg_duration_ms: 150, error_rate: 0 }],
         }),
       ),
@@ -45,6 +46,56 @@ describe('AnalyticsTools', () => {
       />,
     );
     expect(await findByText('web_search')).toBeInTheDocument();
+  });
+
+  // ── The window-availability branch (issue 618).
+  //
+  // The dimension can be unavailable on a 200 now: shared migration 0119 is the
+  // tool record's producer, so a window that closed before it was applied has no
+  // tool data and the endpoint omits `items` rather than answering `[]`. The
+  // component's `data?.items ?? []` would otherwise turn that into a convincing
+  // "0 tools" table — the same false claim the old 501 refusal existed to
+  // prevent, now reachable through a successful response.
+  it('says the dimension is unavailable, and renders NO table, when the window predates the producer', async () => {
+    server.use(
+      http.get(`${BASE}/elitea_core/analytics_tools/prompt_lib/7`, () =>
+        HttpResponse.json({ tool_dimension_available: false }),
+      ),
+    );
+    const { findByText, queryByText } = renderScreen(
+      <AnalyticsTools
+        projectId="7"
+        dateFrom={RANGE.dateFrom}
+        dateTo={RANGE.dateTo}
+      />,
+    );
+    expect(await findByText('Not available on this deployment')).toBeInTheDocument();
+    expect(
+      await findByText('This deployment did not record tool calls for the selected period.'),
+    ).toBeInTheDocument();
+    // The absence of the table is the load-bearing half: error text beside an
+    // empty table would pass an assertion on the text alone.
+    expect(queryByText('Failed to load analytics data.')).not.toBeInTheDocument();
+    expect(queryByText('Tool')).not.toBeInTheDocument();
+  });
+
+  // The other real state: the deployment WAS recording and no tool ran. That is
+  // a measurement, so the table renders empty rather than claiming absence.
+  it('renders the empty table when the dimension is available and nothing ran', async () => {
+    server.use(
+      http.get(`${BASE}/elitea_core/analytics_tools/prompt_lib/7`, () =>
+        HttpResponse.json({ tool_dimension_available: true, items: [] }),
+      ),
+    );
+    const { findByText, queryByText } = renderScreen(
+      <AnalyticsTools
+        projectId="7"
+        dateFrom={RANGE.dateFrom}
+        dateTo={RANGE.dateTo}
+      />,
+    );
+    expect(await findByText('Tool')).toBeInTheDocument();
+    expect(queryByText('Not available on this deployment')).not.toBeInTheDocument();
   });
 
   // ── The load-failure branch (issue #303) — see AnalyticsAgents.test.tsx's
@@ -76,6 +127,7 @@ describe('AnalyticsTools', () => {
     server.use(
       http.get(`${BASE}/elitea_core/analytics_tools/prompt_lib/7`, () =>
         HttpResponse.json({
+          tool_dimension_available: true,
           items: [{ toolkit_id: 'tk1', tool_name: 'web_search', run_count: 8, avg_duration_ms: 150, error_rate: 0 }],
         }),
       ),
@@ -99,6 +151,7 @@ describe('AnalyticsTools', () => {
     server.use(
       http.get(`${BASE}/elitea_core/analytics_tools/prompt_lib/7`, () =>
         HttpResponse.json({
+          tool_dimension_available: true,
           items: [{ toolkit_id: 'tk1', tool_name: 'web_search', run_count: 8, avg_duration_ms: 150, error_rate: 0.2 }],
         }),
       ),
@@ -118,6 +171,7 @@ describe('AnalyticsTools', () => {
     server.use(
       http.get(`${BASE}/elitea_core/analytics_tools/prompt_lib/7`, () =>
         HttpResponse.json({
+          tool_dimension_available: true,
           items: [{ toolkit_id: 'tk1', tool_name: 'web_search', run_count: 8, avg_duration_ms: 150, error_rate: 0 }],
         }),
       ),

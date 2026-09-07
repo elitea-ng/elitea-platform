@@ -364,6 +364,14 @@ func (productionProjectPermissionResolver) ResolvePermissions(
 	return auth.PermissionResolution{}, nil
 }
 
+func (productionProjectPermissionResolver) ResolveMembershipPermissions(
+	context.Context,
+	auth.User,
+	string,
+) (auth.PermissionResolution, error) {
+	return auth.PermissionResolution{}, nil
+}
+
 func TestProductionRouterMountsOnlyExactCurrentProjectListPath(t *testing.T) {
 	projectList, err := v2projects.NewCurrentProjectListRoute(
 		productionProjectStore{},
@@ -1662,6 +1670,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"DELETE /api/v2/admin/scim_group_bindings/administration/{id}",
 		"DELETE /api/v2/admin/toolkit_types/administration/{type}/projects/{projectID}",
 		"DELETE /api/v2/admin/users/{mode}/{projectID}",
+		"DELETE /api/v2/artifacts/bucket_permissions/{projectID}",
 		"DELETE /api/v2/artifacts/buckets/{projectID}/{bucket}",
 		"DELETE /api/v2/artifacts/objects/{projectID}/{bucket}/*",
 		"DELETE /api/v2/auth/token/{tokenUUID}",
@@ -1706,6 +1715,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"GET /api/openapi.yaml",
 		"GET /api/v2/admin/active_tasks/{mode}",
 		"GET /api/v2/admin/auth_users/{mode}",
+		"GET /api/v2/admin/background_jobs/administration",
 		"GET /api/v2/admin/branding/administration",
 		"GET /api/v2/admin/branding/package/administration",
 		"GET /api/v2/admin/branding/package/administration/versions",
@@ -1745,6 +1755,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"GET /api/v2/admin/user_project_permissions/administration",
 		"GET /api/v2/admin/users/administration/{projectID}",
 		"GET /api/v2/admin/users/{mode}/{projectID}",
+		"GET /api/v2/artifacts/bucket_permissions/{projectID}",
 		"GET /api/v2/artifacts/buckets/{projectID}",
 		"GET /api/v2/artifacts/buckets/{projectID}/{bucket}",
 		"GET /api/v2/artifacts/objects/{projectID}/{bucket}",
@@ -1919,6 +1930,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"PATCH /api/v2/scim/v2/Groups/{id}",
 		"PATCH /api/v2/scim/v2/Users/{id}",
 		"POST /api/v2/admin/auth_users/{mode}",
+		"POST /api/v2/admin/background_jobs/administration/{kind}/{jobID}:cancel",
 		"POST /api/v2/admin/branding/assets/{kind}",
 		"POST /api/v2/admin/branding/package/administration",
 		"POST /api/v2/admin/branding/package/administration/versions/{digest}/restore",
@@ -2073,6 +2085,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"PUT /api/v2/admin/user_suspend/{mode}/{userID}",
 		"PUT /api/v2/admin/users/administration/{projectID}",
 		"PUT /api/v2/admin/users/{mode}/{projectID}",
+		"PUT /api/v2/artifacts/bucket_permissions/{projectID}",
 		"PUT /api/v2/configurations/configuration/{mode}/{projectID}/{configID}",
 		"PUT /api/v2/configurations/configuration/{projectID}/{configID}",
 		"PUT /api/v2/context_manager/summary/{projectID}/{conversationID}/{summaryID}",

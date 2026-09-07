@@ -88,8 +88,7 @@ func TestAPIGroupOIDCOnlyAuthRejectsADeactivatedSession(t *testing.T) {
 			// exactly as they are in main.go, which is the condition that
 			// produced the defect.
 			config := apiGroupAuthConfig(
-				nil, nil, nil, testCase.principals, nil, apiGroupTestSecret, true,
-			)
+				nil, nil, nil, testCase.principals, nil, apiGroupTestSecret, true, nil)
 			handler := &reachedHandler{}
 			router := newAPIGroupRouter(config, handler)
 
@@ -144,8 +143,7 @@ func TestAPIGroupAuthConfigDoesNotReuseTheProductionValidator(t *testing.T) {
 	tokens := &countingTokens{}
 
 	config := apiGroupAuthConfig(
-		nil, production, nil, session, tokens, apiGroupTestSecret, true,
-	)
+		nil, production, nil, session, tokens, apiGroupTestSecret, true, nil)
 
 	if config.SessionSecret != apiGroupTestSecret {
 		t.Fatalf("the OIDC-only branch lost its SessionSecret: %q",
@@ -179,8 +177,7 @@ func TestAPIGroupAuthConfigKeepsTheProductionCredentials(t *testing.T) {
 	formGraph := &authcomposition.FormGraph{}
 
 	config := apiGroupAuthConfig(
-		formGraph, production, verifier, session, &countingTokens{}, apiGroupTestSecret, true,
-	)
+		formGraph, production, verifier, session, &countingTokens{}, apiGroupTestSecret, true, nil)
 
 	if config.Validator != apimw.TokenValidator(formGraph) {
 		t.Fatal("the production branch lost its token validator: the form " +
@@ -209,8 +206,7 @@ func TestAPIGroupAuthConfigAdmitsNothingWithoutACredentialPlane(t *testing.T) {
 	session := &countingPrincipals{inner: activePrincipals{}}
 
 	config := apiGroupAuthConfig(
-		nil, nil, nil, session, &countingTokens{}, apiGroupTestSecret, false,
-	)
+		nil, nil, nil, session, &countingTokens{}, apiGroupTestSecret, false, nil)
 
 	// AuthConfig holds a slice, so it is not comparable as a whole.
 	if config.SessionSecret != "" {
@@ -251,7 +247,7 @@ func TestAPIGroupAuthUsesTheSharedComposition(t *testing.T) {
 }
 
 // TestAPIGroupAuthConfigAlwaysTakesAPoolBackedValidator closes the trap the
-// issue names. `apiGroupAuthConfig(..., principalValidator, ...)` in the
+// issue names. `apiGroupAuthConfig(..., principalValidator, ..., nil)` in the
 // session position would read like a fix and enforce nothing, because main.go
 // assigns that variable only inside the `authEnabled` block. Every call must
 // therefore build a validator from the pool instead.
@@ -377,8 +373,7 @@ func TestAPIGroupOIDCOnlyAuthAcceptsAPersonalAccessToken(t *testing.T) {
 			principals := &countingPrincipals{inner: activePrincipals{}}
 			tokens := &countingTokens{}
 			config := apiGroupAuthConfig(
-				nil, nil, nil, principals, tokens, apiGroupTestSecret, true,
-			)
+				nil, nil, nil, principals, tokens, apiGroupTestSecret, true, nil)
 			handler := &reachedHandler{}
 			router := newAPIGroupRouter(config, handler)
 

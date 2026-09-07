@@ -732,8 +732,12 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 			v := applications.Version{
 				Name: anyStr(versionData, "name"),
 			}
+			v.Present.Name = v.Name != ""
+			// Same presence rule as UpdateVersion's own decode (#824): the
+			// nested `version` stub can clear the instructions too.
 			if instr, ok := versionData["instructions"].(string); ok {
 				v.Instructions = instr
+				v.Present.Instructions = true
 			}
 			ver, vErr := h.repo.UpdateVersion(r.Context(), projectID, applicationID, versionID, v)
 			if vErr == nil {
@@ -930,18 +934,44 @@ func (h *Handler) UpdateVersion(w http.ResponseWriter, r *http.Request) {
 	// implementation opened its SET list with `updated_at = now()` —
 	// application_versions has no updated_at column (migrations/001_initial
 	// .sql), so every version update failed with 42P01 and returned a 500.
+	//
+	// #824 — presence is carried through to the repository, not folded into
+	// emptiness here. The decode below always knew the difference (the `, ok`
+	// on every type assertion IS the presence test), but it wrote the value
+	// into a plain string, and the repository then read "" as "the caller
+	// said nothing". So a client that cleared its welcome message got a 201
+	// and read the old text back. `Present` keeps the two apart all the way
+	// to the SET list.
 	v := applications.Version{}
 	if name, ok := body["name"].(string); ok {
+		// `name` and `agent_type` are NOT NULL columns whose empty value the
+		// platform cannot read back: the create path substitutes
+		// defaultVersionName / defaultAgentType for "", and
+		// _application_version_name_uc means a second blank-named version in
+		// the same application would collide. So an explicit "" is REFUSED
+		// here rather than written or — as before #824 — silently dropped.
+		if name == "" {
+			apierr.Write(w, apierr.BadRequest("name cannot be empty"))
+			return
+		}
 		v.Name = name
+		v.Present.Name = true
 	}
 	if instructions, ok := body["instructions"].(string); ok {
 		v.Instructions = instructions
+		v.Present.Instructions = true
 	}
 	if welcomeMessage, ok := body["welcome_message"].(string); ok {
 		v.WelcomeMessage = welcomeMessage
+		v.Present.WelcomeMessage = true
 	}
 	if agentType, ok := body["agent_type"].(string); ok {
+		if agentType == "" {
+			apierr.Write(w, apierr.BadRequest("agent_type cannot be empty"))
+			return
+		}
 		v.AgentType = agentType
+		v.Present.AgentType = true
 	}
 	if llm, ok := body["llm_settings"].(map[string]any); ok {
 		v.LLMSettings = llm

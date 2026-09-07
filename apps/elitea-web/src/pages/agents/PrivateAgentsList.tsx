@@ -8,6 +8,7 @@ import { useNavigate, useParams, useSearch } from '@tanstack/react-router';
 import { useListApplications } from '@/shared/api/generated/applications/applications';
 import type { Application, ApplicationList } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
+import { useRailTagSelection } from '@/shared/ui/EntityRail';
 import { SimpleSearchBar } from '@/shared/ui/SimpleSearchBar';
 
 import { sortApplicationsByField, type SortOrder } from './lib/sortApplicationsByField';
@@ -126,11 +127,24 @@ export function PrivateAgentsList({ statuses, cardContentType }: PrivateAgentsLi
 
   const [query, setQuery] = useState('');
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const { selectedTags } = useRailTagSelection();
 
   const trimmedQuery = query.trim();
+  // The rail's tag selection goes to the SERVER, as the `tags` request param
+  // the handler always read (`internal/api/v2/applications/handler.go`). The
+  // repository query behind it ignored the param and left every row's `tags`
+  // empty, so this page disclosed the rail as decorative. Both halves are
+  // real now (issue 841), and the filter is server-side because the list is
+  // capped at the backend's first page: a client-side filter would narrow one
+  // page instead of the project.
+  const tagFilter = selectedTags.join(',');
   const listQuery = useListApplications(
     projectId ?? '',
-    { agents_type: 'classic', ...(trimmedQuery === '' ? {} : { query: trimmedQuery }) },
+    {
+      agents_type: 'classic',
+      ...(trimmedQuery === '' ? {} : { query: trimmedQuery }),
+      ...(tagFilter === '' ? {} : { tags: tagFilter }),
+    },
     { query: { enabled: projectId !== undefined } },
   );
   // `.data.data`'s declared type includes the error-envelope variant — never

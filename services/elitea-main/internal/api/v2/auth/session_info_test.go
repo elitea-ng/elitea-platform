@@ -19,11 +19,16 @@ package auth
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -73,7 +78,8 @@ func TestSessionInfoSeparatesAStoreOutageFromNoSession(t *testing.T) {
 		wantStatus    int
 		wantAuth      bool
 		wantRetry     bool
-		wantErrorBody string
+		wantErrorCode string
+		wantLoginURL  bool
 	}{
 		{
 			name:       "a live session stays authenticated",
@@ -82,17 +88,23 @@ func TestSessionInfoSeparatesAStoreOutageFromNoSession(t *testing.T) {
 			wantAuth:   true,
 		},
 		{
-			name:       "an absent or suspended user is not authenticated",
-			row:        stubRow{err: pgx.ErrNoRows},
-			wantStatus: http.StatusOK,
-			wantAuth:   false,
+			// The caller HELD a session and the account behind it is gone or
+			// suspended. That is an expiry, not "you were never signed in":
+			// the browser is sitting on a screen it can no longer load, so it
+			// must go back to the identity provider. See writeSessionExpired.
+			name:          "an absent or suspended user is expired, not merely unauthenticated",
+			row:           stubRow{err: pgx.ErrNoRows},
+			wantStatus:    http.StatusUnauthorized,
+			wantAuth:      false,
+			wantErrorCode: SessionExpiredCode,
+			wantLoginURL:  true,
 		},
 		{
 			name:          "a store outage is not an answer about the caller",
 			row:           stubRow{err: errors.New("connection refused")},
 			wantStatus:    http.StatusServiceUnavailable,
 			wantRetry:     true,
-			wantErrorBody: "session store unavailable",
+			wantErrorCode: "session_store_unavailable",
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -108,16 +120,30 @@ func TestSessionInfoSeparatesAStoreOutageFromNoSession(t *testing.T) {
 			if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
 				t.Fatalf("body %q: %v", recorder.Body.String(), err)
 			}
-			if test.wantErrorBody != "" {
-				if body["error"] != test.wantErrorBody {
-					t.Fatalf("body = %v, want error %q", body, test.wantErrorBody)
+			if test.wantErrorCode != "" {
+				envelope, ok := body["error"].(map[string]any)
+				if !ok || envelope["code"] != test.wantErrorCode {
+					t.Fatalf("body = %v, want error code %q", body, test.wantErrorCode)
 				}
+			}
+			if test.wantStatus == http.StatusServiceUnavailable {
 				// The outage must never carry the sign-out verdict.
 				if _, present := body["authenticated"]; present {
 					t.Fatalf("body = %v, want no authenticated field", body)
 				}
 			} else if body["authenticated"] != test.wantAuth {
 				t.Fatalf("authenticated = %v, want %v", body["authenticated"], test.wantAuth)
+			}
+			if test.wantLoginURL {
+				// The hint the app shell navigates to, in the body and in the
+				// header, so a caller can read whichever it already reads.
+				if body["login_url"] == nil || body["login_url"] == "" {
+					t.Fatalf("body = %v, want a login_url hint", body)
+				}
+				if recorder.Header().Get("Location") != body["login_url"] {
+					t.Fatalf("Location = %q, want the login_url %v",
+						recorder.Header().Get("Location"), body["login_url"])
+				}
 			}
 			if got := recorder.Header().Get("Retry-After"); (got != "") != test.wantRetry {
 				t.Fatalf("Retry-After = %q, want present=%v", got, test.wantRetry)
@@ -139,25 +165,47 @@ func TestSessionInfoReportsAMisWiredHandler(t *testing.T) {
 	}
 }
 
-// TestSessionInfoStillReportsNoSessionWithoutACookie keeps the three exits that
-// really do mean "no session" on 200.
-func TestSessionInfoStillReportsNoSessionWithoutACookie(t *testing.T) {
+// TestSessionInfoSeparatesNoCookieFromAnUnusableOne holds the ONE distinction
+// the app shell routes on.
+//
+// NO COOKIE is 200 `authenticated: false`. Nobody was signed in, the shell
+// shows its sign-in affordance, and nothing navigates.
+//
+// A COOKIE THAT NO LONGER WORKS is 401 `session_expired`. The user WAS signed
+// in and is now looking at a screen that cannot load, so the shell sends the
+// browser to the login start. Answering 200 for this case is the defect the
+// smoke run found: an expired user sat on a dead page with no redirect.
+func TestSessionInfoSeparatesNoCookieFromAnUnusableOne(t *testing.T) {
 	const secret = "session-secret"
 	handler := NewSessionHandler(nil, secret)
 	handler.users = stubUsers{row: stubRow{userID: 7}}
 
 	for _, test := range []struct {
-		name  string
-		token string
+		name       string
+		token      string
+		wantStatus int
 	}{
-		{name: "no cookie", token: ""},
-		{name: "bad signature", token: makeSessionToken("other-secret", "7", "owner@example.test")},
-		{name: "no user id", token: makeSessionToken(secret, "0", "owner@example.test")},
+		{name: "no cookie", token: "", wantStatus: http.StatusOK},
+		{
+			name:       "bad signature",
+			token:      makeSessionToken("other-secret", "7", "owner@example.test"),
+			wantStatus: http.StatusUnauthorized,
+		},
+		{
+			name:       "no user id",
+			token:      makeSessionToken(secret, "0", "owner@example.test"),
+			wantStatus: http.StatusUnauthorized,
+		},
+		{
+			name:       "an expired signed cookie",
+			token:      expiredSessionToken(secret, "7", "owner@example.test"),
+			wantStatus: http.StatusUnauthorized,
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			recorder := infoResponse(t, handler, test.token)
-			if recorder.Code != http.StatusOK {
-				t.Fatalf("status = %d, want 200", recorder.Code)
+			if recorder.Code != test.wantStatus {
+				t.Fatalf("status = %d, want %d", recorder.Code, test.wantStatus)
 			}
 			var body map[string]any
 			if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
@@ -166,6 +214,27 @@ func TestSessionInfoStillReportsNoSessionWithoutACookie(t *testing.T) {
 			if body["authenticated"] != false {
 				t.Fatalf("authenticated = %v, want false", body["authenticated"])
 			}
+			if test.wantStatus != http.StatusUnauthorized {
+				if _, present := body["error"]; present {
+					t.Fatalf("body = %v, want no error envelope on a plain no-session answer", body)
+				}
+				return
+			}
+			envelope, ok := body["error"].(map[string]any)
+			if !ok || envelope["code"] != SessionExpiredCode {
+				t.Fatalf("body = %v, want error code %q", body, SessionExpiredCode)
+			}
 		})
 	}
+}
+
+// expiredSessionToken signs a legacy cookie whose `exp` has already passed.
+func expiredSessionToken(secret, userID, email string) string {
+	payload, _ := json.Marshal(map[string]any{
+		"uid": userID, "email": email, "exp": time.Now().Add(-time.Hour).Unix(),
+	})
+	encoded := base64.RawURLEncoding.EncodeToString(payload)
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write([]byte(encoded))
+	return encoded + "." + hex.EncodeToString(mac.Sum(nil))
 }

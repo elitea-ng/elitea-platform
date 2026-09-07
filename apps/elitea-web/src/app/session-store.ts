@@ -23,6 +23,8 @@ import { createHttpClient } from '@/shared/api/http';
 import { getConfig } from '@/shared/config';
 import { readPersistedProject } from '@/shared/lib/selectedProjectPersistence';
 
+import { createProbeClient } from './session-probe-client';
+
 import type { AuthContext, AuthUser } from './router-context';
 
 interface SessionState {
@@ -236,6 +238,12 @@ export interface CreateSessionStoreOptions {
    * already uses for its client.
    */
   readonly apiBaseUrl?: string;
+  /**
+   * Where an EXPIRED session sends the browser. Defaults to a real
+   * navigation; a test replaces it, because jsdom's `window.location.assign`
+   * is not configurable.
+   */
+  readonly navigate?: (url: string) => void;
 }
 
 /**
@@ -255,8 +263,14 @@ async function formPlaneUser(apiBaseUrl: string | undefined): Promise<AuthUser |
   return withPermissions(user, apiBaseUrl);
 }
 
+
 export function createSessionStore(options: CreateSessionStoreOptions = {}): SessionStore {
-  const http = createHttpClient({ baseUrl: '/' });
+  const http = createProbeClient(
+    options.navigate ??
+      ((url: string): void => {
+        window.location.assign(url);
+      }),
+  );
 
   return create<SessionState>((set, get) => ({
     user: undefined,
