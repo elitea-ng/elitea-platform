@@ -256,7 +256,20 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentApplication(
 					},
 				)
 				if errors.Is(queryErr, pgx.ErrNoRows) {
-					return agentexecutionapp.ErrUnsupportedCurrentAgentStart
+					// EVERY join in ResolveCurrentApplicationTurn can produce
+					// this one empty result, and they fail for very different
+					// operator-visible reasons. The support assistant spent a
+					// release answering 502 here because its conversations
+					// carried no `user` participant and its agent mapping
+					// carried no `entity_settings.version_id`; the log said
+					// only "not supported by the admitted parity slice", so
+					// neither cause was visible. The reason below names the
+					// joins so the next such failure is readable.
+					return agentexecutionapp.UnsupportedCurrentAgentStart(
+						"application turn row not found: the conversation, its " +
+							"entity_name='user' participant for the caller, the target " +
+							"application participant, or the application_versions row named " +
+							"by that participant's entity_settings.version_id is missing")
 				}
 				if queryErr != nil {
 					return fmt.Errorf("resolve current application turn: %w", queryErr)
@@ -265,11 +278,24 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentApplication(
 				versionDetails := json.RawMessage(row.ApplicationVersionDetailsJson)
 				chatHistory := json.RawMessage(row.ChatHistoryJson)
 				internalTools := json.RawMessage(row.InternalToolsJson)
-				if int64(row.ApplicationProjectID) != request.ProjectID ||
-					row.ApplicationID <= 0 || row.ApplicationVersionID <= 0 ||
-					!json.Valid(variables) || !json.Valid(versionDetails) ||
+				if int64(row.ApplicationProjectID) != request.ProjectID {
+					return agentexecutionapp.UnsupportedCurrentAgentStart(
+						"the target participant's entity_meta.project_id is not the project " +
+							"the turn runs in; a turn reads application_versions from its own " +
+							"tenant schema, so the agent must live in that project")
+				}
+				if row.ApplicationID <= 0 {
+					return agentexecutionapp.UnsupportedCurrentAgentStart(
+						"the target participant carries no entity_meta.id")
+				}
+				if row.ApplicationVersionID <= 0 {
+					return agentexecutionapp.UnsupportedCurrentAgentStart(
+						"the target participant mapping carries no entity_settings.version_id")
+				}
+				if !json.Valid(variables) || !json.Valid(versionDetails) ||
 					!json.Valid(chatHistory) || !json.Valid(internalTools) {
-					return agentexecutionapp.ErrUnsupportedCurrentAgentStart
+					return agentexecutionapp.UnsupportedCurrentAgentStart(
+						"the resolved turn carries a malformed JSON projection")
 				}
 				if validationErr := validateCurrentApplicationNesting(
 					ctx,

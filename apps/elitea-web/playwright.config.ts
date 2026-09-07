@@ -15,6 +15,8 @@
  *                   own note and `scripts/chat-stream-e2e.sh`
  *   index-stream  — the #93 index journey, same stack plus `seed-index`;
  *                   see `scripts/index-stream-e2e.sh`
+ *   support-stack — the Support Assistant widget journey, same stack;
+ *                   see `scripts/support-e2e.sh`
  *
  * The `setup` project runs once before the browser projects; each browser
  * project depends on it so the storageState files are always fresh.
@@ -155,6 +157,16 @@ const WIKI_QUERY_JOURNEY = /journeys\/deepwiki\/deepwiki\.wiki-query\.spec\.ts/;
  */
 const REAL_ENGINE_JOURNEY = /journeys\/deepwiki\/deepwiki\.real-engine\.spec\.ts/;
 
+/*
+ * The Support Assistant journey — the first E2E coverage of the in-app
+ * widget itself (`admin/admin.features.spec.ts` only ever drove its ADMIN
+ * section). A real turn is an agent execution, so it needs the FULL
+ * standalone stack the same way `chat-stream` does; it runs in the
+ * `support-stack` project only, against that stack
+ * (`scripts/support-e2e.sh`).
+ */
+const SUPPORT_JOURNEY = /journeys\/support\/support\.spec\.ts/;
+
 const CHROMIUM_LAUNCH_OPTIONS = {
   args: ['--disable-web-security', '--allow-insecure-localhost', '--no-sandbox'],
 };
@@ -191,7 +203,7 @@ export default defineConfig({
     // ── chromium ──────────────────────────────────────────────────────────
     {
       name: 'chromium',
-      testIgnore: [ADMISSION_JOURNEY, REAL_ENGINE_JOURNEY, WIKI_QUERY_JOURNEY],
+      testIgnore: [ADMISSION_JOURNEY, REAL_ENGINE_JOURNEY, WIKI_QUERY_JOURNEY, SUPPORT_JOURNEY],
       use: {
         ...devices['Desktop Chrome'],
         storageState: STORAGE_STATE.member,
@@ -204,7 +216,7 @@ export default defineConfig({
     // ── webkit (spec §6.2: "chromium + webkit") ───────────────────────────
     {
       name: 'webkit',
-      testIgnore: [ADMISSION_JOURNEY, REAL_ENGINE_JOURNEY, WIKI_QUERY_JOURNEY],
+      testIgnore: [ADMISSION_JOURNEY, REAL_ENGINE_JOURNEY, WIKI_QUERY_JOURNEY, SUPPORT_JOURNEY],
       use: {
         ...devices['Desktop Safari'],
         storageState: STORAGE_STATE.member,
@@ -271,6 +283,37 @@ export default defineConfig({
       },
       dependencies: ['setup'],
       testMatch: PROVIDER_BACKED_JOURNEYS,
+      fullyParallel: false,
+    },
+    {
+      /**
+       * The Support Assistant journey (`e2e/journeys/support/support.spec.ts`)
+       * — the first E2E coverage that opens the in-app widget rather than
+       * only its admin section. A real turn needs an agent to answer, which
+       * needs the FULL standalone stack the same way `chat-stream` does.
+       *
+       * `storageState: STORAGE_STATE.admin`: the seeding needs an admin
+       * session (create the agent, PUT the admin Features section for
+       * `support_assistant`), and the same session then opens the widget as
+       * an ordinary authenticated user — the support project enrols any
+       * caller as a viewer on first use, admin included, so one persona
+       * covers both jobs.
+       *
+       * `fullyParallel: false`: the file's three tests share state across
+       * the run (a conversation started in test 2 is read back in test 3)
+       * and a platform-wide admin section (test 1 must run BEFORE test 2
+       * turns the switch on). The top-level `fullyParallel: true` would
+       * otherwise let Playwright run them out of order or in different
+       * workers.
+       */
+      name: 'support-stack',
+      use: {
+        ...devices['Desktop Chrome'],
+        storageState: STORAGE_STATE.admin,
+        launchOptions: CHROMIUM_LAUNCH_OPTIONS,
+      },
+      dependencies: ['setup'],
+      testMatch: SUPPORT_JOURNEY,
       fullyParallel: false,
     },
     {

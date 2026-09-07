@@ -35,6 +35,14 @@ type ChatStore interface {
 	ListMessageGroups(ctx context.Context, projectID, conversationID string, limit int, sortOrder string) ([]map[string]any, error)
 	AddParticipant(ctx context.Context, projectID, conversationID string, body map[string]any) error
 	ListParticipants(ctx context.Context, projectID, conversationID string) ([]conversations.Participant, error)
+	// UpdateEntitySettings repairs a mapping row that already exists.
+	//
+	// It is here because `AddParticipant`'s mapping insert is
+	// ON CONFLICT DO NOTHING: a conversation that already holds an agent
+	// mapping keeps whatever entity_settings it was created with, and this
+	// package created every one of them empty. Without an update path those
+	// conversations can never answer a question again. See participants.go.
+	UpdateEntitySettings(ctx context.Context, projectID, conversationID, participantID string, settings map[string]any) error
 }
 
 // WithChatStore supplies the reused chat repository. Without it the routes that
@@ -151,6 +159,29 @@ func (h *Handler) CreateConversation(w http.ResponseWriter, r *http.Request) {
 		h.logger.Error("support assistant: create conversation", "err", err)
 		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to create conversation")
 		return
+	}
+
+	// THE AUTHOR IS A PARTICIPANT, and the conversation is unusable without it.
+	//
+	// `ResolveCurrentApplicationTurn` joins `chat_participants` on
+	// `entity_name = 'user'` AND the caller's id. This route used to insert the
+	// conversation row and stop, so every support conversation this service
+	// created resolved to no row and every question it carried answered 502.
+	//
+	// The failure is LOGGED AND SURVIVED rather than returned. The conversation
+	// exists at this point; answering 500 would leave the client with no id for
+	// a row that was created, and the predict route repairs a missing author on
+	// the next turn anyway (ensureTurnParticipants). Refusing here would trade a
+	// recoverable gap for an unrecoverable orphan.
+	if h.chat != nil {
+		if err := h.ensureUserParticipant(r.Context(),
+			strconv.FormatInt(projectID, 10),
+			strconv.FormatInt(conversation.ID, 10),
+			projectID, userID,
+		); err != nil {
+			h.logger.Warn("support assistant: attach author participant",
+				"conversation_id", conversation.ID, "err", err)
+		}
 	}
 	writeJSON(w, http.StatusCreated, conversation)
 }

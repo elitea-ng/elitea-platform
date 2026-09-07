@@ -8,9 +8,24 @@
  * report `current_entity_id` for a string like `configuration` or nothing at
  * all.
  */
+import type { ReactNode } from 'react';
+
+import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from '@tanstack/react-router';
+import { renderHook, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
-import { deriveAssistantPageContext } from './useAssistantContext';
+import { deriveAssistantPageContext, useAssistantContext } from './useAssistantContext';
+
+function wrapperAt(pathname: string) {
+  return function Wrapper({ children }: { readonly children: ReactNode }): ReactNode {
+    const rootRoute = createRootRoute({ component: () => <>{children}</> });
+    const router = createRouter({
+      routeTree: rootRoute,
+      history: createMemoryHistory({ initialEntries: [pathname] }),
+    });
+    return <RouterProvider router={router as never} />;
+  };
+}
 
 describe('deriveAssistantPageContext', () => {
   it('reports the entity from the LAST numeric segment, not the one after the kind', () => {
@@ -70,5 +85,49 @@ describe('deriveAssistantPageContext', () => {
 
   it('survives the root path', () => {
     expect(deriveAssistantPageContext('/')).toEqual({ current_page: '/' });
+  });
+});
+
+describe('useAssistantContext', () => {
+  it('adds the project id and name when the shell passed a project', async () => {
+    const { result } = renderHook(() => useAssistantContext({ id: 7, name: 'Acme' }), {
+      wrapper: wrapperAt('/agents'),
+    });
+
+    await waitFor(() => {
+      expect(result.current).toEqual(
+        expect.objectContaining({ current_page: '/agents', project_id: 7, project_name: 'Acme' }),
+      );
+    });
+  });
+
+  it('omits the project id when it does not resolve to a finite number', async () => {
+    const { result } = renderHook(() => useAssistantContext({ id: 'not-a-number' }), {
+      wrapper: wrapperAt('/agents'),
+    });
+
+    await waitFor(() => {
+      expect(result.current).not.toBeNull();
+    });
+    expect('project_id' in result.current).toBe(false);
+  });
+
+  it('omits the project name when it is an empty string', async () => {
+    const { result } = renderHook(() => useAssistantContext({ id: 1, name: '' }), {
+      wrapper: wrapperAt('/agents'),
+    });
+
+    await waitFor(() => {
+      expect(result.current).not.toBeNull();
+    });
+    expect('project_name' in result.current).toBe(false);
+  });
+
+  it('builds a context with no project fields when none is passed', async () => {
+    const { result } = renderHook(() => useAssistantContext(), { wrapper: wrapperAt('/agents') });
+
+    await waitFor(() => {
+      expect(result.current).toEqual({ current_page: '/agents', current_entity_type: 'agent' });
+    });
   });
 });

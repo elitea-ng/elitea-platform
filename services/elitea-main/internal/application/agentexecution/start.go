@@ -571,3 +571,21 @@ func unsupportedStart(reason string) error {
 func unsupportedStartBecause(reason string, cause error) error {
 	return &unsupportedCurrentAgentStart{reason: reason, cause: cause}
 }
+
+// UnsupportedCurrentAgentStart names a refusal raised OUTSIDE this package.
+//
+// The repository layer resolves the turn's row and holds several separate
+// reasons to refuse it. Every one of them used to answer the bare
+// ErrUnsupportedCurrentAgentStart sentinel. An operator then read one sentence
+// — "current agent start is not supported by the admitted parity slice" — for
+// a missing user participant, a missing version id, a foreign project and six
+// other causes, with nothing to tell them apart. The support assistant shipped
+// broken for exactly that reason: the log named the sentinel, not the cause.
+//
+// The reason must be a FIXED string. It reaches deployment logs, so it carries
+// no request data. Callers keep matching with
+// errors.Is(err, ErrUnsupportedCurrentAgentStart), which the wrapper's Unwrap
+// preserves.
+func UnsupportedCurrentAgentStart(reason string) error {
+	return &unsupportedCurrentAgentStart{reason: reason}
+}
