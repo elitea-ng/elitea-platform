@@ -368,3 +368,28 @@ export function activeAdminNavItemId(matchedRouteIds: readonly string[]): string
   }
   return undefined;
 }
+
+/**
+ * Whether the caller unlocks ANY sidebar section — the boot-time gate
+ * `AdminApp.tsx` uses to decide whether the admin router mounts at all.
+ *
+ * `visibleAdminNavGroups` already computes exactly this per item, by
+ * construction: an item survives its filter only when the (presentation-only)
+ * probe shows one of its `anyPermission` names. A caller for whom every group
+ * comes back empty has no reachable page in this bundle, which used to render
+ * as a full console shell around an empty sidebar — the router mounted
+ * regardless, so `/admin/app/` itself, and every page a URL could name, still
+ * rendered. This collapses the same computation to the boolean that lets the
+ * boot gate skip mounting the router at all, rather than leaving that shell
+ * on screen for a caller with nothing to do in it.
+ *
+ * Still presentation, not authorisation, for the reason `adminUiConfig.ts`'s
+ * header gives: the server refuses every write on its own account regardless
+ * of what renders here. What changes is WHERE that fact is acted on — one
+ * boot-time check instead of eleven pages each finding out from a 403.
+ */
+export function hasAnyAdminNavAccess(
+  shows: (permission: string) => boolean = adminUiShowsControlFor,
+): boolean {
+  return visibleAdminNavGroups(shows).length > 0;
+}

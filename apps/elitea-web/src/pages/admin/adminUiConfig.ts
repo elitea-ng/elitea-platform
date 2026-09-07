@@ -25,6 +25,14 @@
  * Accordingly nothing in this module is allowed to be the only thing standing
  * between a user and a mutation — the UI may use it to disable a control, and a
  * refused request still comes back 403 from the server either way.
+ *
+ * `AdminApp.tsx`'s boot gate (`adminNavItems.ts`'s `hasAnyAdminNavAccess`)
+ * reads this same array to decide whether to mount the router at all. That is
+ * still a RENDERING decision, at a bigger grain than one hidden nav item — a
+ * caller who spoofed a non-empty list here would see the shell and still have
+ * every write refused server-side, exactly as before this module hid a
+ * control. Nothing downstream of that gate trusts the array for anything a
+ * server route does not independently re-check.
  */
 
 interface AdminUiConfig {
