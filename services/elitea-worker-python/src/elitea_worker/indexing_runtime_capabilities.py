@@ -149,7 +149,7 @@ def require_indexing_runtime_capabilities(
         try:
             (ocr_probe or _verify_ocr_runtime)()
         except Exception as exc:
-            failures.append(f"ocr-runtime:{type(exc).__name__}")
+            failures.append(f"ocr-runtime:{type(exc).__name__}:{exc}")
         try:
             (markdown_probe or _verify_markdown_runtime)()
         except Exception as exc:
@@ -221,11 +221,17 @@ def _verify_ocr_runtime() -> None:
         pytesseract.image_to_string(
             image,
             config="--psm 7",
-            timeout=10,
+            # pytesseract raises RuntimeError("Tesseract process timeout") when
+            # the executable does not answer in time. A CI builder running the
+            # image matrix in parallel took longer than 10 s once (run
+            # 34137688006), and the failure read as "ocr-runtime:RuntimeError"
+            # — the same label a wrong reading gets. The bound is generous now,
+            # and the two failures are named apart below.
+            timeout=60,
         ).split()
     )
     if observed != _OCR_PROBE_TEXT:
-        raise RuntimeError("ocr-output-mismatch")
+        raise RuntimeError(f"ocr-output-mismatch:{observed!r}")
 
 
 def _verify_markdown_runtime() -> None:
