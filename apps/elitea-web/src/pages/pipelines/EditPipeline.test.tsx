@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { configure, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { delay, http, HttpResponse } from 'msw';
@@ -23,6 +23,10 @@ import { renderPipelinesRoute, renderPipelinesRouteWithoutSocket } from './__tes
 // default under CI coverage instrumentation (unit shard 2 on 26ad27cc,
 // 76adc4e5 and 793cf88e). Every waitFor/findBy in this file gets 5 s.
 configure({ asyncUtilTimeout: 5_000 });
+// And vitest's own per-test limit is raised to match: a test that legitimately
+// waits twice (not-found, then the post-navigation re-render) can exceed the
+// 5 s default on the same instrumented runner (shard 2 on 51ea184d).
+vi.setConfig({ testTimeout: 30_000 });
 
 // `ConfigurationTab`'s real `EditorPanel`/`FlowEditor` needs both jsdom
 // polyfills this provides (CodeMirror's YAML mode, `ResizeObserver` for
