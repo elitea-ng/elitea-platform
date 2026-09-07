@@ -28,6 +28,8 @@ from elitea_worker.constants import (
     SDK_PACKAGE_TREE_SHA256,
     SDK_SOURCE_REVISION,
     TOOLKIT_AVAILABLE_TOOLS_CAPABILITY_ID,
+    TOOLKIT_CALL_TOOL_CAPABILITY_ID,
+    TOOLKIT_CALL_TOOL_CAPABILITY_VERSION,
 )
 
 
@@ -195,6 +197,33 @@ def capability_message(
                     "typed-inline-terminal-result",
                 ],
             ),
+            capability_manifest_pb2.RuntimeCapabilityV1(
+                capability_id=TOOLKIT_CALL_TOOL_CAPABILITY_ID,
+                capability_version=TOOLKIT_CALL_TOOL_CAPABILITY_VERSION,
+                accepted_command_types=[
+                    command_pb2.WORKER_COMMAND_TYPE_V1_TOOLKIT_CALL_TOOL,
+                ],
+                emitted_event_types=[
+                    output_pb2.EXECUTION_OUTPUT_EVENT_TYPE_V1_TOOLKIT_CALL_TOOL_RESULT,
+                    output_pb2.EXECUTION_OUTPUT_EVENT_TYPE_V1_RUNTIME_ERROR,
+                ],
+                # durable_job, not contract_handler_parity. Running a toolkit
+                # tool effects provider work: it writes tickets and pushes
+                # commits. That needs durable effect identity, claim-bound
+                # credentials and a settlement, which is exactly what this
+                # interaction model names and what toolkit.available_tools.v1
+                # deliberately does not claim.
+                interaction_model="durable_job",
+                resource_classes=["toolkit-call"],
+                feature_flags=[
+                    "current-sdk-delegate",
+                    "reference-only-input",
+                    "claim-bound-materialization",
+                    "claim-bound-runtime-context",
+                    "bounded-sync-sdk-execution",
+                    "typed-inline-terminal-result",
+                ],
+            ),
         ],
         runtime_constraints=capability_manifest_pb2.RuntimeConstraintsV1(
             isolation_classes=["shared-claim-scoped-authority"],
@@ -216,6 +245,7 @@ def capability_message(
                 "toolkit-catalog",
                 "indexing",
                 "agent-execution",
+                "toolkit-call",
             ],
         ),
     )

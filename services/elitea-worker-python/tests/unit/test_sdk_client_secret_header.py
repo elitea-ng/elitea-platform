@@ -22,6 +22,7 @@ from elitea_worker.agents.client_context import EliteaClientContext
 from elitea_worker.agents.sdk_adapter import (
     EliteaSdkAgentAdapter,
     EliteaSdkIndexingAdapter,
+    EliteaSdkToolkitToolAdapter,
 )
 
 
@@ -68,8 +69,9 @@ def _context(secrets_header_value: str = "") -> EliteaClientContext:
     [
         lambda context: EliteaSdkAgentAdapter.from_context(context),
         lambda context: EliteaSdkIndexingAdapter.from_context(context),
+        lambda context: EliteaSdkToolkitToolAdapter.from_context(context),
     ],
-    ids=["agent", "indexing"],
+    ids=["agent", "indexing", "toolkit-call-tool"],
 )
 def test_the_project_value_reaches_the_sdk_client_header(build) -> None:
     value = "Yk9tZS1yYW5kb20tcHJvamVjdC12YWx1ZQ"
@@ -92,8 +94,9 @@ def test_the_project_value_reaches_the_sdk_client_header(build) -> None:
     [
         lambda context: EliteaSdkAgentAdapter.from_context(context),
         lambda context: EliteaSdkIndexingAdapter.from_context(context),
+        lambda context: EliteaSdkToolkitToolAdapter.from_context(context),
     ],
-    ids=["agent", "indexing"],
+    ids=["agent", "indexing", "toolkit-call-tool"],
 )
 def test_no_project_value_adds_no_argument(build) -> None:
     """The worker does not invent a header when the project has none.

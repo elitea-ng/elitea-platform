@@ -396,6 +396,71 @@ class EliteaSdkIndexingAdapter:
             )
 
 
+class EliteaSdkToolkitToolAdapter:
+    """Pinned adapter for ONE toolkit tool run.
+
+    This is ``EliteaSdkIndexingAdapter`` with the tool name promoted from a
+    constant to a parameter. It is a separate class and not a keyword argument
+    on that one because the two carry different obligations: the index adapter
+    must keep applying the current wrapper's ``index_data`` tool-name
+    compatibility rewrite, and a caller-named tool must NOT be rewritten. One
+    class per obligation is what stops a later edit from giving an arbitrary
+    tool the index path's special case.
+
+    The SDK entrypoint is the same public method the current indexer worker
+    calls, so no new SDK surface is admitted by this capability.
+    """
+
+    def __init__(self, client: Any) -> None:
+        client_type = _indexing_client_type()
+        if not isinstance(client, client_type):
+            raise TypeError(
+                "client must be an EliteAClient from the admitted SDK artifact"
+            )
+        self._client = client
+
+    @classmethod
+    def from_context(cls, context: EliteaClientContext) -> EliteaSdkToolkitToolAdapter:
+        """Construct one SDK client from claim-scoped in-memory authority."""
+
+        client_type = _indexing_client_type()
+        client = client_type(
+            project_id=context.project_id,
+            base_url=context.base_url,
+            auth_token=context.auth_token,
+            # X-SECRET, not api_extra_headers. See _secrets_header_kwargs: the
+            # value authenticates one platform route and must not reach the
+            # model call. A tool run makes model calls, so this matters here.
+            **_secrets_header_kwargs(context),
+        )
+        return cls(client)
+
+    def call_tool(
+        self,
+        *,
+        toolkit_config: dict[str, Any],
+        tool_name: str,
+        tool_params: dict[str, Any],
+        runtime_config: dict[str, Any],
+        llm_model: str | None,
+        llm_config: dict[str, Any],
+        mcp_tokens: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        # Business-compatibility boundary: exactly the public SDK operation the
+        # current indexer worker uses, exactly once per kernel invocation, with
+        # the caller's tool name passed through unaltered.
+        with _sdk_budget_boundary():
+            return self._client.test_toolkit_tool(
+                toolkit_config=deepcopy(toolkit_config),
+                tool_name=tool_name,
+                tool_params=deepcopy(tool_params),
+                runtime_config=runtime_config,
+                llm_model=llm_model,
+                llm_config=deepcopy(llm_config),
+                mcp_tokens=mcp_tokens,
+            )
+
+
 class EliteaSdkAgentAdapter:
     """Initial synchronous SDK seam for the two current agent constructors.
 
