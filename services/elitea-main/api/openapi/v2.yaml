@@ -1938,6 +1938,103 @@ components:
             project_context.content, so a draft this route returns can always
             be saved.
 
+    CanvasEditor:
+      type: object
+      required: [user_id, user_name, state]
+      description: >
+        One person with the canvas open. The field names are the reference's
+        (legacy/plugins/elitea_core utils/participant_utils.py), so the SPA's
+        existing `item_details.editors` patch path applies unchanged.
+      properties:
+        user_id:
+          type: string
+          description: >
+            The server-derived principal id. ADDED to the reference shape, which
+            matched editors by display-name string comparison alone — two people
+            with the same display name defeat that.
+        user_name:
+          type: string
+          description: >
+            The principal's display name, falling back to the e-mail and then to
+            the id, so no entry is ever nameless.
+        user_avatar:
+          type: string
+          description: >
+            ABSENT today. The reference fills it from the `social` plugin's
+            avatar store, which elitea-main composes no reader for. The key is
+            omitted rather than sent empty: an empty string is the different and
+            wrong claim "this user has no avatar".
+        state:
+          type: string
+          enum: [editing, viewing]
+          description: >
+            The last state this editor heartbeated. `left` never appears here —
+            it removes the entry.
+
+    CanvasPresenceRequest:
+      type: object
+      description: >
+        The heartbeat body. Every field is optional; an empty body is a
+        `viewing` beat.
+
+        There is NO project or canvas field, deliberately. Both come from the
+        gated mount pattern. The deleted socket prototype read
+        `data["user_id"]` and a client-supplied room name off the wire, which is
+        the defect #622 exists to not repeat.
+      properties:
+        state:
+          type: string
+          enum: [editing, viewing, left]
+          default: viewing
+          description: >
+            `left` removes the caller from the roster now, rather than waiting a
+            TTL. The SPA sends it on unmount and when the tab is hidden.
+        message_group_uuid:
+          type: string
+          description: >
+            ECHOED, never trusted. The server resolves the real message group
+            from the canvas and publishes that one.
+
+    CanvasPresence:
+      type: object
+      required: [project_id, entity_id, entity_type, action, canvas_uuid, message_group_uuid, editors, ttl_seconds]
+      description: >
+        The roster. This is BOTH the POST's answer and the payload of the
+        `canvas.editors` event published on the project SSE channel
+        (`project:{project_id}:events`, GET
+        /elitea_core/events/prompt_lib/{project_id}), so a client parses one
+        shape either way.
+      properties:
+        project_id: { type: string }
+        entity_id:
+          type: string
+          description: The canvas uuid. Mirrors internal/events DomainEvent.
+        entity_type:
+          type: string
+          description: >
+            Always `canvas`. Left as a plain string rather than a single-member
+            enum: oapi-codegen turns a one-value enum into a bare `Canvas`
+            constant in the generated package, which claims a very general name
+            for a very narrow fact.
+        action:
+          type: string
+          description: Always `editors`. A plain string for the reason above.
+        canvas_uuid: { type: string }
+        message_group_uuid: { type: string }
+        editors:
+          type: array
+          description: >
+            Never null. An empty roster is `[]`, so a client can tell "nobody is
+            editing" from "this server did not answer the field". The two
+            service principals the reference filters in the UI
+            (admin@centry.user, system@centry.user) are suppressed here instead.
+          items: { $ref: '#/components/schemas/CanvasEditor' }
+        ttl_seconds:
+          type: integer
+          description: >
+            How long this beat is good for. The client resends at a third of it,
+            so the interval is not a constant duplicated on both sides.
+
     LlmSettings:
       type: object
       properties:
@@ -8725,6 +8822,81 @@ paths:
   # ==========================================================================
   # CHAT — execution-step traces
   # ==========================================================================
+  /elitea_core/canvas/prompt_lib/{project_id}/{canvas_id}/presence:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: canvas_id
+        in: path
+        required: true
+        schema: { type: string }
+        description: >
+          The canvas message item, by its integer row id OR by its uuid. Both
+          forms reach this segment: the SPA carries `canvas_uuid`
+          (shared/api/socket/rooms.ts) while the canvas READ is called with the
+          row id.
+
+    post:
+      operationId: heartbeatCanvasPresence
+      summary: Announce that this caller has a canvas open, and read the roster
+      description: |
+        Canvas editor presence WITHOUT a socket server (#622, decided in #615).
+        Two people editing one canvas was last-write-wins and silent.
+
+        This is a HEARTBEAT. The SPA calls it on mount, on a timer at a third of
+        `ttl_seconds`, on `visibilitychange`, and once with `state: "left"` on
+        unmount. The answer is the roster, and the same roster is published as a
+        `canvas.editors` event on the project's existing SSE channel — the one
+        GET /elitea_core/events/prompt_lib/{project_id} serves — so the other
+        tabs learn about it without polling.
+
+        THE CHANNEL NAME IS UNDERIVABLE FROM CLIENT INPUT. It is built from the
+        `{project_id}` of this mount pattern, which
+        `RequireResolvedPermissions` has already gated. The deleted socket
+        prototype's room was `"canvas:" + canvas_id` with NO project component,
+        and canvas ids are per-tenant-schema integers, so canvas 42 in project 1
+        and canvas 42 in project 7 were the same room by construction.
+
+        A PROJECT PREFIX ALONE IS NOT ENOUGH. `{canvas_id}` is resolved INSIDE
+        `schema({project_id})` before anything is published; a canvas that does
+        not live in this project is a 404 and publishes nothing.
+
+        NOTE(#622): internal/api/v2/canvaspresence. Gated on
+        `models.chat.canvas.details` — the string the canvas READ already takes,
+        because announcing presence on a canvas is not a wider claim than
+        opening it, and reusing it means this route needs no migration and 403s
+        nobody who can already open the canvas.
+
+        NOT A LOCK. The canvas WRITE route does not consult this roster. The SPA
+        uses it to go read-only, which is what the reference user saw, but the
+        server refuses no write on it — a lock enforced on one side only would
+        be a control that looks live and never fires.
+      tags: [chat]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CanvasPresenceRequest'
+      responses:
+        '200':
+          description: The live roster for this canvas
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CanvasPresence'
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: >
+            No canvas with this id inside this project's tenant schema. This is
+            the cross-project refusal, not only a typo path.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500': { $ref: '#/components/responses/500' }
+
   /elitea_core/message_traces/prompt_lib/{project_id}/{conversation_id}:
     parameters:
       - $ref: '#/components/parameters/ProjectId'

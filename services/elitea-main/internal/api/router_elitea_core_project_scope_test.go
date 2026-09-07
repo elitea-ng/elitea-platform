@@ -160,6 +160,9 @@ var eliteaCoreProjectScopedRoutes = []eliteaCoreProjectScopedRoute{
 	{http.MethodPost, "/api/v2/elitea_core/canvases/prompt_lib/7", "/api/v2/elitea_core/canvases/prompt_lib/8", "models.chat.canvas.create"},
 	{http.MethodGet, "/api/v2/elitea_core/canvas/prompt_lib/7/1", "/api/v2/elitea_core/canvas/prompt_lib/8/1", "models.chat.canvas.details"},
 	{http.MethodPut, "/api/v2/elitea_core/canvas/prompt_lib/7/1", "/api/v2/elitea_core/canvas/prompt_lib/8/1", "models.chat.canvas.update"},
+	// Canvas presence (#622) takes the canvas READ permission, not a new one:
+	// announcing presence on a canvas is not a wider claim than opening it.
+	{http.MethodPost, "/api/v2/elitea_core/canvas/prompt_lib/7/1/presence", "/api/v2/elitea_core/canvas/prompt_lib/8/1/presence", "models.chat.canvas.details"},
 	{http.MethodPost, "/api/v2/elitea_core/attachments/prompt_lib/7/1", "/api/v2/elitea_core/attachments/prompt_lib/8/1", "models.chat.attachments.create"},
 	{http.MethodDelete, "/api/v2/elitea_core/attachments/prompt_lib/7/1", "/api/v2/elitea_core/attachments/prompt_lib/8/1", "models.chat.attachments.delete"},
 	{http.MethodGet, "/api/v2/elitea_core/context_strategy/prompt_lib/7/1", "/api/v2/elitea_core/context_strategy/prompt_lib/8/1", "models.chat.conversation.details"},

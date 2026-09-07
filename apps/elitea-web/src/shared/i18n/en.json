@@ -3844,5 +3844,7 @@
   "analytics.tokens.seriesInput": "Input",
   "analytics.tokens.seriesOutput": "Output",
   "analytics.tokens.totalCaption": "input + output tokens",
-  "analytics.tokens.totalLabel": "TOTAL TOKENS"
+  "analytics.tokens.totalLabel": "TOTAL TOKENS",
+  "canvas.presence.oneEditing": "{{name}} is editing…",
+  "canvas.presence.manyEditing": "{{people}} people are editing…"
 }

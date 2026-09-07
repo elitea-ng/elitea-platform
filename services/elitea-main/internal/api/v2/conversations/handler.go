@@ -185,6 +185,17 @@ type Repository interface {
 	CreateCanvas(ctx context.Context, projectID string, body map[string]any) (map[string]any, error)
 	GetCanvas(ctx context.Context, projectID, canvasID string) (map[string]any, error)
 	UpdateCanvas(ctx context.Context, projectID, canvasID string, body map[string]any) error
+	// ResolveCanvas proves a canvas id names a canvas INSIDE schema(projectID)
+	// and returns its uuid plus its message group's uuid. No handler in THIS
+	// package calls it: it is the cross-project control for the presence
+	// heartbeat (internal/api/v2/canvaspresence, #622), which is registered
+	// beside the canvas routes above and is handed this same repository.
+	//
+	// It is declared HERE rather than asserted from the concrete type at the
+	// call site so the compiler is what proves the wiring. A type assertion
+	// that quietly fails leaves a route that answers and does nothing, which is
+	// the #126/#128 class this repository keeps re-finding.
+	ResolveCanvas(ctx context.Context, projectID, canvasID string) (canvasUUID, messageGroupUUID string, err error)
 	UpdateAttachmentStorage(ctx context.Context, projectID, conversationID string, body map[string]any) error
 	AddAttachments(ctx context.Context, projectID, conversationID string, body map[string]any) error
 	DeleteAttachments(ctx context.Context, projectID, conversationID string) error

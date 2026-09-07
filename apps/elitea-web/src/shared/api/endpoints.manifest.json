@@ -2382,6 +2382,19 @@
             "usedBy": [
                 "entities/inventory"
             ]
+        },
+        {
+            "$comment": "Canvas editor presence (#622). A HEARTBEAT: features/chat-messages/model/useCanvasPresence.ts sends it on mount, on a timer at a third of the server's ttl_seconds, on visibilitychange, and once with state:'left' on unmount. The answer is the roster, and the same roster arrives at every other tab as a `canvas.editors` frame on the project SSE stream (GET /elitea_core/events/prompt_lib/{projectId}), so this one call is both the write and the read. HANDWRITTEN YET NAMING AN operationId, the shape chatMessages.generateContentBlocking documents: v2.yaml describes it and orval generates a hook for it, but orval shapes every write endpoint as a useQuery gated by `enabled`, and this beat is sent from an effect and from a DOM listener, neither of which is a render. Keeping the id is what lets elitea-main's TestSpecRouterConformance/manifest_reverse_check match this entry to the spec.",
+            "id": "canvas.presenceHeartbeat",
+            "method": "POST",
+            "path": "/elitea_core/canvas/prompt_lib/{projectId}/{canvasId}/presence",
+            "operationId": "heartbeatCanvasPresence",
+            "source": "handwritten",
+            "responseSchema": "CanvasPresenceWire",
+            "fixture": null,
+            "usedBy": [
+                "features/chat-messages"
+            ]
         }
     ]
 }
