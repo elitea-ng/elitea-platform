@@ -116,6 +116,16 @@ func (e ExpectedRuntimeFailure) Validate() error {
 		if e.LogicalOutputID != "agent-execution:"+e.ExecutionID {
 			return ErrInvalidValidationOutput
 		}
+	case executiondomain.ToolkitCallToolCapability:
+		// A tool run CAN fail as a runtime failure rather than as a tool result:
+		// a lost claim, a passed deadline or an exhausted SDK budget never
+		// reaches the tool. The producer's bounded wait reads this row like any
+		// other terminal row, so leaving the capability out here would have left
+		// such a run polling until its own timeout for a settlement that was
+		// already durable but unprojectable.
+		if e.LogicalOutputID != "toolkit-call-tool:"+e.ExecutionID {
+			return ErrInvalidValidationOutput
+		}
 	default:
 		return ErrInvalidValidationOutput
 	}
