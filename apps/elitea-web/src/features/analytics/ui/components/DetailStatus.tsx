@@ -161,6 +161,27 @@ function AnalyticsLoadErrorImpl({ error }: AnalyticsLoadErrorProps): ReactNode {
     );
   }
 
+  return <DimensionUnavailableImpl detail={absent.detail} />;
+}
+
+export interface AnalyticsDimensionUnavailableProps {
+  /** The server's own reason, or a locally-authored one for a 200 that carries none. */
+  readonly detail: string;
+}
+
+/**
+ * The same "not available on this deployment" state, reached from a 200 rather
+ * than a 501.
+ *
+ * A dimension can now be unavailable for a WINDOW rather than for the whole
+ * deployment: the tool record arrived in shared migration 0119, so a range that
+ * closed before it was applied has no tool data and the endpoint says so with
+ * `tool_dimension_available: false` and NO items key (issue 618). Rendering
+ * that as an empty table would put "0 tools" on a month of constant tool use —
+ * the exact claim the 501 refusal existed to avoid, now reachable through a
+ * successful response.
+ */
+function DimensionUnavailableImpl({ detail }: AnalyticsDimensionUnavailableProps): ReactNode {
   return (
     // tabIndex={0}, and it is the load-bearing part of this fix rather than a
     // nicety.
@@ -190,7 +211,7 @@ function AnalyticsLoadErrorImpl({ error }: AnalyticsLoadErrorProps): ReactNode {
       >
         {t('analytics.unavailable.title', 'Not available on this deployment')}
       </Typography>
-      {absent.detail !== '' && (
+      {detail !== '' && (
         // The server's own words, rather than a paraphrase this file would have
         // to keep in step with a repository it cannot see. It names the table
         // or the figure that is missing, which is the only thing that makes
@@ -199,7 +220,7 @@ function AnalyticsLoadErrorImpl({ error }: AnalyticsLoadErrorProps): ReactNode {
           variant="bodySmall"
           sx={detailSx}
         >
-          {absent.detail}
+          {detail}
         </Typography>
       )}
     </Box>
@@ -209,3 +230,4 @@ function AnalyticsLoadErrorImpl({ error }: AnalyticsLoadErrorProps): ReactNode {
 export const DetailLoading = memo(DetailLoadingImpl);
 export const DetailEmpty = memo(DetailEmptyImpl);
 export const AnalyticsLoadError = memo(AnalyticsLoadErrorImpl);
+export const AnalyticsDimensionUnavailable = memo(DimensionUnavailableImpl);

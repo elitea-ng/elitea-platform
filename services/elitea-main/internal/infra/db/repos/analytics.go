@@ -152,6 +152,11 @@ const (
 	// is REPORTED (AgentBreakdown.Truncated) because the client normalises its
 	// share column by summing what it received.
 	agentRowsLimit = 100
+	// toolRowsLimit caps the Tools tab. Same order as agentRowsLimit and for
+	// the same reason: the rows are one per (toolkit, tool), not one per call.
+	// The cut is REPORTED (ToolBreakdown.Truncated) because the client
+	// normalises its share column by summing what it received.
+	toolRowsLimit = 100
 	// healthModelRowsLimit caps the health table. Higher than modelRowsLimit
 	// because its rows are keyed by (provider, model, STREAMING), so a
 	// deployment serving both response kinds produces two rows per model.
@@ -331,6 +336,14 @@ func (r *AnalyticsRepo) GetUserActivity(ctx context.Context, params analytics.Qu
 // runs no agent performed. agent_execution_jobs' own CHECK constraint (shared
 // 0055) is this same pair, which is what keeps the two lists from drifting into
 // disagreement without anything failing.
+// toolCallRecordsMigration is the shared migration that created
+// elitea_runtime.tool_call_records. It is the moment this deployment began
+// recording tool calls, and therefore the boundary of what the Tools tab can
+// speak for. The number is pinned here rather than derived so a later
+// renumbering at merge cannot silently move the boundary — the manifest head
+// test names the same file.
+const toolCallRecordsMigration = 119
+
 const agentCapabilities = `('agent.execute.application.v1', 'agent.execute.adhoc.v1')`
 
 // agentExecutionColumn probes for the column migration 0100 adds.
@@ -640,10 +653,167 @@ LIMIT $4`
 	return agents, false, nil
 }
 
-// GetToolAnalytics has no source. See the file header.
-func (r *AnalyticsRepo) GetToolAnalytics(context.Context, analytics.QueryParams) ([]analytics.ToolAnalytics, error) {
-	return nil, analytics.NoSourceError("tool analytics",
-		"p_<id>.chat_message_trace_step records tool_name but no toolkit_id, and covers chat turns only")
+/* ── tools ─────────────────────────────────────────────────────── */
+
+// GetToolAnalytics is the Tools tab. It used to answer ErrNoSource, and the
+// header of this file records the exact statement that stopped being true:
+// there was no durable per-tool-call record, only two half-producers that each
+// under-report by an unknown factor.
+//
+// Shared migration 0119 is that record, and BOTH halves write it — the explicit
+// tool run (toolkit.call_tool.v1: the test button and MCP tools/call) and the
+// agent turn's tool-call trace step, which is the bulk of tool usage and the
+// exact exclusion the old refusal named. So this read is one statement over one
+// table with one project column and one clock, and it needs neither a tenant
+// schema loop nor a join across two time types.
+//
+// AVAILABILITY IS A PROPERTY OF THE WINDOW, not of the table. Nothing written
+// before 0119 identifies a tool call, so a window that ENDS before the
+// migration was applied is a window this deployment cannot speak for, and it is
+// reported unavailable rather than as an empty list. Once the producer was
+// running, zero rows is a measurement: no tool ran.
+func (r *AnalyticsRepo) GetToolAnalytics(ctx context.Context, params analytics.QueryParams) (analytics.ToolBreakdown, error) {
+	id, err := projectID(params)
+	if err != nil {
+		return analytics.ToolBreakdown{}, err
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, analyticsReadTimeout)
+	defer cancel()
+
+	// One snapshot, for the reason GetAgentAnalytics opens one: the
+	// availability probe and the rows are two views of one table that both
+	// producers commit into continuously, and a breakdown read after a
+	// separately-read flag can disagree with it.
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return analytics.ToolBreakdown{}, fmt.Errorf("analytics: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	present, err := checkRelations(ctx, tx, "elitea_runtime.tool_call_records")
+	if err != nil {
+		return analytics.ToolBreakdown{}, err
+	}
+	if !present {
+		// A NAMED absence. The endpoint refuses rather than answering with an
+		// empty breakdown, because a 200 with no tools is indistinguishable
+		// from a project whose tools never ran.
+		return analytics.ToolBreakdown{}, analytics.NoSourceError("tool analytics",
+			"elitea_runtime.tool_call_records is absent — shared migration 0119 has not run on this database")
+	}
+
+	recording, err := toolRecordingSince(ctx, tx)
+	if err != nil {
+		return analytics.ToolBreakdown{}, err
+	}
+	breakdown := analytics.ToolBreakdown{}
+	if recording.IsZero() || !params.To.After(recording) {
+		// NOT AVAILABLE, and not "no tool ran".
+		//
+		// The ledger has no row for 0119 (recording is zero) or the whole
+		// window closed before the producer started. Both are "we have nothing
+		// to say about tools here". Tools stays nil and the handler omits the
+		// list entirely.
+		return breakdown, nil
+	}
+	breakdown.Available = true
+
+	tools, truncated, err := toolUsage(ctx, tx, id, params)
+	if err != nil {
+		return analytics.ToolBreakdown{}, err
+	}
+	// Present-and-possibly-empty once the producer was running for the window:
+	// at that point "no tool ran" is a measured fact.
+	if tools == nil {
+		tools = []analytics.ToolAnalytics{}
+	}
+	breakdown.Tools = tools
+	breakdown.Truncated = truncated
+	return breakdown, nil
+}
+
+// toolRecordingSince reports the moment this database began recording tool
+// calls: the applied_at of shared migration 0119.
+//
+// The LEDGER is the source, not the earliest row in the table. A project with
+// no tool calls yet has no earliest row, and reading "no rows" as "the producer
+// is not running" would make an idle project indistinguishable from an
+// un-migrated one — the availability flag would then be a statement about
+// traffic rather than about the deployment.
+func toolRecordingSince(ctx context.Context, q analyticsQuerier) (time.Time, error) {
+	var appliedAt *time.Time
+	if err := q.QueryRow(ctx, `
+SELECT min(applied_at)
+FROM elitea_runtime.schema_migrations
+WHERE target_kind = 'shared' AND version = $1`, toolCallRecordsMigration).Scan(&appliedAt); err != nil {
+		if missingRelation(err) {
+			return time.Time{}, nil
+		}
+		return time.Time{}, fmt.Errorf("analytics: tool producer probe: %w", err)
+	}
+	if appliedAt == nil {
+		return time.Time{}, nil
+	}
+	return *appliedAt, nil
+}
+
+// toolUsage folds the window into one row per tool.
+//
+// GROUPED BY (toolkit_id, toolkit_name, tool_name) rather than by tool_name
+// alone. Two toolkits can expose a tool of the same name, and collapsing them
+// would publish one row whose duration and error rate belong to two different
+// integrations. The toolkit id is NULL on an agent-turn row, so the grouping
+// keeps the name beside it: `coalesce` on the id would fold every unidentified
+// toolkit into one bucket, which is the invented fact this table exists to
+// avoid.
+//
+// duration is derived from the two timestamps and averaged over the calls that
+// FINISHED. A call still running has no duration, and counting it as zero would
+// pull the average toward zero exactly when a tool has started hanging.
+func toolUsage(ctx context.Context, q analyticsQuerier, id int64, params analytics.QueryParams) ([]analytics.ToolAnalytics, bool, error) {
+	rows, err := q.Query(ctx, `
+SELECT coalesce(r.toolkit_id::text, ''),
+       coalesce(r.toolkit_name, ''),
+       r.tool_name,
+       count(*)::bigint,
+       count(*) FILTER (WHERE r.is_error)::bigint,
+       coalesce(avg(EXTRACT(EPOCH FROM (r.finished_at - r.started_at)) * 1000)
+                FILTER (WHERE r.finished_at IS NOT NULL), 0)::double precision
+FROM elitea_runtime.tool_call_records AS r
+WHERE r.project_id = $1
+  AND r.started_at >= $2
+  AND r.started_at < $3
+GROUP BY r.toolkit_id, r.toolkit_name, r.tool_name
+ORDER BY count(*) DESC, r.tool_name ASC
+LIMIT $4`, id, params.From, params.To, toolRowsLimit+1)
+	if err != nil {
+		return nil, false, fmt.Errorf("analytics: tool usage: %w", err)
+	}
+	defer rows.Close()
+
+	tools := make([]analytics.ToolAnalytics, 0)
+	for rows.Next() {
+		var tool analytics.ToolAnalytics
+		if err := rows.Scan(&tool.ToolkitID, &tool.ToolkitName, &tool.ToolName,
+			&tool.RunCount, &tool.ErrorCount, &tool.AvgDuration); err != nil {
+			return nil, false, fmt.Errorf("analytics: tool usage scan: %w", err)
+		}
+		tool.AvgDuration = math.Round(tool.AvgDuration*10) / 10
+		// Guarded rather than assumed non-zero, for the reason agentUsage
+		// guards its own division.
+		if tool.RunCount > 0 {
+			tool.ErrorRate = math.Round(float64(tool.ErrorCount)/float64(tool.RunCount)*1000) / 10
+		}
+		tools = append(tools, tool)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	if len(tools) > toolRowsLimit {
+		return tools[:toolRowsLimit], true, nil
+	}
+	return tools, false, nil
 }
 
 // analyticsQuerier is the read seam every helper takes, so they run inside

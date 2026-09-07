@@ -4007,5 +4007,6 @@
   "pages.admin.tasks.tableLabel": "Background jobs",
   "pages.admin.tasks.title": "Tasks",
   "pages.admin.tasks.truncated": "Only the most recent jobs are listed. Narrow the filters to reach older ones.",
-  "pages.admin.tasks.unavailable": "This deployment cannot report its background jobs."
+  "pages.admin.tasks.unavailable": "This deployment cannot report its background jobs.",
+  "analytics.tools.notRecorded": "This deployment did not record tool calls for the selected period."
 }
