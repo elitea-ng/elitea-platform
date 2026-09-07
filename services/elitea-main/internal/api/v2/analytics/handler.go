@@ -164,22 +164,26 @@ func (h *Handler) Usage(w http.ResponseWriter, r *http.Request) {
 		"total_tokens":    summary.TotalTokens,
 		"ai_active_users": summary.ActiveUsers,
 	}
-	if summary.TotalProjectUsers != nil && summary.ActiveMembers != nil {
+	// `total > 0` gates the PUBLICATION of the pair, not only the rate.
+	//
+	// The tile prints the caller count over this denominator: "AI ACTIVE 1 of 4
+	// members". A denominator of 0 beside a numerator of 1 is not a fact about
+	// the project — one caller cannot be one of none — it says the membership
+	// source did not describe this project. That state rendered as
+	// "AI ACTIVE 1 of 0 members" on every fresh install. Omitting the pair makes
+	// the tile drop its suffix and report the caller count alone, which is the
+	// figure the request log can defend.
+	if summary.TotalProjectUsers != nil && summary.ActiveMembers != nil && *summary.TotalProjectUsers > 0 {
 		total := *summary.TotalProjectUsers
 		activeMembers := *summary.ActiveMembers
 		kpis["total_project_users"] = total
 		kpis["active_project_members"] = activeMembers
-		// Guarded rather than assumed non-zero: a project with a membership
-		// table and no members is a real state, and 0/0 is not 0%.
-		//
 		// The numerator is ACTIVE MEMBERS, not active callers. Callers include
 		// identities the membership table does not contain — a removed member, a
 		// global administrator, a service token — so dividing by the member
 		// count produced rates above 100% routinely (measured: 3 callers, 1
 		// member, "300% adoption"). See projectAdoption in the repository.
-		if total > 0 {
-			kpis["adoption_rate"] = round1(float64(activeMembers) / float64(total) * 100)
-		}
+		kpis["adoption_rate"] = round1(float64(activeMembers) / float64(total) * 100)
 	}
 
 	body := map[string]any{

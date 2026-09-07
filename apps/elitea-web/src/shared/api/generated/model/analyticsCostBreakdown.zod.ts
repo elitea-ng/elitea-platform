@@ -41,6 +41,7 @@
  */
 import * as zod from "zod";
 import { AnalyticsCostPeriod } from "./analyticsCostPeriod.zod";
+import { AnalyticsUsageEstimate } from "./analyticsUsageEstimate.zod";
 
 export const AnalyticsCostBreakdown = zod
   .object({
@@ -90,6 +91,9 @@ export const AnalyticsCostBreakdown = zod
       ),
     date_from: zod.iso.datetime({ offset: true }),
     date_to: zod.iso.datetime({ offset: true }),
+    estimate: AnalyticsUsageEstimate.optional().describe(
+      "The per-model, per-user and per-day view, read from the gateway request log rather than from the accumulator. Absent on a database that carries no request log.\n",
+    ),
   })
   .describe(
     "The cost view over gateway.llm_budget_accumulators. Its shape is the\naccumulator's own: money per (scope, scope_id, period). The per-model,\nper-agent, per-user and per-day views the pylon original carried are\nabsent here because nothing in this architecture records those\ndimensions — see the operation description.\n",

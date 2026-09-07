@@ -289,3 +289,29 @@ export const DATE_FILTER_PRESETS: readonly DateFilterPreset[] = [
   { label: 'Last 30d', value: '30', days: 30 },
   { label: 'Last 90d', value: '90', days: 90 },
 ];
+
+/**
+ * The tab index by name.
+ *
+ * A tab IS its position in `TAB_LABELS` — that is what `BaseTabs` reports and
+ * what `AnalyticsTabContent` switches on. Adding Costs and Tokens in the
+ * reference deployment's order (second and third) moved every tab after them,
+ * and the bare integers that used to encode "Users" and "Health" were spread
+ * across three files. Naming them makes the next insertion a one-line change
+ * and makes a wrong one a compile error rather than a tab that opens the wrong
+ * screen.
+ *
+ * It lives in `lib/` and not beside `TAB_LABELS` because the container and the
+ * tab body both need it, and the container imports the tab body — putting it in
+ * either file makes an import cycle.
+ */
+export const ANALYTICS_TAB = {
+  overview: 0,
+  costs: 1,
+  tokens: 2,
+  agents: 3,
+  tools: 4,
+  users: 5,
+  health: 6,
+  guide: 7,
+} as const;

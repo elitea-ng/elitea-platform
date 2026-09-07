@@ -129,8 +129,29 @@ VALUES ($1, 7, $2, '/llm/v1/chat/completions', 'POST', 200, $3, $4, $5, $6, 1, 1
 }
 
 // plantMembership creates the identity tables this service does not own and
-// grants a role, so the adoption denominator has something to count.
+// grants a project role, so the adoption denominator has something to count.
+//
+// THE TABLE MATTERS. Membership is public.auth_core__project_user_role, keyed
+// (project_id, user_id, role_id). public.auth_core__user_role is the CENTRAL
+// grant table: it has no project column, and its role_id references
+// auth_core__role rather than auth_core__project_role. This fixture used to
+// write the central table and the query used to read it, so the pair agreed
+// with each other and with nothing else — the shape both halves of a defect
+// take when the fixture is written from the query.
+//
+// The column list is the one internal/infra/db/migrations/001_initial.sql
+// declares.
 func plantMembership(t *testing.T, pool *pgxpool.Pool, projectID int, grants map[int][]string) {
+	t.Helper()
+	plantMembershipWithEmails(t, pool, projectID, grants, nil)
+}
+
+// plantMembershipWithEmails is plantMembership with chosen addresses, for the
+// system-user exclusion (an address ending in @centry.user).
+func plantMembershipWithEmails(
+	t *testing.T, pool *pgxpool.Pool, projectID int,
+	grants map[int][]string, emails map[int]string,
+) {
 	t.Helper()
 	ctx := context.Background()
 	for _, ddl := range []string{
@@ -138,7 +159,8 @@ func plantMembership(t *testing.T, pool *pgxpool.Pool, projectID int, grants map
 			id SERIAL PRIMARY KEY, email TEXT, name TEXT)`,
 		`CREATE TABLE IF NOT EXISTS public.auth_core__project_role (
 			id SERIAL PRIMARY KEY, project_id INTEGER NOT NULL, name TEXT NOT NULL)`,
-		`CREATE TABLE IF NOT EXISTS public.auth_core__user_role (
+		`CREATE TABLE IF NOT EXISTS public.auth_core__project_user_role (
+			id SERIAL PRIMARY KEY, project_id INTEGER NOT NULL,
 			user_id INTEGER NOT NULL, role_id INTEGER NOT NULL)`,
 	} {
 		if _, err := pool.Exec(ctx, ddl); err != nil {
@@ -146,10 +168,14 @@ func plantMembership(t *testing.T, pool *pgxpool.Pool, projectID int, grants map
 		}
 	}
 	for userID, roles := range grants {
+		email := fmt.Sprintf("user%d@example.com", userID)
+		if chosen, ok := emails[userID]; ok {
+			email = chosen
+		}
 		if _, err := pool.Exec(ctx, `
 INSERT INTO public.auth_core__user (id, email, name) VALUES ($1, $2, $3)
 ON CONFLICT (id) DO NOTHING`,
-			userID, fmt.Sprintf("user%d@example.com", userID), fmt.Sprintf("User %d", userID)); err != nil {
+			userID, email, fmt.Sprintf("User %d", userID)); err != nil {
 			t.Fatalf("plant user: %v", err)
 		}
 		for _, role := range roles {
@@ -160,8 +186,9 @@ INSERT INTO public.auth_core__project_role (project_id, name) VALUES ($1, $2) RE
 				t.Fatalf("plant role: %v", err)
 			}
 			if _, err := pool.Exec(ctx, `
-INSERT INTO public.auth_core__user_role (user_id, role_id) VALUES ($1, $2)`,
-				userID, roleID); err != nil {
+INSERT INTO public.auth_core__project_user_role (project_id, user_id, role_id)
+VALUES ($1, $2, $3)`,
+				projectID, userID, roleID); err != nil {
 				t.Fatalf("plant grant: %v", err)
 			}
 		}
@@ -402,6 +429,97 @@ func TestMissingMembershipTablesDoNotFailTheRead(t *testing.T) {
 	for _, absent := range []string{"total_project_users", "adoption_rate", "active_project_members"} {
 		if v, present := kpis[absent]; present {
 			t.Errorf("kpis.%s = %v with no membership source", absent, v)
+		}
+	}
+}
+
+// Membership is auth_core__project_user_role, and a CENTRAL grant must not
+// answer for it.
+//
+// The old query joined public.auth_core__user_role to
+// public.auth_core__project_role on `project_role.id = user_role.role_id`.
+// Those ids come from two unrelated SERIAL sequences over two unrelated tables:
+// auth_core__user_role.role_id references auth_core__role, which has no project
+// column at all. So the denominator counted whoever happened to hold a central
+// role whose id collided with a project role id — and missed every real member.
+// Measured on a fresh install: the tile read "AI ACTIVE 1 of 0 members" on a
+// personal project whose one member was the caller.
+func TestAdoptionIgnoresACollidingCentralRoleGrant(t *testing.T) {
+	pool, router := newUsageEnvironment(t)
+	ctx := context.Background()
+
+	plantMembership(t, pool, usageProjectID, map[int][]string{7: {"admin"}})
+	// The central table, holding a grant for a NON-member whose role id is one
+	// of this project's role ids. This is the row the old join counted.
+	if _, err := pool.Exec(ctx, `CREATE TABLE IF NOT EXISTS public.auth_core__user_role (
+		id SERIAL PRIMARY KEY, user_id INTEGER NOT NULL, role_id INTEGER NOT NULL)`); err != nil {
+		t.Fatalf("create central role table: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+INSERT INTO public.auth_core__user_role (user_id, role_id)
+SELECT 90, id FROM public.auth_core__project_role WHERE project_id = $1 LIMIT 1`,
+		usageProjectID); err != nil {
+		t.Fatalf("plant colliding central grant: %v", err)
+	}
+	at := usageNow.Add(-time.Hour)
+	plantRequest(t, pool, usageProjectID, 7, at, "gpt-4o", "openai", 1, 1)
+	plantRequest(t, pool, usageProjectID, 90, at, "gpt-4o", "openai", 1, 1)
+
+	_, body := usageGet(t, router, fmt.Sprintf("/analytics/prompt_lib/%d", usageProjectID))
+	kpis, _ := body["kpis"].(map[string]any)
+
+	// One member: user 7. User 90 holds a central grant and no membership row.
+	wantNumber(t, kpis, "total_project_users", "1")
+	wantNumber(t, kpis, "active_project_members", "1")
+	wantNumber(t, kpis, "ai_active_users", "2")
+	wantNumber(t, kpis, "adoption_rate", "100")
+}
+
+// A project's own system account is a member row and is not a person.
+//
+// Provisioning grants it the `system` project role (createSystemUser), and the
+// Users page hides it with `email NOT LIKE '%@centry.user'`. A denominator that
+// counted it would put one member on this tile that the page beside it does not
+// list — on a personal project, "1 of 2" where the truth is "1 of 1".
+func TestAdoptionExcludesTheProjectSystemUser(t *testing.T) {
+	pool, router := newUsageEnvironment(t)
+
+	plantMembershipWithEmails(t, pool, usageProjectID,
+		map[int][]string{7: {"admin"}, 12: {"system"}},
+		map[int]string{12: "system_user_41@centry.user"})
+	plantRequest(t, pool, usageProjectID, 7, usageNow.Add(-time.Hour), "gpt-4o", "openai", 1, 1)
+
+	_, body := usageGet(t, router, fmt.Sprintf("/analytics/prompt_lib/%d", usageProjectID))
+	kpis, _ := body["kpis"].(map[string]any)
+
+	wantNumber(t, kpis, "total_project_users", "1")
+	wantNumber(t, kpis, "adoption_rate", "100")
+}
+
+// A denominator of zero is not a denominator.
+//
+// The tile prints the caller count over this figure: "AI ACTIVE 1 of 0
+// members". One caller cannot be one of none, so the pair says the membership
+// source did not describe this project rather than describing it. The response
+// omits both figures, and the tile then reports the caller count alone.
+func TestMembershipPairIsAbsentWhenTheProjectHasNoMembers(t *testing.T) {
+	pool, router := newUsageEnvironment(t)
+
+	// The tables exist and hold a member of a DIFFERENT project.
+	plantMembership(t, pool, usageOtherID, map[int][]string{7: {"admin"}})
+	plantRequest(t, pool, usageProjectID, 7, usageNow.Add(-time.Hour), "gpt-4o", "openai", 1, 1)
+
+	status, body := usageGet(t, router, fmt.Sprintf("/analytics/prompt_lib/%d", usageProjectID))
+	if status != http.StatusOK {
+		t.Fatalf("status %d: %v", status, body)
+	}
+	kpis, _ := body["kpis"].(map[string]any)
+
+	wantNumber(t, kpis, "ai_active_users", "1")
+	for _, absent := range []string{"total_project_users", "active_project_members", "adoption_rate"} {
+		if v, present := kpis[absent]; present {
+			t.Errorf("kpis.%s = %v for a project with no members: "+
+				"the tile then renders \"1 of 0\"", absent, v)
 		}
 	}
 }

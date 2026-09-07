@@ -158,7 +158,11 @@ test('J24: settings: analytics renders the live backend\'s own usage figures', a
   await expect(page.getByText('From:', { exact: true })).toBeVisible();
   await expect(page.getByText('To:', { exact: true })).toBeVisible();
   await expect(page.getByRole('spinbutton')).toHaveCount(10);
-  for (const tab of ['Overview', 'Agents', 'Tools', 'Users', 'Health', 'Guide']) {
+  // The tab list, in the reference deployment's order. Costs and Tokens sit
+  // second and third there, so they were inserted rather than appended, and
+  // this list is the assertion that catches an insertion that renumbered the
+  // switch without renumbering the labels.
+  for (const tab of ['Overview', 'Costs', 'Tokens', 'Agents', 'Tools', 'Users', 'Health', 'Guide']) {
     await expect(page.getByRole('tab', { name: tab, exact: true })).toBeVisible();
   }
 
