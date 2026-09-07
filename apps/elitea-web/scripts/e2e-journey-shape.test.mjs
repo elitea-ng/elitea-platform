@@ -27,8 +27,10 @@
  *     signing out on the shared state signs out the whole suite. Measured on
  *     the 1.60.0 smoke run: 21 chromium journeys failed downstream of J4,
  *     none for a reason of its own, and the refusal a revoked session
- *     produces — `401 missing authorization header` — reads exactly like a
- *     route that was never wired.
+ *     produced — `401 missing authorization header` — read exactly like a
+ *     route that was never wired. That reading is closed: the refusal now
+ *     says `code: session_revoked` (#538), which `e2e/fixtures/api.ts`'s
+ *     `describeRefusal` turns into this rule's name in the report.
  *
  * Each rule is checked twice: against the real file, and against the shape the
  * file had before the correction. A rule with no failing case is a rule that

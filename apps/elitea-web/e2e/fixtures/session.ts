@@ -15,9 +15,11 @@
  * journey that signs out therefore signs out every worker, and from that
  * instant every later test presents a revoked identifier:
  *
- *   * an API helper gets `401 {"code":"unauthenticated","message":"missing
- *     authorization header"}` — the refusal a revoked session produces, which
- *     reads exactly like a route that was never wired;
+ *   * an API helper gets `401 {"code":"session_revoked"}` — and it used to get
+ *     `{"code":"unauthenticated","message":"missing authorization header"}`,
+ *     the SAME body an unwired route answers, which is what made this cause
+ *     take a separate investigation (#538). `describeRefusal` in
+ *     `e2e/fixtures/api.ts` prints that code with this paragraph's summary;
  *   * a page load gets `401 session_expired` from the shell's session probe,
  *     and `app/session-probe-client.ts` navigates the tab to the identity
  *     provider, which surfaces as `net::ERR_ABORTED` or a `waitForURL`

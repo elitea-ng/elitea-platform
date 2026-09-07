@@ -129,3 +129,38 @@ export async function sessionExpiredLoginUrl(response: Response): Promise<string
     return undefined;
   }
 }
+
+/* ── behaviour 2d: WHICH refusal this 401 is ─────────────────────────────── */
+
+/**
+ * The check that refused the request, as elitea-main's `middleware/auth.go`
+ * named it — or `undefined` when this 401 named nothing.
+ *
+ * WHY IT IS READ AT ALL. The same 401 body — `{"code":"unauthenticated",
+ * "message":"missing authorization header"}` — used to be written when the
+ * browser sent no cookie, when it sent one signed by another deployment's
+ * secret, when the cookie had expired, and when a server-side session had been
+ * revoked. #538 is what that cost: a journey holding a valid session was
+ * refused once in three runs and nobody could say which of the four it was,
+ * because the response was the only evidence that outlived the run. The server
+ * now writes a specific `error.code` for each, and this reads it.
+ *
+ * IT CHANGES NO DECISION. `needsReauth` still branches on the status alone, so
+ * a code this app has never seen behaves exactly as it does today. The value
+ * rides on the `kind: 'auth'` failure so a console, a log or an E2E report
+ * names the cause instead of restating the status.
+ *
+ * Reads a CLONE, so the original response is still consumable by `toResult`.
+ */
+export async function credentialRefusalCode(response: Response): Promise<string | undefined> {
+  if (response.status !== 401) return undefined;
+  if (!(response.headers.get('content-type') ?? '').includes('application/json')) return undefined;
+  try {
+    const body: unknown = await response.clone().json();
+    const code = (body as { readonly error?: { readonly code?: unknown } } | null)?.error?.code;
+    return typeof code === 'string' && code !== '' ? code : undefined;
+  } catch {
+    // Handled (§3.6): a 401 that lies about its content-type names nothing.
+    return undefined;
+  }
+}

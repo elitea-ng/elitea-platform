@@ -123,8 +123,7 @@ func Auth(cfg AuthConfig) func(http.Handler) http.Handler {
 			if apiKey := r.Header.Get("X-API-Key"); apiKey != "" {
 				user, err := validateToken(r.Context(), cfg, apiKey)
 				if err != nil {
-					logCredentialRefusal(r, sourceAPIKey, reasonTokenRejected)
-					writeJSONError(w, http.StatusUnauthorized, "authentication_error", "unauthenticated", "invalid api key")
+					writeCredentialRefusal(w, r, sourceAPIKey, reasonTokenRejected)
 					return
 				}
 				user, err = validatePrincipal(r.Context(), cfg, user)
@@ -197,8 +196,7 @@ func Auth(cfg AuthConfig) func(http.Handler) http.Handler {
 					}
 					refusal = cookieRefusal
 				}
-				logCredentialRefusal(r, sourceSession, refusal)
-				writeJSONError(w, http.StatusUnauthorized, "authentication_error", "unauthenticated", "missing authorization header")
+				writeCredentialRefusal(w, r, sourceSession, refusal)
 				return
 			}
 
@@ -208,22 +206,19 @@ func Auth(cfg AuthConfig) func(http.Handler) http.Handler {
 			} else if strings.HasPrefix(authHeader, "Basic ") {
 				decoded, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(authHeader, "Basic "))
 				if err != nil {
-					logCredentialRefusal(r, sourceToken, reasonAuthorizationHeaderMalformed)
-					writeJSONError(w, http.StatusUnauthorized, "authentication_error", "unauthenticated", "invalid basic auth encoding")
+					writeCredentialRefusal(w, r, sourceToken, reasonAuthorizationHeaderMalformed)
 					return
 				}
 				parts := strings.SplitN(string(decoded), ":", 2)
 				token = parts[0]
 			} else {
-				logCredentialRefusal(r, sourceToken, reasonAuthorizationSchemeUnsupported)
-				writeJSONError(w, http.StatusUnauthorized, "authentication_error", "unauthenticated", "unsupported authorization scheme")
+				writeCredentialRefusal(w, r, sourceToken, reasonAuthorizationSchemeUnsupported)
 				return
 			}
 
 			user, err := validateToken(r.Context(), cfg, token)
 			if err != nil {
-				logCredentialRefusal(r, sourceToken, reasonTokenRejected)
-				writeJSONError(w, http.StatusUnauthorized, "authentication_error", "unauthenticated", "token validation failed")
+				writeCredentialRefusal(w, r, sourceToken, reasonTokenRejected)
 				return
 			}
 
@@ -453,6 +448,79 @@ func logCredentialRefusal(r *http.Request, source, reason string) {
 		"cookie_count", len(r.Cookies()),
 		"has_cookie_header", r.Header.Get("Cookie") != "",
 	)
+}
+
+// credentialRefusalAnswer maps one internal reason onto the 401 the CALLER
+// reads: a code it can branch on, and a message a person can read.
+//
+// THE 401 USED TO SAY THE SAME THING ABOUT FOUR DIFFERENT FINDINGS.
+// `{"code":"unauthenticated","message":"missing authorization header"}` was
+// written when the browser sent nothing, when it sent a cookie signed by
+// another deployment, when the cookie had expired, and when a server-side
+// session had been revoked. #538 is what that cost: a journey holding a valid
+// session was refused once in three runs, and the response was the only
+// evidence that survived the run. The log line of #537 named the branch for an
+// OPERATOR. This names it for the CLIENT, which is what a test harness, a
+// browser console and an SDK actually see.
+//
+// THE STATUS DOES NOT MOVE. Every answer here is 401 `authentication_error`,
+// and no branch of Auth changes. Only the code and the message become
+// specific.
+//
+// WHAT IS NOT DISCLOSED. `session_secret_not_configured` is a statement about
+// the SERVER, not about the caller's credential: it says this deployment
+// cannot verify cookies at all. That is an operator's fact, so it stays in the
+// log and the caller gets the generic answer. Every other reason here is a
+// finding about the credential the caller itself supplied, which the caller
+// already holds.
+func credentialRefusalAnswer(source, reason string) (code, message string) {
+	switch reason {
+	case reasonNoCredential:
+		// The message is unchanged, because for THIS reason it was always
+		// true: no header and no cookie of ours arrived.
+		return reasonNoCredential, "missing authorization header"
+	case reasonSessionMalformed:
+		return reasonSessionMalformed, "the session cookie is malformed"
+	case reasonSessionBadSignature:
+		return reasonSessionBadSignature, "the session cookie signature does not match"
+	case reasonSessionExpired:
+		return reasonSessionExpired, "the session cookie expired"
+	case reasonSessionSubject:
+		return reasonSessionSubject, "the session cookie names no usable subject"
+	case reasonServerSessionUnknown:
+		return reasonServerSessionUnknown, "the session is not known to this deployment"
+	case reasonServerSessionRevoked:
+		return reasonServerSessionRevoked, "the session was revoked"
+	case reasonServerSessionExpired:
+		return reasonServerSessionExpired, "the session expired"
+	case reasonServerSessionIdle:
+		return reasonServerSessionIdle, "the session was idle for too long"
+	case reasonLegacySessionRejected:
+		return reasonLegacySessionRejected, "the legacy session cookie is no longer accepted"
+	case reasonAuthorizationHeaderMalformed:
+		return reasonAuthorizationHeaderMalformed, "invalid basic auth encoding"
+	case reasonAuthorizationSchemeUnsupported:
+		return reasonAuthorizationSchemeUnsupported, "unsupported authorization scheme"
+	case reasonTokenRejected:
+		if source == sourceAPIKey {
+			return reasonTokenRejected, "invalid api key"
+		}
+		return reasonTokenRejected, "token validation failed"
+	default:
+		// reasonSessionSecretAbsent and anything a later branch adds without
+		// deciding what to disclose. The generic answer is the safe default.
+		return "unauthenticated", "missing authorization header"
+	}
+}
+
+// writeCredentialRefusal logs the refusal and answers it.
+//
+// One function, so a new refusal branch cannot log one reason and answer with
+// another. That split is exactly how the four findings came to share one body.
+func writeCredentialRefusal(w http.ResponseWriter, r *http.Request, source, reason string) {
+	logCredentialRefusal(r, source, reason)
+	code, message := credentialRefusalAnswer(source, reason)
+	writeJSONError(w, http.StatusUnauthorized, "authentication_error", code, message)
 }
 
 // The reason each refusal names. The three are the whole vocabulary, and they

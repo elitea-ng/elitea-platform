@@ -57,7 +57,11 @@ func TestAuth_MissingHeader(t *testing.T) {
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("expected 401, got %d", rec.Code)
 	}
-	wantBody := `{"error":{"message":"missing authorization header","type":"authentication_error","code":"unauthenticated"}}` + "\n"
+	// `no_credential`, not the old blanket `unauthenticated`: the four
+	// findings behind this 401 now each name themselves in the body (#538).
+	// The MESSAGE is unchanged for this one, because for this one it was
+	// always true.
+	wantBody := `{"error":{"message":"missing authorization header","type":"authentication_error","code":"no_credential"}}` + "\n"
 	if body := rec.Body.String(); body != wantBody {
 		t.Errorf("unexpected body: %q, want %q", body, wantBody)
 	}

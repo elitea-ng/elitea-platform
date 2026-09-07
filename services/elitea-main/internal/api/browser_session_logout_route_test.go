@@ -16,12 +16,17 @@ package api
 // itself to the identity provider mid-journey — two symptoms that read as a
 // composition gap and are not one.
 //
+// THAT BODY NO LONGER HIDES THE CAUSE (#538). A revoked session answers
+// `session_revoked`, and a request with no cookie answers `no_credential`.
+// The investigation above cost a separate measurement because the two strings
+// were one string. `credential_refusal_code_route_test.go` holds one case per
+// finding.
+//
 // So this file pins the two answers by their exact shape, next to the
 // sequence that produces them:
 //
-//   1. `/api/v2` refuses a revoked session with `unauthenticated` and the
-//      message `missing authorization header` — the SAME body a request with
-//      no cookie at all gets. A reader who greps that string finds this note.
+//   1. `/api/v2` refuses a revoked session with `session_revoked`, which no
+//      other finding writes.
 //   2. `/forward-auth/info` refuses it with `session_expired`, which is the
 //      one code `apps/elitea-web/src/app/session-probe-client.ts` navigates
 //      the browser on.
@@ -91,7 +96,7 @@ func TestALogoutRefusesEverySecondHolderOfTheSameCookie(t *testing.T) {
 	}
 
 	// 1. The OTHER holder — the one that never called logout — is refused, and
-	//    the body it gets names no session at all.
+	//    the body it gets NAMES the revocation.
 	refused := httptest.NewRequest(http.MethodGet, theAPIRoute, nil)
 	refused.AddCookie(&http.Cookie{Name: browsersession.CookieName, Value: value})
 	apiRecorder := httptest.NewRecorder()
@@ -108,10 +113,11 @@ func TestALogoutRefusesEverySecondHolderOfTheSameCookie(t *testing.T) {
 	if err := json.Unmarshal(apiRecorder.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode refusal: %v (%s)", err, apiRecorder.Body.String())
 	}
-	if body.Error.Code != "unauthenticated" || body.Error.Message != "missing authorization header" {
-		t.Fatalf("refusal body = %q, want the `unauthenticated` / `missing authorization header` "+
-			"pair. That string is what a REVOKED session answers as well as an absent one, and "+
-			"reading it as a wiring gap is what cost the 1.60.0 smoke run its E2E suite.",
+	if body.Error.Code != "session_revoked" || body.Error.Message != "the session was revoked" {
+		t.Fatalf("refusal body = %q, want the `session_revoked` / `the session was revoked` "+
+			"pair. A revoked session used to answer exactly what an ABSENT cookie answers, and "+
+			"reading that as a wiring gap is what cost the 1.60.0 smoke run its E2E suite. "+
+			"This code is what stops the next run from repeating that reading (#538).",
 			apiRecorder.Body.String())
 	}
 
