@@ -48,6 +48,24 @@ package repos
 //     "toolkit usage" table built from it would silently exclude every tool
 //     call an agent made outside a chat.
 //
+//     NOTE(#618): `toolkit.call_tool.v1` (#340/#616) did NOT close this, and it
+//     is worth saying why, because it looks as if it should have.
+//     `elitea_runtime.execution_jobs` now carries one row per explicit tool run
+//     with a project and an `admitted_at`, which is two of the five columns
+//     ToolAnalytics needs. It carries NEITHER `toolkit_id` NOR `tool_name`:
+//     that capability deliberately owns no binding table, because it dispatches
+//     inline and its command scalars never need to survive the request (see
+//     internal/db/queries/runtime_toolkit_call_tool.sql). And it covers only
+//     tool runs a person or an MCP client asked for — the toolkit test button
+//     and `tools/call` — not the tool calls an AGENT makes inside a turn, which
+//     is the bulk of tool usage and the exact exclusion this bullet is about.
+//
+//     Closing #618 therefore needs a durable per-tool-call record — project,
+//     toolkit id, tool name, started/finished, outcome — written by BOTH the
+//     agent turn and the explicit run. That is a table, not an event, and no
+//     amount of producer-side signalling from this capability substitutes for
+//     it.
+//
 // It is answered with ErrNoSource, which the API layer turns into a FINAL
 // status rather than a retryable one. It is a product gap, not a fault.
 //
