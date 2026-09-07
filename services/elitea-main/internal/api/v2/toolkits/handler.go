@@ -94,6 +94,10 @@ type Handler struct {
 	// Nil restores the pre-#613 behaviour: every save accepted unresolved. See
 	// settings_validation.go.
 	settingsValidator ToolkitSettingsValidator
+	// projections contribute catalogue entries no snapshot can hold: the
+	// pre-built MCP servers an operator registered, and the toolkits an
+	// admitted provider publishes. See projection.go for the merge contract.
+	projections []ToolkitTypeProjection
 }
 
 // Option configures a Handler at construction, matching the pattern
@@ -114,16 +118,46 @@ func WithSettingsDefinitions(source ToolkitSettingsDefinitionSource) Option {
 	return func(h *Handler) { h.settingsDefinitions = source }
 }
 
+// NewHandler builds the toolkit handler.
+//
+// The catalogue projections are installed here, from the pool this constructor
+// already receives, rather than threaded through RouterConfig. That is the same
+// decision the guardrails source records in internal/api/router.go: a dependency
+// that needs nothing but the pool does not earn a router field. It also keeps
+// the whole projection change inside this package.
+//
+// Order is fixed and is the collision rule: the generic Remote MCP type is
+// contributed first, so neither a catalogue row keyed `mcp` nor a provider that
+// published a toolkit named `mcp` can replace it.
 func NewHandler(pool *pgxpool.Pool, opts ...Option) *Handler {
 	h := &Handler{repo: &pgRepo{pool: pool}, pool: pool}
+	h.projections = []ToolkitTypeProjection{
+		remoteMCPProjection{},
+		newPrebuiltMCPProjection(pool),
+		newProviderHubProjection(pool),
+	}
 	for _, opt := range opts {
 		opt(h)
 	}
 	return h
 }
 
+// NewHandlerWithRepo builds the handler over a supplied repository, with no
+// pool.
+//
+// It installs the SAME projection sources as NewHandler, over a nil pool. The
+// two constructors must not disagree about what the catalogue contains: a unit
+// suite that saw a smaller catalogue than the running binary would report a
+// green result for a shape no deployment serves. Over a nil pool the two
+// database-backed halves contribute nothing, and the Remote MCP type — which
+// needs no database — is served, exactly as it is in production.
 func NewHandlerWithRepo(repo Repository, opts ...Option) *Handler {
 	h := &Handler{repo: repo}
+	h.projections = []ToolkitTypeProjection{
+		remoteMCPProjection{},
+		newPrebuiltMCPProjection(nil),
+		newProviderHubProjection(nil),
+	}
 	for _, opt := range opts {
 		opt(h)
 	}
@@ -441,6 +475,11 @@ func (h *Handler) ListTypeSchemas(w http.ResponseWriter, r *http.Request) {
 			"failed to build the toolkit type catalogue", err)
 		return
 	}
+	// The projected half — pre-built MCP servers, the generic Remote MCP type
+	// and the admitted providers' toolkits — composes here, between the
+	// built-in catalogue and the guardrails. See projection.go for the contract
+	// this single call holds with toolkitTypeCatalogue.
+	catalogue = mergeProjectedTypes(catalogue, h.projectedToolkitTypes(r.Context())...)
 	catalogue = applyGuardrailsToCatalogue(
 		h.guardrailPolicy(r.Context(), "list_type_schemas"), catalogue,
 	)

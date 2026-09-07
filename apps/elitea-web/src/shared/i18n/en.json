@@ -3547,5 +3547,6 @@
   "settings.projectGeneral.aiConfig.toggle": "AI configuration view",
   "settings.projectGeneral.aiConfigurations": "AI Configurations",
   "settings.projectGeneral.general": "General",
-  "settings.projectGeneral.title": "General"
+  "settings.projectGeneral.title": "General",
+  "pages.toolkits.mcpLoadTools.error": "Could not load the tools of this MCP server: "
 }

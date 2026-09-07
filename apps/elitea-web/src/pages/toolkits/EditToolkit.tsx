@@ -18,7 +18,8 @@ import { BaseTabs } from '@/shared/ui/BaseTabs';
 import type { ControlsDropdownItem } from '@/shared/ui/ControlsDropdown';
 
 import { useScheduleCredentialsSelectSlot, useToolkitCredentialPickerSlot } from './lib/credentialPickerSlots';
-import { SHAREPOINT_AUTH_MODALS } from './lib/sharepointAuthModals';
+import { useConfigurationTabSlots } from './lib/configurationTabSlots';
+import { useMcpLoadTools } from './lib/useMcpLoadTools';
 import { useSelectedProjectId } from './lib/useSelectedProjectId';
 import { INDEXES_CHAT_UI } from './lib/indexesChatUI';
 import type { EditToolDetail } from './lib/toolkitFormTypes';
@@ -40,7 +41,6 @@ const headerSx: SxProps<Theme> = {
 const actionsSx: SxProps<Theme> = { display: 'flex', alignItems: 'center', gap: '0.5rem' };
 const tabBarSx: SxProps<Theme> = { flexShrink: 0, borderBottom: 1, borderColor: 'divider', padding: '0 1.5rem' };
 const contentSx: SxProps<Theme> = { flex: 1, minHeight: 0 };
-const testPaneSlotSx: SxProps<Theme> = { flex: 1, minWidth: 0 };
 const indexesPanelSx: SxProps<Theme> = { height: '100%', display: 'flex', minHeight: 0 };
 
 export interface EditToolkitDeps {
@@ -313,10 +313,13 @@ export function EditToolkit({ isMCP = false, deps }: EditToolkitProps): ReactNod
   const indexesTab = useIndexesTabState({ isMCP, detail, editToolDetail, tab });
 
   // #308. This page is a legal composition root for BOTH `features/toolkits`
-  // and `features/credentials`. Supplying these two slots is what makes the
-  // toolkit credential field and the schedule credential select render at all.
+  // and `features/credentials`. Supplying these slots is what makes the toolkit
+  // credential field, the schedule credential select and — for an MCP toolkit —
+  // the "Load Tools" action render at all. See `./lib/useMcpLoadTools.tsx`.
   const renderCredentialPicker = useToolkitCredentialPickerSlot(projectId);
   const renderCredentialsSelect = useScheduleCredentialsSelectSlot(projectId);
+  const mcpLoadTools = useMcpLoadTools({ projectId, editToolDetail, onChangeToolDetail: handleChangeToolDetail });
+  const configurationTabSlots = useConfigurationTabSlots({ renderCredentialPicker, mcpLoadTools });
 
   const title = resolveTitle(isMCP, detail?.name);
 
@@ -366,25 +369,7 @@ export function EditToolkit({ isMCP = false, deps }: EditToolkitProps): ReactNod
             isMCP={isMCP}
             projectId={projectId}
             saveHandlers={{ saveToolkit: saveToolkitMutation }}
-            slots={{
-              // The one place in the app that can legally hand SharePoint's
-              // delegated-login UI a REAL `McpAuthModal` — see
-              // `./lib/sharepointAuthModals.tsx`.
-              sharepointAuth: SHAREPOINT_AUTH_MODALS,
-              renderCredentialPicker,
-              renderTestPane: () => (
-                // Composition gap: the right-pane live test-chat content
-                // (`TestTools`, a sibling A4 sub-unit's owned file — see
-                // `ConfigurationTab.tsx`'s own module doc comment for why
-                // this is a slot, not a direct import) has real dependencies
-                // (`features/chat`, a `widgets/`-layer LLM model selector)
-                // that do not exist anywhere in this worktree yet.
-                <Box
-                  sx={testPaneSlotSx}
-                  data-testid="edit-toolkit-test-pane-slot"
-                />
-              ),
-            }}
+            slots={configurationTabSlots}
           />
         )}
         {indexesTab.activeTab === 1 && (
