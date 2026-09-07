@@ -13233,9 +13233,9 @@ paths:
                 type: object
                 additionalProperties: true
                 x-elitea-passthrough: >-
-                  NOTE(W2): the attachment row as the repository returns it
-                  (internal/api/v2/skills/handler.go updateSkillRelation); the
-                  writer owns the shape.
+                  NOTE(W2): the SkillAttachment row as the repository returns
+                  it (internal/api/v2/skills/handler.go:395, AttachSkill) —
+                  the writer owns the shape.
         '400': { $ref: '#/components/responses/400' }
         '403': { $ref: '#/components/responses/403' }
         '404': { $ref: '#/components/responses/404' }
