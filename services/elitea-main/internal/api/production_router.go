@@ -182,6 +182,14 @@ func mountReviewedProductionRoutes(r chi.Router, cfg RouterConfig) {
 	if cfg.CurrentAgentCancel != nil {
 		r.Method(http.MethodDelete, agentexecutionapi.CurrentAgentCancelPath, cfg.CurrentAgentCancel)
 	}
+	// One handler, two verbs, two permissions. They are registered separately
+	// because the route resolves a different permission per verb — polling is a
+	// read and stopping is not — the same reason the DeepWiki facade above
+	// registers its shared path twice.
+	if cfg.CurrentApplicationTask != nil {
+		r.Method(http.MethodGet, agentexecutionapi.CurrentApplicationTaskPath, cfg.CurrentApplicationTask)
+		r.Method(http.MethodDelete, agentexecutionapi.CurrentApplicationTaskPath, cfg.CurrentApplicationTask)
+	}
 	if cfg.CurrentIndexCancel != nil {
 		r.Method(http.MethodDelete, indexingapi.CurrentIndexCancelPath, cfg.CurrentIndexCancel)
 	}

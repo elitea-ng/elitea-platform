@@ -32,6 +32,12 @@ type PublicRoutes struct {
 	// AgentCancel preserves the current DELETE contract while atomically
 	// cancelling the exact durable execution and its current chat projection.
 	AgentCancel agentexecutionapi.CurrentAgentCanceller
+	// AgentTaskStatus is the READ half of the legacy application_task surface.
+	// It is composed beside AgentCancel because the two resolve the same
+	// durable execution from the same response message and share one ownership
+	// predicate; a reader that outlived its canceller would disclose the state
+	// of runs the caller may not stop.
+	AgentTaskStatus agentexecutionapi.CurrentAgentTaskStatusReader
 	// IndexCancel preserves the current UI DELETE contract while selecting only
 	// Go-owned execution IDs at the compatibility edge.
 	IndexCancel indexingapi.CurrentIndexCanceller

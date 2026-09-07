@@ -206,6 +206,11 @@ for (const e of sortedEndpoints) {
   if (e.endpoint === 'stopApplicationTask') {
     // W-008: dead surface — zero importers in the old SPA; live stop paths
     // use the served stop-task route. Deliberately NOT ported.
+    //
+    // The ROUTE came back with issue 254 P2 (GET polls, DELETE stops, both in
+    // internal/api/v2/agentexecution). The waiver did not: it records that the
+    // new app has no caller for it, which is still true. The wording below no
+    // longer claims the router refuses the path.
     item = {
       id: `API-${pad(apiN)}`,
       domain: e.domain, kind: 'integration', priority: 'waived',
@@ -214,7 +219,7 @@ for (const e of sortedEndpoints) {
       acceptance: [
         `GIVEN the old client declares a stop-application-task request that no component ever invokes`,
         `WHEN the reimplementation ships`,
-        `THEN this request is not ported: it is dead surface, and the router does not serve it`,
+        `THEN this request is not ported: it is dead surface with no caller in the new app`,
         `AND live task stopping continues to work through the served stop-task route, which has its own manifest item`,
       ],
       verify: {
@@ -224,7 +229,7 @@ for (const e of sortedEndpoints) {
       },
       unit: e.unit, status: 'waived', coverage: cov(e.unit),
       waiver: {
-        reason: 'W-008: dead surface — endpoint has zero importers in the old SPA and is not served by the Go router; live stop paths use the served stop-task route',
+        reason: 'W-008: dead surface — endpoint has zero importers in the old SPA and none in the new app; live stop paths use the served stop-task route. The Go router serves the path again as of issue 254 P2 (internal/api/v2/agentexecution), so the waiver is about the UI, not about the route',
         decidedBy: 'unit W1 contract correction (decision record 2026-07-26, flagged for operator veto)',
         date: '2026-07-26',
         replacesBehaviour: 'old SPA declared DELETE /elitea_core/application_task/prompt_lib/{projectId}/{taskId} but never called it',

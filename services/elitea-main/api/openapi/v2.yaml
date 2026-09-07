@@ -11314,15 +11314,28 @@ paths:
               schema:
                 $ref: '#/components/schemas/PublishValidationResult'
 
-  # APPLICATIONS — task cancellation
-  # NOTE(W1, waiver W-008): the former DELETE
-  # /elitea_core/application_task/prompt_lib/{project_id}/{task_id}
-  # (stopApplicationTask) was removed. The router has never served DELETE on
-  # that path (only GET, internal/api/router.go:430); the old SPA defines the
-  # mutation (src/api/applications.js:338) but useStopApplicationTaskMutation
-  # is imported by zero components, and the live stop paths use
-  # DELETE /task/prompt_lib/{projectID}/{taskID}, which the router serves.
-  # Dead surface — not ported to the new app.
+  # APPLICATIONS — task poll and cancellation
+  # NOTE(W1, waiver W-008, superseded by issue 254 P2): the former
+  # stopApplicationTask operation on
+  # /elitea_core/application_task/prompt_lib/{project_id}/{task_id} was removed
+  # here as dead surface — the old SPA defines the mutation
+  # (src/api/applications.js:338) but useStopApplicationTaskMutation is
+  # imported by zero components.
+  #
+  # The path IS served again, by internal/api/v2/agentexecution
+  # (CurrentApplicationTaskPath), mounted in production_router.go under the
+  # runtime plane. GET polls the run bound to a response message and DELETE
+  # stops it through the same use case
+  # DELETE /task/prompt_lib/{projectID}/{responseMessageID} runs. The path
+  # parameter is the RESPONSE MESSAGE UUID, not a pylon arbiter task id.
+  #
+  # Both operations are deliberately still absent from this document, for the
+  # reason the chat_config note below gives and one more of their own: every
+  # sibling route of the runtime plane — the message start, the regeneration,
+  # continue_predict and the task cancel — is undescribed too, so describing
+  # the poll alone would tell a client it can watch a run it has no described
+  # way to start. Describe them together, or not at all. No client in this
+  # workspace calls either verb.
 
   # APPLICATIONS — versions
   /elitea_core/version/prompt_lib/{project_id}/{application_id}/{version_id}:
@@ -13869,10 +13882,20 @@ paths:
   # ==========================================================================
   # CHAT
   # ==========================================================================
-  # NOTE(#126): webchatSync (POST
+  # NOTE(#126, re-checked for issue 254 P2): webchatSync (POST
   # /elitea_core/webchat/prompt_lib/{project_id}/{version_id}) was removed. It
   # was gated on RouterConfig.Predictor — the prototype indexer transport — and
-  # 404'd in every deployment. See #93 for the chat dispatch migration.
+  # 404'd in every deployment.
+  #
+  # It is NOT coming back, and it was never a chat surface. The pylon module
+  # (legacy/plugins/elitea_core/api/v2/webchat.py) is an unauthenticated
+  # Microsoft Bot Framework webhook stub: it echoes the caller's own text back
+  # to a connector URL taken from the request body, carries the literal
+  # placeholder strings 'MICROSOFT-APP-ID' and 'MICROSOFT-APP-PASSWORD' as its
+  # credentials, and marks its missing permission gate with `# FIXME: auth`. It
+  # never predicts and never reads its own {version_id}. A public chat entry
+  # point is a NEW feature; issue 254 carries the finding and a bounded design.
+  # See #93 for the chat dispatch migration.
 
   # NOTE(#126/#194): getChatConfig (GET
   # /elitea_core/chat_config/prompt_lib/{project_id}) was removed here when the

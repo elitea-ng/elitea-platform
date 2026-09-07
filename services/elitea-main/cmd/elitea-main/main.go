@@ -1462,6 +1462,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// for the tick and the settings routes to disagree on a dependency.
 	var pipelineTriggers *v2pipelinetriggers.Handler
 	var currentAgentCancel http.Handler
+	var currentApplicationTask http.Handler
 	var currentIndexCancel http.Handler
 	var currentIndexMeta http.Handler
 	var currentIndexMetaDelete http.Handler
@@ -1668,6 +1669,22 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			)
 			if err != nil {
 				return fmt.Errorf("compose current agent-cancel route: %w", err)
+			}
+		}
+		// The legacy application_task path (issue 254 P2). It needs BOTH halves
+		// — the poll reader and the canceller — so it is composed only when the
+		// runtime supplies both. It takes the same apiGroupAuth the cancel route
+		// takes, for the reason recorded on the start route above: the browser's
+		// session cookie is the only credential the chat surface carries.
+		if publicRoutes.AgentTaskStatus != nil && publicRoutes.AgentCancel != nil {
+			currentApplicationTask, err = agentexecutionapi.NewCurrentApplicationTaskRoute(
+				publicRoutes.AgentTaskStatus,
+				publicRoutes.AgentCancel,
+				apiGroupAuth,
+				legacyrbac.NewPostgresResolver(pool),
+			)
+			if err != nil {
+				return fmt.Errorf("compose current application-task route: %w", err)
 			}
 		}
 		if publicRoutes.IndexCancel != nil {
@@ -2044,6 +2061,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		PipelineTriggers:           pipelineTriggers,
 		AuditRecorder:              auditRecorder,
 		CurrentAgentCancel:         currentAgentCancel,
+		CurrentApplicationTask:     currentApplicationTask,
 		CurrentIndexCancel:         currentIndexCancel,
 		CurrentIndexMeta:           currentIndexMeta,
 		CurrentIndexMetaDelete:     currentIndexMetaDelete,

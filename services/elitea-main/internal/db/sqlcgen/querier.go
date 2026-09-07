@@ -205,6 +205,16 @@ type Querier interface {
 	GetAuthUserByProviderForProvisioning(ctx context.Context, providerRef string) (AuthCoreUser, error)
 	GetCurrentActiveAuthUser(ctx context.Context, userID int32) (AuthCoreUser, error)
 	GetCurrentAgentInvokedSkills(ctx context.Context, messageGroupID int64) (string, error)
+	// The read half of the legacy `application_task` surface. It resolves the
+	// durable execution from the RESPONSE MESSAGE, exactly the way
+	// CancelCurrentAgentExecution does, so a caller can never name a foreign
+	// execution id and read another project's run state.
+	//
+	// The ownership predicate is byte-for-byte the cancel query's: the caller owns
+	// the conversation, or the caller wrote the question this response answers.
+	// A reader that could see more than the canceller could stop would be a
+	// disclosure the cancel path already refuses.
+	GetCurrentAgentTaskStatus(ctx context.Context, arg GetCurrentAgentTaskStatusParams) (GetCurrentAgentTaskStatusRow, error)
 	GetCurrentAgentTraceBinding(ctx context.Context, arg GetCurrentAgentTraceBindingParams) (GetCurrentAgentTraceBindingRow, error)
 	GetCurrentConfiguration(ctx context.Context, arg GetCurrentConfigurationParams) (GetCurrentConfigurationRow, error)
 	GetCurrentConfigurationRenameToolkit(ctx context.Context, arg GetCurrentConfigurationRenameToolkitParams) (GetCurrentConfigurationRenameToolkitRow, error)

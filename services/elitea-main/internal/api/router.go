@@ -377,8 +377,12 @@ type RouterConfig struct {
 	// group's own 404, while a registered route with no runtime behind it is
 	// the "answers 200, nothing is wired" defect this repository keeps
 	// rediscovering.
-	PipelineTriggers           *v2pipelinetriggers.Handler
-	CurrentAgentCancel         http.Handler
+	PipelineTriggers   *v2pipelinetriggers.Handler
+	CurrentAgentCancel http.Handler
+	// CurrentApplicationTask serves the legacy application_task path (issue
+	// 254 P2): GET polls the run bound to a response message, DELETE stops
+	// it through the SAME use case CurrentAgentCancel runs.
+	CurrentApplicationTask     http.Handler
 	CurrentIndexCancel         http.Handler
 	CurrentIndexMeta           http.Handler
 	CurrentIndexMetaDelete     http.Handler
@@ -2934,21 +2938,28 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// Predictor, ChatService or PipelineRunner field. Nothing ever
 				// assigned those fields, so the groups were never registered
 				// and the paths 404'd in every deployment:
-				//   DELETE /task/prompt_lib/{projectID}/{taskID}
-				//   GET    /application_task/prompt_lib/{projectID}/{taskID}
 				//   POST   /chat/prompt_lib/{projectID}/{conversationID}/messages
-				//   GET    /chat_config/prompt_lib/{projectID}
 				//   GET|POST|PUT /pipeline_trigger/prompt_lib/{projectID}/pipeline/{versionID}/trigger
 				// See the IndexerDeps note at the top of this file for why the
 				// transport behind them was retired rather than repaired, and
 				// #192/#193/#93 for the capability records.
 				//
-				// POST /predict_llm/prompt_lib/{projectID} was on that list and
-				// is NOT any more — it is registered immediately below (#194).
-				// A comment that keeps claiming a route is absent after it has
+				// FOUR paths have left that list and are NOT in it any more. A
+				// comment that keeps claiming a route is absent after it has
 				// landed is the "disclosed gap goes stale" failure this
-				// repository has produced repeatedly, so the line was removed
-				// from the list rather than annotated.
+				// repository has produced repeatedly, so each line was removed
+				// rather than annotated:
+				//   POST   /predict_llm/prompt_lib/{projectID} — registered
+				//          immediately below (#194).
+				//   GET    /chat_config/prompt_lib/{projectID} — served by
+				//          internal/api/v2/promptcontextreads, mounted in
+				//          production_router.go (#194).
+				//   DELETE /task/prompt_lib/{projectID}/{responseMessageID} —
+				//          served by internal/api/v2/agentexecution, mounted in
+				//          production_router.go under the runtime plane.
+				//   GET|DELETE /application_task/prompt_lib/{projectID}/
+				//          {responseMessageID} — served by the same package and
+				//          mounted the same way (#254 P2).
 
 				// Predict LLM — one stateless turn, no agent, no tools, no
 				// version id (#194). Registered UNCONDITIONALLY, unlike the
@@ -3007,8 +3018,17 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// caller needs anyway, since the only thing to do with a
 				// generated Project Background is save it.
 				//
-				// NOT restored here: webchat. It needs the runtime task plane
-				// and is #254's P2 batch.
+				// NOT restored, here or anywhere: webchat. It is not a chat
+				// surface. legacy/plugins/elitea_core/api/v2/webchat.py is an
+				// unauthenticated Microsoft Bot Framework webhook stub that
+				// echoes the caller's own text back through a connector URL
+				// taken from the request body, with the literal placeholder
+				// strings 'MICROSOFT-APP-ID' and 'MICROSOFT-APP-PASSWORD' as
+				// its credentials and a `# FIXME: auth` where the permission
+				// gate belongs. It never predicts, never reads its own
+				// {version_id}, and creates no conversation. #254 carries the
+				// full finding and a bounded design for a real public chat
+				// surface, which is a NEW feature and not a restoration.
 				draftHandler := v2drafts.NewHandler(cfg.PredictCompleter)
 				r.With(projectPermission("models.applications.applications.create")).
 					Post("/generate_application_draft/prompt_lib/{projectID}", draftHandler.GenerateApplicationDraft)
