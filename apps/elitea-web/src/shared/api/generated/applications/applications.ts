@@ -4229,8 +4229,8 @@ export const getListApplicationsUrl = (
 };
 
 /**
- * NOTE(W2): internal/api/v2/applications/handler.go:71-107 — the
- * response is the domain ListResponse (types.go:86-92). The handler
+ * NOTE(W2): internal/api/v2/applications/handler.go:83-119 — the
+ * response is the domain ListResponse (types.go:105-111). The handler
  * also reads query/search, tags, folder_id, agents_type.
  * @summary List applications for a project
  */

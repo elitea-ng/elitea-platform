@@ -21,6 +21,7 @@ function applicationsList(total: number) {
       is_forked: false,
       meta: null,
       has_interrupt: false,
+      tags: [],
     })),
     total,
     page: 1,

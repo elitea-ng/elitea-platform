@@ -43,6 +43,18 @@ export interface TestRouterUser {
  * this page's own post-save and post-delete navigations were being blocked
  * by the guard the page itself armed.
  */
+/**
+ * `tags[]` as the REAL shell route parses it (`src/routes/-search/params.ts`
+ * `list()` → `toStringArray`): always a string array, even when the URL
+ * carries exactly one value. A fixture that returned the raw value handed
+ * the page a bare string, which is a shape the real app never produces.
+ */
+function tagList(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map(String);
+  if (typeof value === 'string' && value !== '') return [value];
+  return [];
+}
+
 function buildTestRouter(
   initialPath: string,
   content: ReactElement,
@@ -70,7 +82,7 @@ function buildTestRouter(
       sort_by: typeof search.sort_by === 'string' ? search.sort_by : undefined,
       sort_order: typeof search.sort_order === 'string' ? search.sort_order : undefined,
       author_id: typeof search.author_id === 'string' ? search.author_id : undefined,
-      'tags[]': Array.isArray(search['tags[]']) ? (search['tags[]'] as string[]) : undefined,
+      'tags[]': tagList(search['tags[]']),
     }),
     component: () => content,
   });

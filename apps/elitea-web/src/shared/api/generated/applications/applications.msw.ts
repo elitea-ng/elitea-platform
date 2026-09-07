@@ -1167,13 +1167,10 @@ export const getListApplicationsResponseMock = (
       faker.string.alpha({ length: { min: 10, max: 20 } }),
       undefined,
     ]),
-    tags: faker.helpers.arrayElement([
-      Array.from(
-        { length: faker.number.int({ min: 1, max: 10 }) },
-        (_, i) => i + 1,
-      ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
-      undefined,
-    ]),
+    tags: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
     folder_id: faker.helpers.arrayElement([
       faker.string.alpha({ length: { min: 10, max: 20 } }),
       undefined,

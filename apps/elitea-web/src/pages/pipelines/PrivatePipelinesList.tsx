@@ -8,6 +8,7 @@ import { useNavigate, useParams, useSearch } from '@tanstack/react-router';
 import { useListApplications } from '@/shared/api/generated/applications/applications';
 import type { Application, ApplicationList } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
+import { useRailTagSelection } from '@/shared/ui/EntityRail';
 import { SimpleSearchBar } from '@/shared/ui/SimpleSearchBar';
 
 import { sortPipelinesByField, type SortOrder } from './lib/sortPipelinesByField';
@@ -115,10 +116,14 @@ export function PrivatePipelinesList({ cardContentType }: PrivatePipelinesListPr
 
   const [query, setQuery] = useState('');
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const { selectedTags } = useRailTagSelection();
 
+  // See `pages/agents/PrivateAgentsList.tsx` — the same server-side tag
+  // filter, over the same list endpoint with `agents_type: 'pipeline'`.
+  const tagFilter = selectedTags.join(',');
   const listQuery = useListApplications(
     projectId ?? '',
-    { agents_type: 'pipeline' },
+    { agents_type: 'pipeline', ...(tagFilter === '' ? {} : { tags: tagFilter }) },
     { query: { enabled: projectId !== undefined } },
   );
   // `.data.data`'s declared type includes the error-envelope variant — never
