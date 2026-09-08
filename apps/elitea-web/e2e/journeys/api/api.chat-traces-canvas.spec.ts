@@ -9,9 +9,10 @@
  * The legacy API suite's trace-step, canvas and malformed-participant cases: a
  * conversation with no agent turns shows no steps rather than an error; asking
  * for a step that does not exist is a clean not-found; a canvas selection whose
- * end is before its start is refused; and a participant whose stored settings
- * lost their version still loads — the participant degrades, the conversation
- * does not.
+ * end is before its start is refused; a healthy agent participant comes back
+ * carrying its RESOLVED TOOL LIST; and a participant whose stored settings lost
+ * their version still loads — the participant degrades, the conversation does
+ * not.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * WHAT IS ASSERTED HERE, AND WHAT IS ASSERTED ELSEWHERE
@@ -38,17 +39,16 @@
  * message, so it lives in `e2e/streaming/chat.canvasExtraction.spec.ts`.
  *
  * ─────────────────────────────────────────────────────────────────────────────
- * A DISCLOSED GAP
+ * THE PARTICIPANT'S TOOL LIST IS RESOLVED ON THE READ
  * ─────────────────────────────────────────────────────────────────────────────
- * The legacy suite also requires a healthy agent participant to come back from
- * the conversation read carrying its RESOLVED TOOL LIST (`meta.tools`). This
- * server resolves no such thing: a participant's `meta` is written once, at
- * attach time, from the entity's display name, and the read hands the stored
- * column back unchanged. Measured against a running deployment, an attached
- * agent's `meta` is `{"name": "<agent name>"}` and nothing else. The case below
- * therefore asserts what the read DOES answer for a healthy participant and
- * says here what it does not, rather than asserting a key that would silently
- * be `undefined`.
+ * A participant's `meta` is written once, at attach time, from the entity's
+ * display name. The tool list is resolved on every READ instead, from the
+ * version the participant's own settings name, because an author changes an
+ * agent's toolkits after attaching it and the rail must draw what the agent
+ * HAS. The case below attaches a real toolkit and reads it back through
+ * `meta.tools`, and the degraded half asserts the other side of the same rule:
+ * a participant whose version cannot be resolved is still served, with no tool
+ * list rather than no participant.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * WHAT THIS RUN LEAVES BEHIND
@@ -65,10 +65,15 @@ import {
   DEFAULT_PROJECT_ID,
   createAgent,
   createConversation,
+  createGithubToolkit,
   deleteAgent,
   deleteConversation,
+  deleteGithubToolkit,
 } from '../../fixtures/api';
+import { attachToolkitToVersion } from '../../fixtures/exportImport';
 import { STORAGE_STATE } from '../../../playwright.config';
+
+import type { GithubToolkitFixture } from '../../fixtures/api';
 
 test.use({ storageState: STORAGE_STATE.admin });
 
@@ -287,7 +292,16 @@ test('a participant whose settings lost their version still loads with the conve
   const conversationId = await createConversation(request, autotestName('broken'));
   const agentName = autotestName('brokenag');
   const agent = await createAgent(request, agentName);
+  let toolkit: GithubToolkitFixture | undefined;
   try {
+    // A REAL toolkit on the agent's version. Without it the tool-list
+    // assertion below would pass against a read that always answered an empty
+    // list, which is the shape a missing resolution takes.
+    toolkit = await createGithubToolkit(request, DEFAULT_PROJECT_ID, `${agentName}_tk`, {});
+    await attachToolkitToVersion(request, toolkit.toolkitId, {
+      applicationId: agent.id,
+      versionId: agent.versionId,
+    });
     const attached = await request.post(`${PARTICIPANTS_PATH}/${conversationId}`, {
       data: [
         {
@@ -308,10 +322,18 @@ test('a participant whose settings lost their version still loads with the conve
     expect(String((healthyRow?.['entity_settings'] as Record<string, unknown>)?.['version_id'] ?? '')).toBe(
       agent.versionId,
     );
-    // `meta` is always an object and carries the display name the rail draws.
-    // It does NOT carry a resolved tool list — see the module header.
+    // `meta` is always an object and carries the display name the rail draws…
     expect(typeof healthyRow?.['meta']).toBe('object');
-    expect((healthyRow?.['meta'] as Record<string, unknown>)?.['name']).toBe(agentName);
+    const healthyMeta = healthyRow?.['meta'] as Record<string, unknown>;
+    expect(healthyMeta?.['name']).toBe(agentName);
+    // …and the tool list the read RESOLVES from the participant's version. The
+    // toolkit attached above is the one this must name; a stored snapshot taken
+    // when the agent was attached could not carry it.
+    const tools = healthyMeta?.['tools'] as readonly Record<string, unknown>[] | undefined;
+    expect(Array.isArray(tools), `no resolved tool list: ${JSON.stringify(healthyMeta)}`).toBe(true);
+    expect(tools ?? []).toHaveLength(1);
+    expect(tools?.[0]?.['name']).toBe(`${agentName}_tk`);
+    expect(tools?.[0]?.['type']).toBe('github');
 
     // Now take the version away, exactly as a whole-object replace does.
     const stripped = await request.put(
@@ -332,11 +354,17 @@ test('a participant whose settings lost their version still loads with the conve
       'the write was meant to REPLACE the document; a merge would have put the version back',
     ).toBeUndefined();
     expect(settings?.['chat_settings'], 'the replacement document is what was stored').not.toBeUndefined();
+    // The participant that lost its version carries NO tool list. There is
+    // nothing to resolve, and inventing an empty one would tell the rail this
+    // agent has no toolkits when the truth is that nobody could tell.
+    expect((rows[0]?.['meta'] as Record<string, unknown>)?.['tools']).toBeUndefined();
+    expect((rows[0]?.['meta'] as Record<string, unknown>)?.['name']).toBe(agentName);
     // …and the rest of the conversation is intact.
     expect(String(degraded['id'] ?? '')).toBe(conversationId);
     expect(String(degraded['uuid'] ?? '')).not.toBe('');
   } finally {
     await deleteConversation(request, conversationId);
+    await deleteGithubToolkit(request, DEFAULT_PROJECT_ID, toolkit);
     await deleteAgent(request, agent.id);
   }
 });

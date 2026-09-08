@@ -15,6 +15,13 @@
  *         token is still issued.
  *   FAIL  blocking findings; HTTP 422, and NO token is issued.
  *
+ * The token is a GRANT, not a shape. The publish route once accepted any string
+ * of sixteen lowercase hexadecimal characters in place of the check, so the
+ * gate was optional for anyone willing to type one; the token is now signed and
+ * bound to the version it was issued for, and the two cases under "the approval
+ * token" below are what that means to a client — a well-formed token nobody
+ * issued and a real token issued for another version are both refused.
+ *
  * ─────────────────────────────────────────────────────────────────────────────
  * WHY THE ITEMS ARE ASSERTED AND NOT ONLY THE STATUS
  * ─────────────────────────────────────────────────────────────────────────────
@@ -447,18 +454,22 @@ test('a token the platform never issued is refused', async ({ request }) => {
   const agent = await createQualityAgent(request, autotestName('val_forged'), projectId);
 
   try {
-    // The publish route checks the token's FORM. A value in the shape another
-    // platform's token takes — a colon-separated claim with a signature — is
-    // refused here, and refused as a validation failure rather than as a
-    // malformed body, which is what the dialog renders.
+    // WELL FORMED and unsigned. The publish route used to check the token's
+    // SHAPE alone — sixteen or more lowercase hexadecimal characters — so any
+    // string of the right alphabet skipped the quality gate on any version.
+    // This value is exactly the length and alphabet the platform mints, which
+    // is the point: only a token the platform SIGNED may stand in for a check.
+    const forged = 'ab'.repeat(72);
     const refused = await publish(request, projectId, agent.versionId, {
       version_name: versionName('rel'),
-      validation_token: 'X:42:0123456789abcdef:1700000000',
+      validation_token: forged,
     });
     expect(refused.status(), await refusal(refused)).toBe(400);
-    expect((await refused.json()) as Record<string, unknown>).toMatchObject({
-      error: 'validation_failed',
-    });
+    const body = (await refused.json()) as Record<string, unknown>;
+    expect(body).toMatchObject({ error: 'validation_token_invalid' });
+    // The message is what the dialog shows the author, and it must tell them
+    // what to do rather than only that something was wrong.
+    expect(String(body['msg'])).toContain('not issued for this version');
 
     // Nothing was published. A refusal that had already cloned the row answers
     // the same 400.
@@ -466,6 +477,46 @@ test('a token the platform never issued is refused', async ({ request }) => {
     expect(versions.every((version) => version.status !== 'published')).toBe(true);
   } finally {
     await withdrawAndDelete(request, projectId, agent.id);
+  }
+});
+
+test('a token issued for another version does not publish this one', async ({ request }) => {
+  const projectId = await resolvePublishAuthorProjectId(request);
+  const checked = await createQualityAgent(request, autotestName('val_tok_own'), projectId);
+  const other = await createQualityAgent(request, autotestName('val_tok_other'), projectId);
+
+  try {
+    // A token the platform really ISSUED, for a different agent's version. It
+    // is signed, so only the binding to the version can refuse it — which is
+    // the half a shape check cannot do at all.
+    const issued = await validate(request, projectId, checked.versionId, {
+      version_name: versionName('rel'),
+    });
+    expect(issued.status(), await refusal(issued)).toBe(200);
+    const token = (await resultOf(issued)).validation_token;
+    expect(typeof token).toBe('string');
+
+    const borrowed = await publish(request, projectId, other.versionId, {
+      version_name: versionName('rel'),
+      validation_token: token,
+    });
+    expect(borrowed.status(), await refusal(borrowed)).toBe(400);
+    const body = (await borrowed.json()) as Record<string, unknown>;
+    expect(body).toMatchObject({ error: 'validation_token_invalid' });
+    expect(String(body['msg'])).toContain('not issued for this version');
+    const otherVersions = await readApplicationVersions(request, other.id, projectId);
+    expect(otherVersions.every((version) => version.status !== 'published')).toBe(true);
+
+    // …and the same token publishes the version it WAS issued for, which is
+    // what tells this apart from a route that refuses every token.
+    const own = await publish(request, projectId, checked.versionId, {
+      version_name: versionName('rel'),
+      validation_token: token,
+    });
+    expect(own.status(), await refusal(own)).toBe(200);
+  } finally {
+    await withdrawAndDelete(request, projectId, other.id);
+    await withdrawAndDelete(request, projectId, checked.id);
   }
 });
 

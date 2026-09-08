@@ -7,8 +7,9 @@
  * ─────────────────────────────────────────────────────────────────────────────
  * The legacy API suite's publish lifecycle cases (PUB-01, PUB-02, PUB-04…PUB-08
  * and PUB-10): a draft is published and the draft survives, a withdrawal turns
- * the clone back into a draft instead of deleting it, the `base` version is
- * publishable, a name that is already live is refused, withdrawing something
+ * the clone back into a draft instead of deleting it AND frees the release name
+ * that clone held, so the same name can be published again, the `base` version
+ * is publishable, a name that is already live is refused, withdrawing something
  * that was never published is refused, a name with spaces or punctuation and an
  * empty name are both refused before anything is created, and a version id that
  * names nothing answers 404.
@@ -251,15 +252,42 @@ test('withdrawing turns the published clone back into a draft and empties the ca
     const withdrawn = await unpublish(request, projectId, cloneId);
     expect(withdrawn.status(), await refusal(withdrawn)).toBe(200);
 
-    // The clone SURVIVES as a draft. The legacy platform reverted rather than
-    // deleted, and an author who withdraws a release expects to find the
-    // version they published still there — a delete would take the version
-    // name with it, and with it the ability to publish that name again.
+    // The clone SURVIVES as a draft. An author who withdraws a release expects
+    // to find the version they published still there, and something may still
+    // point at it — a conversation that ran against it, an export, a link.
     const versions = await readApplicationVersions(request, agent.id, projectId);
     const clone = versions.find((version) => version.id === cloneId);
     expect(clone, `the withdrawal deleted the clone: ${JSON.stringify(versions)}`).toBeDefined();
     expect(clone?.status).toBe('draft');
-    expect(clone?.name).toBe(release);
+
+    // …and it GIVES THE RELEASE NAME BACK. The reverted clone used to keep the
+    // name it was published under, and a version name is unique per agent, so
+    // the name was spent for good: publish → withdraw → publish again under the
+    // same name was refused forever, with no way to recover it. The withdrawal
+    // now renames the clone, which is what frees the name below.
+    expect(
+      clone?.name,
+      `the withdrawn clone still holds the release name: ${JSON.stringify(versions)}`,
+    ).not.toBe(release);
+    expect(clone?.name).toContain('-withdrawn-');
+    expect(versions.filter((version) => version.name === release)).toHaveLength(0);
+
+    // The name is spendable again, which is what an author who withdrew a
+    // release in order to fix it and cut it again needs.
+    const again = await publish(request, projectId, agent.versionId, { version_name: release });
+    expect(again.status(), await refusal(again)).toBe(200);
+    const republished = await readApplicationVersions(request, agent.id, projectId);
+    const live = republished.filter((version) => version.name === release);
+    expect(live).toHaveLength(1);
+    expect(live[0]?.status).toBe('published');
+    expect(live[0]?.id, 'the republish reused the withdrawn row instead of cloning').not.toBe(
+      cloneId,
+    );
+
+    // Withdrawn again, so that the catalogue poll below measures a withdrawal
+    // and not a live release.
+    const withdrawnAgain = await unpublish(request, projectId, String(live[0]?.id));
+    expect(withdrawnAgain.status(), await refusal(withdrawnAgain)).toBe(200);
 
     // …and the catalogue no longer carries it. An agent that stays in the
     // catalogue after its author took it down is the one outcome the publish

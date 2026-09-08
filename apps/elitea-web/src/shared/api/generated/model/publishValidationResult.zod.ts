@@ -61,7 +61,7 @@ export const PublishValidationResult = zod
       .string()
       .nullish()
       .describe(
-        "Hex token generated for non-FAIL results; null on FAIL (handler.go:1164-1169). Pass it to publishApplication to skip re-validation.\n",
+        "The approval token issued for non-FAIL results; null on FAIL. Pass it to publishApplication to skip re-validation. It is signed, bound to the version it was issued for and to that version's content, and it expires; a version edited after the check invalidates it.\n",
       ),
     issues: zod
       .array(ValidationIssue)

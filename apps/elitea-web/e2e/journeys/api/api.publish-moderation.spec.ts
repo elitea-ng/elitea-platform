@@ -43,20 +43,23 @@
  * `platform_settings`, which is where the browser learns it too.
  *
  * ─────────────────────────────────────────────────────────────────────────────
- * TWO PLACES THIS PLATFORM ANSWERS DIFFERENTLY FROM THE LEGACY ONE
+ * WHERE THIS PLATFORM ANSWERS DIFFERENTLY FROM THE LEGACY ONE
  * ─────────────────────────────────────────────────────────────────────────────
- * Both are asserted as the platform behaves, and both are called out where
- * they happen rather than left for a reader to discover from a failing run:
+ * One place, asserted as the platform behaves and called out where it happens
+ * rather than left for a reader to discover from a failing run:
  *
  *   - a moderator does NOT skip the pre-publish quality gate. The legacy flow
  *     let a publish issued from the catalogue project through unchecked;
  *     `Publish` has no such branch, so a sparse agent is refused wherever it
  *     stands. See "the quality gate applies inside the catalogue too".
- *   - a withdrawn release name stays TAKEN on its agent. Withdrawal reverts
- *     the published clone to a draft and the draft keeps the release name
- *     (api.publish-lifecycle.spec.ts owns that half), so publishing that name
- *     again collides with it. The legacy moderator flow allowed the reuse.
- *     See "a withdrawn release name stays taken on its agent".
+ *
+ * A second difference used to be listed here: a withdrawn release name stayed
+ * TAKEN on its agent, because the withdrawal reverted the published clone to a
+ * draft that kept the release name, so publish → withdraw → publish again under
+ * the same name was refused forever. That was this platform's own defect rather
+ * than a decision. The withdrawal now frees the name
+ * (api.publish-lifecycle.spec.ts owns the mechanism), and the case below
+ * asserts the re-cut a moderator makes with it.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * WHY THE REFUSALS ARE ASSERTED ON THEIR BODIES
@@ -206,14 +209,6 @@ async function withdrawAndDelete(
     }
   }
   await deleteAgent(request, applicationId, projectId);
-}
-
-/** Every `rule` a 422 validation result carries. */
-function rulesOf(body: unknown): readonly string[] {
-  const result = (body as { validation_result?: { issues?: unknown } })?.validation_result;
-  const issues = result?.issues;
-  if (!Array.isArray(issues)) return [];
-  return issues.map((issue) => String((issue as { rule?: unknown })?.rule ?? ''));
 }
 
 /**
@@ -440,7 +435,7 @@ test('withdrawing one catalogue version leaves the other one live', async ({ req
   }
 });
 
-test('a withdrawn release name stays taken on its agent', async ({ request }) => {
+test('a withdrawn release name can be published again', async ({ request }) => {
   const catalogueProjectId = await resolveCatalogueProjectId(request);
   const name = autotestName('mod_reuse');
   const release = versionName('rel');
@@ -453,29 +448,27 @@ test('a withdrawn release name stays taken on its agent', async ({ request }) =>
     const withdrawn = await unpublish(request, catalogueProjectId, cloneId);
     expect(withdrawn.status(), await refusal(withdrawn)).toBe(200);
 
-    // THIS PLATFORM ANSWERS DIFFERENTLY FROM THE LEGACY ONE, and the difference
-    // is asserted rather than hidden. The legacy moderator flow allowed
-    // publish → withdraw → publish again under the SAME name. Here a withdrawal
-    // REVERTS the published clone to a draft and that draft keeps the release
-    // name (api.publish-lifecycle.spec.ts owns that half), so the name is still
-    // held by a row of this agent and the pre-check finds it. The version-name
-    // column is unique per application, so the alternative to this refusal is a
-    // 500 on a constraint violation, not a success.
-    //
-    // The consequence is that a release name is spent for good once it has been
-    // published: the reported divergence, not an accident of this journey.
+    // The moderator's own re-cut. A withdrawal used to leave the release name
+    // held by the draft it reverted the clone to, so this second publish was
+    // refused 422 `version_name_exists_in_source` and the name could never be
+    // used again on this agent. The withdrawal now renames the reverted clone,
+    // so the name is free and the release goes out again under it.
     const again = await publish(request, catalogueProjectId, agent.versionId, {
       version_name: release,
     });
-    expect(again.status(), await refusal(again)).toBe(422);
-    expect(rulesOf(await again.json())).toContain('version_name_exists_in_source');
+    expect(again.status(), await refusal(again)).toBe(200);
 
-    // …and the same refusal is what a name already used by ANY draft on the
-    // agent gets, which is the second case this covers: the reverted clone is
-    // an ordinary draft now, and the pre-check does not care how it got there.
+    // Exactly one row of this agent holds the release name, and it is the live
+    // one: the withdrawn clone is still there under a name that says what it
+    // is, and it is not competing for the name.
     const versions = await readApplicationVersions(request, agent.id, catalogueProjectId);
-    expect(versions.filter((version) => version.name === release)).toHaveLength(1);
-    expect(versions.every((version) => version.status !== 'published')).toBe(true);
+    const holders = versions.filter((version) => version.name === release);
+    expect(holders).toHaveLength(1);
+    expect(holders[0]?.status).toBe('published');
+    expect(holders[0]?.id).not.toBe(cloneId);
+    const withdrawnClone = versions.find((version) => version.id === cloneId);
+    expect(withdrawnClone?.status).toBe('draft');
+    expect(withdrawnClone?.name).toContain('-withdrawn-');
   } finally {
     await withdrawAndDelete(request, catalogueProjectId, agent.id);
   }
