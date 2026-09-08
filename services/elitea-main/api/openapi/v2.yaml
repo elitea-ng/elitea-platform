@@ -1780,6 +1780,15 @@ components:
             it arrived as, so a client can match a row to its request.
         success: { type: boolean }
         message: { type: string }
+        reason:
+          type: string
+          description: >
+            The machine-readable verdict of a TOOLKIT credential probe
+            (internal/api/v2/configurations/toolkit_check.go). Absent for an
+            ai_credentials provider. unsupported_type means this build carries
+            no probe for the type, which is NOT evidence that the credential is
+            broken and must not be shown as one.
+          enum: [ok, auth_failed, unreachable, unsupported_type]
         unsupported:
           type: boolean
           description: The configuration's type is not registered in this build.
@@ -17553,6 +17562,17 @@ paths:
                     type: boolean
                     description: Always true on this response.
                   message: { type: string }
+                  reason:
+                    type: string
+                    description: >
+                      The machine-readable verdict of a TOOLKIT credential
+                      probe: one of ok, auth_failed, unreachable,
+                      unsupported_type (internal/api/v2/configurations/
+                      toolkit_check.go). Absent for an ai_credentials
+                      provider, whose own reason vocabulary is already
+                      collapsed into message by the gateway path. Read message
+                      for the text; switch on this only where it is present.
+                    enum: [ok, auth_failed, unreachable, unsupported_type]
         '400':
           description: >
             The provider rejected the credential, the type has no working check
@@ -17570,6 +17590,17 @@ paths:
                     type: boolean
                     description: Always false on this response.
                   message: { type: string }
+                  reason:
+                    type: string
+                    description: >
+                      The machine-readable verdict of a TOOLKIT credential
+                      probe: one of ok, auth_failed, unreachable,
+                      unsupported_type (internal/api/v2/configurations/
+                      toolkit_check.go). Absent for an ai_credentials
+                      provider, whose own reason vocabulary is already
+                      collapsed into message by the gateway path. Read message
+                      for the text; switch on this only where it is present.
+                    enum: [ok, auth_failed, unreachable, unsupported_type]
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '404':

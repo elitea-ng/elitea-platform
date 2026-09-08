@@ -49,6 +49,12 @@ export const StoredConnectionCheckRow = zod.object({
     ),
   success: zod.boolean(),
   message: zod.string().optional(),
+  reason: zod
+    .enum(["ok", "auth_failed", "unreachable", "unsupported_type"])
+    .optional()
+    .describe(
+      "The machine-readable verdict of a TOOLKIT credential probe (internal\/api\/v2\/configurations\/toolkit_check.go). Absent for an ai_credentials provider. unsupported_type means this build carries no probe for the type, which is NOT evidence that the credential is broken and must not be shown as one.\n",
+    ),
   unsupported: zod
     .boolean()
     .optional()
