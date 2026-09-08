@@ -597,3 +597,82 @@ describe('the sweep must not run beside the journeys it would sweep', () => {
     expect(sweepJourneyIsIsolated(after)).toBe(true);
   });
 });
+
+/* ── rule 7 ─────────────────────────────────────────────────────────────── */
+
+/**
+ * The publish journeys' tenancy has to be SEEDED where the fixtures look for
+ * it, and the two files have to agree on the names.
+ *
+ * `e2e/fixtures/api.ts` resolves the author project and the non-shared model
+ * BY NAME — deliberately, so no journey repeats an id the seed picks out of a
+ * reserved range. That makes the name a contract between two files that are
+ * edited for different reasons and never run together: rename the project in
+ * the seed and every publish journey fails at run time on CI with "the caller
+ * is a member of no project of that name", which reads like a broken stack
+ * rather than a rename.
+ *
+ * Three properties, and the third is the one that only fails on a FIRST seed:
+ *
+ *  1. the seed creates a project of the name the fixture asks for, and grants
+ *     BOTH personas a membership in it — the API journeys run on the admin
+ *     state while the project is member-owned, so one membership is not enough;
+ *  2. the seed creates the model the fixture asks for, `shared = false`, which
+ *     is what makes the private-model refusals refuse for their own reason;
+ *  3. the model row is written AFTER the `DO $schemas$` loop that creates
+ *     `p_<id>`. Written with the project rows it would fail on a missing
+ *     relation the first time the seed ever runs, and pass on every re-run —
+ *     the shape the schema loop's own comment records.
+ */
+export function publishTenancySeeded(seedSource, fixtureSource) {
+  const projectName = /PUBLISH_AUTHOR_PROJECT_NAME = '([^']+)'/.exec(fixtureSource)?.[1] ?? '';
+  const modelName = /PRIVATE_MODEL_NAME = '([^']+)'/.exec(fixtureSource)?.[1] ?? '';
+  if (projectName === '' || modelName === '') return false;
+
+  const projectInsert = seedSource.indexOf(`'${projectName}'`);
+  if (projectInsert < 0) return false;
+
+  // The loop is found by its BODY, not by the `DO $schemas$` label: the
+  // label is quoted in a comment near the top of the seed, and an index that
+  // stopped there would put the whole file "after the loop".
+  const schemaLoop = seedSource.indexOf('PERFORM create_tenant_schema(');
+  if (schemaLoop < 0 || schemaLoop < projectInsert) return false;
+  const projectBlock = seedSource.slice(projectInsert, schemaLoop);
+  const grantsBothPersonas =
+    projectBlock.includes('e2e-member@autotest.local') &&
+    projectBlock.includes('e2e-admin@autotest.local');
+
+  const modelInsert = seedSource.indexOf(`'${modelName}'`);
+  const modelIsPrivate = /shared = false|, false,/.test(
+    seedSource.slice(modelInsert, modelInsert + 600),
+  );
+  return grantsBothPersonas && modelInsert > schemaLoop && modelIsPrivate;
+}
+
+describe('the publish journeys must find the tenancy their fixtures resolve', () => {
+  it('the seed provisions the author project and the non-shared model', () => {
+    expect(publishTenancySeeded(read(SEED_SCRIPT), read('e2e/fixtures/api.ts'))).toBe(true);
+  });
+
+  it('rejects a seed that renamed the project the fixtures ask for', () => {
+    const seed = read(SEED_SCRIPT).replaceAll("'e2e-publish-author'", "'e2e-publishing'");
+    expect(publishTenancySeeded(seed, read('e2e/fixtures/api.ts'))).toBe(false);
+  });
+
+  it('rejects a seed that grants only the owning persona a membership', () => {
+    const seed = read(SEED_SCRIPT).replace(
+      "WHERE u.email IN ('e2e-member@autotest.local', 'e2e-admin@autotest.local')\nON CONFLICT (project_id, user_id, role_id) DO NOTHING;\n\n-- The empty vault pair",
+      "WHERE u.email = 'e2e-member@autotest.local'\nON CONFLICT (project_id, user_id, role_id) DO NOTHING;\n\n-- The empty vault pair",
+    );
+    expect(publishTenancySeeded(seed, read('e2e/fixtures/api.ts'))).toBe(false);
+  });
+
+  it('rejects the model row written before the schema loop that creates its schema', () => {
+    const seed = read(SEED_SCRIPT);
+    const row = "'e2e-private-model-llm', 'E2E-PRIVATE-MODEL'";
+    const moved = seed
+      .replace(row, 'ROW MOVED')
+      .replace('PERFORM create_tenant_schema(', `${row}\nPERFORM create_tenant_schema(`);
+    expect(publishTenancySeeded(moved, read('e2e/fixtures/api.ts'))).toBe(false);
+  });
+});

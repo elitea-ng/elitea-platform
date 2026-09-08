@@ -1419,6 +1419,81 @@ JOIN auth_core__project_role r ON r.project_id = 90300 AND r.name = 'editor'
 WHERE u.email = 'e2e-member@autotest.local'
 ON CONFLICT (project_id, user_id, role_id) DO NOTHING;
 
+-- ── the publish journeys' author project (project 90500) ────────────────────
+--
+-- WHY A SECOND PROJECT IS THE PREREQUISITE, and not a convenience. Publishing
+-- is a CROSS-PROJECT operation: the clone stays in the author's own schema and
+-- a TWIN is written into the public project's schema, which is the only schema
+-- ELITEA Catalog reads (internal/api/v2/eliteacore/catalog_mirror.go). On this
+-- rig the public project IS project 1 — nothing sets `ELITEA_AI_PROJECT_ID`,
+-- so `internal/publicproject` answers its default — and every persona already
+-- stands there. A publish issued from project 1 therefore takes the
+-- `isPublicProject` short circuit and writes no twin at all, so the two halves
+-- of a publish cannot be told apart from inside it: the author-side clone and
+-- the catalogue row are the same row.
+--
+-- This project supplies the missing half. It is NOT the public project, so a
+-- publish from here crosses schemas exactly as a real author's does, the twin
+-- is written, and withdrawing has something to remove. It is also what makes
+-- "the moderator publishes from inside the catalogue project" a DIFFERENT
+-- case from "the author publishes into it" rather than the same request twice.
+--
+-- ITS OWN PROJECT, and not 90200 / 90300 / 90401 / 90411, for the reason the
+-- DeepWiki block above states: each of those is asserted on by journeys that
+-- never mention this one, and a published agent is a row their listings count.
+--
+-- OWNED BY THE MEMBER PERSONA, and both personas hold the admin role in it.
+-- `owner_id` is the member so the project is a member-owned team project — the
+-- ordinary shape, not an operator's — while the API journeys run on the admin
+-- storage state (e2e/journeys/api/*.spec.ts), so the admin persona needs a
+-- membership here or every request from those journeys is refused before the
+-- publish route is reached.
+INSERT INTO centry.project (id, name, owner_id, keycloak_groups, create_success, suspended)
+SELECT 90500, 'e2e-publish-author', u.id, '{}', true, false
+FROM auth_core__user u
+WHERE u.email = 'e2e-member@autotest.local'
+ON CONFLICT (id) DO UPDATE
+    SET name = EXCLUDED.name, owner_id = EXCLUDED.owner_id, suspended = EXCLUDED.suspended;
+
+INSERT INTO auth_core__project_role (project_id, name) VALUES
+    (90500, 'admin'), (90500, 'editor'), (90500, 'viewer')
+ON CONFLICT (project_id, name) DO NOTHING;
+
+-- Copied from project 1's overrides rather than restated, for the reason
+-- 90200's block gives: a hand-written subset drifts the moment a permission is
+-- added, and the journey then fails on a permission nobody thought about. The
+-- publish path alone resolves five of them
+-- (`models.applications.publish.post`, `.unpublish.post`, `.version.*`,
+-- `.applications.*`), and the catalogue reads resolve more.
+INSERT INTO auth_core__project_role_permission (project_id, role_id, permission)
+SELECT 90500, target.id, source.permission
+FROM auth_core__project_role_permission source
+JOIN auth_core__project_role origin
+  ON origin.id = source.role_id AND origin.project_id = 1
+JOIN auth_core__project_role target
+  ON target.project_id = 90500 AND target.name = origin.name
+WHERE source.project_id = 1
+ON CONFLICT (project_id, role_id, permission) DO NOTHING;
+
+INSERT INTO auth_core__project_user_role (project_id, user_id, role_id)
+SELECT 90500, u.id, r.id
+FROM auth_core__user u
+JOIN auth_core__project_role r ON r.project_id = 90500 AND r.name = 'admin'
+WHERE u.email IN ('e2e-member@autotest.local', 'e2e-admin@autotest.local')
+ON CONFLICT (project_id, user_id, role_id) DO NOTHING;
+
+-- The empty vault pair, copied from project 1 exactly as the personal projects
+-- above copy it and for the same measured reason: `CurrentModelCatalogReader`
+-- fails the WHOLE read when the rows are ABSENT, not when they are empty, so a
+-- project without them answers 500 to `GET /configurations/models/{project}` —
+-- the read that tells a journey which model it may name.
+INSERT INTO centry.secrets_key (id, data)
+SELECT 'project-90500', data FROM centry.secrets_key WHERE id = 'project-1'
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO centry.secrets_data (id, data)
+SELECT 'project-90500', data FROM centry.secrets_data WHERE id = 'project-1'
+ON CONFLICT (id) DO NOTHING;
+
 -- Tenant schemas for every project this seed created.
 --
 -- POSITION IS LOAD-BEARING: this must run after EVERY `centry.project` insert,
@@ -2239,6 +2314,88 @@ INVENTORY_SQL
 
     echo "  ✓ Inventory project 90300, toolkits 9101/9102 and source 9110 seeded"
     echo "    (no graph objects: the fixture runner answers every read from its canned graph)"
+
+    # ── the publish journeys' project-private model (project 90500) ─────────
+    #
+    # POSITION IS LOAD-BEARING, like the two blocks above: `p_90500` is created
+    # by the `DO $schemas$` loop inside the seed SQL, so a row written into that
+    # schema has to be written AFTER it. Placed with the project rows it would
+    # fail on `relation "p_90500.configuration" does not exist` on a first seed.
+    #
+    # WHAT THIS ROW IS FOR. Publishing refuses an agent whose model belongs to
+    # any project other than the public one — `llm_not_shared`, decided against
+    # `llm_settings.model_project_id` alone (internal/api/v2/eliteacore/
+    # handler.go) — and the pre-publish check raises the same finding as a
+    # critical issue. Until now this rig held exactly ONE model and it lived in
+    # the public project, so the refusal could only be provoked by naming a
+    # project id that exists nowhere. That is a different test: it proves the
+    # guard refuses an UNKNOWN project, not that it refuses a REAL private
+    # model, and a guard that compared against "any project the caller can see"
+    # would pass it.
+    #
+    # `shared = false` in a project that is not the public one is what makes it
+    # private in the sense the catalogue means: `internal/infra/db/repos/
+    # models.go` serves a project its OWN rows plus the public project's SHARED
+    # rows, so this model is visible in 90500 and in no other project.
+    echo "  → Seeding the project-private model in project 90500…"
+
+    $EXEC_BIN exec -i "$POSTGRES_CONTAINER" psql -U elitea -d elitea -v ON_ERROR_STOP=1 >/dev/null <<'PUBLISH_SQL'
+-- The MODEL CATALOGUE row, `section = 'llm'` — the section the picker and
+-- `GET /configurations/models/{project}` read, and a different section from
+-- the `models` credential row. The project-1 pair above states why the three
+-- sections must not be conflated.
+INSERT INTO p_90500.configuration
+    (project_id, elitea_title, label, type, section, data, meta, shared, status_ok, source, created_at, updated_at)
+VALUES
+    (90500, 'e2e-private-model-llm', 'E2E-PRIVATE-MODEL', 'llm_model', 'llm',
+     '{"name":"E2E-PRIVATE-MODEL"}',
+     '{}', false, true, 'user', NOW(), NOW())
+ON CONFLICT (elitea_title) DO UPDATE
+    SET data = EXCLUDED.data, section = EXCLUDED.section, type = EXCLUDED.type,
+        label = EXCLUDED.label, shared = false, status_ok = true, updated_at = NOW();
+
+-- ── postcondition, in SQL, because every one of these is silent on screen ──
+--
+-- A missing membership is a 403 the journey reads as "publish is broken"; a
+-- missing permission row is the same 403 one layer down; a missing model row
+-- makes the private-model refusal pass for the wrong reason — the id names
+-- nothing rather than naming something private. None of them can be told apart
+-- from the others by a journey, so they are asserted here, where the failure
+-- names itself.
+DO $publish$
+DECLARE
+    memberships INTEGER;
+    grants INTEGER;
+    private_models INTEGER;
+    vaults INTEGER;
+BEGIN
+    SELECT count(*) INTO memberships
+      FROM auth_core__project_user_role pur
+      JOIN auth_core__user u ON u.id = pur.user_id
+     WHERE pur.project_id = 90500
+       AND u.email IN ('e2e-member@autotest.local', 'e2e-admin@autotest.local');
+    SELECT count(*) INTO grants
+      FROM auth_core__project_role_permission
+     WHERE project_id = 90500
+       AND permission IN ('models.applications.publish.post',
+                          'models.applications.unpublish.post',
+                          'models.applications.applications.create');
+    SELECT count(*) INTO private_models
+      FROM p_90500.configuration
+     WHERE elitea_title = 'e2e-private-model-llm' AND section = 'llm' AND shared = false;
+    SELECT count(*) INTO vaults
+      FROM centry.secrets_key WHERE id = 'project-90500';
+
+    IF memberships <> 2 OR grants < 3 OR private_models <> 1 OR vaults <> 1 THEN
+        RAISE EXCEPTION
+            'publish tenancy seed incomplete: % memberships (want 2), % publish grants (want >=3), % private model(s) (want 1), % vault(s) (want 1)',
+            memberships, grants, private_models, vaults;
+    END IF;
+END
+$publish$;
+PUBLISH_SQL
+
+    echo "  ✓ Publish author project 90500 and its non-shared model seeded"
 
     echo "→ Seed complete."
     ;;

@@ -71,6 +71,10 @@ import {
   createConversation,
   deleteConversation,
   DEFAULT_PROJECT_ID,
+  readProjectModels,
+  resolveCatalogueProjectId,
+  resolvePrivateModel,
+  resolvePublishAuthorProjectId,
   sweepAutotestEntities,
 } from '../../fixtures/api';
 import { createPipelineThroughApi, deletePipeline } from '../../fixtures/pipelines';
@@ -367,4 +371,43 @@ test('API-FX4: two journeys running against the same project do not see each oth
     await deleteConversation(request, alphaConversation).catch(() => undefined);
     await deletePipeline(request, alphaPipeline).catch(() => undefined);
   }
+});
+
+/**
+ * API-FX5: the tenancy the publish journeys resolve is really provisioned.
+ *
+ * The publish journeys need a project that is NOT the catalogue, and a model
+ * that is NOT the catalogue's — `scripts/e2e-stack.sh` seeds both, and
+ * `e2e/fixtures/api.ts` finds them BY NAME so no journey repeats an id the
+ * seed picked out of a reserved range.
+ *
+ * Stated here rather than left to the journeys that use it, because the way it
+ * breaks is silent in both directions. A seed that never created the project
+ * fails those journeys with "the caller is a member of no project of that
+ * name", which reads as a broken stack; a deployment whose public project is
+ * the SAME project would let every one of them pass while proving nothing —
+ * the publish would take the "already in the catalogue" short circuit and the
+ * private model would not be private. This test creates nothing and asserts
+ * exactly those two properties.
+ */
+test('API-FX5: the seeded author project and its non-shared model exist and are not the catalogue', async ({
+  request,
+}) => {
+  const catalogueProjectId = await resolveCatalogueProjectId(request);
+  const authorProjectId = await resolvePublishAuthorProjectId(request);
+  expect(
+    authorProjectId,
+    'the author project must not be the catalogue project, or the publish journeys prove nothing',
+  ).not.toBe(catalogueProjectId);
+
+  // The model is resolved through the picker's own route, and the resolver
+  // refuses a model that is not where the guard expects it.
+  const privateModel = await resolvePrivateModel(request);
+  expect(privateModel.projectId).toBe(authorProjectId);
+
+  // …and the catalogue project does NOT serve it. That is the whole meaning of
+  // "non-shared" for the publish guard: a model that a published agent cannot
+  // reach from the catalogue.
+  const catalogueModels = await readProjectModels(request, catalogueProjectId);
+  expect(catalogueModels.map((model) => model.name)).not.toContain(privateModel.modelName);
 });
