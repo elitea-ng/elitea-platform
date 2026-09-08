@@ -1461,10 +1461,14 @@ components:
                 $ref: '#/components/schemas/ValidationFieldError'
           description: >
             Either a plain message (e.g. "llm_not_shared",
-            "pipeline_not_publishable") or a pydantic-style field error list.
+            "pipeline_not_publishable", "validation_token_invalid") or a
+            pydantic-style field error list.
         msg:
           type: string
-          description: Present only alongside error="pipeline_not_publishable".
+          description: >
+            Present alongside error="pipeline_not_publishable" and
+            error="validation_token_invalid", where it says which of the four
+            token findings was made.
       description: >
         NOTE(W2): union of the 400 bodies written by Publish
         (internal/api/v2/eliteacore/handler.go:452, 456-461, 467-473, 486, 547,
@@ -1531,9 +1535,10 @@ components:
           type: string
           nullable: true
           description: >
-            Hex token generated for non-FAIL results; null on FAIL
-            (handler.go:1164-1169). Pass it to publishApplication to skip
-            re-validation.
+            The approval token issued for non-FAIL results; null on FAIL. Pass
+            it to publishApplication to skip re-validation. It is signed, bound
+            to the version it was issued for and to that version's content, and
+            it expires; a version edited after the check invalidates it.
         issues:
           type: array
           items: { $ref: '#/components/schemas/ValidationIssue' }
@@ -3888,8 +3893,12 @@ components:
         validation_token:
           type: string
           description: >
-            Hex token from validateForPublish; when present, inline validation
-            is skipped (handler.go:554-588).
+            The approval token validateForPublish issued for THIS version. When
+            present and valid, inline validation is skipped. It is a signed
+            grant, not a shape: a token nobody issued, one issued for another
+            version, an expired one and one whose agent was edited afterwards
+            are each refused with 400 `validation_token_invalid` and a `msg`
+            saying which.
         category:
           type: string
           enum: ["Business Analyst", "Quality Assurance", "Development",

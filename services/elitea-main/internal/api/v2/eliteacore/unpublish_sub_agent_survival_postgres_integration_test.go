@@ -160,7 +160,7 @@ func TestUnpublishRemovesTheEmbeddedCopyAndKeepsTheAuthorsSubAgent(t *testing.T)
 
 	published := publishCopyDo(t, router, fixture.parentVersionID, map[string]any{
 		"version_name":     "v-one",
-		"validation_token": publishCopyValidationToken,
+		"validation_token": publishCopyToken(t, pool, fixture.parentVersionID),
 	})
 	if published.Code != http.StatusOK {
 		t.Fatalf("publish status = %d, body = %s", published.Code, published.Body.String())

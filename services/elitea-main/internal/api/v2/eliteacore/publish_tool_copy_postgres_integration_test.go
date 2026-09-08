@@ -27,6 +27,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"testing"
 	"time"
 
@@ -39,9 +40,17 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// publishCopyValidationToken skips the inline validation gate, as the UI does
-// after a separate validate call. It must be 16 or more hexadecimal characters.
-const publishCopyValidationToken = "0123456789abcdef0123456789abcdef"
+// publishCopyToken mints the approval token that skips the inline validation
+// gate, as the UI does after a separate validate call.
+//
+// It is MINTED rather than written down, for the reason catalogMirrorToken
+// gives: the token is a signed grant bound to the version, so a literal string
+// is no longer a token at all (issue 855).
+func publishCopyToken(t *testing.T, pool *pgxpool.Pool, versionID int) string {
+	t.Helper()
+	return eliteacore.NewHandler(pool).PublishValidationTokenFor(
+		context.Background(), "p_1", strconv.Itoa(versionID))
+}
 
 // publishCopyFixture is one agent in p_1 with one toolkit attached to its
 // single draft version.
@@ -62,7 +71,7 @@ func TestPublishCarriesToolAttachments(t *testing.T) {
 
 	recorder := publishCopyDo(t, router, fixture.versionID, map[string]any{
 		"version_name":     "v-one",
-		"validation_token": publishCopyValidationToken,
+		"validation_token": publishCopyToken(t, pool, fixture.versionID),
 	})
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("publish status = %d, body = %s", recorder.Code, recorder.Body.String())
@@ -143,7 +152,7 @@ ALTER TABLE p_1.entity_tool_mapping ADD CONSTRAINT copy_must_fail CHECK (entity_
 
 	recorder := publishCopyDo(t, router, fixture.versionID, map[string]any{
 		"version_name":     "v-one",
-		"validation_token": publishCopyValidationToken,
+		"validation_token": publishCopyToken(t, pool, fixture.versionID),
 	})
 	if recorder.Code == http.StatusOK {
 		t.Fatalf("publish reported success while the tool copy failed: %s", recorder.Body.String())

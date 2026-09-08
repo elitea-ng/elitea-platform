@@ -6,15 +6,16 @@ package eliteacore_test
 //   - the model a published agent names must belong to the public project;
 //   - the pre-publish quality gate has no exemption for the public project,
 //     so a moderator publishing in place is checked like everybody else;
-//   - a release name is spent once it has been used, because withdrawal
-//     REVERTS the published clone to a draft that keeps the name.
+//   - a withdrawn release name is FREE again, because the withdrawal renames
+//     the clone it reverts to a draft.
 //
 // The first was gated in handler.go with no test of any kind, so `llm_not_shared`
-// was reachable only by reading the source. The other two are places where this
-// platform answers differently from the one it replaces: the reference let a
-// publish issued from inside the public project skip the check, and allowed a
-// withdrawn version name to be published again. Both differences are pinned
-// here so a future change to either is a deliberate one.
+// was reachable only by reading the source. The second is a place where this
+// platform answers differently from the one it replaces — the reference let a
+// publish issued from inside the public project skip the check — and is pinned
+// here so a future change to it is a deliberate one. The third is the fix for
+// issue 854: a name spent for good by a withdrawal was this platform's own
+// defect, not a decision, and the tests below now pin the recovery.
 //
 // The fixtures, the pool and the router come from
 // catalog_mirror_postgres_integration_test.go: the same two tenants (p_1, the
@@ -28,10 +29,12 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
+	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -106,7 +109,7 @@ func TestPublishRefusesAModelFromAnotherProject(t *testing.T) {
 		// The approval token is sent, so the quality gate cannot be what
 		// refuses this: the model check runs BEFORE it and must be what
 		// answers.
-		"validation_token": catalogMirrorValidationToken,
+		"validation_token": catalogMirrorToken(t, pool, fixture),
 	})
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("publish status = %d, want 400; body = %s", recorder.Code, recorder.Body.String())
@@ -143,7 +146,7 @@ func TestPublishKeepsAPublicProjectModelOnTheCatalogueTwin(t *testing.T) {
 
 	recorder := catalogMirrorPublish(t, router, fixture, map[string]any{
 		"version_name":     "v-one",
-		"validation_token": catalogMirrorValidationToken,
+		"validation_token": catalogMirrorToken(t, pool, fixture),
 	})
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("publish status = %d, body = %s", recorder.Code, recorder.Body.String())
@@ -229,22 +232,25 @@ func TestPublishInThePublicProjectStillRunsTheQualityGate(t *testing.T) {
 	}
 }
 
-// TestAWithdrawnReleaseNameStaysTaken pins the second DIVERGENCE.
+// TestAWithdrawnReleaseNameCanBePublishedAgain pins what a withdrawal means
+// for the release name it took.
 //
-// The reference allowed a moderator to publish, withdraw and publish again
-// under the SAME version name. Here withdrawal reverts the published clone to a
-// draft and that draft keeps the release name, so the name is still held by a
-// row of the same agent — and `application_versions` carries a UNIQUE
-// constraint on (application_id, name), which makes the alternative to this
-// refusal a 500 on a constraint violation rather than a success.
-func TestAWithdrawnReleaseNameStaysTaken(t *testing.T) {
+// Withdrawal reverts the published clone to a draft rather than deleting it, so
+// the author keeps the version that was published. The reverted row used to
+// keep the RELEASE NAME too, and the name is unique per agent, so publish →
+// withdraw → publish again under the same name was refused forever with
+// `version_name_exists_in_source` and the name could never be recovered (issue
+// 854). The withdrawal now RENAMES the reverted clone, which gives the name
+// back: the row survives, under a name that says what it is, and the original
+// name is free for the next release.
+func TestAWithdrawnReleaseNameCanBePublishedAgain(t *testing.T) {
 	pool := newCatalogMirrorPool(t)
 	router := catalogMirrorRouter(eliteacore.NewHandler(pool))
 	fixture := seedCatalogMirrorFixture(t, pool, 1, "agent republished in place")
 
 	published := catalogMirrorPublish(t, router, fixture, map[string]any{
 		"version_name":     "v-one",
-		"validation_token": catalogMirrorValidationToken,
+		"validation_token": catalogMirrorToken(t, pool, fixture),
 	})
 	if published.Code != http.StatusOK {
 		t.Fatalf("publish status = %d, body = %s", published.Code, published.Body.String())
@@ -253,55 +259,137 @@ func TestAWithdrawnReleaseNameStaysTaken(t *testing.T) {
 	if err := json.Unmarshal(published.Body.Bytes(), &response); err != nil {
 		t.Fatalf("decode publish response: %v", err)
 	}
+	firstCloneID := fmt.Sprintf("%v", response["public_version_id"])
 
-	target := fmt.Sprintf("/elitea_core/unpublish/prompt_lib/%d/%v",
-		fixture.projectID, response["public_version_id"])
-	request := httptest.NewRequest(http.MethodPost, target, bytes.NewReader([]byte(`{}`)))
-	request.Header.Set("Content-Type", "application/json")
-	withdrawn := httptest.NewRecorder()
-	router.ServeHTTP(withdrawn, request)
-	if withdrawn.Code != http.StatusOK {
-		t.Fatalf("unpublish status = %d, body = %s", withdrawn.Code, withdrawn.Body.String())
-	}
+	catalogMirrorUnpublish(t, router, fixture.projectID, firstCloneID)
 
+	// The name is free, and the SAME name goes through again.
 	again := catalogMirrorPublish(t, router, fixture, map[string]any{
 		"version_name":     "v-one",
-		"validation_token": catalogMirrorValidationToken,
+		"validation_token": catalogMirrorToken(t, pool, fixture),
 	})
-	if again.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("re-publish status = %d, want 422; body = %s", again.Code, again.Body.String())
-	}
-	var refusal struct {
-		ValidationResult struct {
-			Issues []map[string]any `json:"issues"`
-		} `json:"validation_result"`
-	}
-	if err := json.Unmarshal(again.Body.Bytes(), &refusal); err != nil {
-		t.Fatalf("decode re-publish refusal: %v", err)
-	}
-	found := false
-	for _, issue := range refusal.ValidationResult.Issues {
-		if issue["rule"] == "version_name_exists_in_source" {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("refusal issues = %v, want version_name_exists_in_source",
-			refusal.ValidationResult.Issues)
+	if again.Code != http.StatusOK {
+		t.Fatalf("re-publish status = %d, want 200; body = %s", again.Code, again.Body.String())
 	}
 
-	// The withdrawn clone is still there, still carrying the name — which is
-	// WHY the re-publish is refused, and what tells this apart from a handler
-	// that refused for some other reason.
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	var status string
-	if err := pool.QueryRow(ctx,
-		`SELECT status FROM p_1.application_versions WHERE application_id = $1 AND name = 'v-one'`,
-		fixture.appID).Scan(&status); err != nil {
-		t.Fatalf("read the withdrawn version: %v", err)
+
+	// The withdrawn clone SURVIVES. It is a draft, it no longer holds the
+	// release name, and it says which release it was — a withdrawal that
+	// deleted the row would take the author's published version with it.
+	var withdrawnName, withdrawnStatus, withdrawnFrom string
+	if err := pool.QueryRow(ctx, `
+SELECT name, status, COALESCE(meta->>'withdrawn_from_name', '')
+FROM p_1.application_versions WHERE id = $1`, firstCloneID).
+		Scan(&withdrawnName, &withdrawnStatus, &withdrawnFrom); err != nil {
+		t.Fatalf("read the withdrawn clone: %v", err)
 	}
-	if status != "draft" {
-		t.Errorf("the withdrawn version is %q, want draft", status)
+	if withdrawnStatus != "draft" {
+		t.Errorf("the withdrawn clone is %q, want draft", withdrawnStatus)
+	}
+	if !strings.HasPrefix(withdrawnName, "v-one-withdrawn-") {
+		t.Errorf("the withdrawn clone is named %q, want the released name to carry the withdrawn marker", withdrawnName)
+	}
+	if withdrawnFrom != "v-one" {
+		t.Errorf("meta.withdrawn_from_name = %q, want v-one", withdrawnFrom)
+	}
+
+	// …and exactly ONE row of this agent carries the release name now: the one
+	// the second publish created, and it is the live one.
+	rows, err := pool.Query(ctx, `
+SELECT id, status FROM p_1.application_versions WHERE application_id = $1 AND name = 'v-one'`, fixture.appID)
+	if err != nil {
+		t.Fatalf("read the republished version: %v", err)
+	}
+	defer rows.Close()
+	holders := map[string]string{}
+	for rows.Next() {
+		var id, status string
+		if err := rows.Scan(&id, &status); err != nil {
+			t.Fatalf("scan the republished version: %v", err)
+		}
+		holders[id] = status
+	}
+	if len(holders) != 1 {
+		t.Fatalf("rows named v-one = %v, want exactly one", holders)
+	}
+	for id, status := range holders {
+		if id == firstCloneID {
+			t.Errorf("the withdrawn clone %s still holds the release name", id)
+		}
+		if status != "published" {
+			t.Errorf("the row named v-one is %q, want published", status)
+		}
+	}
+}
+
+// TestASecondWithdrawalOfTheSameNameGetsItsOwnName publishes, withdraws,
+// publishes and withdraws again under one name, which is the case the counter
+// in the replacement name exists for: two withdrawn clones of one agent cannot
+// both be called `v-one-withdrawn-1`, and a collision there would leave the
+// second withdrawal holding the release name again.
+func TestASecondWithdrawalOfTheSameNameGetsItsOwnName(t *testing.T) {
+	pool := newCatalogMirrorPool(t)
+	router := catalogMirrorRouter(eliteacore.NewHandler(pool))
+	fixture := seedCatalogMirrorFixture(t, pool, 1, "agent republished twice")
+
+	var cloneIDs []string
+	for round := 0; round < 2; round++ {
+		published := catalogMirrorPublish(t, router, fixture, map[string]any{
+			"version_name":     "v-one",
+			"validation_token": catalogMirrorToken(t, pool, fixture),
+		})
+		if published.Code != http.StatusOK {
+			t.Fatalf("publish %d status = %d, body = %s", round, published.Code, published.Body.String())
+		}
+		var response map[string]any
+		if err := json.Unmarshal(published.Body.Bytes(), &response); err != nil {
+			t.Fatalf("decode publish response: %v", err)
+		}
+		cloneID := fmt.Sprintf("%v", response["public_version_id"])
+		cloneIDs = append(cloneIDs, cloneID)
+		catalogMirrorUnpublish(t, router, fixture.projectID, cloneID)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	names := map[string]string{}
+	for _, cloneID := range cloneIDs {
+		var name string
+		if err := pool.QueryRow(ctx,
+			`SELECT name FROM p_1.application_versions WHERE id = $1`, cloneID).Scan(&name); err != nil {
+			t.Fatalf("read clone %s: %v", cloneID, err)
+		}
+		if !strings.HasPrefix(name, "v-one-withdrawn-") {
+			t.Errorf("clone %s is named %q, want the withdrawn marker", cloneID, name)
+		}
+		if other, clash := names[name]; clash {
+			t.Errorf("clones %s and %s are both named %q", other, cloneID, name)
+		}
+		names[name] = cloneID
+	}
+	var stillTaken bool
+	if err := pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM p_1.application_versions WHERE application_id = $1 AND name = 'v-one')`,
+		fixture.appID).Scan(&stillTaken); err != nil {
+		t.Fatalf("read the release name: %v", err)
+	}
+	if stillTaken {
+		t.Error("the release name is still held after both withdrawals")
+	}
+}
+
+// catalogMirrorUnpublish withdraws one published version through the route the
+// publish dialog calls.
+func catalogMirrorUnpublish(t *testing.T, router chi.Router, projectID int, versionID string) {
+	t.Helper()
+	target := fmt.Sprintf("/elitea_core/unpublish/prompt_lib/%d/%s", projectID, versionID)
+	request := httptest.NewRequest(http.MethodPost, target, bytes.NewReader([]byte(`{}`)))
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("unpublish status = %d, body = %s", recorder.Code, recorder.Body.String())
 	}
 }

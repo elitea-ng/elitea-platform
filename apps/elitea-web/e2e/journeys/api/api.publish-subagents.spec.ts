@@ -522,9 +522,9 @@ test('re-publishing after a withdrawal makes the embedded copies again', async (
     const withdrawn = await unpublish(request, projectId, firstClone);
     expect(withdrawn.status(), await refusal(withdrawn)).toBe(200);
 
-    // A NEW name: the withdrawn clone survives as a draft and keeps the name
-    // it was published under, so re-using it is refused for a reason that has
-    // nothing to do with sub-agents.
+    // A NEW name, so that nothing about the name can explain the result: this
+    // case is about the second publish's OWN embedded copy, and the withdrawn
+    // clone is still on the agent as a draft.
     const secondClone = await publishAndGetClone(
       request,
       projectId,

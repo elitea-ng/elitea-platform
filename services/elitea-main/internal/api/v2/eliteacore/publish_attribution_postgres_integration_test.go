@@ -59,7 +59,7 @@ func TestPublishResponseNamesTheSourceDraft(t *testing.T) {
 
 	recorder := catalogMirrorPublish(t, router, fixture, map[string]any{
 		"version_name":     "v-source",
-		"validation_token": catalogMirrorValidationToken,
+		"validation_token": catalogMirrorToken(t, pool, fixture),
 	})
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("publish status = %d, body = %s", recorder.Code, recorder.Body.String())
@@ -112,7 +112,7 @@ func TestPublishStampsThePublisher(t *testing.T) {
 
 	recorder := publishAttributionPublish(t, router, fixture, publishAttributionActor, map[string]any{
 		"version_name":     "v-attributed",
-		"validation_token": catalogMirrorValidationToken,
+		"validation_token": catalogMirrorToken(t, pool, fixture),
 		"category":         "Development",
 	})
 	if recorder.Code != http.StatusOK {
@@ -197,7 +197,7 @@ SELECT author_id FROM p_2.application_versions WHERE id = $1`, fixture.versionID
 	// No principal at all: the request carries no authenticated user.
 	recorder := catalogMirrorPublish(t, router, fixture, map[string]any{
 		"version_name":     "v-fallback",
-		"validation_token": catalogMirrorValidationToken,
+		"validation_token": catalogMirrorToken(t, pool, fixture),
 	})
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("publish status = %d, body = %s", recorder.Code, recorder.Body.String())

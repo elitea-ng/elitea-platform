@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -283,7 +284,149 @@ func (r *ConversationsRepo) ListParticipants(ctx context.Context, projectID, con
 	if items == nil {
 		items = []conversations.Participant{}
 	}
+	r.enrichAgentParticipantTools(ctx, s, items)
 	return items, nil
+}
+
+// enrichAgentParticipantTools resolves each agent participant's toolkits at
+// READ time and writes them to `meta.tools`.
+//
+// WHY THE READ RESOLVES THEM. A participant's `meta` is written once, when the
+// agent is attached, and it holds the display name and nothing else
+// (participantDisplayMeta). The legacy conversation read served the agent's
+// tool list with the participant, and a client that draws the participant rail
+// — which toolkits this agent brings to the conversation, whether it carries
+// sub-agents — had no other place to read it from (issue 856). A snapshot taken
+// at attach time could not answer it either: an author edits an agent's
+// toolkits after attaching it, and the conversation must show what the agent
+// HAS, not what it had.
+//
+// The version is read from the participant's own `entity_settings.version_id`,
+// which is where the attach path records which version of the agent joined.
+//
+// EVERY FAILURE DEGRADES THE PARTICIPANT, NEVER THE CONVERSATION. A participant
+// whose settings lost their version, a version that no longer exists, a tenant
+// whose toolkit tables were never created — each of those leaves the
+// participant exactly as it was read and the conversation still loads. That is
+// the contract the conversation read already keeps for its other enrichments,
+// and the one a participant rail depends on: a conversation that refuses to
+// open because one attached agent was deleted is worse than a rail with a
+// missing tool list.
+func (r *ConversationsRepo) enrichAgentParticipantTools(ctx context.Context, s string, items []conversations.Participant) {
+	byVersion := map[int32][]int{}
+	for i := range items {
+		if items[i].EntityName != participantEntityApplication {
+			continue
+		}
+		versionID, ok := participantVersionID(items[i].EntitySettings)
+		if !ok {
+			continue
+		}
+		byVersion[versionID] = append(byVersion[versionID], i)
+	}
+	if len(byVersion) == 0 {
+		return
+	}
+	versionIDs := make([]int32, 0, len(byVersion))
+	for versionID := range byVersion {
+		versionIDs = append(versionIDs, versionID)
+	}
+
+	// The toolkit row carries the name and the type; the mapping row carries
+	// which of the toolkit's tools this version selected. Both are what the
+	// agent read serves for the same version
+	// (internal/api/v2/applications/handler.go fetchVersionDetails), so the
+	// participant and the agent page agree on what is attached.
+	rows, err := r.pool.Query(ctx, fmt.Sprintf(`
+		SELECT etm.entity_version_id, etm.tool_id, COALESCE(t.name, ''), COALESCE(t.type, ''),
+		       COALESCE(etm.selected_tools::text, '[]')
+		FROM %s.entity_tool_mapping etm
+		LEFT JOIN %s.elitea_tools t ON t.id = etm.tool_id
+		WHERE etm.entity_version_id = ANY($1::int[])
+		ORDER BY etm.id`, s, s), versionIDs)
+	if err != nil {
+		return // no toolkit tables on this tenant: the participants stand as read
+	}
+	defer rows.Close()
+
+	resolved := map[int32][]map[string]any{}
+	for rows.Next() {
+		var versionID int32
+		var toolID int64
+		var name, toolType, selected string
+		if err := rows.Scan(&versionID, &toolID, &name, &toolType, &selected); err != nil {
+			continue
+		}
+		tool := map[string]any{
+			"id":   toolID,
+			"name": name,
+			"type": toolType,
+			// `toolkit_name` repeats the toolkit's own name because the legacy
+			// payload carried both keys: `name` is what a reader renders, and
+			// for a sub-agent tool it is the CHILD AGENT's name rather than the
+			// toolkit's, which is why the two are separate keys at all.
+			"toolkit_name": name,
+		}
+		var selectedTools any
+		if json.Unmarshal([]byte(selected), &selectedTools) == nil {
+			tool["selected_tools"] = selectedTools
+		}
+		resolved[versionID] = append(resolved[versionID], tool)
+	}
+	if rows.Err() != nil {
+		return // a partial tool list would read as "these are all the tools"
+	}
+
+	for versionID, indexes := range byVersion {
+		tools := resolved[versionID]
+		if tools == nil {
+			// An agent version with no toolkits and an agent version that is
+			// gone both answer an empty list. The key is PRESENT either way:
+			// an absent key reads to a client as "not resolved", which is the
+			// state this enrichment exists to end.
+			tools = []map[string]any{}
+		}
+		for _, i := range indexes {
+			// The resolved list WINS over anything stored. The stored document
+			// is an attach-time snapshot, and this is the answer for now.
+			items[i].Meta["tools"] = tools
+		}
+	}
+}
+
+// participantEntityApplication is the entity_name an attached agent carries.
+const participantEntityApplication = "application"
+
+// participantVersionID reads the version an agent participant was attached at.
+// The document is written by clients as well as by this service, so the number
+// arrives as a JSON number or as a string, and neither form may be trusted to
+// be a version id at all.
+func participantVersionID(settings map[string]any) (int32, bool) {
+	raw, ok := settings["version_id"]
+	if !ok || raw == nil {
+		return 0, false
+	}
+	switch value := raw.(type) {
+	case float64:
+		if value < 1 || value > math.MaxInt32 {
+			return 0, false
+		}
+		return int32(value), true
+	case json.Number:
+		parsed, err := strconv.ParseInt(value.String(), 10, 32)
+		if err != nil || parsed < 1 {
+			return 0, false
+		}
+		return int32(parsed), true
+	case string:
+		parsed, err := strconv.ParseInt(strings.TrimSpace(value), 10, 32)
+		if err != nil || parsed < 1 {
+			return 0, false
+		}
+		return int32(parsed), true
+	default:
+		return 0, false
+	}
 }
 
 func (r *ConversationsRepo) Create(ctx context.Context, projectID string, conv conversations.Conversation) (conversations.Conversation, error) {

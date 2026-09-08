@@ -489,7 +489,7 @@ test.describe('the publish rules the wizard rests on', () => {
     await deleteAgent(request, agentId);
   }
 
-  test('after a withdrawal the same version name is refused and a new one succeeds', async ({
+  test('after a withdrawal the same version name is free again', async ({
     request,
   }) => {
     const name = uniqueName('republish');
@@ -510,21 +510,35 @@ test.describe('the publish rules the wizard rests on', () => {
       );
       expect(withdrawn.status(), await withdrawn.text()).toBe(200);
 
-      // The withdrawal REVERTS the clone rather than deleting it, so the name
-      // it was published under is still taken on this agent. An author who
-      // expects "unpublish, fix, publish again under the same name" meets this
-      // refusal, and it is the reason the dialog asks for a NEW name.
+      // "Unpublish, fix, publish again under the same name" is what an author
+      // expects, and it used to be refused forever: the withdrawal REVERTED the
+      // clone rather than deleting it and the reverted draft kept the release
+      // name, which is unique per agent, so the name was spent for good. The
+      // withdrawal now renames the clone it reverts, so the name comes back.
       const again = await request.post(
         `${API_BASE}/elitea_core/publish/prompt_lib/${DEFAULT_PROJECT_ID}/${agent.versionId}`,
         { data: { version_name: first } },
       );
-      expect(again.status(), await again.text()).toBe(422);
-      const issues: readonly { readonly rule?: string }[] =
-        (await again.json())?.validation_result?.issues ?? [];
-      expect(issues.map((issue) => issue.rule)).toContain('version_name_exists_in_source');
+      expect(again.status(), await again.text()).toBe(200);
 
-      // A different name goes through, which is what makes the refusal above a
-      // rule about the NAME and not about the withdrawn agent.
+      // The withdrawn clone is still there — an author who withdrew a release
+      // keeps the version they published — under a name that says what it is,
+      // and the release name is held by the live version alone.
+      const detail = await request.get(
+        `${API_BASE}/elitea_core/application/prompt_lib/${DEFAULT_PROJECT_ID}/${agent.id}`,
+      );
+      expect(detail.status(), await detail.text()).toBe(200);
+      const versions: readonly { readonly id?: string; readonly name?: string; readonly status?: string }[] =
+        (await detail.json())?.versions ?? [];
+      const withdrawnClone = versions.find((version) => String(version.id) === cloneId);
+      expect(withdrawnClone?.status).toBe('draft');
+      expect(withdrawnClone?.name).toContain('-withdrawn-');
+      const holders = versions.filter((version) => version.name === first);
+      expect(holders).toHaveLength(1);
+      expect(holders[0]?.status).toBe('published');
+
+      // A different name goes through as well, which is what makes the answers
+      // above rules about the NAME and not about the withdrawn agent.
       const second = await request.post(
         `${API_BASE}/elitea_core/publish/prompt_lib/${DEFAULT_PROJECT_ID}/${agent.versionId}`,
         { data: { version_name: `${first}b` } },

@@ -103,7 +103,7 @@ func TestWithdrawingAParentKeepsTheAuthorsOwnSubAgent(t *testing.T) {
 
 	recorder := publishCopyDo(t, router, parent.versionID, map[string]any{
 		"version_name":     "v-one",
-		"validation_token": publishCopyValidationToken,
+		"validation_token": publishCopyToken(t, pool, parent.versionID),
 	})
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("publish: got %d: %s", recorder.Code, recorder.Body.String())
