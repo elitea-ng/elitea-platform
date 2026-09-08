@@ -344,20 +344,54 @@ export async function acquirePlatformFlagRead(): Promise<() => Promise<void>> {
 }
 
 /**
+ * What a `beforeEach` needs from `TestInfo` to lengthen its own budget.
+ *
+ * Structural rather than Playwright's `TestInfo` so this module stays a plain
+ * Node one — it is imported by the lock's own vitest suite, which has no
+ * Playwright runtime.
+ */
+interface TimeoutExtendable {
+  readonly timeout: number;
+  setTimeout: (timeout: number) => void;
+}
+
+/**
  * Registers the shared lock around every test of the calling file.
  *
  * A hook pair rather than a wrapper so a spec file states the dependency once,
  * at the top instead of indenting every body — and so a test added to that
  * file later cannot forget it. Module state is safe: a worker process runs one
  * test at a time.
+ *
+ * THE HOOK LENGTHENS THE TEST'S BUDGET BY ITS OWN WAIT BOUND. Waiting is the
+ * normal case, not the exceptional one: journey 36b and the guardrails journey
+ * hold windows measured in tens of seconds, and the support file holds one
+ * window for four tests. A reader may therefore legitimately wait up to
+ * `STALE_MS`, while the hook runs INSIDE the test's timeout — 30 s for most
+ * projects. Without this the waiter is killed by the test clock and reports
+ * "Test timeout of 30000ms exceeded while running "beforeEach" hook", which
+ * names this file and says nothing about the writer it was waiting for.
+ * Measured that way on `toolkits.catalogue.spec.ts` (webkit).
+ *
+ * Lengthening rather than shortening the wait is deliberate. A reader that
+ * gave up early would go on to run INSIDE the writer's window, which is
+ * exactly the failure this lock exists to prevent (#519) — and it would fail
+ * as "the MCP checkbox is missing", blaming the product.
+ *
+ * A timeout of `0` means the project disabled the clock; adding to it would
+ * impose one.
  */
 export function readsPlatformFlags(test: {
-  beforeEach: (fn: () => Promise<void>) => void;
+  beforeEach: (fn: (args: Record<string, never>, testInfo: TimeoutExtendable) => Promise<void>) => void;
   afterEach: (fn: () => Promise<void>) => void;
 }): void {
   let release: (() => Promise<void>) | undefined;
 
-  test.beforeEach(async () => {
+  /* Playwright reads the first parameter's SOURCE and requires an object
+     pattern there; a named one is refused before the file is even listed. */
+  // eslint-disable-next-line no-empty-pattern
+  test.beforeEach(async ({}: Record<string, never>, testInfo: TimeoutExtendable) => {
+    if (testInfo.timeout > 0) testInfo.setTimeout(testInfo.timeout + STALE_MS);
     release = await acquirePlatformFlagRead();
   });
 

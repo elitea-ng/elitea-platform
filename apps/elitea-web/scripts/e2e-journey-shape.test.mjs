@@ -68,6 +68,7 @@ const FEATURES_SPEC = 'e2e/journeys/admin/admin.features.spec.ts';
 const APP_REQUESTS_SPEC = 'e2e/journeys/admin/admin.app-requests.spec.ts';
 const SEED_SCRIPT = 'scripts/e2e-stack.sh';
 const WIDGET_SPEC = 'e2e/journeys/support/support.widget.spec.ts';
+const CONTEXT_BUDGET_SPEC = 'e2e/journeys/chat/chat.contextBudget.spec.ts';
 
 /**
  * Every journey that runs its WHOLE file in one worker, in order.
@@ -87,6 +88,15 @@ const WIDGET_SPEC = 'e2e/journeys/support/support.widget.spec.ts';
  * that then queue for it — measured, three `afterAll` hooks over their 120 s
  * budget and one test dead inside `page.goto` after 210 s. One worker has no
  * queue.
+ *
+ * The seventh is the same shape one layer down. `chat.contextBudget.spec.ts`'s
+ * two tests both write `default_context_management`, which hangs off the
+ * PERSONA and not off anything either test created, and the second one opens
+ * by writing back the very value the first one has just replaced. On two
+ * workers that is a suite writing over its own assertion, and it reported
+ * itself as a product defect ("a changed profile budget must reach the
+ * panel") in both engines. It has to SAY that, because the next reader's
+ * first instinct — the one the previous fix took — is a browser cache.
  */
 const FILE_LEVEL_SERIAL = [
   { path: 'e2e/journeys/deepwiki/deepwiki.real-engine.spec.ts' },
@@ -95,6 +105,7 @@ const FILE_LEVEL_SERIAL = [
   { path: 'e2e/journeys/admin/admin.configuration.spec.ts' },
   { path: APP_REQUESTS_SPEC },
   { path: WIDGET_SPEC, mustSay: /ONE WORKER, IN ORDER/ },
+  { path: CONTEXT_BUDGET_SPEC, mustSay: /ONE ACCOUNT, ONE WRITER/ },
 ];
 
 /* ── rule 1 ─────────────────────────────────────────────────────────────── */
