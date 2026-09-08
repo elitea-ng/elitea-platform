@@ -60,12 +60,19 @@ function uniqueName(tag: string): string {
  * unconditionally, so a future default of "expanded" closes nothing.
  * (Same helper, same reasoning, as `chat.management.spec.ts`'s M1.)
  */
-async function openTodayGroup(page: Page): Promise<void> {
+async function openGroup(page: Page, groupName: string): Promise<void> {
   const sidebar = page.getByTestId('chat-conversation-sidebar');
   await expect(sidebar).toBeVisible({ timeout: 20_000 });
-  const today = sidebar.getByRole('button', { name: 'Today' });
-  await expect(today).toBeVisible({ timeout: 20_000 });
-  if ((await today.getAttribute('aria-expanded')) !== 'true') await today.click();
+  const header = sidebar.getByRole('button', { name: groupName, exact: true });
+  await expect(header, `the rail must render the "${groupName}" group the server named`).toBeVisible({
+    timeout: 20_000,
+  });
+  if ((await header.getAttribute('aria-expanded')) !== 'true') await header.click();
+}
+
+/** The group every conversation created during a run belongs to. */
+async function openTodayGroup(page: Page): Promise<void> {
+  await openGroup(page, 'Today');
 }
 
 /**
@@ -160,4 +167,139 @@ test('the rail moves from one open conversation to another', async ({ page }) =>
 
   await deleteConversation(page.request, first);
   await deleteConversation(page.request, second);
+});
+
+/*
+ * The rail as a TIMELINE: which date bucket each conversation lands in, the
+ * order inside it, and how much of it arrives at once.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * WHY THE EXPECTED GROUP IS TAKEN FROM THE PAGE'S OWN RESPONSE
+ * ─────────────────────────────────────────────────────────────────────────────
+ * The buckets are computed SERVER-side (`groupByDate`, against the server's own
+ * clock) and the label travels on the wire; the rail only renders what it was
+ * told. A journey that hardcoded "Today" would therefore be asserting the two
+ * machines agree about the date — which is a real, recurring failure here
+ * (a run that crosses midnight has already broken a seeded assertion once) and
+ * is not what this rail is for. So the expectation is read out of THE VERY
+ * RESPONSE THE PAGE FETCHED, and what is asserted is that the screen agrees
+ * with it.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * WHAT THE "NO SECOND PAGE" ASSERTIONS MEAN
+ * ─────────────────────────────────────────────────────────────────────────────
+ * The rail CAN page a bucket — `LoadMoreSentinel` fires `date_group=…&offset=…`
+ * once a bucket reports more rows than it delivered — and today it never does,
+ * because this server answers the grouped listing with every conversation of
+ * every bucket and a `total` equal to that same count. Both halves are
+ * asserted: the answer's own arithmetic, and the absence of any follow-up page
+ * request on the wire.
+ *
+ * That is the load-bearing precondition for the two tests above, which find
+ * their rows without ever scrolling the rail. The day the server starts paging
+ * a bucket, this test fails and names the reason — instead of those two
+ * starting to lose rows in a way that reads like a missing conversation.
+ */
+test('the rail places each conversation in the date group the server assigned, in the server’s order', async ({
+  page,
+}) => {
+  const names = [uniqueName('when1'), uniqueName('when2'), uniqueName('when3')];
+  const ids: string[] = [];
+  for (const name of names) ids.push(await createConversation(page.request, name));
+
+  try {
+    // Every request the page makes from here, so the "no second page" claim
+    // below is measured on the wire rather than inferred from the screen.
+    const requested: string[] = [];
+    page.on('request', (request) => requested.push(request.url()));
+
+    // Armed before the navigation: this is the rail's OWN read, and the
+    // load-more fetchers hit the same path with a `date_group`/`folder_id`
+    // parameter, so both are excluded here.
+    const listed = page.waitForResponse(
+      (response) =>
+        response.request().method() === 'GET' &&
+        response.url().includes('/elitea_core/folder/prompt_lib/') &&
+        response.url().includes('grouped=true') &&
+        !response.url().includes('date_group=') &&
+        !response.url().includes('folder_id='),
+      { timeout: 30_000 },
+    );
+    await page.goto(BASE_URL + '/app/chat');
+    await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 20_000 });
+
+    const listing = (await (await listed).json()) as {
+      date_groups?: readonly {
+        readonly name?: string;
+        readonly total?: number;
+        readonly conversations?: readonly { readonly id?: string | number }[];
+      }[];
+    };
+    const groups = listing.date_groups ?? [];
+    expect(groups.length, 'the grouped listing must carry the buckets the rail renders').toBeGreaterThan(0);
+
+    /* ── what the server said about THESE three ─────────────────────────── */
+    // The flattened server order: buckets in the order the response lists them
+    // (newest bucket first), rows in the order inside each bucket.
+    const serverOrder: string[] = [];
+    const groupOf = new Map<string, string>();
+    for (const group of groups) {
+      for (const conversation of group.conversations ?? []) {
+        const id = String(conversation.id ?? '');
+        if (!ids.includes(id)) continue;
+        serverOrder.push(id);
+        groupOf.set(id, String(group.name ?? ''));
+      }
+    }
+    expect(
+      [...serverOrder].sort(),
+      'every conversation just created must be in the grouped listing the rail reads',
+    ).toEqual([...ids].sort());
+
+    // Every bucket arrives WHOLE: `total` is the count of rows delivered, so
+    // there is nothing left for a second page to fetch.
+    for (const group of groups) {
+      expect(
+        group.total,
+        `bucket "${String(group.name)}" reports a total that does not match the rows it carries`,
+      ).toBe((group.conversations ?? []).length);
+    }
+
+    /* ── what the screen shows ──────────────────────────────────────────── */
+    for (const groupName of new Set(groupOf.values())) await openGroup(page, groupName);
+
+    for (const id of ids) {
+      // Visible, not merely attached: a row sitting in a COLLAPSED bucket is
+      // mounted but hidden, so visibility here is what says the row is under
+      // the header the server named.
+      await expect(
+        page.getByTestId(`conversation-item-${id}`),
+        `the conversation must be visible under the "${String(groupOf.get(id))}" group the server assigned it`,
+      ).toBeVisible({ timeout: 20_000 });
+    }
+
+    const rendered = await page
+      .getByTestId('chat-conversation-sidebar')
+      .locator('[data-testid^="conversation-item-"]')
+      .evaluateAll((nodes) =>
+        nodes.map((node) => (node.getAttribute('data-testid') ?? '').replace('conversation-item-', '')),
+      );
+    expect(
+      rendered.filter((id) => ids.includes(id)),
+      'the rail must keep the order the server sent — newest first, by the timestamps it grouped on',
+    ).toEqual(serverOrder);
+
+    /* ── and nothing on this rail asked for a second page ───────────────── */
+    // Not read as a missing sentinel element: a folder accordion renders one of
+    // those too, and a folder that holds a PINNED conversation is short by
+    // client-side filtering rather than by paging — so a count taken at page
+    // scope would flake on another journey's fixtures. The REQUEST is the
+    // unambiguous fact.
+    expect(
+      requested.filter((url) => url.includes('date_group=')),
+      'no bucket reported more rows than it delivered, so nothing had a second page to ask for',
+    ).toEqual([]);
+  } finally {
+    for (const id of ids) await deleteConversation(page.request, id);
+  }
 });
