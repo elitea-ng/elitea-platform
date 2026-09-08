@@ -7,6 +7,12 @@
  *
  *  - `TestContextManagementSettings::test_context_budget_reflects_profile_max_tokens[10k_tokens]`
  *  - `TestContextManagementSettings::test_context_budget_reflects_profile_max_tokens[32k_tokens]`
+ *  - `chat/test_chat_interface.py::test_edit_context_settings` — the second
+ *    test below. The panel was read-only by a documented decision, so the
+ *    legacy test's own `pytest.skip("Edit context settings button not
+ *    visible")` was the only branch it could take here. The pencil is real
+ *    now: it edits the reader's DEFAULT budget through the same
+ *    `PUT /social/author` this file already writes by hand.
  *
  * The two legacy cases are one journey here. They are not two use cases — the
  * legacy suite parameterised them, and its own docstring says why the second
@@ -198,6 +204,77 @@ test('the Context Budget panel reports the budget the profile sets, and follows 
     expect(await tokensLine(page)).not.toContain(`/ ${grouped(FIRST_BUDGET)} tokens`);
   } finally {
     // Restored whatever happened above, including back to "never saved".
+    await writeContextDefaults(page.request, author, original);
+    await deleteConversation(page.request, conversationId);
+  }
+});
+
+/*
+ * Legacy: `chat/test_chat_interface.py::TestChatInterface::
+ * test_edit_context_settings` — "the Edit context settings button opens the
+ * settings dialog".
+ *
+ * The legacy test stops at "a dialog opened", which a dialog wired to nothing
+ * would satisfy. This drives the edit to the end and reads the result back off
+ * the SERVER, then off the panel: an editor that changed only what is on screen
+ * would pass the first half and fail the second.
+ *
+ * The write is account-wide and is restored in a `finally`, for the reason the
+ * file header states in full.
+ */
+test('the Context Budget pencil edits the budget, and the new value reaches the profile and the panel', async ({
+  page,
+}) => {
+  const author = await readAuthor(page.request);
+  const original = author.default_context_management;
+  const conversationId = await createConversation(
+    page.request,
+    `${AUTOTEST_PREFIX}budgetedit${SUFFIX}-${Date.now()}`,
+  );
+
+  try {
+    await writeContextDefaults(page.request, author, { ...original, enabled: true, max_context_tokens: FIRST_BUDGET });
+
+    await page.goto(`${BASE_URL}/app/chat/${conversationId}`);
+    await expect(page.getByTestId('chat-message-input')).toBeEditable({ timeout: 20_000 });
+    await page.getByRole('button', { name: 'Expand participants' }).click();
+    await expect(page.getByTestId('participants-container')).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId('context-budget-panel')).toBeVisible({ timeout: 20_000 });
+
+    await page.getByTestId('context-budget-edit-button').click();
+    const dialog = page.getByTestId('context-budget-edit-dialog');
+    await expect(dialog, 'the pencil must open the context-settings editor').toBeVisible({ timeout: 10_000 });
+
+    // It opens on the budget in force, not on an empty field.
+    await expect(page.getByTestId('context-budget-max-tokens-input')).toHaveValue(String(FIRST_BUDGET));
+
+    await page.getByTestId('context-budget-max-tokens-input').fill(String(SECOND_BUDGET));
+    await page.getByRole('button', { name: 'Save' }).click();
+    await expect(dialog).toHaveCount(0, { timeout: 20_000 });
+
+    // The SERVER first. The profile is where the value has to land — the same
+    // field Settings › Memory writes — and a panel that only re-rendered would
+    // otherwise look identical.
+    await expect
+      .poll(
+        async () => {
+          const record = await readAuthor(page.request);
+          const block = record.default_context_management ?? {};
+          return (block as { max_context_tokens?: number }).max_context_tokens;
+        },
+        { timeout: 20_000, message: 'the edited budget never reached the profile' },
+      )
+      .toBe(SECOND_BUDGET);
+
+    // Then the panel, without a reload: the save invalidates the status query,
+    // so the number the reader just set is the number on screen.
+    await expect
+      .poll(async () => tokensLine(page), {
+        timeout: 20_000,
+        message: 'the panel must follow the budget its own editor just wrote',
+      })
+      .toContain(`/ ${grouped(SECOND_BUDGET)} tokens`);
+  } finally {
     await writeContextDefaults(page.request, author, original);
     await deleteConversation(page.request, conversationId);
   }

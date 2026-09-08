@@ -4027,5 +4027,12 @@
   "pages.pipelines.editPipeline.exportError": "Failed to export this pipeline.",
   "features.agents.instructionsFullscreen.editorAriaLabel": "Instructions, full screen",
   "features.agents.instructionsFullscreen.open": "Open in full screen",
-  "features.agents.instructionsFullscreen.title": "Instructions"
+  "features.agents.instructionsFullscreen.title": "Instructions",
+  "widgets.contextBudget.edit.failed": "Failed to save the context settings.",
+  "widgets.contextBudget.edit.help": "This is your own default for new conversations. Settings › Memory writes the same value.",
+  "widgets.contextBudget.edit.maxTokens": "Max Context Tokens",
+  "widgets.contextBudget.edit.range": "Enter a whole number between {{min}} and {{max}}.",
+  "widgets.contextBudget.edit.save": "Save",
+  "widgets.contextBudget.edit.title": "Context settings",
+  "widgets.contextBudget.editTooltip": "Edit context settings"
 }
