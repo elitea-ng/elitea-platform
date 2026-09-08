@@ -173,19 +173,8 @@ func withoutBlockedTools(
 	if !ok {
 		return typeSchema
 	}
-	argsSchemas, ok := selectedTools["args_schemas"].(map[string]any)
-	if !ok {
-		return typeSchema
-	}
-
-	kept := make(map[string]any, len(argsSchemas))
-	for toolName, argsSchema := range argsSchemas {
-		if policy.ToolBlocked(toolkitType, toolName) {
-			continue
-		}
-		kept[toolName] = argsSchema
-	}
-	if len(kept) == len(argsSchemas) {
+	kept, removed := withoutBlockedArgumentSchemas(policy, toolkitType, selectedTools["args_schemas"])
+	if !removed {
 		return typeSchema
 	}
 
@@ -207,4 +196,54 @@ func withoutBlockedTools(
 	}
 	rebuilt["properties"] = rebuiltProperties
 	return rebuilt
+}
+
+// withoutBlockedArgumentSchemas removes the blocked tool KEYS from one
+// `selected_tools.args_schemas` node and reports whether anything went.
+//
+// IT ACCEPTS BOTH CONCRETE MAP TYPES THE CATALOGUE BUILDS THAT NODE FROM, and
+// that is the whole reason it exists rather than being three lines inline.
+//
+// `handler.go`'s hand-written type overrides write it as a `map[string]any`
+// literal, but `withArgumentSchemas` — the path every SDK-backed type takes —
+// assigns the snapshot's own `map[string]map[string]any` straight in
+// (handler.go:608, and `runtimecomposition.CurrentToolkitSchemaEntry.ArgsSchemas`
+// declares that type). A single `.(map[string]any)` assertion therefore MISSED
+// every real type: `github`, `jira`, `confluence` and the other 45 kept every
+// tool an operator had blocked, while the eight hand-written stubs were filtered
+// correctly — so the package's own tests passed and the deployment did not.
+// Both branches are JSON objects on the wire; only the Go type differs.
+//
+// The kept map is returned as `any` and stored back unchanged, so each shape
+// keeps the type it arrived with and nothing else in the tree is retyped.
+func withoutBlockedArgumentSchemas(
+	policy guardrails.Policy,
+	toolkitType string,
+	argsSchemas any,
+) (any, bool) {
+	switch schemas := argsSchemas.(type) {
+	case map[string]any:
+		kept := make(map[string]any, len(schemas))
+		for toolName, argsSchema := range schemas {
+			if policy.ToolBlocked(toolkitType, toolName) {
+				continue
+			}
+			kept[toolName] = argsSchema
+		}
+		return kept, len(kept) != len(schemas)
+	case map[string]map[string]any:
+		kept := make(map[string]map[string]any, len(schemas))
+		for toolName, argsSchema := range schemas {
+			if policy.ToolBlocked(toolkitType, toolName) {
+				continue
+			}
+			kept[toolName] = argsSchema
+		}
+		return kept, len(kept) != len(schemas)
+	default:
+		// No args_schemas node, or one this package does not build. Nothing to
+		// remove, and rebuilding the tree around an unknown value would only
+		// risk changing what is served.
+		return nil, false
+	}
 }
