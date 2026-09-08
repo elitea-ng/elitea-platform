@@ -24,6 +24,7 @@ import Box from '@mui/material/Box';
 import Skeleton from '@mui/material/Skeleton';
 
 import { ApplicationAnswer } from './ApplicationAnswer';
+import type { CanvasEditPayload, CodeBlockInfo } from '../canvas/Canvas';
 import { UserMessage } from './UserMessage';
 import type { UserMessageUpdatedItem } from './UserMessage';
 
@@ -55,6 +56,12 @@ export interface ChatMessageListActions {
   readonly onSubmitEditedMessage?:
     | ((messageId: string, updatedItems: readonly UserMessageUpdatedItem[]) => void)
     | undefined;
+}
+
+/** The canvas opener (issue 853), grouped to stay under the component-props budget: the handler that opens a stored canvas and the block already open. */
+export interface ChatMessageListCanvas {
+  readonly onEdit?: ((payload: CanvasEditPayload) => void) | undefined;
+  readonly selected?: CodeBlockInfo | undefined;
 }
 
 /** Read-aloud (TTS) props, grouped to stay under the component-props budget. */
@@ -109,6 +116,8 @@ export interface ChatMessageListProps {
    */
   readonly projectId?: string | undefined;
   readonly messageActions?: ChatMessageListActions;
+  /** Opens a `canvas_message` block in this transcript — supplied by the layer that mounts the canvas editor. Omitted, canvas blocks render with no open control. */
+  readonly canvas?: ChatMessageListCanvas;
   readonly tts?: ChatMessageListTts;
   readonly continuation?: ChatMessageListContinuation;
   readonly pagination?: ChatMessageListPagination;
@@ -194,6 +203,7 @@ export function ChatMessageList({
   userId,
   projectId,
   messageActions: { onCopyToClipboard, onDeleteAnswer, onRegenerateAnswer, onSubmitEditedMessage } = {},
+  canvas: { onEdit: onEditCanvas, selected: selectedCodeBlockInfo } = {},
   tts: { onAutoSpeak, speakingMessageId, speakingSegments, spokenRange } = {},
   continuation: {
     onContinueMcpExecution,
@@ -354,6 +364,7 @@ export function ChatMessageList({
                         ? () => { onRegenerateAnswer(messageId); }
                         : undefined,
                     shouldDisableRegenerate: messageIsStreaming || Boolean(message.isLoading) || message.id === WELCOME_MESSAGE_ID,
+                    onEditCanvas, selectedCodeBlockInfo,
                   }}
                   continuation={{
                     hideContinueButton,

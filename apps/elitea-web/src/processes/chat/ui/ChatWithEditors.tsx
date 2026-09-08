@@ -85,6 +85,7 @@ export function ChatWithEditors(): ReactNode {
     handleShowAgentEditor,
     handleShowPipelineEditor,
     handleShowToolkitEditor,
+    handleShowCanvasEditor,
     canvas,
   } = useChatWithEditors();
 
@@ -142,6 +143,14 @@ export function ChatWithEditors(): ReactNode {
               onShowToolkitEditor: handleShowToolkitEditor,
               onCloseAgentEditor: editAgent.onCloseAgentEditor,
               onClosePipelineEditor: editPipeline.onClosePipelineEditor,
+              /*
+                * The transcript's canvas opener (issue 853). Both halves travel
+                * together: the handler that opens a stored canvas block, and the
+                * block currently open — the transcript swaps that one for an
+                * editing placeholder so the same document is not shown twice.
+                */
+              onShowCanvasEditor: handleShowCanvasEditor,
+              selectedCanvasBlock: canvas.selectedCodeBlockInfo,
             }}
           />
           )}

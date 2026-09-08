@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -1804,17 +1805,47 @@ func (r *ConversationsRepo) ListMessages(ctx context.Context, projectID, convers
 	// each group's text into `content` (the string_agg above), which every
 	// client reads as the message body; re-emitting the same text as items
 	// would give two sources for one sentence and let them drift. Attachments
-	// have no such representation here — they exist in this response only as
-	// items — so they are what this carries.
+	// and CANVASES have no such representation here — they exist in this
+	// response only as items — so they are what this carries.
+	//
+	// The canvas half is the same gap as the attachment half, one route later
+	// (issue 853). `content` above aggregates `text_message` items ALONE, and
+	// this projection carried attachments alone, so a canvas carved out of an
+	// answer was invisible to the chat page in both halves of this response at
+	// once: its text was not in `content` and its item was not in
+	// `message_items`. The details route (ListMessageGroups) served it and this
+	// one did not — two projections of one transcript disagreeing, which is the
+	// defect the attachment note above already names. A frontend opener alone
+	// could not have closed it: there was nothing in this payload to open.
 	if len(groupIDs) > 0 {
 		byGroup, err := r.attachmentItemsByGroup(ctx, s, groupIDs)
 		if err != nil {
 			return conversations.MessagesListResponse{}, err
 		}
+		canvasByGroup, err := r.canvasItemsByGroup(ctx, s, groupIDs)
+		if err != nil {
+			return conversations.MessagesListResponse{}, err
+		}
 		for i := range items {
-			if attachments := byGroup[groupIDs[i]]; len(attachments) > 0 {
-				items[i].MessageItems = attachments
+			// One list per group, in the order the items are STORED. Each
+			// projection is ordered on its own, so concatenating them would
+			// put every attachment before every canvas whatever the message
+			// actually looks like; `order_index` is what says where the canvas
+			// sits, and a client rendering the items in the order given must
+			// be given the right one.
+			merged := append(append([]map[string]any{}, byGroup[groupIDs[i]]...), canvasByGroup[groupIDs[i]]...)
+			if len(merged) == 0 {
+				continue
 			}
+			sort.SliceStable(merged, func(a, b int) bool {
+				left, leftOK := merged[a]["order_index"].(int)
+				right, rightOK := merged[b]["order_index"].(int)
+				if !leftOK || !rightOK {
+					return false
+				}
+				return left < right
+			})
+			items[i].MessageItems = merged
 		}
 	}
 
@@ -1897,6 +1928,80 @@ func (r *ConversationsRepo) attachmentItemsByGroup(ctx context.Context, s string
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("conversations: list message attachments: %w", err)
+	}
+	return byGroup, nil
+}
+
+// canvasItemsByGroup projects the `canvas_message` items of the given message
+// groups in the SAME shape ListMessageGroups serves them — the discriminator,
+// the order index and the `canvasItemDetails` payload, which carries both the
+// flat keys and `latest_version`.
+//
+// INNER JOIN on chat_messages_canvas, for the reason the attachment projection
+// above states: an item whose discriminator says `canvas_message` but which has
+// no canvas row is not a canvas with empty fields, it is a mislabelled row, and
+// serving it as a map of nils would make the client render an editor over
+// nothing.
+//
+// The version join is LEFT and LATERAL: a canvas with no version yet still gets
+// its details, carrying an empty document. The client reads
+// `item_details.latest_version.canvas_content`, and an ABSENT `latest_version`
+// there is a crash rather than an empty editor.
+//
+// A query failure PROPAGATES. Reporting "this transcript has no canvases"
+// because a tenant migration has not run is exactly how the read-side gap this
+// function closes stayed invisible on the other route for as long as it did.
+func (r *ConversationsRepo) canvasItemsByGroup(ctx context.Context, s string, groupIDs []int) (map[int][]map[string]any, error) {
+	q := fmt.Sprintf(`
+		SELECT mi.message_group_id, mi.id, COALESCE(mi.uuid::text, ''), mi.order_index,
+			cv.name, cv.canvas_type, ver.id, ver.canvas_content, ver.code_language, ver.created_at
+		FROM %s.chat_message_items mi
+		JOIN %s.chat_messages_canvas cv ON cv.id = mi.id
+		LEFT JOIN LATERAL (
+			SELECT id, canvas_content, code_language, created_at
+			FROM %s.chat_canvas_versions v
+			WHERE v.canvas_item_id = mi.id
+			ORDER BY v.created_at DESC, v.id DESC
+			LIMIT 1
+		) ver ON true
+		WHERE mi.message_group_id = ANY($1) AND mi.item_type = 'canvas_message'
+		ORDER BY mi.message_group_id, mi.order_index`, s, s, s)
+
+	rows, err := r.pool.Query(ctx, q, groupIDs)
+	if err != nil {
+		return nil, fmt.Errorf("conversations: list message canvases: %w", err)
+	}
+	defer rows.Close()
+
+	byGroup := map[int][]map[string]any{}
+	for rows.Next() {
+		var groupID, itemID, orderIndex int
+		var itemUUID, name, canvasType string
+		var versionID *int
+		var content, language *string
+		var createdAt *time.Time
+		if err := rows.Scan(&groupID, &itemID, &itemUUID, &orderIndex, &name, &canvasType,
+			&versionID, &content, &language, &createdAt); err != nil {
+			return nil, fmt.Errorf("conversations: scan message canvas: %w", err)
+		}
+		byGroup[groupID] = append(byGroup[groupID], map[string]any{
+			"id":          itemID,
+			"item_type":   "canvas_message",
+			"order_index": orderIndex,
+			"item_details": canvasItemDetails(canvasItemDetailsInput{
+				itemID:    itemID,
+				itemUUID:  itemUUID,
+				name:      name,
+				canvasT:   canvasType,
+				versionID: versionID,
+				content:   content,
+				language:  language,
+				createdAt: createdAt,
+			}),
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("conversations: list message canvases: %w", err)
 	}
 	return byGroup, nil
 }

@@ -94,7 +94,7 @@ export type { ChatContinueProps } from './ui/chat-continue/ChatContinue';
 export { ChatHitlActions } from './ui/chat-hitl-actions/ChatHitlActions';
 export type { ChatHitlActionsProps } from './ui/chat-hitl-actions/ChatHitlActions';
 export { ChatMessageList } from './ui/chat-box/ChatMessageList';
-export type { ChatMessageListProps } from './ui/chat-box/ChatMessageList';
+export type { ChatMessageListCanvas, ChatMessageListProps } from './ui/chat-box/ChatMessageList';
 export { CreatedTimeInfo } from './ui/CreatedTimeInfo';
 export type { CreatedTimeInfoProps } from './ui/CreatedTimeInfo';
 export { EditingPlaceholder } from './ui/EditingPlaceholder';
