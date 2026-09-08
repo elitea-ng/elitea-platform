@@ -5,9 +5,9 @@ import DeleteOutlinedIcon from '@mui/icons-material/DeleteOutlined';
 import Box from '@mui/material/Box';
 import IconButton from '@mui/material/IconButton';
 import Tooltip from '@mui/material/Tooltip';
-import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
+import { CharacterCounter } from '@/shared/ui/CharacterCounter';
 import { t } from '@/shared/i18n';
 import { MAX_CONVERSATION_STARTERS, MAX_CONVERSATION_STARTER_LENGTH } from '@/shared/lib/limits';
 import { BaseBtn } from '@/shared/ui/BaseBtn';
@@ -123,15 +123,18 @@ function ConversationStarterRow({
             },
           }}
         />
-        {isFocused(focusId) && value.length > 0 && (
-          <Typography
-            variant="bodySmall"
-            sx={counterSx}
-            data-testid="agent-conversation-starter-counter"
-          >
-            {`${MAX_CONVERSATION_STARTER_LENGTH - value.length} characters left`}
-          </Typography>
-        )}
+        {/* #848 — never unmount: an unmounted counter shrinks this row and
+          * shifts every row after it (and the `+ Starter` button once this
+          * is the last row) up on blur, so a real click already in flight
+          * lands on nothing. `visibility: hidden` keeps the line's height
+          * reserved instead. */}
+        <CharacterCounter
+          value={value}
+          maxLength={MAX_CONVERSATION_STARTER_LENGTH}
+          visible={isFocused(focusId) && value.length > 0}
+          sx={counterSx}
+          data-testid="agent-conversation-starter-counter"
+        />
       </Box>
       {!disabled && (
         <Box sx={deleteWrapperSx}>

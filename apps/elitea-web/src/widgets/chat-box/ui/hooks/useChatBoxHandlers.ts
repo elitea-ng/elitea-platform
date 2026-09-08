@@ -28,39 +28,38 @@
  * every approval paused server-side. It never emits after a route that
  * ACCEPTED the resume; that would run the agent twice.
  *
- * MCP authorization still stays on the socket. It would need
- * `agent.continue.authorization.v1`, which
- *    REQUIRES an `authorization_request_id`. Nothing in this app captures that
- *    field off the `mcp_authorization_required` frame yet, and the same
- *    contract refuses the non-empty `user_declined_mcp_servers` this handler
- *    sends.
+ * `resumeMcpFlow` now takes the same route with
+ * `agent.continue.authorization.v1`. That contract REQUIRES an
+ * `authorization_request_id`, and `./useChatBoxHandlers.mcpAuth` reads it back
+ * off the `mcp_authorization_required` frame's own metadata — the one thing
+ * this app was missing, and the whole reason MCP approval stayed socket-only.
+ * The contract does NOT refuse a non-empty `user_declined_mcp_servers`, which
+ * an earlier reading of it claimed: its arm requires that field to BE an
+ * array, empty or not, and requires `mcp_tokens` and `ignored_mcp_servers` to
+ * be present as well (`currentJSONArray`/`currentJSONObject`, not the HITL
+ * arm's `emptyJSONArray`/`emptyJSONObject`).
  *
  * It still reverts its optimistic patch when no transport takes the resume.
  */
 
 import { conversationApi } from "@/entities/conversation";
 import type { ChatMessage } from "@/features/chat-messages";
-import { ToolActionStatus } from "@/shared/lib/chat";
 
 import {
   buildChatContinuePayload,
-  buildDeclinedServersList,
   extractCopyableContent,
-  findActionRequiredToolAction,
   findQuestionText,
-  readServerUrl,
   revertContinuation,
-  trackMcpAuthDecision,
   tryEmit,
 } from "./useChatBoxHandlers.helpers";
 import {
   buildHitlContinueBody,
   findHitlInterruptId,
 } from "./useChatBoxHandlers.hitl";
+import { createResumeMcpFlow } from "./useChatBoxHandlers.mcpAuth";
 import type {
   ChatBoxHandlerDeps,
   HitlInterruptAction,
-  ToolActionLike,
   UseChatBoxHandlersResult,
 } from "./useChatBoxHandlers.helpers";
 import {
@@ -245,53 +244,7 @@ export function useChatBoxHandlers(
       revertContinuation(setChatHistory, message, undeliveredText());
     }
   };
-  const resumeMcpFlow = (messageId: string, addToIgnoreList = false): void => {
-    const message = deps.chatHistory.find((item) => item.id === messageId);
-    if (!message) return;
-    const authRequiredAction = findActionRequiredToolAction(message);
-    trackMcpAuthDecision(
-      deps.sessionDeclinedMcpServersRef,
-      authRequiredAction,
-      readServerUrl(authRequiredAction),
-      addToIgnoreList,
-    );
-    const question = findQuestionText(deps.chatHistory, message) ?? "Continue";
-    const payload: Record<string, unknown> = {
-      ...buildChatContinuePayload(deps, {
-        messageId,
-        threadId: message.threadId,
-        question,
-      }),
-      user_declined_mcp_servers: buildDeclinedServersList(
-        deps.sessionDeclinedMcpServersRef,
-      ),
-    };
-    setChatHistory((prev) =>
-      prev.map((msg) =>
-        msg.id !== messageId
-          ? msg
-          : {
-              ...msg,
-              isLoading: true,
-              isStreaming: true,
-              toolActions: (
-                (msg.toolActions ?? []) as readonly ToolActionLike[]
-              ).filter(
-                (a) => a.status !== ToolActionStatus.actionRequired,
-              ) as unknown as ChatMessage["toolActions"],
-            },
-      ),
-    );
-    setStreamingInfo(message.questionId ?? messageId);
-    if (
-      !tryEmit(
-        () => emitSocket("chat_continue_predict", payload),
-        "resumeMcpFlow",
-      )
-    ) {
-      revertContinuation(setChatHistory, message, undeliveredText());
-    }
-  };
+  const resumeMcpFlow = createResumeMcpFlow(deps);
   const continueTokenLimit = async (messageId: string): Promise<void> => {
     const message = deps.chatHistory.find((item) => item.id === messageId);
     if (!message) return;

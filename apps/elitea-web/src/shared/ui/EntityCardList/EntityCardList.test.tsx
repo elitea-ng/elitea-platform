@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
 
-import { fireEvent } from '@testing-library/react';
+import { act, fireEvent } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { renderWithTheme } from '../lib/testTheme';
@@ -84,6 +84,43 @@ describe('EntityCardList', () => {
     );
     expect(container.querySelector('table')).toBeInTheDocument();
     expect(getAllByTestId('entity-list-row')).toHaveLength(2);
+  });
+
+  /**
+   * DEFECT this closes. With no `view` prop the grid reads `?view=` off the
+   * URL, and it used to read it at RENDER TIME only — so the value moved and
+   * nothing re-read it. The toggle lives in the page header and subscribes to
+   * the router; the list body does not, so on the agents and pipelines list
+   * pages the button took `aria-pressed="true"`, the address bar carried
+   * `view=table`, and the panel below kept drawing cards for as long as E2E
+   * waited (J14e, J16d).
+   *
+   * Nothing else changes here: no prop, no parent state, no router. A history
+   * change alone has to reach the rendering, because a history change alone is
+   * what the product does.
+   */
+  it('follows `?view=` when the URL moves under it, with no other change', async () => {
+    const initial = window.location.href;
+    try {
+      const { getAllByTestId, queryAllByTestId, findAllByTestId } = renderWithTheme(<EntityCardList items={ITEMS} />);
+      expect(getAllByTestId('entity-card')).toHaveLength(2);
+
+      act(() => {
+        window.history.pushState(null, '', '?view=table');
+      });
+
+      expect(await findAllByTestId('entity-list-row')).toHaveLength(2);
+      expect(queryAllByTestId('entity-card')).toHaveLength(0);
+
+      act(() => {
+        window.history.pushState(null, '', '?view=cards');
+      });
+
+      expect(await findAllByTestId('entity-card')).toHaveLength(2);
+      expect(queryAllByTestId('entity-list-row')).toHaveLength(0);
+    } finally {
+      window.history.replaceState(null, '', initial);
+    }
   });
 
   it('shows the empty state only when the list is genuinely empty — never while loading or erroring', () => {

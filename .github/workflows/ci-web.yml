@@ -316,7 +316,7 @@ jobs:
         run: node scripts/check-mutator-coverage.mjs
 
   gates-static:
-    # The seventeen single-script gates that need nothing but a checkout and
+    # The eighteen single-script gates that need nothing but a checkout and
     # the installed node_modules. Each was its own job, each paid ~1.4 min of
     # runner setup + `npm ci` to run a script for 10–60 s, and together they
     # were the bulk of this workflow's 20-slot appetite. They are steps here,
@@ -618,6 +618,19 @@ jobs:
       - name: Contract coverage
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: node scripts/check-contract-coverage.mjs
+
+      # ── Test-id namespace ───────────────────────────────────────────────
+      # Issue #312. The legacy UI sync recorded three test-id namespaces —
+      # EliteaUI's, the QA suites' and this app's — and asked for one. The two
+      # others live in repositories this one does not own, so the actionable
+      # half is refusing a NEW id that leaves this app's convention
+      # (lowercase kebab-case, the convention every `getByTestId` in
+      # apps/elitea-web/e2e already selects on). The gate states how many
+      # files and ids it read, so a rule that stops matching cannot pass as a
+      # clean tree.
+      - name: Test-id namespace
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: node scripts/check-testid-namespace.mjs
 
       # ── Stale disclosures ───────────────────────────────────────────────
       # Issue 621. A "NOT PORTED" / "NO PRODUCER" / "never emitted today"

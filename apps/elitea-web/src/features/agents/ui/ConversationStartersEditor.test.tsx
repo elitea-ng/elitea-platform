@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { screen } from '@testing-library/react';
+import { fireEvent, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import { MAX_CONVERSATION_STARTERS, MAX_CONVERSATION_STARTER_LENGTH } from '@/shared/lib/limits';
@@ -151,5 +151,35 @@ describe('ConversationStartersEditor', () => {
 
     expect(screen.queryAllByTestId('agent-conversation-starter-input')).toHaveLength(0);
     expect(screen.getByTestId('agent-conversation-starter-add')).toBeEnabled();
+  });
+
+  // #848 — this row's own counter used to be conditionally MOUNTED
+  // (`isFocused && value.length > 0 && <Typography>`), so blurring the row
+  // unmounted it and shrank the column, moving the next row (or, on the
+  // last row, `+ Starter`) up under the pointer mid-click. The counter's
+  // line must stay reserved across focus/blur.
+  it('keeps a row counter mounted (same node) across focus and blur, only toggling visibility', () => {
+    renderWithProviders(
+      <ConversationStartersEditor
+        starters={['first']}
+        onStartersChange={vi.fn()}
+      />,
+    );
+
+    const input = screen.getByTestId('agent-conversation-starter-input');
+    const counterAtRest = screen.getByTestId('agent-conversation-starter-counter');
+    expect(getComputedStyle(counterAtRest).visibility).toBe('hidden');
+
+    fireEvent.focus(input);
+    const counterFocused = screen.getByTestId('agent-conversation-starter-counter');
+    expect(counterFocused).toBe(counterAtRest);
+    expect(getComputedStyle(counterFocused).visibility).toBe('visible');
+
+    fireEvent.blur(input);
+    const counterBlurred = screen.getByTestId('agent-conversation-starter-counter');
+    expect(counterBlurred).toBe(counterAtRest);
+    expect(getComputedStyle(counterBlurred).visibility).toBe('hidden');
+
+    expect(screen.getByTestId('agent-conversation-starter-add')).toBeInTheDocument();
   });
 });

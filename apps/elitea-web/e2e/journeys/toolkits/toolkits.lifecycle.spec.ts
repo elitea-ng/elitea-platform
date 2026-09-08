@@ -6,17 +6,19 @@
  *
  * ── NOT COVERED (product gaps — deliberately NOT asserted around) ───────────
  *
- * 1. "Test connection" — NO UI EXISTS. `onTestConnection` is only a prop TYPE
+ * 1. "Test connection" on the toolkit FORM — still no UI. `onTestConnection` is
+ *    only a prop TYPE
  *    (features/toolkits/ui/form/ToolkitForm/ToolkitsOperationButtons.types.ts:69);
- *    ToolkitsOperationButtons never destructures or renders it. The toolkit
- *    test endpoints (/test_tool, /test_toolkit_tool) exist in
- *    services/elitea-main/internal/api/router.go but are absent from
- *    api/openapi/v2.yaml, so no generated client method reaches them.
- *    The live test PANE is a declared composition gap: EditToolkit.tsx:299-310
- *    renders an EMPTY <Box data-testid="edit-toolkit-test-pane-slot" />.
- *    => The "the test result is displayed" half of JRNY-017 cannot be written
- *       as a real assertion today. It is NOT stubbed here and NOT skipped —
- *       it is simply absent, and this note is the coverage record.
+ *    ToolkitsOperationButtons never destructures or renders it.
+ *
+ *    CORRECTED: the second half of this note said the live test PANE was a
+ *    composition gap and that "the test result is displayed" could not be
+ *    asserted. Both halves are now false. `TestToolPane`
+ *    (features/toolkits/ui/test-tools/TestToolPane.tsx) is the real pane, over
+ *    the synchronous run route POST /elitea_core/test_tool/prompt_lib/{p}/{t},
+ *    and `toolkits.test-pane.spec.ts` (J17b) drives it: pick a tool, fill it,
+ *    Run, read the outcome. That file is where the missing half of JRNY-017
+ *    lives now.
  *
  * 2. Edit-and-save on the detail page — no save affordance is mounted.
  *    ToolkitsOperationButtons draws no persistent button; its update path
@@ -102,6 +104,14 @@ function typeSearchBox(page: Page) {
  */
 
 test('J17.2: the create page offers real, server-supplied toolkit types', async ({ page }) => {
+  // Budget, not behaviour: this test's own waits (two 15 s tile waits, seven
+  // further assertions on default timeouts, and `checkA11y` over a grid of
+  // sixty-odd tiles) already exceed the 30 s file default, so it passed only
+  // while every step was fast. In the first CI read of the ported suite it
+  // timed out on webkit INSIDE `checkA11y` — axe injecting and analysing this
+  // page, which is the largest DOM in the toolkits area, not a missing tile.
+  test.setTimeout(90_000);
+
   // PASSES as of the #129 route fix. The tile label "GitHub" is derivable ONLY
   // from a schema map that actually contains the key `github`
   // (entities/toolkit/model/toolMenu.ts labels each map key through ToolTypes),
@@ -269,6 +279,19 @@ test('J17.3: create a toolkit, persist it, and reopen it from the list', async (
  * assertion fails loudly instead of silently testing nothing.
  */
 test('J17.5: a toolkit whose type supports indexing renders the real Indexes panel', async ({ page }) => {
+  /*
+   * THE DEFAULT 30 s BUDGET CANNOT HOLD THIS TEST — measured, not guessed.
+   *
+   * It reads the catalogue, creates a toolkit over the API, opens the editor,
+   * waits up to 20 s for the Indexes panel, waits for the panel's own list
+   * request, and only THEN runs `checkA11y`, which walks the whole rendered
+   * page in a separate axe pass. On a loaded runner that last pass is what
+   * ran out of budget, and the failure read as `frame.evaluate: Test timeout`
+   * inside `fixtures/axe.ts` — the shape of a budget exhausted earlier, not
+   * of a broken scan (webkit, retried green).
+   */
+  test.setTimeout(90_000);
+
   // ── Derive the type from the live catalogue rather than trusting a literal.
   const schemasResp = await page.request.get(
     `${API_BASE}/elitea_core/toolkits/prompt_lib/${DEFAULT_PROJECT_ID}`,

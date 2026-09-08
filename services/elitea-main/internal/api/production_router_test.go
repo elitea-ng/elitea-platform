@@ -1990,6 +1990,10 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"POST /api/v2/admin/gateway/providers/{configID}/check",
 		"POST /api/v2/admin/gateway/providers/{configID}/models",
 		"POST /api/v2/admin/gateway/providers/{configID}/revalidate",
+		// The cross-project bulk membership invite (issue 247). It replaces
+		// pylon's invites_bulkusers and invites_bulkprojects console pages,
+		// which are the same cross product with one side pinned.
+		"POST /api/v2/admin/invites_bulk/administration",
 		"POST /api/v2/admin/moderation_status/{mode}/{projectID}/{entityID}",
 		"POST /api/v2/admin/modes/administration",
 		"POST /api/v2/admin/permissions/{scope}/{mode}",

@@ -29,6 +29,13 @@ import { defineConfig, devices } from '@playwright/test';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
+import {
+  isLiveToolkitConfigured,
+  liveImageModel,
+  LIVE_TOOLKIT_IDS,
+  type LiveToolkitId,
+} from './e2e/live/liveEnv';
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /**
@@ -181,6 +188,36 @@ const SUPPORT_JOURNEY = /journeys\/support\/support\.spec\.ts/;
  * that can create a toolkit. See the file's own header.
  */
 const EMPTY_TOOLKIT_LIST_JOURNEY = /journeys\/toolkits\/toolkits\.emptyList\.spec\.ts/;
+
+/*
+ * The fixture self-tests (API-FX1..4), and why they run as a TEARDOWN.
+ *
+ * API-FX3 calls `sweepAutotestEntities`, which deletes every `autotest_`
+ * conversation, agent and pipeline in the shared project. That is the claim
+ * it is about — a cleanup that reports success and deletes nothing is the
+ * failure `admin.app-requests.spec.ts` (#544) and `toolkits.emptyList.spec.ts`
+ * were both eventually rewritten for — and it is also, run at the wrong
+ * moment, a way to destroy every sibling journey's rows mid-flight.
+ *
+ * It first ran in an ordering project that both engines DEPENDED on, before
+ * the first journey that can create a row. That gave the isolation and cost
+ * far too much: a dependency's failure SKIPS its dependents, so one failing
+ * assertion in this file reported `308 did not run` and the whole browser
+ * suite went unmeasured (measured on b705c058). A self-test that can take the
+ * suite down with it is a worse trade than the leftovers it cleans up.
+ *
+ * So it is `setup`'s `teardown` instead. Playwright runs a teardown project
+ * after its parent AND after every project that depends on the parent has
+ * finished — which is every browser project here — so the isolation is
+ * stronger than before (nothing is still running, rather than nothing has
+ * started yet) and NOTHING depends on it, so its failure reports itself and
+ * skips nobody. Running last also means the sweep meets the rows the whole
+ * run left behind, which is the state a cleanup is actually for.
+ *
+ * It therefore carries no `dependencies` of its own: naming `setup` there
+ * while being `setup`'s teardown is a cycle.
+ */
+const FIXTURE_ISOLATION_JOURNEY = /journeys\/api\/api\.fixture-isolation\.spec\.ts/;
 /*
  * THE INVENTORY JOURNEYS (journeys/inventory, INV-001..010) HAVE NO CONSTANT
  * HERE, AND THAT IS THE DECISION.
@@ -203,6 +240,63 @@ const EMPTY_TOOLKIT_LIST_JOURNEY = /journeys\/toolkits\/toolkits\.emptyList\.spe
  * same reason in reverse: the journeys belong in the projects that CAN answer
  * them, and excluding them from anywhere would only hide that they ran.
  */
+
+/*
+ * ── THE LIVE LANES (e2e/live) ─────────────────────────────────────────────
+ *
+ * Two projects whose journeys need something no stack in this repository can
+ * fake: a real toolkit credential, or a real image-capable model. They exist
+ * so the legacy public suite's credential-bound cases are REUSED rather than
+ * dropped — see `e2e/live/README.md` for the whole variable contract.
+ *
+ * THE GATE IS `testIgnore`, computed at config load, and that is the same
+ * mechanic `chromium`/`webkit` use below to keep the stack-gated DeepWiki and
+ * Support journeys out of themselves. A spec whose variables are absent is
+ * ignored, so the project lists ZERO tests rather than listing a test that
+ * would fail for want of a secret. There is deliberately no `test.skip`
+ * anywhere under `e2e/live`: a skip is reported as a pass-shaped row, and a
+ * lane that claims coverage it did not take is the one failure mode these
+ * journeys were written to avoid.
+ *
+ * The observable contract, asserted by
+ * `scripts/e2e-journey-shape.test.mjs`'s rule 5 and by the CI job:
+ *
+ *   with no E2E_LIVE_* set  ->  both projects list 0 tests
+ *   with a provider set     ->  that provider's spec, and no other
+ *
+ * `--project=image-live` with no model therefore ends on Playwright's own
+ * "no tests found" error and a non-zero exit, which is the loud failure the
+ * lane owes rather than a silent green.
+ *
+ * Both need the FULL standalone stack with a real model — the
+ * `chat-stream-real` shape — because every journey drives a real turn. They
+ * run through `scripts/chat-stream-e2e.sh`, which forwards every `E2E_LIVE_*`
+ * variable into the Playwright container.
+ */
+const LIVE_TOOLKIT_SPECS: Record<LiveToolkitId, RegExp> = {
+  github: /live\/toolkits\.github\.spec\.ts/,
+  jira: /live\/toolkits\.jira\.spec\.ts/,
+  gitlab: /live\/toolkits\.gitlab\.spec\.ts/,
+  bitbucket: /live\/toolkits\.bitbucket\.spec\.ts/,
+  confluence: /live\/toolkits\.confluence\.spec\.ts/,
+};
+
+/** Both GitHub-gated: the two legacy agent files use a GitHub toolkit. */
+const LIVE_AGENT_SPEC = /live\/toolkits\.agent\.spec\.ts/;
+/** Jira-gated, as the legacy indicator file is. */
+const LIVE_INDICATORS_SPEC = /live\/toolkits\.indicators\.spec\.ts/;
+const LIVE_IMAGE_SPECS = /live\/image\..+\.spec\.ts/;
+
+/** Every live toolkit spec whose provider this machine cannot drive. */
+function unconfiguredLiveToolkitSpecs(): RegExp[] {
+  const ignored: RegExp[] = [];
+  for (const id of LIVE_TOOLKIT_IDS) {
+    if (!isLiveToolkitConfigured(id)) ignored.push(LIVE_TOOLKIT_SPECS[id]);
+  }
+  if (!isLiveToolkitConfigured('github')) ignored.push(LIVE_AGENT_SPEC);
+  if (!isLiveToolkitConfigured('jira')) ignored.push(LIVE_INDICATORS_SPEC);
+  return ignored;
+}
 
 const CHROMIUM_LAUNCH_OPTIONS = {
   args: ['--disable-web-security', '--allow-insecure-localhost', '--no-sandbox'],
@@ -266,6 +360,10 @@ export default defineConfig({
       name: 'setup',
       testMatch: /auth\.setup\.ts/,
       fullyParallel: false,
+      // The fixture self-tests, AFTER every project that depends on this one.
+      // See `FIXTURE_ISOLATION_JOURNEY` above for why they are a teardown and
+      // not a dependency.
+      teardown: 'fixtures-sweep',
       use: { ...devices['Desktop Chrome'], launchOptions: CHROMIUM_LAUNCH_OPTIONS },
     },
 
@@ -294,10 +392,42 @@ export default defineConfig({
       testMatch: EMPTY_TOOLKIT_LIST_JOURNEY,
     },
 
+    /*
+     * ── fixtures-sweep — the fixture self-tests, after everything else ─────
+     *
+     * `setup`'s teardown; see `FIXTURE_ISOLATION_JOURNEY` above. Serial,
+     * because API-FX3's sweep would otherwise take the rows API-FX1/2/4 are
+     * holding; chromium only, because none of the four opens a page. No
+     * `dependencies`: it is the teardown OF `setup`, and naming it there
+     * would be a cycle.
+     *
+     * `retries: 0` on purpose. A retried sweep would run the destructive half
+     * three times and report the third attempt, which is not what a cleanup
+     * self-test should say — it either did the work or it did not.
+     */
+    {
+      name: 'fixtures-sweep',
+      use: {
+        ...devices['Desktop Chrome'],
+        storageState: STORAGE_STATE.admin,
+        launchOptions: CHROMIUM_LAUNCH_OPTIONS,
+      },
+      testMatch: FIXTURE_ISOLATION_JOURNEY,
+      fullyParallel: false,
+      retries: 0,
+    },
+
     // ── chromium ──────────────────────────────────────────────────────────
     {
       name: 'chromium',
-      testIgnore: [ADMISSION_JOURNEY, REAL_ENGINE_JOURNEY, WIKI_QUERY_JOURNEY, SUPPORT_JOURNEY, EMPTY_TOOLKIT_LIST_JOURNEY],
+      testIgnore: [
+        ADMISSION_JOURNEY,
+        REAL_ENGINE_JOURNEY,
+        WIKI_QUERY_JOURNEY,
+        SUPPORT_JOURNEY,
+        EMPTY_TOOLKIT_LIST_JOURNEY,
+        FIXTURE_ISOLATION_JOURNEY,
+      ],
       use: {
         ...devices['Desktop Chrome'],
         storageState: STORAGE_STATE.member,
@@ -310,7 +440,14 @@ export default defineConfig({
     // ── webkit (spec §6.2: "chromium + webkit") ───────────────────────────
     {
       name: 'webkit',
-      testIgnore: [ADMISSION_JOURNEY, REAL_ENGINE_JOURNEY, WIKI_QUERY_JOURNEY, SUPPORT_JOURNEY, EMPTY_TOOLKIT_LIST_JOURNEY],
+      testIgnore: [
+        ADMISSION_JOURNEY,
+        REAL_ENGINE_JOURNEY,
+        WIKI_QUERY_JOURNEY,
+        SUPPORT_JOURNEY,
+        EMPTY_TOOLKIT_LIST_JOURNEY,
+        FIXTURE_ISOLATION_JOURNEY,
+      ],
       use: {
         ...devices['Desktop Safari'],
         storageState: STORAGE_STATE.member,
@@ -565,6 +702,52 @@ export default defineConfig({
         /streaming\/chat\.regenerate\.spec\.ts/,
       ],
       fullyParallel: false,
+    },
+
+    /*
+     * ── toolkits-live — the legacy credential-bound toolkit cases ──────────
+     *
+     * See the LIVE LANES note above and `e2e/live/README.md`. Serial and on
+     * the chat persona for the same two reasons `chat-stream` states: the
+     * turns run through the same single-consumer execution plane, and the
+     * personal project is where `/llm` resolves the provider credential from
+     * (#290).
+     */
+    {
+      name: 'toolkits-live',
+      use: {
+        ...devices['Desktop Chrome'],
+        storageState: STORAGE_STATE.chat,
+        launchOptions: CHROMIUM_LAUNCH_OPTIONS,
+      },
+      dependencies: ['setup'],
+      testMatch: /live\/toolkits\..+\.spec\.ts/,
+      testIgnore: unconfiguredLiveToolkitSpecs(),
+      fullyParallel: false,
+      retries: 0,
+    },
+
+    /*
+     * ── image-live — image creation against a real image-capable model ─────
+     *
+     * `deploy/mock-llm/server.py` serves chat completions and nothing else,
+     * so these two cannot run on any other project. `E2E_LIVE_IMAGE_MODEL`
+     * names the model row as the picker spells it; without it the project
+     * lists nothing and a `--project=image-live` run fails on Playwright's
+     * own "no tests found".
+     */
+    {
+      name: 'image-live',
+      use: {
+        ...devices['Desktop Chrome'],
+        storageState: STORAGE_STATE.chat,
+        launchOptions: CHROMIUM_LAUNCH_OPTIONS,
+      },
+      dependencies: ['setup'],
+      testMatch: LIVE_IMAGE_SPECS,
+      testIgnore: liveImageModel() === '' ? [LIVE_IMAGE_SPECS] : [],
+      fullyParallel: false,
+      retries: 0,
     },
 
     /*

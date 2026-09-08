@@ -57,14 +57,31 @@ export function GroupedConversations({
 
   const { isGroupExpanded, toggleGroup, initializeExpansion, enterSearchMode, exitSearchMode } = useDateGroupExpansion();
 
-  const prevSearchModeRef = useRef(isSearchMode);
+  /*
+   * Seeded as "not searching" and "no groups", NOT from this render's own
+   * props, because a mount can already be in search mode: the rail's grouped
+   * listing is keyed on the search query, so typing one puts the query into a
+   * loading state and `Conversations.body.tsx` replaces this whole subtree
+   * with skeletons until the filtered answer lands. What comes back is a fresh
+   * mount holding the matches — and, seeded from its own props, this effect
+   * saw no transition, did nothing, and `initializeExpansion` below is skipped
+   * in search mode, so every group stayed collapsed. The rail narrowed
+   * correctly and showed the user nothing.
+   */
+  const prevSearchModeRef = useRef(false);
   const prevSearchQueryRef = useRef(searchQuery);
+  const prevGroupNamesRef = useRef('');
 
   useEffect(() => {
     const searchModeChanged = prevSearchModeRef.current !== isSearchMode;
     const searchQueryChanged = prevSearchQueryRef.current !== searchQuery;
+    // By NAME, not by identity: every refetch hands down a new array, and
+    // re-applying the expansion on each one would undo a group the user
+    // collapsed by hand while the search was open.
+    const groupNames = visibleGroups.map((group) => group.name).join('\u0000');
+    const groupsChanged = prevGroupNamesRef.current !== groupNames;
 
-    if (isSearchMode && (searchModeChanged || searchQueryChanged)) {
+    if (isSearchMode && (searchModeChanged || searchQueryChanged || groupsChanged)) {
       const lowerQuery = searchQuery.toLowerCase();
       // `conversation.name` is typed `string` (`entities/conversation/model/types.ts`)
       // but sourced from an explicitly unschemaed wire (`conversationApi.ts`'s own
@@ -79,6 +96,7 @@ export function GroupedConversations({
 
     prevSearchModeRef.current = isSearchMode;
     prevSearchQueryRef.current = searchQuery;
+    prevGroupNamesRef.current = groupNames;
   }, [isSearchMode, searchQuery, visibleGroups, enterSearchMode, exitSearchMode]);
 
   useEffect(() => {

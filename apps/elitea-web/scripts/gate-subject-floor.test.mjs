@@ -24,6 +24,10 @@ import { afterEach, describe, expect, it } from 'vitest';
  *   - `check-endpoint-manifest.mjs` takes `--manifest`, so its empty case
  *     lives with its other CLI cases in
  *     scripts/check-endpoint-manifest.test.mjs.
+ *
+ * check-testid-namespace.mjs is proved in its own file for the same reason as
+ * check-endpoint-manifest.mjs: it takes `--root`, so its empty case sits with
+ * its other CLI cases in scripts/check-testid-namespace.test.mjs.
  */
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));

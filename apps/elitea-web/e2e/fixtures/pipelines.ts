@@ -19,7 +19,7 @@ import type { APIRequestContext } from '@playwright/test';
 
 import { load as loadYaml } from 'js-yaml';
 
-import { API_BASE } from './api';
+import { API_BASE, DEFAULT_PROJECT_ID } from './api';
 
 /**
  * The node-id characters `valid_graph_id` (worker `yaml.rs:362`) admits,
@@ -251,4 +251,169 @@ export function parseStoredGraph(instructions: string): StoredPipelineGraph {
 /** Every `nodes[].id` in a stored graph, as strings, in document order. */
 export function storedNodeIds(graph: StoredPipelineGraph): readonly string[] {
   return graph.nodes.map(node => String(node['id'] ?? ''));
+}
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * Creating a pipeline WITHOUT the canvas
+ *
+ * The journeys ported from the legacy public suite's
+ * `tests/ui/pipelines/test_pipeline_management.py` are about the DASHBOARD,
+ * the detail screen and the editor's own controls — not about authoring a
+ * graph. Driving `/pipelines/create` for each of them would spend a form
+ * round trip and a canvas mount on a precondition, which is the "create
+ * through the API before the test" rule `e2e/fixtures/api.ts` already states
+ * for agents and conversations.
+ *
+ * `createAgent` cannot stand in. A pipeline is an `application` row whose
+ * VERSION carries `agent_type: 'pipeline'`
+ * (`entities/pipeline/model/types.ts`), and that one field decides three
+ * things at once: whether the row appears under `agents_type=pipeline` on the
+ * pipelines list at all, which editor route can open it, and which assembler
+ * the worker picks for a turn. An agent created by `createAgent` satisfies
+ * none of them.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * The document a pipeline created through `/pipelines/create` is stored with.
+ *
+ * A COPY of `src/shared/lib/pipelineStarterTemplate.ts`, kept here because
+ * nothing under `e2e/` imports from `src/` (the app's `@/*` path alias is
+ * declared in a tsconfig whose `include` does not cover this directory, and
+ * Playwright transpiles these files on its own). The copy is load-bearing in
+ * the same way the original is, and for the reasons its doc comment records:
+ * every `state:` entry is a MAPPING rather than a bare type name (the SDK
+ * worker's `set_defaults` writes into each entry and raises `TypeError` on a
+ * string), and `input_mapping` carries BOTH `system` and `task` (the SDK
+ * selects its pipeline branch on `'system' in func_args`). A pipeline seeded
+ * with anything less is admitted, saved, and then fails its first turn.
+ *
+ * A journey that only needs "a pipeline exists" is free to ignore all of
+ * that; `chat.pipeline-execution.spec.ts` is the one that runs it, and it is
+ * the reason this is the starter document rather than a hand-cut minimal one.
+ */
+export const PIPELINE_STARTER_TEMPLATE = `state:
+  input:
+    type: str
+  messages:
+    type: list
+entry_point: LLM_1
+nodes:
+  - id: LLM_1
+    type: llm
+    input:
+      - input
+    input_mapping:
+      system:
+        type: fstring
+        value: You are a helpful assistant.
+      task:
+        type: variable
+        value: input
+    output:
+      - messages
+    transition: END
+`;
+
+/** Node id of the single LLM node {@link PIPELINE_STARTER_TEMPLATE} ships — `entry_point` names it. */
+export const PIPELINE_STARTER_ENTRY_NODE_ID = 'LLM_1';
+
+/** A pipeline created by {@link createPipelineThroughApi}, addressed by everything a stored read needs. */
+export interface CreatedPipeline {
+  /** `applications.id` — the SERIAL key every pipeline route addresses it by. */
+  readonly id: string;
+  /** `application_versions.id` of the `base` version created alongside it. */
+  readonly versionId: string;
+  /** The project the row was created in — echoed back so a caller never has to assume `1`. */
+  readonly projectId: string;
+}
+
+/** Options for {@link createPipelineThroughApi}. Every key has a working default. */
+export interface CreatePipelineOptions {
+  /** Defaults to `${name} description`. The create form requires a non-blank one, so this helper always sends one too. */
+  readonly description?: string;
+  /** The pipeline document. Defaults to {@link PIPELINE_STARTER_TEMPLATE}. */
+  readonly instructions?: string;
+  /** Defaults to `DEFAULT_PROJECT_ID` (the seeded shared project the journey personas hold a role on). */
+  readonly projectId?: string;
+}
+
+/**
+ * Create a pipeline over the API and return the ids a stored read needs.
+ *
+ * Sends the body `entities/application-form/model/mutations.ts` builds for
+ * `/pipelines/create` — `type: 'interface'` at the application level and one
+ * `versions[]` entry carrying `agent_type: 'pipeline'`. An application with no
+ * version row is degenerate (`List` INNER JOINs `application_versions`, so it
+ * never appears on any list and no deep link can open it), which is why the
+ * version travels with the create rather than following it.
+ *
+ * `pipeline_settings` is deliberately NOT sent: `versionFromBody` reads no such
+ * key and `insertVersion`'s INSERT does not name the column
+ * (`internal/api/v2/applications/handler.go`, measured by
+ * `pipelines.versioning.spec.ts`'s own probe), so a caller sending one would be
+ * shown an empty object back and could reasonably read that as a defect here.
+ *
+ * Throws on a non-2xx, naming the status and body. Returning a partial object
+ * instead would push the failure into whichever assertion first used a blank
+ * id, which says nothing about the create.
+ */
+export async function createPipelineThroughApi(
+  request: APIRequestContext,
+  name: string,
+  options: CreatePipelineOptions = {},
+): Promise<CreatedPipeline> {
+  const projectId = options.projectId ?? DEFAULT_PROJECT_ID;
+  const url = `${API_BASE}/elitea_core/applications/prompt_lib/${projectId}`;
+  const resp = await request.post(url, {
+    data: {
+      name,
+      description: options.description ?? `${name} description`,
+      type: 'interface',
+      versions: [
+        {
+          name: 'base',
+          agent_type: 'pipeline',
+          instructions: options.instructions ?? PIPELINE_STARTER_TEMPLATE,
+          conversation_starters: [],
+          variables: [],
+          meta: { step_limit: 25, internal_tools: [] },
+        },
+      ],
+    },
+  });
+  if (!resp.ok()) {
+    throw new Error(
+      `createPipelineThroughApi: POST ${url} -> ${describeResponse(resp.status(), resp.statusText(), await resp.text())}`,
+    );
+  }
+  const body = (await resp.json()) as { id?: unknown; version_details?: { id?: unknown; agent_type?: unknown } };
+  const id = typeof body.id === 'string' || typeof body.id === 'number' ? String(body.id) : '';
+  const versionId =
+    typeof body.version_details?.id === 'string' || typeof body.version_details?.id === 'number'
+      ? String(body.version_details.id)
+      : '';
+  if (id === '' || versionId === '') {
+    throw new Error(
+      `createPipelineThroughApi: 201 without an id/version_details.id: ${JSON.stringify(body).slice(0, 300)}`,
+    );
+  }
+  // The discriminator, checked HERE rather than in each caller: a row stored
+  // as an agent looks identical until a list filtered by `agents_type` comes
+  // back without it, three steps later, in a journey about a search box.
+  if (body.version_details?.agent_type !== 'pipeline') {
+    throw new Error(
+      `createPipelineThroughApi: the created version is not a pipeline (agent_type=${String(
+        body.version_details?.agent_type,
+      )}) — every pipelines route filters on that field`,
+    );
+  }
+  return { id, versionId, projectId };
+}
+
+/** Delete a pipeline (cleanup). Best effort by design — a caller in `afterEach` must not fail the test it is cleaning up after. */
+export async function deletePipeline(
+  request: APIRequestContext,
+  pipeline: Pick<CreatedPipeline, 'id' | 'projectId'>,
+): Promise<void> {
+  await request.delete(`${API_BASE}/elitea_core/application/prompt_lib/${pipeline.projectId}/${pipeline.id}`);
 }

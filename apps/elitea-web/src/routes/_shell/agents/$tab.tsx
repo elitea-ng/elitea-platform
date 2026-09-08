@@ -32,6 +32,7 @@ export const Route = createFileRoute('/_shell/agents/$tab')({
     'sort_by',
     'sort_order',
     'source_application_id',
+    'query',
     'view',
     'viewMode',
   ),

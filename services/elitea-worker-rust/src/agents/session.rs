@@ -1192,10 +1192,7 @@ pub(crate) async fn assemble_pipeline_native(
     {
         return Err(invalid_configuration());
     }
-    let agent: Arc<dyn Agent> = Arc::new(
-        EliteaGraphAgent::new(graph)
-            .with_printer_interrupts(Arc::clone(&state.checkpointer), printer_catalog),
-    );
+    let agent = pipeline_graph_agent(graph, &state.checkpointer, printer_catalog, is_resume);
     let agent = node_events.map_or(agent.clone(), |events| {
         Arc::new(PipelineNodeEventStreamingAgent::new(agent, events)) as Arc<dyn Agent>
     });
@@ -1226,6 +1223,26 @@ pub(crate) async fn assemble_pipeline_native(
         projector,
         PipelineAgentCompletion { thread_id },
     ))
+}
+
+/// One graph agent, told whether this invocation STARTS a run or CONTINUES a
+/// paused one.
+///
+/// A turn that is not continuing a pause must not inherit the previous run's
+/// checkpoint — `EliteaGraphAgent::starting_a_fresh_run` carries what
+/// inheriting it does to the answer.
+fn pipeline_graph_agent(
+    graph: adk_rust::graph::GraphAgent,
+    checkpointer: &Arc<dyn Checkpointer>,
+    printer_catalog: super::graph::PrinterPauseCatalog,
+    is_resume: bool,
+) -> Arc<dyn Agent> {
+    let agent = EliteaGraphAgent::new(graph)
+        .with_printer_interrupts(Arc::clone(checkpointer), printer_catalog);
+    if is_resume {
+        return Arc::new(agent);
+    }
+    Arc::new(agent.starting_a_fresh_run(Arc::clone(checkpointer)))
 }
 
 async fn resolve_pipeline_start(

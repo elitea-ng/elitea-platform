@@ -71,6 +71,13 @@ type Handler struct {
 	// response's `shared` block serves. Zero means "not configured", and the
 	// block is then empty — see sharedConfigurationSchema.
 	publicProjectID int
+	// toolkitChecker probes a TOOLKIT credential (github, gitlab, bitbucket,
+	// jira, confluence) with one authenticated metadata GET — the half of #319
+	// the gateway cannot serve, because the gateway speaks to LLM providers.
+	// See toolkit_check.go. NewHandler always supplies one, so a toolkit type
+	// this build carries a probe for is never refused for want of composition;
+	// WithToolkitConnectionChecker replaces it in a test.
+	toolkitChecker ToolkitConnectionChecker
 }
 
 type Option func(*Handler)
@@ -137,6 +144,14 @@ func NewHandler(pool *pgxpool.Pool, opts ...Option) *Handler {
 	}
 	for _, opt := range opts {
 		opt(handler)
+	}
+	if handler.toolkitChecker == nil {
+		// Built here rather than at the composition root because it needs no
+		// dependency the root owns — an allowlist read from the environment and
+		// an HTTP client. A nil checker would read as "this type cannot be
+		// checked", which is a different claim from the one an unconfigured
+		// allowlist makes (toolkit_check.go's own doc says so).
+		handler.toolkitChecker = NewToolkitConnectionCheckerFromEnv()
 	}
 	return handler
 }
@@ -356,6 +371,39 @@ type Configuration struct {
 	AuthorID   *int           `json:"author_id,omitempty"`
 	CreatedAt  string         `json:"created_at"`
 	UpdatedAt  string         `json:"updated_at,omitempty"`
+}
+
+// MarshalJSON serves the stored title under BOTH `name` and `elitea_title`.
+//
+// `Name` holds the `elitea_title` COLUMN, and `elitea_title` is the name every
+// reader in the product resolves a credential by. A toolkit does not store the
+// secret, it stores `{"github_configuration": {"elitea_title": …}}`; the model
+// and toolkit forms build their credential picker from `row.elitea_title`
+// (apps/elitea-web/src/pages/credentials/CredentialFormFields.tsx); and the
+// credential editor seeds its stable lookup key from the same field
+// (useCredentialFormController.ts's `useFormSeeding`).
+//
+// This projection emitted the column as `name` alone, so against this handler
+// every one of those readers read an empty title. Two consequences, both
+// silent: the picker offered NO credential to link — the list of options is
+// built by filtering out the empty ones — and an edit-save re-derived the
+// stable key from the display label, so renaming a credential rewrote the key
+// that every toolkit referencing it holds.
+//
+// `name` stays. The two read routes are a documented union (v2.yaml's
+// ConfigurationRow), other clients already read `name`, and an extra key is
+// additive for all of them.
+//
+// A marshaller rather than a struct field: the column is scanned straight into
+// `Name` at five call sites (list, get, create, update, revalidate), and a
+// sixth added later would otherwise ship the same empty field again.
+func (c Configuration) MarshalJSON() ([]byte, error) {
+	// `projection` drops this method, so the call below cannot recurse.
+	type projection Configuration
+	return json.Marshal(struct {
+		projection
+		EliteaTitle string `json:"elitea_title"`
+	}{projection(c), c.Name})
 }
 
 type ListResponse struct {

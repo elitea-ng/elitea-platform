@@ -71,7 +71,11 @@ export function useChatBoxActions({
       const pendingAttachments = data.attachments.state.attachments;
       data.attachments.state.onClearAttachments();
       void handlers.sendQuestion({ question, attachments: pendingAttachments, isSendingToUser, userIds }).then((result) => {
-        if (result.success && result.createdConversation) onConversationCreated?.(result.createdConversation);
+        // Announced on `result.createdConversation` alone, NOT on `success`:
+        // the row is committed before any transport is tried, so a turn that
+        // then fails still leaves a conversation the route and the rail have
+        // to learn about (see `SendResult`).
+        if (result.createdConversation) onConversationCreated?.(result.createdConversation);
       });
     },
     [data.hasPendingHitlInterrupt, data.attachments.state, handlers, state, chatInputRef, onConversationCreated],
@@ -130,7 +134,7 @@ export function useChatBoxActions({
   );
 
   const handleContinueMcpExecution = useCallback(
-    (messageId: string, addToIgnoreList?: boolean) => { handlers.resumeMcpFlow(messageId, addToIgnoreList); },
+    (messageId: string, addToIgnoreList?: boolean) => { void handlers.resumeMcpFlow(messageId, addToIgnoreList); },
     [handlers],
   );
 

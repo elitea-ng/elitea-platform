@@ -488,6 +488,80 @@ func TestABlankCategoryNeverReachesTheHub(t *testing.T) {
 	}
 }
 
+/* ── guardrails: the blocklist the product UI paints from ──────────────── */
+
+// TestBlockedToolkitsArePublishedAsCanonicalKeys states which of the two
+// spellings this document carries, because both are defensible and the E2E
+// journey GR-1 asserted the other one.
+//
+// The operator's own spelling is what the STORE holds and what the admin page
+// reads back — `admin/guardrails_postgres_integration_test.go` asserts that row
+// survives unmangled, so nothing an operator typed is lost. THIS field is a
+// different thing: a projection of the MATCHER (`Policy.BlockedToolkits()`),
+// published as the canonical comparison keys `api/openapi/v2.yaml` documents,
+// because it is compared and never displayed. The product's blocked banner
+// takes its label from the toolkit's own `type`
+// (`features/agents/ui/ToolCard.tsx`), and `toolkitBlocklist.ts` canonicalises
+// both sides before comparing, so the typed casing has no consumer here.
+func TestBlockedToolkitsArePublishedAsCanonicalKeys(t *testing.T) {
+	pool := newFlagsPool(t)
+	router := flagsRouter(eliteacore.NewHandler(pool))
+
+	published := func() []string {
+		body := decodeMap(t, flagsDo(t, router, http.MethodGet,
+			"/elitea_core/platform_settings/prompt_lib", nil))
+		raw, ok := body["blocked_toolkits"].([]any)
+		if !ok {
+			t.Fatalf("blocked_toolkits = %#v, want an array", body["blocked_toolkits"])
+		}
+		out := make([]string, 0, len(raw))
+		for _, entry := range raw {
+			text, ok := entry.(string)
+			if !ok {
+				t.Fatalf("blocked_toolkits carries a non-string entry %#v", entry)
+			}
+			out = append(out, text)
+		}
+		return out
+	}
+
+	// Fresh: PRESENT and empty, never absent and never null — a client that had
+	// to tell `[]` from a missing field has been handed the server's problem.
+	if before := published(); len(before) != 0 {
+		t.Errorf("blocked_toolkits = %v on a fresh install, want empty", before)
+	}
+
+	// Two types in the spellings an operator would type them, plus a separator
+	// row the form makes easy to leave behind.
+	setFlag(t, pool, "guardrails", "blocked_toolkits", []string{"GitHub", "Data-Source", "---"})
+
+	got := map[string]bool{}
+	for _, entry := range published() {
+		got[entry] = true
+	}
+	for _, want := range []string{"github", "datasource"} {
+		if !got[want] {
+			t.Errorf("blocked_toolkits = %v, want the canonical key %q", published(), want)
+		}
+	}
+	// The raw spellings are NOT echoed. Publishing both forms would let a client
+	// that compares literally appear to work against one deployment's data and
+	// silently miss on another's.
+	for _, unwanted := range []string{"GitHub", "Data-Source"} {
+		if got[unwanted] {
+			t.Errorf("blocked_toolkits echoed the operator's spelling %q", unwanted)
+		}
+	}
+	// A value that canonicalises to nothing is dropped rather than published as
+	// an empty key: an empty key would match a toolkit with no type at all.
+	if got[""] || got["---"] {
+		t.Errorf("blocked_toolkits = %v, want the separator row dropped", published())
+	}
+	if len(got) != 2 {
+		t.Errorf("blocked_toolkits = %v, want exactly the two canonical keys", published())
+	}
+}
+
 /* ── failure is permissive, deliberately ───────────────────────────────── */
 
 // TestAnUnreadableStoreDoesNotDisableMCPOrBlockPublishing.

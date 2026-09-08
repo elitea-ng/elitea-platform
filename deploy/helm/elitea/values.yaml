@@ -1140,6 +1140,24 @@ main:
     # other has to be able to say so. Fail-closed in exactly the same way:
     # unset refuses every source, and `*` disables the control explicitly.
     ELITEA_INVENTORY_GIT_ALLOWLIST: ""
+
+    # --- The toolkit credential connection check (#319, toolkit half) ---
+    #
+    # The hosts a "test connection" on a TOOLKIT credential (github, gitlab,
+    # bitbucket, jira, confluence) may reach, for the one authenticated metadata
+    # GET that check makes. The base URL is tenant-authored (#13), so it is
+    # checked before the dial, with the same matching rules the two facades
+    # above use: hostnames, case-insensitive, `*.` for DIRECT subdomains only,
+    # a bare `*` to disable the control out loud.
+    #
+    # UNSET IS NOT FAIL-CLOSED HERE, and that is the difference from the two
+    # allowlists above. A clone reaches a URL somebody typed into a request; this
+    # check reaches the endpoint of a credential the platform itself ships a
+    # toolkit for, so an empty value falls back to the five vendors' PUBLIC API
+    # hosts (api.github.com, github.com, gitlab.com, api.bitbucket.org,
+    # bitbucket.org, *.atlassian.net). Set it to reach a self-hosted GitLab or
+    # Jira — the value REPLACES that default, it does not extend it.
+    ELITEA_TOOLKIT_CHECK_ALLOWLIST: ""
     # The origin the Inventory provider calls back to for artifacts and models.
     # EMPTY DISABLES SOURCE EXPANSION rather than failing the boot: the eight
     # Inventory tools that only read an existing graph still work, and the

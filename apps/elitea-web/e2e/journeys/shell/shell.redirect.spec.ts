@@ -20,6 +20,25 @@ import { BASE_URL } from '../../../playwright.config';
 // ─────────────────────────────────────────────────────────────────────────────
 // Journey 1: Cold load / → /chat
 // ─────────────────────────────────────────────────────────────────────────────
+/*
+ * ALSO COVERS the legacy public suite's whole smoke file
+ * (`qa/elitea-testing-public/automation/tests/ui/smoke/test_ui_smoke.py`):
+ *
+ *   `TestHomePage::test_page_loads`          — "the home page loads without
+ *     errors", asserted there as a non-empty `page.title()`.
+ *   `TestHomePage::test_main_content_visible` — "the main content area
+ *     renders", asserted there as `main, #root, #app, [role=main]` being
+ *     visible.
+ *
+ * Neither is ported as a journey of its own, and the reason is that both
+ * would be WEAKER than this test rather than additional to it. A non-empty
+ * `<title>` and a visible `#root` are true of the error page, of a stub route
+ * and of a shell that never resolved a session; this test lands on the exact
+ * path, finds the product's own composer, and asserts it is editable and
+ * carries the production placeholder. `role=main` in particular is rendered
+ * by the app shell on EVERY route — the same locator this file's own header
+ * records as having matched unconditionally in an earlier revision.
+ */
 test('J1: cold load / redirects through to /chat', async ({ page }) => {
   // Navigate to the root — auth setup already injected a valid session via
   // storageState, so elitea-main should honour the authenticated redirect chain.
@@ -205,15 +224,39 @@ test('J4: logout clears user state and el.* storage', async ({ browser }) => {
   // covers the storage sweep in jsdom and names THIS journey as the half that
   // proves the browser really leaves the app, so the page it opens has to be
   // the page the control is on.
+  // THE DEFAULT 30 s BUDGET CANNOT HOLD THIS TEST — measured, not guessed.
+  // Unlike every other journey, this one does not start signed in: it drives
+  // the provider round trip itself, and `signInThroughOidc` alone holds two
+  // 15 s `waitForURL`s plus two navigations and a `/forward-auth/info` read.
+  // The profile load and the 20 s wait for the logout control come after
+  // that, so the waits this test already declares add up to more than the
+  // file default and it can only pass while every hop is fast. It timed out
+  // on webkit in the first CI read of the ported suite, at the logout control
+  // with an empty call log — the shape a budget exhausted elsewhere takes,
+  // not a missing control. `shell.reauth-popup.spec.ts` carries the same
+  // 120 s for the same reason: a real OIDC round trip inside the test body.
+  test.setTimeout(120_000);
+
   const context = await browser.newContext({ storageState: undefined });
   const page = await context.newPage();
   await signInThroughOidc(page, 'e2e-member@autotest.local');
 
   await page.goto(BASE_URL + '/app/settings/profile', { waitUntil: 'domcontentloaded' });
 
-  // Wait for the logout control to be interactive before touching storage.
+  /*
+   * Wait for the logout control to be interactive before touching storage.
+   *
+   * The CARD first, then the button inside it. `Log out` sits under the
+   * identity rows, so a 20 s wait on the button alone was really a wait on the
+   * whole profile screen — the session read, the identity query and the render
+   * — and it reported a slow load as "element(s) not found", i.e. as a control
+   * that is not there at all (measured on webkit, retried green). Two waits
+   * name which half was slow, and the budget matches what this test's own
+   * 120 s allows after the provider round trip.
+   */
+  await expect(page.getByTestId('profile-identity')).toBeVisible({ timeout: 30_000 });
   const logoutItem = page.getByRole('button', { name: 'Log out', exact: true });
-  await expect(logoutItem).toBeVisible({ timeout: 20_000 });
+  await expect(logoutItem).toBeVisible({ timeout: 30_000 });
 
   // Precondition: the session this journey is about to destroy really exists.
   // Without this, every assertion below is also satisfied by a browser that

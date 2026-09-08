@@ -2,15 +2,29 @@ import type { ReactNode } from 'react';
 
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
-import type { Theme } from '@mui/material/styles';
+import type { SxProps, Theme } from '@mui/material/styles';
 
 import { t } from '@/shared/i18n';
 
-/** @public shared/ui component API — consumed once a features/widgets/pages caller exists (none does yet in this pass). */
+import { combineSx } from '../lib/combineSx';
+
+/** @public shared/ui component API. */
 export interface CharacterCounterProps {
   value: string;
   maxLength: number;
-  textVariant?: 'bodySmall' | 'bodyMedium' | 'labelSmall' | 'labelMedium';
+  textVariant?: 'bodySmall' | 'bodySmall2' | 'bodyMedium' | 'labelSmall' | 'labelMedium' | 'labelTiny';
+  /**
+   * `false` keeps the line in flow but invisible (#848).
+   *
+   * A counter that UNMOUNTS on blur shrinks the row and shifts every control
+   * under it up by its own height, so a real click already in flight lands on
+   * nothing. Every in-flow caller passes this instead of a conditional mount.
+   *
+   * @default true
+   */
+  visible?: boolean;
+  /** Layout only — the caller's own placement. The colour stays this component's. */
+  sx?: SxProps<Theme>;
   'data-testid'?: string;
 }
 
@@ -33,22 +47,42 @@ export interface CharacterCounterProps {
  * limit-reached state was signalled by colour alone; the appended "reached
  * the MAXIMUM" text was already there, so this is belt-and-suspenders, not
  * a new requirement.
+ *
+ * WIRED, at last. This component was ported, tested and had ZERO callers —
+ * its own header said so ("consumed once a features/widgets/pages caller
+ * exists (none does yet in this pass)"). Five files meanwhile rendered their
+ * own bare `Typography` counter: none of them turned red, and none of them
+ * said anything at the limit, which is what the legacy suite's
+ * `agents/test_agent_character_limits.py` asserts. All five call this now —
+ * `WelcomeMessageInput`, `ConversationStartersEditor`, `CreateAgentForm`,
+ * `ApplicationEditForm` and toolkits' `NameDescriptionInput`.
+ *
+ * `remaining` is clamped at zero. A caller whose stored value is longer than
+ * its own `maxLength` — a row saved under an older, larger limit — would
+ * otherwise read "-12 characters left", which is not a state a reader can act
+ * on, and would never show the limit message either.
  */
 export function CharacterCounter({
   value,
   maxLength,
   textVariant = 'bodySmall',
+  visible = true,
+  sx,
   'data-testid': dataTestId,
 }: CharacterCounterProps): ReactNode {
-  const remaining = maxLength - value.length;
+  const remaining = Math.max(maxLength - value.length, 0);
   const isAtLimit = remaining === 0;
 
   return (
     <Box
       data-testid={dataTestId}
-      sx={(theme: Theme) => ({
-        color: isAtLimit ? theme.vars.palette.text.warningText : theme.vars.palette.text.secondary,
-      })}
+      sx={combineSx(
+        (theme: Theme) => ({
+          color: isAtLimit ? theme.vars.palette.text.warningText : theme.vars.palette.text.secondary,
+          visibility: visible ? 'visible' : 'hidden',
+        }),
+        sx,
+      )}
     >
       <Typography variant={textVariant}>
         {remaining} {t('shared.ui.characterCounter.remaining', 'characters left')}

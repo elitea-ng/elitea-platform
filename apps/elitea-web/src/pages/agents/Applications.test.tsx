@@ -119,3 +119,48 @@ describe('Applications', () => {
     expect(header).toContainElement(screen.getByTestId('agents-import-button'));
   });
 });
+
+/*
+ * The header's own controls — the composition root, not the components.
+ * `ListSearchField.test.tsx` and `ListViewToggle.test.tsx` prove each control
+ * works; these tests prove this page MOUNTS them, which is the half that was
+ * missing (`ViewToggle` and the rail search box were both disclosed as
+ * unported in this page's module comment) and the half a component test can
+ * never see.
+ */
+describe('Applications — header controls', () => {
+  it('mounts the search box and the view toggle on a tab that has a list', async () => {
+    setConfig('1');
+    renderAgentsRoute(<Applications />, '/agents/all', { projectId: '2' });
+
+    expect(await screen.findByTestId('agent-search-input')).toBeInTheDocument();
+    expect(screen.getByTestId('agent-table-view-button')).toBeInTheDocument();
+    expect(screen.getByTestId('agent-card-view-button')).toBeInTheDocument();
+  });
+
+  it('omits both on a tab whose body has no rows to act on', async () => {
+    setConfig('1');
+    renderAgentsRoute(<Applications />, '/agents/trending', { projectId: '1' });
+
+    expect(await screen.findByTestId('agents-tab-trending')).toBeInTheDocument();
+    expect(screen.queryByTestId('agent-search-input')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('agent-table-view-button')).not.toBeInTheDocument();
+  });
+
+  it('hands the typed query to the tab body, which sends it to the server', async () => {
+    setConfig('1');
+    const seen: (string | null)[] = [];
+    server.use(
+      getListApplicationsMockHandler((info) => {
+        seen.push(new URL(info.request.url).searchParams.get('query'));
+        return emptyApplicationList();
+      }),
+    );
+    const user = userEvent.setup();
+    renderAgentsRoute(<Applications />, '/agents/all', { projectId: '2' });
+
+    await user.type(await screen.findByTestId('agent-search-input'), 'alpha');
+
+    await waitFor(() => expect(seen).toContain('alpha'));
+  });
+});

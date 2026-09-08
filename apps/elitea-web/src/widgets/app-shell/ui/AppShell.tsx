@@ -20,6 +20,7 @@ import {
 import { usePersonalProjectId } from '../model/usePersonalProjectId';
 import { useSelectedProject } from '../model/useSelectedProject.hooks';
 import { useSettleShellAfterProvisioning } from '../model/useSettleShellAfterProvisioning';
+import { BudgetWarningBanner } from './BudgetWarningBanner';
 import { MaintenanceSplash } from './MaintenanceSplash';
 import { NavBlockerDialog } from './NavBlockerDialog';
 import { PlatformBanner } from './PlatformBanner';
@@ -269,6 +270,12 @@ export function AppShell({ children }: AppShellProps): ReactNode {
             absolutely positioned at `zIndex: 2400`, which put it on top of
             every dialog in the app. */}
         <PlatformBanner banner={banner} />
+        {/* Below the platform banner on purpose: an operator's notice about
+            the deployment outranks one project's budget. Issue 312 — the
+            threshold read has existed since #322 with nothing calling it, so a
+            project went from "fine" to "every call refused" with no warning
+            between. */}
+        <BudgetWarningBanner projectId={selectedProjectId} projectName={project?.name} />
         {children}
         <NavBlockerDialog />
       </Box>

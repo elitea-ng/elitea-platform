@@ -43,6 +43,10 @@ export interface EntityLifecycleControlsProps {
   readonly activeVersionId: string | undefined;
   /** `application_versions.status` of the open version. */
   readonly activeVersionStatus: string | undefined;
+  /** Adds an Export item to the menu's ENTITY group. Omitted where the editor already carries an Export button. */
+  readonly onExport?: () => void;
+  /** Adds a Delete item to the menu's ENTITY group. The caller owns the confirmation dialog. */
+  readonly onDelete?: () => void;
 }
 
 export function EntityLifecycleControls({
@@ -54,6 +58,8 @@ export function EntityLifecycleControls({
   tab,
   activeVersionId,
   activeVersionStatus,
+  onExport,
+  onDelete,
 }: EntityLifecycleControlsProps): ReactNode {
   const [notice, setNotice] = useState<string>();
   const [error, setError] = useState<string>();
@@ -114,6 +120,7 @@ export function EntityLifecycleControls({
         isPublished={isPublished}
         {...(versionId === undefined ? {} : { onShareVersion: () => share(versionId) })}
         onShareEntity={() => share(undefined)}
+        {...entityActionHandlers(onExport, onDelete)}
         onFork={() => {
           setError(undefined);
           setNotice(undefined);
@@ -202,6 +209,24 @@ export function EntityLifecycleControls({
       />
     </Box>
   );
+}
+
+/**
+ * The two optional ENTITY-group handlers, as one spreadable object.
+ *
+ * Lives outside the component for the §3.5 cyclomatic-complexity budget (12),
+ * which two inline `undefined` checks take the component past — the same
+ * reason `pages/agents/ui/EditApplicationActions.tsx` moved its own optional
+ * unwrapping out of its call site.
+ */
+function entityActionHandlers(
+  onExport: (() => void) | undefined,
+  onDelete: (() => void) | undefined,
+): { onExport?: () => void; onDelete?: () => void } {
+  return {
+    ...(onExport === undefined ? {} : { onExport }),
+    ...(onDelete === undefined ? {} : { onDelete }),
+  };
 }
 
 /**

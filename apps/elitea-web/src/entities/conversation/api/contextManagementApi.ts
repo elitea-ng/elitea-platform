@@ -43,9 +43,27 @@ export async function getContextStatus(params: ConversationScopedParams, signal?
   );
 }
 
+/**
+ * The cache key of the context-status query, exported so a WRITER can
+ * invalidate it by the key the READER actually uses.
+ *
+ * DEFECT this closes. `widgets/context-budget`'s pencil invalidated
+ * `['GET', '/elitea_core/context_analytics/prompt_lib']` — the URL-shaped
+ * namespace a generated client would use, which nothing in this app has ever
+ * registered a query under. TanStack Query matches prefixes structurally, so
+ * that call matched zero queries and returned successfully: the panel kept
+ * reporting the budget the reader had just replaced until a reload. Calling
+ * this factory with no arguments yields the PREFIX (`['conversation',
+ * 'contextStatus']`), which invalidates every conversation's status.
+ */
+export function contextStatusQueryKey(params?: ConversationScopedParams): readonly unknown[] {
+  const root = ['conversation', 'contextStatus'] as const;
+  return params === undefined ? root : [...root, params.projectId, params.conversationId];
+}
+
 export function useGetContextStatusQuery(params: ConversationScopedParams, options: { enabled?: boolean } = {}): UseQueryResult<ContextStatusWire> {
   return useQuery({
-    queryKey: ['conversation', 'contextStatus', params.projectId, params.conversationId],
+    queryKey: contextStatusQueryKey(params),
     queryFn: ({ signal }) => getContextStatus(params, signal),
     enabled: options.enabled ?? true,
   });

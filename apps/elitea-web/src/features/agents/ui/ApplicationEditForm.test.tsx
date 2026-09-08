@@ -90,12 +90,19 @@ describe('ApplicationEditForm', () => {
     expect(onDescriptionChange).toHaveBeenCalledWith('x');
   });
 
-  it('shows the "0 characters left" hint only while the name field is focused at the max length', async () => {
+  it('shows the at-limit hint only while the name field is focused at the max length', async () => {
     renderForm({ name: 'x'.repeat(32) });
     const input = await screen.findByTestId('agent-name-input');
-    expect(screen.queryByText(/characters left/)).not.toBeInTheDocument();
+    // The name counter mounts only at the limit, so its absence is a real
+    // absence. The description counter is a different test id — it is always
+    // in the document (#848: never unmounted, only visibility-toggled).
+    expect(screen.queryByTestId('agent-name-counter')).not.toBeInTheDocument();
     await userEvent.setup().click(input);
-    expect(screen.getByText('0 characters left')).toBeInTheDocument();
+    const counter = screen.getByTestId('agent-name-counter');
+    // The whole sentence, not just the count: a name field at its limit tells
+    // the reader nothing more will be accepted (legacy
+    // `test_agent_character_limits.py`'s own assertion).
+    expect(counter).toHaveTextContent('0 characters left. You have reached the MAXIMUM character limit');
   });
 
   it('renders an existing tag passed via the tags prop', async () => {
@@ -106,9 +113,12 @@ describe('ApplicationEditForm', () => {
   it('shows the remaining-characters hint while the description field is focused and non-empty', async () => {
     renderForm({ description: 'Does things' });
     const input = await screen.findByTestId('agent-description-input');
-    expect(screen.queryByText(/characters left/)).not.toBeInTheDocument();
+    // #848 — the counter's line is now reserved always (never unmounted),
+    // so the SAME node is found before focus too; only its visibility toggles.
+    const counter = screen.getByText(`${2304 - 'Does things'.length} characters left`);
+    expect(counter).not.toBeVisible();
     await userEvent.setup().click(input);
-    expect(screen.getByText(`${2304 - 'Does things'.length} characters left`)).toBeInTheDocument();
+    expect(counter).toBeVisible();
   });
 
   it('re-syncs the local name field when the name prop changes externally (e.g. a discard/reset)', async () => {
@@ -191,9 +201,12 @@ describe('ApplicationEditForm', () => {
     const input = await screen.findByTestId('agent-description-input');
     const user = userEvent.setup();
     await user.click(input);
-    expect(screen.getByText(/characters left/)).toBeInTheDocument();
+    // #848 — the same node persists across blur (never unmounted); only its
+    // visibility toggles back to hidden.
+    const counter = screen.getByText(`${2304 - 'Does things'.length} characters left`);
+    expect(counter).toBeVisible();
     await user.tab();
-    expect(screen.queryByText(/characters left/)).not.toBeInTheDocument();
+    expect(counter).not.toBeVisible();
   });
 
   it('opens the tag dropdown with a pre-selected tag, exercising option/value equality for both the existing chip and freeSolo strings', async () => {

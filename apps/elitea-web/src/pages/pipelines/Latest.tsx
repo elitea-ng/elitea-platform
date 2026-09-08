@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 
 import Box from '@mui/material/Box';
 import type { SxProps, Theme } from '@mui/material/styles';
@@ -8,7 +8,7 @@ import { useNavigate } from '@tanstack/react-router';
 import { filterAppsByQuery, normaliseAppPage, type App } from '@/entities/app';
 import { useListPublicApplications } from '@/shared/api/generated/applications/applications';
 import { t } from '@/shared/i18n';
-import { SimpleSearchBar } from '@/shared/ui/SimpleSearchBar';
+import { useListSearchQuery } from '@/widgets/page-header';
 
 import { PipelineListPanel, type PipelineListRow } from './ui/PipelineListPanel';
 
@@ -49,8 +49,15 @@ function isPipelineRow(app: App): boolean {
  */
 export function Latest(): ReactNode {
   const navigate = useNavigate();
-  const [query, setQuery] = useState('');
+  // The search box is the page HEADER's (`widgets/page-header`'s
+  // `ListSearchField`); its value reaches this tab as the route's `query`
+  // search param.
+  const query = useListSearchQuery();
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+
+  useEffect(() => {
+    setVisibleCount(PAGE_SIZE);
+  }, [query]);
 
   const listQuery = useListPublicApplications({});
   // `.data.data`'s declared type includes no error-envelope variant on this
@@ -68,14 +75,6 @@ export function Latest(): ReactNode {
 
   return (
     <Box sx={containerSx}>
-      <SimpleSearchBar
-        value={query}
-        onChange={(next) => {
-          setQuery(next);
-          setVisibleCount(PAGE_SIZE);
-        }}
-        placeholder={t('pages.pipelines.latest.search', 'Search')}
-      />
       <PipelineListPanel
         rows={visibleRows.map(
           (app): PipelineListRow => ({ id: app.id, name: app.name, description: app.description }),

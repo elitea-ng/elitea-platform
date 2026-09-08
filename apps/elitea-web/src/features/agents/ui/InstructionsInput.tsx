@@ -21,6 +21,7 @@ import type { FileReaderInputHandle, MentionableTool } from '../lib/hooks/useIns
 import { useInstructionsSkillMention } from '../lib/hooks/useInstructionsSkillMention.hooks';
 import type { FilteredSkillMentionItem } from '../lib/hooks/useInstructionsSkillMention.hooks';
 
+import { InstructionsFullscreenButton } from './InstructionsFullscreenButton';
 import { InstructionsSlashSuggestionList } from './InstructionsSlashSuggestionList';
 
 /**
@@ -326,6 +327,7 @@ export function InstructionsInput({
       title: 'Instructions',
       content: (
         <Box sx={wrapperSx}>
+          <InstructionsFullscreenButton value={instructions ?? ''} onChange={handleChange} disabled={disabled} />
           <CodeMirrorEditor
             value={instructions ?? ''}
             onChange={handleChange}

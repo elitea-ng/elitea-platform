@@ -557,3 +557,113 @@ fn resume_payload(interrupt_id: &str, action: &str, value: &str) -> AgentExecuti
         truncated_content: None,
     }
 }
+
+/// A SECOND question on a conversation that already answered one.
+///
+/// The graph's checkpoint thread is the conversation, and ADK's executor opens
+/// every run by restoring whatever checkpoint that thread holds — including
+/// the terminal one a finished run leaves, whose `pending_nodes` is empty. A
+/// second turn assembled without `starting_a_fresh_run` therefore executes NO
+/// node and completes instantly on the FIRST turn's state: measured here as
+/// the bare "Pipeline completed." marker, and measured in CI run 34191944006
+/// as a pipeline test chat whose second answer was the first answer verbatim
+/// (`chat.pipeline-execution.spec.ts`).
+///
+/// The two runs deliberately share ONE checkpointer and ONE session, because
+/// that sharing is the defect's whole mechanism — a test that gave the second
+/// turn its own checkpointer would pass against the broken code.
+#[tokio::test]
+async fn a_second_question_runs_the_graph_again_on_its_own_input() {
+    let definition = PipelineDefinition::from_yaml(
+        r#"
+state:
+  input:
+    type: str
+  messages:
+    type: list
+  final_text:
+    type: str
+    value: ""
+entry_point: transform
+nodes:
+  - id: transform
+    type: state_modifier
+    template: "echo {{ input }}"
+    input: [input]
+    output: [final_text]
+    transition: END
+"#,
+    )
+    .expect("two-turn pipeline");
+    let checkpointer: Arc<dyn Checkpointer> = Arc::new(MemoryCheckpointer::new());
+    let sessions = Arc::new(InMemorySessionService::new());
+    sessions
+        .create(CreateRequest {
+            app_name: APP.to_owned(),
+            user_id: USER.to_owned(),
+            session_id: Some(THREAD.to_owned()),
+            state: HashMap::new(),
+        })
+        .await
+        .expect("pipeline session");
+
+    let first = definition
+        .compile(ROOT, Arc::clone(&checkpointer), None)
+        .expect("first graph");
+    assert_eq!(
+        fresh_run_text(first, Arc::clone(&checkpointer), sessions.clone(), "alpha").await,
+        "echo alpha"
+    );
+
+    let second = definition
+        .compile(ROOT, Arc::clone(&checkpointer), None)
+        .expect("second graph");
+    assert_eq!(
+        fresh_run_text(second, Arc::clone(&checkpointer), sessions.clone(), "beta").await,
+        "echo beta",
+        "the second question was answered from the first turn's checkpoint instead of being run"
+    );
+}
+
+/// Run one FRESH turn — the shape `assemble_pipeline_native` builds for a
+/// question that is not continuing a pause — and return its terminal text.
+async fn fresh_run_text(
+    graph: adk_rust::graph::GraphAgent,
+    checkpointer: Arc<dyn Checkpointer>,
+    sessions: Arc<InMemorySessionService>,
+    input: &str,
+) -> String {
+    let session_service: Arc<dyn SessionService> = sessions;
+    let runner = Runner::builder()
+        .app_name(APP)
+        .agent(Arc::new(
+            EliteaGraphAgent::new(graph).starting_a_fresh_run(checkpointer),
+        ))
+        .session_service(session_service)
+        .build()
+        .expect("pipeline runner");
+    let invocation = NativeAgentInvocation::new(
+        runner,
+        UserId::new(USER).expect("fixture user"),
+        SessionId::new(THREAD).expect("fixture session"),
+        Content::new("user").with_text(input),
+    );
+    let mut running = invocation.start().expect("pipeline invocation");
+    let mut last = String::new();
+    loop {
+        match running.next_event().await {
+            Ok(Some(event)) => {
+                if let Some(content) = event.content() {
+                    for part in &content.parts {
+                        if let Part::Text { text } = part {
+                            last.clone_from(text);
+                        }
+                    }
+                }
+            }
+            Ok(None) => break,
+            Err(error) => panic!("pipeline event failed: {error}"),
+        }
+    }
+    last
+}

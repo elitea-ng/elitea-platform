@@ -36,6 +36,7 @@ import type { UseMutationResult, UseQueryOptions, UseQueryResult } from '@tansta
 import { batchTestConfigurationConnection, testConfigurationConnection } from './configurationConnections';
 import type { BatchTestConnectionItem, BatchTestResultRow } from './configurationConnections';
 import {
+  batchCheckStoredConfigurationConnections,
   checkStoredConfigurationConnection,
   createConfiguration,
   deleteConfiguration,
@@ -52,6 +53,7 @@ import type {
   GetAvailableConfigurationsTypeParams,
   GetConfigurationsListParams,
   StoredConnectionCheckResult,
+  StoredConnectionCheckRow,
   UpdateConfigurationBody,
 } from './configurations';
 
@@ -260,5 +262,24 @@ export function useCheckStoredConfigurationConnection(): UseMutationResult<
 > {
   return useMutation({
     mutationFn: ({ projectId, configId }) => checkStoredConfigurationConnection(projectId, configId),
+  });
+}
+
+/**
+ * The batch form of {@link useCheckStoredConfigurationConnection}.
+ *
+ * It ALWAYS answers 200 with one row per requested id, in request order, so a
+ * failing item is a row and never a rejection — the credential picker marks
+ * every credential invalid when the request itself fails, and a 4xx would paint
+ * a healthy project red (`internal/api/v2/configurations/stored_check.go` says
+ * so at its own call site).
+ */
+export function useBatchCheckStoredConfigurationConnections(): UseMutationResult<
+  StoredConnectionCheckRow[],
+  Error,
+  { projectId: string | number; configurationIds: readonly string[] }
+> {
+  return useMutation({
+    mutationFn: ({ projectId, configurationIds }) => batchCheckStoredConfigurationConnections(projectId, configurationIds),
   });
 }

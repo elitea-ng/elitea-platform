@@ -1706,3 +1706,144 @@ func TestDeleteMessage_ForwardsAnEmptyIdentityWhenUnauthenticated(t *testing.T) 
 		t.Fatalf("an unauthenticated request forwarded caller %q, want empty", repo.deleteMessageUserID)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// meta — the conversation's own settings document
+//
+// The chat composer's Modules panel is a CONVERSATION setting: switching one
+// on PUTs `meta.internal_tools` and the panel reads its state back from the
+// details response. This route read neither key, so every switch answered 200
+// and stored nothing, and a reloaded conversation offered all of them off.
+// ---------------------------------------------------------------------------
+
+func TestUpdate_WritesTheMetaTheBodyCarries(t *testing.T) {
+	var seen map[string]any
+	repo := &mockRepo{
+		updateFn: func(_ context.Context, projectID, conversationID string, conv conversations.Conversation) (conversations.Conversation, error) {
+			seen = conv.Meta
+			conv.ID = conversationID
+			conv.ProjectID = projectID
+			return conv, nil
+		},
+	}
+	router := newRouter(conversations.NewHandler(repo))
+
+	req := httptest.NewRequest(http.MethodPut, "/projects/proj-1/conversations/conv-1",
+		bytes.NewReader([]byte(`{"meta":{"internal_tools":["planner"]}}`)))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	tools, _ := seen["internal_tools"].([]any)
+	if len(tools) != 1 || tools[0] != "planner" {
+		t.Fatalf("the repository was asked to store %v, want internal_tools [planner]", seen)
+	}
+	var answered conversations.Conversation
+	if err := json.NewDecoder(w.Body).Decode(&answered); err != nil {
+		t.Fatal(err)
+	}
+	if answered.Meta == nil || answered.Meta["internal_tools"] == nil {
+		t.Errorf("the update answered %v, which does not describe the conversation it just wrote", answered.Meta)
+	}
+}
+
+func TestUpdate_LeavesMetaAloneWhenTheBodyDoesNotStateIt(t *testing.T) {
+	stated := true
+	repo := &mockRepo{
+		updateFn: func(_ context.Context, _, conversationID string, conv conversations.Conversation) (conversations.Conversation, error) {
+			stated = conv.Meta != nil
+			conv.ID = conversationID
+			return conv, nil
+		},
+	}
+	router := newRouter(conversations.NewHandler(repo))
+
+	// A rename. It must not blank the conversation's settings.
+	req := httptest.NewRequest(http.MethodPut, "/projects/proj-1/conversations/conv-1",
+		bytes.NewReader([]byte(`{"name":"Renamed"}`)))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(httptest.NewRecorder(), req)
+
+	if stated {
+		t.Error("a rename asked the repository to write a meta document the caller never sent")
+	}
+}
+
+func TestGet_AnswersTheStoredMeta(t *testing.T) {
+	repo := &mockRepo{
+		getFn: func(_ context.Context, projectID, conversationID string) (conversations.Conversation, error) {
+			return conversations.Conversation{
+				ID: conversationID, ProjectID: projectID, Name: "test",
+				Meta: map[string]any{"internal_tools": []any{"planner"}},
+			}, nil
+		},
+	}
+	router := newRouter(conversations.NewHandler(repo))
+
+	req := httptest.NewRequest(http.MethodGet, "/projects/proj-1/conversations/conv-1", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	var body map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	meta, ok := body["meta"].(map[string]any)
+	if !ok {
+		t.Fatalf("the details response carries no meta object: %v", body)
+	}
+	tools, _ := meta["internal_tools"].([]any)
+	if len(tools) != 1 || tools[0] != "planner" {
+		t.Errorf("details answered internal_tools %v, want [planner]", meta["internal_tools"])
+	}
+}
+
+func TestGet_AnswersAnEmptyMetaRatherThanNull(t *testing.T) {
+	repo := &mockRepo{
+		getFn: func(_ context.Context, projectID, conversationID string) (conversations.Conversation, error) {
+			return conversations.Conversation{ID: conversationID, ProjectID: projectID}, nil
+		},
+	}
+	router := newRouter(conversations.NewHandler(repo))
+
+	req := httptest.NewRequest(http.MethodGet, "/projects/proj-1/conversations/conv-1", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	var body map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := body["meta"].(map[string]any); !ok {
+		t.Errorf("a conversation with no settings answered meta %#v, want an object", body["meta"])
+	}
+}
+
+func TestCreate_CarriesTheMetaTheFirstSendSends(t *testing.T) {
+	var seen map[string]any
+	repo := &mockRepo{
+		createFn: func(_ context.Context, projectID string, conv conversations.Conversation) (conversations.Conversation, error) {
+			seen = conv.Meta
+			conv.ID = "1"
+			conv.ProjectID = projectID
+			return conv, nil
+		},
+	}
+	router := newRouter(conversations.NewHandler(repo))
+
+	req := httptest.NewRequest(http.MethodPost, "/projects/proj-1/conversations/",
+		bytes.NewReader([]byte(`{"name":"c","meta":{"steps_limit":7}}`)))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d", w.Code)
+	}
+	if seen == nil || seen["steps_limit"] == nil {
+		t.Errorf("the repository was asked to store %v, which drops the step limit the composer sent", seen)
+	}
+}

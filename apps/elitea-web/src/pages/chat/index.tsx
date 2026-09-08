@@ -31,6 +31,7 @@
 import type { ComponentProps } from 'react';
 import { memo, useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams, useSearch } from '@tanstack/react-router';
+import { useQueryClient } from '@tanstack/react-query';
 
 import Box from '@mui/material/Box';
 
@@ -136,6 +137,7 @@ export interface ChatPageProps {
 
 const ChatPage = memo(({ editorCallbacks, entitySubmenus }: ChatPageProps) => {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { conversationId: routeConversationId } = useParams({ strict: false }) as { conversationId?: string };
   const { conversationId, messageId } = useDeepLinkedConversationId(routeConversationId);
   const { projectId, user, activeConversation, isLoadingConversation } = useChatPageData({ conversationId });
@@ -148,12 +150,29 @@ const ChatPage = memo(({ editorCallbacks, entitySubmenus }: ChatPageProps) => {
   // Baseline default: collapsed (`NewChat.jsx:166`).
   const [participantsCollapsed, setParticipantsCollapsed] = useState(true);
 
+  /**
+   * A conversation is written by the FIRST SEND, not by a button
+   * (`useChatBoxSend.ts`'s `createConversationForSend`), so this callback is
+   * the only place the app learns that the rail's listing is now out of date.
+   *
+   * The rail reads `folderApi.useList`, a cached query nothing else
+   * invalidates: every folder mutation invalidates `['folder', 'list']`, but
+   * no conversation one did. So a conversation created by a send appeared in
+   * the route and in the transcript and was simply missing from the rail
+   * beside it until something else happened to refetch. The baseline does the
+   * same thing at the same layer (`NewChat.jsx:459`,
+   * `invalidateTags([TAG_TYPE_FOLDERS])`).
+   *
+   * Invalidate, not refetch: the key already holds data, so the listing keeps
+   * showing while it revalidates instead of collapsing to skeletons.
+   */
   const handleConversationCreated = useCallback(
     (created: { readonly id?: string | number }) => {
       if (created.id === undefined) return;
+      void queryClient.invalidateQueries({ queryKey: ['folder', 'list'] });
       void navigate({ to: '/chat/$conversationId', params: { conversationId: String(created.id) } });
     },
-    [navigate],
+    [navigate, queryClient],
   );
 
   // Restore the conversation's last-active participant once its real

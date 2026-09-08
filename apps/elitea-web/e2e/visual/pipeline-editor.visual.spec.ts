@@ -297,6 +297,53 @@ async function addNodeThroughMenu(page: Page, label: string): Promise<void> {
   // or the shot photographs a closing popover. Its own transition is frozen by
   // `settle()`, but only after it has been removed from the DOM.
   await expect(page.getByRole('menu')).toHaveCount(0, { timeout: 10_000 });
+  await pinScrollToTop(page);
+}
+
+/**
+ * Put every scroll position back to zero, and prove it stayed there.
+ *
+ * NOTHING IN THIS SUITE PINNED SCROLL, and the Add-node menu moves it. MUI's
+ * `Menu` returns focus to the control that opened it when it closes, and the
+ * browser scrolls that control into view; with three nodes added the editor
+ * body was photographed 40px up on two runs in three, which reads as a whole-
+ * frame diff on `pipeline-editor-authored-graph` and says nothing about the
+ * graph the shot exists for.
+ *
+ * `settle()` freezes MOTION; a scroll offset is not motion, it is state, so it
+ * belongs here rather than there — and this file is the only one that drives a
+ * portal menu before a shutter.
+ *
+ * ReactFlow's canvas is unaffected: it pans with a CSS transform on
+ * `.react-flow__viewport`, and has no scroll offset to reset.
+ */
+async function pinScrollToTop(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    (document.activeElement as HTMLElement | null)?.blur();
+    window.scrollTo(0, 0);
+    for (const element of document.querySelectorAll('*')) {
+      const node = element as HTMLElement;
+      if (node.scrollTop !== 0) node.scrollTop = 0;
+      if (node.scrollLeft !== 0) node.scrollLeft = 0;
+    }
+  });
+  // Read back rather than assumed: a container that scrolls itself again after
+  // the write is the case this helper exists for, and it must fail here with a
+  // name instead of as an unexplained pixel diff.
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          () =>
+            window.scrollY +
+            window.scrollX +
+            Array.from(document.querySelectorAll('*')).filter(
+              (element) => (element as HTMLElement).scrollTop !== 0 || (element as HTMLElement).scrollLeft !== 0,
+            ).length,
+        ),
+      { timeout: 10_000, message: 'the editor kept a scroll offset the shot cannot reproduce' },
+    )
+    .toBe(0);
 }
 
 /**
@@ -405,6 +452,9 @@ test('@visual pipeline-editor-authored-graph', async ({ page }) => {
   await expect(page.getByTestId('node-admission-issues')).toHaveCount(0);
   await expect(page.getByTestId('graph-admission-gate')).toHaveCount(0);
   await expect(page.getByTestId('edit-pipeline-test-chat-disabled')).toBeVisible({ timeout: 20_000 });
+  // Once more after the assertions above: each one can move focus, and focus
+  // moves scroll.
+  await pinScrollToTop(page);
   await settle(page);
 
   await expect(page).toHaveScreenshot('pipeline-editor-authored-graph.png', {

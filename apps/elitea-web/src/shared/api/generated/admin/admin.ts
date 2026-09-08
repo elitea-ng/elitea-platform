@@ -58,6 +58,8 @@ import type {
   BrandingPackageReport,
   BrandingSettings,
   BrandingSettingsSave,
+  BulkInviteRequest,
+  BulkInviteSummary,
   CancelBackgroundJobParams,
   ErrorResponse,
   GetUserProjectPermissionsParams,
@@ -1926,6 +1928,258 @@ export function useInviteUserGlobally<
 } {
   const queryOptions = getInviteUserGloballyQueryOptions(
     globalUserInviteRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type bulkInviteMembersResponse200 = {
+  data: BulkInviteSummary;
+  status: 200;
+};
+
+export type bulkInviteMembersResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type bulkInviteMembersResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type bulkInviteMembersResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type bulkInviteMembersResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type bulkInviteMembersResponseSuccess = bulkInviteMembersResponse200 & {
+  headers: Headers;
+};
+export type bulkInviteMembersResponseError = (
+  | bulkInviteMembersResponse400
+  | bulkInviteMembersResponse401
+  | bulkInviteMembersResponse403
+  | bulkInviteMembersResponse500
+) & {
+  headers: Headers;
+};
+
+export type bulkInviteMembersResponse =
+  bulkInviteMembersResponseSuccess | bulkInviteMembersResponseError;
+
+export const getBulkInviteMembersUrl = () => {
+  return `/admin/invites_bulk/administration`;
+};
+
+/**
+ * The admin cross-project bulk membership invite. Every listed account is
+ * added to every listed project with the one named role, and every
+ * (user, project) pair reports its own outcome.
+ *
+ * It replaces two pylon console pages —
+ * `legacy/plugins/admin/api/v2/invites_bulkusers.py` ("add every user to
+ * one project") and `invites_bulkprojects.py` ("add one user to many
+ * projects") — which are the same cross product with one side pinned.
+ * Both declare their own permission, and this route accepts either.
+ *
+ * Four differences from pylon are deliberate and are recorded in
+ * `internal/api/v2/admin/invites_bulk.go`:
+ *
+ * - The role set is ADDED to, never replaced. pylon's write replaces
+ *   every role the account holds in the project, which run over "all
+ *   users" demotes every existing project admin.
+ * - Per-pair outcomes, not one English log blob.
+ * - Ids and one typed role name, not comma-separated free text.
+ * - A personal project is refused: it is one account's own space and a
+ *   bulk form may not place a stranger in it.
+ *
+ * One transaction per pair, so a project that does not define the role
+ * cannot roll back the pairs that succeeded. Re-running the same batch is
+ * safe: the second run reports `already_member` for every pair.
+ * @summary Add many users to many projects with one role
+ */
+export const bulkInviteMembers = async (
+  bulkInviteRequest: BulkInviteRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<bulkInviteMembersResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+  return eliteaFetch<bulkInviteMembersResponse>(getBulkInviteMembersUrl(), {
+    ...options,
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...getHeaders(options?.headers),
+    },
+    body: JSON.stringify(bulkInviteRequest),
+  });
+};
+
+export const getBulkInviteMembersQueryKey = (
+  bulkInviteRequest?: BulkInviteRequest,
+) => {
+  return [
+    "POST",
+    `/admin/invites_bulk/administration`,
+    bulkInviteRequest,
+  ] as const;
+};
+
+export const getBulkInviteMembersQueryOptions = <
+  TData = Awaited<ReturnType<typeof bulkInviteMembers>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  bulkInviteRequest: BulkInviteRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof bulkInviteMembers>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getBulkInviteMembersQueryKey(bulkInviteRequest);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof bulkInviteMembers>>
+  > = ({ signal }) =>
+    bulkInviteMembers(bulkInviteRequest, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof bulkInviteMembers>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type BulkInviteMembersQueryResult = NonNullable<
+  Awaited<ReturnType<typeof bulkInviteMembers>>
+>;
+export type BulkInviteMembersQueryError =
+  N400Response | N401Response | N403Response | N500Response;
+
+export function useBulkInviteMembers<
+  TData = Awaited<ReturnType<typeof bulkInviteMembers>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  bulkInviteRequest: BulkInviteRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof bulkInviteMembers>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof bulkInviteMembers>>,
+          TError,
+          Awaited<ReturnType<typeof bulkInviteMembers>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useBulkInviteMembers<
+  TData = Awaited<ReturnType<typeof bulkInviteMembers>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  bulkInviteRequest: BulkInviteRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof bulkInviteMembers>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof bulkInviteMembers>>,
+          TError,
+          Awaited<ReturnType<typeof bulkInviteMembers>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useBulkInviteMembers<
+  TData = Awaited<ReturnType<typeof bulkInviteMembers>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  bulkInviteRequest: BulkInviteRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof bulkInviteMembers>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Add many users to many projects with one role
+ */
+
+export function useBulkInviteMembers<
+  TData = Awaited<ReturnType<typeof bulkInviteMembers>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  bulkInviteRequest: BulkInviteRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof bulkInviteMembers>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getBulkInviteMembersQueryOptions(
+    bulkInviteRequest,
     options,
   );
 

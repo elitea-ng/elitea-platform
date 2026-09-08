@@ -135,6 +135,19 @@ adminTest('J37: the landing page offers a nav, and marks the page it is showing'
 });
 
 adminTest('J37b: every one of the admin pages is reachable by CLICKING the nav', async ({ page }) => {
+  /*
+   * THIRTEEN PAGES AND AN AXE PASS, in one test, on purpose: "the nav reaches
+   * every page" is one claim, and splitting it per item would let a nav that
+   * forgets an item still report twelve greens.
+   *
+   * The default 30 s budget is for a test that opens ONE screen. This one loads
+   * thirteen admin routes, each with its own listing request, and then runs the
+   * accessibility pass over the last of them. On webkit it reached the final
+   * item, `Budgets`, and ran out of time inside `checkA11y` — the timing the
+   * indexing journey already hit for the same reason. The budget names what the
+   * test does instead of trimming what it proves.
+   */
+  adminTest.setTimeout(120_000);
   await openAdminLanding(page);
   const nav = page.getByRole('navigation', { name: 'Admin navigation' });
 

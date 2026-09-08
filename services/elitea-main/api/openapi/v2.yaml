@@ -525,6 +525,7 @@ components:
             - enabled
             - warning_pct
             - percent_used
+            - warning_active
             - spend_available
           properties:
             can_see_amounts:
@@ -579,6 +580,24 @@ components:
               type: number
               nullable: true
               description: Null when the scope is unlimited or the limit is zero.
+            warning_active:
+              type: boolean
+              description: |
+                True when `percent_used` has reached `warning_pct` — the
+                soft-alert threshold this scope resolves, which is the
+                project's own value, else the platform value an operator set
+                through `PUT /admin/gateway/budget-alerts`, else 80.
+
+                The server answers it rather than each client deriving it, so a
+                warning banner and the percentage beside it cannot disagree,
+                and so the comparison is made once against the same resolved
+                threshold the gateway alerts on. False whenever there is
+                nothing to warn about: an unlimited scope, a disabled one and a
+                zero ceiling all report a null `percent_used`.
+
+                It is not a cost figure and is never redacted: a member who may
+                not see the amounts still learns the project is close to its
+                limit.
             spend_available:
               type: boolean
               description: |
@@ -1761,6 +1780,15 @@ components:
             it arrived as, so a client can match a row to its request.
         success: { type: boolean }
         message: { type: string }
+        reason:
+          type: string
+          description: >
+            The machine-readable verdict of a TOOLKIT credential probe
+            (internal/api/v2/configurations/toolkit_check.go). Absent for an
+            ai_credentials provider. unsupported_type means this build carries
+            no probe for the type, which is NOT evidence that the credential is
+            broken and must not be shown as one.
+          enum: [ok, auth_failed, unreachable, unsupported_type]
         unsupported:
           type: boolean
           description: The configuration's type is not registered in this build.
@@ -2331,11 +2359,44 @@ components:
           description: Numeric id serialized as string (strconv.Itoa).
         name: { type: string }
         status: { type: string }
-        agent_type: { type: string }
+        agent_type:
+          type: string
+          description: >
+            Kept although pylon's ApplicationVersionListModel excluded it:
+            apps/elitea-web reads it off the summary to shape the version
+            dropdown (pages/agents/lib/editApplicationMappers.ts
+            toVersionSummaries, and its pipeline twin).
         created_at: { type: string, format: date-time }
+        instructions:
+          type: string
+          description: >
+            The version's prompt text, always present as "" when the column is
+            NULL (COALESCE in getVersions). Restored for issue 844 — the
+            projection dropped it, so a client reading the prompt off the
+            version LIST saw null on a response that otherwise looked complete.
+        meta:
+          allOf: [{ $ref: '#/components/schemas/VersionMeta' }]
+          nullable: true
+          description: >
+            application_versions.meta, the same jsonb ApplicationVersionDetail
+            carries. Restored for issue 844 alongside instructions; `{}` when
+            the column is NULL.
+        is_default:
+          type: boolean
+          description: >
+            Derived, not stored: true when the owning application's
+            meta.default_version_id names this row. Emitted since the
+            default-version bar was wired, and read by
+            apps/elitea-web/src/pages/{agents,pipelines}/lib/*Mappers.ts and
+            features/agents/model/useVersionBarCommands.ts — it was simply
+            absent from this schema, which is why those readers cast it off the
+            wire.
       description: >
         NOTE(W2): getVersions row map,
-        internal/api/v2/applications/handler.go:159-165.
+        internal/api/v2/applications/handler.go:216-243. The handler emits ALL
+        eight keys on every row; `required` lists only the five the schema
+        carried before issue 844, so that adding the other three stays additive
+        for the generated fixtures rather than invalidating every existing one.
 
     VersionToolRef:
       type: object
@@ -4586,14 +4647,17 @@ components:
         elitea_title:
           type: string
           description: >
-            `reviewed` only. The row's stored title. `compat` serves the same
-            column as `name`.
+            BOTH. The row's stored title, and the name every reader resolves a
+            credential by: a toolkit stores the reference
+            `{"github_configuration": {"elitea_title": …}}`, and the credential
+            picker builds its options from this field. `compat` served the
+            column as `name` alone until the two were aligned, so against that
+            handler the picker offered nothing to link.
         name:
           type: string
           description: >
-            `compat` only. The same column `reviewed` serves as
-            `elitea_title`. A client that must read both routes reads
-            `elitea_title ?? name`.
+            `compat` only, and the same column it also serves as
+            `elitea_title`. Kept for the clients that already read it.
         label:
           type: string
           nullable: true
@@ -6472,6 +6536,20 @@ components:
         versions:
           type: array
           items: { $ref: '#/components/schemas/VersionWriteRequest' }
+          description: >
+            On THIS route `versions[].agent_type` accepts `openai`, `react`,
+            `dial`, `pipeline`, `agent` and the empty string, and nothing else;
+            `versions[0]` decides, and any other value is refused on the agents
+            error channel with "invalid agent_type"
+            (internal/api/v2/eliteacore/handler.go, storedAgentType).
+
+            `agent` and the empty string are both STORED as `openai`. `agent`
+            is accepted because the platform's own markdown export writes it
+            for a stored `openai` agent (export_markdown.go,
+            markdownAgentType, mirroring pylon's _application_to_md), so
+            without the mapping an exported `.agent.md` file was not importable
+            through this API — only through a web client, which renames the
+            value in its own file parser (issue 845).
       additionalProperties: true
       x-elitea-passthrough: >-
         NOTE(W2): entities are handled as map[string]any. The import reads
@@ -7668,6 +7746,100 @@ components:
         invitation_delivery:
           type: string
           description: What happened to the e-mail, in full.
+
+    BulkInviteRequest:
+      type: object
+      required: [users, projects, role]
+      description: >
+        NOTE(W2): internal/api/v2/admin/invites_bulk.go:110-114. The cross
+        product the console submits: every listed account is added to every
+        listed project with the one named role.
+      properties:
+        users:
+          type: array
+          minItems: 1
+          items: { type: integer, format: int64 }
+          description: Platform user ids, from the admin user listing.
+        projects:
+          type: array
+          minItems: 1
+          items: { type: integer, format: int64 }
+          description: Project ids, from the admin project listing.
+        role:
+          type: string
+          description: >
+            ONE role name, resolved per project against
+            auth_core__project_role. A project that does not define it is
+            refused for that pair, never given another project's role row.
+
+    BulkInviteResult:
+      type: object
+      required: [user_id, user_email, project_id, project_name, status, outcome, msg]
+      description: >
+        NOTE(W2): internal/api/v2/admin/invites_bulk.go:121-129. One (user,
+        project) pair's outcome.
+      properties:
+        user_id: { type: integer, format: int64 }
+        user_email:
+          type: string
+          description: Empty when the id resolved to no account.
+        project_id: { type: integer, format: int64 }
+        project_name:
+          type: string
+          description: Empty when the id resolved to no project.
+        status:
+          type: string
+          enum: [ok, error]
+          description: >
+            The coarse verdict. `ok` covers both `added` and `already_member`:
+            the account holds the role in the project either way.
+        outcome:
+          type: string
+          enum:
+            - added
+            - already_member
+            - unknown_user
+            - unknown_project
+            - unknown_role
+            - system_user
+            - personal_project
+            - failed
+          description: >
+            The machine-readable reason. pylon returned one English log blob
+            for the whole batch, so a console could not tell "added" from
+            "was already a member" without matching on prose.
+        msg:
+          type: string
+          description: The same outcome in English, for a log pane.
+
+    BulkInviteSummary:
+      type: object
+      required: [ok, role, requested, added, skipped, failed, results]
+      description: >
+        NOTE(W2): internal/api/v2/admin/invites_bulk.go:135-143.
+      properties:
+        ok:
+          type: boolean
+          description: >
+            False as soon as one pair ended in anything but `added` or
+            `already_member`. The response is still 200 — the batch is a
+            report, and a 400 would say nothing landed when something did.
+        role:
+          type: string
+          description: The role that was requested, echoed back.
+        requested:
+          type: integer
+          description: >
+            The size of the cross product after duplicate and non-positive ids
+            were dropped, so it can differ from the submitted array lengths.
+        added: { type: integer }
+        skipped:
+          type: integer
+          description: Pairs whose account was already a member with that role.
+        failed: { type: integer }
+        results:
+          type: array
+          items: { $ref: '#/components/schemas/BulkInviteResult' }
 
     UserProjectRoleMap:
       type: object
@@ -8899,6 +9071,56 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/GlobalUserInviteResult'
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500': { $ref: '#/components/responses/500' }
+
+  /admin/invites_bulk/administration:
+    post:
+      operationId: bulkInviteMembers
+      summary: Add many users to many projects with one role
+      description: |
+        The admin cross-project bulk membership invite. Every listed account is
+        added to every listed project with the one named role, and every
+        (user, project) pair reports its own outcome.
+
+        It replaces two pylon console pages —
+        `legacy/plugins/admin/api/v2/invites_bulkusers.py` ("add every user to
+        one project") and `invites_bulkprojects.py` ("add one user to many
+        projects") — which are the same cross product with one side pinned.
+        Both declare their own permission, and this route accepts either.
+
+        Four differences from pylon are deliberate and are recorded in
+        `internal/api/v2/admin/invites_bulk.go`:
+
+        - The role set is ADDED to, never replaced. pylon's write replaces
+          every role the account holds in the project, which run over "all
+          users" demotes every existing project admin.
+        - Per-pair outcomes, not one English log blob.
+        - Ids and one typed role name, not comma-separated free text.
+        - A personal project is refused: it is one account's own space and a
+          bulk form may not place a stranger in it.
+
+        One transaction per pair, so a project that does not define the role
+        cannot roll back the pairs that succeeded. Re-running the same batch is
+        safe: the second run reports `already_member` for every pair.
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BulkInviteRequest'
+      responses:
+        '200':
+          description: >
+            The per-pair report. 200 even when `ok` is false — read `failed`
+            and each result's `outcome`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BulkInviteSummary'
         '400': { $ref: '#/components/responses/400' }
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
@@ -17343,6 +17565,17 @@ paths:
                     type: boolean
                     description: Always true on this response.
                   message: { type: string }
+                  reason:
+                    type: string
+                    description: >
+                      The machine-readable verdict of a TOOLKIT credential
+                      probe: one of ok, auth_failed, unreachable,
+                      unsupported_type (internal/api/v2/configurations/
+                      toolkit_check.go). Absent for an ai_credentials
+                      provider, whose own reason vocabulary is already
+                      collapsed into message by the gateway path. Read message
+                      for the text; switch on this only where it is present.
+                    enum: [ok, auth_failed, unreachable, unsupported_type]
         '400':
           description: >
             The provider rejected the credential, the type has no working check
@@ -17360,6 +17593,17 @@ paths:
                     type: boolean
                     description: Always false on this response.
                   message: { type: string }
+                  reason:
+                    type: string
+                    description: >
+                      The machine-readable verdict of a TOOLKIT credential
+                      probe: one of ok, auth_failed, unreachable,
+                      unsupported_type (internal/api/v2/configurations/
+                      toolkit_check.go). Absent for an ai_credentials
+                      provider, whose own reason vocabulary is already
+                      collapsed into message by the gateway path. Read message
+                      for the text; switch on this only where it is present.
+                    enum: [ok, auth_failed, unreachable, unsupported_type]
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '404':

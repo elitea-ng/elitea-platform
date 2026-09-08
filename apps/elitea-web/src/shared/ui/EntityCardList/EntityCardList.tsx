@@ -6,6 +6,7 @@ import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
 import { t } from '@/shared/i18n';
+import { useLocationSearch } from '@/shared/lib/hooks/useLocationSearch';
 
 import { EntityCard } from './EntityCard';
 import { useEntityRailVisible } from '../EntityRail';
@@ -67,14 +68,21 @@ export interface EntityCardListProps {
  * mount them WITHOUT a `RouterProvider` (`useSearch` throws
  * "Cannot read properties of null (reading 'stores')" there, and a hook that
  * throws mid-render cannot be recovered from with try/catch without
- * corrupting React's hook order). A render-time read is correct for this
- * value: the router mutates `window.location` synchronously in the same
- * `pushState` that then re-renders the route, so every render that could
- * observe a new `view` re-reads it.
+ * corrupting React's hook order).
+ *
+ * SUBSCRIBED, not read at render time. The earlier version of this function
+ * read `window.location.search` directly and assumed "every render that could
+ * observe a new `view` re-reads it" — which was wrong, and inert in exactly
+ * the case the control exists for. A search-only navigation re-renders the
+ * components that subscribed to the router; the list body is not one of them,
+ * so the toggle in the page HEADER took `aria-pressed="true"` while the panel
+ * below kept drawing cards. `useLocationSearch` subscribes to the same value
+ * instead (`shared/lib/hooks/useLocationSearch.ts`), so the read happens again
+ * when the URL moves.
  */
-function searchView(): EntityListView {
-  if (typeof window === 'undefined') return ENTITY_LIST_VIEW.cards;
-  const value = new URLSearchParams(window.location.search).get('view');
+function useSearchView(): EntityListView {
+  const search = useLocationSearch();
+  const value = new URLSearchParams(search).get('view');
   return value === ENTITY_LIST_VIEW.table ? ENTITY_LIST_VIEW.table : ENTITY_LIST_VIEW.cards;
 }
 
@@ -118,7 +126,8 @@ type ListRowsProps = Omit<EntityCardListProps, 'isLoading' | 'isError' | 'errorM
 
 /** The populated list itself: the `?view=`-selected rendering plus the optional pagination footer. */
 function ListRows({ items, view, onTagClick, pagination, renderCardActions }: ListRowsProps): ReactNode {
-  const isTable = (view ?? searchView()) === ENTITY_LIST_VIEW.table;
+  const searchView = useSearchView();
+  const isTable = (view ?? searchView) === ENTITY_LIST_VIEW.table;
   return (
     <>
       {isTable ? (
