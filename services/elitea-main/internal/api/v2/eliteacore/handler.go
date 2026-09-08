@@ -1296,10 +1296,23 @@ func (h *Handler) Publish(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
-// deleteEmbeddedSubAgents removes the EMBEDDED sub-agent applications that
-// versionID references, and then detaches every sub-agent reference the version
-// still holds. Applications that hold no embedded version are left alone: see
-// the loop below for why the two kinds arrive here together.
+// deleteEmbeddedSubAgents removes the EMBEDDED COPIES a publish made under
+// versionID. It does not touch the author's own agents.
+//
+// THE DISTINCTION IS THE WHOLE FUNCTION. A published version carries TWO
+// sub-agent references for each sub-agent its draft had: the mapping the
+// publish copied, which still names the AUTHOR'S OWN child agent, and the link
+// to the private copy `embedSubAgents` then made. This walked both and deleted
+// every application either of them named — so unpublishing a parent, or
+// deleting it, destroyed the child agent the author still had open in the
+// list. Nothing reported it: the deletes are best-effort by design, and the
+// author's next read of that agent was a plain 404.
+//
+// `status = 'embedded'` is the marker `embedSubAgentsRecursive` writes on the
+// copy it creates, and the same marker the recursion below already reads, so
+// the two halves of this function now agree on what an embedded copy is. A
+// reference whose version cannot be read leaves the application alone: an
+// orphaned copy costs storage, and the alternative costs somebody their agent.
 func (h *Handler) deleteEmbeddedSubAgents(ctx context.Context, schema string, versionID string) {
 	refs, err := listApplicationToolReferences(ctx, h.pool, schema, versionID)
 	if err != nil {
@@ -1307,9 +1320,19 @@ func (h *Handler) deleteEmbeddedSubAgents(ctx context.Context, schema string, ve
 	}
 	var embeddedAppIDs []string
 	for _, ref := range refs {
-		if ref.ApplicationID != "" {
-			embeddedAppIDs = append(embeddedAppIDs, ref.ApplicationID)
+		if ref.ApplicationID == "" || ref.VersionID == "" {
+			continue
 		}
+		var refStatus string
+		if statusErr := h.pool.QueryRow(ctx, fmt.Sprintf(
+			`SELECT COALESCE(status, '') FROM %s.application_versions WHERE id = $1`, schema),
+			ref.VersionID).Scan(&refStatus); statusErr != nil {
+			continue
+		}
+		if refStatus != "embedded" {
+			continue
+		}
+		embeddedAppIDs = append(embeddedAppIDs, ref.ApplicationID)
 	}
 
 	for _, eAppID := range embeddedAppIDs {
