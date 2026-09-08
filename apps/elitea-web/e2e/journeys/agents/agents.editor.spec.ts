@@ -18,21 +18,13 @@
  *    — the toolkit grid and its attach/detach round trip are J17's
  *    (`e2e/journeys/toolkits/`), driven through the real toolkit routes.
  *
- * And three legacy use cases have NO port target in this app, which is a
- * disclosed product gap rather than a missing test — `pages/agents/
- * Applications.tsx`'s own module comment records both:
- *
- *  - `test_agents_dashboard_loads` (the list's search box),
- *    `test_agent_search`, `test_agent_search_no_results` — the agents list
- *    carries no search control. The baseline's `StatusFilterSelect` and the
- *    search field beside it were never ported.
- *  - `test_view_toggle_table_and_card` — `ViewToggle` (`@/components/
- *    ViewToggle` in the baseline) has no port anywhere in `shared/ui` or
- *    `widgets`, so there is no table view to switch to.
- *
- * A journey for any of those would have to assert on a control that does not
- * exist, which is the `if (await x.isVisible())` shape this suite exists to
- * refuse.
+ *  - `test_agents_dashboard_loads`, `test_agent_search`,
+ *    `test_agent_search_no_results` and `test_view_toggle_table_and_card` —
+ *    all four are `agents.list.spec.ts` (J14e). This file used to record them
+ *    as product gaps: the list carried no search control and `ViewToggle` had
+ *    no port. Both are real now (`widgets/page-header`'s `ListSearchField` and
+ *    `ListViewToggle`, mounted by `pages/agents/Applications.tsx`), so the use
+ *    cases are journeys rather than disclosures.
  */
 import { test, expect } from '@playwright/test';
 
@@ -229,21 +221,21 @@ test('J14c: the editor shows the instructions the agent was stored with', async 
  *    text is added, reaches "0 characters left" at the limit, and the field
  *    refuses the character after it. Both fields, since both carry their own
  *    counter.
- *  - NOT COVERED, because this app does not implement it: the legacy tests
- *    also assert a RED counter and a "You have reached the MAXIMUM character
- *    limit" sentence at zero (their acceptance criteria 2-4), and a FULLSCREEN
- *    dialog carrying the same counter. `WelcomeMessageInput.tsx` and
- *    `ConversationStartersEditor.tsx` render the count alone, in one style, in
- *    one mode. Asserting the warning here would fail for a reason this journey
- *    cannot fix; it is a real parity gap, recorded here rather than smuggled in
- *    behind an `if (visible)`. The pattern EXISTS in this app —
- *    `features/settings/ui/project-context/EditorSection.tsx` shows both the
- *    red state and that exact sentence — so the gap is a missing application of
- *    it, not a missing capability.
+ *  - COVERED NOW — the legacy acceptance criteria 2-4: the counter changes
+ *    colour at zero and says "You have reached the MAXIMUM character limit".
+ *    This journey used to record both as an unimplemented parity gap. Five
+ *    files each rendered their own bare count, and `shared/ui/CharacterCounter`
+ *    — which had always carried both states — had no callers at all. All five
+ *    call it now.
+ *  - COVERED NOW — the FULLSCREEN mode. The legacy fullscreen cases open the
+ *    field on a large surface; this app's expand affordance is on the
+ *    INSTRUCTIONS editor (`InstructionsFullscreenButton`), which is the field
+ *    the reference gives one to and the longest field on the page. Asserted
+ *    below.
  *
- * The counter text is a template literal in both components, NOT an `en.json`
- * key, which is why this journey asserts the rendered string rather than a
- * bundle entry.
+ * The counter's copy comes from `shared/ui/CharacterCounter`'s own two bundle
+ * keys, which is why the strings below are the rendered sentence rather than a
+ * template literal this file rebuilds.
  */
 test('J14c: the welcome message and chat starters count down to 768 and refuse the 769th character', async ({
   page,
@@ -317,7 +309,82 @@ test('J14c: the welcome message and chat starters count down to 768 and refuse t
     await welcome.press('End');
     await welcome.pressSequentially('Z');
     expect((await welcome.inputValue()).length).toBe(MAX_TEXT_FIELD_CHARS);
-    await expect(welcomeCounter).toHaveText('0 characters left');
+    await expect(welcomeCounter).toHaveText('0 characters left. You have reached the MAXIMUM character limit');
+
+    /*
+     * The colour, measured rather than assumed. `toHaveCSS` reads the computed
+     * value, so a rule that never applied — the exact failure a `class`
+     * assertion would miss — shows up as the neutral colour still being there.
+     *
+     * The two states are compared against each other rather than against a
+     * literal `rgb(...)`: the token is the theme's (`text.warningText`), and
+     * pinning its hex here would fail the next time the brand pack moves,
+     * for a reason that is not a regression.
+     */
+    const atLimitColour = await welcomeCounter.evaluate((node) => getComputedStyle(node).color);
+    await welcome.fill('Hello');
+    await expect(welcomeCounter).toHaveText(`${MAX_TEXT_FIELD_CHARS - 5} characters left`);
+    const belowLimitColour = await welcomeCounter.evaluate((node) => getComputedStyle(node).color);
+    expect(atLimitColour, 'the counter must change colour at the limit').not.toBe(belowLimitColour);
+  } finally {
+    await deleteAgent(request, agent.id);
+  }
+});
+
+/*
+ * Legacy: the FULLSCREEN half of `agents/test_agent_character_limits.py`
+ * (`test_welcome_message_fullscreen_counter_and_warning` and its siblings),
+ * which open a field on a large surface and edit it there.
+ *
+ * This app puts the expand affordance on the INSTRUCTIONS editor, which is the
+ * field the reference gives one to and the longest field on the page. The
+ * legacy tests self-skip when the expand button is absent — the shape this
+ * suite refuses — so this asserts the dialog and the round trip instead.
+ *
+ * The text typed in the dialog is read back from the SERVER, not from the
+ * inline editor: a dialog that edited a copy of the value would still show the
+ * new text on screen and save the old one.
+ */
+test('J14c: the instructions editor opens full screen, and what is typed there is what gets saved', async ({
+  page,
+  request,
+}) => {
+  const name = uniqueName('fullscreen');
+  const agent = await createAgent(request, name);
+  const typed = 'Answer only in haiku.';
+  try {
+    await openAgentEditor(page, agent.id);
+
+    await page.getByTestId('agent-instructions-fullscreen-button').click();
+    const dialog = page.getByTestId('agent-instructions-fullscreen-dialog');
+    await expect(dialog, 'the instructions must open on a fullscreen surface').toBeVisible({ timeout: 20_000 });
+
+    // The dialog carries the CURRENT instructions, not an empty editor.
+    await expect(dialog).toContainText('You are a helpful assistant.', { timeout: 20_000 });
+
+    const editor = dialog.locator('.cm-content');
+    await editor.click();
+    await page.keyboard.press('ControlOrMeta+a');
+    await page.keyboard.type(typed);
+    await expect(dialog).toContainText(typed);
+
+    await page.keyboard.press('Escape');
+    await expect(dialog).toHaveCount(0, { timeout: 10_000 });
+
+    await page.getByTestId('agent-save-button').click();
+
+    await expect
+      .poll(
+        async () => {
+          const detail = await request.get(
+            `${API_BASE}/elitea_core/application/prompt_lib/${DEFAULT_PROJECT_ID}/${agent.id}`,
+          );
+          const body = await detail.json();
+          return String(body?.version_details?.instructions ?? '');
+        },
+        { timeout: 30_000, message: 'the instructions typed in the fullscreen editor never reached the server' },
+      )
+      .toContain(typed);
   } finally {
     await deleteAgent(request, agent.id);
   }

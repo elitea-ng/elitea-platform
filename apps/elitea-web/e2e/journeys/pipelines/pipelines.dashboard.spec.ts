@@ -30,25 +30,23 @@
  * did something else for a while would not be able to rely on that, which is
  * why each test below creates immediately before it looks.
  *
- * ── Two legacy use cases have no port target, and that is a product gap ──
+ * ── The two use cases this file used to record as product gaps ───────────
  *
- *  - `TestPipelineDashboard::test_view_toggle_table_and_card` — there is no
- *    table view to switch to. `pages/pipelines/Pipelines.tsx`'s own module
- *    comment discloses it: `ViewToggle` (`@/components/ViewToggle` in the
- *    baseline) has no port anywhere in `shared/ui` or `widgets`. The agents
- *    port (`agents.editor.spec.ts`) records the same gap for the same
- *    control.
- *  - `TestDeletePipeline::test_delete_pipeline_via_ui_menu` — a pipeline
- *    cannot be deleted from the UI at all. `pages/pipelines/ui/
- *    EditPipelineActions.tsx` states it ("export/delete have no pipeline-side
- *    mount point yet"): the editor's `⋮` menu is `EntityLifecycleMenu`, which
- *    carries Share/Fork only, the version bar's Delete removes a VERSION, and
- *    the list cards carry no menu. The delete USE CASE is covered below
- *    through the API, which is the half that exists.
+ *  - `TestPipelineDashboard::test_view_toggle_table_and_card` — there IS a
+ *    table view now. `widgets/page-header`'s `ListViewToggle` is mounted by
+ *    `pages/pipelines/Pipelines.tsx`, and the journey for it is at the foot of
+ *    this file.
+ *  - `TestDeletePipeline::test_delete_pipeline_via_ui_menu` — a pipeline can
+ *    be deleted from its editor's `⋮` menu now (`EntityLifecycleMenu`'s Delete
+ *    item, behind the type-the-name confirmation the agent editor uses). That
+ *    journey belongs to the EDITOR surface and lives in
+ *    `pipelines.editor-surface.spec.ts`; the delete-through-the-API use case
+ *    stays below, because a list that drops a row it was never told about is a
+ *    different claim.
  *
- * Neither is written as an `if (await control.isVisible())` journey: a test
- * that skips itself when the control is missing reports green on the app that
- * has nothing, which is the shape this suite exists to refuse.
+ * Neither was ever written as an `if (await control.isVisible())` journey: a
+ * test that skips itself when the control is missing reports green on the app
+ * that has nothing, which is the shape this suite exists to refuse.
  */
 import { expect, test, type Page } from '@playwright/test';
 
@@ -90,21 +88,23 @@ async function openPipelinesList(page: Page): Promise<void> {
 }
 
 /**
- * The list's own search field — `PrivatePipelinesList.tsx`'s `SimpleSearchBar`,
- * placeholder "Search".
+ * The header's search field — `widgets/page-header`'s `ListSearchField`,
+ * mounted with this test id by `Pipelines.tsx`.
  *
- * NOTE FOR THE SERVER-SIDE SEARCH UNIT (product-gaps wave): this control
- * exists today and filters the ONE page the list reads, client-side. The
- * assertions below are written against the observable behaviour — "the
- * matching row survives, the others go" — and not against where the filtering
- * happens, so a server-side query behind the same box keeps them true. What
- * DOES need revisiting when that lands is this file's header note about the
- * single 20-row page, and the decoy row J16d creates to make its own
- * precondition: with a server-side query the decoy stays correct but its
- * "same page" justification no longer applies.
+ * The box used to live inside the tab body and filter the ONE page the list
+ * reads, client-side. It is on the page HEADER now, it writes the route's
+ * `query` param, and `PrivatePipelinesList` sends that param to the server —
+ * which is a real substring filter on this endpoint. The assertions below were
+ * written against the observable behaviour ("the matching row survives, the
+ * others go"), so they hold either way.
+ *
+ * The decoy row J16d creates for its own precondition stays correct, but its
+ * "the decoy is on the same page" justification no longer applies: the server
+ * narrows the page now, so the decoy's job is only to prove the list held more
+ * than one row BEFORE the search.
  */
 function searchBox(page: Page) {
-  return page.getByPlaceholder('Search', { exact: true });
+  return page.getByTestId('pipeline-search-input');
 }
 
 /** Every card currently drawn by `EntityCardList`. */
@@ -245,4 +245,43 @@ test('J16d: a pipeline deleted through the API leaves the dashboard', async ({ p
   // through the API, so the page was never told.
   await openPipelinesList(page);
   await expect(cards(page).filter({ hasText: name })).toHaveCount(0, { timeout: 30_000 });
+});
+
+/*
+ * Legacy: `TestPipelineDashboard::test_view_toggle_table_and_card`.
+ *
+ * The legacy test asserts only that the two buttons exist and take
+ * `aria-pressed`, which a pair of buttons wired to nothing would satisfy. Each
+ * click here is checked against the list it must change: the table rendering
+ * draws `entity-list-row`s and no `entity-card`s.
+ *
+ * The agents twin (`agents.list.spec.ts`) additionally covers the remembered
+ * choice across a reload; that property belongs to `ListViewToggle` itself and
+ * is stated once.
+ */
+test('J16d: the view toggle switches the pipelines list between table and cards', async ({ page }) => {
+  const name = uniqueName('view');
+  const pipeline = await createPipelineThroughApi(page.request, name);
+  created.push(pipeline);
+
+  await openPipelinesList(page);
+  const tableButton = page.getByTestId('pipeline-table-view-button');
+  const cardButton = page.getByTestId('pipeline-card-view-button');
+  await expect(tableButton).toBeVisible();
+  await expect(cardButton).toBeVisible();
+  await expect(cardButton, 'the list starts on cards').toHaveAttribute('aria-pressed', 'true');
+  await expect(cards(page).filter({ hasText: name })).toHaveCount(1, { timeout: 30_000 });
+
+  await tableButton.click();
+  await expect(tableButton).toHaveAttribute('aria-pressed', 'true');
+  await expect(
+    page.getByTestId('entity-list-row').filter({ hasText: name }),
+    'the table rendering must draw the same pipeline',
+  ).toHaveCount(1, { timeout: 20_000 });
+  await expect(cards(page), 'no card grid while the table is showing').toHaveCount(0);
+
+  await cardButton.click();
+  await expect(cardButton).toHaveAttribute('aria-pressed', 'true');
+  await expect(cards(page).filter({ hasText: name })).toHaveCount(1, { timeout: 20_000 });
+  await expect(page.getByTestId('entity-list-row')).toHaveCount(0);
 });

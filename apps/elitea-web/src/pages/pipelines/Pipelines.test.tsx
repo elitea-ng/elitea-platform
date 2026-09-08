@@ -142,3 +142,45 @@ describe('Pipelines', () => {
     expect(header).toContainElement(screen.getByTestId('pipelines-import-button'));
   });
 });
+
+/*
+ * The header's own controls, at the composition root — see
+ * `pages/agents/Applications.test.tsx` for the same three claims and why they
+ * cannot be made by a component test.
+ */
+describe('Pipelines — header controls', () => {
+  it('mounts the search box and the view toggle on a tab that has a list', async () => {
+    setConfig('1');
+    renderPipelinesRoute(<Pipelines />, '/pipelines/all', { projectId: '2' });
+
+    expect(await screen.findByTestId('pipeline-search-input')).toBeInTheDocument();
+    expect(screen.getByTestId('pipeline-table-view-button')).toBeInTheDocument();
+    expect(screen.getByTestId('pipeline-card-view-button')).toBeInTheDocument();
+  });
+
+  it('omits both on a tab whose body has no rows to act on', async () => {
+    setConfig('1');
+    renderPipelinesRoute(<Pipelines />, '/pipelines/trending', { projectId: '1' });
+
+    expect(await screen.findByTestId('pipelines-tab-trending')).toBeInTheDocument();
+    expect(screen.queryByTestId('pipeline-search-input')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('pipeline-table-view-button')).not.toBeInTheDocument();
+  });
+
+  it('hands the typed query to the tab body, which sends it to the server', async () => {
+    setConfig('1');
+    const seen: (string | null)[] = [];
+    server.use(
+      getListApplicationsMockHandler((info) => {
+        seen.push(new URL(info.request.url).searchParams.get('query'));
+        return emptyApplicationList();
+      }),
+    );
+    const user = userEvent.setup();
+    renderPipelinesRoute(<Pipelines />, '/pipelines/all', { projectId: '2' });
+
+    await user.type(await screen.findByTestId('pipeline-search-input'), 'alpha');
+
+    await waitFor(() => expect(seen).toContain('alpha'));
+  });
+});

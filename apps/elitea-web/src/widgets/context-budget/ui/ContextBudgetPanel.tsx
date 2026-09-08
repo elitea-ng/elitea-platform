@@ -12,7 +12,9 @@
  */
 import type { ReactNode } from 'react';
 
+import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 import Box from '@mui/material/Box';
+import IconButton from '@mui/material/IconButton';
 import type { Theme } from '@mui/material/styles';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
@@ -26,6 +28,11 @@ import type { ContextBudgetStats } from '../lib/contextStatus';
 /** @public */
 export interface ContextBudgetPanelProps {
   readonly stats: ContextBudgetStats;
+  /**
+   * Opens the context-settings editor. Omitted where the panel is read-only
+   * (the collapsed rail has no room for the control).
+   */
+  readonly onEdit?: () => void;
 }
 
 /**
@@ -47,7 +54,7 @@ function visibleStatRows(stats: ContextBudgetStats): readonly { readonly key: st
   ];
 }
 
-export function ContextBudgetPanel({ stats }: ContextBudgetPanelProps): ReactNode {
+export function ContextBudgetPanel({ stats, onEdit }: ContextBudgetPanelProps): ReactNode {
   // The bar itself caps at 100%; the number above it does not (the old app
   // shows the true over-budget percentage and flags it with the warning icon).
   const barPercentage = Math.min(stats.utilizationPercentage, 100);
@@ -80,6 +87,22 @@ export function ContextBudgetPanel({ stats }: ContextBudgetPanelProps): ReactNod
             <InfoIcon width={16} height={16} />
           </Box>
         </Tooltip>
+        {onEdit !== undefined && (
+          <Tooltip
+            title={t('widgets.contextBudget.editTooltip', 'Edit context settings')}
+            placement="top"
+          >
+            <IconButton
+              size="small"
+              sx={editButtonSx}
+              aria-label={t('widgets.contextBudget.editTooltip', 'Edit context settings')}
+              data-testid="context-budget-edit-button"
+              onClick={onEdit}
+            >
+              <EditOutlinedIcon fontSize="inherit" />
+            </IconButton>
+          </Tooltip>
+        )}
       </Box>
 
       <Box sx={(theme: Theme) => ({ display: 'flex', flexDirection: 'column', gap: theme.spacing(0.5), paddingX: theme.spacing(2), paddingY: theme.spacing(1) })}>
@@ -224,3 +247,6 @@ function ProgressBar({ percentage, isHigh }: { readonly percentage: number; read
     </Box>
   );
 }
+
+/** The pencil sits at the end of the header row, where the reference puts it (`ContextBudgetHeader.jsx`). */
+const editButtonSx = { marginLeft: 'auto', padding: 0 };

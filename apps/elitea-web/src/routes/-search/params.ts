@@ -178,6 +178,20 @@ export const paramSchemas = {
   // (`shared/ui/EntityCardList` treats anything that is not `table` as cards).
   view: z.enum(['grid', 'list', 'cards', 'table']).catch('grid').prefault('grid'),
 
+  /**
+   * The list pages' search text — one key for the header search box every
+   * entity list shares (`widgets/page-header`'s `ListSearchField`).
+   *
+   * Not in P1's manifest: the baseline keeps this string in Redux
+   * (`components/RightPanel.jsx` writes `actions.setQuery`), so no URL key
+   * existed to extract. It is a URL key here because the box lives in the
+   * page HEADER and the rows are rendered by the TAB below it — two sibling
+   * components with no shared owner other than the route. The URL is the one
+   * store both already read, and it makes a filtered list linkable and
+   * reload-proof, which the Redux version was not.
+   */
+  query: text(),
+
   // ── artifacts (PARAM-024..027) ───────────────────────────────────────────
   bucket: text(),
   file: text(),

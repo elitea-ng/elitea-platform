@@ -2,13 +2,12 @@ import type { ChangeEvent, ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import Box from '@mui/material/Box';
-import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
 import { MAX_WELCOME_MESSAGE_LENGTH } from '@/shared/lib/limits';
+import { CharacterCounter } from '@/shared/ui/CharacterCounter';
 import { t } from '@/shared/i18n';
 import { BasicAccordion } from '@/shared/ui/BasicAccordion';
-import { combineSx } from '@/shared/ui/lib/combineSx';
 import { StyledInputEnhancer } from '@/shared/ui/StyledInputEnhancer';
 
 import { useFieldFocus } from '../lib/useFieldFocus';
@@ -120,13 +119,13 @@ export function WelcomeMessageInput({
               * `ConversationStartersEditor`, mounted right after this
               * accordion) loses its first click on blur. `visibility:
               * hidden` keeps the box in flow without showing stale text. */}
-            <Typography
-              variant="bodySmall"
-              sx={combineSx(counterSx, { visibility: showCounter ? 'visible' : 'hidden' })}
+            <CharacterCounter
+              value={inputValue}
+              maxLength={MAX_WELCOME_MESSAGE_LENGTH}
+              visible={showCounter}
+              sx={counterSx}
               data-testid="agent-welcome-message-counter"
-            >
-              {`${MAX_WELCOME_MESSAGE_LENGTH - inputValue.length} characters left`}
-            </Typography>
+            />
           </Box>
         ),
       },

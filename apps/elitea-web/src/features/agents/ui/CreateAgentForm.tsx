@@ -7,6 +7,7 @@ import Typography from '@mui/material/Typography';
 
 import { applicationCreationSchema } from '@/entities/application-form';
 import { MAX_DESCRIPTION_LENGTH, MAX_NAME_LENGTH } from '@/shared/lib/limits';
+import { CharacterCounter } from '@/shared/ui/CharacterCounter';
 import { t } from '@/shared/i18n';
 import { BasicAccordion } from '@/shared/ui/BasicAccordion';
 import { combineSx } from '@/shared/ui/lib/combineSx';
@@ -196,16 +197,14 @@ function GeneralFields({ name, description, disabled, iconSlot, tagsSlot }: Gene
           * unmounting on blur shifts that control up, swallowing a click
           * already headed for it. `visibility: hidden` keeps the line's
           * height reserved. */}
-        <Typography
-          variant="labelTiny"
-          sx={combineSx(descriptionCharactersLabelSx, {
-            visibility: description.focused && description.value.length > 0 ? 'visible' : 'hidden',
-          })}
-        >
-          {t('features.agents.createAgentForm.descriptionCharactersLeft', '{{count}} characters left', {
-            count: MAX_DESCRIPTION_LENGTH - description.value.length,
-          })}
-        </Typography>
+        <CharacterCounter
+          value={description.value}
+          maxLength={MAX_DESCRIPTION_LENGTH}
+          textVariant="labelTiny"
+          visible={description.focused && description.value.length > 0}
+          sx={descriptionCharactersLabelSx}
+          data-testid="agent-description-counter"
+        />
       </Box>
 
       {tagsSlot}

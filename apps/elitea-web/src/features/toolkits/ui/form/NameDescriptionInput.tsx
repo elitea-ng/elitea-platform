@@ -2,13 +2,12 @@ import type { ChangeEvent, ReactNode } from 'react';
 import { useCallback } from 'react';
 
 import Box from '@mui/material/Box';
-import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
+import { CharacterCounter } from '@/shared/ui/CharacterCounter';
 import { t } from '@/shared/i18n';
 import { MAX_DESCRIPTION_LENGTH, MAX_NAME_LENGTH } from '@/shared/lib/limits';
 import { PROMPT_PAYLOAD_KEY } from '@/shared/lib/prompt-payload';
-import { combineSx } from '@/shared/ui/lib/combineSx';
 import { StyledInputEnhancer } from '@/shared/ui/StyledInputEnhancer';
 
 import { useFieldFocus } from '../../lib/hooks/useFieldFocus';
@@ -108,12 +107,13 @@ function NameField({ visible, value, nameIsRequired, disabled, showValidation, h
         onBlur={onBlur}
       />
       {isFocused && MAX_NAME_LENGTH === value.length && (
-        <Typography
-          variant="bodySmall2"
+        <CharacterCounter
+          value={value}
+          maxLength={MAX_NAME_LENGTH}
+          textVariant="bodySmall2"
           sx={nameLengthMessageSx}
-        >
-          {t('features.toolkits.nameDescriptionInput.charactersLeftZero', '0 is left from {{max}} characters left', { max: MAX_NAME_LENGTH })}
-        </Typography>
+          data-testid="toolkit-name-counter"
+        />
       )}
     </Box>
   );
@@ -156,12 +156,13 @@ function DescriptionField({ visible, value, disabled, showValidation, hasError, 
         * fields directly after this component, and unmounting on blur
         * shifts them up, swallowing a click already headed for one of
         * them. `visibility: hidden` keeps the line's height reserved. */}
-      <Typography
-        variant="bodySmall"
-        sx={combineSx(descriptionLengthMessageSx, { visibility: isFocused && value.length > 0 ? 'visible' : 'hidden' })}
-      >
-        {t('features.toolkits.nameDescriptionInput.charactersLeft', '{{count}} characters left', { count: MAX_DESCRIPTION_LENGTH - value.length })}
-      </Typography>
+      <CharacterCounter
+        value={value}
+        maxLength={MAX_DESCRIPTION_LENGTH}
+        visible={isFocused && value.length > 0}
+        sx={descriptionLengthMessageSx}
+        data-testid="toolkit-description-counter"
+      />
     </Box>
   );
 }

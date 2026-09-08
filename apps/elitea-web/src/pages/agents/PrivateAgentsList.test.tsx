@@ -97,7 +97,14 @@ describe('PrivateAgentsList', () => {
     expect(await screen.findByText('No agents yet')).toBeInTheDocument();
   });
 
-  it('filters client-side by the search box', async () => {
+  /*
+   * The search box moved to the page HEADER (`widgets/page-header`'s
+   * `ListSearchField`, mounted by `Applications.tsx`/`Pipelines.tsx`), so this
+   * tab body no longer renders one. Its contract is now "read the route's
+   * `query` param", which is what these tests drive. The typing interaction
+   * itself is covered by `widgets/page-header/ui/ListSearchField.test.tsx`.
+   */
+  it('filters client-side by the header search box\'s `query` param', async () => {
     server.use(
       getListApplicationsMockHandler(
         applications([
@@ -106,23 +113,20 @@ describe('PrivateAgentsList', () => {
         ]),
       ),
     );
-    const user = userEvent.setup();
     renderAgentsRoute(
       <PrivateAgentsList
         statuses={undefined}
         cardContentType="all"
       />,
-      '/agents/all',
+      '/agents/all?query=Alpha',
       { projectId: 'proj-1' },
     );
 
-    await screen.findByText('Alpha App');
-    await user.type(screen.getByPlaceholderText('Search'), 'Alpha');
-
+    expect(await screen.findByText('Alpha App')).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByText('Beta App')).not.toBeInTheDocument());
   });
 
-  it('sends the search box value as the real server-side `query` param, not just a client-side filter', async () => {
+  it('sends the `query` param on to the server, not just to the client-side filter', async () => {
     const seenQueryValues: (string | null)[] = [];
     server.use(
       getListApplicationsMockHandler((info) => {
@@ -130,19 +134,16 @@ describe('PrivateAgentsList', () => {
         return applications([{ id: '1', name: 'Alpha App', status: 'draft' }]);
       }),
     );
-    const user = userEvent.setup();
     renderAgentsRoute(
       <PrivateAgentsList
         statuses={undefined}
         cardContentType="all"
       />,
-      '/agents/all',
+      '/agents/all?query=Alpha',
       { projectId: 'proj-1' },
     );
 
     await screen.findByText('Alpha App');
-    await user.type(screen.getByPlaceholderText('Search'), 'Alpha');
-
     await waitFor(() => expect(seenQueryValues).toContain('Alpha'));
   });
 

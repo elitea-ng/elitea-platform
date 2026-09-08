@@ -79,6 +79,11 @@ function buildTestRouter(
     // fixture that omitted them would silently DROP whatever the right-hand
     // rail writes and make a passing tag-selection test meaningless.
     validateSearch: (search: Record<string, unknown>) => ({
+      // `query` is the list header's search text
+      // (`widgets/page-header`'s `ListSearchField` writes it); the tab body
+      // reads it back with `useListSearchQuery`. A fixture that dropped it
+      // would make every search assertion below unreachable.
+      query: typeof search.query === 'string' ? search.query : undefined,
       sort_by: typeof search.sort_by === 'string' ? search.sort_by : undefined,
       sort_order: typeof search.sort_order === 'string' ? search.sort_order : undefined,
       author_id: typeof search.author_id === 'string' ? search.author_id : undefined,

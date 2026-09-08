@@ -11,15 +11,8 @@
  * (`pipelines.configuration-form.spec.ts`) and the save/admission gate
  * (`pipelines.validation.spec.ts`). The controls AROUND them had none.
  *
- * ── Two legacy use cases in this file's area are NOT ported ──────────────
+ * ── One legacy use case in this file's area is still NOT ported ──────────
  *
- *  - `TestActionsMenu::test_export_pipeline_if_available` — there is no
- *    Export control on a pipeline. `pages/pipelines/ui/EditPipelineActions.tsx`
- *    discloses it ("export/delete have no pipeline-side mount point yet"),
- *    and the menu asserted below is the evidence: it holds Share and Fork and
- *    nothing else. The legacy test self-skips when the item is absent, which
- *    is precisely the shape that reports green against an app that has
- *    nothing; the menu's real contents are asserted instead.
  *  - `TestMultiNodeTopology::test_three_node_chain` — it builds LLM → Code →
  *    END, and `Code` is not a node type this platform admits: the Rust
  *    compiler has no `parse_pipeline_node` arm for it
@@ -116,9 +109,11 @@ test('J16e: the pipeline editor shows its configuration panel and its run-histor
  * the rule it is built on: production's menu holds nine items, four of them
  * already exist in this app as their own toolbar buttons, and this menu
  * carries the ones that were missing rather than a second path to the same
- * write. For a PIPELINE that is Share (version), Fork and Share (entity) —
- * publish is omitted because the server refuses a pipeline outright with 400
- * `pipeline_not_publishable`.
+ * write. For a PIPELINE that is Share (version), Fork, Share (entity), Export
+ * and Delete — publish is omitted because the server refuses a pipeline
+ * outright with 400 `pipeline_not_publishable`, and Export and Delete are here
+ * (rather than on the toolbar, where the AGENT editor puts them) because the
+ * reference puts them in the pipeline's own menu.
  *
  * The count is exact and the absences are named. "At least two items" would
  * pass against a menu that had grown a second Delete, and the two publish
@@ -138,7 +133,9 @@ test('J16e: the pipeline editor’s ⋮ menu offers exactly the lifecycle action
   await expect(menu.getByTestId('pipeline-share-version-menuitem')).toBeVisible();
   await expect(menu.getByTestId('pipeline-fork-menuitem')).toBeVisible();
   await expect(menu.getByTestId('pipeline-share-entity-menuitem')).toBeVisible();
-  await expect(menu.getByRole('menuitem'), 'the menu is exactly those three items').toHaveCount(3);
+  await expect(menu.getByTestId('pipeline-export-menuitem')).toBeVisible();
+  await expect(menu.getByTestId('pipeline-delete-menuitem')).toBeVisible();
+  await expect(menu.getByRole('menuitem'), 'the menu is exactly those five items').toHaveCount(5);
 
   // Publish and Unpublish are withheld for a pipeline on purpose — the route
   // answers 400 `pipeline_not_publishable`, so offering them would be a
@@ -274,4 +271,79 @@ test('J16e: Discard drops an unsaved rename — the server never sees it and the
   //    legacy test made on the page it stayed on.
   await openPipelineEditor(page, pipeline);
   await expect(page.getByTestId('agent-name-input')).toHaveValue(name);
+});
+
+/*
+ * Legacy: `TestDeletePipeline::test_delete_pipeline_via_ui_menu` — "create a
+ * pipeline, delete it through the UI three-dot menu, and verify removal".
+ *
+ * This file used to record the use case as unportable: a pipeline could not be
+ * deleted from the UI at all. It can now, through the `⋮` menu's Delete item
+ * behind the same type-the-name confirmation the agent editor uses.
+ *
+ * The SERVER is asked at the end, not only the list: a list that merely dropped
+ * a cached row would satisfy a UI-only check, and the two need different fixes.
+ */
+test('J16e: deleting a pipeline from its ⋮ menu removes it from the list and from the server', async ({ page }) => {
+  const name = uniqueName('delete-ui');
+  const pipeline = await createPipelineThroughApi(page.request, name);
+  await openPipelineEditor(page, pipeline);
+
+  await page.getByTestId('pipeline-lifecycle-menu-button').click();
+  await page.getByTestId('pipeline-delete-menuitem').click();
+
+  // The confirmation is a real gate, not a formality: Confirm stays disabled
+  // until the pipeline's own name is typed.
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible({ timeout: 10_000 });
+  const confirm = dialog.getByRole('button', { name: /confirm|delete/i });
+  await expect(confirm, 'the delete must be gated on typing the name').toBeDisabled();
+  await dialog.getByRole('textbox').fill(name);
+  await expect(confirm).toBeEnabled();
+  await confirm.click();
+
+  // The editor returns to the list it was opened from.
+  await page.waitForURL('**/app/pipelines/**', { timeout: 30_000 });
+
+  await expect
+    .poll(
+      async () => {
+        const detail = await page.request.get(
+          `${BASE_URL}/api/v2/elitea_core/application/prompt_lib/${pipeline.projectId}/${pipeline.id}`,
+        );
+        return detail.status();
+      },
+      { timeout: 20_000, message: 'the pipeline was still readable after the UI delete' },
+    )
+    .toBeGreaterThanOrEqual(400);
+
+  await page.goto(`${BASE_URL}/app/pipelines/all`);
+  await expect(page.getByTestId('entity-card').filter({ hasText: name })).toHaveCount(0, { timeout: 30_000 });
+});
+
+/*
+ * Legacy: `TestActionsMenu::test_export_pipeline_if_available`.
+ *
+ * The legacy test SKIPS itself when the Export item is missing, which reports
+ * green against an app that has nothing — the shape this suite refuses. This
+ * one asserts the download the browser was actually handed, and its name: a
+ * menu item that opened a request and dropped the answer would pass a
+ * "nothing threw" check.
+ */
+test('J16e: exporting a pipeline from its ⋮ menu downloads a markdown document', async ({ page }) => {
+  const name = uniqueName('export');
+  const pipeline = await createPipelineThroughApi(page.request, name);
+  created.push(pipeline);
+  await openPipelineEditor(page, pipeline);
+
+  await page.getByTestId('pipeline-lifecycle-menu-button').click();
+
+  const downloadPromise = page.waitForEvent('download', { timeout: 30_000 });
+  await page.getByTestId('pipeline-export-menuitem').click();
+  const download = await downloadPromise;
+
+  // `.md`, not `.json`: the export route branches on `format=md` before it
+  // considers `as_file`, and an earlier handler ignored the parameter — which
+  // saved a JSON body under a markdown name.
+  expect(download.suggestedFilename(), 'the export must be a markdown document').toMatch(/\.(md|zip)$/);
 });
