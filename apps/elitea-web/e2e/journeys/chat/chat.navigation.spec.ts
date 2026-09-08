@@ -26,6 +26,20 @@
  * which is exactly what the legacy page object did — has two bodies and proves
  * neither. The flag is therefore seeded to "expanded" before the app loads, so
  * there is one path through this test and one meaning for every assertion.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * WHAT COLLAPSING TAKES AWAY, AND WHAT IT MUST NOT
+ * ─────────────────────────────────────────────────────────────────────────────
+ * A collapsed row loses its VISIBLE label — `SidebarNavItem` renders the
+ * `Typography` only while `showLabel` is true (`SidebarNavItem.tsx:79`) — and
+ * that is the discriminator the legacy test used. It does NOT lose its
+ * accessible name: the same component wraps every row in a `Tooltip` whose
+ * title is the label exactly while the label is hidden
+ * (`SidebarNavItem.tsx:33-38`), and MUI puts a string title on the child as
+ * `aria-label` (`@mui/material/Tooltip/Tooltip.js:489`). That is the correct
+ * behaviour for an icon-only link — an unnamed one would be an a11y defect,
+ * and `checkA11y` below would say so — so the collapsed rail is asserted on
+ * the label text, and the link is asserted to still be there and still named.
  */
 import { test, expect } from '@playwright/test';
 
@@ -55,29 +69,39 @@ test('the shell rail collapses and expands from the chat, and reaches the Agents
   const toggle = page.getByTestId('sidebar-collapse-toggle');
   await expect(toggle).toBeVisible({ timeout: 15_000 });
 
-  // Expanded: the rail's rows carry their text label, so each one has an
-  // accessible name. This is the legacy test's own discriminator.
-  const agents = page.getByRole('link', { name: AGENTS_ROW, exact: true });
+  // Scoped to the shell rail (`Sidebar.tsx:64-66`'s `nav[aria-label="side-bar"]`),
+  // never to the page: the conversation rail beside it holds rows of its own.
+  const rail = page.getByRole('navigation', { name: 'side-bar' });
+  // Expanded: the row carries its text label. This is the legacy test's own
+  // discriminator, and it is the one the collapse really removes.
+  const agents = rail.getByRole('link', { name: AGENTS_ROW, exact: true });
   await expect(agents).toBeVisible({ timeout: 15_000 });
+  // The row's own rendered text, not a search of the page: the label is the
+  // only text this link ever holds, so `''` is exactly "the label is gone".
+  await expect(agents).toHaveText(AGENTS_ROW, { timeout: 15_000 });
   await expect(toggle).toHaveAccessibleName('Collapse sidebar');
 
   await checkA11y(page);
 
   // Collapsed: `SidebarNavItem` renders no `Typography` at all while
-  // `showLabel` is false, so the named row is GONE from the accessibility tree
-  // — not merely hidden. `count()` is what states that; a visibility assertion
-  // would wait for an element that is never going to attach.
+  // `showLabel` is false, so the row holds no text at all — the label is GONE
+  // from the document, not merely hidden.
   await toggle.click();
   await expect(toggle).toHaveAccessibleName('Expand sidebar');
-  await expect(agents).toHaveCount(0);
+  await expect(agents).toHaveText('');
+  // The row itself stays, and stays NAMED: the collapsed rail is icons, and an
+  // icon-only link with no accessible name would be unreachable by name for a
+  // screen reader. The tooltip is what keeps the name (see the header).
+  await expect(agents).toHaveCount(1);
+  await expect(agents).toBeVisible();
   // The chat surface is unaffected by the rail's width — a collapse that
-  // unmounted the page would pass the two assertions above.
+  // unmounted the page would pass the assertions above.
   await expect(page.getByTestId('chat-message-input')).toBeEditable();
 
   // …and back, on the same control.
   await toggle.click();
   await expect(toggle).toHaveAccessibleName('Collapse sidebar');
-  await expect(agents).toBeVisible({ timeout: 10_000 });
+  await expect(agents).toHaveText(AGENTS_ROW, { timeout: 10_000 });
 
   // ── the row is a real link out of chat ───────────────────────────────────
   await agents.click();
