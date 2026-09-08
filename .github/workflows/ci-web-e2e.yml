@@ -287,8 +287,22 @@ jobs:
             -e E2E_TZ="${E2E_TZ:-UTC}" \
             mcr.microsoft.com/playwright:v1.62.1-noble \
             npx playwright test --project=${{ matrix.engine }} ${{ matrix.shard && format('--shard={0}', matrix.shard) || '' }}
+      - name: Give the report back to the runner user
+        # The container runs as root, so playwright-results/ and
+        # playwright-report/ come back root-owned. upload-artifact can still READ
+        # them (0644), but a root-owned tree in the workspace is a trap for any
+        # later step that wants to write there, and the failure would be a
+        # baffling EACCES far from its cause.
+        #
+        # ORDER IS LOAD-BEARING: this must run BEFORE "Collect the stack's own
+        # logs". That step writes playwright-results/stack-logs.txt as the
+        # runner user, and with the chown after it the write failed on every
+        # run, `|| true` hid it, and "0 line(s) collected" was green (#859).
+        if: always()
+        run: sudo chown -R "$(id -u):$(id -g)" playwright-results playwright-report 2>/dev/null || true
       - name: Collect the stack's own logs
-        # ONLY ON FAILURE, and BEFORE the teardown below removes the stack.
+        # ONLY ON FAILURE, AFTER the chown above, and BEFORE the teardown below
+        # removes the stack.
         #
         # A journey failed with "Failed to load users." on screen after a write.
         # The job captured a screenshot, a video and an accessibility tree, and
@@ -297,22 +311,19 @@ jobs:
         # step and the answer went with it.
         #
         # A failure nobody can diagnose gets retried until it passes, which is
-        # how a real defect becomes "flaky". `|| true` because a diagnostic that
-        # fails the job it is diagnosing replaces one unexplained failure with
-        # another.
+        # how a real defect becomes "flaky". `continue-on-error`, not `|| true`:
+        # a diagnostic that fails the job it is diagnosing replaces one
+        # unexplained failure with another, so the job's outcome stays what the
+        # journeys made it — but the script exits non-zero when it collected
+        # nothing (unwritable file, zero log lines), and a step that is visibly
+        # failed in the run view is how that gets noticed instead of hidden
+        # behind a green tick (#859).
         if: failure()
+        continue-on-error: true
         working-directory: apps/elitea-web
         env:
           COMPOSE_BIN: docker compose
-        run: bash scripts/e2e-stack.sh logs || true
-      - name: Give the report back to the runner user
-        # The container runs as root, so playwright-results/ and
-        # playwright-report/ come back root-owned. upload-artifact can still READ
-        # them (0644), but a root-owned tree in the workspace is a trap for any
-        # later step that wants to write there, and the failure would be a
-        # baffling EACCES far from its cause.
-        if: always()
-        run: sudo chown -R "$(id -u):$(id -g)" playwright-results playwright-report 2>/dev/null || true
+        run: bash scripts/e2e-stack.sh logs
       - name: Upload Playwright report
         if: always()
         uses: actions/upload-artifact@v7
@@ -1157,6 +1168,26 @@ jobs:
             mcr.microsoft.com/playwright:v1.62.1-noble \
             npx playwright test --grep @visual $update_arg
 
+      - name: Give the report back to the runner user
+        # Same root-owned-report trap and fix as the `e2e` job's copy of this
+        # step, and the same ORDER: it must run BEFORE "Collect the stack's own
+        # logs" below, which writes into playwright-results/ as the runner
+        # user. This job had no chown at all, so its collection wrote nothing
+        # on every failed run (#859).
+        if: always()
+        working-directory: apps/elitea-web
+        run: sudo chown -R "$(id -u):$(id -g)" playwright-results playwright-report 2>/dev/null || true
+      - name: Collect the stack's own logs
+        # ONLY ON FAILURE, AFTER the chown above, and BEFORE the teardown below
+        # removes the stack. See the `e2e` job's copy of this step for why the
+        # file exists and why `continue-on-error` replaced `|| true` (#859).
+        if: failure()
+        continue-on-error: true
+        working-directory: apps/elitea-web
+        env:
+          COMPOSE_BIN: docker compose
+        run: bash scripts/e2e-stack.sh logs
+
       # What actually moved, by PIXELS. A regeneration re-encodes every PNG, so
       # `git status` and any byte comparison call all of them changed — measured
       # on #238, 37 files reported for 18 real movements, with admin pages and
@@ -1169,24 +1200,6 @@ jobs:
       #
       # `|| true` because the script exits non-zero whenever anything differs,
       # which in this mode is the normal and expected outcome, not a failure.
-      - name: Collect the stack's own logs
-        # ONLY ON FAILURE, and BEFORE the teardown below removes the stack.
-        #
-        # A journey failed with "Failed to load users." on screen after a write.
-        # The job captured a screenshot, a video and an accessibility tree, and
-        # none of them can say whether the listing answered 500, timed out, or
-        # was refused — only the server can. The stack was torn down in the next
-        # step and the answer went with it.
-        #
-        # A failure nobody can diagnose gets retried until it passes, which is
-        # how a real defect becomes "flaky". `|| true` because a diagnostic that
-        # fails the job it is diagnosing replaces one unexplained failure with
-        # another.
-        if: failure()
-        working-directory: apps/elitea-web
-        env:
-          COMPOSE_BIN: docker compose
-        run: bash scripts/e2e-stack.sh logs || true
       - name: Report what the regeneration changed
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.update_visual_baselines == true }}
         working-directory: apps/elitea-web
