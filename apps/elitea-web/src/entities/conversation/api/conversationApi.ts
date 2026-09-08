@@ -274,6 +274,13 @@ export async function startAgentExecution(params: StartAgentExecutionParams): Pr
  * the same durable session; it is not a HITL or checkpoint resume.
  */
 export const AGENT_CONTINUE_HITL_CONTRACT = 'agent.continue.hitl.v1';
+/**
+ * MCP tool authorization. Its own contract because the route's checks are the
+ * OPPOSITE of the HITL arm's on three fields: `mcp_tokens`,
+ * `ignored_mcp_servers` and `user_declined_mcp_servers` must be PRESENT (an
+ * object and two arrays), where the HITL arm refuses all three.
+ */
+export const AGENT_CONTINUE_AUTHORIZATION_CONTRACT = 'agent.continue.authorization.v1';
 export const AGENT_CONTINUE_OUTPUT_LIMIT_CONTRACT = 'agent.continue.output-limit.v1';
 
 export interface ContinueAgentExecutionParams {

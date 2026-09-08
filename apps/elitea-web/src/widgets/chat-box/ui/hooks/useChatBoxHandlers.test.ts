@@ -24,6 +24,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ChatMessage } from "@/features/chat-messages";
 import { EliteaApiError } from "@/shared/api/generated/mutator";
+import { ToolActionStatus } from "@/shared/lib/chat";
 import { ROLES } from "@/shared/lib/enums";
 
 import { useChatBoxHandlers } from "./useChatBoxHandlers";
@@ -867,7 +868,7 @@ describe("continueTokenLimit / resumeMcpFlow transport", () => {
     expect(history.read()[0]?.exception).toBeDefined();
   });
 
-  it("resumeMcpFlow reverts its own spinner", () => {
+  it("resumeMcpFlow reverts its own spinner", async () => {
     const history = makeHistory([tokenLimitMessage]);
     const handlers = useChatBoxHandlers(
       makeDeps({
@@ -877,10 +878,166 @@ describe("continueTokenLimit / resumeMcpFlow transport", () => {
       }),
     );
 
-    handlers.resumeMcpFlow("answer-1");
+    await handlers.resumeMcpFlow("answer-1");
 
     expect(history.read()[0]?.isStreaming).toBe(false);
     expect(history.read()[0]?.exception).toBeDefined();
+  });
+});
+
+/**
+ * MCP AUTHORIZATION — the last continuation that was socket-only (#312).
+ *
+ * The contract needs an `authorization_request_id`, and nothing read it off
+ * the `mcp_authorization_required` frame, so on a socket-less deployment
+ * every "Continue (Auth)"/"Skip Auth" press reached no transport at all: the
+ * card vanished, the bubble spun, and the run stayed paused server-side.
+ *
+ * The id is a COALESCE over three metadata keys, not one field, because that
+ * is how the server files and looks the request up — a fixed key would refuse
+ * resumable pauses.
+ */
+describe("resumeMcpFlow — the REST authorization continuation", () => {
+  /** One `mcp_authorization_required` card, as `chatStreamToolFrames` builds it (`toolMeta` IS the frame's `response_metadata`). */
+  function authPausedMessage(meta: Record<string, unknown>): ChatMessage {
+    return {
+      ...pausedMessage,
+      hitlInterrupt: undefined,
+      toolActions: [
+        {
+          id: "run-1",
+          name: "sharepoint___search",
+          status: ToolActionStatus.actionRequired,
+          toolOutputs: { server_url: "https://mcp.example.com" },
+          toolMeta: meta,
+        },
+      ] as unknown as ChatMessage["toolActions"],
+    };
+  }
+
+  const authMeta = {
+    interrupt_id: "mcp_auth_sharepoint-1",
+    tool_call_id: "call-9",
+    server_url: "https://mcp.example.com",
+  };
+
+  it("POSTs the authorization contract with the captured id and does not also emit", async () => {
+    const message = authPausedMessage(authMeta);
+    const history = makeHistory([message]);
+    const emitSocket = vi.fn(() => true);
+    const seen = captureContinuations();
+    const handlers = useChatBoxHandlers(
+      makeDeps({
+        setChatHistory: history.setChatHistory,
+        chatHistory: [message],
+        emitSocket,
+        continueStreamedExecution: seen.continueStreamedExecution,
+      }),
+    );
+
+    await handlers.resumeMcpFlow("answer-1", false);
+
+    expect(seen.calls).toEqual([
+      {
+        conversationUuid: "conv-uuid-1",
+        contract: "agent.continue.authorization.v1",
+        body: {
+          project_id: 1,
+          conversation_uuid: "conv-uuid-1",
+          message_id: "answer-1",
+          authorization_request_id: "mcp_auth_sharepoint-1",
+          authorization_action: "authorize",
+          mcp_tokens: {},
+          ignored_mcp_servers: [],
+          user_declined_mcp_servers: [],
+        },
+      },
+    ]);
+    // A second resume over the socket would run the agent twice.
+    expect(emitSocket).not.toHaveBeenCalled();
+    expect(history.read()[0]?.isStreaming).toBe(true);
+    expect(history.read()[0]?.toolActions).toEqual([]);
+  });
+
+  it('sends `skip` and the declined server when the user pressed "Skip Auth"', async () => {
+    const message = authPausedMessage(authMeta);
+    const history = makeHistory([message]);
+    const seen = captureContinuations();
+    const handlers = useChatBoxHandlers(
+      makeDeps({
+        setChatHistory: history.setChatHistory,
+        chatHistory: [message],
+        continueStreamedExecution: seen.continueStreamedExecution,
+        sessionDeclinedMcpServersRef: { current: new Map() },
+      }),
+    );
+
+    await handlers.resumeMcpFlow("answer-1", true);
+
+    const body = seen.calls[0]?.body;
+    expect(body?.["authorization_action"]).toBe("skip");
+    // The route admits a NON-EMPTY array here — the HITL contract does not.
+    expect(body?.["user_declined_mcp_servers"]).toEqual([
+      expect.objectContaining({ server_url: "https://mcp.example.com" }),
+    ]);
+  });
+
+  it("falls back to `tool_call_id` when the frame carried no `interrupt_id`", async () => {
+    const message = authPausedMessage({ tool_call_id: "call-9" });
+    const history = makeHistory([message]);
+    const seen = captureContinuations();
+    const handlers = useChatBoxHandlers(
+      makeDeps({
+        setChatHistory: history.setChatHistory,
+        chatHistory: [message],
+        continueStreamedExecution: seen.continueStreamedExecution,
+      }),
+    );
+
+    await handlers.resumeMcpFlow("answer-1");
+
+    const body = seen.calls[0]?.body;
+    expect(body?.["authorization_request_id"]).toBe("call-9");
+  });
+
+  it("stays on the socket for a card that carries no identity at all", async () => {
+    const message = authPausedMessage({ server_url: "https://mcp.example.com" });
+    const history = makeHistory([message]);
+    const emitSocket = vi.fn(() => true);
+    const seen = captureContinuations();
+    const handlers = useChatBoxHandlers(
+      makeDeps({
+        setChatHistory: history.setChatHistory,
+        chatHistory: [message],
+        emitSocket,
+        continueStreamedExecution: seen.continueStreamedExecution,
+      }),
+    );
+
+    await handlers.resumeMcpFlow("answer-1");
+
+    expect(seen.calls).toHaveLength(0);
+    expect(emitSocket).toHaveBeenCalledTimes(1);
+  });
+
+  it("reverts when neither the route nor the socket took the resume", async () => {
+    const message = authPausedMessage(authMeta);
+    const history = makeHistory([message]);
+    const handlers = useChatBoxHandlers(
+      makeDeps({
+        setChatHistory: history.setChatHistory,
+        chatHistory: [message],
+        emitSocket: deadSocket(),
+        continueStreamedExecution: () => Promise.resolve(noTransport),
+      }),
+    );
+
+    await handlers.resumeMcpFlow("answer-1");
+
+    expect(history.read()[0]?.isStreaming).toBe(false);
+    expect(history.read()[0]?.exception).toBeDefined();
+    // The card comes back, so the user can retry.
+    expect(history.read()[0]?.toolActions).toHaveLength(1);
   });
 });
 
