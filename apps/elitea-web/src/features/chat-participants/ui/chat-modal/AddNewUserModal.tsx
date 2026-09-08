@@ -54,7 +54,8 @@ function useSelectedProjectId(): string | undefined {
 // Props
 // ---------------------------------------------------------------------------
 
-export interface AddNewUserModalProps {
+/** Not exported: the barrel re-exports the component only, and no other slice names this shape. */
+interface AddNewUserModalProps {
   open: boolean;
   onClose: () => void;
   onAddUsers: (users: Record<string, unknown>[]) => void;
@@ -63,8 +64,16 @@ export interface AddNewUserModalProps {
    * excluded from the candidate list (baseline: `AddNewUserModal.jsx:
    * 14-32`'s `excludedUserIds`, built from `participants.filter(item =>
    * item.entity_name === ChatParticipantType.Users)`).
+   *
+   * Accepts EITHER shape, and reads both below. The domain rows this slice
+   * normalises are camelCase (`entityName`/`entityMeta`); the conversation
+   * payload the chat page holds is the raw snake_case wire row
+   * (`entity_name`/`entity_meta`). A filter that knew only the first is the
+   * exact mismatch that made the rail drop every user row before it was
+   * fixed — here it would have re-offered a person who is already in the
+   * conversation, and the second add would then 500 or duplicate.
    */
-  participants?: readonly Participant[];
+  participants?: readonly (Participant | Readonly<Record<string, unknown>>)[];
   /**
    * The current participant type filter (applications, pipelines, etc.).
    * Defaults to `['user']` — this modal's own baseline
@@ -125,9 +134,10 @@ const AddNewUserModal = memo((props: AddNewUserModalProps): React.ReactElement =
   // `AddNewUserModal.jsx:14-32`'s `excludedUserIds`.
   const excludedUserIds = useMemo(() => {
     const ids = (participants ?? [])
-      .filter((item) => item.entityName === 'user')
-      .map((item) => item.entityMeta?.id)
-      .filter((id): id is string => id !== undefined);
+      .filter((item) => (item.entityName ?? item.entity_name) === 'user')
+      .map((item) => (item.entityMeta ?? item.entity_meta)?.id)
+      .filter((id) => id !== undefined)
+      .map((id) => String(id));
     return new Set(ids);
   }, [participants]);
 
@@ -169,7 +179,7 @@ const AddNewUserModal = memo((props: AddNewUserModalProps): React.ReactElement =
   );
 
   return (
-    <Dialog open={open} onClose={onClose} onKeyDown={handleKeyDown} maxWidth="sm" fullWidth>
+    <Dialog open={open} onClose={onClose} onKeyDown={handleKeyDown} maxWidth="sm" fullWidth data-testid="add-participants-dialog">
       <DialogTitle>{t('chat-participants.modal.title', 'Add Participants')}</DialogTitle>
       <DialogContent>
         <Box sx={{ mb: 2 }}>
@@ -180,6 +190,7 @@ const AddNewUserModal = memo((props: AddNewUserModalProps): React.ReactElement =
             onChange={(e) => setSearchQuery(e.target.value)}
             size="small"
             autoComplete="off"
+            slotProps={{ htmlInput: { 'data-testid': 'add-participants-search' } }}
           />
         </Box>
         <Box sx={{ maxHeight: 300, overflow: 'auto' }}>
@@ -198,6 +209,7 @@ const AddNewUserModal = memo((props: AddNewUserModalProps): React.ReactElement =
             return (
               <Box
                 key={rowKey}
+                data-testid={`add-participant-option-${rowKey}`}
                 onClick={() => handleSelectUser(candidate.data)}
                 sx={{
                   display: 'flex',
@@ -234,6 +246,7 @@ const AddNewUserModal = memo((props: AddNewUserModalProps): React.ReactElement =
           onClick={handleAddSelected}
           disabled={selectedUsers.length === 0}
           variant="contained"
+          data-testid="add-participants-confirm"
         >
           {t('chat-participants.modal.addSelected', 'Add Selected')}
         </Button>

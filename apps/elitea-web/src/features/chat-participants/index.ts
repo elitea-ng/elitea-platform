@@ -29,6 +29,8 @@ export { Participants } from './ui/Participants';
 export { ParticipantsWrapper } from './ui/ParticipantsWrapper';
 export { default as ParticipantItem } from './ui/ExpandedParticipants/ParticipantItem';
 export { default as ParticipantWarning } from './ui/ExpandedParticipants/ParticipantWarning';
+/** The add-participant picker. Exported for `pages/chat`, the composition root that mounts it — see gap G2 in `ParticipantsLayout.tsx`'s header comment. */
+export { default as AddNewUserModal } from './ui/chat-modal/AddNewUserModal';
 
 // ── chat hooks ──
 export { default as useDeleteParticipant } from './hooks/chat/useDeleteParticipant';

@@ -78,8 +78,16 @@ const DeleteParticipantButton = memo((props: DeleteParticipantButtonProps): Reac
   const [open, setOpen] = useState(false);
 
   const entityType = resolveEntityType(participant);
+  // `meta.user_name` is in the chain because a user participant stored over
+  // the REST path carries only `entity_meta.id` — the server resolves the
+  // display name into `meta.user_name`. Without it the confirmation for
+  // detaching a person read "…remove Participant user from conversation?",
+  // naming nobody at the moment it asks for consent.
   const displayName = String(
-    participant.entity_meta?.name || participant.entity_meta?.model_name || t('chat-participants.common.participant', 'Participant'),
+    participant.entity_meta?.name ||
+      participant.entity_meta?.model_name ||
+      participant.meta?.user_name ||
+      t('chat-participants.common.participant', 'Participant'),
   );
   const removeLabel = entityType
     ? t('chat-participants.tooltip.removeEntity', 'Remove {{entityType}}', { entityType })

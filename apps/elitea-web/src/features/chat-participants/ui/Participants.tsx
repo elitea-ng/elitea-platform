@@ -83,6 +83,7 @@ export const Participants = memo(
     onCollapsed,
     disabledEdit,
     disabledAdd,
+    onAddParticipants,
     activeParticipantId,
     onSelectParticipant,
     onDeleteParticipant,
@@ -258,6 +259,7 @@ export const Participants = memo(
           onUpdateParticipant,
           editingToolkit,
           resolveToolkitIcon,
+          onAddParticipants,
         }}
         renderContextBudget={renderContextBudget}
         conversationId={conversationId}
