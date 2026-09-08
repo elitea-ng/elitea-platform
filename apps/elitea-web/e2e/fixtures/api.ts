@@ -482,31 +482,226 @@ export async function readVersionExpanded(
 export interface StoredTag {
   readonly id: string;
   readonly name: string;
+  /** The free-form blob the tag carries — the colour the rail draws it in. */
+  readonly data: unknown;
+}
+
+/**
+ * Which entities' tags to read.
+ *
+ * A project's `tags` table is shared by everything that can be tagged, so
+ * "the tags in this project" and "the tags I can filter agents by" are
+ * different sets. `all` — the default — is every row, including one that
+ * nothing carries yet, which is the only coverage a freshly CREATED tag
+ * appears in.
+ */
+export type TagCoverage = 'all' | 'application' | 'pipeline' | 'skill';
+
+/** How to read the project's tags. */
+export interface ReadTagsOptions {
+  readonly coverage?: TagCoverage;
+  readonly projectId?: string;
 }
 
 /**
  * The project's tags, as the tag control reads them.
  *
- * The list is filtered by NAME rather than paged: this reads the whole set
- * because the caller matches its own `autotest_` names out of it, and the
- * route offers no name filter to narrow with.
+ * The list is filtered by NAME by the caller rather than paged: this reads
+ * the whole set because the caller matches its own `autotest_` names out of
+ * it, and the route offers no name filter to narrow with. It does offer
+ * `entity_coverage`, which narrows by the KIND of entity carrying the tag,
+ * and that is what `options.coverage` sends.
  */
 export async function readTags(
   request: APIRequestContext,
-  projectId: string = DEFAULT_PROJECT_ID,
+  options: ReadTagsOptions = {},
 ): Promise<readonly StoredTag[]> {
+  const projectId = options.projectId ?? DEFAULT_PROJECT_ID;
   const url = `${API_BASE}/elitea_core/tags/prompt_lib/${projectId}`;
-  const response = await request.get(url);
+  const response = await request.get(url, {
+    params: options.coverage === undefined ? {} : { entity_coverage: options.coverage },
+  });
   if (!response.ok()) {
     throw new Error(
       `readTags: GET ${url} -> ${response.status()}: ${(await response.text()).slice(0, 300)}`,
     );
   }
-  const body = (await response.json()) as { rows?: readonly Record<string, unknown>[] };
+  const body = (await response.json()) as {
+    rows?: readonly Record<string, unknown>[];
+    total?: unknown;
+  };
   return (body.rows ?? []).map((row) => ({
     id: String(row['id'] ?? ''),
     name: String(row['name'] ?? ''),
+    data: row['data'] ?? null,
   }));
+}
+
+/** The whole tag-list response, for the journey whose subject is the envelope. */
+export async function readTagsEnvelope(
+  request: APIRequestContext,
+  options: ReadTagsOptions = {},
+): Promise<Record<string, unknown>> {
+  const projectId = options.projectId ?? DEFAULT_PROJECT_ID;
+  const url = `${API_BASE}/elitea_core/tags/prompt_lib/${projectId}`;
+  const response = await request.get(url, {
+    params: options.coverage === undefined ? {} : { entity_coverage: options.coverage },
+  });
+  if (!response.ok()) {
+    throw new Error(
+      `readTagsEnvelope: GET ${url} -> ${response.status()}: ` +
+        `${(await response.text()).slice(0, 300)}`,
+    );
+  }
+  return (await response.json()) as Record<string, unknown>;
+}
+
+/**
+ * Create a tag through the tag write API and answer the STORED row.
+ *
+ * Idempotent on the name, which is what the server is: one name is one row
+ * per project, shared by every version that carries it.
+ */
+export async function createTag(
+  request: APIRequestContext,
+  name: string,
+  data?: Readonly<Record<string, unknown>>,
+  projectId: string = DEFAULT_PROJECT_ID,
+): Promise<StoredTag> {
+  const url = `${API_BASE}/elitea_core/tags/prompt_lib/${projectId}`;
+  const response = await request.post(url, {
+    data: data === undefined ? { name } : { name, data },
+  });
+  if (!response.ok()) {
+    throw new Error(
+      `createTag: POST ${url} -> ${response.status()}: ${(await response.text()).slice(0, 300)}`,
+    );
+  }
+  const row = (await response.json()) as Record<string, unknown>;
+  return {
+    id: String(row['id'] ?? ''),
+    name: String(row['name'] ?? ''),
+    data: row['data'] ?? null,
+  };
+}
+
+/**
+ * Delete a tag by id. Answers the status, so a cleanup can stay quiet and a
+ * journey about the delete can assert on it.
+ */
+export async function deleteTag(
+  request: APIRequestContext,
+  tagId: string,
+  projectId: string = DEFAULT_PROJECT_ID,
+): Promise<number> {
+  const response = await request.delete(
+    `${API_BASE}/elitea_core/tags/prompt_lib/${projectId}/${tagId}`,
+  );
+  return response.status();
+}
+
+/**
+ * Remove every tag the project holds whose name starts with `autotest_`.
+ *
+ * A tag row outlives the agent that carried it — deleting an agent takes the
+ * ASSOCIATION and leaves the row — so a journey that saves a tag has to
+ * remove the row itself or leave one behind on every run.
+ */
+export async function deleteAutotestTags(
+  request: APIRequestContext,
+  names: readonly string[],
+  projectId: string = DEFAULT_PROJECT_ID,
+): Promise<void> {
+  const wanted = new Set(names);
+  for (const tag of await readTags(request, { projectId })) {
+    if (wanted.has(tag.name) && tag.id !== '') {
+      await deleteTag(request, tag.id, projectId);
+    }
+  }
+}
+
+/** One row of the agents list, as `GET /applications/...` serves it. */
+export interface ListedAgent extends Record<string, unknown> {
+  readonly id?: string;
+  readonly name?: string;
+}
+
+/** The agents-list envelope: `{rows, total, page, page_size, total_pages}`. */
+export interface AgentListEnvelope {
+  readonly rows: readonly ListedAgent[];
+  readonly body: Record<string, unknown>;
+}
+
+/**
+ * The agents list, NAMING what it wants.
+ *
+ * `query` is the list's own name filter, so a journey finds its own agents
+ * instead of asking for the first page of everything and hoping they are on
+ * it — the shape rule 2 of scripts/e2e-journey-shape.test.mjs states, and the
+ * one a suite that creates rows in parallel needs anyway.
+ */
+export async function readAgentList(
+  request: APIRequestContext,
+  options: {
+    readonly query?: string;
+    readonly limit?: number;
+    readonly agentsType?: string;
+    readonly projectId?: string;
+  } = {},
+): Promise<AgentListEnvelope> {
+  const projectId = options.projectId ?? DEFAULT_PROJECT_ID;
+  const url = `${API_BASE}/elitea_core/applications/prompt_lib/${projectId}`;
+  const params: Record<string, string | number> = { limit: options.limit ?? 20 };
+  if (options.query !== undefined) params['query'] = options.query;
+  if (options.agentsType !== undefined) params['agents_type'] = options.agentsType;
+  const response = await request.get(url, { params });
+  if (!response.ok()) {
+    throw new Error(
+      `readAgentList: GET ${url} -> ${response.status()}` +
+        `${await describeRefusal(response)}\n${(await response.text()).slice(0, 300)}`,
+    );
+  }
+  const body = (await response.json()) as Record<string, unknown>;
+  const rows = (body['rows'] as readonly ListedAgent[] | undefined) ?? [];
+  return { rows, body };
+}
+
+/**
+ * The author profile: identity plus the counters the profile page shows.
+ *
+ * `GET /elitea_core/author/prompt_lib/{author}` is a different route from
+ * `/social/author`, which answers the CALLER. This one answers any author by
+ * id, and counts the agents, pipelines and toolkits they own across every
+ * project they belong to.
+ */
+export async function readAuthorProfile(
+  request: APIRequestContext,
+  authorId: string,
+): Promise<Record<string, unknown>> {
+  const url = `${API_BASE}/elitea_core/author/prompt_lib/${authorId}`;
+  const response = await request.get(url);
+  if (!response.ok()) {
+    throw new Error(
+      `readAuthorProfile: GET ${url} -> ${response.status()}` +
+        `${await describeRefusal(response)}\n${(await response.text()).slice(0, 300)}`,
+    );
+  }
+  return (await response.json()) as Record<string, unknown>;
+}
+
+/** The signed-in caller, as `/social/author` answers it. */
+export async function readCallerIdentity(
+  request: APIRequestContext,
+): Promise<{ readonly id: string; readonly email: string }> {
+  const url = `${API_BASE}/social/author/`;
+  const response = await request.get(url);
+  if (!response.ok()) {
+    throw new Error(
+      `readCallerIdentity: GET ${url} -> ${response.status()}${await describeRefusal(response)}`,
+    );
+  }
+  const body = (await response.json()) as { id?: unknown; email?: unknown };
+  return { id: String(body.id ?? ''), email: String(body.email ?? '') };
 }
 
 /** What one sweep actually did, so a caller can assert on the work and not on the silence. */

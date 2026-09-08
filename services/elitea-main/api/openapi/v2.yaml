@@ -2304,10 +2304,15 @@ components:
           type: string
           format: date-time
           description: >
-            ALWAYS present despite the omitempty tag — encoding/json never
-            omits struct types, and the List path never scans the column, so
-            the wire carries the zero sentinel "0001-01-01T00:00:00Z" on
-            every row (types.go:23; repos/applications.go:66-107).
+            When the agent last changed. ALWAYS present despite the omitempty
+            tag — encoding/json never omits struct types. It used to be the
+            zero sentinel "0001-01-01T00:00:00Z" on every row, because
+            `applications` had no such column and nothing scanned one:
+            migrations/tenant/0134 adds it and every write stamps it inside
+            the statement that makes the change — a rename, a version save, a
+            new version, a version delete and a default-version change
+            (repos/applications.go). A request that changes nothing does not
+            move it.
         created_by: { type: string }
         owner_id: { type: string }
         authors:
@@ -2516,8 +2521,12 @@ components:
         presence varies by endpoint (hence the minimal required set):
         fetchVersionDetails always adds created_at/agent_type/instructions/
         welcome_message/llm_settings/meta/conversation_starters/
-        pipeline_settings/author_id/tools/tags/variables
-        (internal/api/v2/applications/handler.go:325-342); CreateVersion adds
+        pipeline_settings/author_id/author/tools/tags/variables
+        (internal/api/v2/applications/handler.go) — `author` is the same
+        {id, email, name} object the write echo carries, joined from
+        auth_core__user; the read used to answer author_id alone, so a
+        version's author had a name until the editor reloaded it;
+        CreateVersion adds
         author + is_forked but no pipeline_settings (:783-801); UpdateVersion
         emits the 10-key subset without created_at/author/tools (:913-919);
         Fork adds is_forked and omits pipeline_settings
@@ -5804,6 +5813,25 @@ components:
             never inspected. Channel-B fixture recommended (M1).
       description: >
         NOTE(W2): internal/api/v2/tags/handler.go:13-17.
+
+    TagWriteRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          description: >
+            The tag's name, which is its identity: `tags.name` is unique per
+            tenant schema. It is trimmed, and a blank one is refused with 400
+            (the column is NOT NULL).
+        data:
+          nullable: true
+          x-elitea-passthrough: >-
+            NOTE(W2): the same free-form jsonb blob `Tag.data` carries
+            (internal/api/v2/tags/handler.go:17) — stored verbatim when the
+            row is new, never inspected. Channel-B fixture recommended (M1).
+      description: >
+        The create body. `id` is not accepted: the store keys on the name.
 
     TagsList:
       type: object
@@ -16672,8 +16700,27 @@ paths:
       summary: Get all tags for a project
       description: |
         NOTE(W2): {rows, total} envelope (NOT a bare array),
-        internal/api/v2/tags/handler.go:37-49.
+        internal/api/v2/tags/handler.go.
       tags: [tags]
+      parameters:
+        - name: entity_coverage
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [all, application, pipeline, skill]
+          description: >
+            Narrows the list to the tags one KIND of entity carries. A
+            project's `tags` table is shared by everything that can be
+            tagged, so "the tags in this project" and "the tags I can filter
+            agents by" are different sets. `application` is the tags of
+            agents (applications with no pipeline version), `pipeline` the
+            tags of pipelines, `skill` the tags of skill versions. An absent
+            value — or `all` — answers every tag row the project holds,
+            INCLUDING one that nothing carries yet, which is the only way a
+            freshly created tag is visible. A value outside the enum is
+            refused with 400; the legacy implementation answered an empty
+            list, which reads exactly like a project with no tags.
       responses:
         '200':
           description: Tags
@@ -16681,8 +16728,69 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TagsList'
+        '400': { $ref: '#/components/responses/400' }
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
+
+    post:
+      operationId: createTag
+      summary: Create a tag in the project
+      description: |
+        Answers the STORED row, with the id the database chose.
+
+        It is idempotent on the NAME: `tags.name` is unique per tenant schema
+        and one name is one row shared by every version that carries it, so a
+        second create of the same name answers the row that already exists
+        rather than a second row or a conflict. `data` is written when the row
+        is new and left alone when it is not — the blob belongs to every
+        entity using the tag.
+
+        This verb used to echo the request back with 201 and an `id` of 0,
+        touching no table: a tag created here was in no list and its id
+        addressed nothing.
+      tags: [tags]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TagWriteRequest'
+      responses:
+        '201':
+          description: The stored tag
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Tag'
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+
+  /elitea_core/tags/prompt_lib/{project_id}/{tag_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: tag_id
+        in: path
+        required: true
+        schema: { type: integer }
+
+    delete:
+      operationId: deleteTag
+      summary: Remove a tag from the project
+      description: |
+        Removes the tag row and every association pointing at it, so the tag
+        leaves the project's list and every entity that carried it.
+
+        A tag the project does not hold answers 404 rather than the 204 a real
+        delete answers: this verb used to write 204 and return, so a caller
+        could not remove a tag at all and could not tell that it had not.
+      tags: [tags]
+      responses:
+        '204':
+          description: Deleted (no content)
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
 
   # ==========================================================================
   # TOOLKITS

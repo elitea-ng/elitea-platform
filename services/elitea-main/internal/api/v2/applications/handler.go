@@ -289,20 +289,30 @@ func (h *Handler) fetchVersionDetails(ctx context.Context, projectID, applicatio
 	var llmSettingsJSON, metaJSON, startersJSON, pipelineSettingsJSON []byte
 	var createdAt interface{}
 	var authorID *int
+	var authorEmail, authorName string
 
+	// The author is JOINED here rather than left to the caller. The write
+	// echo answers an `author` object — `{id, email, name}`, built by
+	// versionDetailsResponse — and this read, which is the agent editor's own
+	// RELOAD of the row it has just written, answered `author_id` and nothing
+	// else. The name a user saw beside a version therefore survived until the
+	// page was refreshed and then became an id, and every other reader that
+	// attributes a version (moderation, publish) had to make a second request
+	// for the same three fields the write already knew.
 	err := h.pool.QueryRow(ctx, fmt.Sprintf(`
 		SELECT v.id, v.application_id, v.name, v.status, v.created_at,
 			v.agent_type, v.instructions, v.welcome_message,
 			COALESCE(v.llm_settings::text, '{}'), COALESCE(v.meta::text, '{}'),
 			COALESCE(v.conversation_starters::text, '[]'),
 			COALESCE(v.pipeline_settings::text, '{}'),
-			v.author_id
+			v.author_id, COALESCE(u.email, ''), COALESCE(u.name, '')
 		FROM %s.application_versions v
+		LEFT JOIN public.auth_core__user u ON u.id = v.author_id
 		WHERE v.application_id = $1 AND v.id = $2`, s), applicationID, versionID).Scan(
 		&id, &appID, &name, &status, &createdAt,
 		&agentType, &instructions, &welcomeMsg,
 		&llmSettingsJSON, &metaJSON, &startersJSON, &pipelineSettingsJSON,
-		&authorID,
+		&authorID, &authorEmail, &authorName,
 	)
 	if err != nil {
 		return nil
@@ -423,7 +433,7 @@ func (h *Handler) fetchVersionDetails(ctx context.Context, projectID, applicatio
 	// control blanked itself. The rows exist; nothing read them.
 	tags := h.versionTagsOrEmpty(ctx, s, versionID)
 
-	return map[string]any{
+	detail := map[string]any{
 		"id":                    strconv.Itoa(id),
 		"application_id":        strconv.Itoa(appID),
 		"name":                  name,
@@ -441,6 +451,18 @@ func (h *Handler) fetchVersionDetails(ctx context.Context, projectID, applicatio
 		"tags":                  tags,
 		"variables":             variables,
 	}
+	// The same object the write echo carries, so a reload of a version reads
+	// the way the save of it did. `application_versions.author_id` is NOT
+	// NULL, so the key is absent only for a row written outside this schema's
+	// rules; when the join finds no account the id is still answered and the
+	// two name fields are empty, which says "this author is gone" rather than
+	// "this version has no author".
+	if authorID != nil {
+		detail["author"] = map[string]any{
+			"id": authorIDStr, "email": authorEmail, "name": authorName,
+		}
+	}
+	return detail
 }
 
 // principal resolves the owning auth_core__user id of the authenticated
@@ -495,6 +517,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	// is invisible to List (which INNER JOINs application_versions) and cannot
 	// be opened in the agent editor, so a half-created agent must not commit.
 	var initialVariables []any
+	var initialTags []any
 	if versions, ok := body["versions"].([]any); ok && len(versions) > 0 {
 		if vBody, ok := versions[0].(map[string]any); ok {
 			// Validate model_project_id if llm_settings provided
@@ -509,6 +532,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 			}
 			req.InitialVersion = versionFromBody(vBody, ownerID)
 			initialVariables, _ = vBody["variables"].([]any)
+			initialTags, _ = vBody["tags"].([]any)
 		}
 	}
 
@@ -535,15 +559,39 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	// above states for a missing version row, and the FK's ON DELETE CASCADE
 	// takes any rows that did land with it. A create the caller was told
 	// failed must leave nothing behind for them to find in the list.
+	rollback := func(cause error) {
+		if delErr := h.repo.Delete(r.Context(), projectID, app.ID); delErr != nil {
+			// Nothing left to do for the caller — they get the failure
+			// either way — but a stranded agent is worth a trail.
+			slog.ErrorContext(r.Context(), "rollback of a half-created application failed",
+				"application_id", app.ID, "err", delErr)
+		}
+		apierr.Write(w, cause)
+	}
 	if len(initialVariables) > 0 && len(app.Versions) > 0 {
 		if err := h.replaceVersionVariables(r.Context(), projectID, app.Versions[0].ID, initialVariables); err != nil {
-			if delErr := h.repo.Delete(r.Context(), projectID, app.ID); delErr != nil {
-				// Nothing left to do for the caller — they get the failure
-				// either way — but a stranded agent is worth a trail.
-				slog.ErrorContext(r.Context(), "rollback of a half-created application failed",
-					"application_id", app.ID, "err", delErr)
-			}
-			apierr.Write(w, err)
+			rollback(err)
+			return
+		}
+	}
+
+	// The tags the create body carried, written to the same association table
+	// a SAVE writes to.
+	//
+	// This path used to read every other key of the version body and not this
+	// one, so the create-agent form's tag control was accepted with a 201 and
+	// dropped: the same payload persisted its tags through
+	// `PUT /version/...` and lost them through `POST /applications/...`. The
+	// user who tagged an agent while creating it had to open it again and tag
+	// it a second time, and nothing said so.
+	//
+	// It runs AFTER repo.Create for the reason the variables above do — the
+	// association references application_versions(id), so the version row has
+	// to exist — and it takes the same rollback: a create the caller was told
+	// failed must leave no agent behind.
+	if len(initialTags) > 0 && len(app.Versions) > 0 {
+		if err := h.replaceVersionTags(r.Context(), projectID, app.Versions[0].ID, initialTags); err != nil {
+			rollback(err)
 			return
 		}
 	}
@@ -561,9 +609,14 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		"created_at": app.CreatedAt,
 	}
 	if len(app.Versions) > 0 {
-		// Create writes no tag association, so the echo says "none" and is
-		// true. `tags` on the write body is read by UpdateVersion only.
-		versionDetails := versionDetailsResponse(app.Versions[0], user, userID, nil)
+		// The echo reports the tags the DATABASE holds after the write, the
+		// same way the save's echo does: a duplicate name collapses to one
+		// row and a blank name is dropped, so echoing the request would
+		// over-report. It answered a hardcoded "none" while the create wrote
+		// no association at all.
+		s, _ := tenantSchema(projectID)
+		versionDetails := versionDetailsResponse(app.Versions[0], user, userID,
+			h.versionTagsOrEmpty(r.Context(), s, app.Versions[0].ID))
 		resp["version_details"] = versionDetails
 		resp["versions"] = []any{versionDetails}
 	}

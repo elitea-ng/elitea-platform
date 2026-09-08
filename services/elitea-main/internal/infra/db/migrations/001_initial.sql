@@ -314,6 +314,14 @@ BEGIN
             icon VARCHAR,
             owner_id INTEGER NOT NULL,
             created_at TIMESTAMP NOT NULL DEFAULT now(),
+            -- WHEN THE AGENT LAST CHANGED. Declared here and, for a schema
+            -- this function already built, by migrations/tenant/0134 — the
+            -- pair every table in this file needs (the canvas tables are the
+            -- same shape). The API has always carried an `updated_at` on
+            -- every agent it lists; there was no column to fill it from, so
+            -- the wire said "0001-01-01T00:00:00Z" for every agent ever
+            -- created. The writers set it (repos/applications.go).
+            updated_at TIMESTAMP NOT NULL DEFAULT now(),
             shared_owner_id INTEGER,
             shared_id INTEGER,
             uuid UUID UNIQUE DEFAULT gen_random_uuid(),

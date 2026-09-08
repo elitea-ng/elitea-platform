@@ -252,7 +252,7 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 			WHERE tv.application_id = a.id), '{}')`, s)
 	query := fmt.Sprintf(`
 		SELECT DISTINCT ON (a.id) a.id, a.name, COALESCE(a.description, ''), COALESCE(a.icon, ''),
-			a.owner_id, a.created_at, COALESCE(a.shared_id, 0),
+			a.owner_id, a.created_at, a.updated_at, COALESCE(a.shared_id, 0),
 			COALESCE(a.meta, '{}'::jsonb)::text,
 			COALESCE(av.agent_type, '`+defaultAgentType+`'),
 			COALESCE(u.id, 0), COALESCE(u.email, ''), COALESCE(u.name, ''),
@@ -289,7 +289,7 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 		)
 		if err := rows.Scan(
 			&app.ID, &app.Name, &app.Description, &app.Icon,
-			&app.OwnerID, &app.CreatedAt, &sharedID,
+			&app.OwnerID, &app.CreatedAt, &app.UpdatedAt, &sharedID,
 			&metaStr, &app.AgentType,
 			&authorID, &authorEmail, &authorName,
 			&app.Status, &app.Tags,
@@ -324,13 +324,13 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 }
 
 const applicationColumns = `id, name, COALESCE(description, ''), COALESCE(icon, ''),
-	owner_id, created_at, COALESCE(uuid::text, '')`
+	owner_id, created_at, updated_at, COALESCE(uuid::text, '')`
 
 func scanApplication(row rowScanner, projectID string) (applications.Application, error) {
 	var app applications.Application
 	if err := row.Scan(
 		&app.ID, &app.Name, &app.Description, &app.Icon,
-		&app.OwnerID, &app.CreatedAt, &app.UUID,
+		&app.OwnerID, &app.CreatedAt, &app.UpdatedAt, &app.UUID,
 	); err != nil {
 		return applications.Application{}, err
 	}
@@ -453,6 +453,12 @@ func (r *ApplicationsRepo) Update(ctx context.Context, req applications.UpdateRe
 	if len(setClauses) == 0 {
 		return r.Get(ctx, req.ProjectID, req.ApplicationID)
 	}
+	// Stamped in the SAME statement as the edit, never as a second write: a
+	// timestamp that can fail on its own is a timestamp that is sometimes
+	// wrong, and this one is the only answer the API has to "when did this
+	// agent last change". It is appended AFTER the early return above, so a
+	// request that changes nothing does not report a change.
+	setClauses = append(setClauses, "updated_at = now()")
 
 	args = append(args, req.ApplicationID)
 	query := fmt.Sprintf(`UPDATE %s.applications SET %s WHERE id = $%d RETURNING `+applicationColumns,
@@ -615,6 +621,13 @@ func insertVersion(ctx context.Context, q querier, s, applicationID string, v ap
 	// The INSERT ... RETURNING is wrapped in a CTE so the read projection —
 	// which needs the owning applications row for is_default — is the same
 	// SQL as GetVersion's.
+	// `touched` stamps the OWNING agent, in the same statement. A new version
+	// is a change to the agent, and applications.updated_at is what a client
+	// sorting by "last modified" reads. It is a CTE and not a second Exec so
+	// the two cannot disagree, and the SELECT below still reads the
+	// pre-statement `a` row (a data-modifying CTE is invisible to the rest of
+	// the query) — which is right: the version projection carries the
+	// version's own fields, not the agent's timestamp.
 	query := fmt.Sprintf(`
 		WITH v AS (
 			INSERT INTO %s.application_versions
@@ -622,8 +635,11 @@ func insertVersion(ctx context.Context, q querier, s, applicationID string, v ap
 				 welcome_message, llm_settings, conversation_starters, meta)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10::jsonb)
 			RETURNING *
+		), touched AS (
+			UPDATE %s.applications SET updated_at = now()
+			WHERE id = (SELECT application_id FROM v)
 		)
-		SELECT `+versionColumns+` FROM v JOIN %s.applications a ON a.id = v.application_id`, s, s)
+		SELECT `+versionColumns+` FROM v JOIN %s.applications a ON a.id = v.application_id`, s, s, s)
 
 	ver, err := scanVersion(q.QueryRow(ctx, query,
 		applicationID, name, status, v.AuthorID, agentType, v.Instructions,
@@ -737,14 +753,19 @@ func (r *ApplicationsRepo) UpdateVersion(ctx context.Context, projectID, applica
 	}
 
 	args = append(args, applicationID, versionID)
+	// …and the owning agent's `updated_at`, for the reason insertVersion
+	// stamps it: a version save IS the save a user made to the agent.
 	query := fmt.Sprintf(`
 		WITH v AS (
 			UPDATE %s.application_versions SET %s
 			WHERE application_id = $%d AND id = $%d
 			RETURNING *
+		), touched AS (
+			UPDATE %s.applications SET updated_at = now()
+			WHERE id = (SELECT application_id FROM v)
 		)
 		SELECT `+versionColumns+` FROM v JOIN %s.applications a ON a.id = v.application_id`,
-		s, strings.Join(setClauses, ", "), len(args)-1, len(args), s)
+		s, strings.Join(setClauses, ", "), len(args)-1, len(args), s, s)
 
 	ver, err := scanVersion(r.pool.QueryRow(ctx, query, args...))
 	if err != nil {
@@ -764,8 +785,17 @@ func (r *ApplicationsRepo) DeleteVersion(ctx context.Context, projectID, applica
 	if !isNumericRowID(applicationID) || !isNumericRowID(versionID) {
 		return apierr.NotFound("version not found")
 	}
-	ct, err := r.pool.Exec(ctx,
-		fmt.Sprintf(`DELETE FROM %s.application_versions WHERE application_id = $1 AND id = $2`, s),
+	// The count read below is the count of the STAMP, not of the delete, and
+	// they are the same number: the UPDATE touches one agent row for each
+	// version row the CTE removed, so zero still means "no such version".
+	ct, err := r.pool.Exec(ctx, fmt.Sprintf(`
+		WITH d AS (
+			DELETE FROM %s.application_versions
+			WHERE application_id = $1 AND id = $2
+			RETURNING application_id
+		)
+		UPDATE %s.applications SET updated_at = now()
+		WHERE id IN (SELECT application_id FROM d)`, s, s),
 		applicationID, versionID)
 	if err != nil {
 		return fmt.Errorf("applications: delete version: %w", err)
@@ -810,7 +840,8 @@ func (r *ApplicationsRepo) SetDefaultVersion(ctx context.Context, projectID, app
 
 	ct, err := r.pool.Exec(ctx, fmt.Sprintf(`
 		UPDATE %s.applications
-		SET meta = jsonb_set(COALESCE(meta, '{}'::jsonb), '{`+defaultVersionMetaKey+`}', to_jsonb($1::text))
+		SET meta = jsonb_set(COALESCE(meta, '{}'::jsonb), '{`+defaultVersionMetaKey+`}', to_jsonb($1::text)),
+			updated_at = now()
 		WHERE id = $2`, s), versionID, applicationID)
 	if err != nil {
 		return fmt.Errorf("applications: set default version: %w", err)

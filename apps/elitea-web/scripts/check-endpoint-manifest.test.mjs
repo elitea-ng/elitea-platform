@@ -542,7 +542,22 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
  * `warning_active` is a new FIELD on BudgetState, not a new operation, and
  * every route that carries it was already described.
  */
-const GENERATED_OPERATION_COUNT = 232;
+/*
+ * 232 -> 234, when the tag WRITE verbs were described (`createTag`,
+ * `deleteTag`). Both routes have been mounted since the tags family landed and
+ * neither did anything: the create echoed the request back with 201 and an
+ * `id` of 0, the delete wrote 204 and returned, and the only way a tag row
+ * ever appeared was as a side effect of a version save. They store and remove
+ * rows now, so the contract describes them.
+ *
+ * The `entity_coverage` filter that arrives with them moves NEITHER number: it
+ * is a query PARAMETER on the existing `listTags`, not a new operation.
+ *
+ * MANIFEST_ENTRY_COUNT is unchanged. No UI ships with this change — the tag
+ * rail still reads the list alone — so neither operation acquires a caller,
+ * which is the same case as every backend-only step above.
+ */
+const GENERATED_OPERATION_COUNT = 234;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
