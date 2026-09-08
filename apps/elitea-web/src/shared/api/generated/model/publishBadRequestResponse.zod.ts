@@ -53,7 +53,7 @@ export const PublishBadRequestResponse = zod
       .string()
       .optional()
       .describe(
-        'Present alongside error=\"pipeline_not_publishable\" and error=\"validation_token_invalid\", where it says which of the four token findings was made.\n',
+        'Present alongside error=\"pipeline_not_publishable\" and error=\"validation_token_invalid\", where it says which of the four token findings was made. Also present alongside error=\"llm_not_shared\" when the version names a PLATFORM model that is not granted to every project: a platform model is available to all projects, to none, or to a chosen set (share_scope \/ shared_with on the catalogue row), and a published agent is read by every project that opens the catalogue, so it may only name a model available to all of them. The message names the model and the scope that was found.\n',
       ),
   })
   .describe(

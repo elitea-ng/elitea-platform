@@ -1,6 +1,14 @@
 /**
  * Create / edit one platform-wide model.
  *
+ * ## "Available to" decides WHO gets the model
+ *
+ * A platform model used to be offered to every project the moment it existed.
+ * It can now be granted to every project, to none, or to a chosen set
+ * (`PlatformModelGrantFields.tsx`). The control is offered for every kind,
+ * because the grant is a fact about the row's audience rather than about what
+ * the model can do — unlike the chat fields, which only one kind declares.
+ *
  * ## An edit MERGES over the stored row
  *
  * The update replaces the `data` column whole. This dialog used to build that
@@ -62,6 +70,7 @@ import Typography from '@mui/material/Typography';
 import { t } from '@/shared/i18n';
 
 import { PlatformModelChatFields } from './PlatformModelChatFields';
+import { PlatformModelGrantFields } from './PlatformModelGrantFields';
 import {
   platformModelTypeLabel,
   type PlatformModel,
@@ -163,7 +172,7 @@ export function PlatformModelDialog({
         <Typography variant="bodySmall" color="text.secondary">
           {t(
             'pages.admin.platformModels.dialog.intro',
-            'A platform model is offered to every project on this deployment, and names the platform provider it uses. Both halves are required: a model with no provider is stored and never served.',
+            'A platform model names the platform provider it uses, and says which projects may use it. Both are required: a model with no provider is stored and never served.',
           )}
         </Typography>
 
@@ -235,6 +244,11 @@ export function PlatformModelDialog({
             </MenuItem>
           ))}
         </TextField>
+
+        {/* Offered for EVERY kind. The grant is a fact about who the row is
+            for, not about what the model can do, so all five model types carry
+            it — unlike the chat fields below. */}
+        <PlatformModelGrantFields form={form} onChange={update} />
 
         {tiered ? <PlatformModelChatFields form={form} onChange={update} /> : null}
       </DialogContent>

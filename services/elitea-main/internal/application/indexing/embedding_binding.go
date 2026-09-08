@@ -11,6 +11,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
 	runtimedomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
 )
 
@@ -279,6 +280,12 @@ func (r *CurrentEmbeddingBindingResolver) resolveCurrentEmbeddingConfiguration(
 		if !found {
 			return CurrentEmbeddingConfiguration{}, false, ErrCurrentEmbeddingBindingUnavailable
 		}
+		// A pinned PUBLIC row is still subject to the grant. The pin says which
+		// project the model was resolved in, not that this project may use it.
+		if *preferredProjectID == r.publicProject && projectID != r.publicProject &&
+			!platformModelGrantsProject(configuration.Data, projectID) {
+			return CurrentEmbeddingConfiguration{}, false, ErrCurrentEmbeddingBindingUnavailable
+		}
 		return configuration, true, nil
 	}
 
@@ -303,7 +310,32 @@ func (r *CurrentEmbeddingBindingResolver) resolveCurrentEmbeddingConfiguration(
 	if err != nil {
 		return CurrentEmbeddingConfiguration{}, false, currentEmbeddingDependencyError(ctx, err)
 	}
+	if found && !platformModelGrantsProject(configuration.Data, projectID) {
+		// The row is published and this project holds no grant for it, so for
+		// this project the model does not exist. NOT FOUND rather than an
+		// error: an ungranted model is the same answer as an absent one, and
+		// every caller already handles it.
+		return CurrentEmbeddingConfiguration{}, false, nil
+	}
 	return configuration, found, nil
+}
+
+// platformModelGrantsProject reports whether a shared public-project row is
+// offered to projectID.
+//
+// The rule and its leniency are stated once, in
+// application/configurations/model_grant.go: an absent or unreadable grant
+// means every project, because that is what every row written before the field
+// existed meant. This is the THIRD reader of it inside elitea-main — the model
+// catalogue and the admin surface are the others — and it is here because the
+// index plane resolves a platform embedding model on its own path. Without it a
+// project could not SEE a model it could still build an index against.
+func platformModelGrantsProject(data json.RawMessage, projectID int32) bool {
+	var decoded map[string]any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return true
+	}
+	return configurationapp.ReadModelGrant(decoded).Allows(projectID)
 }
 
 func currentEmbeddingConfigurationDigest(
@@ -360,6 +392,23 @@ func decodeCurrentEmbeddingConfigurationData(raw []byte) (currentEmbeddingConfig
 	var document struct {
 		Name          string                               `json:"name"`
 		AICredentials *currentEmbeddingCredentialReference `json:"ai_credentials"`
+		// The platform GRANT. It is declared here so the strict decode ACCEPTS
+		// it, and it is deliberately absent from the canonical document below.
+		//
+		// A platform embedding model can be granted to every project, to none,
+		// or to a chosen set (application/configurations/model_grant.go), and
+		// the two fields live on the same `data` object this decoder reads.
+		// Without these two lines a granted embedding model failed the decode
+		// entirely, which this package reports as an invalid binding: the model
+		// would stop resolving for every project, including the ones it had
+		// just been granted to.
+		//
+		// It stays out of the DIGEST because the digest identifies the binding
+		// an index was built against. Re-granting a model does not change what
+		// it embeds, and a digest that moved with the grant would invalidate
+		// every index the moment an operator added one project to the list.
+		ShareScope string          `json:"share_scope"`
+		SharedWith json.RawMessage `json:"shared_with"`
 	}
 	if err := decoder.Decode(&document); err != nil {
 		return currentEmbeddingConfigurationData{}, ErrInvalidCurrentEmbeddingBinding

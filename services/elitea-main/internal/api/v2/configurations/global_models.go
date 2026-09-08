@@ -71,6 +71,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
 
 	"github.com/jackc/pgx/v5"
@@ -135,6 +136,20 @@ type GlobalModel struct {
 	// would clear the flag of every model it saved.
 	LowTier  bool `json:"low_tier"`
 	HighTier bool `json:"high_tier"`
+	// ShareScope and SharedWith are the row's GRANT: which projects this
+	// platform model is offered to. `shared = true` still marks the row as a
+	// platform row — every reader keys on it — and the scope narrows it to
+	// every project (`all`), to none (`none`), or to the ids in SharedWith
+	// (`projects`).
+	//
+	// A row written before the grant existed carries neither field and was
+	// offered to every project, so it is REPORTED as `all` rather than as an
+	// empty string: the panel renders this value, and a blank there would read
+	// as "this model is granted to nobody" for every model on the deployment.
+	ShareScope string `json:"share_scope"`
+	// SharedWith is empty for every scope but `projects`, and it is a list
+	// rather than an omitted field so the edit dialog can clear it.
+	SharedWith []int `json:"shared_with"`
 	// Data is the row's stored `data` object, ENTIRE.
 	//
 	// The fields above name what this listing interprets. They are not what the
@@ -310,6 +325,12 @@ func scanGlobalModel(
 	item.CredentialName = credentialTitleOf(decoded)
 	item.LowTier = globalModelFlag(decoded, "low_tier")
 	item.HighTier = globalModelFlag(decoded, "high_tier")
+	grant := configurationapp.ReadModelGrant(decoded)
+	item.ShareScope = string(grant.Scope)
+	item.SharedWith = make([]int, 0, len(grant.Projects))
+	for _, projectID := range grant.Projects {
+		item.SharedWith = append(item.SharedWith, int(projectID))
+	}
 	// An EMPTY object, never a null, when the column would not decode. The
 	// dialog merges its edited fields over this one, and `null` there would make
 	// the merge itself the thing that fails — a corrupt row would stop being
@@ -468,6 +489,9 @@ func (h *Handler) rewriteGlobalModelBody(
 	if !h.admitGlobalModelCredential(w, r, body) {
 		return nil, false
 	}
+	if !admitGlobalModelGrant(w, body) {
+		return nil, false
+	}
 	// The model dialog has no label field either — see completeGlobalRowLabel
 	// in global_providers.go, which both surfaces share along with the body
 	// bound and the shared-flag rule.
@@ -559,4 +583,85 @@ func (h *Handler) admitGlobalModelCredential(
 		return false
 	}
 	return true
+}
+
+// admitGlobalModelGrant refuses a grant this platform cannot act on.
+//
+// The READ side is deliberately lenient — an absent or malformed scope is read
+// as "every project", because that is what every row written before the field
+// existed meant and a stricter read would withdraw them all (see
+// application/configurations/model_grant.go). That leniency is only safe while
+// the WRITE side refuses what it cannot store, which is here: a scope this
+// platform does not know, and a `projects` grant naming no project, would both
+// be stored and then read back as "all" — the opposite of what the operator
+// chose, reported to them as a success.
+//
+// Like the credential check it keys on the PRESENCE of `data`, so a partial
+// update that touches neither field is not asked about them. `data` is
+// replaced whole, though, so a body that carries the object and omits the
+// scope is a row with no scope — which is "all", and is the same answer the
+// row had before this feature. That is why an omitted scope is admitted rather
+// than required.
+func admitGlobalModelGrant(w http.ResponseWriter, body map[string]any) bool {
+	raw, present := body["data"]
+	if !present {
+		return true
+	}
+	data, _ := raw.(map[string]any)
+	if data == nil {
+		return true
+	}
+	scopeValue, hasScope := data[configurationapp.ModelShareScopeField]
+	if !hasScope {
+		return true
+	}
+	scope, isString := scopeValue.(string)
+	if !isString || !configurationapp.IsSupportedModelShareScope(
+		configurationapp.ModelShareScope(scope)) {
+		apierr.WriteStatus(w, http.StatusBadRequest,
+			"a platform model is available to one of: "+strings.Join(globalModelShareScopes(), ", ")+
+				". An unknown value is read back as \"all\", so it would grant the model to "+
+				"every project while the screen said otherwise.")
+		return false
+	}
+	if configurationapp.ModelShareScope(scope) != configurationapp.ModelShareScopeProjects {
+		// The list is CLEARED, never left behind. A row that had been granted
+		// to three projects and is now granted to none would otherwise keep
+		// naming them, and the next edit that switched back to `projects` would
+		// silently restore a grant nobody re-chose.
+		data[configurationapp.ModelSharedWithField] = []any{}
+		return true
+	}
+	granted := configurationapp.ReadModelGrant(data)
+	if len(granted.Projects) == 0 {
+		apierr.WriteStatus(w, http.StatusBadRequest,
+			"a model available to selected projects must name at least one project id in "+
+				configurationapp.ModelSharedWithField+
+				". A list that names none grants the model to nobody, which is the \"none\" choice.")
+		return false
+	}
+	// Rewritten as the ids that were READ, so what is stored is what the rule
+	// above admitted. A body that spelled an id as a string, or repeated one,
+	// is stored once and as a number — the shape every reader expects.
+	normalized := make([]any, 0, len(granted.Projects))
+	seen := make(map[int32]struct{}, len(granted.Projects))
+	for _, projectID := range granted.Projects {
+		if _, duplicate := seen[projectID]; duplicate {
+			continue
+		}
+		seen[projectID] = struct{}{}
+		normalized = append(normalized, projectID)
+	}
+	data[configurationapp.ModelSharedWithField] = normalized
+	return true
+}
+
+// globalModelShareScopes are the grant scopes a platform model may carry, in a
+// stable order for the refusal above.
+func globalModelShareScopes() []string {
+	return []string{
+		string(configurationapp.ModelShareScopeAll),
+		string(configurationapp.ModelShareScopeNone),
+		string(configurationapp.ModelShareScopeProjects),
+	}
 }

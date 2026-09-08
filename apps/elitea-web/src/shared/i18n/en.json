@@ -1540,7 +1540,7 @@
   "pages.admin.platformModels.dialog.cancel": "Cancel",
   "pages.admin.platformModels.dialog.create": "Add a platform model",
   "pages.admin.platformModels.dialog.edit": "Edit platform model",
-  "pages.admin.platformModels.dialog.intro": "A platform model is offered to every project on this deployment, and names the platform provider it uses. Both halves are required: a model with no provider is stored and never served.",
+  "pages.admin.platformModels.dialog.intro": "A platform model names the platform provider it uses, and says which projects may use it. Both are required: a model with no provider is stored and never served.",
   "pages.admin.platformModels.dialog.save": "Save",
   "pages.admin.platformModels.dialog.saving": "Saving…",
   "pages.admin.platformModels.edit": "Edit",
@@ -4096,5 +4096,18 @@
   "pages.admin.platformModels.field.openaiCompatible": "Speaks the OpenAI wire format",
   "pages.admin.platformModels.field.supportsReasoning": "Supports reasoning",
   "pages.admin.platformModels.field.supportsVision": "Accepts images",
-  "pages.admin.platformModels.noProvider": "no provider linked"
+  "pages.admin.platformModels.noProvider": "no provider linked",
+  "pages.admin.platformModels.column.availableTo": "Available to",
+  "pages.admin.platformModels.field.shareScope": "Available to",
+  "pages.admin.platformModels.field.shareScopeHelp": "Which projects may see and use this model. A project with no grant cannot select it and cannot call it.",
+  "pages.admin.platformModels.field.sharedWith": "Projects",
+  "pages.admin.platformModels.field.sharedWithPlaceholder": "Search by project name",
+  "pages.admin.platformModels.field.sharedWithHelp": "At least one. A model available to no selected project is available to nobody.",
+  "pages.admin.platformModels.field.projectById": "Project {{id}}",
+  "pages.admin.platformModels.scope.all": "All projects",
+  "pages.admin.platformModels.scope.none": "No project",
+  "pages.admin.platformModels.scope.projects": "Selected projects",
+  "pages.admin.platformModels.scope.chipAll": "All projects",
+  "pages.admin.platformModels.scope.chipNone": "No project",
+  "pages.admin.platformModels.scope.chipProjects": "{{count}} projects"
 }

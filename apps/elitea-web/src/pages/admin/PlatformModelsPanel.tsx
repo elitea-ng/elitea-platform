@@ -34,6 +34,12 @@ import Typography from '@mui/material/Typography';
 import { t } from '@/shared/i18n';
 
 import { PlatformModelDialog } from './PlatformModelDialog';
+import {
+  shareScopeChipColour,
+  shareScopeChipLabel,
+  shareScopeOf,
+  sharedWithOf,
+} from './platformModelGrant';
 import { configFailureReason } from './api/adminConfigurationApi';
 import {
   platformModelTypeLabel,
@@ -46,6 +52,20 @@ import {
 } from './api/adminLlmPlatformModelsApi';
 
 const EMPTY_MODELS: readonly PlatformModel[] = [];
+
+/** One row's "Available to" chip. */
+function GrantChip({ row }: { readonly row: PlatformModel }): ReactNode {
+  const scope = shareScopeOf(row);
+  return (
+    <Chip
+      size="small"
+      variant="outlined"
+      color={shareScopeChipColour(scope)}
+      data-testid="platform-model-scope"
+      label={shareScopeChipLabel(scope, sharedWithOf(row).length)}
+    />
+  );
+}
 
 function ModelRows({
   items,
@@ -66,6 +86,9 @@ function ModelRows({
             <TableCell>{t('pages.admin.platformModels.column.kind', 'Kind')}</TableCell>
             <TableCell>{t('pages.admin.platformModels.column.wireName', 'Provider model')}</TableCell>
             <TableCell>{t('pages.admin.platformModels.column.provider', 'Provider')}</TableCell>
+            <TableCell>
+              {t('pages.admin.platformModels.column.availableTo', 'Available to')}
+            </TableCell>
             <TableCell align="right">
               {t('pages.admin.platformModels.column.actions', 'Actions')}
             </TableCell>
@@ -111,6 +134,13 @@ function ModelRows({
                     {row.credential_name}
                   </Typography>
                 )}
+              </TableCell>
+              <TableCell>
+                {/* The grant, on the row rather than only in the dialog: the
+                    question this table is read to answer is which model a
+                    project is missing, and a scope only the edit form showed
+                    would need one click per model to answer it. */}
+                <GrantChip row={row} />
               </TableCell>
               <TableCell align="right">
                 <Button

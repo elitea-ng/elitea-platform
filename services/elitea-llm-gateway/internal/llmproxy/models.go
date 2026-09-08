@@ -212,6 +212,16 @@ type modelCredentialLookups struct {
 	projectLocal     []map[string]credentialRef
 	personal         []map[string]credentialRef
 	modelOwnerAccess bool
+	// grantedTo is the CALLER's project id, and it is set for the public-scope
+	// pass alone. A catalogue row is skipped unless its grant names this
+	// project (model_grant.go). Empty means "do not filter", which is what an
+	// own-project read is: a project's own rows are its own.
+	//
+	// It sits on this struct rather than beside it because it is the same kind
+	// of fact — whose scopes this read is being made for — and adding a
+	// positional parameter to queryScope for it would make the two boolean
+	// arguments three.
+	grantedTo string
 }
 
 // modelSection is one (section, type) pair in p_{projectID}.configuration that
@@ -594,10 +604,18 @@ func (m *ModelResolver) query(ctx context.Context, projectID string) ([]modelObj
 	// A public model's private:false link uses the model owner's credential.
 	// private:true retains the current platform's personal-project behavior and
 	// falls back only to a separately published public credential.
+	// THE GRANT IS APPLIED HERE, on the public scope alone.
+	//
+	// `shared = true` says the row is a platform row; the grant says which
+	// projects it is offered to (model_grant.go). The caller's own rows are
+	// never filtered — they are its own whatever their `data` says — and the
+	// public scope is not read at all when the caller IS the public project,
+	// so the catalogue keeps seeing its own withdrawn models.
 	if err := m.queryScope(ctx, m.publicProjectID, true, modelCredentialLookups{
 		projectLocal:     []map[string]credentialRef{publicModelOwnerCreds},
 		personal:         []map[string]credentialRef{ownCreds, publicCreds},
 		modelOwnerAccess: true,
+		grantedTo:        projectID,
 	}, &models, seen); err != nil {
 		return nil, err
 	}
@@ -649,6 +667,12 @@ func (m *ModelResolver) queryScope(
 		// rather than advertise another project's private model.
 		if sharedOnly && !shared {
 			return fmt.Errorf("model row from project %s escaped the shared scope", scopeProjectID)
+		}
+		// A platform row the caller holds no grant for is not this caller's
+		// model. Skipped rather than refused: the row is valid, it is simply
+		// not offered here, and the same read serves every other caller.
+		if !modelRowGrantsProject(dataBytes, creds.grantedTo) {
+			continue
 		}
 		id, providerModel, link := modelNames(title, dataBytes)
 		if id == "" {

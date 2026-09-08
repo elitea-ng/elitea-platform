@@ -229,11 +229,27 @@ export interface CatalogueModel {
  * full deployment the first, and a helper that read only one of them would
  * resolve a title as a model name on one of the two and fail to match at all.
  */
+export interface ReadProjectModelsOptions {
+  /**
+   * Merge the CATALOGUE's published models into the answer.
+   *
+   * The route defaults it to false, and the product sends it as
+   * `projectId !== publicProjectId` (`configurationsPanel.helpers.ts`). A
+   * journey about a PLATFORM model has to ask for it: without it the answer is
+   * the project's own rows and a platform model — granted or not — is absent
+   * from every one of them, so an assertion made on the default would pass
+   * whatever the grant said.
+   */
+  readonly includeShared?: boolean;
+}
+
 export async function readProjectModels(
   request: APIRequestContext,
   projectId: string,
+  options: ReadProjectModelsOptions = {},
 ): Promise<readonly CatalogueModel[]> {
-  const url = `${API_BASE}/configurations/models/${projectId}`;
+  const query = options.includeShared === true ? '?include_shared=true' : '';
+  const url = `${API_BASE}/configurations/models/${projectId}${query}`;
   const response = await request.get(url);
   if (!response.ok()) {
     throw new Error(

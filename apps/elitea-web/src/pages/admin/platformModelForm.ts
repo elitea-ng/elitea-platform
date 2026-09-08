@@ -25,6 +25,12 @@
  * into an invalid binding rather than a model with an ignored extra.
  */
 import type { PlatformModel, PlatformModelData, PlatformModelDraft } from './api/adminLlmPlatformModelsApi';
+import {
+  DEFAULT_SHARE_SCOPE,
+  shareScopeOf,
+  sharedWithOf,
+  type ShareScope,
+} from './platformModelGrant';
 
 /** The value of the provider select before one has been chosen. */
 export const NO_CREDENTIAL_CHOSEN = '';
@@ -74,6 +80,14 @@ export interface ModelForm {
   readonly openaiCompatible: boolean;
   readonly supportsReasoning: boolean;
   readonly supportsVision: boolean;
+  /**
+   * Which projects the model is offered to. It is a field of every kind, not
+   * of the chat kind alone: it says who the ROW is for, not what the model can
+   * do, and all five model types carry it.
+   */
+  readonly shareScope: ShareScope;
+  /** Read only for `projects`, and cleared by the submit for every other scope. */
+  readonly sharedWith: readonly number[];
 }
 
 /** One stored boolean, or the registry default when the row carries none. */
@@ -117,6 +131,11 @@ export function formOf(
       openaiCompatible: false,
       supportsReasoning: false,
       supportsVision: DEFAULT_SUPPORTS_VISION,
+      // A NEW model is offered to everyone, which is what publishing one meant
+      // before the grant existed. Opening on "no project" would make the
+      // ordinary case the one that needs a second decision.
+      shareScope: DEFAULT_SHARE_SCOPE,
+      sharedWith: [],
     };
   }
   // `credential_name` is empty on a row written before the link was required.
@@ -137,6 +156,11 @@ export function formOf(
     openaiCompatible: storedFlag(stored, 'openai_compatible', false),
     supportsReasoning: storedFlag(stored, 'supports_reasoning', false),
     supportsVision: storedFlag(stored, 'supports_vision', DEFAULT_SUPPORTS_VISION),
+    // Read from the row's own reported fields, like the tiers: the server
+    // interprets an absent scope as `all`, and a form that opened on a blank
+    // would save "granted to nobody" over a model nobody had restricted.
+    shareScope: shareScopeOf(editing),
+    sharedWith: sharedWithOf(editing),
   };
 }
 
@@ -151,7 +175,12 @@ export function formIsComplete(form: ModelForm): boolean {
   return (
     form.name.trim() !== '' &&
     form.modelName.trim() !== '' &&
-    form.credential !== NO_CREDENTIAL_CHOSEN
+    form.credential !== NO_CREDENTIAL_CHOSEN &&
+    // "Selected projects" with nothing selected grants the model to nobody,
+    // which is the OTHER choice on the same control. The server refuses that
+    // body; Save is disabled instead, so the operator is told while they can
+    // still pick a project.
+    (form.shareScope !== 'projects' || form.sharedWith.length > 0)
   );
 }
 
@@ -195,7 +224,24 @@ export function modelDraftOf(
       ...stored,
       name: form.modelName.trim(),
       ai_credentials: { elitea_title: form.credential },
+      ...grantFields(form),
       ...chatFields(form),
     },
+  };
+}
+
+/**
+ * The grant, written over the merge base on every save.
+ *
+ * `shared_with` is sent EMPTY for the two scopes that do not read it, never
+ * omitted. `data` is replaced whole, so an omitted field would be dropped —
+ * but the base this merges over carries the stored list, so omitting it would
+ * keep naming the projects a withdrawn model no longer serves, and the next
+ * switch back to "selected projects" would restore a grant nobody re-chose.
+ */
+function grantFields(form: ModelForm): Partial<PlatformModelData> {
+  return {
+    share_scope: form.shareScope,
+    shared_with: form.shareScope === 'projects' ? [...form.sharedWith] : [],
   };
 }

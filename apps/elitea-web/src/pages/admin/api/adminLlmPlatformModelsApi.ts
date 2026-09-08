@@ -85,6 +85,20 @@ export interface PlatformModel {
   readonly low_tier?: boolean;
   readonly high_tier?: boolean;
   /**
+   * Which projects this platform model is offered to — `all`, `none`, or the
+   * ids in `shared_with`.
+   *
+   * `shared = true` still means "this is a platform row"; the grant NARROWS it.
+   * A row written before the grant existed carries neither field and was
+   * offered to every project, so the SERVER reports such a row as `all`. The
+   * field is optional here for a different reason: a server that predates it
+   * sends none, and this screen must not render "granted to nobody" for every
+   * model on that deployment.
+   */
+  readonly share_scope?: string;
+  /** Empty for every scope but `projects`. */
+  readonly shared_with?: readonly number[];
+  /**
    * The row's stored `data` object, ENTIRE — the merge base the edit dialog
    * writes its own fields over.
    *
@@ -156,6 +170,13 @@ export interface PlatformModelData {
   readonly openai_compatible?: boolean;
   readonly supports_reasoning?: boolean;
   readonly supports_vision?: boolean;
+  /**
+   * The grant. Both fields are sent on every save, whatever the kind: the five
+   * model types all carry it, because it is a fact about the ROW's audience and
+   * not about what the model can do.
+   */
+  readonly share_scope?: string;
+  readonly shared_with?: readonly number[];
   readonly [field: string]: unknown;
 }
 

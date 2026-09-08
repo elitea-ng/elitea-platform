@@ -1089,6 +1089,18 @@ func (h *Handler) Publish(w http.ResponseWriter, r *http.Request) {
 				writeJSON(w, http.StatusBadRequest, map[string]any{"error": "llm_not_shared"})
 				return
 			}
+			// The model IS the catalogue's — and the catalogue's own models are
+			// no longer one set. A platform model carries a GRANT, and a
+			// published agent is offered to every project that reads the
+			// catalogue, so it may only name a model granted to all of them.
+			// Same code, because it is the same finding; the `msg` names the
+			// scope that was found. See publish_model_grant.go.
+			if refusal := h.publishGrantRefusal(ctx, llmSettings); refusal != "" {
+				writeJSON(w, http.StatusBadRequest, map[string]any{
+					"error": "llm_not_shared", "msg": refusal,
+				})
+				return
+			}
 		}
 	}
 
@@ -1871,6 +1883,15 @@ func (h *Handler) runPublishValidation(ctx context.Context, s, versionID, versio
 				criticalIssues = append(criticalIssues, map[string]any{
 					"field":  "llm_settings",
 					"issue":  "model is not shared and cannot be used in published agents",
+					"source": "deterministic",
+				})
+			} else if refusal := h.publishGrantRefusal(ctx, llm); refusal != "" {
+				// The same rule the publish itself applies, raised HERE so the
+				// author reads it in the pre-publish check rather than only in
+				// the refusal of the publish they then attempt.
+				criticalIssues = append(criticalIssues, map[string]any{
+					"field":  "llm_settings",
+					"issue":  refusal,
 					"source": "deterministic",
 				})
 			}

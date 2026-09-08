@@ -569,6 +569,26 @@ adminTest('J34n: a platform model cannot be authored without a platform provider
   await expect(dialog.getByTestId('platform-model-low-tier')).toBeVisible();
   await expect(dialog.getByTestId('platform-model-high-tier')).toBeVisible();
 
+  // "Available to" — WHO gets the model. A platform model used to be offered
+  // to every project the moment it existed; it can now be granted to every
+  // project, to none, or to a chosen set. The control opens on "All projects",
+  // which is what publishing one used to mean, so an operator who ignores it
+  // gets the behaviour they had. The project picker is NOT here yet, and its
+  // absence is the assertion: it is mounted for the one scope that reads it,
+  // so a dialog opened to rename a model does not fetch a page of projects.
+  //
+  // The three choices, the wire they produce and the grant a stored model
+  // opens on are pinned where they can be pinned without publishing a platform
+  // credential on this shared deployment: PlatformModelsPanel.test.tsx for the
+  // form, e2e/journeys/api/api.model-grants.spec.ts for the enforcement.
+  const scope = dialog.getByRole('combobox', { name: /Available to/ });
+  await expect(scope).toHaveText('All projects');
+  await expect(dialog.getByTestId('platform-model-shared-with')).toHaveCount(0);
+  await scope.click();
+  await expect(page.getByRole('option', { name: 'Selected projects' })).toBeVisible();
+  await expect(page.getByRole('option', { name: 'No project' })).toBeVisible();
+  await page.keyboard.press('Escape');
+
   await dialog.getByRole('button', { name: 'Cancel' }).click();
   await expect(dialog).toHaveCount(0);
 
