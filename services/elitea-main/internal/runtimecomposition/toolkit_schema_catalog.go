@@ -8,12 +8,12 @@ import (
 	"errors"
 	"io"
 	"math"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 
 	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/toolkitnaming"
 )
 
 const (
@@ -402,8 +402,6 @@ func NewCurrentBuiltInToolkitNameDeriver(
 	return &CurrentBuiltInToolkitNameDeriver{builtIn: builtIn}, nil
 }
 
-var currentBuiltInToolkitNameSanitizer = regexp.MustCompile(`[^a-zA-Z0-9_.-]`)
-
 func (d *CurrentBuiltInToolkitNameDeriver) DeriveCurrentToolkitName(
 	ctx context.Context,
 	input CurrentToolkitNameInput,
@@ -437,8 +435,10 @@ func (d *CurrentBuiltInToolkitNameDeriver) DeriveCurrentToolkitName(
 		// inventing a Go map/list rendering for a corrupted current row.
 		return "", ErrCurrentToolkitNameInputInvalid
 	}
-	cleaned := currentBuiltInToolkitNameSanitizer.ReplaceAllString(text, "")
-	cleaned = strings.ReplaceAll(cleaned, ".", "_")
+	// The shared rule (internal/toolkitnaming). The per-type maximum length
+	// below is this deriver's own, and stays here: it comes from the toolkit
+	// schema snapshot, which the naming package must not depend on.
+	cleaned := toolkitnaming.RuntimeName(text, "")
 	if found && entry.maxLength > 0 && len(cleaned) > entry.maxLength {
 		cleaned = cleaned[:entry.maxLength]
 	}
