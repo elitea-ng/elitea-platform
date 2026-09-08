@@ -19,21 +19,39 @@ import (
 
 type CurrentAgentStartRepository struct {
 	projects projectStore
+	// catalogueProjectID is the ONE public project — the schema that holds the
+	// published catalogue (internal/publicproject). It is the single foreign
+	// project a conversation may address an agent in, and it is a field rather
+	// than an environment read inside the resolve so that the admission rule is
+	// exercisable without setting a process-wide variable.
+	catalogueProjectID int32
 }
 
-func NewCurrentAgentStartRepository(pool *pgxpool.Pool) (*CurrentAgentStartRepository, error) {
+func NewCurrentAgentStartRepository(
+	pool *pgxpool.Pool,
+	catalogueProjectID int32,
+) (*CurrentAgentStartRepository, error) {
 	projects, err := newPostgresProjectStore(pool)
 	if err != nil {
 		return nil, err
 	}
-	return newCurrentAgentStartRepository(projects)
+	return newCurrentAgentStartRepository(projects, catalogueProjectID)
 }
 
-func newCurrentAgentStartRepository(projects projectStore) (*CurrentAgentStartRepository, error) {
+func newCurrentAgentStartRepository(
+	projects projectStore,
+	catalogueProjectID int32,
+) (*CurrentAgentStartRepository, error) {
 	if projects == nil {
 		return nil, errors.New("current agent project database is required")
 	}
-	return &CurrentAgentStartRepository{projects: projects}, nil
+	if catalogueProjectID <= 0 {
+		return nil, errors.New("current agent catalogue project id is required")
+	}
+	return &CurrentAgentStartRepository{
+		projects:           projects,
+		catalogueProjectID: catalogueProjectID,
+	}, nil
 }
 
 type currentApplicationStartQuerier interface {
@@ -232,7 +250,12 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentApplication(
 	var target agentexecutionapp.CurrentApplicationTarget
 	resolve := func() error {
 		target = agentexecutionapp.CurrentApplicationTarget{}
-		return repository.projects.WithinProjectTx(
+		// The catalogue version is read in its OWN short transaction after this
+		// one closes, never nested inside it: two pool connections held at once
+		// per turn start is a deadlock waiting for a busy pool, and the second
+		// read needs no snapshot the first one took.
+		catalogue := currentCatalogueApplicationReference{}
+		if err := repository.projects.WithinProjectTx(
 			ctx,
 			request.ProjectID,
 			pgx.TxOptions{IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadOnly},
@@ -253,6 +276,7 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentApplication(
 						QuestionID:          questionID,
 						ConversationUuid:    conversationUUID,
 						ProjectID:           projectID,
+						CatalogueProjectID:  repository.catalogueProjectID,
 					},
 				)
 				if errors.Is(queryErr, pgx.ErrNoRows) {
@@ -278,12 +302,6 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentApplication(
 				versionDetails := json.RawMessage(row.ApplicationVersionDetailsJson)
 				chatHistory := json.RawMessage(row.ChatHistoryJson)
 				internalTools := json.RawMessage(row.InternalToolsJson)
-				if int64(row.ApplicationProjectID) != request.ProjectID {
-					return agentexecutionapp.UnsupportedCurrentAgentStart(
-						"the target participant's entity_meta.project_id is not the project " +
-							"the turn runs in; a turn reads application_versions from its own " +
-							"tenant schema, so the agent must live in that project")
-				}
 				if row.ApplicationID <= 0 {
 					return agentexecutionapp.UnsupportedCurrentAgentStart(
 						"the target participant carries no entity_meta.id")
@@ -291,6 +309,44 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentApplication(
 				if row.ApplicationVersionID <= 0 {
 					return agentexecutionapp.UnsupportedCurrentAgentStart(
 						"the target participant mapping carries no entity_settings.version_id")
+				}
+				if int64(row.ApplicationProjectID) != request.ProjectID {
+					// A FOREIGN project. Exactly one is admitted — the public
+					// (catalogue) project — and only for a version the second
+					// read proves is `published`. Everything else is the
+					// tenancy boundary and stays refused here.
+					//
+					// The SQL branch already made this the only foreign project
+					// that can reach this line. The comparison is repeated
+					// because a resolver that trusted the query for its own
+					// boundary would silently widen the day that WHERE is
+					// edited, and this is the boundary.
+					if row.ApplicationProjectID != repository.catalogueProjectID {
+						return agentexecutionapp.UnsupportedCurrentAgentStart(
+							"the target participant's entity_meta.project_id is neither the project " +
+								"the turn runs in nor the published catalogue; an agent private to " +
+								"another project cannot be chatted with from this one")
+					}
+					if !json.Valid(variables) || !json.Valid(chatHistory) ||
+						!json.Valid(internalTools) {
+						return agentexecutionapp.UnsupportedCurrentAgentStart(
+							"the resolved turn carries a malformed JSON projection")
+					}
+					// `versionDetails` from this row is a document of nulls: the
+					// version is not in THIS schema, so the projection had no
+					// row to build from. It is deliberately not carried over.
+					catalogue = currentCatalogueApplicationReference{
+						applicationID: row.ApplicationID,
+						versionID:     row.ApplicationVersionID,
+					}
+					target = agentexecutionapp.CurrentApplicationTarget{
+						ApplicationID:        int64(row.ApplicationID),
+						ApplicationVersionID: int64(row.ApplicationVersionID),
+						Variables:            variables,
+						ChatHistory:          chatHistory,
+						InternalTools:        internalTools,
+					}
+					return nil
 				}
 				if !json.Valid(variables) || !json.Valid(versionDetails) ||
 					!json.Valid(chatHistory) || !json.Valid(internalTools) {
@@ -335,7 +391,18 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentApplication(
 				}
 				return nil
 			},
-		)
+		); err != nil {
+			return err
+		}
+		if catalogue.versionID == 0 {
+			return nil
+		}
+		versionDetails, err := repository.resolveCatalogueApplicationVersion(ctx, catalogue)
+		if err != nil {
+			return err
+		}
+		target.VersionDetails = versionDetails
+		return nil
 	}
 	if err := repository.resolveAfterCurrentResponseSettles(
 		ctx, request.ProjectID, conversationUUID, resolve,
@@ -343,6 +410,225 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentApplication(
 		return agentexecutionapp.CurrentApplicationTarget{}, err
 	}
 	return target, nil
+}
+
+// currentCatalogueApplicationReference names the version a turn must read out
+// of the PUBLIC (catalogue) project's schema rather than its own. A zero
+// versionID means the turn is an ordinary same-project one and no second read
+// is due.
+type currentCatalogueApplicationReference struct {
+	applicationID int32
+	versionID     int32
+}
+
+// currentPublishedVersionStatus is the one `application_versions.status` value
+// a conversation in another project may address.
+//
+// The vocabulary is the publish plane's: `draft` is an author's working copy,
+// `published` is what Publish clones and what the catalogue twin is written as,
+// `embedded` is the marker a sub-agent clone carries
+// (internal/api/v2/eliteacore/handler.go, catalog_mirror.go). Only `published`
+// was ever offered to another project, so only `published` is admitted; a
+// moderator's draft sitting in the catalogue schema is refused exactly like a
+// private agent in a stranger's project.
+const currentPublishedVersionStatus = "published"
+
+// resolveCatalogueApplicationVersion reads one PUBLISHED version out of the
+// catalogue project's own tenant schema, for a conversation that lives
+// somewhere else.
+//
+// WHY A SECOND READ AT ALL. `application_versions` is a per-project table.
+// ResolveCurrentApplicationTurn runs inside the conversation's schema and can
+// only see that project's rows, so the version of an agent published in the
+// catalogue is not reachable from there at any price — the turn query's LEFT
+// JOIN misses it by construction. Everything the TURN is made of (the
+// conversation, its participants, its history) stays in the conversation's
+// project; only the agent's definition comes from the catalogue.
+//
+// WHAT STAYS WITH THE CALLER. The execution, its claim, its budget and its
+// `X-SECRET` are the CALLER's project's, unchanged: the turn is billed and
+// authorised where it is held. The model is the exception the publish plane
+// already arranged — a publishable version must name a SHARED model, whose
+// `model_project_id` is the catalogue project, and both the published clone and
+// the catalogue twin copy `llm_settings` verbatim
+// (internal/api/v2/eliteacore/handler.go, catalog_mirror.go). The freeze then
+// resolves that model through the shared-model catalogue, so a published agent
+// answers with the catalogue's model while the turn is still the caller's.
+//
+// WHAT IS NOT CROSS-PROJECT YET, AND WHAT IT WOULD TAKE. Only the SEND path.
+// The two statements a send runs — ResolveCurrentApplicationTurn and
+// InsertCurrentApplicationTurn — both admit the catalogue participant. The
+// eight statements behind REGENERATE, CONTINUE, the two resumes and the reset
+// (ResolveCurrentRegeneration, ResolveCurrentContinuation,
+// ResolveCurrentOutputLimitContinuation, ResolveCurrentAuthorizationContinuation,
+// ResumeCurrentAgentOutputLimit, ResumeCurrentAgentHITL,
+// ResumeCurrentAgentAuthorization, ResetCurrentAgentResponse) still compare the
+// response author's `entity_meta.project_id` against the request's project
+// alone, so those actions on a catalogue participant's answer are refused with
+// the same 422 the send used to give. That is fail-closed and visible, not a
+// wrong answer: nothing is written and nothing is billed. Closing it is the
+// same two edits per statement made here — the project disjunct, and for the
+// five that join `application_versions`, the LEFT JOIN with its identity
+// comparisons restated — and it needs its own tests, because none of those
+// paths is exercised by the send journey.
+func (repository *CurrentAgentStartRepository) resolveCatalogueApplicationVersion(
+	ctx context.Context,
+	reference currentCatalogueApplicationReference,
+) (json.RawMessage, error) {
+	if repository == nil || repository.projects == nil ||
+		repository.catalogueProjectID <= 0 ||
+		reference.applicationID <= 0 || reference.versionID <= 0 {
+		return nil, agentexecutionapp.ErrUnsupportedCurrentAgentStart
+	}
+	var versionDetails json.RawMessage
+	err := repository.projects.WithinProjectTx(
+		ctx,
+		int64(repository.catalogueProjectID),
+		pgx.TxOptions{IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadOnly},
+		func(tx sqlExecutor) error {
+			queries, ok := tx.(currentApplicationVersionQuerier)
+			if !ok {
+				return errors.New("current application version query is unavailable")
+			}
+			nesting, ok := tx.(currentApplicationNestingQuerier)
+			if !ok {
+				return errors.New("current application nesting query is unavailable")
+			}
+			row, queryErr := queries.ResolveCurrentApplicationVersionDetails(
+				ctx,
+				sqlcgen.ResolveCurrentApplicationVersionDetailsParams{
+					ApplicationVersionID: reference.versionID,
+					ApplicationID:        reference.applicationID,
+				},
+			)
+			if errors.Is(queryErr, pgx.ErrNoRows) {
+				return agentexecutionapp.UnsupportedCurrentAgentStart(
+					"the catalogue project holds no application version with the id pair the " +
+						"participant names")
+			}
+			if queryErr != nil {
+				return fmt.Errorf("resolve catalogue application version details: %w", queryErr)
+			}
+			details := json.RawMessage(row.ApplicationVersionDetailsJson)
+			if row.ApplicationID != reference.applicationID ||
+				row.ApplicationVersionID != reference.versionID ||
+				!json.Valid(details) {
+				return agentexecutionapp.UnsupportedCurrentAgentStart(
+					"the catalogue version read back does not match the pair that was asked for")
+			}
+			if err := currentCatalogueVersionAdmissible(details); err != nil {
+				return err
+			}
+			if validationErr := validateCurrentApplicationNesting(
+				ctx,
+				nesting,
+				reference.versionID,
+				1,
+			); validationErr != nil {
+				if contextErr := ctx.Err(); contextErr != nil {
+					return contextErr
+				}
+				if errors.Is(validationErr, errInvalidCurrentApplicationNesting) {
+					return agentexecutionapp.ErrUnsupportedCurrentAgentStart
+				}
+				return fmt.Errorf("validate catalogue application nesting: %w", validationErr)
+			}
+			materialized, materializeErr := materializeCurrentApplicationVersionNestedSkills(
+				ctx,
+				nesting,
+				details,
+			)
+			if materializeErr != nil {
+				if contextErr := ctx.Err(); contextErr != nil {
+					return contextErr
+				}
+				if errors.Is(materializeErr, errInvalidCurrentApplicationNesting) {
+					return agentexecutionapp.ErrUnsupportedCurrentAgentStart
+				}
+				return fmt.Errorf("materialize catalogue nested skills: %w", materializeErr)
+			}
+			versionDetails = materialized
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+	return versionDetails, nil
+}
+
+// currentCatalogueVersionAdmissible applies the two rules that only apply to a
+// version borrowed from another project.
+//
+// STATUS. Only `published` crosses a project line. The turn query admitted the
+// participant on its project alone, because status lives on a row that schema
+// cannot see; this is where the other half of the rule is enforced.
+//
+// TOOLS. A catalogue version must carry none, and this refuses rather than
+// silently drops. Every id in a `tools` entry — the toolkit row, the credential
+// reference inside its settings, a nested agent's application/version pair —
+// names a row in the CATALOGUE project's schema, while the freeze that runs
+// next resolves toolkit settings and credentials in the CALLER's project
+// (internal/application/agentexecution/tools.go) and the nested-version route
+// reads the claim's project (internal/infra/storage/runtime_application_version.go).
+// Carrying such an entry across would resolve one project's id against another
+// project's tables, which is a wrong answer or a leak, never a correct run.
+//
+// It is not a hypothetical guard on a shape that cannot occur: it is the shape
+// the catalogue twin already has. `mirrorPublishedVersion` deliberately copies
+// no `entity_tool_mapping` or `entity_skill_mapping` row
+// (internal/api/v2/eliteacore/catalog_mirror.go), so a twin's `tools` is `[]`
+// and this refusal never fires for one. It fires if that ever changes, instead
+// of the change quietly reaching across schemas.
+func currentCatalogueVersionAdmissible(details json.RawMessage) error {
+	var version struct {
+		Status string            `json:"status"`
+		Tools  []json.RawMessage `json:"tools"`
+		Meta   struct {
+			InternalTools []any `json:"internal_tools"`
+		} `json:"meta"`
+	}
+	if err := json.Unmarshal(details, &version); err != nil {
+		return agentexecutionapp.UnsupportedCurrentAgentStart(
+			"the catalogue version details are not a readable version document")
+	}
+	if version.Status != currentPublishedVersionStatus {
+		return agentexecutionapp.UnsupportedCurrentAgentStart(
+			"the version the participant names in the catalogue project is not published; " +
+				"only a published version may be chatted with from another project")
+	}
+	if len(version.Tools) != 0 {
+		return agentexecutionapp.UnsupportedCurrentAgentStart(
+			"the catalogue version carries toolkit or sub-agent references, whose ids belong to " +
+				"the catalogue project; they cannot be resolved in the project this turn runs in")
+	}
+	for _, entry := range version.Meta.InternalTools {
+		name, isString := entry.(string)
+		if !isString || !currentAuthorableInternalTools[name] {
+			return agentexecutionapp.UnsupportedCurrentAgentStart(
+				"the catalogue version names an internal tool this platform does not serve")
+		}
+	}
+	return nil
+}
+
+// currentAuthorableInternalTools is the platform's authorable internal-tool
+// catalogue, restated for the ONE version read that SQL cannot gate.
+//
+// Both turn statements carry this list against
+// `application_version.meta -> 'internal_tools'`
+// (internal/db/queries/agent_chat.sql). Neither can apply it to a catalogue
+// version: the row is in another schema, so their join misses it and the clause
+// is vacuously true. Applying it here keeps a published agent held to the same
+// admission as a local one, on the document actually read.
+//
+// It must stay equal to the list in that file. A name added there and not here
+// refuses a published agent the product can run; a name added here and not
+// there admits one it cannot.
+var currentAuthorableInternalTools = map[string]bool{
+	"ask_user": true, "attachments": true, "data_analysis": true,
+	"image_generation": true, "internal_mcp": true, "lazy_tools_mode": true,
+	"planner": true, "pyodide": true, "swarm": true,
 }
 
 func (repository *CurrentAgentStartRepository) ResolveCurrentAdhoc(

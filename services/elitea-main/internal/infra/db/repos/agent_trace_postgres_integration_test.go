@@ -190,7 +190,7 @@ func admitPostgresAgentExecution(
 		LimitsRevision:    "agent-limits-v1",
 		MaxOutstanding:    2,
 	}
-	repository, err := NewAgentExecutionJobsRepository(pool, policy)
+	repository, err := NewAgentExecutionJobsRepository(pool, policy, 1)
 	if err != nil {
 		t.Fatal(err)
 	}

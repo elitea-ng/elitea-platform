@@ -36,28 +36,30 @@
  * two-level chain nests one marker inside another's task, so B's own prompt is
  * the instruction to call C.
  *
- * ── The one legacy case that is NOT ported, and why ────────────────────────
+ * ── Chatting with a published agent from ANOTHER project ───────────────────
  *
- * CHATTING WITH A PUBLISHED AGENT FROM ANOTHER PROJECT. The legacy platform
- * lets a conversation in one project hold a participant that names an agent in
- * the PUBLIC project (`entity_meta.project_id` crosses the boundary), and that
- * is how a marketplace agent is chatted with. This platform refuses it by
- * construction: the turn resolver runs inside the conversation's own tenant
- * schema and filters
- * `(target_participant.entity_meta ->> 'project_id')::integer = <the request's
- * project>` (`ResolveCurrentApplicationTurn`,
- * services/elitea-main/internal/db/queries/agent_chat.sql), so a participant
- * naming the catalogue's copy resolves no rows and every send answers 422 —
- * while the participant add itself succeeds, so the conversation looks healthy
- * and only its turns are dead. The last step of the third case below asserts
- * that refusal EXPLICITLY, as a disclosed gap rather than as a contract: it is
- * the shape a reader needs to see when the cross-project path is implemented,
- * and it will fail the moment it is — which is the correct signal.
+ * The legacy platform lets a conversation in one project hold a participant
+ * that names an agent in the PUBLIC project (`entity_meta.project_id` crosses
+ * the boundary), and that is how a marketplace agent is chatted with. This
+ * platform used to refuse it by construction: the turn resolver runs inside the
+ * conversation's own tenant schema and demanded that the participant's project
+ * be the conversation's own, so a participant naming the catalogue's copy
+ * resolved no rows and every send answered 422 — while the participant add
+ * itself succeeded, so the conversation looked healthy and only its turns were
+ * dead.
  *
- * What IS proved instead is the half that works: an agent published from a
- * non-catalogue project (so the catalogue twin is really written, cross-schema)
- * and then chatted with in the project that authored it, beside a private
- * agent, each one answering only when it is the one addressed.
+ * `ResolveCurrentApplicationTurn`
+ * (services/elitea-main/internal/db/queries/agent_chat.sql) now admits one
+ * foreign project, the public one, and only for a version that is `published`;
+ * the version is then read out of the catalogue project's own schema. The third
+ * case below runs both halves in one conversation: the author's published clone
+ * answering in its own project, and the CATALOGUE twin answering across the
+ * project line.
+ *
+ * The counter-half — an agent private to a THIRD project stays refused, and a
+ * DRAFT in the catalogue project stays refused — needs projects this rig does
+ * not have, and is pinned next to the resolver instead
+ * (agent_catalogue_turn_postgres_integration_test.go).
  *
  * Lives in `streaming/` because every case runs real turns — a parent turn, a
  * child turn and, for the chain, a grandchild turn — which need the FULL
@@ -572,11 +574,12 @@ test('a two-level chain delegates twice, and the grandchild’s answer comes bac
   }
 });
 
-test('a published agent answers in a mixed conversation, and only when it is the one addressed', async ({
+test('a published agent answers in a mixed conversation, from its own project and from the catalogue', async ({
   page,
 }) => {
-  // A publish, then two turns in one conversation.
-  test.setTimeout(600_000);
+  // A publish, then THREE turns in one conversation: the private agent, the
+  // author's published clone, and the catalogue twin across the project line.
+  test.setTimeout(900_000);
 
   const projectId = await readCallerPersonalProjectId(page.request);
   expect(projectId, 'this persona works in its own project').not.toBe('');
@@ -702,15 +705,23 @@ test('a published agent answers in a mixed conversation, and only when it is the
       'no row may be flagged is_error',
     ).toEqual([]);
 
-    // ── THE DISCLOSED GAP: the catalogue's own copy cannot be chatted with ─
+    // ── THE CATALOGUE'S OWN COPY, CHATTED WITH FROM ANOTHER PROJECT ───────
     //
-    // Read the header. The participant add SUCCEEDS — nothing checks the
-    // project a participant names — and the turn is then refused, because the
-    // resolver runs in the conversation's tenant schema and requires the
-    // participant's `entity_meta.project_id` to be the conversation's own. That
-    // is the unported half of "chat with a marketplace agent from your own
-    // project", and it is asserted here so the gap is visible and so this line
-    // fails the day it is closed.
+    // This is the marketplace case, and it is the one the participant add
+    // already allowed and the turn used to refuse: nothing checks the project a
+    // participant names, so the conversation could hold the catalogue twin and
+    // every send answered 422.
+    //
+    // Two things make the turn answerable now. The resolver admits a
+    // participant whose `entity_meta.project_id` is the catalogue project AND
+    // whose version is `published`, and it reads that version out of the
+    // CATALOGUE project's schema rather than this conversation's — which is the
+    // only schema it is in. Everything else stays here: the conversation, the
+    // history, the execution and its budget are this project's.
+    //
+    // A private agent in a stranger's project is still refused; that boundary
+    // is pinned by the Postgres cases next to the resolver, because it needs a
+    // third project this rig does not have.
     expect(catalogueVersionId, 'the publish must name the catalogue twin’s version').not.toBe('');
     const crossProject = await addParticipants(page, projectId, conversation.id, [
       agentParticipantBody(
@@ -723,21 +734,39 @@ test('a published agent answers in a mixed conversation, and only when it is the
     );
     expect(
       twinParticipant,
-      'the catalogue twin can be ADDED as a participant — which is what makes the refusal below a gap ' +
-        'rather than a guard',
+      'the catalogue twin must be addable as a participant of a conversation in another project',
     ).toBeDefined();
-    const refused = await postTurn(page, {
+    const cataloguePrompt = `${marker('tocatalogue')} which of you answered?`;
+    const answered = await postTurn(page, {
       projectId,
       conversation,
       participantId: twinParticipant?.id ?? '',
-      prompt: `${marker('tocatalogue')} which of you answered?`,
+      prompt: cataloguePrompt,
     });
     expect(
-      refused.status(),
-      `KNOWN GAP: a turn addressed at a participant in ANOTHER project answered ` +
-        `${refused.status()} — if this is now 200 the cross-project path has been implemented and ` +
-        'this case should become a positive assertion',
-    ).toBe(422);
+      answered.status(),
+      'a turn addressed at the PUBLISHED catalogue twin was refused: ' +
+        `${(await answered.text()).slice(0, 400)}`,
+    ).toBe(200);
+    // The same `contains` discipline as the two turns above: the newest
+    // assistant row is the previous turn's, already finished, so only this
+    // turn's own marker makes the wait about this turn.
+    await expectStoredAssistantAnswer(page, projectId, conversation.id, {
+      timeout: 300_000,
+      contains: cataloguePrompt,
+      message:
+        'the catalogue twin stored no answer — its version lives in the catalogue project’s ' +
+        'schema, so a resolver that read only this conversation’s schema cannot find it',
+    });
+    const afterCatalogue = await readStoredMessageGroups(page, projectId, conversation.id);
+    expect(
+      afterCatalogue.at(-1)?.authorParticipantId,
+      'the catalogue twin’s turn was answered by another participant',
+    ).toBe(twinParticipant?.id);
+    expect(
+      (await readStoredTranscript(page, projectId, conversation.id)).filter((row) => row.isError),
+      'the cross-project turn stored an is_error row',
+    ).toEqual([]);
   } finally {
     if (publishedVersionId !== '') {
       await page.request.post(
