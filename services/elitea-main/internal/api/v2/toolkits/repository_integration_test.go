@@ -122,10 +122,14 @@ func TestToolkitRepositoryLifecycleAgainstPostgres(t *testing.T) {
 		if row["name"] != "lifecycle-fixture" {
 			t.Errorf("name=%#v", row["name"])
 		}
-		// The stored name may hold anything; toolkit_name is what the runtime
-		// uses as an identifier, so the punctuation is gone.
-		if name, _ := row["toolkit_name"].(string); strings.ContainsAny(name, "- ") {
-			t.Errorf("toolkit_name=%q still carries punctuation", name)
+		// toolkit_name is the identifier the RUNTIME addresses this toolkit's
+		// tools by, so it is the runtime's rule that decides it: `_`, `.` and
+		// `-` survive and the `.` folds into `_`
+		// (internal/toolkitnaming.RuntimeName). This assertion used to read
+		// "no `-` and no space", which passed for a route that kept
+		// alphanumerics only and so reported a name nothing addresses.
+		if name, _ := row["toolkit_name"].(string); name != "lifecycle-fixture" {
+			t.Errorf("toolkit_name=%q, want the runtime identifier %q", name, "lifecycle-fixture")
 		}
 		author, _ := row["author"].(map[string]any)
 		if author == nil {
