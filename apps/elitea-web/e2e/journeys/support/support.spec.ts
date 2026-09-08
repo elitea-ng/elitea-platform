@@ -51,6 +51,15 @@ const AGENT_NAME = `${AUTOTEST_PREFIX}support_agent_${RUN_ID}`;
 const ASSISTANT_NAME = `${AUTOTEST_PREFIX}Support ${RUN_ID}`;
 const WELCOME_MESSAGE = `${AUTOTEST_PREFIX}Welcome. Ask me about ELITEA.`;
 const PLACEHOLDER = `${AUTOTEST_PREFIX}Type your question...`;
+/**
+ * The question test 2 asks.
+ *
+ * At module scope rather than inside test 2 because tests 4 and 5 read the
+ * SAME conversation back — one to prove "New chat" left it alone, the other
+ * to restore it — and a transcript assertion that invented its own string
+ * would pass against an empty panel.
+ */
+const QUESTION = `${AUTOTEST_PREFIX}question ${RUN_ID}`;
 
 test.describe('the support assistant widget, off then on', () => {
   test.describe.configure({ mode: 'serial' });
@@ -151,8 +160,6 @@ test.describe('the support assistant widget, off then on', () => {
     await expect(chatWindow.locator('.elitea-assistant-message--assistant').first()).toContainText(WELCOME_MESSAGE);
     await expect(chatWindow.locator('#elitea-assistant-message-input')).toHaveAttribute('placeholder', PLACEHOLDER);
 
-    const question = `${AUTOTEST_PREFIX}question ${RUN_ID}`;
-
     // Armed BEFORE the send: the widget creates its conversation on the
     // FIRST message, and this response is the only place the UUID test 3
     // needs is named.
@@ -162,7 +169,7 @@ test.describe('the support assistant widget, off then on', () => {
       { timeout: 20_000 },
     );
 
-    await chatWindow.locator('#elitea-assistant-message-input').fill(question);
+    await chatWindow.locator('#elitea-assistant-message-input').fill(QUESTION);
     await chatWindow.locator('.elitea-assistant-send-button').click();
 
     const createdResponse = await conversationCreated;
@@ -173,7 +180,7 @@ test.describe('the support assistant widget, off then on', () => {
 
     // The user's own bubble renders immediately — optimistic, client-side,
     // before any server round trip.
-    await expect(chatWindow.locator('.elitea-assistant-message--user').last()).toContainText(question);
+    await expect(chatWindow.locator('.elitea-assistant-message--user').last()).toContainText(QUESTION);
 
     /*
      * THE ANSWER IS A SECOND ASSISTANT BUBBLE, and the count is what proves it.
@@ -218,5 +225,160 @@ test.describe('the support assistant widget, off then on', () => {
       'the stored user message must carry the <support_assistant_context> fenced block ' +
         '`composeUserInput` appends to every question',
     ).toBe(true);
+  });
+  /*
+   * ── The two legacy cases that need a real prior turn ────────────────────
+   *
+   * Ported from `qa/elitea-testing-public/automation/tests/ui/
+   * support_assistant/test_support_assistant_smoke.py`:
+   *
+   *   test 4 ← `TestSupportAssistantNewSession::test_new_chat_creates_fresh_session`
+   *   test 5 ← `TestSupportAssistantHistory::test_history_restore_and_continue`
+   *
+   * They live HERE, in the `support-stack` project, and not beside the
+   * widget-state journeys in `support.widget.spec.ts`, because both are
+   * about a conversation that ALREADY HOLDS A TURN: "new chat leaves the
+   * previous session alone" says nothing when there is no previous session,
+   * and "restore it and keep talking" cannot restore an empty one. The
+   * e2e-standalone stack has no worker and no model, so neither could be
+   * made true there.
+   *
+   * Both read the conversation test 2 created — which is why the file's
+   * describe is serial and why `QUESTION` is at module scope.
+   *
+   * A RELOADED panel shows the STORE, not the screen test 2 left behind:
+   * `parseConversationMessages` returns the stored groups and the welcome
+   * bubble is only synthesised when that list is EMPTY. So the transcript is
+   * one user bubble and one assistant bubble, not the two assistant bubbles
+   * test 2 counted.
+   */
+
+  /** Open the app, open the widget, and wait for the init read to settle. */
+  async function openWidget(page: Page) {
+    await openApp(page);
+    const launcher = page.locator('.elitea-assistant-button');
+    await expect(launcher).toBeVisible({ timeout: 20_000 });
+    await launcher.click();
+    const chatWindow = page.locator('.elitea-assistant-window');
+    await expect(chatWindow).toBeVisible({ timeout: 15_000 });
+    // The header controls are disabled while `useInitAssistant` is in
+    // flight, so this is the "history has loaded" landmark — not a paint.
+    await expect(chatWindow.getByRole('button', { name: 'New chat' })).toBeEnabled({
+      timeout: 30_000,
+    });
+    return chatWindow;
+  }
+
+  test('4. "New chat" opens a clean session and leaves the previous one alone.', async ({ page }) => {
+    test.setTimeout(120_000);
+
+    expect(conversationUuid, 'test 2 must have created a conversation first').toBeTruthy();
+
+    const chatWindow = await openWidget(page);
+
+    // The widget opens on the MOST RECENT conversation, which is test 2's.
+    // Asserting the QUESTION rather than a bubble count is what makes this a
+    // statement about that conversation: a count of one is also what an
+    // unrelated empty session shows.
+    await expect(chatWindow.locator('.elitea-assistant-message--user').first()).toContainText(
+      QUESTION,
+      { timeout: 30_000 },
+    );
+
+    await chatWindow.getByRole('button', { name: 'New chat' }).click();
+
+    // A CLEAN session: the welcome bubble alone, and the previous
+    // conversation's user turn gone from the panel. `.count()` for the
+    // absence — it reads the DOM as it is rather than waiting for an attach
+    // that must not happen.
+    await expect(chatWindow.locator('.elitea-assistant-message--assistant')).toHaveCount(1, {
+      timeout: 15_000,
+    });
+    await expect(chatWindow.locator('.elitea-assistant-message--assistant').first()).toContainText(
+      WELCOME_MESSAGE,
+    );
+    await expect
+      .poll(async () => chatWindow.locator('.elitea-assistant-message--user').count(), {
+        timeout: 15_000,
+        message: '"New chat" left the previous session\'s messages on screen',
+      })
+      .toBe(0);
+
+    // …AND THE PREVIOUS SESSION STILL EXISTS. That is the half the legacy
+    // title names ("without affecting the previous"), and it is a SERVER
+    // read: a "New chat" that deleted or truncated the old conversation
+    // would clear the panel just the same.
+    const listed = await page.request.get(`${API_BASE}/support_assistant/conversations/`);
+    expect(listed.ok(), 'the conversation list must answer').toBe(true);
+    const body = (await listed.json()) as { items?: readonly { uuid?: string }[] };
+    expect(
+      (body.items ?? []).map((item) => item.uuid),
+      'the conversation test 2 created must survive "New chat"',
+    ).toContain(conversationUuid);
+  });
+
+  test('5. A previous session can be restored from history and continued.', async ({ page }) => {
+    // A real turn again — the follow-up message. Same budget as test 2, for
+    // the same reason.
+    test.setTimeout(600_000);
+
+    expect(conversationUuid, 'test 2 must have created a conversation first').toBeTruthy();
+
+    const chatWindow = await openWidget(page);
+
+    // Start from a CLEAN session, so "the transcript came back" cannot be
+    // satisfied by the transcript that was already on screen.
+    await chatWindow.getByRole('button', { name: 'New chat' }).click();
+    await expect
+      .poll(async () => chatWindow.locator('.elitea-assistant-message--user').count(), {
+        timeout: 15_000,
+      })
+      .toBe(0);
+
+    // The history control is disabled while the list is empty, so this
+    // assertion is also "the widget has a previous session to offer".
+    const history = chatWindow.getByRole('button', { name: 'Chat history' });
+    await expect(history).toBeEnabled({ timeout: 15_000 });
+    await history.click();
+
+    // BY POSITION, not by name: every support conversation is stored under
+    // `defaultConversationName` ("New conversation",
+    // `supportassistant/conversations.go`), so a name locator matches all of
+    // them. The list is newest-first and test 2's is the newest.
+    const entries = chatWindow.locator('.elitea-assistant-history-item');
+    await expect(entries.first()).toBeVisible({ timeout: 15_000 });
+    await entries.first().click();
+
+    // Restored from the SERVER — the panel now shows the stored turn.
+    await expect(chatWindow.locator('.elitea-assistant-message--user').first()).toContainText(
+      QUESTION,
+      { timeout: 30_000 },
+    );
+    await expect(chatWindow.locator('.elitea-assistant-message--assistant')).toHaveCount(1);
+
+    // …and it can be CONTINUED. The count is the discriminator again: the
+    // restored answer is itself a non-empty assistant bubble, so `.last()`
+    // alone would pass the moment the transcript loaded.
+    const followUp = `${AUTOTEST_PREFIX}follow up ${RUN_ID}`;
+    await chatWindow.locator('#elitea-assistant-message-input').fill(followUp);
+    await chatWindow.locator('.elitea-assistant-send-button').click();
+
+    await expect(chatWindow.locator('.elitea-assistant-message--user')).toHaveCount(2, {
+      timeout: 60_000,
+    });
+    await expect(chatWindow.locator('.elitea-assistant-message--assistant')).toHaveCount(2, {
+      timeout: 570_000,
+    });
+    const answer = chatWindow.locator('.elitea-assistant-message--assistant').last();
+    await expect(answer).toContainText(/\S/, { timeout: 570_000 });
+    await expect(answer).not.toHaveClass(/elitea-assistant-message--error/);
+
+    // The follow-up landed in the SAME conversation, in the store — not in a
+    // new one the widget opened behind the restore.
+    const details = await waitForSupportTurnSettled(page.request, conversationUuid, {
+      timeout: 570_000,
+    });
+    const stored = JSON.stringify(details);
+    expect(stored, 'the follow-up must be stored in the restored conversation').toContain(followUp);
   });
 });

@@ -604,3 +604,191 @@ test.describe('J20 artifacts lifecycle', () => {
     expect(removed.status(), await removed.text()).toBe(200);
   });
 });
+
+/* ─────────────────────────────────────────────────────────────────────────────
+ * J20k — a MULTI-FILE artifact set: files at the bucket root AND under a
+ * sub-path, all listed and all downloadable.
+ *
+ * Ported from the legacy public suite
+ * (`qa/elitea-testing-public/automation/tests/ui/artifacts/
+ * test_artifacts_multi_file.py::TestArtifactMultiFileDownload::
+ * test_agent_creates_files_at_root_and_in_subfolder`, ELITEA-1327).
+ *
+ * ## What changed in the port, and why it still tests the same defect
+ *
+ * The legacy body asks an AGENT to write six files through the Artifact
+ * toolkit in one turn, then checks that all six survived. The regression it
+ * guards is that only the LAST file written survived when a toolkit created
+ * several in one call. That is a STORAGE fact — six distinct object keys,
+ * three of them multi-segment, all readable afterwards — and the agent is how
+ * the legacy suite happened to produce them. `deploy/docker-compose.e2e-standalone.yml`
+ * has no worker and no model, so the turn cannot run here; the six objects are
+ * written over the same artifacts API the toolkit itself writes through, which
+ * is what the assessment's own reproduction did.
+ *
+ * The half that is NOT reproducible without the agent — the file CARDS the
+ * toolkit renders inside the answer bubble — is not asserted, and is not
+ * silently dropped either: it belongs to a chat turn and would need the
+ * `chat-stream` project's stack.
+ *
+ * ## Why its own bucket, and its own describe
+ *
+ * The J20 block above shares two FIXED buckets in a defined order. This set
+ * needs a bucket whose whole content it controls (a stray object from another
+ * test would sit in the same table and in the same folder listing), and it
+ * needs nothing from that ordering — so it takes a bucket of its own and
+ * deletes it afterwards. `autotest-` and not `AUTOTEST_PREFIX`: the bucket
+ * name pattern (`CreateBucket.tsx`'s `BUCKET_NAME_PATTERN`) rejects the
+ * underscore, the same reason the constants above give.
+ * ────────────────────────────────────────────────────────────────────────── */
+
+const MULTI_BUCKET = 'autotest-j20k-art';
+const MULTI_FOLDER = 'output';
+/** Distinct bodies, so a download that returned the wrong object cannot pass. */
+const MULTI_ROOT_FILES = [
+  ['report1.txt', 'Report 1 content'],
+  ['report2.txt', 'Report 2 content'],
+  ['report3.txt', 'Report 3 content'],
+] as const;
+const MULTI_SUB_FILES = [
+  ['a.txt', 'Content A'],
+  ['b.txt', 'Content B'],
+  ['c.txt', 'Content C'],
+] as const;
+
+/** Every key the set writes, in the shape the store holds them. */
+const MULTI_KEYS = [
+  ...MULTI_ROOT_FILES.map(([name]) => name),
+  ...MULTI_SUB_FILES.map(([name]) => `${MULTI_FOLDER}/${name}`),
+];
+
+test.describe('J20k artifacts: a multi-file set at the root and under a sub-path', () => {
+  let multiProjectId = '';
+
+  test.afterAll(async ({ browser }) => {
+    // Best effort, in its own context: a test that ended on its own timeout
+    // has no page left to clean up with, and a bucket left behind would make
+    // the next run's "the folder holds exactly three files" read a table this
+    // one filled.
+    if (multiProjectId === '') return;
+    const context = await browser.newContext();
+    try {
+      await context.request
+        .delete(`/api/v2/artifacts/buckets/${multiProjectId}/${MULTI_BUCKET}`)
+        .catch(() => {});
+    } finally {
+      await context.close();
+    }
+  });
+
+  test('J20k: every file an agent writes — root and sub-path — is listed and downloadable', async ({
+    page,
+    request,
+  }) => {
+    await page.goto(BASE_URL + '/app/artifacts');
+    await page.waitForURL('**/artifacts**', { timeout: 15_000 });
+    const projectId = await selectedProjectId(page);
+    multiProjectId = projectId;
+
+    // ── seed: one bucket, six objects, three of them multi-segment ─────────
+    const created = await request.post(`/api/v2/artifacts/buckets/${projectId}`, {
+      data: { name: MULTI_BUCKET },
+    });
+    expect([200, 201, 409]).toContain(created.status());
+
+    for (const [name, body] of [
+      ...MULTI_ROOT_FILES.map(([n, b]) => [n, b] as const),
+      ...MULTI_SUB_FILES.map(([n, b]) => [`${MULTI_FOLDER}/${n}`, b] as const),
+    ]) {
+      const uploaded = await request.post(
+        `/api/v2/artifacts/objects/${projectId}/${MULTI_BUCKET}?overwrite=true`,
+        { multipart: { file: { name, mimeType: 'text/plain', buffer: Buffer.from(body) } } },
+      );
+      expect(uploaded.status(), await uploaded.text()).toBe(201);
+    }
+
+    /*
+     * THE STORE HOLDS SIX DISTINCT KEYS — asserted here, before any UI.
+     *
+     * This is the ELITEA-1327 regression itself, and it is also the one place
+     * a multi-segment key can quietly stop being one: the upload takes the
+     * key from the raw `Content-Disposition` filename precisely so that
+     * `output/a.txt` is not reduced to `a.txt` by `filepath.Base`
+     * (`internal/api/v2/artifacts/objects.go`). A client or a server that
+     * flattened them would leave three keys here, and the folder assertions
+     * below would then fail for a reason that reads like a broken table.
+     */
+    const listing = await request.get(`/api/v2/artifacts/objects/${projectId}/${MULTI_BUCKET}`);
+    expect(listing.status(), await listing.text()).toBe(200);
+    const stored = (await listing.json()) as { objects?: readonly { key?: string }[] };
+    expect(
+      (stored.objects ?? []).map((object) => object.key).sort(),
+      'every file written in one run must survive as its own object',
+    ).toEqual([...MULTI_KEYS].sort());
+
+    // ── the bucket root: three files and one folder ────────────────────────
+    await reenterArtifacts(page, `${BASE_URL}/app/artifacts?bucket=${MULTI_BUCKET}`);
+
+    for (const [name, body] of MULTI_ROOT_FILES) {
+      const row = page.getByRole('row').filter({ hasText: name });
+      await expect(row, `${name} is missing from the bucket root`).toBeVisible({ timeout: 15_000 });
+      // The real size, which only the backend can supply.
+      await expect(row).toContainText(`${body.length} B`);
+    }
+
+    // The sub-path renders as a FOLDER, derived by `getItemsAtCurrentLevel`
+    // from the keys — not as three more rows at the root.
+    const folderRow = page.getByRole('row').filter({ hasText: MULTI_FOLDER });
+    await expect(folderRow).toBeVisible({ timeout: 15_000 });
+    for (const [name] of MULTI_SUB_FILES) {
+      await expect(
+        page.getByRole('row').filter({ hasText: name }),
+        `${name} must live inside ${MULTI_FOLDER}/, not at the root`,
+      ).toHaveCount(0);
+    }
+
+    await checkA11y(page);
+
+    // ── into the folder ────────────────────────────────────────────────────
+    // The folder ROW is the navigation affordance (`ArtifactGridRow`'s
+    // `onClick` is bound for folders only), and it writes the prefix into the
+    // query string — so the URL is part of the assertion.
+    await folderRow.click();
+    await expect(page).toHaveURL(new RegExp(`folder=${MULTI_FOLDER}`), { timeout: 15_000 });
+
+    for (const [name, body] of MULTI_SUB_FILES) {
+      const row = page.getByRole('row').filter({ hasText: name });
+      await expect(row, `${name} is missing from ${MULTI_FOLDER}/`).toBeVisible({ timeout: 15_000 });
+      await expect(row).toContainText(`${body.length} B`);
+    }
+
+    // ── downloads: one from the sub-path, one from the root ────────────────
+    // The legacy body spot-checks that the bytes are non-empty; the exact
+    // content is asserted instead, which is what tells "the six keys are all
+    // there" from "the six rows all point at the same object".
+    const [subName, subBody] = MULTI_SUB_FILES[0];
+    const [subDownload] = await Promise.all([
+      page.waitForEvent('download', { timeout: 15_000 }),
+      page.getByRole('button', { name: `Download ${subName}`, exact: true }).click(),
+    ]);
+    expect(subDownload.suggestedFilename()).toBe(subName);
+    expect((await readDownload(subDownload)).toString()).toBe(subBody);
+
+    // The tooltip the download button just opened sits over its neighbour —
+    // the same popper that made J20d's next click miss (issue #154).
+    await page.mouse.move(0, 0);
+    await expect(page.getByRole('tooltip')).toBeHidden({ timeout: 15_000 });
+
+    await reenterArtifacts(page, `${BASE_URL}/app/artifacts?bucket=${MULTI_BUCKET}`);
+    const [rootName, rootBody] = MULTI_ROOT_FILES[0];
+    await expect(page.getByRole('row').filter({ hasText: rootName })).toBeVisible({
+      timeout: 15_000,
+    });
+    const [rootDownload] = await Promise.all([
+      page.waitForEvent('download', { timeout: 15_000 }),
+      page.getByRole('button', { name: `Download ${rootName}`, exact: true }).click(),
+    ]);
+    expect(rootDownload.suggestedFilename()).toBe(rootName);
+    expect((await readDownload(rootDownload)).toString()).toBe(rootBody);
+  });
+});

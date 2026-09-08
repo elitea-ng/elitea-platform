@@ -20,6 +20,25 @@ import { BASE_URL } from '../../../playwright.config';
 // ─────────────────────────────────────────────────────────────────────────────
 // Journey 1: Cold load / → /chat
 // ─────────────────────────────────────────────────────────────────────────────
+/*
+ * ALSO COVERS the legacy public suite's whole smoke file
+ * (`qa/elitea-testing-public/automation/tests/ui/smoke/test_ui_smoke.py`):
+ *
+ *   `TestHomePage::test_page_loads`          — "the home page loads without
+ *     errors", asserted there as a non-empty `page.title()`.
+ *   `TestHomePage::test_main_content_visible` — "the main content area
+ *     renders", asserted there as `main, #root, #app, [role=main]` being
+ *     visible.
+ *
+ * Neither is ported as a journey of its own, and the reason is that both
+ * would be WEAKER than this test rather than additional to it. A non-empty
+ * `<title>` and a visible `#root` are true of the error page, of a stub route
+ * and of a shell that never resolved a session; this test lands on the exact
+ * path, finds the product's own composer, and asserts it is editable and
+ * carries the production placeholder. `role=main` in particular is rendered
+ * by the app shell on EVERY route — the same locator this file's own header
+ * records as having matched unconditionally in an earlier revision.
+ */
 test('J1: cold load / redirects through to /chat', async ({ page }) => {
   // Navigate to the root — auth setup already injected a valid session via
   // storageState, so elitea-main should honour the authenticated redirect chain.

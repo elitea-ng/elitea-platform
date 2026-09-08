@@ -677,6 +677,61 @@ adminTest(
           after.voice_features_enabled,
           'temporarily disabling must not HIDE the control',
         ).toBe(true);
+
+        /*
+         * ── THE CHAT SURFACE, not just the row ────────────────────────────
+         *
+         * Ported from the legacy public suite's
+         * `tests/ui/voice/test_voice_configuration.py::
+         * TestVoiceConfiguration::test_voice_settings_not_visible_by_default`
+         * (TC5, regression for bug 5235). Everything above this point proves
+         * the WRITE reaches `platform_settings`; the legacy case is about
+         * what a user sees, and the defect unit A14 removed was precisely a
+         * flag that persisted and changed nothing.
+         *
+         * Two facts, on the real chat page:
+         *
+         *  1. THE READ-OUT MINI PLAYER IS NOT THERE BY DEFAULT. That is the
+         *     legacy regression, and here it is structural rather than
+         *     stateful: `features/chat-input`'s `VoiceMiniPlayer` /
+         *     `VoiceControlButton` have no render site in this app at all
+         *     (their own module docs say so), so the TTS controls cannot
+         *     appear on a chat surface that nobody asked to read aloud.
+         *  2. THE MICROPHONE OBEYS THE SWITCH. `widgets/chat`'s `VoiceButton`
+         *     is the one MOUNTED voice control, reached through ChatBox's
+         *     slot bundle; `temporarily disabled` must leave it visible and
+         *     inert, and `enabled: false` must remove it.
+         *
+         * `.count()` for both absences: it reads the DOM as it stands rather
+         * than waiting for an attach that must never happen.
+         */
+        await page.goto(BASE_URL + '/app/chat', { waitUntil: 'domcontentloaded' });
+        await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 30_000 });
+
+        const microphone = page.getByRole('button', { name: 'start voice input' });
+        await expect(
+          microphone,
+          'temporarily disabling must leave the control on screen',
+        ).toBeVisible({ timeout: 20_000 });
+        await expect(microphone).toBeDisabled();
+        await expect(page.getByTestId('chat-voice-mini-player')).toHaveCount(0);
+
+        // Now HIDE it, which is the other switch in the same section.
+        const hidden = await putValues(page, 'voice_features', {
+          vite_voice_features_enabled: false,
+          vite_voice_features_temporarily_disabled: true,
+        });
+        expect(hidden.status, hidden.body).toBe(200);
+
+        await page.reload({ waitUntil: 'domcontentloaded' });
+        await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 30_000 });
+        await expect
+          .poll(async () => page.getByRole('button', { name: 'start voice input' }).count(), {
+            timeout: 20_000,
+            message: 'the voice control survived an operator switching voice features off',
+          })
+          .toBe(0);
+        await expect(page.getByTestId('chat-voice-mini-player')).toHaveCount(0);
       } finally {
         // Same reason as J36b's restore — see `restoreSection`.
         await restoreSection(page, 'voice_features', {
