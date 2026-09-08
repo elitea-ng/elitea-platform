@@ -2394,7 +2394,7 @@ func newCompleteProductionRouter(sessionSecret string) chi.Router {
 		// the browser-auth surface below PINS the SAML paths — a handler left
 		// out of this router would let all three routes be removed without a
 		// test noticing.
-		SAMLHandler:    &v2auth.SAMLHandler{},
+		SAMLHandler:   &v2auth.SAMLHandler{},
 		SessionSecret: sessionSecret,
 		RuntimeRoutes: RuntimeRoutes{
 			Validation:      runtimeHandler,
