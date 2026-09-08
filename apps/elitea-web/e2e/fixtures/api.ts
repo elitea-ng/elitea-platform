@@ -292,8 +292,9 @@ export async function resolvePrivateModel(
 export async function createConversation(
   request: APIRequestContext,
   name: string,
+  projectId: string = DEFAULT_PROJECT_ID,
 ): Promise<string> {
-  const url = `${API_BASE}/elitea_core/conversations/prompt_lib/${DEFAULT_PROJECT_ID}`;
+  const url = `${API_BASE}/elitea_core/conversations/prompt_lib/${projectId}`;
   const resp = await request.post(url, { data: { name } });
   // Check the status BEFORE parsing. Calling `.json()` on a 401 (whose body is
   // not JSON) produced `SyntaxError: Unexpected non-whitespace character after
@@ -320,10 +321,9 @@ export async function createConversation(
 export async function deleteConversation(
   request: APIRequestContext,
   id: string,
+  projectId: string = DEFAULT_PROJECT_ID,
 ): Promise<void> {
-  await request.delete(
-    `${API_BASE}/elitea_core/conversation/prompt_lib/${DEFAULT_PROJECT_ID}/${id}`,
-  );
+  await request.delete(`${API_BASE}/elitea_core/conversation/prompt_lib/${projectId}/${id}`);
 }
 
 /** An agent created through the API, with the initial version it owns. */
@@ -1013,6 +1013,39 @@ export async function readCallerIdentity(
   }
   const body = (await response.json()) as { id?: unknown; email?: unknown };
   return { id: String(body.id ?? ''), email: String(body.email ?? '') };
+}
+
+/**
+ * The caller's OWN project — `project_user_<uid>` — as `/social/author` names it.
+ *
+ * Wanted by the journeys whose subject is a rule that DISCRIMINATES between the
+ * public project and any other one. The server's public project is resolved
+ * from `ELITEA_AI_PROJECT_ID` and defaults to 1, which is also the project
+ * every seeded persona works in, so a rule of the form "only entities that live
+ * in the public project may do X" is satisfied by everything a journey creates
+ * in the ordinary way and its refusing half is unreachable. The caller's own
+ * personal project is a second REAL project, owned by the same persona, and it
+ * is the one place a journey can put an entity that the rule must refuse.
+ *
+ * `''` is answered rather than thrown when the server names the seeded project:
+ * `resolvePersonalProjectID` falls back to the lowest-id project the caller
+ * holds any role in, so project 1 comes back for a persona whose own project
+ * was never provisioned. That answer is an absence, not an id — see
+ * `e2e/auth.setup.ts`, which waits for a real one before any journey runs — and
+ * a caller that treated it as one would create its "not published" fixture in
+ * the very project the rule calls published.
+ */
+export async function readCallerPersonalProjectId(request: APIRequestContext): Promise<string> {
+  const url = `${API_BASE}/social/author/`;
+  const response = await request.get(url);
+  if (!response.ok()) {
+    throw new Error(
+      `readCallerPersonalProjectId: GET ${url} -> ${response.status()}${await describeRefusal(response)}`,
+    );
+  }
+  const body = (await response.json()) as { personal_project_id?: unknown };
+  const id = String(body.personal_project_id ?? '');
+  return id === DEFAULT_PROJECT_ID ? '' : id;
 }
 
 /** What one sweep actually did, so a caller can assert on the work and not on the silence. */
