@@ -282,6 +282,24 @@ PLAYWRIGHT_PROJECT="${PLAYWRIGHT_PROJECT:-chat-stream}"
 # run below starts from an EMPTY environment — a variable exported on the
 # host and not listed here reaches the host path and silently not the
 # container path.
+# THE LIVE LANES' VARIABLES, forwarded by NAME.
+#
+# `e2e/live/liveEnv.ts` decides whether the `toolkits-live` and `image-live`
+# projects list anything at all, and it decides it from the environment the
+# Playwright process sees. The container run below starts from an EMPTY
+# environment, so a variable exported on the host reaches the host path and
+# silently not the container path — which would show up as a live project that
+# listed zero tests inside the container while the operator had just set the
+# secret. `-e NAME` with no `=` forwards the host's value, so the list is built
+# from whatever `E2E_LIVE_*` names are actually present rather than from a
+# hard-coded roster that a new provider would fall off.
+LIVE_ENV_ARGS=()
+while IFS= read -r live_name; do
+  [ -n "$live_name" ] && LIVE_ENV_ARGS+=("-e" "$live_name")
+done <<EOF
+$(env | sed -n 's/^\(E2E_LIVE_[A-Za-z0-9_]*\)=.*/\1/p')
+EOF
+
 # shellcheck disable=SC2086 -- REPEAT_ARGS is deliberately word-split
 if [ -n "${PLAYWRIGHT_CONTAINER_IMAGE:-}" ]; then
   "${CONTAINER_BIN:-docker}" run --rm --network host \
@@ -290,6 +308,7 @@ if [ -n "${PLAYWRIGHT_CONTAINER_IMAGE:-}" ]; then
     -e E2E_REUSE_STACK=1 \
     -e E2E_WORKER="$E2E_WORKER" \
     -e E2E_CHAT_MODEL="${E2E_CHAT_MODEL:-}" \
+    "${LIVE_ENV_ARGS[@]+"${LIVE_ENV_ARGS[@]}"}" \
     -e PLAYWRIGHT_BASE_URL="http://localhost:${PORT}" \
     "$PLAYWRIGHT_CONTAINER_IMAGE" \
     npx playwright test --project="$PLAYWRIGHT_PROJECT" --workers=1 $REPEAT_ARGS

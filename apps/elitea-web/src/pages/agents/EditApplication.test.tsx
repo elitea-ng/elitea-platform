@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { configure, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 
@@ -23,6 +23,22 @@ import { renderAgentsRoute } from './__tests__/testRouter';
 // tests below, though the same mount runs — and can throw — in every test in
 // this file.
 installCodeMirrorTestPolyfills();
+
+/*
+ * This file mounts the REAL agent edit route — router, query client, the whole
+ * configuration panel — so its first paint waits on the detail read plus every
+ * query the panel's own sections fire. Adding the Information section (#846)
+ * gave it one more, and CI unit shard 5 then failed `renders the Save/Cancel
+ * bar once loaded` on `findByTestId('agent-save-button')` at Testing Library's
+ * 1 s default while the same command passed locally: the gap is v8 coverage
+ * instrumentation on the CI runner, not the assertion.
+ *
+ * The sibling page that already mounted this section needed exactly this and
+ * says so — `pages/pipelines/EditPipeline.test.tsx:21-30`. Same remedy, same
+ * numbers, so the two composition-root suites cannot drift apart.
+ */
+configure({ asyncUtilTimeout: 5_000 });
+vi.setConfig({ testTimeout: 30_000 });
 
 const globals = globalThis as unknown as Record<string, unknown>;
 
@@ -809,6 +825,74 @@ describe('EditApplication', () => {
 
     await waitFor(() => expect(useNavBlockerStore.getState().isBlockNav).toBe(true));
   }, 20_000);
+
+  /*
+   * #846 — the Information accordion. `features/agents/ui/
+   * ApplicationInformation.tsx` was ported, exported and unit-tested, and its
+   * ONLY production caller was `pages/pipelines/ui/
+   * EditPipelineConfigurationPanel.tsx`. The agent editor — the screen the
+   * baseline writes it for (`ApplicationConfigurationForm.jsx:72`) — never
+   * mounted it, so the ids a person needs to wire an external caller were
+   * unreachable and 17 legacy UI tests timed out on `agent-information-section`.
+   *
+   * Asserted from the ROUTE, not by rendering the panel directly: a panel-level
+   * test cannot see this defect at all. Both halves were correct; only the
+   * composition was missing, which is exactly the class
+   * `EditApplicationToolsPanel`/`AgentTagEditor` already record in this file.
+   */
+  it('mounts the Information section inside the configuration panel, showing the ids the detail read carries', async () => {
+    server.use(getGetApplicationMockHandler(detail()));
+    renderAgentsRoute(<EditApplication />, '/agents/all/42', { projectId: '9' });
+
+    const panel = await screen.findByTestId('edit-application-configuration-tab-panel', {}, { timeout: 5_000 });
+    const information = await screen.findByTestId('agent-information-section', {}, { timeout: 5_000 });
+    // `toContainElement`, not merely "on screen": the defect was a missing
+    // mount point in THIS panel, and a section rendered anywhere else in the
+    // page would satisfy a bare presence check.
+    expect(panel).toContainElement(information);
+
+    // The rows, not just the accordion. An empty accordion is in the document.
+    // Both values come from the SAME detail read the rest of the panel is
+    // driven by — `id` off the application, `version_details.id` off the open
+    // version — which is what makes them the ids an external caller needs.
+    // `find`, not `get`: the section mounts with the detail read still in
+    // flight (the agent id comes from the URL, the version id from the
+    // server), so a synchronous read here passes on the id the URL already
+    // knew and never waits for the one the panel is being tested for.
+    expect(await within(information).findByText('Version ID:', {}, { timeout: 5_000 })).toBeInTheDocument();
+    expect(within(information).getByText('Agent ID:')).toBeInTheDocument();
+    expect(within(information).getByTestId('copy-id')).toHaveTextContent('42');
+    expect(within(information).getByText('1')).toBeInTheDocument();
+
+    // An agent is not a pipeline: the trigger rows and the "Show pipeline"
+    // link stay off, and no `pipeline_trigger` request is made (msw runs with
+    // `onUnhandledRequest: 'error'`, so one would fail this test outright).
+    expect(within(information).queryByText('Trigger:')).not.toBeInTheDocument();
+    expect(within(information).queryByText('Pipeline:')).not.toBeInTheDocument();
+  }, 15_000);
+
+  it('names the origin agent in the Information section when the open version was forked', async () => {
+    const forked = detail();
+    server.use(
+      http.get('*/elitea_core/application/prompt_lib/:projectId/:applicationId', ({ params }) =>
+        // The fork's ORIGIN is a different application in a different project.
+        // Answering both reads from one handler is what proves the panel asks
+        // for the parent at all: a panel that passed its own ids would read
+        // back "My Agent" and fail the assertion below.
+        params['applicationId'] === '7'
+          ? HttpResponse.json({ id: '7', name: 'Origin Agent', versions: [], version_details: { id: '3', application_id: '7', name: 'base', status: 'draft' } })
+          : HttpResponse.json({
+              ...forked,
+              version_details: { ...forked.version_details, meta: { parent_project_id: '5', parent_entity_id: '7' } },
+            }),
+      ),
+    );
+    renderAgentsRoute(<EditApplication />, '/agents/all/42', { projectId: '9' });
+
+    const information = await screen.findByTestId('agent-information-section', {}, { timeout: 5_000 });
+    expect(await within(information).findByText('Forked from:', {}, { timeout: 5_000 })).toBeInTheDocument();
+    expect(await within(information).findByText('Origin Agent', {}, { timeout: 5_000 })).toBeInTheDocument();
+  }, 15_000);
 });
 
 describe('leaving the editor', () => {

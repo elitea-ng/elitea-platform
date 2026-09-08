@@ -25,7 +25,16 @@ export interface HitlInterruptAction {
 }
 /** A single edited message item (baseline: `updatedItems`; matches `UserMessage.tsx`'s `UserMessageUpdatedItem` shape structurally). */
 export interface UpdatedMessageItem { readonly uuid?: string | undefined; readonly content: string; readonly item_type: string; }
-/** Result returned by the send handler; `createdConversation` is present only when a conversation needed creating for this send. */
+/**
+ * Result returned by the send handler.
+ *
+ * `success` is about the TURN. `createdConversation` is about the ROW, and the
+ * two are independent: `resolveConversationForSend` commits the conversation on
+ * the server BEFORE any transport is tried, so a turn that is then refused
+ * still leaves a real conversation behind. It is therefore present on a failed
+ * result too, and the caller announces it either way — see
+ * `useChatBoxActions`'s `handleSend`.
+ */
 export interface SendResult { readonly success: boolean; readonly createdConversation?: { readonly id?: string | number; readonly uuid?: string } }
 export interface SendQuestionParams {
   readonly question: string;
@@ -202,6 +211,7 @@ export interface UseChatBoxHandlersResult {
   readonly deleteAnswer: (messageId: string) => Promise<void>;
   readonly clearChat: () => Promise<void>;
   readonly continueHitl: (action: HitlInterruptAction) => Promise<void>;
+  /** Resume the exact authorization request. Skip applies only to this run. */
   readonly resumeMcpFlow: (messageId: string, addToIgnoreList?: boolean, authorizationRequestId?: string) => Promise<void>;
   readonly continueTokenLimit: (messageId: string) => Promise<void>;
 }
@@ -359,7 +369,8 @@ export function buildOptimisticUserMessage(questionId: string, question: string,
  * path a first attachment takes.
  */
 export const resolveUploadConversationId = (createdConversation: { readonly id?: string | number; readonly uuid?: string } | undefined, fallbackUuid: string | undefined): string | undefined => createdConversation?.uuid ?? fallbackUuid;
-export const buildSendResult = (createdConversation: { readonly id?: string | number; readonly uuid?: string } | undefined): SendResult => (createdConversation ? { success: true, createdConversation } : { success: true });
+export const buildSendResult = (createdConversation: { readonly id?: string | number; readonly uuid?: string } | undefined, success = true): SendResult =>
+  createdConversation ? { success, createdConversation } : { success };
 /** `chatHistory.find` for the question a given answer replies to. */
 export function findQuestionForAnswer(chatHistory: readonly ChatMessage[], answer: ChatMessage | undefined): ChatMessage | undefined {
   if (answer?.questionId === undefined) return undefined;

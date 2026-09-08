@@ -40,6 +40,7 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { VersionMeta } from "./versionMeta.zod";
 
 export const ApplicationVersionSummary = zod
   .object({
@@ -48,11 +49,33 @@ export const ApplicationVersionSummary = zod
       .describe("Numeric id serialized as string (strconv.Itoa)."),
     name: zod.string(),
     status: zod.string(),
-    agent_type: zod.string(),
+    agent_type: zod
+      .string()
+      .describe(
+        "Kept although pylon's ApplicationVersionListModel excluded it: apps\/elitea-web reads it off the summary to shape the version dropdown (pages\/agents\/lib\/editApplicationMappers.ts toVersionSummaries, and its pipeline twin).\n",
+      ),
     created_at: zod.iso.datetime({ offset: true }),
+    instructions: zod
+      .string()
+      .optional()
+      .describe(
+        'The version\'s prompt text, always present as \"\" when the column is NULL (COALESCE in getVersions). Restored for issue 844 — the projection dropped it, so a client reading the prompt off the version LIST saw null on a response that otherwise looked complete.\n',
+      ),
+    meta: zod
+      .union([VersionMeta, zod.null()])
+      .optional()
+      .describe(
+        "application_versions.meta, the same jsonb ApplicationVersionDetail carries. Restored for issue 844 alongside instructions; `{}` when the column is NULL.\n",
+      ),
+    is_default: zod
+      .boolean()
+      .optional()
+      .describe(
+        "Derived, not stored: true when the owning application's meta.default_version_id names this row. Emitted since the default-version bar was wired, and read by apps\/elitea-web\/src\/pages\/{agents,pipelines}\/lib\/\*Mappers.ts and features\/agents\/model\/useVersionBarCommands.ts — it was simply absent from this schema, which is why those readers cast it off the wire.\n",
+      ),
   })
   .describe(
-    "NOTE(W2): getVersions row map, internal\/api\/v2\/applications\/handler.go:159-165.\n",
+    "NOTE(W2): getVersions row map, internal\/api\/v2\/applications\/handler.go:216-243. The handler emits ALL eight keys on every row; `required` lists only the five the schema carried before issue 844, so that adding the other three stays additive for the generated fixtures rather than invalidating every existing one.\n",
   );
 
 export type ApplicationVersionSummary = zod.input<

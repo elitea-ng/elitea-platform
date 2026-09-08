@@ -1620,6 +1620,25 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				r.With(requireModeUsers).Post("/modes/administration", adminHandler.ModesAssign)
 				r.With(requireModeUsers).Delete("/modes/administration", adminHandler.ModesRemove)
 				r.With(requireModeUsers).Post("/user_invite/administration", adminHandler.UserInvite)
+				// The CROSS-PROJECT bulk membership invite (issue 247,
+				// internal/api/v2/admin/invites_bulk.go). pylon serves this as
+				// two console pages — legacy/plugins/admin/api/v2/
+				// invites_bulkusers.py and invites_bulkprojects.py — and each
+				// declares its OWN permission rather than the project-membership
+				// one. Both strings gate this route, ANY-of, so an operator who
+				// held either page holds the one route that replaces both.
+				// Shared migration 0121 grants them; without it the route would
+				// answer 403 on a clean database, which is the class
+				// router_permission_grant_gate_test.go exists to catch.
+				//
+				// The mode segment is STATIC. pylon's `mode_handlers` names
+				// `administration` and nothing else on both modules, so another
+				// mode 404s rather than reaching a handler that would have to
+				// guess what it meant.
+				r.With(apimw.RequireCentralPermissions(
+					permissionResolver, platformauth.PermissionModeAdministration,
+					admin.BulkInviteUsersPermission, admin.BulkInviteProjectsPermission,
+				)).Post("/invites_bulk/administration", adminHandler.BulkInviteMembers)
 				// The personal/team project permission editor (#255) — the
 				// matrix every ORDINARY project gets, as opposed to the named
 				// scopes `/permissions/{scope}/{mode}` edits. Gated on the

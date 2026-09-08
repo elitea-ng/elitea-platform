@@ -2,10 +2,10 @@ import type { ChangeEvent, ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import Box from '@mui/material/Box';
-import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
 import { MAX_WELCOME_MESSAGE_LENGTH } from '@/shared/lib/limits';
+import { CharacterCounter } from '@/shared/ui/CharacterCounter';
 import { t } from '@/shared/i18n';
 import { BasicAccordion } from '@/shared/ui/BasicAccordion';
 import { StyledInputEnhancer } from '@/shared/ui/StyledInputEnhancer';
@@ -114,15 +114,18 @@ export function WelcomeMessageInput({
                 htmlInput: { maxLength: MAX_WELCOME_MESSAGE_LENGTH, 'data-testid': 'agent-welcome-message-input' },
               }}
             />
-            {showCounter && (
-              <Typography
-                variant="bodySmall"
-                sx={counterSx}
-                data-testid="agent-welcome-message-counter"
-              >
-                {`${MAX_WELCOME_MESSAGE_LENGTH - inputValue.length} characters left`}
-              </Typography>
-            )}
+            {/* #848 — never unmount: this line's height must stay reserved
+              * even while hidden, or a control below it (`+ Starter` in
+              * `ConversationStartersEditor`, mounted right after this
+              * accordion) loses its first click on blur. `visibility:
+              * hidden` keeps the box in flow without showing stale text. */}
+            <CharacterCounter
+              value={inputValue}
+              maxLength={MAX_WELCOME_MESSAGE_LENGTH}
+              visible={showCounter}
+              sx={counterSx}
+              data-testid="agent-welcome-message-counter"
+            />
           </Box>
         ),
       },

@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 
 import Box from '@mui/material/Box';
 import type { SxProps, Theme } from '@mui/material/styles';
@@ -9,7 +9,7 @@ import { useListApplications } from '@/shared/api/generated/applications/applica
 import type { Application, ApplicationList } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
 import { useRailTagSelection } from '@/shared/ui/EntityRail';
-import { SimpleSearchBar } from '@/shared/ui/SimpleSearchBar';
+import { useListSearchQuery } from '@/widgets/page-header';
 
 import { sortApplicationsByField, type SortOrder } from './lib/sortApplicationsByField';
 import { useSelectedProjectId } from './lib/useSelectedProjectId';
@@ -125,9 +125,20 @@ export function PrivateAgentsList({ statuses, cardContentType }: PrivateAgentsLi
   const sortBy = search.sort_by === 'name' ? 'name' : 'createdAt';
   const sortOrder: SortOrder = search.sort_order === 'asc' ? 'asc' : 'desc';
 
-  const [query, setQuery] = useState('');
+  // The search box is the page HEADER's (`widgets/page-header`'s
+  // `ListSearchField`, mounted by `Applications.tsx`), and its value reaches
+  // this tab through the route's `query` search param. This component used to
+  // own both the box and the state; a box per tab meant the text was lost on
+  // every tab change and could not be linked to.
+  const query = useListSearchQuery();
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const { selectedTags } = useRailTagSelection();
+
+  // A new query restarts the "load more" window; without this, narrowing the
+  // list would keep whatever count the previous query had grown to.
+  useEffect(() => {
+    setVisibleCount(PAGE_SIZE);
+  }, [query]);
 
   const trimmedQuery = query.trim();
   // The rail's tag selection goes to the SERVER, as the `tags` request param
@@ -169,14 +180,6 @@ export function PrivateAgentsList({ statuses, cardContentType }: PrivateAgentsLi
       key={cardContentType}
       sx={containerSx}
     >
-      <SimpleSearchBar
-        value={query}
-        onChange={(next) => {
-          setQuery(next);
-          setVisibleCount(PAGE_SIZE);
-        }}
-        placeholder={t('pages.agents.privateList.search', 'Search')}
-      />
       <ApplicationListPanel
         rows={visibleRows.map(toRow)}
         isLoading={listQuery.isFetching && wire === undefined}

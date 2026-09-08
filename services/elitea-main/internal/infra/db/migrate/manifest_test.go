@@ -514,11 +514,18 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// `models.applications.task.delete` went in. A new file for 0116's reason:
 	// 0068 is checksum-immutable and 0060 returns early on any configured
 	// deployment.
-	// 121 preserves parameterized static MCP configuration from the Rust branch.
+	//
+	// 121: shared/0121_bulk_invite_permissions.sql, the two administration-mode
+	// grants the cross-project bulk membership invite needs
+	// (`invites.bulkusers`, `invites.bulkprojects`, issue 247). pylon declares
+	// both on the two console pages that route replaces, so the strings are
+	// parity rather than a new policy, and the route would answer 403 on a
+	// clean database without them. A new file for 0120's reason: 0082 is
+	// checksum-immutable and 0060 returns early on any configured deployment.
 	// 122 adds the Rust read-only capability without removing Python tool runs.
-	// Branch versions 111 and 112 collided with main. Rehearsal upgrade needs
-	// the explicit ledger reconciliation in the merge source mapping.
-	require.EqualValues(t, 122, Head(shared))
+	// 123 preserves parameterized static MCP configuration from the Rust branch.
+	// The old rehearsal versions 111 and 112 require explicit reconciliation.
+	require.EqualValues(t, 123, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

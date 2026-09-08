@@ -34,7 +34,7 @@ import { expect, test, type Page } from '@playwright/test';
 
 import { BASE_URL } from '../../../playwright.config';
 import { AUTOTEST_PREFIX } from '../../fixtures/api';
-import { readStoredPipelineVersion } from '../../fixtures/pipelines';
+import { createPipelineThroughApi, readStoredPipelineVersion } from '../../fixtures/pipelines';
 
 /** The create POST carries the project id; nothing here assumes project 1 (the chat persona owns its own — #290). */
 const APPLICATIONS_RE = /\/elitea_core\/applications\/prompt_lib\/(\d+)/;
@@ -160,6 +160,57 @@ test.describe('pipeline configuration form', () => {
    * NOWHERE, so "it renders on the real route" is the only claim that has
    * ever been checked.
    */
+  /*
+   * Ported BY USE CASE from the legacy public suite
+   * (`qa/elitea-testing-public/automation/tests/ui/pipelines/
+   * test_pipeline_management.py::TestEditPipeline::
+   * test_pipeline_detail_page_loads`) — "navigate to a pipeline's detail page
+   * and verify the form fields match the API data".
+   *
+   * It lands here rather than in a file of its own because it is the COLD
+   * half of the round trip the test above owns. That one creates through the
+   * form and then edits, so every value it reads back has been through this
+   * page's own state at least once; a page that never re-read the server
+   * would still pass it as long as it kept what the user typed. This one
+   * creates the pipeline over the API — nothing about it has ever been on
+   * screen — and opens the editor on a cold navigation, so the only place the
+   * values on screen can come from is the detail fetch.
+   *
+   * Asserted against the API's own answer rather than against the string this
+   * test passed in: the create and the read are two different routes, and a
+   * comparison to a local constant cannot tell a page that renders the stored
+   * row from one that renders nothing while the server holds something else.
+   */
+  test('a cold navigation to a pipeline populates the form from the server', async ({ page }) => {
+    const name = `${AUTOTEST_PREFIX}cold-${String(Date.now()).slice(-7)}`;
+    const seeded = await createPipelineThroughApi(page.request, name, {
+      description: `${AUTOTEST_PREFIX}cold load description`,
+    });
+    const pipeline: CreatedPipeline = {
+      projectId: seeded.projectId,
+      pipelineId: seeded.id,
+      versionId: seeded.versionId,
+    };
+    created.push(pipeline);
+
+    // What the SERVER holds, read before the browser goes anywhere near it.
+    const stored = await readStoredApplication(page, pipeline);
+    expect(stored.name, 'the API create must have stored the name it was given').toBe(name);
+
+    await openConfigurationForm(page, pipeline);
+
+    await expect(page.getByTestId('agent-name-input')).toHaveValue(stored.name);
+    await expect(page.getByTestId('agent-description-input')).toHaveValue(stored.description);
+
+    // The editor opened on the PIPELINE surface, not the agent one. Both
+    // routes render `CreateAgentForm`'s inputs, so the two fields above are
+    // identical on either — the flow canvas is what makes this the pipeline
+    // editor, and a pipeline that opened without one is a pipeline nobody can
+    // edit.
+    await expect(page.getByTestId('rf__wrapper')).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator('.react-flow__node[data-id="END"]')).toBeVisible({ timeout: 20_000 });
+  });
+
   test('the Information panel shows the ids an external caller needs', async ({ page }) => {
     const pipeline = await createPipeline(page, `${AUTOTEST_PREFIX}cfg-info`);
     await openConfigurationForm(page, pipeline);

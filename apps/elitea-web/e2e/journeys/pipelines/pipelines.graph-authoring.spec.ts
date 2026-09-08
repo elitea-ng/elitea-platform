@@ -512,3 +512,80 @@ test('a Router’s branch handle is stored as a route list, not as a transition'
   expect(decision['nodes'], 'the Decision’s branch handle must append its target to `nodes`').toEqual(['Printer_1']);
   expect(decision['default_output'], 'the Decision’s default output is untouched by a branch connection').toBe('END');
 });
+
+/*
+ * Ported BY USE CASE from the legacy public suite
+ * (`qa/elitea-testing-public/automation/tests/ui/pipelines/
+ * test_pipeline_nodes.py::TestAddNode::
+ * test_add_human_in_the_loop_node_and_connect_to_end`) — "add a HITL node and
+ * connect its approve handle to END".
+ *
+ * It extends this file because this is where the connection machinery lives,
+ * and it is the FOURTH YAML shape `connectionOperations.helpers.ts` writes:
+ * a plain node gets `transition`, a Router gets `routes[]`, a Decision gets
+ * `nodes[]`, and a HITL gets a route MAP keyed by the handle that was dragged
+ * (`handleFromHitlNodeConnection`). J16's node-type coverage
+ * (`pipelines.lifecycle.spec.ts`) proves a HITL node can be added and saved;
+ * nothing proved one of its three branch handles writes anything.
+ *
+ * ── Why this connects to a Printer and not to END ────────────────────────
+ *
+ * The legacy test drags approve → END, which is a NO-OP on this platform and
+ * would make the assertion vacuous: `nodeDefaults.constants.ts` seeds
+ * `routes: {approve: 'END', reject: 'END'}` on every freshly added HITL node,
+ * and its own doc comment records why — the original `approve: ''` seed
+ * failed the runtime's `validate_target` (`hitl.rs:464-468`) and rejected the
+ * whole document on the first save. So the route already points at END before
+ * anything is dragged. Connecting it somewhere ELSE is the same use case
+ * (a HITL branch handle wires into the graph) stated so that only a working
+ * conversion can satisfy it.
+ *
+ * `edit` is deliberately not dragged: `rejectHitlConnection` refuses an
+ * `edit` route to END outright, and any other target renders the node card's
+ * "Provide an edit state key before using the Edit route." error until a
+ * state key is picked — a second control, and a different journey.
+ */
+test('a HITL branch handle is stored as a route map entry, not as a transition', async ({ page }) => {
+  test.setTimeout(180_000);
+  const pipeline = await createPipeline(page, `${AUTOTEST_PREFIX}hitl-${Date.now() % 1e6}`);
+  await openCanvas(page);
+
+  await addNode(page, 'Human-in-the-loop');
+  await addNode(page, 'Printer');
+  await expect(page.locator('.react-flow__node[data-id="Printer_1"]')).toBeVisible({ timeout: 20_000 });
+
+  // Before, from the STORED document. Saved before `compactCanvas` for the
+  // reason that helper documents. Both seeded routes are asserted, because
+  // the point of the drag below is that it moves ONE of them.
+  await saveAndAwaitPersist(page);
+  const before = await storedGraph(page, pipeline);
+  expect(
+    storedNode(before, 'HITL_1')['routes'],
+    'a freshly added HITL node must be seeded with both routes at END — see `nodeDefaults.constants.ts`',
+  ).toEqual({ approve: 'END', reject: 'END' });
+
+  await compactCanvas(page);
+  await connectHandles(page, {
+    source: 'HITL_1',
+    sourceHandle: 'hitlNode_approve',
+    target: 'Printer_1',
+    targetHandle: 'target',
+  });
+  await saveAndAwaitPersist(page);
+
+  const after = await storedGraph(page, pipeline);
+  const hitl = storedNode(after, 'HITL_1');
+  expect(
+    hitl['routes'],
+    'the dragged approve route never reached the stored document — the canvas showed an edge the YAML never got, ' +
+      'and the other branch must be untouched by it',
+  ).toEqual({ approve: 'Printer_1', reject: 'END' });
+  // A HITL node routes; it does not transition. `handleFromHitlNodeConnection`
+  // clears `transition` as part of the same write, and a node carrying both
+  // is one the compiler reads differently from the graph on screen.
+  expect(hitl['transition'], 'a HITL node must not grow a plain `transition`').toBeUndefined();
+  // The target end is untouched: a connection writes the SOURCE's routes, and
+  // a helper that wrote both would pass the line above while corrupting the
+  // graph.
+  expect(storedNode(after, 'Printer_1')['transition'], 'the target node must keep its own transition').toBe('END');
+});

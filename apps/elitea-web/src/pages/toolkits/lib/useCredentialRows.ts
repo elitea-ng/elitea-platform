@@ -40,6 +40,14 @@ const VECTOR_STORAGE_SECTION = 'vectorstorage';
  * site, the same technique `./sharepointAuthModals.tsx` already uses.
  */
 export interface CredentialPickerRow {
+  /**
+   * The saved row's own id.
+   *
+   * The connection check needs it: every read path seals a stored secret as a
+   * `{{secret.NAME}}` reference, so a credential can only be re-checked through
+   * the SAVED-row route, which addresses the row by id and carries no body.
+   */
+  readonly id: string;
   readonly eliteaTitle: string;
   readonly isPrivate: boolean;
   readonly displayLabel: string;
@@ -86,6 +94,7 @@ function toRows(items: readonly Credential[], isPrivate: boolean, accepted: Read
     // field instead of picking anything.
     if (eliteaTitle === '') continue;
     rows.push({
+      id: item.uid ?? item.id,
       eliteaTitle,
       isPrivate,
       displayLabel: readDisplayLabel(item, eliteaTitle),

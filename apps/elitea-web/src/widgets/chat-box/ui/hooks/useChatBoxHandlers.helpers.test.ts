@@ -316,6 +316,10 @@ describe('buildSendResult', () => {
     expect(buildSendResult({ id: 1, uuid: 'u' })).toEqual({ success: true, createdConversation: { id: 1, uuid: 'u' } });
   });
 
+  it('carries the created conversation on a FAILED result too — the row is committed before the transport is tried', () => {
+    expect(buildSendResult({ id: 1, uuid: 'u' }, false)).toEqual({ success: false, createdConversation: { id: 1, uuid: 'u' } });
+  });
+
   it('returns success only when no conversation created', () => {
     expect(buildSendResult(undefined)).toEqual({ success: true });
   });

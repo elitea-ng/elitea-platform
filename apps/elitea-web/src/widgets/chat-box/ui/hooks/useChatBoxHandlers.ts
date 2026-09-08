@@ -25,6 +25,7 @@
  *
  * Delegated authorization uses its exact REST contract. It never falls back
  * to the socket because that payload cannot identify the paused invocation.
+ * Authorization retains browser tokens and batches exact parallel decisions.
  */
 
 import { conversationApi } from "@/entities/conversation";
@@ -41,6 +42,7 @@ import {
   buildHitlContinueBody,
   findHitlInterruptId,
 } from "./useChatBoxHandlers.hitl";
+import { createResumeMcpFlow } from "./useChatBoxHandlers.mcpAuth";
 import type {
   ChatBoxHandlerDeps,
   HitlInterruptAction,
@@ -53,7 +55,6 @@ import {
   undeliveredText,
 } from "./useChatBoxHandlers.turns";
 import { createRegenerateAnswer } from "./useChatBoxHandlers.regenerate";
-import { resumeMcpAuthorization } from './useChatBoxHandlers.authorization';
 
 /*
  * [#71] `UpdatedMessageItem` and `UploadedAttachmentOutcome` were dropped from
@@ -229,16 +230,7 @@ export function useChatBoxHandlers(
       revertContinuation(setChatHistory, message, undeliveredText());
     }
   };
-  const resumeMcpFlow = (
-    messageId: string,
-    addToIgnoreList = false,
-    authorizationRequestId?: string,
-  ): Promise<void> => resumeMcpAuthorization(
-    deps,
-    messageId,
-    addToIgnoreList ? 'skip' : 'authorize',
-    authorizationRequestId,
-  );
+  const resumeMcpFlow = createResumeMcpFlow(deps);
   const continueTokenLimit = async (messageId: string): Promise<void> => {
     const message = deps.chatHistory.find((item) => item.id === messageId);
     if (!message) return;

@@ -315,7 +315,7 @@ func newCataloguePool(t *testing.T) *pgxpool.Pool {
 
 	for _, name := range []string{
 		"0094_mcp_prebuilt_catalogue.sql",
-		"0121_mcp_prebuilt_parameter_schema.sql",
+		"0123_mcp_prebuilt_parameter_schema.sql",
 	} {
 		migration, err := os.ReadFile("../../migrations/shared/" + name)
 		require.NoError(t, err, "the migration file must be readable: this test proves it, not a copy")

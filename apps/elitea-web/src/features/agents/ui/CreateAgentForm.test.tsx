@@ -373,6 +373,34 @@ describe('CreateAgentForm', () => {
     expect(screen.queryByTestId('application-variables')).not.toBeInTheDocument();
   });
 
+  // #848 — a real mousedown on `+ Starter` blurs the still-focused welcome
+  // field first; the old code unmounted that field's counter on blur,
+  // shrinking the layout and moving `+ Starter` out from under the pointer
+  // before mouseup, so the click never landed. `user.click` here exercises
+  // the same pointerdown/blur/pointerup/click sequence a real mouse
+  // produces (unlike a plain `fireEvent.click`, which fires `click` alone
+  // with no intervening blur) — with the counter's line now reserved
+  // instead of unmounted, one click still reaches the button and adds a row.
+  it('adds a conversation-starter row on a single click on + Starter while the welcome message is still focused', async () => {
+    const user = userEvent.setup();
+    const onFieldChange = vi.fn();
+    renderWithProviders(
+      <CreateAgentForm
+        values={baseValues}
+        onFieldChange={onFieldChange}
+      />,
+    );
+
+    const welcomeInput = screen.getByTestId('agent-welcome-message-input');
+    await user.click(welcomeInput);
+    await user.type(welcomeInput, 'Hello!');
+    expect(welcomeInput).toHaveFocus();
+
+    await user.click(screen.getByTestId('agent-conversation-starter-add'));
+
+    expect(onFieldChange).toHaveBeenCalledWith('version_details.conversation_starters', ['']);
+  });
+
   it('renders ApplicationVariables and forwards edits when variables are present', () => {
     const onFieldChange = vi.fn();
     renderWithProviders(

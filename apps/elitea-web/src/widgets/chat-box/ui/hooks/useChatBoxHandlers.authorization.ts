@@ -27,7 +27,8 @@ export interface McpAuthorizationBatch {
 
 function exactRequestId(action: ToolActionLike | undefined): string | undefined {
   const meta = action?.toolMeta ?? {};
-  const value = action?.authorizationRequestId ?? meta['authorization_request_id'] ?? meta['interrupt_id'] ?? action?.id;
+  const value = action?.authorizationRequestId ?? meta['authorization_request_id']
+    ?? meta['interrupt_id'] ?? meta['tool_run_id'] ?? meta['tool_call_id'] ?? action?.id;
   return typeof value === 'string' && value !== '' ? value : undefined;
 }
 

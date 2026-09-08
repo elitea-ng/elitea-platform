@@ -2,9 +2,9 @@ import type { ChangeEvent, ReactNode } from 'react';
 import { useCallback } from 'react';
 
 import Box from '@mui/material/Box';
-import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
+import { CharacterCounter } from '@/shared/ui/CharacterCounter';
 import { t } from '@/shared/i18n';
 import { MAX_DESCRIPTION_LENGTH, MAX_NAME_LENGTH } from '@/shared/lib/limits';
 import { PROMPT_PAYLOAD_KEY } from '@/shared/lib/prompt-payload';
@@ -107,12 +107,13 @@ function NameField({ visible, value, nameIsRequired, disabled, showValidation, h
         onBlur={onBlur}
       />
       {isFocused && MAX_NAME_LENGTH === value.length && (
-        <Typography
-          variant="bodySmall2"
+        <CharacterCounter
+          value={value}
+          maxLength={MAX_NAME_LENGTH}
+          textVariant="bodySmall2"
           sx={nameLengthMessageSx}
-        >
-          {t('features.toolkits.nameDescriptionInput.charactersLeftZero', '0 is left from {{max}} characters left', { max: MAX_NAME_LENGTH })}
-        </Typography>
+          data-testid="toolkit-name-counter"
+        />
       )}
     </Box>
   );
@@ -149,14 +150,19 @@ function DescriptionField({ visible, value, disabled, showValidation, hasError, 
         onFocus={onFocus}
         onBlur={onBlur}
       />
-      {isFocused && value.length > 0 && (
-        <Typography
-          variant="bodySmall"
-          sx={descriptionLengthMessageSx}
-        >
-          {t('features.toolkits.nameDescriptionInput.charactersLeft', '{{count}} characters left', { count: MAX_DESCRIPTION_LENGTH - value.length })}
-        </Typography>
-      )}
+      {/* #848 — never unmount: unlike `nameLengthMessageSx` above (absolutely
+        * positioned, so it overlays rather than pushes), this counter sits
+        * in normal flow — `ToolBase.render.tsx` renders real property
+        * fields directly after this component, and unmounting on blur
+        * shifts them up, swallowing a click already headed for one of
+        * them. `visibility: hidden` keeps the line's height reserved. */}
+      <CharacterCounter
+        value={value}
+        maxLength={MAX_DESCRIPTION_LENGTH}
+        visible={isFocused && value.length > 0}
+        sx={descriptionLengthMessageSx}
+        data-testid="toolkit-description-counter"
+      />
     </Box>
   );
 }

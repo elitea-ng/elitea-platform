@@ -14,7 +14,7 @@
  * streaming), and ~735-765 (attachment removal, via `useAttachmentState`/
  * `useUploadAttachments`).
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
 
 import {
@@ -214,9 +214,44 @@ export function useChatBoxData(params: UseChatBoxDataParams): UseChatBoxDataResu
 
   const [conversationForSync, setConversationForSync] = useState<ConversationForSync>(seedConversationForSync);
 
+  /**
+   * Which conversation the live history currently belongs to. `undefined` is a
+   * real value here: a chat with no row yet, which is where the FIRST SEND
+   * starts.
+   */
+  const seededIdentity = conversationUuid ?? (conversationId !== undefined ? String(conversationId) : undefined);
+  const seededIdentityRef = useRef<string | undefined>(seededIdentity);
+
+  /*
+   * DEFECT this closes. The first send COMMITS the conversation before it tries
+   * any transport, and the page then routes to `/chat/{id}` — so the very act
+   * of adopting the row re-ran this effect with a server answer that has no
+   * messages in it yet, and the optimistic question (plus, on a refused turn,
+   * its failure bubble and error trace) was erased from the screen a moment
+   * after it was drawn. On a deployment with a live transport the socket sync
+   * put the persisted copy back and hid it; with no transport — every E2E stack
+   * (`VITE_SOCKET_SERVER: ""`) and any refused turn — nothing put it back and
+   * the reader's own question vanished.
+   *
+   * So an EMPTY server seed is not authoritative over a non-empty live history:
+   * it only means "the server has nothing to add yet". It replaces the history
+   * only when the reader really moved to a DIFFERENT conversation, which is the
+   * case the re-seed exists for. A seed that carries messages still wins, and
+   * the Create control resets the surface by remounting the subtree
+   * (`useCreateChatReset` keys it), so neither path is weakened here.
+   */
   useEffect(() => {
-    setConversationForSync(seedConversationForSync());
-  }, [seedConversationForSync]);
+    const previousIdentity = seededIdentityRef.current;
+    seededIdentityRef.current = seededIdentity;
+    const seed = seedConversationForSync();
+    const switchedConversation = previousIdentity !== undefined && previousIdentity !== seededIdentity;
+    const seedIsEmpty = (seed.chat_history ?? []).length === 0;
+    setConversationForSync((prev) => {
+      const live = prev.chat_history ?? [];
+      if (switchedConversation || !seedIsEmpty || live.length === 0) return seed;
+      return { ...seed, chat_history: live };
+    });
+  }, [seedConversationForSync, seededIdentity]);
 
   useSyncChatMessage({ activeConversation: conversationForSync, setActiveConversation: setConversationForSync });
 

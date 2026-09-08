@@ -2,6 +2,8 @@ import type { ReactNode } from 'react';
 import { useState } from 'react';
 
 import CallSplitOutlinedIcon from '@mui/icons-material/CallSplitOutlined';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined';
+import FileDownloadOutlinedIcon from '@mui/icons-material/FileDownloadOutlined';
 import LinkOutlinedIcon from '@mui/icons-material/LinkOutlined';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import PublicOffOutlinedIcon from '@mui/icons-material/PublicOffOutlined';
@@ -33,6 +35,13 @@ import { t } from '@/shared/i18n';
  * (internal/api/v2/eliteacore/handler.go). Offering a control whose only
  * possible outcome is a refusal is worse than omitting it, which is the same
  * rule `features/settings`' row menu already follows for a missing grant.
+ *
+ * `onExport`/`onDelete` are optional for the same "do not duplicate" reason
+ * the note above states. The AGENT editor keeps its own Export and Delete
+ * toolbar buttons and passes neither. The PIPELINE editor has no such buttons
+ * — `pages/pipelines/ui/EditPipelineActions.tsx` disclosed that export and
+ * delete had no pipeline-side mount point at all — so it passes both, and this
+ * menu is where the reference puts them (Share, Fork, Export, Delete).
  */
 export interface EntityLifecycleMenuProps {
   /** Disables every item — used while the editor is still loading its entity. */
@@ -44,6 +53,10 @@ export interface EntityLifecycleMenuProps {
   readonly onFork: () => void;
   readonly onPublish?: () => void;
   readonly onUnpublish?: () => void;
+  /** Export the whole entity as markdown. Omitted where the editor carries its own Export button. */
+  readonly onExport?: () => void;
+  /** Delete the whole entity. The caller owns the confirmation. Omitted where the editor carries its own Delete button. */
+  readonly onDelete?: () => void;
   /** Distinguishes the agent and pipeline copies of this menu in the DOM. */
   readonly testIdPrefix: string;
 }
@@ -56,6 +69,8 @@ export function EntityLifecycleMenu({
   onFork,
   onPublish,
   onUnpublish,
+  onExport,
+  onDelete,
   testIdPrefix,
 }: EntityLifecycleMenuProps): ReactNode {
   const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
@@ -137,6 +152,24 @@ export function EntityLifecycleMenu({
           <LinkOutlinedIcon sx={iconSx} />
           {t('features.agentLifecycle.menu.shareEntity', 'Share')}
         </MenuItem>
+        {onExport !== undefined && (
+          <MenuItem
+            data-testid={`${testIdPrefix}-export-menuitem`}
+            onClick={run(onExport)}
+          >
+            <FileDownloadOutlinedIcon sx={iconSx} />
+            {t('features.agentLifecycle.menu.export', 'Export')}
+          </MenuItem>
+        )}
+        {onDelete !== undefined && (
+          <MenuItem
+            data-testid={`${testIdPrefix}-delete-menuitem`}
+            onClick={run(onDelete)}
+          >
+            <DeleteOutlineIcon sx={iconSx} />
+            {t('features.agentLifecycle.menu.delete', 'Delete')}
+          </MenuItem>
+        )}
       </Menu>
     </>
   );

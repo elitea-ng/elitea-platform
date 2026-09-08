@@ -186,12 +186,29 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 // LEFT JOIN, not JOIN: this reads a version LIST, and an inner join would make
 // a missing applications row silently shorten it. "The default is unknown" is
 // the right degradation for that; "these versions do not exist" is not.
+//
+// The row carries FOUR fields pylon's `ApplicationVersionListModel`
+// (legacy/plugins/elitea_core/models/pd/version.py) does not agree with, and
+// each stays for a caller that reads it:
+//
+//   - `instructions` and `meta` — pylon HAD them and this projection dropped
+//     them (#844). Restored above.
+//   - `agent_type` — pylon excluded it; elitea-web reads it off the summary to
+//     shape the version dropdown (apps/elitea-web/src/pages/agents/lib/
+//     editApplicationMappers.ts `toVersionSummaries`, and its pipeline twin).
+//   - `is_default` — pylon had no such concept; elitea-web reads it to mark the
+//     default in the version bar on FIRST render (the same two mappers, and
+//     features/agents/model/useVersionBarCommands.ts).
+//
+// So neither is dead weight, and dropping either to match pylon would blank a
+// control that works today.
 func (h *Handler) getVersions(ctx context.Context, projectID, applicationID string) ([]map[string]any, string) {
 	s, ok := tenantSchema(projectID)
 	if !ok {
 		return []map[string]any{}, ""
 	}
 	q := fmt.Sprintf(`SELECT v.id, v.name, v.status, v.agent_type, v.created_at,
+		COALESCE(v.instructions, ''), COALESCE(v.meta::text, '{}'),
 		COALESCE(a.meta->>'`+defaultVersionMetaKey+`', '')
 		FROM %s.application_versions v
 		LEFT JOIN %s.applications a ON a.id = v.application_id
@@ -206,11 +223,18 @@ func (h *Handler) getVersions(ctx context.Context, projectID, applicationID stri
 	var defaultVersionID string
 	for rows.Next() {
 		var id int
-		var name, status, agentType, rowDefaultVersionID string
+		var name, status, agentType, instructions, rowDefaultVersionID string
+		var metaJSON []byte
 		var createdAt any
-		if err := rows.Scan(&id, &name, &status, &agentType, &createdAt, &rowDefaultVersionID); err != nil {
+		if err := rows.Scan(&id, &name, &status, &agentType, &createdAt,
+			&instructions, &metaJSON, &rowDefaultVersionID); err != nil {
 			continue
 		}
+		// COALESCE'd above, so this is always a JSON document. A `meta` that
+		// failed to decode would leave `any(nil)`, which marshals to `null` —
+		// the same answer a NULL column gives, and never a truncated object.
+		var meta any
+		_ = json.Unmarshal(metaJSON, &meta)
 		defaultVersionID = rowDefaultVersionID
 		versionID := strconv.Itoa(id)
 		versions = append(versions, map[string]any{
@@ -219,6 +243,14 @@ func (h *Handler) getVersions(ctx context.Context, projectID, applicationID stri
 			"status":     status,
 			"agent_type": agentType,
 			"created_at": createdAt,
+			// `instructions` and `meta` are the two fields pylon's
+			// `ApplicationVersionListModel` carried on every summary and this
+			// projection dropped (#844). A client that read the prompt text off
+			// the version LIST — which is what the summary is for, and what the
+			// legacy export/import suite reads — got `null` for it on every
+			// version, on a response that otherwise looked complete.
+			"instructions": instructions,
+			"meta":         meta,
 			// Compared against the empty string as well as the row id so an
 			// application with no default recorded flags no version, rather
 			// than flagging one whose id happens to stringify to "".

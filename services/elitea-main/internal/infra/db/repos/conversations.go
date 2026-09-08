@@ -148,14 +148,16 @@ func (r *ConversationsRepo) Get(ctx context.Context, projectID, conversationID s
 
 	q := fmt.Sprintf(`
 		SELECT c.id::text, c.name, COALESCE(c.uuid::text, ''), c.author_id, c.folder_id::text, c.created_at, COALESCE(c.updated_at, c.created_at),
+			c.meta,
 			(SELECT COUNT(*) FROM %s.chat_message_group mg WHERE mg.conversation_id = c.id)
 		FROM %s.chat_conversations c WHERE %s`, s, s, predicate)
 
 	var c conversations.Conversation
 	var authorID int
 	var folderID *string
+	var metaBytes []byte
 	err := r.pool.QueryRow(ctx, q, conversationID).Scan(
-		&c.ID, &c.Name, &c.UUID, &authorID, &folderID, &c.CreatedAt, &c.UpdatedAt, &c.MessageCount,
+		&c.ID, &c.Name, &c.UUID, &authorID, &folderID, &c.CreatedAt, &c.UpdatedAt, &metaBytes, &c.MessageCount,
 	)
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -166,7 +168,25 @@ func (r *ConversationsRepo) Get(ctx context.Context, projectID, conversationID s
 	c.ProjectID = projectID
 	c.CreatedBy = fmt.Sprintf("%d", authorID)
 	c.FolderID = folderID
+	c.Meta = decodeConversationMeta(metaBytes)
 	return c, nil
+}
+
+// decodeConversationMeta reads the `meta` jsonb column.
+//
+// A document this repository cannot parse reads as "no settings", not as an
+// error: the column is written by this service and by pylon before it, and a
+// details request must still answer with the conversation's name and
+// participants when one legacy row holds something unexpected.
+func decodeConversationMeta(raw []byte) map[string]any {
+	if len(raw) == 0 {
+		return nil
+	}
+	var meta map[string]any
+	if err := json.Unmarshal(raw, &meta); err != nil {
+		return nil
+	}
+	return meta
 }
 
 func (r *ConversationsRepo) ListParticipants(ctx context.Context, projectID, conversationID string) ([]conversations.Participant, error) {
@@ -271,18 +291,30 @@ func (r *ConversationsRepo) Create(ctx context.Context, projectID string, conv c
 		authorID = "1"
 	}
 
+	// The settings document the caller sent, or an empty one. Marshalled
+	// rather than interpolated: it is caller data.
+	meta := conv.Meta
+	if meta == nil {
+		meta = map[string]any{}
+	}
+	encodedMeta, err := json.Marshal(meta)
+	if err != nil {
+		return conversations.Conversation{}, fmt.Errorf("conversations: create: encode meta: %w", err)
+	}
+
 	q := fmt.Sprintf(`
 		INSERT INTO %s.chat_conversations (name, author_id, is_private, meta, source)
-		VALUES ($1, $2, true, '{}'::jsonb, 'api')
-		RETURNING id::text, name, uuid::text, created_at, COALESCE(updated_at, created_at)`, s)
+		VALUES ($1, $2, true, $3::jsonb, 'api')
+		RETURNING id::text, name, uuid::text, created_at, COALESCE(updated_at, created_at), meta`, s)
 
 	var c conversations.Conversation
-	err := r.pool.QueryRow(ctx, q, conv.Name, authorID).Scan(&c.ID, &c.Name, &c.UUID, &c.CreatedAt, &c.UpdatedAt)
-	if err != nil {
+	var metaBytes []byte
+	if err := r.pool.QueryRow(ctx, q, conv.Name, authorID, encodedMeta).Scan(&c.ID, &c.Name, &c.UUID, &c.CreatedAt, &c.UpdatedAt, &metaBytes); err != nil {
 		return conversations.Conversation{}, fmt.Errorf("conversations: create: %w", err)
 	}
 	c.ProjectID = projectID
 	c.CreatedBy = authorID
+	c.Meta = decodeConversationMeta(metaBytes)
 	return c, nil
 }
 
@@ -307,6 +339,20 @@ func (r *ConversationsRepo) Update(ctx context.Context, projectID, conversationI
 			argIdx++
 		}
 	}
+	// Written whole, and only when the caller stated one: the handler sets
+	// this field exactly when the request body carried a `meta` object, so a
+	// rename never touches the column while a settings write replaces the
+	// whole document — which is what the client sends (it PUTs the previous
+	// document plus its one change).
+	if conv.Meta != nil {
+		encodedMeta, err := json.Marshal(conv.Meta)
+		if err != nil {
+			return conversations.Conversation{}, fmt.Errorf("conversations: update: encode meta: %w", err)
+		}
+		setClauses += fmt.Sprintf(", meta = $%d::jsonb", argIdx)
+		args = append(args, encodedMeta)
+		argIdx++
+	}
 
 	id, err := r.resolveConversationID(ctx, projectID, conversationID)
 	if err != nil {
@@ -318,14 +364,15 @@ func (r *ConversationsRepo) Update(ctx context.Context, projectID, conversationI
 	// 6: every update answered with `"created_by": ""`, so a client that
 	// refreshed its cache from the mutation response lost the owner.
 	q := fmt.Sprintf(`UPDATE %s.chat_conversations SET %s WHERE id = $%d
-		RETURNING id::text, name, COALESCE(uuid::text, ''), author_id, folder_id::text, created_at, COALESCE(updated_at, created_at)`,
+		RETURNING id::text, name, COALESCE(uuid::text, ''), author_id, folder_id::text, created_at, COALESCE(updated_at, created_at), meta`,
 		s, setClauses, argIdx)
 
 	var c conversations.Conversation
 	var authorID int
 	var folderID *string
+	var metaBytes []byte
 	if err := r.pool.QueryRow(ctx, q, args...).Scan(
-		&c.ID, &c.Name, &c.UUID, &authorID, &folderID, &c.CreatedAt, &c.UpdatedAt,
+		&c.ID, &c.Name, &c.UUID, &authorID, &folderID, &c.CreatedAt, &c.UpdatedAt, &metaBytes,
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return conversations.Conversation{}, apierr.NotFound("conversation not found")
@@ -335,6 +382,7 @@ func (r *ConversationsRepo) Update(ctx context.Context, projectID, conversationI
 	c.ProjectID = projectID
 	c.CreatedBy = fmt.Sprintf("%d", authorID)
 	c.FolderID = folderID
+	c.Meta = decodeConversationMeta(metaBytes)
 	return c, nil
 }
 

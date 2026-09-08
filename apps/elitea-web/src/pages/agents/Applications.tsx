@@ -7,8 +7,8 @@ import { useNavigate, useParams } from '@tanstack/react-router';
 
 import { EntityImportButton, useEntityImport } from '@/features/agent-lifecycle';
 import { t } from '@/shared/i18n';
-import { EntityListRail } from '@/shared/ui/EntityRail';
-import { PageHeader } from '@/widgets/page-header';
+import { EntityListRail, RAIL_CONTENT_WIDTH, useEntityRailVisible } from '@/shared/ui/EntityRail';
+import { ListSearchField, ListViewToggle, PageHeader } from '@/widgets/page-header';
 import { useSidebarCollapsedStore } from '@/widgets/sidebar';
 
 import { isPublicAgentsProject } from './lib/isPublicAgentsProject';
@@ -17,11 +17,27 @@ import { useSelectedProjectId } from './lib/useSelectedProjectId';
 import { useApplicationsData } from './useApplicationsData';
 import { useApplicationTabs } from './useApplicationTabs';
 
-const pageSx: SxProps<Theme> = {
+/**
+ * The page's own column, narrowed while the rail is on screen.
+ *
+ * `EntityRail` is `position: fixed` at `right: 12px` with a `z-index` of
+ * 1000 and the full viewport height, so anything the page draws under it is
+ * unreachable — the pointer lands on the rail. The header's right-hand
+ * controls (the table/card switch, the Import button) sat exactly there:
+ * clicking the switch did nothing at all at any viewport wide enough to show
+ * the rail, which is every viewport at or above 800px.
+ *
+ * `CARD_LIST_WIDTH` (`apps/elitea-ui/src/common/constants.js:511`) is the
+ * baseline's answer, and `pages/skills/Skills.tsx` already applies it. The
+ * width goes on the page column rather than on the header alone, so the tab
+ * panel below it lines up with the header instead of running under the rail.
+ */
+const pageSx = (railVisible: boolean): SxProps<Theme> => ({
   height: '100%',
   display: 'flex',
   flexDirection: 'column',
-};
+  width: railVisible ? RAIL_CONTENT_WIDTH : '100%',
+});
 
 
 const tabPanelSx: SxProps<Theme> = {
@@ -54,14 +70,24 @@ interface AgentsRouteParams {
  *    would be both a broken import and, even once it lands, this page
  *    would need updating anyway to pass the real props, so nothing is
  *    faked here in the meantime.
- *  - `ToolbarImportButton` (`@/[fsd]/entities/import-wizard/ui`) and
- *    `ViewToggle` (`@/components/ViewToggle`) have no confirmed port
- *    anywhere in `shared/ui`/`widgets` (grepped both trees for both names —
- *    zero hits) and are out of this unit's ownership fence to add.
+ *  - `ToolbarImportButton` (`@/[fsd]/entities/import-wizard/ui`) is mounted
+ *    now, as `EntityImportButton` in the header's `actions` slot.
  *  - `DateRangeSelect`/`useTrendRange` (baseline's Trending-tab-only date
  *    picker) — see `Trending.tsx`'s own doc comment: the backing
  *    `trend_start_period` filter has no server-side support at all, so
  *    there is nothing for a working date picker to control.
+ *
+ * **Search and the view switch are real now.** `ViewToggle`
+ * (`@/components/ViewToggle` in the baseline) and the rail's search box
+ * (`components/RightPanel.jsx:67-86`) were both disclosed here as having no
+ * port. They are `widgets/page-header`'s `ListViewToggle` and
+ * `ListSearchField`, mounted in this header's own `viewToggle`/`search`
+ * slots. The search text is the route's `query` param and reaches the
+ * selected tab from there; the applications list endpoint reads the same
+ * name server-side (`ListApplicationsParams.query`), so the filter is not
+ * limited to the first fetched page. The view choice is the `view` param
+ * `shared/ui/EntityCardList` already obeyed, additionally remembered per page
+ * in `localStorage`.
  *
  * **The rail and its tag filter are both real (issue 841).** The "Tags"
  * panel lists this project's real tags and writes the selection into the
@@ -84,6 +110,9 @@ export function Applications(): ReactNode {
   const isPublicProject = isPublicAgentsProject(projectId);
   const hasAdminPermission = useHasAdminPermission(isPublicProject ? projectId : undefined);
   const navRailCollapsed = useSidebarCollapsedStore((state) => state.collapsed);
+  // The same answer the rail itself gives, so the column and the rail can
+  // never disagree about whether the rail is on screen.
+  const railVisible = useEntityRailVisible(navRailCollapsed);
   const totals = useApplicationsData(projectId, hasAdminPermission);
   const entityImport = useEntityImport(projectId);
   const tabs = useApplicationTabs(isPublicProject, totals, hasAdminPermission);
@@ -98,6 +127,13 @@ export function Applications(): ReactNode {
     void navigate({ to: '/agents/$tab', params: { tab: firstTab.value }, replace: true });
   }, [selectedIndex, visibleTabs, navigate]);
 
+  /**
+   * The tabs whose body is a real list. `MyLiked`/`Trending` are disclosed
+   * empty states (their own module comments record the absent server filters),
+   * so the header's search box and view switch have nothing to act on there.
+   */
+  const searchableTab = params.tab !== 'my-liked' && params.tab !== 'trending';
+
   const handleChangeTab = (_event: SyntheticEvent, nextIndex: number): void => {
     const nextTab = visibleTabs[nextIndex];
     if (nextTab === undefined) return;
@@ -105,7 +141,7 @@ export function Applications(): ReactNode {
   };
 
   return (
-    <Box sx={pageSx}>
+    <Box sx={pageSx(railVisible)}>
       <PageHeader
         tabs={{
           items: visibleTabs.map((tab) => ({
@@ -126,6 +162,29 @@ export function Applications(): ReactNode {
          * are read-only catalogues, matching the create button's own rule.
          */
         slots={{
+          /*
+           * The search box and the table/card switch, both restored from the
+           * reference (`pages/agents/…Applications.jsx`/`Pipelines.jsx` mount
+           * `ViewToggle` in the header's middle slot; `components/
+           * RightPanel.jsx` mounts the search box in the rail). Both were
+           * disclosed as unported by this file's own module comment.
+           *
+           * Rendered only for the tabs that HAVE a list — `MyLiked` and
+           * `Trending` render a "not available yet" notice with no rows, so a
+           * search box and a view switch over them would be two controls that
+           * change nothing.
+           */
+          ...(searchableTab
+            ? {
+                search: <ListSearchField data-testid="agent-search-input" />,
+                viewToggle: (
+                  <ListViewToggle
+                    pageKey="agents"
+                    testIdPrefix="agent"
+                  />
+                ),
+              }
+            : {}),
           actions: isPublicProject ? undefined : (
             <EntityImportButton
               testIdPrefix="agents"

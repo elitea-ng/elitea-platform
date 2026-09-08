@@ -677,6 +677,107 @@ adminTest(
           after.voice_features_enabled,
           'temporarily disabling must not HIDE the control',
         ).toBe(true);
+
+        /*
+         * ── THE CHAT SURFACE, not just the row ────────────────────────────
+         *
+         * Ported from the legacy public suite's
+         * `tests/ui/voice/test_voice_configuration.py::
+         * TestVoiceConfiguration::test_voice_settings_not_visible_by_default`
+         * (TC5, regression for bug 5235). Everything above this point proves
+         * the WRITE reaches `platform_settings`; the legacy case is about
+         * what a user sees, and the defect unit A14 removed was precisely a
+         * flag that persisted and changed nothing.
+         *
+         * Two facts, on the real chat page:
+         *
+         *  1. THE READ-OUT MINI PLAYER IS NOT THERE BY DEFAULT. That is the
+         *     legacy regression, and here it is structural rather than
+         *     stateful: `features/chat-input`'s `VoiceMiniPlayer` /
+         *     `VoiceControlButton` have no render site in this app at all
+         *     (their own module docs say so), so the TTS controls cannot
+         *     appear on a chat surface that nobody asked to read aloud.
+         *  2. THE MICROPHONE OBEYS THE SWITCH. `widgets/chat`'s `VoiceButton`
+         *     is the one MOUNTED voice control, reached through ChatBox's
+         *     slot bundle; `temporarily disabled` must leave it visible and
+         *     inert, and `enabled: false` must remove it.
+         *
+         * `.count()` for both absences: it reads the DOM as it stands rather
+         * than waiting for an attach that must never happen.
+         */
+        /*
+         * ── THE ENGINE THE CONTROL NEEDS, MADE THE SAME ON BOTH BROWSERS ──
+         *
+         * `VoiceButton` returns null on `!isSupported` BEFORE it reads either
+         * platform flag (`src/widgets/chat/ui/chat-button/VoiceButton.tsx:277`).
+         * With no project ASR model configured, `isSupported` is the client
+         * hook's — whether `window.SpeechRecognition` or
+         * `webkitSpeechRecognition` exists at all
+         * (`src/features/chat-input/lib/hooks/useSpeechRecognition.ts:82-105`).
+         * Playwright's Chromium ships `webkitSpeechRecognition`; its WebKit
+         * ships neither, so the mic had no render site there and the
+         * assertions below failed as "the switch did not reach the chat
+         * surface" on one engine only.
+         *
+         * A stub, not a `browserName` branch: the OPERATOR SWITCH is what this
+         * journey is about, and gating half of it on the engine would leave
+         * WebKit asserting nothing about it for ever. `settings.voice.spec.ts`
+         * installs a `speechSynthesis` stub for the same reason, on the same
+         * argument.
+         *
+         * `addInitScript` before the navigation, because the hook probes in its
+         * first effect. Nothing here ever clicks the control — it is asserted
+         * DISABLED — so a bare constructor is the whole of what is needed.
+         */
+        await page.addInitScript(() => {
+          if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) return;
+          class AutotestSpeechRecognition {
+            continuous = false;
+            interimResults = false;
+            lang = 'en-US';
+            onresult: unknown = null;
+            onerror: unknown = null;
+            onend: unknown = null;
+            start(): void {}
+            stop(): void {}
+            abort(): void {}
+          }
+          Object.defineProperty(window, 'webkitSpeechRecognition', {
+            configurable: true,
+            value: AutotestSpeechRecognition,
+          });
+        });
+
+        await page.goto(BASE_URL + '/app/chat', { waitUntil: 'domcontentloaded' });
+        await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 30_000 });
+
+        const microphone = page.getByRole('button', { name: 'start voice input' });
+        await expect(
+          microphone,
+          'temporarily disabling must leave the control on screen',
+        ).toBeVisible({ timeout: 20_000 });
+        await expect(microphone).toBeDisabled();
+        await expect(page.getByTestId('chat-voice-mini-player')).toHaveCount(0);
+
+        // Now HIDE it, which is the other switch in the same section. The stub
+        // is still installed, so an absent control here is the FLAG's doing and
+        // not the engine's — which is exactly what makes this assertion mean
+        // something on both browsers.
+        const hidden = await putValues(page, 'voice_features', {
+          vite_voice_features_enabled: false,
+          vite_voice_features_temporarily_disabled: true,
+        });
+        expect(hidden.status, hidden.body).toBe(200);
+
+        await page.reload({ waitUntil: 'domcontentloaded' });
+        await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 30_000 });
+        await expect
+          .poll(async () => page.getByRole('button', { name: 'start voice input' }).count(), {
+            timeout: 20_000,
+            message: 'the voice control survived an operator switching voice features off',
+          })
+          .toBe(0);
+        await expect(page.getByTestId('chat-voice-mini-player')).toHaveCount(0);
       } finally {
         // Same reason as J36b's restore — see `restoreSection`.
         await restoreSection(page, 'voice_features', {

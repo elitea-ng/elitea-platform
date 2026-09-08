@@ -322,7 +322,17 @@ SELECT member.id,
        END                                                           AS remaining,
        CASE WHEN limits.enabled AND limits.hard_limit_usd > 0
             THEN round(COALESCE(accrued.accumulated_cost, 0) / limits.hard_limit_usd * 100, 2)::text
-       END                                                           AS percent_used
+       END                                                           AS percent_used,
+       -- The threshold crossing, computed here as well as in
+       -- budgetStateSelect. It is not optional: budgetState carries
+       -- warning_active, so a listing that left it to the zero value would
+       -- report false for every member who is over their threshold — the
+       -- "absence reads as correctness" shape, in a field a banner branches on.
+       COALESCE(
+           CASE WHEN limits.enabled AND limits.hard_limit_usd > 0
+                THEN round(COALESCE(accrued.accumulated_cost, 0) / limits.hard_limit_usd * 100, 2)
+                     >= COALESCE(limits.soft_alert_pct, ` + globalWarningPctSQL + `, $2::smallint)
+           END, false)                                               AS warning_active
 FROM members
 JOIN public.auth_core__user member ON member.id = members.user_id
 LEFT JOIN gateway.user_budget limits
@@ -403,10 +413,12 @@ func (h *Handler) listUserBudgets(ctx context.Context, projectID int64) (*userBu
 			spendAvailable bool
 			remaining      *string
 			percentUsed    *string
+			warningActive  bool
 		)
 		if err := rows.Scan(
 			&row.UserID, &row.Name, &row.Email, &row.Roles,
 			&monthlyLimit, &enabled, &warningPct, &spend, &spendAvailable, &remaining, &percentUsed,
+			&warningActive,
 		); err != nil {
 			return nil, fmt.Errorf("budgets: scan member budget row: %w", err)
 		}
@@ -426,6 +438,7 @@ func (h *Handler) listUserBudgets(ctx context.Context, projectID int64) (*userBu
 			Spend:          numeric(&spend),
 			Remaining:      numeric(remaining),
 			PercentUsed:    numeric(percentUsed),
+			WarningActive:  warningActive,
 			SpendAvailable: spendAvailable,
 			Period:         period.label(),
 			PeriodStart:    period.firstDay(),

@@ -1223,6 +1223,7 @@ pub(crate) async fn assemble_pipeline_native(
     {
         return Err(invalid_configuration());
     }
+    // TurnCheckpointer isolates fresh input without deleting recovery history.
     let agent: Arc<dyn Agent> = Arc::new(
         EliteaGraphAgent::new(graph)
             .with_printer_interrupts(Arc::clone(&state.checkpointer), printer_catalog),

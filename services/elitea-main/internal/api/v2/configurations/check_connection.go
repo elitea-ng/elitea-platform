@@ -111,6 +111,12 @@ type ConnectionCheckResult struct {
 	// separately via slog, never returned — repository convention for typed,
 	// safe API errors).
 	Message string
+	// Reason is the machine-readable verdict of a TOOLKIT probe
+	// (toolkit_check.go's closed four-value vocabulary). It is empty for the
+	// gateway/LLM path, whose own reason vocabulary is already collapsed into
+	// Message by connectionCheckMessageFor — a caller reads Message there, as
+	// it always did, and switches on Reason only where one is present.
+	Reason string
 }
 
 // ConnectionChecker performs the real, minimal provider round trip for one
@@ -317,9 +323,22 @@ func (h *Handler) CheckConnection(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if _, checkable := checkableConnectionTypes[configType]; !checkable {
+		// A TOOLKIT credential is checked by this build's own probe, not by the
+		// gateway (toolkit_check.go). Before this branch existed every one of
+		// them answered "not supported yet", so the credential card's attention
+		// indicator could not light for a token the provider refuses.
+		if outcome, probed := h.checkToolkitConnection(r.Context(), configType, data); probed {
+			writeJSON(w, toolkitCheckStatus(outcome), map[string]any{
+				"success": outcome.Success(),
+				"message": outcome.Message,
+				"reason":  outcome.Reason,
+			})
+			return
+		}
 		writeJSON(w, http.StatusBadRequest, map[string]any{
 			"success": false,
 			"message": connectionCheckNotSupportedMessage(configType),
+			"reason":  ToolkitCheckReasonUnsupportedType,
 		})
 		return
 	}
@@ -435,8 +454,14 @@ func (h *Handler) checkBatchItem(ctx context.Context, projectID string, item map
 	}
 
 	if _, checkable := checkableConnectionTypes[configType]; !checkable {
+		if outcome, probed := h.checkToolkitConnection(ctx, configType, data); probed {
+			return map[string]any{
+				"id": id, "success": outcome.Success(), "message": outcome.Message, "reason": outcome.Reason,
+			}
+		}
 		return map[string]any{
 			"id": id, "success": false, "message": connectionCheckNotSupportedMessage(configType),
+			"reason": ToolkitCheckReasonUnsupportedType,
 		}
 	}
 
@@ -488,4 +513,29 @@ func NewGatewayConnectionCheckerFromConfig(gatewayURL, clientCertFile, clientKey
 		return nil, fmt.Errorf("check connection: build mTLS transport: %w", err)
 	}
 	return NewGatewayConnectionChecker(gatewayURL, transport, identitySecret), nil
+}
+
+// checkToolkitConnection runs this build's own toolkit probe for a type the
+// gateway path cannot check.
+//
+// `probed` is false for a type that is not a toolkit family this build carries
+// a probe for, and the caller then falls through to the "not supported yet"
+// answer it always gave — the honest one, and the same one legacy's registry
+// produced for a registered type with no working check.
+func (h *Handler) checkToolkitConnection(ctx context.Context, configType string, data map[string]any) (ToolkitCheckOutcome, bool) {
+	if h == nil || h.toolkitChecker == nil || !IsToolkitCheckableType(configType) {
+		return ToolkitCheckOutcome{}, false
+	}
+	return h.toolkitChecker.CheckToolkit(ctx, configType, data), true
+}
+
+// toolkitCheckStatus maps an outcome onto the status the single-check routes
+// answer with. The contract is the LLM path's, byte for byte, because the same
+// browser control renders both: 200 only for a proven round trip, 400 for every
+// refusal, with the machine-readable reason beside the message.
+func toolkitCheckStatus(outcome ToolkitCheckOutcome) int {
+	if outcome.Success() {
+		return http.StatusOK
+	}
+	return http.StatusBadRequest
 }

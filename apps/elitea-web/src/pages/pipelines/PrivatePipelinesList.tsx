@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 
 import Box from '@mui/material/Box';
 import type { SxProps, Theme } from '@mui/material/styles';
@@ -9,7 +9,7 @@ import { useListApplications } from '@/shared/api/generated/applications/applica
 import type { Application, ApplicationList } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
 import { useRailTagSelection } from '@/shared/ui/EntityRail';
-import { SimpleSearchBar } from '@/shared/ui/SimpleSearchBar';
+import { useListSearchQuery } from '@/widgets/page-header';
 
 import { sortPipelinesByField, type SortOrder } from './lib/sortPipelinesByField';
 import { useSelectedProjectId } from './lib/useSelectedProjectId';
@@ -114,16 +114,32 @@ export function PrivatePipelinesList({ cardContentType }: PrivatePipelinesListPr
   const sortBy = search.sort_by === 'name' ? 'name' : 'createdAt';
   const sortOrder: SortOrder = search.sort_order === 'asc' ? 'asc' : 'desc';
 
-  const [query, setQuery] = useState('');
+  // See `pages/agents/PrivateAgentsList.tsx` — the search box lives on the
+  // page header and reaches this tab as the route's `query` search param.
+  const query = useListSearchQuery();
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const { selectedTags } = useRailTagSelection();
 
+  useEffect(() => {
+    setVisibleCount(PAGE_SIZE);
+  }, [query]);
+
   // See `pages/agents/PrivateAgentsList.tsx` — the same server-side tag
   // filter, over the same list endpoint with `agents_type: 'pipeline'`.
+  const trimmedQuery = query.trim();
   const tagFilter = selectedTags.join(',');
   const listQuery = useListApplications(
     projectId ?? '',
-    { agents_type: 'pipeline', ...(tagFilter === '' ? {} : { tags: tagFilter }) },
+    {
+      agents_type: 'pipeline',
+      // `query` is a real server-side substring filter on this endpoint
+      // (`ListApplicationsParams.query`, read by
+      // `internal/api/v2/applications/handler.go`). Sending it matters
+      // because the response is capped at the handler's first 20 rows: a
+      // client-side filter alone would narrow one page instead of the project.
+      ...(trimmedQuery === '' ? {} : { query: trimmedQuery }),
+      ...(tagFilter === '' ? {} : { tags: tagFilter }),
+    },
     { query: { enabled: projectId !== undefined } },
   );
   // `.data.data`'s declared type includes the error-envelope variant — never
@@ -147,14 +163,6 @@ export function PrivatePipelinesList({ cardContentType }: PrivatePipelinesListPr
       key={cardContentType}
       sx={containerSx}
     >
-      <SimpleSearchBar
-        value={query}
-        onChange={(next) => {
-          setQuery(next);
-          setVisibleCount(PAGE_SIZE);
-        }}
-        placeholder={t('pages.pipelines.privateList.search', 'Search')}
-      />
       <PipelineListPanel
         rows={visibleRows.map(toRow)}
         isLoading={listQuery.isFetching && wire === undefined}

@@ -83,4 +83,47 @@ describe('WelcomeMessageInput', () => {
     fireEvent.click(screen.getByText('switch version'));
     expect(screen.getByDisplayValue('Second version')).toBeInTheDocument();
   });
+
+  // #848 — the counter used to be conditionally MOUNTED (`showCounter &&
+  // <Typography>`), so blurring the field removed it from the tree and
+  // shrank whatever sits below it (`+ Starter` in the real agent editor,
+  // rendered right after this component). jsdom does not compute real
+  // layout, so an `offsetTop` assertion on a sibling would prove nothing —
+  // it always reads 0. What DOES prove the fix: the exact same DOM node
+  // survives focus -> blur (an unmount+remount would hand back a different
+  // node from a fresh query), and its reserved box never leaves the tree.
+  it('keeps the counter mounted (same node) across focus and blur, only toggling visibility', () => {
+    renderWithProviders(
+      <div>
+        <WelcomeMessageInput
+          welcomeMessage=""
+          onWelcomeMessageChange={vi.fn()}
+          versionId={1}
+        />
+        <button type="button">+ Starter</button>
+      </div>,
+    );
+
+    const input = screen.getByTestId('agent-welcome-message-input');
+
+    // Present before any typing/focus at all — the line is reserved from the start.
+    const counterAtRest = screen.getByTestId('agent-welcome-message-counter');
+    expect(getComputedStyle(counterAtRest).visibility).toBe('hidden');
+
+    fireEvent.change(input, { target: { value: 'Hi' } });
+    fireEvent.focus(input);
+    const counterFocused = screen.getByTestId('agent-welcome-message-counter');
+    expect(counterFocused).toBe(counterAtRest);
+    expect(getComputedStyle(counterFocused).visibility).toBe('visible');
+
+    fireEvent.blur(input);
+    const counterBlurred = screen.getByTestId('agent-welcome-message-counter');
+    expect(counterBlurred).toBe(counterAtRest);
+    expect(getComputedStyle(counterBlurred).visibility).toBe('hidden');
+
+    // The control below is still reachable by a direct query the whole time
+    // (this is the control a real mousedown-driven layout shift would have
+    // moved out from under the pointer).
+    expect(screen.getByRole('button', { name: '+ Starter' })).toBeInTheDocument();
+  });
 });

@@ -70,4 +70,22 @@ describe('Pipelines right-hand rail', () => {
     await user.click(await screen.findByTestId('tags-panel-chip-alpha'));
     await waitFor(() => expect(screen.getByTestId('tags-panel-chip-alpha')).toHaveAttribute('aria-pressed', 'true'));
   });
+  /*
+   * The rail is `position: fixed` over the right edge of the viewport with a
+   * z-index of 1000, so a page column that stays 100% wide draws its header
+   * controls UNDER it and the pointer never reaches them. E2E measured it:
+   * the table/card switch could not be clicked at all
+   * (`e2e/journeys/pipelines/pipelines.dashboard.spec.ts`, "entity-rail subtree intercepts pointer
+   * events"). `pages/skills/Skills.tsx` already narrows its column the same
+   * way.
+   */
+  it('narrows the page column to the card-list width while the rail is on screen', async () => {
+    setConfig('1');
+    renderPipelinesRoute(<Pipelines />, '/pipelines/latest', { projectId: '1' });
+
+    expect(await screen.findByTestId('entity-rail')).toBeInTheDocument();
+    const column = screen.getByRole('tabpanel').parentElement;
+    expect(column).not.toBeNull();
+    expect(getComputedStyle(column as HTMLElement).width).toBe('calc(100% - 328px)');
+  });
 });

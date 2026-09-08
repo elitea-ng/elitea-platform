@@ -443,6 +443,86 @@ describe('EntityLifecycleMenu on its own', () => {
     );
     expect(screen.getByTestId('agent-lifecycle-menu-button')).toBeDisabled();
   });
+
+  /*
+   * Export and Delete are the two items the PIPELINE editor adds and the AGENT
+   * editor does not — the agent keeps its own toolbar buttons, and a second
+   * Delete beside the first is how two code paths drift. The menu must
+   * therefore render each item only when the caller asked for it.
+   */
+  it('offers no export and no delete when the caller passes neither handler', async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <EntityLifecycleMenu
+        testIdPrefix="agent"
+        isPublished={false}
+        onShareEntity={vi.fn()}
+        onFork={vi.fn()}
+      />,
+    );
+    await user.click(screen.getByTestId('agent-lifecycle-menu-button'));
+    expect(screen.queryByTestId('agent-export-menuitem')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('agent-delete-menuitem')).not.toBeInTheDocument();
+  });
+
+  it('runs the export handler and closes the menu', async () => {
+    const onExport = vi.fn();
+    const user = userEvent.setup();
+    renderWithProviders(
+      <EntityLifecycleMenu
+        testIdPrefix="pipeline"
+        isPublished={false}
+        onShareEntity={vi.fn()}
+        onFork={vi.fn()}
+        onExport={onExport}
+        onDelete={vi.fn()}
+      />,
+    );
+    await user.click(screen.getByTestId('pipeline-lifecycle-menu-button'));
+    await user.click(screen.getByTestId('pipeline-export-menuitem'));
+
+    expect(onExport).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.queryByTestId('pipeline-export-menuitem')).not.toBeInTheDocument());
+  });
+
+  it('runs the delete handler', async () => {
+    const onDelete = vi.fn();
+    const user = userEvent.setup();
+    renderWithProviders(
+      <EntityLifecycleMenu
+        testIdPrefix="pipeline"
+        isPublished={false}
+        onShareEntity={vi.fn()}
+        onFork={vi.fn()}
+        onExport={vi.fn()}
+        onDelete={onDelete}
+      />,
+    );
+    await user.click(screen.getByTestId('pipeline-lifecycle-menu-button'));
+    await user.click(screen.getByTestId('pipeline-delete-menuitem'));
+
+    expect(onDelete).toHaveBeenCalledTimes(1);
+  });
+
+  it('forwards both handlers through EntityLifecycleControls', async () => {
+    const onExport = vi.fn();
+    const onDelete = vi.fn();
+    const user = userEvent.setup();
+    renderWithProviders(
+      controls({
+        entity: 'pipelines',
+        onExport,
+        onDelete,
+      }),
+    );
+    await user.click(screen.getByTestId('pipeline-lifecycle-menu-button'));
+    await user.click(screen.getByTestId('pipeline-export-menuitem'));
+    await user.click(screen.getByTestId('pipeline-lifecycle-menu-button'));
+    await user.click(screen.getByTestId('pipeline-delete-menuitem'));
+
+    expect(onExport).toHaveBeenCalledTimes(1);
+    expect(onDelete).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('import', () => {

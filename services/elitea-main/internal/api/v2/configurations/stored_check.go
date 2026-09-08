@@ -179,7 +179,19 @@ func (h *Handler) CheckStoredConnection(w http.ResponseWriter, r *http.Request) 
 	}
 
 	result, status := h.checkStoredRow(ctx, projectID, row)
-	writeJSON(w, status, map[string]any{"success": result.Success, "message": result.Message})
+	writeJSON(w, status, storedConnectionCheckBody(result))
+}
+
+// storedConnectionCheckBody is the one response shape both stored routes write.
+// `reason` is present only for a toolkit probe, which is the one path with a
+// closed vocabulary to publish; the LLM path keeps the {success,message} body
+// it always answered, so no existing reader changes.
+func storedConnectionCheckBody(result ConnectionCheckResult) map[string]any {
+	body := map[string]any{"success": result.Success, "message": result.Message}
+	if result.Reason != "" {
+		body["reason"] = result.Reason
+	}
+	return body
 }
 
 // storedConnectionCheckBatchRequest is the batch body. The web app sends the
@@ -290,7 +302,9 @@ func (h *Handler) checkStoredBatchItem(
 		return connectionCheckUnavailableResult(requested)
 	}
 	result, _ := h.checkStoredRow(ctx, projectID, row)
-	return map[string]any{"id": requested, "success": result.Success, "message": result.Message}
+	item := storedConnectionCheckBody(result)
+	item["id"] = requested
+	return item
 }
 
 // checkStoredRow is the whole decision for one stored row: what may be
@@ -310,11 +324,20 @@ func (h *Handler) checkStoredRow(
 		}, http.StatusNotFound
 	}
 	if _, checkable := checkableConnectionTypes[row.configType]; !checkable {
+		// A TOOLKIT credential takes this build's own probe. It still resolves
+		// first, through the SAME resolver the LLM path uses, because the row
+		// holds a `{{secret.NAME}}` reference and not a token: probing the
+		// reference would ask GitHub to authenticate a template string and
+		// report every saved credential as refused.
+		if IsToolkitCheckableType(row.configType) {
+			return h.checkStoredToolkitRow(ctx, projectID, row)
+		}
 		// The same byte-for-byte message the unsaved check answers, from the
 		// same function: a stored row and an unsaved payload of the same type
 		// must not disagree about whether the platform can check it.
 		return ConnectionCheckResult{
 			Message: connectionCheckNotSupportedMessage(row.configType),
+			Reason:  ToolkitCheckReasonUnsupportedType,
 		}, http.StatusBadRequest
 	}
 	if h.storedResolver == nil || h.connectionChecker == nil {
@@ -324,18 +347,12 @@ func (h *Handler) checkStoredRow(
 		return ConnectionCheckResult{Message: storedConnectionCheckUnavailableMessage}, http.StatusBadRequest
 	}
 
-	resolution := StoredConfigurationResolution{Data: row.data}
-	owner, err := strconv.Atoi(projectID)
-	if err != nil || owner <= 0 || owner > math.MaxInt32 {
-		// tenantSchema already refused a non-decimal id, so this is the
-		// out-of-range case only. A truncated project id would redeem another
-		// project's vault, so it is refused rather than narrowed.
+	// tenantSchema already refused a non-decimal id, so a refusal here is the
+	// out-of-range case only. A truncated project id would redeem another
+	// project's vault, so it is refused rather than narrowed.
+	resolution, ok := storedResolutionFor(projectID, row)
+	if !ok {
 		return ConnectionCheckResult{Message: storedConnectionCheckUnavailableMessage}, http.StatusBadRequest
-	}
-	resolution.ProjectID = int32(owner)
-	if row.authorID != nil && *row.authorID > 0 && *row.authorID <= math.MaxInt32 {
-		author := int32(*row.authorID)
-		resolution.AuthorID = &author
 	}
 
 	resolved, err := h.storedResolver.ResolveStoredConfiguration(ctx, resolution)
@@ -512,4 +529,39 @@ func storedConfigurationRowKey(requested any) (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+// checkStoredToolkitRow resolves a saved TOOLKIT credential and probes it.
+//
+// It is the stored half of toolkit_check.go, and it shares every rule the LLM
+// path above obeys: it writes nothing, it never reports success without a round
+// trip, and the resolved plaintext is handed to the checker and dropped.
+func (h *Handler) checkStoredToolkitRow(
+	ctx context.Context,
+	projectID string,
+	row storedConfigurationRow,
+) (ConnectionCheckResult, int) {
+	if h.storedResolver == nil || h.toolkitChecker == nil {
+		slog.ErrorContext(ctx, "check_stored_connection: the toolkit check is not composed",
+			"type", row.configType, "project_id", projectID,
+			"resolver", h.storedResolver != nil, "checker", h.toolkitChecker != nil)
+		return ConnectionCheckResult{Message: storedConnectionCheckUnavailableMessage}, http.StatusBadRequest
+	}
+
+	resolution, ok := storedResolutionFor(projectID, row)
+	if !ok {
+		return ConnectionCheckResult{Message: storedConnectionCheckUnavailableMessage}, http.StatusBadRequest
+	}
+	resolved, err := h.storedResolver.ResolveStoredConfiguration(ctx, resolution)
+	if err != nil || resolved == nil {
+		slog.WarnContext(ctx, "check_stored_connection: the stored toolkit configuration did not resolve",
+			"type", row.configType, "project_id", projectID, "configuration_id", row.id, "err", err)
+		return ConnectionCheckResult{
+			Message: "This credential could not be resolved. Check that its secret and any referenced configuration still exist.",
+		}, http.StatusBadRequest
+	}
+
+	outcome := h.toolkitChecker.CheckToolkit(ctx, row.configType, resolved)
+	result := ConnectionCheckResult{Success: outcome.Success(), Message: outcome.Message, Reason: outcome.Reason}
+	return result, toolkitCheckStatus(outcome)
 }

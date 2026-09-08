@@ -62,13 +62,13 @@ export const ConfigurationRow = zod
       .string()
       .optional()
       .describe(
-        "`reviewed` only. The row's stored title. `compat` serves the same column as `name`.\n",
+        'BOTH. The row\'s stored title, and the name every reader resolves a credential by: a toolkit stores the reference `{\"github_configuration\": {\"elitea_title\": …}}`, and the credential picker builds its options from this field. `compat` served the column as `name` alone until the two were aligned, so against that handler the picker offered nothing to link.\n',
       ),
     name: zod
       .string()
       .optional()
       .describe(
-        "`compat` only. The same column `reviewed` serves as `elitea_title`. A client that must read both routes reads `elitea_title ?? name`.\n",
+        "`compat` only, and the same column it also serves as `elitea_title`. Kept for the clients that already read it.\n",
       ),
     label: zod
       .string()

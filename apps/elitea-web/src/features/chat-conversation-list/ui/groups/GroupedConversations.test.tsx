@@ -134,10 +134,8 @@ describe('GroupedConversations', () => {
    * conversation from the match set.
    */
   it('does not throw when a conversation in a searched group has a nullish name', () => {
-    // The name-matching effect only runs on an isSearchMode/searchQuery
-    // TRANSITION (its own `searchModeChanged`/`searchQueryChanged` refs are
-    // seeded from the FIRST render's props) — mounting already-in-search-mode
-    // never exercises it, so this starts out of search mode and rerenders in.
+    // Driven through a transition rather than a search-mode mount so that the
+    // guard is exercised on the `searchQueryChanged` path too.
     const mutableConversation = mkConversation({ id: 'c1' }) as unknown as Record<string, unknown>;
     delete mutableConversation['name'];
     const conversationWithNullishName = mutableConversation as unknown as Conversation;
@@ -163,6 +161,96 @@ describe('GroupedConversations', () => {
         />,
       ),
     ).not.toThrow();
+  });
+
+  /**
+   * The rail's grouped listing is keyed on the search query, so typing one
+   * puts the query into a loading state and `Conversations.body.tsx` swaps
+   * this whole subtree for skeletons until the filtered answer arrives. The
+   * results therefore land on a FRESH MOUNT that is already in search mode —
+   * the state this component used to do nothing about, because its transition
+   * refs were seeded from the first render's own props and `initializeExpansion`
+   * is skipped while searching. Every group stayed collapsed: the rail had
+   * narrowed to the match and showed the user nothing.
+   */
+  it('expands the groups holding matches when it mounts already in search mode', () => {
+    const dateGroups: DateGroupListItem[] = [
+      { name: 'today', conversations: [mkConversation({ id: 'c1', name: 'kept-conversation' })] },
+      { name: 'older', conversations: [mkConversation({ id: 'c2', name: 'unrelated' })] },
+    ];
+    renderWithTheme(
+      <GroupedConversations
+        dateGroups={dateGroups}
+        totalConversationsAmount={2}
+        renderConversationItem={renderItem}
+        isSearchMode
+        searchQuery="kept"
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Today' })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('button', { name: 'Older' })).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  /**
+   * The same mount, one step earlier: the component can be asked to expand
+   * before the filtered listing has arrived, and the answer it gives then must
+   * not be the last one it ever gives. `enterSearchMode` used to return early
+   * whenever it was already in search mode, which froze that empty answer.
+   */
+  it('expands the matching group when the results arrive after the search mode did', () => {
+    const { rerender } = renderWithTheme(
+      <GroupedConversations
+        dateGroups={[]}
+        totalConversationsAmount={0}
+        renderConversationItem={renderItem}
+        isSearchMode
+        searchQuery="kept"
+      />,
+    );
+
+    rerender(
+      <GroupedConversations
+        dateGroups={[{ name: 'today', conversations: [mkConversation({ id: 'c1', name: 'kept-conversation' })] }]}
+        totalConversationsAmount={1}
+        renderConversationItem={renderItem}
+        isSearchMode
+        searchQuery="kept"
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Today' })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByTestId('conv-c1')).toBeVisible();
+  });
+
+  it('leaves a group the user collapsed during a search collapsed when the same listing refetches', () => {
+    const dateGroups: DateGroupListItem[] = [
+      { name: 'today', conversations: [mkConversation({ id: 'c1', name: 'kept-conversation' })] },
+    ];
+    const { rerender } = renderWithTheme(
+      <GroupedConversations
+        dateGroups={dateGroups}
+        totalConversationsAmount={1}
+        renderConversationItem={renderItem}
+        isSearchMode
+        searchQuery="kept"
+      />,
+    );
+    const header = screen.getByRole('button', { name: 'Today' });
+    fireEvent.click(header);
+    expect(header).toHaveAttribute('aria-expanded', 'false');
+
+    // A refetch of the same query: a new array, the same groups.
+    rerender(
+      <GroupedConversations
+        dateGroups={[{ name: 'today', conversations: [mkConversation({ id: 'c1', name: 'kept-conversation' })] }]}
+        totalConversationsAmount={1}
+        renderConversationItem={renderItem}
+        isSearchMode
+        searchQuery="kept"
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Today' })).toHaveAttribute('aria-expanded', 'false');
   });
 
   it('calls onLoadMoreInGroup with the group name via DateGroup/LoadMoreSentinel when more items are available', () => {

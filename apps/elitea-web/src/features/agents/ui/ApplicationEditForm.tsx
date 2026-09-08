@@ -2,10 +2,10 @@ import type { ChangeEvent, FocusEvent, ReactNode } from 'react';
 import { useCallback, useEffect, useState } from 'react';
 
 import Box from '@mui/material/Box';
-import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
 import type { Tag } from '@/entities/tag';
+import { CharacterCounter } from '@/shared/ui/CharacterCounter';
 import { t } from '@/shared/i18n';
 import { MAX_DESCRIPTION_LENGTH, MAX_NAME_LENGTH } from '@/shared/lib/limits';
 import { PROMPT_PAYLOAD_KEY } from '@/shared/lib/prompt-payload';
@@ -169,12 +169,13 @@ export function ApplicationEditForm({
                     slotProps={{ htmlInput: { maxLength: MAX_NAME_LENGTH, 'data-testid': 'agent-name-input' } }}
                   />
                   {isFocused(PROMPT_PAYLOAD_KEY.name) && localName.length === MAX_NAME_LENGTH && (
-                    <Typography
-                      variant="labelTiny"
+                    <CharacterCounter
+                      value={localName}
+                      maxLength={MAX_NAME_LENGTH}
+                      textVariant="labelTiny"
                       sx={nameCharactersLabelSx}
-                    >
-                      {t('agents.applicationEditForm.charactersLeftZero', ' 0 characters left')}
-                    </Typography>
+                      data-testid="agent-name-counter"
+                    />
                   )}
                 </Box>
               </Box>
@@ -196,16 +197,19 @@ export function ApplicationEditForm({
                   helperText={descriptionError}
                   slotProps={{ htmlInput: { maxLength: MAX_DESCRIPTION_LENGTH, 'data-testid': 'agent-description-input' } }}
                 />
-                {isFocused(PROMPT_PAYLOAD_KEY.description) && description.length > 0 && (
-                  <Typography
-                    variant="labelTiny"
-                    sx={descriptionCharactersLabelSx}
-                  >
-                    {t('agents.applicationEditForm.charactersLeft', '{{count}} characters left', {
-                      count: MAX_DESCRIPTION_LENGTH - description.length,
-                    })}
-                  </Typography>
-                )}
+                {/* #848 — never unmount: this counter sits in normal flow
+                  * directly above `AgentTagEditor` below, and unmounting on
+                  * blur shifts that control up, swallowing a click already
+                  * headed for it. `visibility: hidden` keeps the line's
+                  * height reserved. */}
+                <CharacterCounter
+                  value={description}
+                  maxLength={MAX_DESCRIPTION_LENGTH}
+                  textVariant="labelTiny"
+                  visible={isFocused(PROMPT_PAYLOAD_KEY.description) && description.length > 0}
+                  sx={descriptionCharactersLabelSx}
+                  data-testid="agent-description-counter"
+                />
               </Box>
 
               <AgentTagEditor

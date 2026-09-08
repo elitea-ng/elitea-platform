@@ -223,18 +223,54 @@ async function saveAndAwaitPersist(page: Page): Promise<void> {
  * feed is dead" about a feed that worked. A MutationObserver installed
  * BEFORE the send cannot miss it, and what it proves is the same thing: a
  * streamed run event reached `useRunEvent` and was matched to this node.
+ *
+ * WHY THE RECORDS ARE READ AND NOT THE DOCUMENT. The first version of this
+ * latch answered every mutation with `document.querySelector('[data-performing
+ * ="true"]')`, and that is a second race hiding inside the first one.
+ * MutationObserver callbacks are delivered as a MICROTASK carrying a BATCH of
+ * records, so a node that was marked and unmarked inside one task — which is
+ * exactly what the offline mock produces, since `agent_on_node_start` and the
+ * frame that clears the node can arrive in a single SSE flush and React
+ * commits both in one render — is reported by a callback that then looks at a
+ * document where nothing is marked any more. The observer fired; the check
+ * said no. That is the shape of run 34191944006's flake on this spec.
+ *
+ * Reading `record.oldValue` closes it: a record whose PREVIOUS value was
+ * `true` is proof the node WAS marked, whatever the document says by the time
+ * the callback runs. The current value is still read as well, for the
+ * transition INTO the highlight, and `childList` still covers a node mounted
+ * already carrying it. What the latch proves is unchanged — it still requires
+ * a node to have carried `data-performing="true"`, and a run feed that names
+ * no node never writes that value at all, so it can no more be satisfied by a
+ * missing frame than the first version could.
+ *
+ * ONE CASE THIS STILL CANNOT SEE, stated rather than left as a surprise: if
+ * React coalesces the frame that marks the node and the frame that clears it
+ * into a SINGLE commit, the attribute is written `false` -> `false` and there
+ * is no DOM mutation at all to observe. Nothing at this level can catch that,
+ * because nothing about it reaches the document. It would show as a
+ * DETERMINISTIC failure here rather than a flaky one, and the fix then belongs
+ * in the feed (a per-frame flush), not in this latch.
  */
 async function latchPerformingHighlight(page: Page): Promise<void> {
   await page.evaluate(() => {
     const flagged = window as unknown as { __eliteaPerformingSeen?: boolean };
-    flagged.__eliteaPerformingSeen = document.querySelector('[data-performing="true"]') !== null;
-    const observer = new MutationObserver(() => {
-      if (document.querySelector('[data-performing="true"]') !== null) flagged.__eliteaPerformingSeen = true;
+    const marked = (): boolean => document.querySelector('[data-performing="true"]') !== null;
+    flagged.__eliteaPerformingSeen = marked();
+    const observer = new MutationObserver((records) => {
+      for (const record of records) {
+        if (record.type === 'attributes' && record.oldValue === 'true') {
+          flagged.__eliteaPerformingSeen = true;
+          return;
+        }
+      }
+      if (marked()) flagged.__eliteaPerformingSeen = true;
     });
     observer.observe(document.body, {
       subtree: true,
       childList: true,
       attributes: true,
+      attributeOldValue: true,
       attributeFilter: ['data-performing'],
     });
   });

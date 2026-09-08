@@ -314,6 +314,67 @@ test('J16: an edited flow graph survives a save + reload', async ({ page }) => {
   }
 });
 
+/*
+ * Ported BY USE CASE from the legacy public suite
+ * (`qa/elitea-testing-public/automation/tests/ui/pipelines/
+ * test_pipeline_advanced.py::TestMultiNodeTopology::
+ * test_save_multi_node_pipeline`) — "build a multi-node pipeline, save,
+ * reload, and the nodes persist".
+ *
+ * It extends this file rather than starting a new one because the two tests
+ * above already own half of it: "an edited flow graph survives a save +
+ * reload" proves the node it added and the starter nodes are BACK on the
+ * canvas, and "the STORED pipeline document carries only compiler-legal ids"
+ * proves every added node reached the backend. Neither states the claim the
+ * legacy test is really making, which is an EQUALITY: the reloaded canvas is
+ * the stored graph, no more and no less. A save that also wrote a phantom
+ * node, or a reload that drew one, satisfies both of the existing tests.
+ *
+ * `END` is the one canvas node with no document entry — the starter template
+ * and every node's `transition: END` name it, and the editor draws it as the
+ * graph's terminal — so it is added to the expected set explicitly rather
+ * than excluded by a filter that would also hide a real stray.
+ */
+test('J16: a saved multi-node graph reloads as exactly the graph that was stored', async ({ page }) => {
+  test.slow();
+  const name = `${AUTOTEST_PREFIX}multi-${Date.now() % 1e9}`;
+  const id = await createPipelineThroughUi(page, name);
+  await expect(page.locator('.react-flow__node[data-id="END"]')).toBeVisible({ timeout: 15_000 });
+
+  // Two nodes of DIFFERENT types, so a reload that kept one shape and dropped
+  // the other cannot pass. Both are in SAVEABLE_NODE_LABELS — their seeded
+  // defaults are complete, so the editor's admission gate lets the save
+  // through with no further configuration.
+  await addNodeThroughMenu(page, 'LLM');
+  await addNodeThroughMenu(page, 'Printer');
+  await saveAndAwaitPersist(page);
+
+  const versionId = await resolveLatestPipelineVersionId(page.request, DEFAULT_PROJECT_ID, id);
+  const stored = await readStoredPipelineVersion(page.request, DEFAULT_PROJECT_ID, id, versionId);
+  const storedIds = storedNodeIds(parseStoredGraph(stored.instructions));
+  // Three: the starter's own node plus the two added here. Stated as a number
+  // because "the canvas matches the document" is vacuous for a document that
+  // came back with one node in it.
+  expect(storedIds.length, 'the starter node and both added nodes must reach the stored document').toBe(3);
+
+  await page.goto(BASE_URL + `/app/pipelines/latest/${id}`);
+  await expect(page.getByRole('heading', { name, exact: true })).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator('.react-flow__node[data-id="END"]')).toBeVisible({ timeout: 15_000 });
+
+  // Polled: the canvas is seeded from the version fetch and laid out
+  // afterwards, so a single read can land between the two and report a graph
+  // that is merely not drawn yet.
+  const expected = [...storedIds, 'END'].sort();
+  await expect
+    .poll(async () => [...(await canvasNodeIds(page))].sort(), {
+      timeout: 20_000,
+      message:
+        'the reloaded canvas is not the stored graph — a node was dropped by the save, or drawn by the editor ' +
+        'without being in the document the worker would compile',
+    })
+    .toEqual(expected);
+});
+
 test('J16: the Add-node menu offers exactly the node types the pipeline compiler admits', async ({ page }) => {
   /*
    * `Code` and `Custom` had no `parse_pipeline_node` arm

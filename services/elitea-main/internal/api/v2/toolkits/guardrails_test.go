@@ -10,6 +10,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sort"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -266,4 +268,78 @@ func TestAnUnwiredSourceBlocksNothing(t *testing.T) {
 	if !bytes.Contains(recorder.Body.Bytes(), []byte("datasource")) {
 		t.Fatalf("body=%s", recorder.Body.String())
 	}
+}
+
+// TestListTypeSchemasBlocksAToolOnAnSDKBackedType is the composition-root twin
+// of TestListTypeSchemasDropsBlockedTypesAndTools above, and the two are not
+// redundant.
+//
+// That test composes a Handler with NO argument-schema source, so the catalogue
+// falls back to handler.go's hand-written type overrides, whose args_schemas are
+// `map[string]any` literals. This one composes the source the deployment
+// composes — the pinned SDK snapshot — whose entries carry
+// `map[string]map[string]any`. `withoutBlockedTools` used to assert the first
+// type only, so it filtered the eight stubs and silently kept every tool of the
+// 45 real types. The package's own suite was green while `github`'s
+// `apply_git_patch` survived being blocked on a live deployment.
+//
+// The tool is DERIVED from the served catalogue rather than named, so a future
+// SDK rename fails on the assertion above rather than as "guardrails broke".
+func TestListTypeSchemasBlocksAToolOnAnSDKBackedType(t *testing.T) {
+	t.Parallel()
+
+	unfiltered := getToolkitTypeCatalogue(t, toolkits.WithArgumentSchemas(pinnedSnapshot(t)))
+	tools := sortedArgumentSchemaNames(t, unfiltered, "github")
+	if len(tools) < 2 {
+		t.Fatalf("the github type schema offers %d tools; this test needs a blocked one and a survivor", len(tools))
+	}
+	target, survivor := tools[0], tools[1]
+
+	// Blocked in a DIFFERENT case and a different naming style than the schema
+	// declares it, which is the property the admin form's free-text editor and
+	// the SDK's canonical matcher exist for.
+	source := &guardrailSourceStub{policy: guardrails.NewPolicy(guardrails.PolicyInput{
+		BlockedTools: map[string][]string{"GitHub": {strings.ToUpper(target)}},
+	})}
+	filtered := getToolkitTypeCatalogue(t,
+		toolkits.WithArgumentSchemas(pinnedSnapshot(t)),
+		toolkits.WithGuardrails(source),
+	)
+
+	if _, present := filtered["github"]; !present {
+		t.Fatal("blocking a TOOL must not remove its TYPE from the catalogue")
+	}
+	names := sortedArgumentSchemaNames(t, filtered, "github")
+	for _, name := range names {
+		if name == target {
+			t.Fatalf("blocking %q left %q in the github args_schemas", strings.ToUpper(target), target)
+		}
+	}
+	if !containsName(names, survivor) {
+		t.Fatalf("blocking one tool removed %q as well; have %v", survivor, names)
+	}
+}
+
+func sortedArgumentSchemaNames(t *testing.T, body map[string]any, toolkitType string) []string {
+	t.Helper()
+	selected := selectedToolsSchema(t, body, toolkitType)
+	schemas, ok := selected["args_schemas"].(map[string]any)
+	if !ok {
+		t.Fatalf("%s has no args_schemas object: %#v", toolkitType, selected)
+	}
+	names := make([]string, 0, len(schemas))
+	for name := range schemas {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func containsName(names []string, want string) bool {
+	for _, name := range names {
+		if name == want {
+			return true
+		}
+	}
+	return false
 }

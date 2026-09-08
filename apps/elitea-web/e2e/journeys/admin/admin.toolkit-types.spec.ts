@@ -97,59 +97,77 @@ adminTest('J38: the page lists every toolkit type this platform can serve', asyn
   await checkA11y(page);
 });
 
-adminTest('J38b: a disabled type leaves the served catalogue, and comes back', async ({ page }) => {
-  await openToolkitTypes(page);
+/*
+ * THE TWO WRITERS SHARE ONE ROW, so they take turns.
+ *
+ * `fullyParallel: true` (playwright.config.ts) parallelises the tests WITHIN a
+ * file, not only across files. J38b and J38c both decide the availability of
+ * the same type — `database` — and each asserts the served catalogue right
+ * after its own write, so run side by side they read each other's decisions:
+ * J38b asked for `enabled` and read a catalogue J38c had just `restricted`,
+ * which is the shape of the flake webkit reported.
+ *
+ * Serial for THESE TWO only, in their own block: J38 above is a read and stays
+ * parallel, and a file-level `serial` would let one failure hide the others
+ * (`scripts/e2e-journey-shape.test.mjs`, #539).
+ */
+adminTest.describe('deciding the availability of one type', () => {
+  adminTest.describe.configure({ mode: 'serial' });
 
-  expect(await servedTypes(page), 'the subject must start in the catalogue').toContain(SUBJECT);
+  adminTest('J38b: a disabled type leaves the served catalogue, and comes back', async ({ page }) => {
+    await openToolkitTypes(page);
 
-  await decide(page, 'disabled', 'JRNY-038 withheld the type');
-  expect(await servedTypes(page), 'a disabled type must leave the chooser').not.toContain(SUBJECT);
+    expect(await servedTypes(page), 'the subject must start in the catalogue').toContain(SUBJECT);
 
-  // The rest of the catalogue survives. A filter that emptied the map would
-  // pass a "the type is gone" assertion and break every toolkit.
-  expect((await servedTypes(page)).length, 'the other types must stay').toBeGreaterThan(0);
+    await decide(page, 'disabled', 'JRNY-038 withheld the type');
+    expect(await servedTypes(page), 'a disabled type must leave the chooser').not.toContain(SUBJECT);
 
-  await decide(page, 'enabled', 'JRNY-038 restored the type');
-  expect(await servedTypes(page), 'an enabled type must return').toContain(SUBJECT);
+    // The rest of the catalogue survives. A filter that emptied the map would
+    // pass a "the type is gone" assertion and break every toolkit.
+    expect((await servedTypes(page)).length, 'the other types must stay').toBeGreaterThan(0);
 
-  // The revert path, which is the control an operator uses to undo a mistake.
-  await decide(page, 'default', '');
-  expect(await servedTypes(page), 'a reverted type stays in the chooser').toContain(SUBJECT);
-});
+    await decide(page, 'enabled', 'JRNY-038 restored the type');
+    expect(await servedTypes(page), 'an enabled type must return').toContain(SUBJECT);
 
-adminTest('J38c: a restricted type reaches only the projects granted it', async ({ page }) => {
-  await openToolkitTypes(page);
-
-  await decide(page, 'restricted', 'JRNY-038 restricted the type');
-  expect(
-    await servedTypes(page),
-    'a restricted type with no exception must leave the chooser',
-  ).not.toContain(SUBJECT);
-
-  // A grant for ANOTHER project must not admit it here. This is the whole point
-  // of a per-project exception, and it is the direction a positive-only test
-  // cannot see.
-  await grant(page, OTHER_PROJECT_ID, 'enabled');
-  expect(
-    await servedTypes(page),
-    "another project's exception must not admit the type here",
-  ).not.toContain(SUBJECT);
-
-  await grant(page, PROJECT_ID, 'enabled');
-  expect(await servedTypes(page), 'the granted project must get the type').toContain(SUBJECT);
-
-  // Reverting takes the exceptions with it, which is the only correct reading
-  // of "revert to default".
-  await decide(page, 'default', '');
-  expect(await servedTypes(page), 'a reverted type stays in the chooser').toContain(SUBJECT);
-
-  // The chooser page still works. A withheld type must never break the screen
-  // that offers the rest of them.
-  const response = await page.goto(BASE_URL + '/app/toolkits/create', {
-    waitUntil: 'domcontentloaded',
+    // The revert path, which is the control an operator uses to undo a mistake.
+    await decide(page, 'default', '');
+    expect(await servedTypes(page), 'a reverted type stays in the chooser').toContain(SUBJECT);
   });
-  expect(response?.status(), 'the toolkit chooser must still render').toBeLessThan(400);
-  await expect(page.getByRole('button', { name: 'GitHub', exact: true })).toBeVisible({
-    timeout: 20_000,
+
+  adminTest('J38c: a restricted type reaches only the projects granted it', async ({ page }) => {
+    await openToolkitTypes(page);
+
+    await decide(page, 'restricted', 'JRNY-038 restricted the type');
+    expect(
+      await servedTypes(page),
+      'a restricted type with no exception must leave the chooser',
+    ).not.toContain(SUBJECT);
+
+    // A grant for ANOTHER project must not admit it here. This is the whole point
+    // of a per-project exception, and it is the direction a positive-only test
+    // cannot see.
+    await grant(page, OTHER_PROJECT_ID, 'enabled');
+    expect(
+      await servedTypes(page),
+      "another project's exception must not admit the type here",
+    ).not.toContain(SUBJECT);
+
+    await grant(page, PROJECT_ID, 'enabled');
+    expect(await servedTypes(page), 'the granted project must get the type').toContain(SUBJECT);
+
+    // Reverting takes the exceptions with it, which is the only correct reading
+    // of "revert to default".
+    await decide(page, 'default', '');
+    expect(await servedTypes(page), 'a reverted type stays in the chooser').toContain(SUBJECT);
+
+    // The chooser page still works. A withheld type must never break the screen
+    // that offers the rest of them.
+    const response = await page.goto(BASE_URL + '/app/toolkits/create', {
+      waitUntil: 'domcontentloaded',
+    });
+    expect(response?.status(), 'the toolkit chooser must still render').toBeLessThan(400);
+    await expect(page.getByRole('button', { name: 'GitHub', exact: true })).toBeVisible({
+      timeout: 20_000,
+    });
   });
 });
