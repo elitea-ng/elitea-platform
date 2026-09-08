@@ -53,11 +53,13 @@ import {
   AUTOTEST_PREFIX,
   attachToolkitThroughPicker,
   createAgentThroughForm,
+  createGithubToolkit,
   deleteAgent,
-  deleteToolkit,
+  deleteGithubToolkit,
   DEFAULT_PROJECT_ID,
   EMPTY_TOOLKIT_GUARDRAILS,
   setToolkitGuardrails,
+  type GithubToolkitFixture,
 } from '../../fixtures/api';
 import { withPlatformFlagLock } from '../../fixtures/platformFlags';
 
@@ -159,20 +161,24 @@ test('GR-1: blocking a toolkit type takes effect on the next read, whatever case
 
   const toolkitName = `${AUTOTEST_PREFIX}gr_tk_${RUN_ID}`;
   const agentName = `${AUTOTEST_PREFIX}gr_ag_${RUN_ID}`;
-  let toolkitId = '';
+  let toolkit: GithubToolkitFixture | undefined;
   let agentId = '';
 
   try {
-    // A toolkit INSTANCE of that type. Created over the API: the github form
-    // needs a stored credential to save, and this journey is about the
-    // policy, not about that form (J17C.1 owns it).
-    const created = await page.request.post(
-      `${API_BASE}/elitea_core/tools/prompt_lib/${DEFAULT_PROJECT_ID}`,
-      { data: { name: toolkitName, type: BLOCKED_TYPE, settings: { selected_tools: [] } } },
-    );
-    expect(created.status(), await created.text()).toBe(201);
-    toolkitId = String(((await created.json()) as { id?: string }).id ?? '');
-    expect(toolkitId).not.toBe('');
+    /*
+     * A toolkit INSTANCE of that type. Created over the API: the github form
+     * needs a stored credential to save, and this journey is about the
+     * policy, not about that form (J17C.1 owns it).
+     *
+     * Through `createGithubToolkit`, which supplies the two settings the
+     * create route requires for this type — `repository` and
+     * `github_configuration` (`validateToolkitCreate`,
+     * `services/elitea-main/internal/api/v2/toolkits/handler.go:987-1004`) —
+     * and the placeholder credential the second one has to reference. A body
+     * carrying only `selected_tools` is answered 400, which is what this line
+     * used to send.
+     */
+    toolkit = await createGithubToolkit(page.request, DEFAULT_PROJECT_ID, toolkitName);
 
     /*
      * THE TYPE LIST IS ASSERTED HERE, AFTER THE INSTANCE EXISTS, and that
@@ -268,7 +274,7 @@ test('GR-1: blocking a toolkit type takes effect on the next read, whatever case
       await expect(page.getByText(`${BLOCKED_TYPE_LABEL} toolkit is blocked`)).toHaveCount(0);
     });
   } finally {
-    if (toolkitId) await deleteToolkit(page, DEFAULT_PROJECT_ID, toolkitId).catch(() => {});
+    await deleteGithubToolkit(page.request, DEFAULT_PROJECT_ID, toolkit).catch(() => {});
     if (agentId) await deleteAgent(page.request, agentId).catch(() => {});
   }
 });

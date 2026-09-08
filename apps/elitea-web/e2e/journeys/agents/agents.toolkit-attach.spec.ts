@@ -40,19 +40,32 @@ import {
   AUTOTEST_PREFIX,
   attachToolkitThroughPicker,
   createAgentThroughForm,
+  createGithubToolkit,
   deleteAgent,
-  deleteToolkit,
+  deleteGithubToolkit,
   readAttachedToolkits,
   DEFAULT_PROJECT_ID,
+  type GithubToolkitFixture,
 } from '../../fixtures/api';
 
 /**
  * The type the legacy suite attaches (`github`).
  *
  * Kept, and safe to keep: a toolkit ROW of this type is created and linked
- * without any provider being contacted — the Go API validates no credential
- * at create time, and nothing here asks the toolkit to run. Only USING it
- * would need GitHub, which is the case this file does not port.
+ * without any provider being contacted, and nothing here asks the toolkit to
+ * run. Only USING it would need GitHub, which is the case this file does not
+ * port.
+ *
+ * CORRECTED. This comment used to say "the Go API validates no credential at
+ * create time", and the create it justified posted
+ * `settings: { selected_tools: [] }`. The route answers
+ * `400 {"error":"settings.repository is required for github toolkit"}`:
+ * `validateToolkitCreate`
+ * (`services/elitea-main/internal/api/v2/toolkits/handler.go:987-1004`)
+ * requires `repository` AND `github_configuration` for this one type, matching
+ * the SDK schema's own `required` list. `createGithubToolkit` in
+ * `e2e/fixtures/api.ts` supplies both, with a placeholder credential it also
+ * removes.
  */
 const TOOLKIT_TYPE = 'github';
 
@@ -61,8 +74,7 @@ const RUN_ID = String(Date.now()).slice(-6);
 interface Fixture {
   readonly agentId: string;
   readonly projectId: string;
-  readonly toolkitId: string;
-  readonly toolkitName: string;
+  readonly toolkit: GithubToolkitFixture;
 }
 
 /**
@@ -73,14 +85,11 @@ interface Fixture {
  * a list that cannot contain it.
  */
 async function agentWithAttachedToolkit(page: Page, suffix: string): Promise<Fixture> {
-  const toolkitName = `${AUTOTEST_PREFIX}tk_${suffix}_${RUN_ID}`;
-  const created = await page.request.post(
-    `${API_BASE}/elitea_core/tools/prompt_lib/${DEFAULT_PROJECT_ID}`,
-    { data: { name: toolkitName, type: TOOLKIT_TYPE, settings: { selected_tools: [] } } },
+  const toolkit = await createGithubToolkit(
+    page.request,
+    DEFAULT_PROJECT_ID,
+    `${AUTOTEST_PREFIX}tk_${suffix}_${RUN_ID}`,
   );
-  expect(created.status(), await created.text()).toBe(201);
-  const toolkitId = String(((await created.json()) as { id?: string }).id ?? '');
-  expect(toolkitId, 'the created toolkit must carry an id').not.toBe('');
 
   const agent = await createAgentThroughForm(page, `${AUTOTEST_PREFIX}ag_${suffix}_${RUN_ID}`);
   await expect(
@@ -88,14 +97,14 @@ async function agentWithAttachedToolkit(page: Page, suffix: string): Promise<Fix
     'the save must land on the agent edit page, where the Tools panel lives',
   ).toBeVisible({ timeout: 30_000 });
 
-  await attachToolkitThroughPicker(page, toolkitName);
+  await attachToolkitThroughPicker(page, toolkit.toolkitName);
 
-  return { agentId: agent.agentId, projectId: agent.projectId, toolkitId, toolkitName };
+  return { agentId: agent.agentId, projectId: agent.projectId, toolkit };
 }
 
 async function cleanUp(page: Page, fixture: Fixture | undefined): Promise<void> {
   if (fixture === undefined) return;
-  await deleteToolkit(page, fixture.projectId, fixture.toolkitId).catch(() => {});
+  await deleteGithubToolkit(page.request, fixture.projectId, fixture.toolkit).catch(() => {});
   await deleteAgent(page.request, fixture.agentId).catch(() => {});
 }
 
@@ -112,7 +121,7 @@ test('TA-1: a toolkit attached from the agent editor is on the card and in the s
 
     // On screen…
     await expect(
-      page.getByTestId('agent-toolkit-card').filter({ hasText: fixture.toolkitName }),
+      page.getByTestId('agent-toolkit-card').filter({ hasText: fixture.toolkit.toolkitName }),
       'the attached toolkit must appear in the Tools panel',
     ).toBeVisible({ timeout: 30_000 });
 
@@ -130,21 +139,21 @@ test('TA-1: a toolkit attached from the agent editor is on the card and in the s
           message: 'the attach answered, but no toolkit row reached the stored agent version',
         },
       )
-      .toContain(fixture.toolkitName);
+      .toContain(fixture.toolkit.toolkitName);
 
     const attached = await readAttachedToolkits(page, fixture.projectId, fixture.agentId);
-    const row = attached.find((entry) => entry.name === fixture?.toolkitName);
+    const row = attached.find((entry) => entry.name === fixture?.toolkit.toolkitName);
     expect(row?.type, 'the stored row must carry the toolkit type, not an empty string').toBe(
       TOOLKIT_TYPE,
     );
-    expect(row?.toolId, 'the stored row must address the toolkit instance').toBe(fixture.toolkitId);
+    expect(row?.toolId, 'the stored row must address the toolkit instance').toBe(fixture.toolkit.toolkitId);
 
     // It SURVIVES a reload — the card is drawn from the server, not from the
     // editor state the attach left behind.
     await page.reload({ waitUntil: 'domcontentloaded' });
     await expect(page.getByTestId('agent-toolkits-section')).toBeVisible({ timeout: 30_000 });
     await expect(
-      page.getByTestId('agent-toolkit-card').filter({ hasText: fixture.toolkitName }),
+      page.getByTestId('agent-toolkit-card').filter({ hasText: fixture.toolkit.toolkitName }),
     ).toBeVisible({ timeout: 30_000 });
   } finally {
     await cleanUp(page, fixture);
@@ -160,7 +169,7 @@ test('TA-2: removing a toolkit from an agent takes it off the card and out of th
   try {
     fixture = await agentWithAttachedToolkit(page, 'rm');
 
-    const card = page.getByTestId('agent-toolkit-card').filter({ hasText: fixture.toolkitName });
+    const card = page.getByTestId('agent-toolkit-card').filter({ hasText: fixture.toolkit.toolkitName });
     await expect(card).toBeVisible({ timeout: 30_000 });
 
     // ── the product's own remove affordance ────────────────────────────────
@@ -181,7 +190,7 @@ test('TA-2: removing a toolkit from an agent takes it off the card and out of th
     await expect
       .poll(
         async () =>
-          page.getByTestId('agent-toolkit-card').filter({ hasText: fixture!.toolkitName }).count(),
+          page.getByTestId('agent-toolkit-card').filter({ hasText: fixture!.toolkit.toolkitName }).count(),
         { timeout: 30_000, message: 'the removed toolkit is still on the agent editor' },
       )
       .toBe(0);
@@ -199,7 +208,7 @@ test('TA-2: removing a toolkit from an agent takes it off the card and out of th
           message: 'the toolkit was removed on screen but is still attached to the stored version',
         },
       )
-      .not.toContain(fixture.toolkitName);
+      .not.toContain(fixture.toolkit.toolkitName);
 
     // The TOOLKIT ITSELF survives. Detaching is not deleting: the row holds
     // settings and a credential reference, and taking it off one agent must
@@ -208,20 +217,20 @@ test('TA-2: removing a toolkit from an agent takes it off the card and out of th
     // and pages twenty at a time, so "it is on page one" is a statement about
     // how many toolkits the stack happens to hold.
     const stillThere = await page.request.get(
-      `${API_BASE}/elitea_core/tool/prompt_lib/${fixture.projectId}/${fixture.toolkitId}`,
+      `${API_BASE}/elitea_core/tool/prompt_lib/${fixture.projectId}/${fixture.toolkit.toolkitId}`,
     );
     expect(
       stillThere.status(),
       `removing a toolkit from an agent must not delete the toolkit: ${(await stillThere.text()).slice(0, 300)}`,
     ).toBe(200);
-    expect(((await stillThere.json()) as { name?: string }).name).toBe(fixture.toolkitName);
+    expect(((await stillThere.json()) as { name?: string }).name).toBe(fixture.toolkit.toolkitName);
 
     // It survives a reload too — the removal reached the server, it did not
     // merely repaint.
     await page.reload({ waitUntil: 'domcontentloaded' });
     await expect(page.getByTestId('agent-toolkits-section')).toBeVisible({ timeout: 30_000 });
     await expect(
-      page.getByTestId('agent-toolkit-card').filter({ hasText: fixture.toolkitName }),
+      page.getByTestId('agent-toolkit-card').filter({ hasText: fixture.toolkit.toolkitName }),
     ).toHaveCount(0);
   } finally {
     await cleanUp(page, fixture);

@@ -851,6 +851,120 @@ export async function createMcpConnection(
   return { id, settings: body.settings ?? {} };
 }
 
+/**
+ * A GitHub toolkit instance, and the credential row it has to reference.
+ *
+ * ## The contract this encodes, and where it is written down
+ *
+ * `github` is the ONE toolkit type the create route validates a settings shape
+ * for: `validateToolkitCreate`
+ * (`services/elitea-main/internal/api/v2/toolkits/handler.go:987-1004`) answers
+ * 400 unless `settings.repository` is a non-empty string AND
+ * `settings.github_configuration` is present. That is not a Go invention —
+ * the SDK's own settings schema declares `required: ["github_configuration",
+ * "repository"]` for the type
+ * (`services/elitea-main/internal/runtimecomposition/
+ * current_toolkit_catalogue_snapshot.json`), and the create FORM renders both
+ * as required fields.
+ *
+ * Three journeys need a github toolkit for reasons that have nothing to do
+ * with credentials — the guardrail that blocks its type, the attach and the
+ * detach — and all three used to post `settings: { selected_tools: [] }` and
+ * take the 400. They share this helper so the contract is stated once.
+ *
+ * ## Why a REAL credential row, rather than a plausible-looking reference
+ *
+ * `github_configuration` is a configuration REFERENCE, resolved by
+ * `refuseUnresolvableToolkitSettings` (`settings_validation.go:183`) whenever
+ * the deployment composes the Configurations graph. The e2e stack does not set
+ * `ELITEA_CONFIGURATIONS_ENABLED`, so a made-up `elitea_title` would be
+ * accepted there today — and would start answering 400 on any deployment that
+ * turns the graph on. One extra POST buys a fixture that is correct on both.
+ *
+ * NEVER a real credential: `data` carries only the placeholder base URL below,
+ * and nothing here contacts api.github.com.
+ */
+export interface GithubToolkitFixture {
+  readonly toolkitId: string;
+  readonly toolkitName: string;
+  readonly credentialId: string;
+  readonly credentialTitle: string;
+}
+
+/** The placeholder GitHub endpoint. Deliberately unroutable. */
+const GITHUB_PLACEHOLDER_BASE_URL = 'https://autotest.invalid/api';
+
+export async function createGithubToolkit(
+  request: APIRequestContext,
+  projectId: string,
+  toolkitName: string,
+): Promise<GithubToolkitFixture> {
+  const credentialTitle = `${toolkitName}_cred`;
+  const credential = await request.post(
+    `${BASE_URL}/api/v2/configurations/configurations/${projectId}`,
+    {
+      data: {
+        type: 'github',
+        elitea_title: credentialTitle,
+        label: credentialTitle,
+        shared: false,
+        data: { base_url: GITHUB_PLACEHOLDER_BASE_URL },
+      },
+    },
+  );
+  if (!credential.ok()) {
+    throw new Error(
+      `createGithubToolkit: the credential POST returned ${credential.status()}: ${(await credential.text()).slice(0, 300)}`,
+    );
+  }
+  const credentialId = String(((await credential.json()) as { id?: string | number }).id ?? '');
+
+  const created = await request.post(
+    `${BASE_URL}/api/v2/elitea_core/tools/prompt_lib/${projectId}`,
+    {
+      data: {
+        name: toolkitName,
+        type: 'github',
+        settings: {
+          // Both required fields, in the shape the stored row keeps: an OBJECT
+          // reference, never the bare string that `CredentialFormFields.tsx`
+          // records as a real defect class here.
+          repository: `${AUTOTEST_PREFIX}org/${AUTOTEST_PREFIX}repo`,
+          github_configuration: { elitea_title: credentialTitle, private: false },
+          selected_tools: [],
+        },
+      },
+    },
+  );
+  if (created.status() !== 201) {
+    throw new Error(
+      `createGithubToolkit: the toolkit POST returned ${created.status()}: ${(await created.text()).slice(0, 300)}`,
+    );
+  }
+  const toolkitId = String(((await created.json()) as { id?: string | number }).id ?? '');
+  if (toolkitId === '') {
+    throw new Error('createGithubToolkit: the created toolkit carries no id');
+  }
+  return { toolkitId, toolkitName, credentialId, credentialTitle };
+}
+
+/** Remove what `createGithubToolkit` made, in dependency order. Never throws. */
+export async function deleteGithubToolkit(
+  request: APIRequestContext,
+  projectId: string,
+  fixture: GithubToolkitFixture | undefined,
+): Promise<void> {
+  if (fixture === undefined) return;
+  await request
+    .delete(`${BASE_URL}/api/v2/elitea_core/tool/prompt_lib/${projectId}/${fixture.toolkitId}`)
+    .catch(() => {});
+  if (fixture.credentialId !== '') {
+    await request
+      .delete(`${BASE_URL}/api/v2/configurations/configuration/${projectId}/${fixture.credentialId}`)
+      .catch(() => {});
+  }
+}
+
 /** Delete a toolkit/MCP connection (cleanup helper). Never throws. */
 export async function deleteToolkit(
   page: Page,

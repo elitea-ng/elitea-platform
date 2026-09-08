@@ -705,6 +705,49 @@ adminTest(
          * `.count()` for both absences: it reads the DOM as it stands rather
          * than waiting for an attach that must never happen.
          */
+        /*
+         * ── THE ENGINE THE CONTROL NEEDS, MADE THE SAME ON BOTH BROWSERS ──
+         *
+         * `VoiceButton` returns null on `!isSupported` BEFORE it reads either
+         * platform flag (`src/widgets/chat/ui/chat-button/VoiceButton.tsx:277`).
+         * With no project ASR model configured, `isSupported` is the client
+         * hook's — whether `window.SpeechRecognition` or
+         * `webkitSpeechRecognition` exists at all
+         * (`src/features/chat-input/lib/hooks/useSpeechRecognition.ts:82-105`).
+         * Playwright's Chromium ships `webkitSpeechRecognition`; its WebKit
+         * ships neither, so the mic had no render site there and the
+         * assertions below failed as "the switch did not reach the chat
+         * surface" on one engine only.
+         *
+         * A stub, not a `browserName` branch: the OPERATOR SWITCH is what this
+         * journey is about, and gating half of it on the engine would leave
+         * WebKit asserting nothing about it for ever. `settings.voice.spec.ts`
+         * installs a `speechSynthesis` stub for the same reason, on the same
+         * argument.
+         *
+         * `addInitScript` before the navigation, because the hook probes in its
+         * first effect. Nothing here ever clicks the control — it is asserted
+         * DISABLED — so a bare constructor is the whole of what is needed.
+         */
+        await page.addInitScript(() => {
+          if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) return;
+          class AutotestSpeechRecognition {
+            continuous = false;
+            interimResults = false;
+            lang = 'en-US';
+            onresult: unknown = null;
+            onerror: unknown = null;
+            onend: unknown = null;
+            start(): void {}
+            stop(): void {}
+            abort(): void {}
+          }
+          Object.defineProperty(window, 'webkitSpeechRecognition', {
+            configurable: true,
+            value: AutotestSpeechRecognition,
+          });
+        });
+
         await page.goto(BASE_URL + '/app/chat', { waitUntil: 'domcontentloaded' });
         await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 30_000 });
 
@@ -716,7 +759,10 @@ adminTest(
         await expect(microphone).toBeDisabled();
         await expect(page.getByTestId('chat-voice-mini-player')).toHaveCount(0);
 
-        // Now HIDE it, which is the other switch in the same section.
+        // Now HIDE it, which is the other switch in the same section. The stub
+        // is still installed, so an absent control here is the FLAG's doing and
+        // not the engine's — which is exactly what makes this assertion mean
+        // something on both browsers.
         const hidden = await putValues(page, 'voice_features', {
           vite_voice_features_enabled: false,
           vite_voice_features_temporarily_disabled: true,

@@ -55,6 +55,28 @@ const RUN_ID = String(Date.now()).slice(-6);
 const PLACEHOLDER_URL = 'https://autotest.invalid/api';
 const PLACEHOLDER_TEXT = 'autotest-placeholder';
 
+/**
+ * THE ROUTE THAT OFFERS THESE FIVE TYPES, and it is not the one J19b uses.
+ *
+ * `CredentialForm` renders one picker for two routes, and the routes ask the
+ * catalogue for DIFFERENT sections. `useTypeSections`
+ * (`src/pages/credentials/useTypeSections.ts:27-36,98`) sends
+ * `/settings/create-configuration` — `mode.configurationMode` — the seven
+ * MODEL sections (`llm`, `embedding`, `vectorstorage`, `ai_credentials`,
+ * `image_generation`, `asr`, `tts`), and `/credentials/create-credential` the
+ * single `credentials` section. Every type in this file is
+ * `section: "credentials"`
+ * (`services/elitea-main/internal/application/configurations/
+ * current_available_snapshot.json`), so the configuration route serves no tile
+ * for any of them — the picker rendered, the search matched nothing, and the
+ * tile assertion read 0.
+ *
+ * J19b's `open_ai` is an `ai_credentials` row, which is why that journey is
+ * correct on the OTHER route. The two are not interchangeable and neither is
+ * wrong.
+ */
+const CREDENTIAL_CREATE_ROUTE = 'credentials/create-credential';
+
 interface SchemaNode {
   readonly title?: string;
   readonly type?: string;
@@ -66,8 +88,24 @@ interface ConfigurationTypeDescriptor {
   readonly type?: string;
   readonly config_schema?: {
     readonly title?: string;
+    /** The screen prefers `metadata.label` over `title` — see `tileLabelOf`. */
+    readonly metadata?: { readonly label?: string };
     readonly properties?: { readonly data?: SchemaNode };
   };
+}
+
+/**
+ * The tile's text, DERIVED THE WAY THE SCREEN DERIVES IT.
+ *
+ * `CredentialTypeSelector`'s `displayLabel`
+ * (`src/pages/credentials/CredentialTypeSelector.tsx:57-59`) is
+ * `metadata.label ?? title ?? type`, in that order. Today the five types here
+ * carry no root `metadata`, so `title` decides — but reading only `title`
+ * would have made this file fail as "the type is not offered" on the day one
+ * of them gained a label, which is a different defect entirely.
+ */
+function tileLabelOf(descriptor: ConfigurationTypeDescriptor | undefined, type: string): string {
+  return descriptor?.config_schema?.metadata?.label ?? descriptor?.config_schema?.title ?? type;
 }
 
 /** One field the create form must be given a value for. */
@@ -113,7 +151,7 @@ function describeType(
   ).toBeGreaterThan(0);
   return {
     type,
-    tileLabel: descriptor?.config_schema?.title ?? type,
+    tileLabel: tileLabelOf(descriptor, type),
     requiredFields: requiredKeys.map((key) => ({
       key,
       label: data?.properties?.[key]?.title ?? key,
@@ -129,10 +167,10 @@ function valueFor(field: RequiredField): string {
 /**
  * Author one credential through the create form, from the type CHOOSER.
  *
- * Through the chooser and not a deep link to `/settings/create-configuration/
- * {type}`: "the type is offered at all" is half of what each legacy case
- * asserts, and a deep link would render the form for a type whose tile the
- * catalogue had stopped serving.
+ * Through the chooser and not a deep link to
+ * `/credentials/create-credential/{type}`: "the type is offered at all" is
+ * half of what each legacy case asserts, and a deep link would render the form
+ * for a type whose tile the catalogue had stopped serving.
  *
  * Returns the id the server assigned.
  */
@@ -141,7 +179,7 @@ async function createCredentialThroughForm(
   subject: TypeUnderTest,
   name: string,
 ): Promise<string> {
-  await page.goto(`${BASE_URL}/app/settings/create-configuration`, {
+  await page.goto(`${BASE_URL}/app/${CREDENTIAL_CREATE_ROUTE}`, {
     waitUntil: 'domcontentloaded',
   });
 
@@ -158,7 +196,7 @@ async function createCredentialThroughForm(
   await expect(tile, `no tile for the ${subject.type} credential type`).toHaveCount(1);
   await tile.click();
 
-  await expect(page).toHaveURL(new RegExp(`/settings/create-configuration/${subject.type}`), {
+  await expect(page).toHaveURL(new RegExp(`/${CREDENTIAL_CREATE_ROUTE}/${subject.type}`), {
     timeout: 20_000,
   });
 
@@ -283,6 +321,13 @@ test('C-1: a GitHub credential is authored from the form and a GitHub toolkit re
         type: 'github',
         settings: {
           github_configuration: { elitea_title: eliteaTitle, private: false },
+          // REQUIRED, alongside the reference. `validateToolkitCreate`
+          // (`services/elitea-main/internal/api/v2/toolkits/handler.go:987-1004`)
+          // answers 400 without it, and the SDK settings schema declares
+          // `required: ["github_configuration", "repository"]` for this type —
+          // so a body carrying only the reference could never have been saved
+          // through the form either.
+          repository: `${AUTOTEST_PREFIX}org/${AUTOTEST_PREFIX}repo`,
           selected_tools: [],
         },
       },
