@@ -24,6 +24,7 @@ import Box from '@mui/material/Box';
 import Skeleton from '@mui/material/Skeleton';
 
 import { ApplicationAnswer } from './ApplicationAnswer';
+import type { AnswerCanvasSelection } from './AnswerContent';
 import type { CanvasEditPayload, CodeBlockInfo } from '../canvas/Canvas';
 import { UserMessage } from './UserMessage';
 import type { UserMessageUpdatedItem } from './UserMessage';
@@ -62,6 +63,8 @@ export interface ChatMessageListActions {
 export interface ChatMessageListCanvas {
   readonly onEdit?: ((payload: CanvasEditPayload) => void) | undefined;
   readonly selected?: CodeBlockInfo | undefined;
+  /** Carves a canvas out of a range the reader highlighted in an answer. */
+  readonly onCreateFromSelection?: ((payload: AnswerCanvasSelection) => void) | undefined;
 }
 
 /** Read-aloud (TTS) props, grouped to stay under the component-props budget. */
@@ -203,7 +206,7 @@ export function ChatMessageList({
   userId,
   projectId,
   messageActions: { onCopyToClipboard, onDeleteAnswer, onRegenerateAnswer, onSubmitEditedMessage } = {},
-  canvas: { onEdit: onEditCanvas, selected: selectedCodeBlockInfo } = {},
+  canvas: { onEdit: onEditCanvas, selected: selectedCodeBlockInfo, onCreateFromSelection: onCreateCanvasFromSelection } = {},
   tts: { onAutoSpeak, speakingMessageId, speakingSegments, spokenRange } = {},
   continuation: {
     onContinueMcpExecution,
@@ -364,7 +367,7 @@ export function ChatMessageList({
                         ? () => { onRegenerateAnswer(messageId); }
                         : undefined,
                     shouldDisableRegenerate: messageIsStreaming || Boolean(message.isLoading) || message.id === WELCOME_MESSAGE_ID,
-                    onEditCanvas, selectedCodeBlockInfo,
+                    onEditCanvas, selectedCodeBlockInfo, onCreateCanvasFromSelection,
                   }}
                   continuation={{
                     hideContinueButton,

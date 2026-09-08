@@ -28,6 +28,12 @@
  * canvas_type, canvas_content, code_language, editors, latest_version:{id,
  * canvas_content, code_language, created_at}}`.
  *
+ * A TEXT item is rendered through `./SelectableAnswerText` rather than
+ * `Markdown` directly, because a text item is also where the canvas CREATE
+ * gesture starts: highlighting part of it offers to carve that range out. The
+ * item's own row id is carried for the same reason — it names the row the
+ * create route splits, on the read that supplies one.
+ *
  * The canvas is addressed by `item_details.uuid` — the message ITEM's uuid,
  * which is the id `PUT /elitea_core/canvas/prompt_lib/{p}/{canvasID}` takes
  * and the id the editor's own socket room is named after. An item whose
@@ -41,7 +47,8 @@ import type { ReactNode } from 'react';
 import { Canvas } from '../canvas/Canvas';
 import type { CanvasEditPayload, CodeBlockInfo } from '../canvas/Canvas';
 
-import { Markdown } from '@/shared/ui/Markdown';
+import { SelectableAnswerText } from './SelectableAnswerText';
+import type { CanvasSelectionPayload } from './SelectableAnswerText';
 
 import type { ChatMessage } from '../../lib/convertMessagesToChatHistory';
 
@@ -54,7 +61,7 @@ type CanvasKind = (typeof CANVAS_TYPES)[number];
 
 /** One rendered entry of an answer: a paragraph of text, or a canvas document. */
 export type AnswerItem =
-  | { readonly kind: 'text'; readonly key: string; readonly content: string }
+  | { readonly kind: 'text'; readonly key: string; readonly content: string; readonly messageItemId: number | undefined }
   | {
       readonly kind: 'canvas';
       readonly key: string;
@@ -117,6 +124,11 @@ export function readAnswerItems(messageItems: ChatMessage['messageItems']): read
         kind: 'text',
         key: asString(item['uuid']) ?? `text-item-${String(index)}`,
         content: asString(details?.['content']) ?? '',
+        // The row the canvas create SPLITS is named by this id. It is absent
+        // on the paginated messages route, which collapses a group's text into
+        // `content` and serves no text item at all — so the create resolves
+        // the item itself when this is `undefined` rather than inventing one.
+        messageItemId: typeof item['id'] === 'number' ? item['id'] : undefined,
       });
       return;
     }
@@ -136,6 +148,12 @@ export interface AnswerMessageItemsProps {
   readonly isStreaming?: boolean;
   /** The word TTS is reading, for the text items only. */
   readonly spokenRange?: { readonly start: number; readonly end: number } | undefined;
+  /**
+   * Carves a canvas out of a range the reader HIGHLIGHTED in one of the text
+   * items. Omitted — no canvas editor is mounted on this surface — the text
+   * renders with no selection affordance at all.
+   */
+  readonly onCreateCanvasFromSelection?: ((payload: CanvasSelectionPayload) => void) | undefined;
 }
 
 /** Renders an answer's stored items in order: markdown for text, a canvas block for a canvas. */
@@ -145,14 +163,19 @@ export function AnswerMessageItems({
   selectedCodeBlockInfo,
   isStreaming = false,
   spokenRange,
+  onCreateCanvasFromSelection,
 }: AnswerMessageItemsProps): ReactNode {
   return (
     <>
       {items.map((item) =>
         item.kind === 'text' ? (
-          <Markdown key={item.key} spokenRange={spokenRange}>
-            {item.content}
-          </Markdown>
+          <SelectableAnswerText
+            key={item.key}
+            content={item.content}
+            messageItemId={item.messageItemId}
+            spokenRange={spokenRange}
+            {...(onCreateCanvasFromSelection !== undefined ? { onCreateCanvas: onCreateCanvasFromSelection } : {})}
+          />
         ) : (
           <Canvas
             key={item.key}
