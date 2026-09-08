@@ -30,6 +30,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AppProviders } from '@/app/providers/AppProviders';
 import { useChatSessionStore } from '@/entities/conversation';
+import { folderApi } from '@/entities/folder';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { installTestEventSource } from '@/shared/api/sse/testing';
 import { server } from '@/test/setup';
@@ -84,10 +85,10 @@ function handlers() {
 }
 
 /** The two real chat routes, so `navigate({to:'/chat/$conversationId'})` resolves the same way it does in the app. */
-function renderAt(initialEntry: string) {
+function renderAt(initialEntry: string, component: () => ReactNode = () => <ChatPage />) {
   const rootRoute = createRootRoute({ component: (): ReactNode => <Outlet /> });
-  const chatRoute = createRoute({ getParentRoute: () => rootRoute, path: '/chat', component: ChatPage });
-  const conversationRoute = createRoute({ getParentRoute: () => rootRoute, path: '/chat/$conversationId', component: ChatPage });
+  const chatRoute = createRoute({ getParentRoute: () => rootRoute, path: '/chat', component });
+  const conversationRoute = createRoute({ getParentRoute: () => rootRoute, path: '/chat/$conversationId', component });
   const router = createRouter({
     routeTree: rootRoute.addChildren([chatRoute, conversationRoute]),
     history: createMemoryHistory({ initialEntries: [initialEntry] }),
@@ -242,6 +243,77 @@ describe('ChatPage new-conversation promotion', () => {
  * page fills it — and that it does NOT for a conversation that has no server
  * state to report on.
  */
+/**
+ * DEFECT: a conversation created by the first send was missing from the rail
+ * beside it.
+ *
+ * The rail's grouped listing (`folderApi.useList`) is a cached query, and the
+ * only writers that invalidated it were the FOLDER mutations. A conversation
+ * is written by the first send, not by a button, so nothing told the listing
+ * it was stale: the new conversation was in the route, in the transcript and
+ * in the database, and absent from the list of conversations until something
+ * else happened to refetch.
+ *
+ * The rail itself is mounted by `processes/chat`, one layer above this page,
+ * so the observation here is the listing QUERY — the same query, through the
+ * same hook the rail uses, sharing this page's cache. A second GET is the
+ * invalidation.
+ */
+describe('ChatPage conversation rail refresh', () => {
+  /** Mounted beside the page: the rail's own listing hook, on the rail's own key. */
+  function RailListingProbe(): ReactNode {
+    folderApi.useList({ projectId: PROJECT, params: { sort_by: 'updated_at', sort_order: 'desc' } });
+    return null;
+  }
+
+  it('invalidates the rail listing when the first send creates the conversation', async () => {
+    const eventSources = installTestEventSource();
+    const originalScrollIntoView = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollIntoView');
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    const listingRequests: string[] = [];
+    server.use(
+      http.get(`${BASE}/elitea_core/folder/prompt_lib/${PROJECT}`, ({ request }) => {
+        listingRequests.push(request.url);
+        return HttpResponse.json({ pinned: { conversations: [] }, date_groups: [], folders: [], total_folders: 0 });
+      }),
+      http.post(`${BASE}/elitea_core/conversations/prompt_lib/${PROJECT}`, () =>
+        HttpResponse.json(
+          { id: CONVERSATION, uuid: 'conversation-uuid-5', project_id: PROJECT, name: 'First turn', participants: [] },
+          { status: 201 },
+        ),
+      ),
+      http.post(`${BASE}/elitea_core/participants/prompt_lib/${PROJECT}/${CONVERSATION}`, () => HttpResponse.json([])),
+      http.get(`${BASE}/configurations/tts_voices/${PROJECT}`, () => HttpResponse.json({ items: [] })),
+      http.get(`${BASE}/elitea_core/context_analytics/prompt_lib/${PROJECT}/${CONVERSATION}`, () =>
+        HttpResponse.json({ current_tokens: 0, max_tokens: 0, message_groups_in_context: 0 }),
+      ),
+      http.post(`${BASE}/elitea_core/messages/prompt_lib/${PROJECT}/:conversationUuid`, () =>
+        HttpResponse.json({ execution_id: 'execution-1', events_url: `${BASE}/executions/${PROJECT}/execution-1/events` }),
+      ),
+    );
+
+    try {
+      renderAt('/chat', () => (
+        <>
+          <ChatPage />
+          <RailListingProbe />
+        </>
+      ));
+      const user = userEvent.setup();
+      const input = await screen.findByPlaceholderText('Type your message...');
+      await waitFor(() => expect(listingRequests).toHaveLength(1), { timeout: 5000 });
+
+      await user.type(input, 'First turn{Enter}');
+
+      await waitFor(() => expect(listingRequests.length).toBeGreaterThan(1), { timeout: 5000 });
+    } finally {
+      if (originalScrollIntoView) Object.defineProperty(Element.prototype, 'scrollIntoView', originalScrollIntoView);
+      else Reflect.deleteProperty(Element.prototype, 'scrollIntoView');
+      eventSources.restore();
+    }
+  });
+});
+
 describe('ChatPage context budget slot', () => {
   const CONTEXT_STATUS_URL = `${BASE}/elitea_core/context_analytics/prompt_lib/${PROJECT}/${CONVERSATION}`;
 
