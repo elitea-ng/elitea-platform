@@ -354,6 +354,196 @@ adminTest.describe('member persona', () => {
 });
 
 /*
+ * ── J39: the cross-project bulk membership invite (issue 247) ────────────────
+ *
+ * pylon serves this as two admin console pages, `invites_bulkusers` and
+ * `invites_bulkprojects`. This platform had no path at all: membership was one
+ * address at a time. The route the dialog posts to answers **200 even when
+ * pairs fail**, so the only thing that separates "forty invited" from "forty
+ * refused" is the per-pair report — which is exactly what this journey reads.
+ *
+ * ITS OWN PROJECT AND ITS OWN ACCOUNTS, one project per engine
+ * (`scripts/e2e-stack.sh`, `e2e-bulkinvite-<engine>`). Not project 1, where
+ * every persona lands, and not `e2e-team-active`, whose Admins cell
+ * `admin.projects.spec.ts` asserts exactly — a bulk write into either would
+ * break a journey that never mentions this one.
+ */
+
+/** The bulk-invite fixtures. One project per engine; the invitees are shared. */
+function bulkInviteProject(projectName: string): string {
+  return projectName === 'chromium' ? 'e2e-bulkinvite-chromium' : 'e2e-bulkinvite-webkit';
+}
+const BULK_INVITEE_A = 'e2e-bulkinvite-a@autotest.local';
+const BULK_INVITEE_B = 'e2e-bulkinvite-b@autotest.local';
+
+/** One pair of the bulk-invite report. */
+interface BulkPair {
+  readonly user_id: number;
+  readonly project_id: number;
+  readonly status: string;
+  readonly outcome: string;
+}
+
+interface BulkReport {
+  readonly ok: boolean;
+  readonly requested: number;
+  readonly added: number;
+  readonly skipped: number;
+  readonly failed: number;
+  readonly results: BulkPair[];
+}
+
+/** The project the journey acts on, resolved by NAME rather than by page. */
+async function bulkProjectId(page: Page, name: string): Promise<number> {
+  const listing = await page.request.get(
+    `${BASE_URL}/api/v2/admin/projects/administration?search=${name}&limit=20&offset=0`,
+  );
+  expect(listing.status(), await listing.text()).toBe(200);
+  const rows = ((await listing.json()) as { rows: { id: number; name: string }[] }).rows;
+  const project = rows.find((row) => row.name === name);
+  expect(project, `the seed must carry the project ${name}`).toBeTruthy();
+  return project?.id ?? 0;
+}
+
+/** The account ids the batch names, resolved by address. */
+async function bulkUserIds(page: Page): Promise<number[]> {
+  const ids: number[] = [];
+  for (const email of [BULK_INVITEE_A, BULK_INVITEE_B]) {
+    const listing = await page.request.get(
+      `${BASE_URL}/api/v2/admin/auth_users/administration?limit=20&offset=0&search=${email}`,
+    );
+    expect(listing.status(), await listing.text()).toBe(200);
+    const row = ((await listing.json()) as { rows: { id: number; email: string }[] }).rows.find(
+      (entry) => entry.email === email,
+    );
+    expect(row, `the seed must carry ${email}`).toBeTruthy();
+    ids.push(row?.id ?? 0);
+  }
+  return ids;
+}
+
+/** The project's member addresses, read from the SERVER. */
+async function projectMemberEmails(page: Page, projectId: number): Promise<string[]> {
+  const members = await page.request.get(
+    `${BASE_URL}/api/v2/admin/users/administration/${projectId}`,
+  );
+  expect(members.status(), await members.text()).toBe(200);
+  const body = (await members.json()) as { rows?: { email: string }[] } | { email: string }[];
+  const rows = Array.isArray(body) ? body : (body.rows ?? []);
+  return rows.map((row) => row.email);
+}
+
+async function postBulkInvite(
+  page: Page,
+  payload: { users: number[]; projects: number[]; role: string },
+): Promise<BulkReport> {
+  const response = await page.request.post(
+    `${BASE_URL}/api/v2/admin/invites_bulk/administration`,
+    { data: payload },
+  );
+  expect(response.status(), await response.text()).toBe(200);
+  return (await response.json()) as BulkReport;
+}
+
+adminTest('J39: a bulk invite writes every pair and the second run reports them as members', async ({ page }, testInfo) => {
+  const projectName = bulkInviteProject(testInfo.project.name);
+  const projectId = await bulkProjectId(page, projectName);
+  const [userA, userB] = await bulkUserIds(page);
+
+  // The batch, through the DIALOG. What the UI does is the claim: the API is
+  // covered by the Go integration tests, and a dialog that posts nothing is
+  // the #130/#180 defect this suite exists to catch.
+  await page.goto(BASE_URL + '/admin/app/users', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByText(SEEDED_ADMIN)).toBeVisible({ timeout: 15_000 });
+  await page.getByTestId('admin-bulk-invite-open').click();
+
+  const usersField = page.getByTestId('bulk-invite-users').getByRole('combobox');
+  await usersField.click();
+  await usersField.fill(BULK_INVITEE_A);
+  await page.getByRole('option').filter({ hasText: BULK_INVITEE_A }).first().click();
+  await usersField.fill(BULK_INVITEE_B);
+  await page.getByRole('option').filter({ hasText: BULK_INVITEE_B }).first().click();
+
+  const projectsField = page.getByTestId('bulk-invite-projects').getByRole('combobox');
+  await projectsField.click();
+  await projectsField.fill(projectName);
+  await page.getByRole('option').filter({ hasText: projectName }).first().click();
+
+  await page.getByTestId('bulk-invite-role').getByRole('combobox').click();
+  await page.getByRole('option', { name: 'editor' }).click();
+
+  const [inviteResponse] = await Promise.all([
+    page.waitForResponse(
+      (r) =>
+        r.url().includes('/admin/invites_bulk/administration') && r.request().method() === 'POST',
+    ),
+    page.getByTestId('bulk-invite-submit').click(),
+  ]);
+  // 200 is the route's answer for a partial batch too, so the status alone
+  // proves authorisation and nothing else.
+  expect(inviteResponse.status(), 'the bulk write must be authorised server-side').toBe(200);
+
+  const report = (await inviteResponse.json()) as BulkReport;
+  expect(report.requested, 'two accounts times one project').toBe(2);
+  expect(report.failed, JSON.stringify(report.results)).toBe(0);
+  // `added` on a fresh stack, `already_member` on a re-run — both mean the
+  // account holds the role, and asserting only `added` would make this journey
+  // pass once per seeded database.
+  for (const pair of report.results) {
+    expect(pair.status).toBe('ok');
+    expect([userA, userB]).toContain(pair.user_id);
+    expect(pair.project_id).toBe(projectId);
+  }
+  await expect(page.getByTestId('bulk-invite-results')).toBeVisible();
+
+  // THE SERVER'S OWN MEMBER LIST, not the dialog's report: a handler that
+  // answered a perfect report and wrote nothing would pass everything above.
+  const emails = await projectMemberEmails(page, projectId);
+  expect(emails).toContain(BULK_INVITEE_A);
+  expect(emails).toContain(BULK_INVITEE_B);
+
+  // Idempotence. Running the same batch again is what an operator who is not
+  // sure the first one landed actually does, and pylon's write REPLACED the
+  // role set — so a second run there could quietly demote somebody.
+  const second = await postBulkInvite(page, {
+    users: [userA ?? 0, userB ?? 0],
+    projects: [projectId],
+    role: 'editor',
+  });
+  expect(second.ok).toBe(true);
+  expect(second.added).toBe(0);
+  expect(second.skipped).toBe(2);
+  for (const pair of second.results) {
+    expect(pair.outcome).toBe('already_member');
+  }
+});
+
+adminTest('J39b: a bulk invite refuses a personal project and an unknown account, and writes neither', async ({ page }) => {
+  const [userA] = await bulkUserIds(page);
+  // `project_user_90001`, seeded for admin.projects.spec.ts's personal tab. A
+  // personal project is one account's own space; pylon's "add every user"
+  // form would have written the whole platform into it.
+  const personalProjectId = await bulkProjectId(page, 'project_user_90001');
+  const unknownUserId = 90999901;
+
+  const report = await postBulkInvite(page, {
+    users: [userA ?? 0, unknownUserId],
+    projects: [personalProjectId],
+    role: 'editor',
+  });
+
+  expect(report.ok, 'both pairs are refusals').toBe(false);
+  expect(report.added).toBe(0);
+  expect(report.failed).toBe(2);
+  const outcomes = report.results.map((pair) => pair.outcome).sort();
+  expect(outcomes).toEqual(['personal_project', 'unknown_user']);
+
+  // Nothing was written. A refusal that still wrote the row would report the
+  // same summary.
+  expect(await projectMemberEmails(page, personalProjectId)).not.toContain(BULK_INVITEE_A);
+});
+
+/*
  * NOT COVERED here — deliberately, and each covered elsewhere or tracked:
  *
  *  - the super_admin escalation guard (grant/revoke). It needs a persona

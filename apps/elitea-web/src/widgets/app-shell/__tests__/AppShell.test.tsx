@@ -627,4 +627,81 @@ describe('AppShell', () => {
     expect(await screen.findByRole('button', { name: /Project:\s*Acme/ })).toBeInTheDocument();
     await waitFor(() => expect(projectCalls).toBe(1));
   });
+
+  /* ── the budget warning banner (issue 312) ─────────────────────────────
+   *
+   * COMPOSITION ROOT. BudgetWarningBanner has its own file of tests, and every
+   * one of them would pass with the component composed into nothing: the unit
+   * suite is blind to a widget that is never mounted, which is the class #597
+   * records. This asserts the shell mounts it AND hands it the selected
+   * project, because a banner given the wrong project id would read a budget
+   * that is not the one on screen.
+   */
+  it('mounts the budget warning banner for the SELECTED project', async () => {
+    const asked: string[] = [];
+    server.use(
+      http.get('*/elitea_core/project_budget/prompt_lib/:projectId/budget', ({ params }) => {
+        asked.push(String(params['projectId']));
+        return HttpResponse.json({
+          limit_source: 'explicit',
+          enabled: true,
+          warning_pct: 80,
+          percent_used: 91,
+          warning_active: true,
+          spend_available: true,
+          period: 'August 2026',
+          period_start: '2026-08-01',
+          period_end: '2026-08-31',
+          resets_at: '2026-09-01T00:00:00Z',
+        });
+      }),
+      authorHandler('2'),
+    );
+
+    await renderWithNavigation(
+      <AppShell>
+        <div>page content</div>
+      </AppShell>,
+    );
+
+    expect(await screen.findByTestId('budget-warning-banner')).toHaveTextContent(
+      'Budget warning: Acme has reached 91% of its monthly budget.',
+    );
+    // The id it read is the selected project's, not the public one.
+    expect(asked).toContain('2');
+    expect(asked).not.toContain('11');
+  });
+
+  // The shell must not carry a banner for a project that is not over its
+  // threshold. A banner everyone sees is a banner nobody reads.
+  it('renders no budget banner while the project is under its threshold', async () => {
+    server.use(
+      http.get('*/elitea_core/project_budget/prompt_lib/:projectId/budget', () =>
+        HttpResponse.json({
+          limit_source: 'explicit',
+          enabled: true,
+          warning_pct: 80,
+          percent_used: 12,
+          warning_active: false,
+          spend_available: true,
+          period: 'August 2026',
+          period_start: '2026-08-01',
+          period_end: '2026-08-31',
+          resets_at: '2026-09-01T00:00:00Z',
+        }),
+      ),
+      authorHandler('2'),
+    );
+
+    await renderWithNavigation(
+      <AppShell>
+        <div>page content</div>
+      </AppShell>,
+    );
+
+    await screen.findByText('page content');
+    await waitFor(() =>
+      expect(screen.queryByTestId('budget-warning-banner')).not.toBeInTheDocument(),
+    );
+  });
 });

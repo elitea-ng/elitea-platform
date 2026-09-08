@@ -34,6 +34,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"testing"
 	"time"
 
@@ -1111,4 +1112,154 @@ func TestUsageUserScopeReportsTheMembersOwnBudget(t *testing.T) {
 	// not "nothing ever writes these" — the distinction the field exists for.
 	wantBool(t, body, "spend_available", false)
 	wantBool(t, body, "enforced", true)
+}
+
+/* ── warning_active: the threshold crossing (issue 312) ────────────────── */
+
+// setProjectBudgetFor writes a ceiling and a threshold through the product's
+// own PUT, so these cases exercise the same row the gateway reads.
+func setProjectBudgetFor(t *testing.T, router chi.Router, limitUSD any, softAlertPct int) {
+	t.Helper()
+	recorder := budgetsDo(t, router, http.MethodPut,
+		fmt.Sprintf("/project_budget/administration/%d/budget", budgetProjectID), budgetAdminUser,
+		map[string]any{"monthly_limit": limitUSD, "soft_alert_pct": softAlertPct})
+	requireStatus(t, recorder, http.StatusOK)
+}
+
+func readProjectBudget(t *testing.T, router chi.Router) map[string]any {
+	t.Helper()
+	recorder := budgetsDo(t, router, http.MethodGet,
+		fmt.Sprintf("/project_budget/administration/%d/budget", budgetProjectID), budgetAdminUser, nil)
+	requireStatus(t, recorder, http.StatusOK)
+	return decodeMap(t, recorder)
+}
+
+// The banner this field drives is the whole feature (issue 312): the endpoints
+// have existed since #322 with nothing calling them, so a project heading for
+// its ceiling gets no warning today, only a hard stop at 100%.
+//
+// The three boundary cases are one test because the boundary is the point. A
+// client deriving the flag itself would have to pick `>` or `>=` and would pick
+// differently from the gateway's own soft-alert path.
+func TestProjectBudgetReportsTheThresholdCrossing(t *testing.T) {
+	for name, testCase := range map[string]struct {
+		spendUSD string
+		want     bool
+	}{
+		// 40 of 100 with a threshold of 80.
+		"below the threshold": {spendUSD: "40.00", want: false},
+		// EXACTLY at it. "reached 80% of its budget" is what the reference's
+		// own copy says, so 80 must warn.
+		"at the threshold": {spendUSD: "80.00", want: true},
+		// A hair under, after rounding to the two decimals the client renders.
+		"just under after rounding": {spendUSD: "79.994", want: false},
+		"over the threshold":        {spendUSD: "93.50", want: true},
+		// Past the ceiling entirely. The hard block is the gateway's job; the
+		// warning stays true rather than switching off.
+		"over the limit": {spendUSD: "140.00", want: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			pool, router := newBudgetsEnvironment(t)
+			setProjectBudgetFor(t, router, 100, 80)
+			plantAccumulator(t, pool, "project", strconv.Itoa(budgetProjectID), budgetProjectID,
+				periodStart(), periodEnd(), testCase.spendUSD)
+
+			wantBool(t, readProjectBudget(t, router), "warning_active", testCase.want)
+		})
+	}
+}
+
+// No budget set is NOT a warning. An unconfigured project reports a null
+// percent_used, and a client that compared null to 80 would decide whatever its
+// language's coercion rules decide — which is the reason the server answers
+// this field at all.
+func TestProjectBudgetWithNoLimitNeverWarns(t *testing.T) {
+	pool, router := newBudgetsEnvironment(t)
+	plantAccumulator(t, pool, "project", strconv.Itoa(budgetProjectID), budgetProjectID,
+		periodStart(), periodEnd(), "500.00")
+
+	payload := readProjectBudget(t, router)
+	wantNull(t, payload, "percent_used")
+	wantBool(t, payload, "warning_active", false)
+	wantString(t, payload, "limit_source", "unlimited")
+}
+
+// A DISABLED budget is exempt, whatever the stored ceiling says, so it must not
+// warn either — the gateway is not holding the project to that number.
+func TestProjectBudgetThatIsDisabledNeverWarns(t *testing.T) {
+	pool, router := newBudgetsEnvironment(t)
+	setProjectBudgetFor(t, router, 100, 80)
+	plantAccumulator(t, pool, "project", strconv.Itoa(budgetProjectID), budgetProjectID,
+		periodStart(), periodEnd(), "95.00")
+	wantBool(t, readProjectBudget(t, router), "warning_active", true)
+
+	recorder := budgetsDo(t, router, http.MethodPut,
+		fmt.Sprintf("/project_budget/administration/%d/budget", budgetProjectID), budgetAdminUser,
+		map[string]any{"monthly_limit": 100, "enabled": false})
+	requireStatus(t, recorder, http.StatusOK)
+
+	wantBool(t, readProjectBudget(t, router), "warning_active", false)
+}
+
+// The threshold the flag compares against is the one the scope RESOLVES, not
+// the 80 fallback: an operator who moves the project's threshold moves the
+// warning with it. Without this the flag would be a second source of truth
+// beside warning_pct.
+func TestProjectBudgetWarningFollowsTheAuthoredThreshold(t *testing.T) {
+	pool, router := newBudgetsEnvironment(t)
+	setProjectBudgetFor(t, router, 100, 95)
+	plantAccumulator(t, pool, "project", strconv.Itoa(budgetProjectID), budgetProjectID,
+		periodStart(), periodEnd(), "90.00")
+
+	payload := readProjectBudget(t, router)
+	if got := fmt.Sprint(payload["warning_pct"]); got != "95" {
+		t.Fatalf("warning_pct = %s, want the authored 95", got)
+	}
+	wantBool(t, payload, "warning_active", false)
+
+	setProjectBudgetFor(t, router, 100, 85)
+	wantBool(t, readProjectBudget(t, router), "warning_active", true)
+}
+
+// The member half of the same field. userBudgetPageSQL computes it in its own
+// SELECT, so a listing that forgot the column would report false for every
+// member who is over their threshold — and nothing else in the response would
+// look wrong.
+func TestMemberBudgetListingReportsTheThresholdCrossing(t *testing.T) {
+	pool, router := newBudgetsEnvironment(t)
+
+	recorder := budgetsDo(t, router, http.MethodPut,
+		fmt.Sprintf("/user_budget/administration/%d/user_budget/%d", budgetProjectID, budgetMemberUser),
+		budgetAdminUser, map[string]any{"monthly_limit": 10, "soft_alert_pct": 50})
+	requireStatus(t, recorder, http.StatusOK)
+	plantAccumulator(t, pool, "user",
+		fmt.Sprintf("%d:%d", budgetProjectID, budgetMemberUser), budgetProjectID,
+		periodStart(), periodEnd(), "7.00")
+
+	recorder = budgetsDo(t, router, http.MethodGet,
+		fmt.Sprintf("/user_budgets/administration/%d", budgetProjectID), budgetAdminUser, nil)
+	requireStatus(t, recorder, http.StatusOK)
+
+	var listing struct {
+		Rows []struct {
+			UserID        int64 `json:"user_id"`
+			WarningActive bool  `json:"warning_active"`
+		} `json:"rows"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &listing); err != nil {
+		t.Fatalf("decode listing: %v", err)
+	}
+	found := false
+	for _, row := range listing.Rows {
+		if row.UserID != int64(budgetMemberUser) {
+			continue
+		}
+		found = true
+		if !row.WarningActive {
+			t.Fatal("the member is at 70% of a 50% threshold and the row does not warn")
+		}
+	}
+	if !found {
+		t.Fatalf("the listing carries no row for user %d", budgetMemberUser)
+	}
 }

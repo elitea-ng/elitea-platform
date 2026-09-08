@@ -515,39 +515,85 @@ describe('the live lanes must never claim coverage they did not take', () => {
 /* ── rule 6 ─────────────────────────────────────────────────────────────── */
 
 /**
- * The destructive fixture self-test must never run inside the ordinary suite.
+ * The destructive fixture self-test must run where it can neither meet a
+ * running journey NOR take one down with it.
  *
  * API-FX3 calls `sweepAutotestEntities`, which deletes every `autotest_`
- * conversation and agent in the shared project. Run in its own ordering
- * project — after `setup`, before the first sibling that can create one — it
- * can only ever find its own rows. Run in `chromium` or `webkit` it would
- * delete, at some unpredictable moment, whatever twenty other journeys were
- * holding, and every one of them would fail on a 404 for a row it created.
+ * conversation, agent and pipeline in the shared project. Two properties are
+ * needed, and the first attempt bought one by giving up the other:
  *
- * That failure has no cause anywhere near it, which is why the rule is stated
- * here rather than left to a reviewer noticing an edit to `testIgnore`.
+ *  1. IT MUST NOT RUN BESIDE THE JOURNEYS IT WOULD SWEEP. Run in `chromium`
+ *     or `webkit` it would delete, at an unpredictable moment, whatever
+ *     twenty other journeys were holding, and every one of them would fail on
+ *     a 404 for a row it created — with no cause anywhere near the failure.
+ *  2. ITS OWN FAILURE MUST NOT SKIP ANYTHING. It first ran in an ordering
+ *     project that both engines DEPENDED on. A dependency's failure skips its
+ *     dependents, so one failing assertion here reported `308 did not run`
+ *     and the whole browser suite went unmeasured (measured on b705c058).
+ *
+ * `teardown` gives both. Playwright runs a teardown project after its parent
+ * and after everything that depends on the parent, so the sweep meets a
+ * finished run rather than a starting one — and nothing depends on IT, so it
+ * reports its own failure and skips nobody.
+ *
+ * The rule therefore checks four things: the file is named, it owns a
+ * project, `setup` declares that project as its teardown, and NO project
+ * lists it as a dependency.
  */
 export function sweepJourneyIsIsolated(source) {
   const named = source.includes(
     'const FIXTURE_ISOLATION_JOURNEY = /journeys\\/api\\/api\\.fixture-isolation\\.spec\\.ts/',
   );
-  // Once per engine project, plus the project that owns it.
-  const ignored = (source.match(/^\s*FIXTURE_ISOLATION_JOURNEY,$/gm) ?? []).length;
   const owned = source.includes("name: 'fixtures-sweep'");
-  return named && owned && ignored === 2;
+  const isTeardown = /teardown:\s*'fixtures-sweep'/.test(source);
+  // A dependency edge is exactly what makes a failure here skip a suite.
+  const dependedOn = /dependencies:\s*\[[^\]]*'fixtures-sweep'/.test(source);
+  // Once per engine project: neither may pick the file up itself.
+  const ignored = (source.match(/^\s*FIXTURE_ISOLATION_JOURNEY,$/gm) ?? []).length;
+  return named && owned && isTeardown && !dependedOn && ignored === 2;
 }
 
 describe('the sweep must not run beside the journeys it would sweep', () => {
-  it('the fixture self-tests own a project and are ignored by both engines', () => {
+  it('the fixture self-tests own a teardown project and are ignored by both engines', () => {
     expect(sweepJourneyIsIsolated(read('playwright.config.ts'))).toBe(true);
   });
 
   it('rejects a config that let one engine pick the sweep up', () => {
     const before = [
       "const FIXTURE_ISOLATION_JOURNEY = /journeys\\/api\\/api\\.fixture-isolation\\.spec\\.ts/;",
+      "      teardown: 'fixtures-sweep',",
       "      name: 'fixtures-sweep',",
       '        FIXTURE_ISOLATION_JOURNEY,',
     ].join('\n');
     expect(sweepJourneyIsIsolated(before)).toBe(false);
+  });
+
+  /*
+   * The shape that actually failed. Every other property held — the file was
+   * named, it owned a project, both engines ignored it — and the dependency
+   * edge alone turned one red assertion into an unmeasured suite.
+   */
+  it('rejects the dependency edge that made one failure skip 308 journeys', () => {
+    const before = [
+      "const FIXTURE_ISOLATION_JOURNEY = /journeys\\/api\\/api\\.fixture-isolation\\.spec\\.ts/;",
+      "      name: 'fixtures-sweep',",
+      "      dependencies: ['setup', 'toolkits-empty', 'fixtures-sweep'],",
+      '        FIXTURE_ISOLATION_JOURNEY,',
+      '        FIXTURE_ISOLATION_JOURNEY,',
+    ].join('\n');
+    expect(sweepJourneyIsIsolated(before)).toBe(false);
+  });
+
+  it('accepts the teardown shape', () => {
+    const after = [
+      "const FIXTURE_ISOLATION_JOURNEY = /journeys\\/api\\/api\\.fixture-isolation\\.spec\\.ts/;",
+      "      name: 'setup',",
+      "      teardown: 'fixtures-sweep',",
+      "      name: 'fixtures-sweep',",
+      "      dependencies: ['setup', 'toolkits-empty'],",
+      '        FIXTURE_ISOLATION_JOURNEY,',
+      '        FIXTURE_ISOLATION_JOURNEY,',
+    ].join('\n');
+    expect(sweepJourneyIsIsolated(after)).toBe(true);
   });
 });

@@ -91,6 +91,11 @@ export const BudgetState = BudgetPeriodWindow.and(
       .number()
       .nullable()
       .describe("Null when the scope is unlimited or the limit is zero."),
+    warning_active: zod
+      .boolean()
+      .describe(
+        "True when `percent_used` has reached `warning_pct` — the\nsoft-alert threshold this scope resolves, which is the\nproject's own value, else the platform value an operator set\nthrough `PUT \/admin\/gateway\/budget-alerts`, else 80.\n\nThe server answers it rather than each client deriving it, so a\nwarning banner and the percentage beside it cannot disagree,\nand so the comparison is made once against the same resolved\nthreshold the gateway alerts on. False whenever there is\nnothing to warn about: an unlimited scope, a disabled one and a\nzero ceiling all report a null `percent_used`.\n\nIt is not a cost figure and is never redacted: a member who may\nnot see the amounts still learns the project is close to its\nlimit.\n",
+      ),
     spend_available: zod
       .boolean()
       .describe(

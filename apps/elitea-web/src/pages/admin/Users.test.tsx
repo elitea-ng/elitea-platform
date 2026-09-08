@@ -391,4 +391,34 @@ describe('Admin › Users', () => {
       expect(listings.some((entry) => entry.url.includes('search=ada'))).toBe(true);
     });
   });
+
+  /*
+   * COMPOSITION ROOT for the cross-project bulk invite (issue 247).
+   *
+   * `AdminBulkInviteDialog.test.tsx` drives the dialog directly, and every one
+   * of its cases would pass with the dialog composed into no page at all — the
+   * "dead code with no caller" class this repository keeps finding. This
+   * asserts the page CARRIES the control and that pressing it mounts the real
+   * dialog, which is the half a unit suite cannot see.
+   */
+  it('opens the bulk invite dialog from the Users page', async () => {
+    server.use(
+      http.get('*/admin/projects/administration', () =>
+        HttpResponse.json({ rows: [], total: 0, counts: { team: 0, personal: 0 } }),
+      ),
+    );
+    const user = userEvent.setup();
+    renderAdminRoute(<AdminUsers />);
+    await screen.findByText('Ada Admin');
+
+    expect(screen.queryByTestId('bulk-invite-submit')).not.toBeInTheDocument();
+    await user.click(screen.getByTestId('admin-bulk-invite-open'));
+
+    expect(await screen.findByTestId('bulk-invite-users')).toBeInTheDocument();
+    expect(screen.getByTestId('bulk-invite-projects')).toBeInTheDocument();
+    // Disabled until a user, a project and a role are chosen — so the control
+    // cannot post an empty cross product the moment it is opened.
+    expect(screen.getByTestId('bulk-invite-submit')).toBeDisabled();
+    expect(writes()).toHaveLength(0);
+  });
 });
