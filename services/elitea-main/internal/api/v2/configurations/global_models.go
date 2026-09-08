@@ -371,11 +371,11 @@ func globalModelSectionNames() []string {
 // rewriteGlobalModelBody forces `shared`, derives `section` and validates the
 // credential link.
 //
-// It shares the buffering, the size bound and the shared-flag rule with the
-// provider surface — see rewriteGlobalProviderBody for why each is done before
-// the delegated handler reads a byte.
+// It shares the buffering, the size bound, the shared-flag rule and the label
+// completion with the provider surface — see rewriteGlobalProviderBody for why
+// each is done before the delegated handler reads a byte.
 func (h *Handler) rewriteGlobalModelBody(
-	w http.ResponseWriter, r *http.Request, requireType bool,
+	w http.ResponseWriter, r *http.Request, creating bool,
 ) (*http.Request, bool) {
 	body, ok := decodeGlobalBody(w, r)
 	if !ok {
@@ -385,7 +385,7 @@ func (h *Handler) rewriteGlobalModelBody(
 		return nil, false
 	}
 
-	modelType, ok := admitGlobalModelType(w, body, requireType)
+	modelType, ok := admitGlobalModelType(w, body, creating)
 	if !ok {
 		return nil, false
 	}
@@ -400,6 +400,12 @@ func (h *Handler) rewriteGlobalModelBody(
 
 	if !h.admitGlobalModelCredential(w, r, body) {
 		return nil, false
+	}
+	// The model dialog has no label field either — see completeGlobalRowLabel
+	// in global_providers.go, which both surfaces share along with the body
+	// bound and the shared-flag rule.
+	if creating {
+		completeGlobalRowLabel(body)
 	}
 	return encodeGlobalBody(w, r, body)
 }
