@@ -314,6 +314,9 @@ test('S2: a share link opens for a reader with no session, and dies when it is r
 // legacy use case: pin a conversation to the top of the rail, and unpin it
 // ─────────────────────────────────────────────────────────────────────────────
 test('S3: pin moves the conversation into the sidebar\'s pinned group on the server, and unpin takes it out', async ({ page }) => {
+  // The same arithmetic S1 states: a chat page load and two 20 s server polls
+  // do not fit in the 30 s default.
+  test.setTimeout(120_000);
   const conversationId = await createConversation(page.request, uniqueName('pin'));
   try {
     expect(await readPinnedIds(page)).not.toContain(conversationId);
@@ -354,6 +357,9 @@ test('S3: pin moves the conversation into the sidebar\'s pinned group on the ser
 // the only way a missing feature stops reading like a passing suite.
 // ─────────────────────────────────────────────────────────────────────────────
 test('S4: the Export entry is present but does nothing — the port has no conversation export', async ({ page }) => {
+  // As S1: measured running out of the 30 s default in the cleanup call, which
+  // is a report about the clock rather than about the export entry.
+  test.setTimeout(120_000);
   const conversationId = await createConversation(page.request, uniqueName('export'));
   try {
     await openChat(page);
