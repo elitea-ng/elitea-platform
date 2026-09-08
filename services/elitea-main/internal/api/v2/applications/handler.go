@@ -1011,6 +1011,22 @@ func (h *Handler) UpdateVersion(w http.ResponseWriter, r *http.Request) {
 	if starters, ok := body["conversation_starters"].([]any); ok {
 		v.ConversationStarters = starters
 	}
+	// `meta` on a version save is a PATCH, not the whole column.
+	//
+	// The repository MERGES what arrives here into the stored object
+	// (infra/db/repos/applications.go, UpdateVersion), and this branch is
+	// half of the reason it has to. The other half is the `variables` fold
+	// below, which builds a `meta` out of nothing when the body carries no
+	// `meta` key at all.
+	//
+	// Neither one carries the keys it is not about. The agent editor sends
+	// `{step_limit, internal_tools}`; the fold sends `{variables}`; the
+	// stored column also holds `icon_meta` and the three fork-provenance
+	// keys. While the repository replaced the column, an ordinary save
+	// therefore destroyed every key the client did not happen to model —
+	// `step_limit` included, which is one of the gates the Rust runtime
+	// admits a stored agent on, so an agent could be edited into being
+	// unrunnable by a request that answered 201.
 	if meta, ok := body["meta"].(map[string]any); ok {
 		v.Meta = meta
 	}
@@ -1037,6 +1053,11 @@ func (h *Handler) UpdateVersion(w http.ResponseWriter, r *http.Request) {
 	// — reports what was actually saved. It must run AFTER the `meta`
 	// assignment above or the client's stale `meta.variables` (which it
 	// spreads from the stored blob) would win over the edit.
+	//
+	// When the body carries no `meta` key this builds a ONE-KEY object. It
+	// is a patch and the repository merges it; it was a whole-column write,
+	// which is how a save of the variables alone erased `step_limit`,
+	// `icon_meta` and the fork provenance.
 	if hasVariables {
 		if v.Meta == nil {
 			v.Meta = map[string]any{}

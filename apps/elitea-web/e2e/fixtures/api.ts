@@ -205,6 +205,310 @@ export async function deleteAgent(
   );
 }
 
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * THE AGENT-VERSION WRITE CONTRACT
+ *
+ * `createAgent` above is the smallest agent that exists. The helpers below are
+ * for the journeys that are ABOUT the version write itself, and they exist
+ * because that body has three properties a hand-rolled literal keeps getting
+ * wrong:
+ *
+ *  1. PRESENCE IS THE CONTRACT. `name`, `instructions`, `meta`, `variables`
+ *     and `tags` each mean something different when the key is ABSENT than
+ *     when it is present and empty — an absent key leaves the stored value
+ *     alone, an empty one clears it. A builder that always emits every key
+ *     cannot express half the cases, and one that emits `undefined` sends
+ *     `null` over the wire, which is a third meaning again. `agentVersionBody`
+ *     therefore omits what the caller did not name.
+ *  2. `variables` AND `meta` ARE THE SAME COLUMN. Variables have no column of
+ *     their own; the server folds them into `meta`. So a body that sends
+ *     `variables` and no `meta` is the exact shape that used to destroy the
+ *     rest of that column.
+ *  3. `llm_settings.model_project_id` NAMES A PROJECT, not a model. It is the
+ *     project the model is published in, and the create path refuses one that
+ *     does not exist.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/** One version variable, in the shape both the write and the read use. */
+export interface VersionVariableInput {
+  readonly name: string;
+  readonly value: string;
+}
+
+/** One topical tag. `data` is the free-form blob pylon's tag model carries. */
+export interface VersionTagInput {
+  readonly name: string;
+  readonly data?: Readonly<Record<string, unknown>>;
+}
+
+/** The model reference a version carries, as `llm_settings`. */
+export interface VersionModelInput {
+  readonly modelName: string;
+  /** The PROJECT the model is published in — not the model's own id. */
+  readonly modelProjectId?: string;
+  readonly temperature?: number;
+  readonly maxTokens?: number;
+}
+
+/**
+ * Everything a version write can carry. Every field is optional on purpose:
+ * an omitted one is omitted from the body, which is the only way to write the
+ * "leave the stored value alone" half of the contract.
+ */
+export interface AgentVersionInput {
+  readonly name?: string;
+  readonly agentType?: string;
+  readonly instructions?: string;
+  readonly welcomeMessage?: string;
+  readonly conversationStarters?: readonly string[];
+  readonly variables?: readonly VersionVariableInput[];
+  readonly tags?: readonly VersionTagInput[];
+  /** A PATCH of the version's meta bag — the server merges it, key by key. */
+  readonly meta?: Readonly<Record<string, unknown>>;
+  readonly model?: VersionModelInput;
+  /** Ids the id-guard cases send. Only a refusal journey needs them. */
+  readonly id?: string;
+  readonly applicationId?: string;
+}
+
+/** The version write body, carrying only the keys the caller named. */
+export function agentVersionBody(version: AgentVersionInput): Record<string, unknown> {
+  const body: Record<string, unknown> = {};
+  if (version.id !== undefined) body['id'] = version.id;
+  if (version.applicationId !== undefined) body['application_id'] = version.applicationId;
+  if (version.name !== undefined) body['name'] = version.name;
+  if (version.agentType !== undefined) body['agent_type'] = version.agentType;
+  if (version.instructions !== undefined) body['instructions'] = version.instructions;
+  if (version.welcomeMessage !== undefined) body['welcome_message'] = version.welcomeMessage;
+  if (version.conversationStarters !== undefined) {
+    body['conversation_starters'] = [...version.conversationStarters];
+  }
+  if (version.variables !== undefined) {
+    body['variables'] = version.variables.map((variable) => ({
+      name: variable.name,
+      value: variable.value,
+    }));
+  }
+  if (version.tags !== undefined) {
+    body['tags'] = version.tags.map((tag) => ({ name: tag.name, data: tag.data ?? {} }));
+  }
+  if (version.meta !== undefined) body['meta'] = { ...version.meta };
+  if (version.model !== undefined) {
+    const llm: Record<string, unknown> = { model_name: version.model.modelName };
+    if (version.model.modelProjectId !== undefined) {
+      llm['model_project_id'] = version.model.modelProjectId;
+    }
+    if (version.model.temperature !== undefined) llm['temperature'] = version.model.temperature;
+    if (version.model.maxTokens !== undefined) llm['max_tokens'] = version.model.maxTokens;
+    body['llm_settings'] = llm;
+  }
+  return body;
+}
+
+/**
+ * Create an agent whose first version is exactly what the caller asked for.
+ *
+ * `createAgent` above hard-codes that version, which is right for the twenty
+ * journeys that only need an agent to exist. This one is for the journeys
+ * whose subject IS the version — the ones that seed a full `meta` and then
+ * assert what an ordinary save did to it.
+ */
+export async function createAgentWithVersion(
+  request: APIRequestContext,
+  name: string,
+  version: AgentVersionInput,
+  projectId: string = DEFAULT_PROJECT_ID,
+): Promise<CreatedAgent> {
+  const path = `/elitea_core/applications/prompt_lib/${projectId}`;
+  const response = await request.post(`${API_BASE}${path}`, {
+    data: {
+      name,
+      description: `${AUTOTEST_PREFIX}version contract fixture`,
+      type: 'agent',
+      versions: [agentVersionBody({ name: 'base', agentType: 'openai', ...version })],
+    },
+  });
+  if (!response.ok()) {
+    throw new Error(
+      `createAgentWithVersion: POST ${path} -> ${response.status()}: ` +
+        `${(await response.text()).slice(0, 300)}`,
+    );
+  }
+  const body = (await response.json()) as {
+    id?: unknown;
+    version_details?: { id?: unknown };
+  };
+  const id: unknown = body.id;
+  const versionId: unknown = body.version_details?.id;
+  if (typeof id !== 'string' || typeof versionId !== 'string') {
+    throw new Error(
+      `createAgentWithVersion: the create answered no id/version_details.id: ` +
+        `${JSON.stringify(body).slice(0, 300)}`,
+    );
+  }
+  return { id, versionId };
+}
+
+/** One version as `GET /version/...` serves it — the editor's own reload. */
+export interface StoredVersionDetails {
+  readonly id: string;
+  readonly applicationId: string;
+  readonly name: string;
+  readonly status: string;
+  readonly agentType: string;
+  readonly instructions: string;
+  readonly welcomeMessage: string;
+  readonly llmSettings: Record<string, unknown>;
+  /** The version's key bag: step_limit, icon_meta, variables, fork provenance. */
+  readonly meta: Record<string, unknown>;
+  readonly variables: readonly VersionVariableInput[];
+  readonly tags: readonly { readonly id: string; readonly name: string }[];
+  readonly tools: readonly Record<string, unknown>[];
+  readonly authorId: string;
+}
+
+function versionDetailsFrom(body: Record<string, unknown>): StoredVersionDetails {
+  const llm = (body['llm_settings'] as Record<string, unknown> | null) ?? {};
+  const meta = (body['meta'] as Record<string, unknown> | null) ?? {};
+  const variables = (body['variables'] as readonly Record<string, unknown>[] | null) ?? [];
+  const tags = (body['tags'] as readonly Record<string, unknown>[] | null) ?? [];
+  const tools = (body['tools'] as readonly Record<string, unknown>[] | null) ?? [];
+  return {
+    id: String(body['id'] ?? ''),
+    applicationId: String(body['application_id'] ?? ''),
+    name: String(body['name'] ?? ''),
+    status: String(body['status'] ?? ''),
+    agentType: String(body['agent_type'] ?? ''),
+    instructions: String(body['instructions'] ?? ''),
+    welcomeMessage: String(body['welcome_message'] ?? ''),
+    llmSettings: llm,
+    meta,
+    variables: variables.map((row) => ({
+      name: String(row['name'] ?? ''),
+      value: String(row['value'] ?? ''),
+    })),
+    tags: tags.map((row) => ({ id: String(row['id'] ?? ''), name: String(row['name'] ?? '') })),
+    tools,
+    authorId: String(body['author_id'] ?? ''),
+  };
+}
+
+/**
+ * Read one version back the way the agent editor reloads it.
+ *
+ * Asserting on THIS and not on the write's own 201 echo is the point: the
+ * echo is built in Go from the value the handler decided to send, so a write
+ * that never reached the column answers a correct-looking echo. Only the read
+ * goes back to the row.
+ */
+export async function readVersion(
+  request: APIRequestContext,
+  applicationId: string,
+  versionId: string,
+  projectId: string = DEFAULT_PROJECT_ID,
+): Promise<StoredVersionDetails> {
+  const url =
+    `${API_BASE}/elitea_core/version/prompt_lib/${projectId}/${applicationId}/${versionId}`;
+  const response = await request.get(url);
+  if (!response.ok()) {
+    throw new Error(
+      `readVersion: GET ${url} -> ${response.status()}${await describeRefusal(response)}\n` +
+        `${(await response.text()).slice(0, 300)}`,
+    );
+  }
+  return versionDetailsFrom((await response.json()) as Record<string, unknown>);
+}
+
+/**
+ * The project's `X-SECRET` value, resolved from the project's own vault.
+ *
+ * The expanded version-details read is gated on this header, and the value is
+ * per project and generated at boot — so a journey that wanted a literal
+ * would need one configured per environment, and would silently start
+ * asserting "a wrong header is refused" everywhere the literal went stale.
+ * Reading it makes the journey portable and keeps the refusal case honest.
+ */
+export async function resolveProjectSecretHeader(
+  request: APIRequestContext,
+  projectId: string = DEFAULT_PROJECT_ID,
+): Promise<string> {
+  const url = `${API_BASE}/secrets/secret/default/${projectId}/secrets_header_value`;
+  const response = await request.get(url);
+  if (!response.ok()) {
+    throw new Error(
+      `resolveProjectSecretHeader: GET ${url} -> ${response.status()}. The project vault holds ` +
+        `no secrets_header_value; cmd/elitea-main backfills one at boot.` +
+        `${await describeRefusal(response)}`,
+    );
+  }
+  const body = (await response.json()) as { value?: unknown };
+  const value = typeof body.value === 'string' ? body.value : '';
+  if (value === '') {
+    throw new Error('resolveProjectSecretHeader: the vault answered an empty secrets_header_value');
+  }
+  return value;
+}
+
+/**
+ * The EXPANDED version details — the read the runtime and the SDK make.
+ *
+ * It is a PATCH on the version path, not a GET (the route is a read that
+ * carries a header, and pylon shaped it that way), and it is gated on the
+ * project's `X-SECRET`. Reading a version through it as well as through
+ * `readVersion` is what says a stored value reaches the RUNTIME, not only the
+ * editor: they are two different projections of the same row.
+ */
+export async function readVersionExpanded(
+  request: APIRequestContext,
+  applicationId: string,
+  versionId: string,
+  secretHeader: string,
+  projectId: string = DEFAULT_PROJECT_ID,
+): Promise<Record<string, unknown>> {
+  const url =
+    `${API_BASE}/elitea_core/version/prompt_lib/${projectId}/${applicationId}/${versionId}`;
+  const response = await request.patch(url, { headers: { 'X-SECRET': secretHeader } });
+  if (!response.ok()) {
+    throw new Error(
+      `readVersionExpanded: PATCH ${url} -> ${response.status()}: ` +
+        `${(await response.text()).slice(0, 300)}`,
+    );
+  }
+  return (await response.json()) as Record<string, unknown>;
+}
+
+/** One row of the project's tag list. */
+export interface StoredTag {
+  readonly id: string;
+  readonly name: string;
+}
+
+/**
+ * The project's tags, as the tag control reads them.
+ *
+ * The list is filtered by NAME rather than paged: this reads the whole set
+ * because the caller matches its own `autotest_` names out of it, and the
+ * route offers no name filter to narrow with.
+ */
+export async function readTags(
+  request: APIRequestContext,
+  projectId: string = DEFAULT_PROJECT_ID,
+): Promise<readonly StoredTag[]> {
+  const url = `${API_BASE}/elitea_core/tags/prompt_lib/${projectId}`;
+  const response = await request.get(url);
+  if (!response.ok()) {
+    throw new Error(
+      `readTags: GET ${url} -> ${response.status()}: ${(await response.text()).slice(0, 300)}`,
+    );
+  }
+  const body = (await response.json()) as { rows?: readonly Record<string, unknown>[] };
+  return (body.rows ?? []).map((row) => ({
+    id: String(row['id'] ?? ''),
+    name: String(row['name'] ?? ''),
+  }));
+}
+
 /** What one sweep actually did, so a caller can assert on the work and not on the silence. */
 export interface AutotestSweepReport {
   /** Rows deleted, per kind. */

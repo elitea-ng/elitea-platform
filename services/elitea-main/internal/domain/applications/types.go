@@ -74,7 +74,14 @@ type Version struct {
 	WelcomeMessage       string         `json:"welcome_message,omitempty"`
 	LLMSettings          map[string]any `json:"llm_settings,omitempty"`
 	ConversationStarters []any          `json:"conversation_starters,omitempty"`
-	Meta                 map[string]any `json:"meta,omitempty"`
+	// Meta is the version's key bag: `step_limit`, `icon_meta`,
+	// `internal_tools`, `variables` (which have no column of their own) and
+	// the three fork-provenance keys. Each key belongs to a different
+	// feature and no client sends them all, so on the UPDATE path this map
+	// is a PATCH: the repository merges it into the stored object key by
+	// key rather than replacing the column. Nil is still "the caller sent
+	// nothing", and the stored object is then left alone.
+	Meta map[string]any `json:"meta,omitempty"`
 	// PipelineSettings is the pipeline flow-graph layout ({nodes, edges,
 	// orientation, layout_version}) stored verbatim in the
 	// application_versions.pipeline_settings jsonb column. Nil means "the

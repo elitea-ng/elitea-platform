@@ -684,12 +684,46 @@ func (r *ApplicationsRepo) UpdateVersion(ctx context.Context, projectID, applica
 		}
 		appendSet("conversation_starters = $%d::jsonb", encoded)
 	}
+	// `meta` MERGES, key by key. Every other jsonb column above replaces,
+	// and this one used to as well — `meta = $n::jsonb`, a whole-column
+	// overwrite.
+	//
+	// WHY THE DIFFERENCE. `meta` is not one feature's object. It is a bag of
+	// independent keys, each written by a different part of the product and
+	// read by a different one:
+	//
+	//	step_limit         the number the Rust runtime admits an agent on
+	//	icon_meta          the agent's icon
+	//	internal_tools     the built-in tools the version enables
+	//	variables          the version's variables (they have no column)
+	//	parent_entity_id   ┐
+	//	parent_project_id  ├ the fork provenance
+	//	parent_author_id   ┘
+	//
+	// NO client sends the whole bag. The agent editor's own draft models
+	// exactly two of those keys (apps/elitea-web/src/entities/
+	// application-form/model/initialValues.ts: `{step_limit,
+	// internal_tools}`), and the HTTP layer synthesises a one-key
+	// `{"variables": …}` for a body that carries `variables` and no `meta`
+	// at all. Under the replace, an ordinary save therefore wrote a two-key
+	// or one-key object over a six-key column and every absent key was
+	// destroyed — silently, behind a 201. `step_limit` is one of the four
+	// gates a stored agent must pass to be admitted by the Rust runtime, so
+	// editing an agent's variables could make it unrunnable.
+	//
+	// A merge cannot express "delete this key", and nothing needs to: every
+	// key above is owned by the feature that writes it, and a feature clears
+	// its own key by sending an empty value for it (`{"variables": []}`
+	// still replaces the whole array, because the merge is over TOP-LEVEL
+	// keys). The concatenation happens inside the UPDATE, so the read and
+	// the write are one statement and two concurrent saves cannot interleave
+	// a read-modify-write.
 	if v.Meta != nil {
 		encoded, err := encodeJSONObject(v.Meta)
 		if err != nil {
 			return applications.Version{}, err
 		}
-		appendSet("meta = $%d::jsonb", encoded)
+		appendSet("meta = COALESCE(meta, '{}'::jsonb) || $%d::jsonb", encoded)
 	}
 	if v.PipelineSettings != nil {
 		encoded, err := encodeJSONObject(v.PipelineSettings)
