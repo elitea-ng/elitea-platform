@@ -5,6 +5,20 @@
  * Renders a syntax-highlighted code block (or unformatted content for
  * diagrams/tables) with an edit button that opens the canvas editor and a
  * copy button that copies the content to the clipboard.
+ *
+ * ── THE OPENER (issue 853) ────────────────────────────────────────────────
+ * This component was ported complete and mounted by NOTHING, which is the
+ * whole of that issue: a canvas carved out of an answer could be created,
+ * edited and saved through the API, and no pixel on the chat surface could
+ * reach it. `ApplicationAnswer` now renders one of these for every
+ * `canvas_message` item in a stored answer, so the block IS the opener.
+ *
+ * Shape follows the legacy transcript rather than inventing one: a right-
+ * aligned toolbar row (open + copy) above the canvas content, no wrapping
+ * card. The one addition is `name` — the legacy row shows the canvas title
+ * only while somebody is editing it, which leaves a stored canvas with no
+ * label at all; the stored `item_details.name` ("Edit code", "Edit table")
+ * is rendered instead, so the affordance says what it opens.
  */
 import { useCallback, useMemo, useState } from 'react';
 
@@ -16,12 +30,15 @@ import Tooltip from '@mui/material/Tooltip';
 
 import type { CanvasEditorPresence } from '@/entities/canvas/model/types';
 import { realCanvasEditors } from '@/entities/canvas/model/selectors';
+import { t } from '@/shared/i18n';
 
 import { EditingPlaceholder } from '../EditingPlaceholder';
 
 export interface CanvasProps {
   /** The content to display — code for `type=code`, mermaid for diagrams, markdown for tables. */
   readonly content?: string;
+  /** The canvas's stored name (`item_details.name`), captioned on the toolbar row. */
+  readonly name?: string;
   /** Called when the user clicks the edit button — receives the canvas edit payload. */
   readonly onEdit?: (payload: CanvasEditPayload) => void;
   /** Canvas identity and positioning — bundled to stay within §3.5 prop/deps budget. */
@@ -90,6 +107,7 @@ export interface CanvasEditPayload {
  */
 export function Canvas({
   content = '',
+  name,
   onEdit,
   canvasRef,
   selectedCodeBlockInfo,
@@ -127,18 +145,18 @@ export function Canvas({
 
   const editingTitle = useMemo(
     () => {
-      if (type === 'code' && language !== 'mermaid') return 'Code editing...';
-      if (type === 'diagram' || language === 'mermaid') return 'Diagram editing...';
-      return 'Table editing...';
+      if (type === 'code' && language !== 'mermaid') return t('features.chatMessages.canvas.block.editingCode', 'Code editing...');
+      if (type === 'diagram' || language === 'mermaid') return t('features.chatMessages.canvas.block.editingDiagram', 'Diagram editing...');
+      return t('features.chatMessages.canvas.block.editingTable', 'Table editing...');
     },
     [language, type],
   );
 
   const editButtonTitle = useMemo(
     () => {
-      if (type === 'code' && language !== 'mermaid') return 'Edit code';
-      if (type === 'diagram' || language === 'mermaid') return 'Edit diagram';
-      return 'Edit table';
+      if (type === 'code' && language !== 'mermaid') return t('features.chatMessages.canvas.block.openCode', 'Edit code');
+      if (type === 'diagram' || language === 'mermaid') return t('features.chatMessages.canvas.block.openDiagram', 'Edit diagram');
+      return t('features.chatMessages.canvas.block.openTable', 'Edit table');
     },
     [language, type],
   );
@@ -193,49 +211,67 @@ export function Canvas({
     return <EditingPlaceholder title={editingTitle} />;
   }
 
+  // The label the toolbar carries: whoever else is editing wins, because that
+  // is the state the reader must not act on blindly; otherwise the canvas's
+  // own stored name, and only then the generic verb.
+  const blockTitle = realEditors.length > 0 ? editingTitle : (name ?? editButtonTitle);
+
   return (
-    <Box sx={{ width: '100%' }}>
+    <Box sx={{ width: '100%' }} data-testid="canvas-block">
       {/* Toolbar row */}
       <Box
         sx={{
           width: '100%',
           display: 'flex',
           flexDirection: 'row',
-          justifyContent: 'flex-end',
+          justifyContent: 'space-between',
           alignItems: 'center',
           padding: '8px 0px 8px 8px',
           gap: '8px',
         }}
       >
-        {realEditors.length > 0 && (
-          <Box
-            sx={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'flex-start',
-              gap: '8px',
-            }}
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-start', gap: '8px', minWidth: 0 }}>
+          {/* TODO: AuthorContainer — avatar row showing active editors */}
+          <Typography
+            variant="bodySmall"
+            color="text.primary"
+            data-testid="canvas-block-title"
+            sx={{ overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}
           >
-            {/* TODO: AuthorContainer — avatar row showing active editors */}
-            <Typography variant="bodySmall" color="text.primary">
-              {editingTitle}
-            </Typography>
-          </Box>
-        )}
+            {blockTitle}
+          </Typography>
+        </Box>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
         {onEdit && (
-          <Tooltip title={realEditors.length > 0 ? 'Watch editing' : editButtonTitle} placement="top">
+          <Tooltip title={realEditors.length > 0 ? t('features.chatMessages.canvas.block.watch', 'Watch editing') : editButtonTitle} placement="top">
             <span>
-              <IconButtonAny variant="elitea" color="tertiary" size="small" onClick={onClickEdit} disabled={isStreaming}>
+              <IconButtonAny
+                variant="elitea"
+                color="tertiary"
+                size="small"
+                onClick={onClickEdit}
+                disabled={isStreaming}
+                data-testid="canvas-block-open"
+                aria-label={editButtonTitle}
+              >
                 ✏️
               </IconButtonAny>
             </span>
           </Tooltip>
         )}
-        <Tooltip title="Copy code" placement="top">
-          <IconButtonAny variant="elitea" color="tertiary" size="small" onClick={onCopy}>
+        <Tooltip title={t('features.chatMessages.canvas.block.copy', 'Copy code')} placement="top">
+          <IconButtonAny
+            variant="elitea"
+            color="tertiary"
+            size="small"
+            onClick={onCopy}
+            data-testid="canvas-block-copy"
+            aria-label={t('features.chatMessages.canvas.block.copy', 'Copy code')}
+          >
             📋
           </IconButtonAny>
         </Tooltip>
+        </Box>
       </Box>
 
       {/* Content area */}
@@ -275,15 +311,21 @@ function CanvasContent({
   return (
     <Box
       component="pre"
-      sx={{
-        background: '#f5f5f5',
-        borderRadius: '0.5rem',
+      data-testid="canvas-block-content"
+      // Theme tokens, not the port's literal `#f5f5f5`: this component was
+      // mounted by nothing until issue 853, so a ground that only works in the
+      // light theme had never been rendered against the dark one.
+      sx={(theme) => ({
+        background: theme.vars.palette.background.aiAnswerBkg,
+        color: theme.vars.palette.text.secondary,
+        borderRadius: theme.vars.shape.radiusMd,
+        margin: 0,
         padding: '1rem',
         overflow: 'auto',
         whiteSpace: 'pre-wrap',
         fontSize: '0.875rem',
         fontFamily: 'monospace',
-      }}
+      })}
     >
       {content || ' '}
     </Box>

@@ -34,7 +34,7 @@ import {
   buildUserParticipant,
   deriveChatBoxIds,
   deriveChatBoxInputState,
-  flattenChatBoxProps,
+  buildCanvasProps, flattenChatBoxProps,
   resolveConversationStarters, shouldDisableClearChat,
 } from './ChatBox.helpers';
 import type { ChatBoxEditorCallbacks } from './ChatBox.helpers';
@@ -339,7 +339,7 @@ const ChatBoxInner = memo(function ChatBox({
             onContinueMcpExecution: handleContinueMcpExecution,
             onContinueTokenLimitExecution: handleContinueTokenLimit,
           }}
-          tts={buildTtsProps(readAloud)}
+          tts={buildTtsProps(readAloud)} canvas={buildCanvasProps(editorCallbacks)}
         />
         {state.shouldShowStarters && (
           <ChatConversationStarters

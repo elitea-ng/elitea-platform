@@ -8,6 +8,7 @@ import type { ComponentProps } from 'react';
 
 import type { Participant } from '@/entities/participant';
 import type { NewChatInput } from '@/features/chat-input';
+import type { CanvasEditPayload, ChatMessageListCanvas, CodeBlockInfo } from '@/features/chat-messages';
 import type { MessageGroupWire } from '@/entities/message';
 
 import type { ChatBoxHandlerDeps } from './hooks/useChatBoxHandlers';
@@ -237,12 +238,18 @@ export interface ChatBoxEditorCallbacks {
   readonly onShowPipelineEditor?: (participant: Participant) => void;
   readonly onCloseAgentEditor?: () => void;
   readonly onClosePipelineEditor?: () => void;
+  /** The transcript's canvas opener (issue 853) and the block already open in the editor. Deliberately NOT resolved by `resolveEditorCallbacks` below — that result is spread into `NewChatInput`'s `agentEditor` props, and the composer knows nothing about a canvas. `buildCanvasProps` reads them instead. */
+  readonly onShowCanvasEditor?: (payload: CanvasEditPayload) => void;
+  readonly selectedCanvasBlock?: CodeBlockInfo | undefined;
 }
 
 function noop(): void {}
 
+/** `ChatMessageList`'s `canvas` group. Built here rather than inline: `ChatBox` is at its §3.5 complexity ceiling, and two more optional reads there breach it. */
+export const buildCanvasProps = (editorCallbacks: ChatBoxEditorCallbacks | undefined): ChatMessageListCanvas => ({ onEdit: editorCallbacks?.onShowCanvasEditor, selected: editorCallbacks?.selectedCanvasBlock });
+
 /** Resolves `editorCallbacks`' 4 optional fields down to real-or-noop, extracted purely to keep `buildAgentEditorProps`'s own cyclomatic complexity under the oxlint budget (12) — 4 more `??` branches inline would have pushed it to 13. */
-function resolveEditorCallbacks(editorCallbacks: ChatBoxEditorCallbacks | undefined): Required<ChatBoxEditorCallbacks> {
+function resolveEditorCallbacks(editorCallbacks: ChatBoxEditorCallbacks | undefined): Required<Omit<ChatBoxEditorCallbacks, 'onShowCanvasEditor' | 'selectedCanvasBlock'>> {
   return {
     onShowAgentEditor: editorCallbacks?.onShowAgentEditor ?? noop,
     onShowPipelineEditor: editorCallbacks?.onShowPipelineEditor ?? noop,

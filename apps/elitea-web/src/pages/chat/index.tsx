@@ -37,6 +37,7 @@ import Box from '@mui/material/Box';
 
 import { conversationNavigation, useChatSessionStore } from '@/entities/conversation';
 import { useDeleteParticipantMutation, type Participant } from '@/entities/participant';
+import type { CanvasEditPayload, CodeBlockInfo } from '@/features/chat-messages';
 import { AddNewUserModal, canParticipantBeActiveInChat, ParticipantsWrapper, useLocalActiveParticipant } from '@/features/chat-participants';
 import type { ChatBoxProps } from '@/widgets/chat-box';
 import { ChatBox, toParticipant } from '@/widgets/chat-box';
@@ -135,6 +136,9 @@ export interface ChatEditorCallbacks {
   readonly onShowToolkitEditor?: (participant: Participant) => void;
   readonly onCloseAgentEditor?: () => void;
   readonly onClosePipelineEditor?: () => void;
+  /** Opens the canvas editor for a stored `canvas_message` block in the transcript (issue 853), and the block already open in it. Forwarded to `ChatBox` untouched, like every other member of this bag. */
+  readonly onShowCanvasEditor?: (payload: CanvasEditPayload) => void;
+  readonly selectedCanvasBlock?: CodeBlockInfo | undefined;
 }
 
 /** @public */
