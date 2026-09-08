@@ -119,7 +119,7 @@ where
         &self,
         fresh: FreshToolkitDelivery,
     ) -> Result<ToolkitProcessOutcome, ToolkitProcessError> {
-        match prepare_toolkit_output(&self.output, fresh)
+        match prepare_toolkit_output(&self.output, fresh, self.clock.now_unix_millis())
             .await
             .map_err(ToolkitProcessError::OutputPreflight)?
         {

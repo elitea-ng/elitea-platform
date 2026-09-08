@@ -48,6 +48,7 @@ Detailed ledgers:
 
 - `main-sync-20260908.md` records the main integration and rehearsal cutover gate.
 - `toolkit-test.md` records required toolkit Test parity under `TKTEST-RUST-01`.
+- `toolkit-terminal-recovery.md` records direct-read terminal takeover and the open horizontal-recovery gates.
 - `agent-runtime.md` maps language-neutral worker delivery and agent execution.
 - `pipeline-nodes.md` maps every current Python pipeline node/edge branch and
   the capability-closed future explicit pipeline `parallel` node core.

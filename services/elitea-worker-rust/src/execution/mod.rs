@@ -29,6 +29,8 @@ mod invocation_supervisor_tests;
 mod output_delivery_tests;
 #[cfg(test)]
 mod redis_delivery_tests;
+#[cfg(test)]
+mod toolkit_output_tests;
 
 pub use agent_delivery::{
     AgentDeliveryCompletion, AgentDeliveryCompletionKind, AgentDeliveryError, AgentDeliveryRoute,

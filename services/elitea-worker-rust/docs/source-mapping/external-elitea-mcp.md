@@ -141,6 +141,10 @@ claim-bound materialization, immutable toolkit and argument identity, runtime
 read-only enforcement, bounded invocation, typed authorization failure, output
 binding, Redis retirement, and failure settlement.
 
+The 2026-09-08 recovery slice adds validated old-fence terminal takeover for direct reads.
+It preserves computed results before the deadline and produces a canonical failure after expiry.
+See [toolkit-terminal-recovery.md](toolkit-terminal-recovery.md) for component evidence and open process-replacement gates.
+
 The local standalone stack proved the full external path on 2026-09-04. An
 external `tools/list` discovered one temporarily opted-in OpenAPI operation.
 `tools/call` traversed Main admission, signed Redis delivery, Rust claim and

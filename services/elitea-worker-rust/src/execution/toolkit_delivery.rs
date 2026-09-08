@@ -69,6 +69,19 @@ pub(super) struct FreshToolkitDelivery {
     claim: AcceptedAgentClaim,
 }
 
+#[cfg(test)]
+pub(super) fn test_fresh_toolkit_delivery(
+    delivery: RedisCommandDelivery,
+    verified: VerifiedToolkitExecuteReadCommand,
+    claim: AcceptedAgentClaim,
+) -> FreshToolkitDelivery {
+    FreshToolkitDelivery {
+        delivery,
+        verified,
+        claim,
+    }
+}
+
 impl FreshToolkitDelivery {
     pub(super) fn spool_identity(&self) -> ExecutionSpoolIdentity {
         let command = self.verified.command();
@@ -115,6 +128,15 @@ impl FreshToolkitDelivery {
             ));
         }
         Ok(())
+    }
+
+    pub(super) fn terminal_replacement(
+        &self,
+        previous: &ExecutionOutputFrameV1,
+        now_unix_millis: i64,
+    ) -> Result<ExecutionOutputFrameV1, ProtocolError> {
+        self.claim
+            .toolkit_terminal_replacement(&self.verified, previous, now_unix_millis)
     }
 
     pub(super) fn into_parts(

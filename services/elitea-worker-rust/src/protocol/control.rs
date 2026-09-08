@@ -314,6 +314,48 @@ impl AcceptedAgentClaim {
             && result.request_content_digest.as_ref() == content.digest.as_ref()
     }
 
+    /// Bind a validated terminal to the replacement claim without invocation.
+    /// Only a claim created after the signed deadline can replace its outcome.
+    pub(crate) fn toolkit_terminal_replacement(
+        &self,
+        verified: &VerifiedToolkitExecuteReadCommand,
+        previous: &ExecutionOutputFrameV1,
+        occurred_at_unix_millis: i64,
+    ) -> Result<ExecutionOutputFrameV1, ProtocolError> {
+        let deadline = verified.command().deadline_unix_millis;
+        let Some(deadline_micros) = deadline.checked_mul(1_000) else {
+            return Err(ProtocolError::AuthorizationFailed(
+                "the direct toolkit terminal recovery is not authorized",
+            ));
+        };
+        if !self.matches_verified_command(verified)
+            || previous.sequence != next_output_sequence(self.claim_handoff_watermark)?
+        {
+            return Err(ProtocolError::AuthorizationFailed(
+                "the direct toolkit terminal recovery is not authorized",
+            ));
+        }
+        if self.claim_started_at_unix_micros < deadline_micros {
+            let mut replacement = previous.clone();
+            replacement.fence = Some(self.fence.clone());
+            replacement.claim_handoff_watermark = self.claim_handoff_watermark;
+            return Ok(replacement);
+        }
+        if occurred_at_unix_millis < deadline {
+            return Err(ProtocolError::AuthorizationFailed(
+                "the direct toolkit deadline recovery clock is inconsistent",
+            ));
+        }
+        build_toolkit_execute_read_terminal_output_frame(
+            verified,
+            &self.fence,
+            ToolkitExecuteReadTerminalOutput::Failure(RuntimeFailureKind::DeadlineExceeded),
+            previous.sequence,
+            occurred_at_unix_millis,
+            self.claim_handoff_watermark,
+        )
+    }
+
     /// Consume fresh business authority after a terminal spool has been
     /// admitted, retaining only the exact lease/output binding needed for
     /// replay. The input manifest is deliberately destroyed here.
@@ -2007,7 +2049,7 @@ impl<R: ControlRpc> AgentControlClient<R> {
 
 #[cfg(test)]
 pub(crate) fn test_accepted_agent_claim(
-    verified: &VerifiedAgentCommand,
+    verified: &impl VerifiedExecutionCommand,
     response: ClaimCommandResponseV1,
     workload_session_id: &str,
     producer_id: &str,
