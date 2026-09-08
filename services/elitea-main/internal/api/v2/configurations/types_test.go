@@ -57,10 +57,10 @@ func TestCurrentConfigurationTypesRouteBindsExactCurrentContract(t *testing.T) {
 		authConfig  apimw.AuthConfig
 		permissions auth.PermissionResolver
 	}{
-		"missing reader":      {authConfig: authConfig, permissions: permissions},
-		"missing principal":   {reader: reader, authConfig: apimw.AuthConfig{ForwardedIdentityVerifier: peer}, permissions: permissions},
-		"missing peer proof":  {reader: reader, authConfig: apimw.AuthConfig{PrincipalValidator: principal}, permissions: permissions},
-		"missing permissions": {reader: reader, authConfig: authConfig},
+		"missing reader":       {authConfig: authConfig, permissions: permissions},
+		"missing principal":    {reader: reader, authConfig: apimw.AuthConfig{ForwardedIdentityVerifier: peer}, permissions: permissions},
+		"no credential reader": {reader: reader, authConfig: apimw.AuthConfig{PrincipalValidator: principal}, permissions: permissions},
+		"missing permissions":  {reader: reader, authConfig: authConfig},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := handler.NewCurrentConfigurationTypesRoute(

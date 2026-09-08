@@ -62,7 +62,7 @@ func TestCurrentModelCatalogRouteBindsCurrentPathAndSafeReadPermission(t *testin
 			reader: reader, publicProjectID: 1,
 			authConfig: apimw.AuthConfig{ForwardedIdentityVerifier: peer}, permissions: permissions,
 		},
-		"missing peer proof": {
+		"no credential reader": {
 			reader: reader, publicProjectID: 1,
 			authConfig: apimw.AuthConfig{PrincipalValidator: principal}, permissions: permissions,
 		},

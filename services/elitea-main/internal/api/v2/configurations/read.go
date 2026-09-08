@@ -49,8 +49,8 @@ func NewCurrentConfigurationReadRoute(
 	authConfig apimw.AuthConfig,
 	permissions auth.PermissionResolver,
 ) (*CurrentConfigurationReadRoute, error) {
-	if reader == nil || publicProjectID <= 0 || authConfig.PrincipalValidator == nil ||
-		authConfig.ForwardedIdentityVerifier == nil || permissions == nil {
+	if reader == nil || publicProjectID <= 0 ||
+		!authConfig.CredentialPlaneComposed() || permissions == nil {
 		return nil, ErrInvalidCurrentConfigurationReadRoute
 	}
 

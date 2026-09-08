@@ -33,11 +33,15 @@ import (
 // that client, so Validator is the only token reader left. SessionSecret
 // counts because the browser session cookie is a credential the deployment
 // issues and apimw.Auth verifies with the same key.
+//
+// The predicate itself lives on apimw.AuthConfig, next to the middleware that
+// reads those fields, because the ROUTE CONSTRUCTORS ask the same question and
+// used to answer it differently: they demanded a non-nil
+// ForwardedIdentityVerifier, which only the Form document composes. This gate
+// therefore admitted an OIDC-only deployment and the constructor behind it then
+// refused, so the binary stopped at boot with "invalid ... route dependencies"
+// on exactly the deployments this gate was widened for. One definition, asked
+// in both places.
 func productionAuthenticationComposed(auth apimw.AuthConfig) bool {
-	if auth.PrincipalValidator == nil {
-		return false
-	}
-	return auth.ForwardedIdentityVerifier != nil ||
-		auth.Validator != nil ||
-		auth.SessionSecret != ""
+	return auth.CredentialPlaneComposed()
 }
