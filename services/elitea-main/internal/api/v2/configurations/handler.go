@@ -1023,6 +1023,27 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The type's own schema decides which fields a create must carry
+	// (required_fields.go). It runs FIRST, on the body as sent: a row with no
+	// label and no data used to be stored with a 201 and could then be
+	// explained by nobody — the catalogue reader treats an unlabelled model row
+	// as an error, and a credential with no data names no endpoint.
+	//
+	// An unknown type carries no schema and keeps the behaviour it had. A row
+	// filed under a section that is not the type's own is checked as a ROW and
+	// not as an instance of the type — see required_fields.go for the
+	// compatibility shape that rule exists for.
+	if entry, known := h.catalog.EntryByType(strVal(body, "type")); known {
+		depth := requiredFieldDepthRow
+		if requested := strVal(body, "section"); requested == "" || requested == entry.Section {
+			depth = requiredFieldDepthData
+		}
+		if missing := missingRequiredConfigurationFields(entry.ConfigSchema, body, depth); len(missing) > 0 {
+			apierr.WriteStatus(w, http.StatusBadRequest, requiredConfigurationFieldsMessage(missing))
+			return
+		}
+	}
+
 	dataMap, _ := body["data"].(map[string]any)
 	if dataMap == nil {
 		dataMap = map[string]any{}

@@ -33,7 +33,12 @@ import { test, expect } from '@playwright/test';
 
 import { checkA11y } from '../../fixtures/axe';
 import { BASE_URL } from '../../../playwright.config';
-import { AUTOTEST_PREFIX, DEFAULT_PROJECT_ID } from '../../fixtures/api';
+import { API_BASE, AUTOTEST_PREFIX, DEFAULT_PROJECT_ID } from '../../fixtures/api';
+import {
+  createConfiguration,
+  createEmbeddingModel,
+  deleteConfiguration,
+} from '../../fixtures/configurations';
 
 /**
  * The entry point into the credential-creation flow.
@@ -255,4 +260,132 @@ test('J19b: create a credential, verify it persisted, then delete it', async ({ 
   await expect(page).toHaveURL(/\/settings\/model-configuration(\?|$)/, { timeout: 15_000 });
   await expect(createButton).toBeEnabled({ timeout: 30_000 });
   await expect(page.getByText(unique)).toHaveCount(0);
+});
+
+/**
+ * J19d: the four kinds of configuration appear on the credential list under
+ * their OWN section, carrying the fields they were stored with — and the
+ * vector store one is usable by a toolkit.
+ *
+ * Ported by use case from the legacy API suite: its "…appear in the project's
+ * credential list" cases, one per section, plus "the shared PgVector fixture
+ * is usable by a toolkit".
+ *
+ * ─────────────────────────────────────────────────────────────────────────
+ * WHY THIS IS AN API TEST IN A UI JOURNEY FILE
+ * ─────────────────────────────────────────────────────────────────────────
+ * J19b above proves the SCREEN renders what the list answers. This proves the
+ * list answers the right rows, and it has to look at four sections at once —
+ * which through the UI would be four navigations and four pickers, none of
+ * them the subject. The two together are the claim: the server files each row
+ * under its own section, and the screen shows what it files.
+ *
+ * ─────────────────────────────────────────────────────────────────────────
+ * THE READ IS FILTERED, AND BOTH FILTERS EARN THEIR PLACE
+ * ─────────────────────────────────────────────────────────────────────────
+ * `section` is the subject. `query` is what makes the assertion safe under
+ * parallel workers: the list is paged, chromium and webkit run this file at
+ * the same time against one database, and other journeys create rows in these
+ * same sections — so "the first page of the section" is not a page this run
+ * can reason about. Filtering by the row's own unique title is.
+ *
+ * The CROSS-SECTION assertion is the discriminating one. A route that ignored
+ * `?section=` would satisfy every "my row is here" line and would put every
+ * credential under every heading — which is exactly what it used to do.
+ */
+test('J19d: each section lists its own rows, and a vector store can be linked by a toolkit', async ({
+  request,
+}) => {
+  const tag = Math.random().toString(36).slice(2, 8);
+  const azureTitle = `${AUTOTEST_PREFIX}list_azure_${tag}`;
+  const vectorTitle = `${AUTOTEST_PREFIX}list_pgvector_${tag}`;
+  const githubTitle = `${AUTOTEST_PREFIX}list_github_${tag}`;
+  const embeddingTitle = `${AUTOTEST_PREFIX}list_embed_${tag}`;
+  const created: string[] = [];
+  let toolkitId = '';
+  try {
+    const azure = await createConfiguration(request, 'ai_credentials', {
+      title: azureTitle,
+      type: 'azure_open_ai',
+      data: { api_base: 'https://autotest.invalid/openai' },
+    });
+    created.push(azure.id);
+    const vector = await createConfiguration(request, 'vectorstorage', { title: vectorTitle, shared: true });
+    created.push(vector.id);
+    const github = await createConfiguration(request, 'credentials', { title: githubTitle });
+    created.push(github.id);
+    const embedding = await createEmbeddingModel(request, { title: embeddingTitle });
+    created.push(embedding.id, embedding.credentialId);
+
+    const expectations = [
+      { section: 'ai_credentials', title: azureTitle, type: 'azure_open_ai' },
+      { section: 'vectorstorage', title: vectorTitle, type: 'pgvector' },
+      { section: 'credentials', title: githubTitle, type: 'github' },
+      { section: 'embedding', title: embeddingTitle, type: 'embedding_model' },
+    ];
+
+    for (const wanted of expectations) {
+      const response = await request.get(
+        `${API_BASE}/configurations/configurations/${DEFAULT_PROJECT_ID}` +
+          `?section=${wanted.section}&query=${encodeURIComponent(wanted.title)}`,
+      );
+      expect(response.status(), await response.text()).toBe(200);
+      const page = (await response.json()) as {
+        items?: { elitea_title?: string; label?: string; type?: string; section?: string }[];
+      };
+      const row = (page.items ?? []).find((entry) => entry.elitea_title === wanted.title);
+      expect(row, `${wanted.section}: the row this run created must be listed here`).toBeDefined();
+      expect(row?.type, `${wanted.section}: the stored type comes back with it`).toBe(wanted.type);
+      expect(row?.label, `${wanted.section}: and the label it was stored with`).toBe(wanted.title);
+      expect(row?.section, `${wanted.section}: the row is filed where it is listed`).toBe(
+        wanted.section,
+      );
+
+      // …and it is listed HERE ONLY. Every other section must answer without
+      // it, which is what tells a working filter from a route that serves the
+      // whole table under each heading.
+      for (const other of expectations.filter((entry) => entry.section !== wanted.section)) {
+        const foreign = await request.get(
+          `${API_BASE}/configurations/configurations/${DEFAULT_PROJECT_ID}` +
+            `?section=${other.section}&query=${encodeURIComponent(wanted.title)}`,
+        );
+        expect(foreign.status()).toBe(200);
+        const foreignPage = (await foreign.json()) as { items?: { elitea_title?: string }[] };
+        expect(
+          (foreignPage.items ?? []).filter((entry) => entry.elitea_title === wanted.title),
+          `${wanted.title} must not appear under ${other.section}`,
+        ).toEqual([]);
+      }
+    }
+
+    // The vector store is not only listed, it is USABLE: a toolkit may link it
+    // by title, and the save-time gate resolves that reference before it
+    // stores anything. A row the picker offers and the save rejects is the
+    // failure this half exists to catch.
+    const toolkit = await request.post(
+      `${API_BASE}/elitea_core/tools/prompt_lib/${DEFAULT_PROJECT_ID}`,
+      {
+        data: {
+          name: `${AUTOTEST_PREFIX}list_tk_${tag}`,
+          type: 'github',
+          settings: {
+            repository: `${AUTOTEST_PREFIX}org/${AUTOTEST_PREFIX}repo`,
+            github_configuration: { elitea_title: githubTitle, private: false },
+            pgvector_configuration: { elitea_title: vectorTitle, private: false },
+            selected_tools: [],
+          },
+        },
+      },
+    );
+    expect(toolkit.status(), await toolkit.text()).toBe(201);
+    toolkitId = String(((await toolkit.json()) as { id?: string | number }).id ?? '');
+    expect(toolkitId).not.toBe('');
+  } finally {
+    if (toolkitId !== '') {
+      await request
+        .delete(`${API_BASE}/elitea_core/tool/prompt_lib/${DEFAULT_PROJECT_ID}/${toolkitId}`)
+        .catch(() => {});
+    }
+    for (const id of created.reverse()) await deleteConfiguration(request, id);
+  }
 });

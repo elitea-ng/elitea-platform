@@ -1973,10 +1973,12 @@ export async function createMcpConnection(
  *
  * `github_configuration` is a configuration REFERENCE, resolved by
  * `refuseUnresolvableToolkitSettings` (`settings_validation.go:183`) whenever
- * the deployment composes the Configurations graph. The e2e stack does not set
- * `ELITEA_CONFIGURATIONS_ENABLED`, so a made-up `elitea_title` would be
- * accepted there today — and would start answering 400 on any deployment that
- * turns the graph on. One extra POST buys a fixture that is correct on both.
+ * the deployment composes the Configurations graph. The e2e stack composes it
+ * — `deploy/docker-compose.e2e-standalone.yml` sets
+ * `ELITEA_CONFIGURATIONS_ENABLED` — so a made-up `elitea_title` is answered
+ * 400 here, exactly as it is on a shipped stack. This helper made the real row
+ * before that was true, which is why turning the graph on cost its callers
+ * nothing.
  *
  * NEVER a real credential: `data` carries only the placeholder base URL below,
  * and nothing here contacts api.github.com.

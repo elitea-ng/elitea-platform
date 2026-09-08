@@ -212,6 +212,53 @@ services:
       # (src/features/chat-input/lib/hooks/useChatSkillMention.ts) read a 404.
       ELITEA_INDEX_TYPES_ENABLED: "true"
       ELITEA_APPLICATION_SKILLS_ENABLED: "true"
+      # ── The Configurations runtime, on the OIDC-only stack ───────────────
+      # It is ON because the credential surface this stack tests is otherwise
+      # only half composed, and the missing half is invisible: every stored
+      # credential check answered "Connection checking is not available right
+      # now" — an honest refusal, but one no journey can tell apart from a
+      # broken probe, so nothing here could prove a credential is ever really
+      # checked. Composing the runtime also gives this stack the reviewed
+      # configuration read routes, the model catalogue, the save-time
+      # credential gate on toolkit writes and the status_ok admission decision
+      # that the shipped stacks (docker-compose.standalone-full.yml,
+      # deploy/helm/elitea/values-standalone.yaml) have always had.
+      #
+      # The gate is the same one ELITEA_INDEX_TYPES_ENABLED above already
+      # passes: `productionAuthenticationComposed` in cmd/elitea-main/main.go —
+      # a reader of the caller's credential plus a PrincipalValidator, which
+      # the OIDC session plane supplies. This stack builds no Form document, so
+      # the flag could NOT be set here before that gate widened (#394/#395).
+      ELITEA_CONFIGURATIONS_ENABLED: "true"
+      # The one public project. `1` is also the resolver's own default
+      # (internal/publicproject), so this states what the stack already
+      # behaves as; the variable is stated because the binary refuses to start
+      # without it once the plane is on.
+      ELITEA_AI_PROJECT_ID: "1"
+      #
+      # SECRETS_MASTER_KEY IS DELIBERATELY ABSENT, and adding it would break
+      # every vault read on this stack. The seeder writes each project's key as
+      # the 44-byte UNWRAPPED Fernet key (apps/elitea-web/scripts/e2e-stack.sh
+      # — the literal blobs are 88 hex characters), which is the shape centry
+      # writes when no master key is set. With the variable present the reader
+      # takes the WRAPPED path instead (internal/infra/storage/
+      # postgres_secret_vault.go) and refuses those rows as invalid keys.
+      #
+      # ── Egress for the toolkit credential probe ──────────────────────────
+      # With the runtime composed, a stored TOOLKIT credential is really
+      # probed: one authenticated metadata GET at the endpoint the credential
+      # names (internal/api/v2/configurations/toolkit_check.go). The default
+      # allowlist is the five vendors' PUBLIC API hosts, so a fixture that
+      # named `api.github.com` would make a CI run depend on GitHub being up
+      # and on this stack having internet.
+      #
+      # This value replaces that list with one name inside the compose
+      # network. Every tenant-authored endpoint is therefore refused BEFORE
+      # the dial, deterministically, with `reason: "unreachable"` and no
+      # socket opened at all — which is the verdict the credential journeys
+      # derive their expectations from. It is not a stub: nothing answers on
+      # that name for this path either.
+      ELITEA_TOOLKIT_CHECK_ALLOWLIST: "elitea-main"
       # ── The DeepWiki facade, on the OIDC-only stack (ADR-0023 H0) ────────
       # The facade takes the API group's credential set, and under OIDC-only
       # auth that carries the LocalValidator for APPLICATION_SECRET_KEY-signed
