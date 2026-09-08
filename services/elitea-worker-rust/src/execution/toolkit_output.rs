@@ -71,6 +71,7 @@ pub(super) struct ToolkitTerminalRecovery {
 pub(super) async fn prepare_toolkit_output(
     output: &AgentOutputPreflight,
     fresh: FreshToolkitDelivery,
+    now_unix_millis: i64,
 ) -> Result<ToolkitOutputPreflightOutcome, AgentOutputPreflightError> {
     let policy = output.shared_policy();
     if !fresh.matches_output_transport(
@@ -82,8 +83,8 @@ pub(super) async fn prepare_toolkit_output(
         ));
     }
     let factory = AgentOutputSpoolFactory::new(policy, Arc::new(fresh.spool_identity()));
-    let prepared = factory.reopen().await?;
-    let Some(frame) = prepared.pending_replay_frame() else {
+    let mut prepared = factory.reopen().await?;
+    let Some(mut frame) = prepared.pending_replay_frame() else {
         return Ok(ToolkitOutputPreflightOutcome::Empty(Box::new(
             EmptyToolkitOutput {
                 fresh,
@@ -93,12 +94,34 @@ pub(super) async fn prepare_toolkit_output(
     };
     if prepared.pending_frame_count() != 1
         || !fresh.matches_output_identity(&frame)
-        || !fresh.matches_output_binding(&frame)
         || fresh.validate_output_frame(&frame).is_err()
     {
         return Err(AgentOutputPreflightError::InvalidDurableState(
             "the pending direct toolkit output does not match the accepted claim",
         ));
+    }
+    if !fresh.matches_output_binding(&frame) {
+        let replacement = fresh
+            .terminal_replacement(&frame, now_unix_millis)
+            .map_err(|_| {
+                AgentOutputPreflightError::InvalidDurableState(
+                    "the pending direct toolkit output has no terminal recovery authority",
+                )
+            })?;
+        let expected = frame;
+        frame = replacement.clone();
+        prepared = tokio::task::spawn_blocking(move || {
+            prepared.replace_pending_toolkit_terminal_recovery(&expected, &replacement)?;
+            Ok::<_, OutputGrpcError>(prepared)
+        })
+        .await
+        .map_err(|_| {
+            AgentOutputPreflightError::Unavailable(
+                "the direct toolkit terminal recovery task did not complete",
+            )
+        })?
+        .map_err(AgentOutputPreflightError::Output)?;
+        tracing::info!(event = "toolkit_output_terminal_rebound");
     }
     let expected = frame.encode_to_vec();
     let (delivery, verified, claim) = fresh.into_terminal_parts();

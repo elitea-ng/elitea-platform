@@ -380,6 +380,26 @@ impl PreparedOutputSpool {
         self.replace_rebound_pending(expected, replacement)
     }
 
+    /// Rebind an admitted read-tool terminal without changing its payload.
+    /// A claim created after its deadline can instead seal a deadline failure.
+    pub(crate) fn replace_pending_toolkit_terminal_recovery(
+        &mut self,
+        expected: &ExecutionOutputFrameV1,
+        replacement: &ExecutionOutputFrameV1,
+    ) -> Result<(), OutputGrpcError> {
+        self.require_single_expected(expected)?;
+        let mut rebound = expected.clone();
+        rebound.fence.clone_from(&replacement.fence);
+        rebound.claim_handoff_watermark = replacement.claim_handoff_watermark;
+        let kind = if &rebound == replacement {
+            RecoveryKind::Terminal
+        } else {
+            RecoveryKind::Deadline
+        };
+        validate_recovery_rebind(expected, replacement, kind)?;
+        self.replace_rebound_pending(expected, replacement)
+    }
+
     /// Connect a fresh session only while the encrypted spool is empty.
     ///
     /// Restored progress requires an owned replay coordinator which can retain
@@ -1701,6 +1721,8 @@ fn terminal_identity_matches_command(
 enum RecoveryKind {
     Cancelled,
     Ambiguous,
+    Deadline,
+    Terminal,
 }
 
 fn validate_recovery_rebind(
@@ -1738,6 +1760,9 @@ fn validate_recovery_rebind(
     }
 
     let valid_payload = match (kind, replacement.payload.as_ref()) {
+        (RecoveryKind::Terminal, _) => {
+            expected.terminal && expected_fence.producer_id == replacement_fence.producer_id
+        }
         (
             RecoveryKind::Cancelled,
             Some(execution_output_frame_v1::Payload::RuntimeError(error)),
@@ -1757,6 +1782,16 @@ fn validate_recovery_rebind(
                 && !error.retryable
                 && settlement.requested_outcome == ExecutionOutcomeV1::Failed as i32
         }
+        (RecoveryKind::Deadline, Some(execution_output_frame_v1::Payload::RuntimeError(error))) => {
+            expected.terminal
+                && expected.logical_output_id == replacement.logical_output_id
+                && expected.event_id == replacement.event_id
+                && expected_fence.producer_id == replacement_fence.producer_id
+                && error.code == RuntimeErrorCodeV1::DeadlineExceeded as i32
+                && error.safe_message == "The execution deadline was exceeded."
+                && error.retryable
+                && settlement.requested_outcome == ExecutionOutcomeV1::Failed as i32
+        }
         _ => false,
     };
     if !valid_payload {
@@ -1769,6 +1804,8 @@ fn recovery_binding_error(kind: RecoveryKind) -> OutputGrpcError {
     let message = match kind {
         RecoveryKind::Cancelled => "the cancellation recovery replacement is not exactly bound",
         RecoveryKind::Ambiguous => "the ambiguous recovery replacement is not exactly bound",
+        RecoveryKind::Deadline => "the deadline recovery replacement is not exactly bound",
+        RecoveryKind::Terminal => "the terminal recovery replacement is not exactly bound",
     };
     OutputGrpcError::Protocol(OutputSessionError::AuthorizationFailed(message))
 }
@@ -2117,12 +2154,18 @@ mod tests {
                 "The runtime operation failed.",
                 ExecutionOutcomeV1::Failed,
             ),
+            RecoveryKind::Deadline => (
+                RuntimeErrorCodeV1::DeadlineExceeded,
+                "The execution deadline was exceeded.",
+                ExecutionOutcomeV1::Failed,
+            ),
+            RecoveryKind::Terminal => return replacement,
         };
         replacement.payload = Some(execution_output_frame_v1::Payload::RuntimeError(
             RuntimeErrorV1 {
                 code: code as i32,
                 safe_message: safe_message.to_owned(),
-                retryable: false,
+                retryable: matches!(kind, RecoveryKind::Deadline),
             },
         ));
         replacement.settlement_proposal = Some(SettlementProposalV1 {
@@ -2753,6 +2796,105 @@ mod tests {
             .replace_pending_ambiguous_recovery(&cancelled, &ambiguous)
             .expect("ambiguous recovery");
         assert!(prepared.replays(&ambiguous));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn toolkit_terminal_rebind_rejects_old_ack_then_mints_new_fence_settlement() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let root = temp.path().join("root");
+        let verified = verified_agent_command("signed_command_output_session");
+        let old = terminal_frame();
+        let replacement = recovery_frame(&old, RecoveryKind::Terminal);
+        let mut prepared =
+            PreparedOutputSpool::prepare(spool(&root), config()).expect("prepared spool");
+        prepared.persist(old.clone()).expect("old terminal");
+        prepared
+            .replace_pending_toolkit_terminal_recovery(&old, &replacement)
+            .expect("terminal replacement");
+        let pending = PendingTerminalSettlement::new(&verified, &replacement)
+            .expect("replacement settlement binding");
+        let stale = FakeStream {
+            acknowledgements: VecDeque::from([Ok(Some(bootstrap())), Ok(Some(bound_ack(&old)))]),
+            writes: Vec::new(),
+            closed: false,
+        };
+        assert!(matches!(
+            prepared
+                .replay_terminal_over(stale, pending, replacement.sequence)
+                .await,
+            Err(OutputGrpcError::Protocol(
+                OutputSessionError::AuthorizationFailed(_)
+            ))
+        ));
+        let restored =
+            PreparedOutputSpool::prepare(spool(&root), config()).expect("restored replacement");
+        assert!(restored.replays(&replacement));
+        let pending = PendingTerminalSettlement::new(&verified, &replacement)
+            .expect("replacement settlement binding");
+        let current = FakeStream {
+            acknowledgements: VecDeque::from([
+                Ok(Some(bootstrap())),
+                Ok(Some(bound_ack(&replacement))),
+            ]),
+            writes: Vec::new(),
+            closed: false,
+        };
+        let acknowledged = restored
+            .replay_terminal_over(current, pending, replacement.sequence)
+            .await
+            .expect("new fence acknowledgment");
+        let (identity, fence, proposal, _, _) = acknowledged.into_settlement_parts();
+        assert_eq!(Some(identity), replacement.identity);
+        assert_eq!(Some(fence), replacement.fence);
+        assert_eq!(Some(proposal), replacement.settlement_proposal);
+        assert!(
+            spool(&root)
+                .pending()
+                .expect("acknowledged spool")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn toolkit_terminal_rebind_refuses_result_changes_and_stale_compare_exchange() {
+        let mutations: &[fn(&mut ExecutionOutputFrameV1)] = &[
+            |frame| frame.occurred_at_unix_millis += 1,
+            |frame| frame.logical_output_id.push('x'),
+            |frame| frame.payload_digest.as_mut().unwrap().value[0] ^= 1,
+            |frame| {
+                frame
+                    .settlement_proposal
+                    .as_mut()
+                    .unwrap()
+                    .requested_outcome = ExecutionOutcomeV1::Failed as i32;
+            },
+        ];
+        for mutate in mutations {
+            let temp = tempfile::tempdir().expect("temporary directory");
+            let root = temp.path().join("root");
+            let old = terminal_frame();
+            let replacement = recovery_frame(&old, RecoveryKind::Terminal);
+            let mut prepared =
+                PreparedOutputSpool::prepare(spool(&root), config()).expect("prepared spool");
+            prepared.persist(old.clone()).expect("old terminal");
+            let mut changed = replacement.clone();
+            mutate(&mut changed);
+            assert!(
+                prepared
+                    .replace_pending_toolkit_terminal_recovery(&old, &changed)
+                    .is_err()
+            );
+            assert!(prepared.replays(&old));
+            prepared
+                .replace_pending_toolkit_terminal_recovery(&old, &replacement)
+                .expect("exact replacement");
+            assert!(
+                prepared
+                    .replace_pending_toolkit_terminal_recovery(&old, &replacement)
+                    .is_err()
+            );
+            assert!(prepared.replays(&replacement));
+        }
     }
 
     #[tokio::test(flavor = "current_thread")]
