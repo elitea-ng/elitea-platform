@@ -93,7 +93,10 @@ describe('ApplicationEditForm', () => {
   it('shows the "0 characters left" hint only while the name field is focused at the max length', async () => {
     renderForm({ name: 'x'.repeat(32) });
     const input = await screen.findByTestId('agent-name-input');
-    expect(screen.queryByText(/characters left/)).not.toBeInTheDocument();
+    // Exact text, not a broad `/characters left/` regex: the description
+    // field's own counter is ALSO always in the document now (#848 — never
+    // unmounted, just visibility-toggled), and a loose regex would match it too.
+    expect(screen.queryByText('0 characters left')).not.toBeInTheDocument();
     await userEvent.setup().click(input);
     expect(screen.getByText('0 characters left')).toBeInTheDocument();
   });
@@ -106,9 +109,12 @@ describe('ApplicationEditForm', () => {
   it('shows the remaining-characters hint while the description field is focused and non-empty', async () => {
     renderForm({ description: 'Does things' });
     const input = await screen.findByTestId('agent-description-input');
-    expect(screen.queryByText(/characters left/)).not.toBeInTheDocument();
+    // #848 — the counter's line is now reserved always (never unmounted),
+    // so the SAME node is found before focus too; only its visibility toggles.
+    const counter = screen.getByText(`${2304 - 'Does things'.length} characters left`);
+    expect(counter).not.toBeVisible();
     await userEvent.setup().click(input);
-    expect(screen.getByText(`${2304 - 'Does things'.length} characters left`)).toBeInTheDocument();
+    expect(counter).toBeVisible();
   });
 
   it('re-syncs the local name field when the name prop changes externally (e.g. a discard/reset)', async () => {
@@ -191,9 +197,12 @@ describe('ApplicationEditForm', () => {
     const input = await screen.findByTestId('agent-description-input');
     const user = userEvent.setup();
     await user.click(input);
-    expect(screen.getByText(/characters left/)).toBeInTheDocument();
+    // #848 — the same node persists across blur (never unmounted); only its
+    // visibility toggles back to hidden.
+    const counter = screen.getByText(`${2304 - 'Does things'.length} characters left`);
+    expect(counter).toBeVisible();
     await user.tab();
-    expect(screen.queryByText(/characters left/)).not.toBeInTheDocument();
+    expect(counter).not.toBeVisible();
   });
 
   it('opens the tag dropdown with a pre-selected tag, exercising option/value equality for both the existing chip and freeSolo strings', async () => {

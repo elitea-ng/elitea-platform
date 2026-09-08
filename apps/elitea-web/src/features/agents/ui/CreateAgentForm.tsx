@@ -190,16 +190,22 @@ function GeneralFields({ name, description, disabled, iconSlot, tagsSlot }: Gene
           helperText={description.error}
           slotProps={{ htmlInput: { maxLength: MAX_DESCRIPTION_LENGTH, 'data-testid': 'agent-description-input' } }}
         />
-        {description.focused && description.value.length > 0 && (
-          <Typography
-            variant="labelTiny"
-            sx={descriptionCharactersLabelSx}
-          >
-            {t('features.agents.createAgentForm.descriptionCharactersLeft', '{{count}} characters left', {
-              count: MAX_DESCRIPTION_LENGTH - description.value.length,
-            })}
-          </Typography>
-        )}
+        {/* #848 — never unmount: unlike `nameCharactersLabelSx` above
+          * (absolutely positioned, so it overlays rather than pushes), this
+          * counter sits in normal flow directly above `tagsSlot` below, and
+          * unmounting on blur shifts that control up, swallowing a click
+          * already headed for it. `visibility: hidden` keeps the line's
+          * height reserved. */}
+        <Typography
+          variant="labelTiny"
+          sx={combineSx(descriptionCharactersLabelSx, {
+            visibility: description.focused && description.value.length > 0 ? 'visible' : 'hidden',
+          })}
+        >
+          {t('features.agents.createAgentForm.descriptionCharactersLeft', '{{count}} characters left', {
+            count: MAX_DESCRIPTION_LENGTH - description.value.length,
+          })}
+        </Typography>
       </Box>
 
       {tagsSlot}
