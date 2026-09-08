@@ -177,12 +177,26 @@ test('J16e: the pipeline create form refuses to save until both required fields 
   await nameInput.fill(uniqueName('req'));
   await expect(saveButton, 'a name alone must not be enough — description is required').toBeDisabled();
 
-  // 3. The reason, in the form's own words. Reached by filling and clearing
-  //    rather than by leaving the field untouched: react-hook-form publishes
-  //    a field error once the field has been interacted with, so an assertion
-  //    on the pristine form would be asserting the resolver's silence.
+  // 3. The reason, in the form's own words.
+  //
+  //    THE MESSAGE IS GATED ON BLUR, NOT ON THE VALUE — read this before
+  //    deleting the `blur()` below as a redundant step. The panel is
+  //    `CreateAgentForm`, which keeps its own `descriptionTouched` flag and
+  //    only sets it in `handleDescriptionBlur`
+  //    (`features/agents/ui/CreateAgentForm.tsx`); `requiredFieldError`
+  //    returns nothing until that flag is true. It stands in for Formik's
+  //    per-field `touched` map in the parity baseline, so this is the
+  //    product's contract and not an accident to work around.
+  //
+  //    `fill()` focuses the field and leaves it focused, so filling and
+  //    clearing alone never blurs it: this assertion timed out on both
+  //    browsers in the first CI read of this journey, waiting for a message
+  //    the form had no reason to publish yet. An earlier revision of this
+  //    comment credited the gate to react-hook-form; the page's `useForm`
+  //    instance drives the Save button, not this message.
   await descriptionInput.fill('temporary');
   await descriptionInput.fill('');
+  await descriptionInput.blur();
   await expect(panel.getByText('Description is required')).toBeVisible({ timeout: 10_000 });
   await expect(saveButton).toBeDisabled();
 

@@ -89,7 +89,20 @@ async function openPipelinesList(page: Page): Promise<void> {
   await expect(searchBox(page), 'the pipelines list must render its search box').toBeVisible({ timeout: 30_000 });
 }
 
-/** The list's own search field — `PrivatePipelinesList.tsx`'s `SimpleSearchBar`, placeholder "Search". */
+/**
+ * The list's own search field — `PrivatePipelinesList.tsx`'s `SimpleSearchBar`,
+ * placeholder "Search".
+ *
+ * NOTE FOR THE SERVER-SIDE SEARCH UNIT (product-gaps wave): this control
+ * exists today and filters the ONE page the list reads, client-side. The
+ * assertions below are written against the observable behaviour — "the
+ * matching row survives, the others go" — and not against where the filtering
+ * happens, so a server-side query behind the same box keeps them true. What
+ * DOES need revisiting when that lands is this file's header note about the
+ * single 20-row page, and the decoy row J16d creates to make its own
+ * precondition: with a server-side query the decoy stays correct but its
+ * "same page" justification no longer applies.
+ */
 function searchBox(page: Page) {
   return page.getByPlaceholder('Search', { exact: true });
 }
@@ -117,6 +130,25 @@ function cards(page: Page) {
 test('J16d: the dashboard lists a pipeline the API created, and the search box narrows the list to it', async ({
   page,
 }) => {
+  // THE SECOND ROW IS MINTED HERE, NOT ASSUMED FROM THE SEED — read this
+  // before deleting it as duplication of the row below.
+  //
+  // The "narrowed to one" claim at the end of this test is only a claim about
+  // the SEARCH if the list held more than one row before the query. The first
+  // CI read of this journey asserted that precondition against whatever the
+  // project happened to hold and failed on webkit with `Received: 1`: the
+  // e2e seed creates no pipelines, so the only other rows on that list are the
+  // ones sibling journeys have created and not yet torn down. Which of them
+  // overlap this test is decided by worker scheduling, so the precondition was
+  // passing on borrowed state. The decoy makes it this test's own.
+  //
+  // Created BEFORE the row under test so that, under the list's
+  // `ORDER BY a.id DESC`, both sit at the top of the single page
+  // `PrivatePipelinesList` reads. Its name shares no substring with the
+  // searched one, so it is a row the search must drop.
+  const decoy = await createPipelineThroughApi(page.request, uniqueName('decoy'));
+  created.push(decoy);
+
   const name = uniqueName('dash');
   const pipeline = await createPipelineThroughApi(page.request, name);
   created.push(pipeline);
@@ -131,9 +163,13 @@ test('J16d: the dashboard lists a pipeline the API created, and the search box n
 
   // At least one OTHER row is on screen before the search — otherwise
   // "narrowed to one" below is satisfied by a project that only ever had one
-  // pipeline, and this test would prove nothing about the search box.
-  const before = await cards(page).count();
-  expect(before, 'the seeded project must hold more than the pipeline this test created').toBeGreaterThan(1);
+  // pipeline, and this test would prove nothing about the search box. The
+  // decoy created at the top of this test guarantees it. Polled rather than
+  // read once: `count()` does not wait for attach, and the two cards can be
+  // painted a frame apart.
+  await expect
+    .poll(() => cards(page).count(), { timeout: 20_000 })
+    .toBeGreaterThan(1);
 
   await searchBox(page).fill(name);
 
