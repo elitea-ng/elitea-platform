@@ -210,27 +210,30 @@ export async function resolveCatalogueProjectId(request: APIRequestContext): Pro
 
 /** One row of the model catalogue, as the picker reads it. */
 export interface CatalogueModel {
+  /** The model NAME a version carries in `llm_settings.model_name`. */
   readonly name: string;
+  /** The configuration row's own title, for a message that names the row. */
+  readonly title: string;
+  /** The project the row lives in — what the publish guard compares. */
   readonly projectId: string;
-  readonly shared: boolean;
 }
 
 /**
  * The models a project may name, through the route the picker itself calls.
  *
- * The catalogue answers a project's OWN rows plus the public project's SHARED
- * ones (`internal/infra/db/repos/models.go`), and `include_shared=true` is what
- * asks for the second half — so the default answer is the honest test of "is
- * this model private to this project".
+ * TWO SHAPES, one route. When the Configurations plane is composed
+ * (`ELITEA_CONFIGURATIONS_ENABLED` + `ELITEA_AI_PROJECT_ID`) the production
+ * route answers items whose `name` is already the model name; without it the
+ * legacy handler answers the configuration ROW, whose `name` is the row's
+ * title and whose `data.name` is the model. The e2e rig runs the second, a
+ * full deployment the first, and a helper that read only one of them would
+ * resolve a title as a model name on one of the two and fail to match at all.
  */
 export async function readProjectModels(
   request: APIRequestContext,
   projectId: string,
-  includeShared = false,
 ): Promise<readonly CatalogueModel[]> {
-  const url =
-    `${API_BASE}/configurations/models/${projectId}` +
-    (includeShared ? '?include_shared=true' : '');
+  const url = `${API_BASE}/configurations/models/${projectId}`;
   const response = await request.get(url);
   if (!response.ok()) {
     throw new Error(
@@ -239,27 +242,37 @@ export async function readProjectModels(
     );
   }
   const body = (await response.json()) as { items?: readonly Record<string, unknown>[] };
-  return (body.items ?? []).map((row) => ({
-    name: String(row['name'] ?? ''),
-    projectId: String(row['project_id'] ?? ''),
-    shared: row['shared'] === true,
-  }));
+  return (body.items ?? []).map((row) => {
+    const title = String(row['name'] ?? '');
+    const data = (row['data'] as Record<string, unknown> | undefined) ?? {};
+    const modelName = typeof data['name'] === 'string' && data['name'] !== '' ? data['name'] : title;
+    return { name: modelName, title, projectId: String(row['project_id'] ?? '') };
+  });
 }
 
 /**
  * The seeded NON-shared model: its name and the project that owns it.
  *
- * Resolved rather than assumed. The refusal under test is decided on
- * `model_project_id`, so a journey that invented an id would prove the guard
- * refuses an id that names nothing — which a guard comparing against "any
- * project the caller can see" would also pass. This one names a model that
- * really exists, in a project the caller really belongs to, and is private
- * only because it is not the catalogue's.
+ * Resolved rather than assumed. The refusal it exists for is decided on
+ * `llm_settings.model_project_id` against the ONE public project, so a journey
+ * that invented an id would prove the guard refuses an id naming nothing —
+ * which a guard comparing against "any project the caller can see" also passes.
+ * This one names a model that really exists, in a project the caller really
+ * belongs to, and is private for the only reason that matters here: its project
+ * is not the catalogue's.
  */
 export async function resolvePrivateModel(
   request: APIRequestContext,
 ): Promise<{ readonly modelName: string; readonly projectId: string }> {
   const projectId = await resolvePublishAuthorProjectId(request);
+  const catalogueProjectId = await resolveCatalogueProjectId(request);
+  if (projectId === catalogueProjectId) {
+    throw new Error(
+      `resolvePrivateModel: the author project IS the catalogue project (${projectId}), so no ` +
+        `model in it can be private. The deployment resolved a different public project than ` +
+        `the seed assumes.`,
+    );
+  }
   const models = await readProjectModels(request, projectId);
   const found = models.find((model) => model.name === PRIVATE_MODEL_NAME);
   if (found === undefined) {
@@ -267,12 +280,6 @@ export async function resolvePrivateModel(
       `resolvePrivateModel: project ${projectId} serves no model named ${PRIVATE_MODEL_NAME}. ` +
         `scripts/e2e-stack.sh seeds it with shared = false; it answered ` +
         `${JSON.stringify(models).slice(0, 300)}`,
-    );
-  }
-  if (found.shared) {
-    throw new Error(
-      `resolvePrivateModel: ${PRIVATE_MODEL_NAME} is reported as SHARED. The refusal cases ` +
-        `it exists for would then pass for the wrong reason.`,
     );
   }
   return { modelName: found.name, projectId };
