@@ -49,6 +49,7 @@ import type {
   BrandingAsset,
   BrandingPackageReport,
   BrandingSettings,
+  BulkInviteSummary,
   GlobalUserInviteResult,
   ListBrandingPackageVersions200,
   MessageResponse,
@@ -172,6 +173,39 @@ export const getInviteUserGloballyResponseMock = (
   created: faker.datatype.boolean(),
   invitation_delivered: faker.datatype.boolean(),
   invitation_delivery: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  ...overrideResponse,
+});
+
+export const getBulkInviteMembersResponseMock = (
+  overrideResponse: Partial<Extract<BulkInviteSummary, object>> = {},
+): BulkInviteSummary => ({
+  ok: faker.datatype.boolean(),
+  role: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  requested: faker.number.int(),
+  added: faker.number.int(),
+  skipped: faker.number.int(),
+  failed: faker.number.int(),
+  results: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    user_id: faker.number.int(),
+    user_email: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    project_id: faker.number.int(),
+    project_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    status: faker.helpers.arrayElement(["ok", "error"] as const),
+    outcome: faker.helpers.arrayElement([
+      "added",
+      "already_member",
+      "unknown_user",
+      "unknown_project",
+      "unknown_role",
+      "system_user",
+      "personal_project",
+      "failed",
+    ] as const),
+    msg: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  })),
   ...overrideResponse,
 });
 
@@ -1056,6 +1090,32 @@ export const getInviteUserGloballyMockHandler = (
   );
 };
 
+export const getBulkInviteMembersMockHandler = (
+  overrideResponse?:
+    | BulkInviteSummary
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<BulkInviteSummary> | BulkInviteSummary),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/admin/invites_bulk/administration",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getBulkInviteMembersResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getListBackgroundJobsMockHandler = (
   overrideResponse?:
     | BackgroundJobListResponse
@@ -1564,6 +1624,7 @@ export const getAdminMock = () => [
   getAssignUserModeRoleMockHandler(),
   getRemoveUserModeRoleMockHandler(),
   getInviteUserGloballyMockHandler(),
+  getBulkInviteMembersMockHandler(),
   getListBackgroundJobsMockHandler(),
   getCancelBackgroundJobMockHandler(),
   getGetBrandingSettingsMockHandler(),

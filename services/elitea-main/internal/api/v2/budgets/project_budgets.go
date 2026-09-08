@@ -36,11 +36,30 @@ type budgetState struct {
 	Spend          *json.Number `json:"spend"`
 	Remaining      *json.Number `json:"remaining"`
 	PercentUsed    *json.Number `json:"percent_used"`
-	SpendAvailable bool         `json:"spend_available"`
-	Period         string       `json:"period"`
-	PeriodStart    string       `json:"period_start"`
-	PeriodEnd      string       `json:"period_end"`
-	ResetsAt       string       `json:"resets_at"`
+	// WarningActive is "this scope is at or over its soft-alert threshold",
+	// answered by the server rather than left to each client (issue 312).
+	//
+	// It is a DERIVED field, not a second source of truth: the same SELECT
+	// computes it from the same percent_used and warning_pct it reports, so a
+	// banner and the number beside it can never disagree. Two clients deriving
+	// it separately is how one of them ends up comparing a null percentage, or
+	// comparing against DefaultWarningPct while the platform threshold says
+	// otherwise.
+	//
+	// False whenever there is nothing to warn about: an unlimited scope, a
+	// disabled one, or a zero ceiling all report null percent_used, and a
+	// scope below its threshold is simply below it.
+	//
+	// It SURVIVES amount redaction. The threshold and the percentage are not
+	// cost figures — usage.go's amountFields does not name them — so a member
+	// who may not see the money still learns that the project is close to its
+	// limit, which is the whole point of a warning.
+	WarningActive  bool   `json:"warning_active"`
+	SpendAvailable bool   `json:"spend_available"`
+	Period         string `json:"period"`
+	PeriodStart    string `json:"period_start"`
+	PeriodEnd      string `json:"period_end"`
+	ResetsAt       string `json:"resets_at"`
 }
 
 // projectBudgetState is a project's budget plus the two policy columns that
@@ -102,7 +121,17 @@ SELECT
     END                                                          AS remaining,
     CASE WHEN NOT COALESCE(limits.is_unlimited, true) AND limits.hard_limit_usd > 0
          THEN round(COALESCE(accrued.accumulated_cost, 0) / limits.hard_limit_usd * 100, 2)::text
-    END                                                          AS percent_used`
+    END                                                          AS percent_used,
+    -- The threshold crossing, computed beside the percentage it compares so the
+    -- two can never disagree. The ROUNDED percentage is used on purpose: it is
+    -- the number the client renders, and warning on an unrounded 79.996 that
+    -- displays as 80.00 — or refusing to warn on one that displays as 80.00 —
+    -- is the kind of off-by-a-hair an operator reports as a bug.
+    COALESCE(
+        CASE WHEN NOT COALESCE(limits.is_unlimited, true) AND limits.hard_limit_usd > 0
+             THEN round(COALESCE(accrued.accumulated_cost, 0) / limits.hard_limit_usd * 100, 2)
+                  >= COALESCE(limits.soft_alert_pct, ` + globalWarningPctSQL + `, $4::smallint)
+        END, false)                                              AS warning_active`
 
 // readBudgetState runs budgetStateSelect against one limit table. limitJoin is
 // a fixed SQL fragment chosen by the caller from the two constants below, never
@@ -119,6 +148,7 @@ func (h *Handler) readBudgetState(
 		spendAvailable bool
 		remaining      *string
 		percentUsed    *string
+		warningActive  bool
 	)
 	query := budgetStateSelect + `
 FROM (SELECT 1) AS anchor(one)
@@ -128,7 +158,8 @@ LEFT JOIN gateway.llm_budget_accumulators AS accrued
       AND accrued.period_start = $3::timestamptz`
 	args := append([]any{scopeID, scope, period.start, DefaultWarningPct}, joinArgs...)
 	err := h.pool.QueryRow(ctx, query, args...).Scan(
-		&monthlyLimit, &enabled, &enforced, &warningPct, &spend, &spendAvailable, &remaining, &percentUsed,
+		&monthlyLimit, &enabled, &enforced, &warningPct, &spend, &spendAvailable,
+		&remaining, &percentUsed, &warningActive,
 	)
 	if err != nil {
 		return budgetState{}, fmt.Errorf("budgets: read %s budget state: %w", scope, err)
@@ -142,6 +173,7 @@ LEFT JOIN gateway.llm_budget_accumulators AS accrued
 		Spend:          numeric(&spend),
 		Remaining:      numeric(remaining),
 		PercentUsed:    numeric(percentUsed),
+		WarningActive:  warningActive,
 		SpendAvailable: spendAvailable,
 		Period:         period.label(),
 		PeriodStart:    period.firstDay(),
