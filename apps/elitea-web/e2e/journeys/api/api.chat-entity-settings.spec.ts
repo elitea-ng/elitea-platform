@@ -541,3 +541,188 @@ test('switching version resends the version’s own settings and is not refused'
     await dropFixture(request, fixture);
   }
 });
+
+/* ── a conversation that holds an agent from ANOTHER project ──────────────── */
+
+/**
+ * A conversation outside the public project may hold a participant that names
+ * the public (catalogue) project, and the server tells the two apart.
+ *
+ * ── The use case ───────────────────────────────────────────────────────────
+ *
+ * The legacy product let a conversation in project A chat with an agent
+ * PUBLISHED into the catalogue: the published version answers, while the turn
+ * is billed and authorised under the caller's own project. An agent that is
+ * merely private to some other project was never reachable that way — that is
+ * the tenancy boundary, not an omission.
+ *
+ * ── What makes this a server rule and not a client one ─────────────────────
+ *
+ * The attach accepts BOTH participants. Nothing on
+ * `POST /elitea_core/participants/...` checks the project an `entity_meta`
+ * names, so a conversation can end up holding an agent it must never be
+ * allowed to use, and every guard therefore has to live on the surfaces that
+ * act on a participant. This case attaches both and then exercises one of
+ * those surfaces.
+ *
+ * ── Which surface, and why this one ────────────────────────────────────────
+ *
+ * The turn itself is the other surface, and the one the rule was written for:
+ * `ResolveCurrentApplicationTurn` admits a participant whose project is the
+ * catalogue AND whose version is `published`, reading that version out of the
+ * catalogue project's own schema, and refuses every other foreign project.
+ * This stack composes no runtime plane, so it mounts no message POST at all
+ * (see api.chat-contract.spec.ts, which says so at length) and the same 405
+ * would come back for an admitted turn and a refused one — three inputs that
+ * cannot produce three answers cannot be told apart. The turn half is asserted
+ * where it can be: `e2e/streaming/chat.delegation.spec.ts` runs it against the
+ * full stack, and the Postgres integration cases in
+ * `services/elitea-main/internal/infra/db/repos` pin the admission rule
+ * directly, published against draft against stranger.
+ *
+ * What IS assertable here is the same discriminator on the settings write —
+ * the participant's `entity_meta.project_id` against the platform's public
+ * project — with the conversation standing somewhere else entirely. Every
+ * other case in this file has the conversation and the agent in ONE project,
+ * so none of them can say what happens when they differ, which is the whole
+ * shape of chatting with a catalogue agent.
+ */
+test('a conversation elsewhere may write settings for a catalogue participant, not a stranger’s', async ({
+  request,
+}) => {
+  const ownProject = await ownProjectId(request);
+  expect(
+    ownProject,
+    'the persona’s own project must not BE the public project, or the two halves of this rule are the same project',
+  ).not.toBe(DEFAULT_PROJECT_ID);
+
+  const catalogueName = autotestName('xpubagent');
+  const catalogueAgent = await createAgentWithVersion(
+    request,
+    catalogueName,
+    { model: BASELINE_MODEL },
+    DEFAULT_PROJECT_ID,
+  );
+  const strangerName = autotestName('xprivagent');
+  const strangerAgent = await createAgentWithVersion(
+    request,
+    strangerName,
+    { model: BASELINE_MODEL },
+    ownProject,
+  );
+  // The conversation stands in the persona's OWN project — not the catalogue,
+  // and not a third place. That is the caller's project in the use case.
+  const conversationId = await createConversation(request, autotestName('xconv'), ownProject);
+
+  try {
+    const attached = await request.post(participantsURL(ownProject, conversationId), {
+      data: [
+        {
+          entity_name: 'application',
+          entity_meta: {
+            id: catalogueAgent.id,
+            project_id: DEFAULT_PROJECT_ID,
+            name: catalogueName,
+          },
+          entity_settings: { version_id: catalogueAgent.versionId },
+        },
+        {
+          entity_name: 'application',
+          entity_meta: { id: strangerAgent.id, project_id: ownProject, name: strangerName },
+          entity_settings: { version_id: strangerAgent.versionId },
+        },
+      ],
+    });
+    expect(
+      attached.status(),
+      `a cross-project participant could not be attached, which is where this rule starts: ${(
+        await attached.text()
+      ).slice(0, 300)}`,
+    ).toBe(200);
+
+    const rows = (await attached.json()) as readonly {
+      id?: unknown;
+      entity_meta?: Record<string, unknown>;
+    }[];
+    const idFor = (agentId: string): string =>
+      String(
+        rows.find((row) => String(row.entity_meta?.['id'] ?? '') === agentId)?.id ?? '',
+      );
+    const catalogueParticipantId = idFor(catalogueAgent.id);
+    const strangerParticipantId = idFor(strangerAgent.id);
+    expect(
+      catalogueParticipantId,
+      'the catalogue agent did not become a participant of a conversation in another project',
+    ).not.toBe('');
+    expect(strangerParticipantId, 'the second agent did not become a participant').not.toBe('');
+
+    // The CATALOGUE participant: accepted, although its project is not the
+    // conversation's. A rule that read the conversation's project instead of
+    // the participant's would refuse this.
+    const catalogueWrite = await request.put(
+      entitySettingsURL(ownProject, conversationId, catalogueParticipantId),
+      {
+        data: {
+          version_id: catalogueAgent.versionId,
+          llm_settings: {
+            model_name: 'autotest-model-b',
+            model_project_id: DEFAULT_PROJECT_ID,
+            reasoning_effort: 'high',
+          },
+        },
+      },
+    );
+    expect(
+      catalogueWrite.status(),
+      `a participant from the public project was refused inside a conversation elsewhere: ${(
+        await catalogueWrite.text()
+      ).slice(0, 300)}`,
+    ).toBe(200);
+
+    // The STRANGER: refused, in the very same conversation, through the very
+    // same endpoint, with the only difference being the project its
+    // `entity_meta` names.
+    const strangerWrite = await request.put(
+      entitySettingsURL(ownProject, conversationId, strangerParticipantId),
+      {
+        data: {
+          version_id: strangerAgent.versionId,
+          llm_settings: {
+            model_name: 'autotest-model-b',
+            model_project_id: ownProject,
+            temperature: 0.9,
+            max_tokens: 4096,
+          },
+        },
+      },
+    );
+    expect(
+      strangerWrite.status(),
+      `an agent that is not in the public project was writable from another project’s conversation: ${(
+        await strangerWrite.text()
+      ).slice(0, 300)}`,
+    ).toBe(400);
+
+    // …and the accepted one really is stored, so the pair above is a rule and
+    // not two different failures.
+    const conversation = await request.get(conversationURL(ownProject, conversationId));
+    expect(conversation.status()).toBe(200);
+    const participants =
+      ((await conversation.json()) as {
+        participants?: readonly { id?: unknown; entity_settings?: Record<string, unknown> }[];
+      }).participants ?? [];
+    const stored = participants.find(
+      (row) => String(row.id ?? '') === catalogueParticipantId,
+    )?.entity_settings;
+    expect(
+      ((stored?.['llm_settings'] ?? {}) as Record<string, unknown>)['model_name'],
+      'the catalogue participant’s override was echoed and not stored',
+    ).toBe('autotest-model-b');
+  } finally {
+    await deleteConversation(request, conversationId, ownProject);
+    await request.delete(
+      `${API_BASE}/elitea_core/application/prompt_lib/${ownProject}/${strangerAgent.id}`,
+    );
+    await deleteAgent(request, catalogueAgent.id);
+  }
+});

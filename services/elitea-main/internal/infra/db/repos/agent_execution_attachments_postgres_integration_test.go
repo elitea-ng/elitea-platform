@@ -48,7 +48,7 @@ func TestPostgresCurrentApplicationTurnWritesAttachmentItemsOnTheQuestionGroup(t
 		QuestionMeta:      json.RawMessage(`{}`), UserInput: "look at these",
 		Attachments: currentAgentAttachmentFixtures(t, "20000000-0000-4000-8000-000000000031"),
 	}
-	if err := insertCurrentApplicationTurn(t.Context(), queries, "execution-attach-1", turn); err != nil {
+	if err := insertCurrentApplicationTurn(t.Context(), queries, "execution-attach-1", turn, 1); err != nil {
 		t.Fatal(err)
 	}
 
@@ -114,7 +114,7 @@ func TestPostgresCurrentApplicationTurnWithoutAttachmentsWritesOnlyItsTextItem(t
 		ResponseMessageID: "40000000-0000-4000-8000-000000000031",
 		QuestionMeta:      json.RawMessage(`{}`), UserInput: "no files here",
 	}
-	if err := insertCurrentApplicationTurn(t.Context(), queries, "execution-attach-2", turn); err != nil {
+	if err := insertCurrentApplicationTurn(t.Context(), queries, "execution-attach-2", turn, 1); err != nil {
 		t.Fatal(err)
 	}
 
@@ -300,7 +300,7 @@ func TestPostgresATurnAfterAnAttachmentIsStillAdmitted(t *testing.T) {
 		QuestionMeta:      json.RawMessage(`{}`), UserInput: "look at this",
 		Attachments: currentAgentAttachmentFixtures(t, "20000000-0000-4000-8000-000000000031"),
 	}
-	if err := insertCurrentApplicationTurn(t.Context(), queries, "execution-attach-4", first); err != nil {
+	if err := insertCurrentApplicationTurn(t.Context(), queries, "execution-attach-4", first, 1); err != nil {
 		t.Fatal(err)
 	}
 	completePostgresCurrentApplicationTurn(
@@ -352,7 +352,7 @@ func TestPostgresRegenerationSurvivesAnAttachmentTurn(t *testing.T) {
 		QuestionMeta:      json.RawMessage(`{}`), UserInput: "regenerate this",
 		Attachments: currentAgentAttachmentFixtures(t, "20000000-0000-4000-8000-000000000031"),
 	}
-	if err := insertCurrentApplicationTurn(t.Context(), queries, "execution-attach-5", turn); err != nil {
+	if err := insertCurrentApplicationTurn(t.Context(), queries, "execution-attach-5", turn, 1); err != nil {
 		t.Fatal(err)
 	}
 	responseID := mustCurrentPGUUID(t, turn.ResponseMessageID)
