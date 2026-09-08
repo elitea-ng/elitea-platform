@@ -53,6 +53,7 @@ describe('real MCP editor discovery composition', () => {
     }
     await user.click(await screen.findByRole('button', { name: 'Load Tools' }));
     await waitFor(() => expect(requests).toBe(1));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Load Tools' })).toBeEnabled());
     // The schema's empty enum must not hide the newly discovered operation.
     expect(await screen.findByText('Echo marker')).toBeInTheDocument();
   });

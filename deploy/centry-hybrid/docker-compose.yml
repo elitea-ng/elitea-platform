@@ -53,9 +53,6 @@ services:
       # Empty keeps current pylon_auth as the authorization authority over the
       # authenticated Redis RPC until the reviewed Go Auth slice is selected.
       APPLICATION_SECRET_KEY: ""
-      SHADOW_ENABLED: "false"
-      LEGACY_URL: ""
-      GATEWAY_HTTP_ADDR: ""
       ADMIN_UI_STATIC_DIR: "/nonexistent"
     depends_on:
       postgres:

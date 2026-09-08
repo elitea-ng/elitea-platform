@@ -25,6 +25,7 @@ import { BaseBtn } from '@/shared/ui/BaseBtn';
 import { DeleteEntityModal } from '@/shared/ui/DeleteEntityModal';
 import { EntityListRail, RAIL_CONTENT_WIDTH, useEntityRailVisible, useRailTagSelection } from '@/shared/ui/EntityRail';
 import { SimpleSearchBar } from '@/shared/ui/SimpleSearchBar';
+import { PageHeader } from '@/widgets/page-header';
 import { usePermissionSet, useSidebarCollapsedStore } from '@/widgets/sidebar';
 
 import { useSelectedProjectId } from './lib/useSelectedProjectId';
@@ -114,24 +115,31 @@ export function Skills(): ReactNode {
   return (
     <Box sx={pageSx}>
       <Box sx={contentWidthSx(railVisible)}>
-        <Box sx={headerSx}>
-          <Typography variant="headingLarge">{t('skills.page.title', 'Skills')}</Typography>
-          <Box sx={actionsSx}>
-            <SkillImportButton
-              isImporting={mutations.importFile.isPending}
-              onImport={async (file) => {
-                await mutations.importFile.mutateAsync(file);
-              }}
-            />
-            <BaseBtn
-              variant="contained"
-              startIcon={<AddOutlinedIcon />}
-              onClick={() => void navigate({ to: '/skills/create' })}
-            >
-              {t('skills.page.create', 'Create skill')}
-            </BaseBtn>
-          </Box>
-        </Box>
+        <PageHeader
+          title={t('skills.page.title', 'Skills')}
+          titleComponent="h1"
+          showBorder={false}
+          sx={headerSx}
+          slots={{
+            actions: (
+              <>
+                <SkillImportButton
+                  isImporting={mutations.importFile.isPending}
+                  onImport={async (file) => {
+                    await mutations.importFile.mutateAsync(file);
+                  }}
+                />
+                <BaseBtn
+                  variant="contained"
+                  startIcon={<AddOutlinedIcon />}
+                  onClick={() => void navigate({ to: '/skills/create' })}
+                >
+                  {t('skills.page.create', 'Create skill')}
+                </BaseBtn>
+              </>
+            ),
+          }}
+        />
         <Tabs
           value={activeTab}
           onChange={(_event, next: SkillTab) => {
@@ -171,6 +179,10 @@ export function Skills(): ReactNode {
           onExport={(skill) => {
             void handleExport(skill);
           }}
+          onCreate={() => {
+            void navigate({ to: '/skills/create' });
+          }}
+          railVisible={false}
         />
         )}
       </Box>
@@ -209,5 +221,5 @@ const contentWidthSx = (railVisible: boolean): SxProps<Theme> => (theme: Theme) 
   gap: theme.spacing(2),
   width: railVisible ? RAIL_CONTENT_WIDTH : '100%',
 });
-const headerSx: SxProps<Theme> = { display: 'flex', alignItems: 'center', justifyContent: 'space-between' };
-const actionsSx: SxProps<Theme> = { display: 'flex', alignItems: 'center', gap: 1 };
+/** The page already pads its content column, so the header keeps no padding of its own. */
+const headerSx: SxProps<Theme> = { padding: 0 };

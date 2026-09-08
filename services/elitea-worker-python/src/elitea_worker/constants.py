@@ -6,6 +6,8 @@ CONFIGURATION_VALIDATION_CAPABILITY_ID = "configuration.validate.v1"
 TOOLKIT_AVAILABLE_TOOLS_CAPABILITY_ID = "toolkit.available_tools.v1"
 INDEX_INGEST_CAPABILITY_ID = "index.ingest.v1"
 INDEX_INGEST_CAPABILITY_VERSION = "2"
+TOOLKIT_CALL_TOOL_CAPABILITY_ID = "toolkit.call_tool.v1"
+TOOLKIT_CALL_TOOL_CAPABILITY_VERSION = "1"
 AGENT_EXECUTE_APPLICATION_CAPABILITY_ID = "agent.execute.application.v1"
 AGENT_EXECUTE_ADHOC_CAPABILITY_ID = "agent.execute.adhoc.v1"
 AGENT_EXECUTION_CAPABILITY_VERSION = "1"
@@ -50,6 +52,11 @@ MAX_MANIFEST_BYTES = 64 * 1024
 MAX_GRPC_REQUEST_BYTES = 64 * 1024
 MAX_GRPC_RESPONSE_BYTES = 80 * 1024
 MAX_SETTINGS_BYTES = 256 * 1024
+# One tool result carried inline on the output data plane. It is a fraction
+# of the 80 KiB gRPC response bound so that the frame it rides in, with its
+# identity, fence and settlement proposal, still fits. A larger result is
+# reported truncated, never silently shortened.
+MAX_TOOL_RESULT_BYTES = 48 * 1024
 MAX_AGENT_INPUT_BYTES = 1024 * 1024
 MAX_BUNDLE_ENTRIES = 16
 MAX_ISSUES = 64

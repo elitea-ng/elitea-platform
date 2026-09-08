@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -505,9 +506,9 @@ func TestAvailableServesPinnedRegistrySnapshot(t *testing.T) {
 		}
 	}
 	// The old payload had eight static rows plus whatever the DB happened to
-	// hold; the snapshot is a fixed 49.
-	if len(types) != 49 {
-		t.Errorf("expected the 49 pinned entries, got %d", len(types))
+	// hold; the snapshot is a fixed 52.
+	if len(types) != 52 {
+		t.Errorf("expected the 52 pinned entries, got %d", len(types))
 	}
 	if got := found["open_ai"].Section; got != "ai_credentials" {
 		t.Errorf("open_ai section = %q, want ai_credentials", got)
@@ -1043,72 +1044,137 @@ func TestListTypes_Success(t *testing.T) {
 
 // ---- TTSVoices --------------------------------------------------------------
 //
-// Both directions of #466. The route answered 200 with `{"voices": []}` for
-// every project and every model, and the test below asserted only that the
-// `voices` key was present — so it passed on the defect. The route now reports
-// the missing capability: the gateway serves audio synthesis and transcription
-// (#323 landed) but no voice-LISTING route in any dialect, and no code path
-// fills the `meta.voices` cache the reference falls back on.
+// The TTS voice listing (issue 323), which spent two releases as a stub.
+//
+// It first answered 200 with `{"voices": []}` for every project and every
+// model, and the test here asserted only that the `voices` key was present —
+// so it passed on the defect. Issue 466 replaced that with a 501 naming the two
+// things that did not exist: no route anywhere could ask a provider which
+// voices it has, and nothing filled the `meta.voices` cache the reference falls
+// back on.
+//
+// Both now exist, so the 501 goes with them. The tests below are the ones the
+// refusal's own doc comment asked for: the route must do WORK, and an empty
+// answer must be a fact about a provider rather than a statement about this
+// platform.
 
-// TestTTSVoicesReportsTheMissingCapability — direction one. The refusal must
-// carry a reason the caller can act on, not a bare status.
-func TestTTSVoicesReportsTheMissingCapability(t *testing.T) {
+// fakeVoiceLister records the listing calls a handler makes, so a test can
+// assert that the route asked at all — the property the empty-list stub could
+// never have satisfied.
+type fakeVoiceLister struct {
+	handler.ConnectionChecker
+	calls  []string
+	voices []handler.ProviderVoice
+	err    error
+}
+
+func (f *fakeVoiceLister) ListProviderVoices(
+	_ context.Context, providerType, model string,
+) (handler.ProviderVoiceListing, error) {
+	f.calls = append(f.calls, providerType+"/"+model)
+	if f.err != nil {
+		return handler.ProviderVoiceListing{}, f.err
+	}
+	return handler.ProviderVoiceListing{Success: true, Voices: f.voices}, nil
+}
+
+// TestTTSVoicesNoLongerRefuses — the route the refusal replaced is back, and it
+// answers in the reference's shape.
+//
+// With no model selected the reference logs and answers an empty list rather
+// than refusing: the picker asks on its first render, before a model is chosen,
+// and a 4xx there would break a page that is working correctly.
+func TestTTSVoicesNoLongerRefuses(t *testing.T) {
 	r := setupConfigRouter()
 
 	for _, path := range []string{
-		"/api/v2/tts_voices/proj-1",
-		"/api/v2/tts_voices/default/proj-1",
+		"/api/v2/tts_voices/1",
+		"/api/v2/tts_voices/default/1",
 	} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		rec := httptest.NewRecorder()
 		r.ServeHTTP(rec, req)
 
-		if rec.Code != http.StatusNotImplemented {
-			t.Fatalf("%s: expected 501, got %d; body: %s", path, rec.Code, rec.Body.String())
+		if rec.Code == http.StatusNotImplemented {
+			t.Fatalf("%s: the route still refuses; body: %s", path, rec.Body.String())
+		}
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: expected 200, got %d; body: %s", path, rec.Code, rec.Body.String())
 		}
 
 		var body map[string]any
 		if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
 			t.Fatalf("%s: failed to decode response: %v", path, err)
 		}
-		reason, _ := body["error"].(string)
-		if reason == "" {
-			t.Fatalf("%s: the refusal names no reason: %v", path, body)
+		// The reference's exact shape: both keys, always, never null.
+		voices, present := body["voices"].([]any)
+		if !present {
+			t.Fatalf("%s: the answer carries no `voices` array: %v", path, body)
 		}
-		if !strings.Contains(reason, "audio route") {
-			t.Errorf("%s: the reason does not say why the voices are missing: %q", path, reason)
+		if len(voices) != 0 {
+			t.Fatalf("%s: a request with no model name returned voices: %v", path, voices)
+		}
+		if _, named := body["model_name"]; !named {
+			t.Errorf("%s: the answer does not echo `model_name`, which the reference client reads: %v",
+				path, body)
 		}
 	}
 }
 
-// TestTTSVoicesNeverAnswersAnEmptyVoiceList — direction two, and the guard.
-//
-// A caller cannot tell "this project has no voices" from "this route does no
-// work" when both answers are 200 with an empty list. This fails if the stub
-// comes back, whatever status it uses.
-func TestTTSVoicesNeverAnswersAnEmptyVoiceList(t *testing.T) {
+// TestTTSVoicesRefusesAnInvalidProjectID — the route now reads a project
+// schema, so a project id that cannot name one is refused rather than silently
+// answered. Every other read on this router does the same.
+func TestTTSVoicesRefusesAnInvalidProjectID(t *testing.T) {
 	r := setupConfigRouter()
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v2/tts_voices/proj-1", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v2/tts_voices/proj-1?model_name=tts-1", nil)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("an unusable project id answered %d, want 400; body: %s", rec.Code, rec.Body.String())
+	}
+}
 
-	if rec.Code == http.StatusOK {
-		t.Fatalf("the route answers 200 again; body: %s", rec.Body.String())
-	}
+// TestBoundProviderVoices is the shape contract between the gateway and a
+// browser, asserted on the function that enforces it.
+func TestBoundProviderVoices(t *testing.T) {
+	t.Run("keeps the provider order, because the FIRST voice is the default", func(t *testing.T) {
+		out := handler.BoundProviderVoicesForTest([]handler.ProviderVoice{
+			{ID: "shimmer", Name: "Shimmer"},
+			{ID: "alloy", Name: "Alloy"},
+		})
+		if len(out) != 2 || out[0].ID != "shimmer" {
+			t.Fatalf("the provider order was not kept: %+v", out)
+		}
+	})
 
-	var body map[string]any
-	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
-		t.Fatalf("failed to decode response: %v", err)
-	}
-	voices, present := body["voices"]
-	if !present {
-		return
-	}
-	list, isList := voices.([]any)
-	if isList && len(list) == 0 {
-		t.Error("the route offers an empty voice list again; a caller cannot tell that from a project with no voices")
-	}
+	t.Run("drops duplicates and voices with no id", func(t *testing.T) {
+		out := handler.BoundProviderVoicesForTest([]handler.ProviderVoice{
+			{ID: "alloy", Name: "Alloy"},
+			{ID: "alloy", Name: "Alloy again"},
+			{ID: "  ", Name: "Nameless"},
+		})
+		if len(out) != 1 {
+			t.Fatalf("expected one voice, got %+v", out)
+		}
+	})
+
+	t.Run("falls back to the id when a voice carries no display name", func(t *testing.T) {
+		// A blank name would render as an empty option in the picker.
+		out := handler.BoundProviderVoicesForTest([]handler.ProviderVoice{{ID: "alloy"}})
+		if len(out) != 1 || out[0].Name != "alloy" {
+			t.Fatalf("a nameless voice was not given a label: %+v", out)
+		}
+	})
+
+	t.Run("bounds an absurd catalogue", func(t *testing.T) {
+		huge := make([]handler.ProviderVoice, 0, 600)
+		for i := 0; i < 600; i++ {
+			huge = append(huge, handler.ProviderVoice{ID: fmt.Sprintf("v%d", i), Name: "V"})
+		}
+		if out := handler.BoundProviderVoicesForTest(huge); len(out) != 500 {
+			t.Fatalf("catalogue bounded to %d, want 500", len(out))
+		}
+	})
 }
 
 // ---- Content-Type header checks ---------------------------------------------

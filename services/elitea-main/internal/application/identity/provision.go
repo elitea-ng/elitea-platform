@@ -102,10 +102,18 @@ type ProvisionResult struct {
 }
 
 // Repository owns the transaction that resolves or creates the user, links
-// the provider, applies current-baseline group/profile/initial-admin rules, and
-// applies project reconciliation in that same transaction. A successful result
-// is returned only after all those effects commit. A suspended result must be
-// returned without committing provisioning or reconciliation effects.
+// the provider, applies current-baseline group/profile/initial-admin rules,
+// applies project reconciliation, and issues the actor personal access token
+// the agent runtime signs the person's calls with — all in that same
+// transaction. A successful result is returned only after all those effects
+// commit. A suspended result must be returned without committing provisioning
+// or reconciliation effects.
+//
+// The actor token belongs in the SAME list as the initial-admin grant because
+// the other browser plane (internal/api/v2/auth, mounted when single sign-on
+// is configured) already leaves both rows behind. When only one plane left the
+// token behind, which login route an operator chose decided whether a fresh
+// install could complete a chat turn.
 type Repository interface {
 	Provision(ctx context.Context, command ProvisionCommand) (ProvisionResult, error)
 }
@@ -208,30 +216,146 @@ func deriveCommand(assertion VerifiedAssertion, policy ProvisioningPolicy) Provi
 	return command
 }
 
-// IsInitialGlobalAdmin is the ONE definition of "this login is a configured
-// initial global administrator". Both provisioning planes ask it, so the list
-// cannot come to mean two different things on the two of them.
+// InitialGlobalAdminEmailPrefix marks an `initial_global_admins` entry that
+// names a VERIFIED e-mail address instead of a provider reference.
 //
-// The comparison is on the provider reference and is EXACT. It is deliberately
-// not on the email claim: an identity provider that can assert an address would
-// otherwise be able to assert its way into the administration role, which is
-// the takeover class internal/api/v2/auth/oidc.go refuses by construction.
+// WHY THE LIST NEEDED A SECOND SHAPE. A provider reference is the only exact
+// name for a login, but with Azure AD or Okta the OIDC subject is an opaque
+// identifier that nobody can know before the person signs in once. The list is
+// read at boot, so "deploy, sign in, read the subject out of the database, edit
+// the chart, restart" was the only way to make the first administrator of a
+// single-sign-on deployment. An address the operator already knows removes that
+// round trip.
+//
+// THE PREFIX IS MANDATORY AND THE NAMESPACE IS CLOSED. An `email:` entry is
+// compared against a verified address ONLY, and never against a provider
+// reference. Without that rule an identity provider that chooses its own
+// subject could assert `sub = "email:victim@corp.com"` and collect a grant
+// meant for the address.
+const InitialGlobalAdminEmailPrefix = "email:"
+
+// IsInitialGlobalAdmin reports whether the provider reference alone names a
+// configured initial global administrator. It is MatchesInitialGlobalAdmin with
+// no verified address. A plane that carries no verified-address signal calls
+// this one.
+func IsInitialGlobalAdmin(admins []string, providerReference string) bool {
+	return MatchesInitialGlobalAdmin(admins, providerReference, "")
+}
+
+// MatchesInitialGlobalAdmin is the ONE definition of "this login is a
+// configured initial global administrator". Both provisioning planes ask it, so
+// the list cannot come to mean two different things on the two of them.
+//
+// AN ENTRY MATCHES IN EXACTLY ONE OF TWO WAYS.
+//
+//  1. It equals the provider reference, EXACTLY. This is the original rule and
+//     it does not change.
+//  2. It is `email:<address>` and this login carried that address AS VERIFIED.
+//     The comparison is case-insensitive, through the same Unicode lowering
+//     the provisioned account's own address gets.
+//
+// `verifiedEmail` IS A PROMISE, NOT A CLAIM. The caller passes an address here
+// only when the identity provider STATED that the address is verified — for
+// OIDC, an explicit `"email_verified": true`. A caller with no such statement
+// passes "", and then no `email:` entry can match. That keeps the takeover
+// class internal/api/v2/auth/oidc.go refuses by construction out of this path:
+// an identity provider that merely ASSERTS an address still cannot assert its
+// way into the administration role.
 //
 // The reference passed here must be the BARE one — the raw subject, with no
 // `oidc:` / `saml:` namespace prefix. The v2/auth plane stores prefixed
 // references and strips the prefix before asking; see
 // internal/api/v2/auth/first_login.go for why both spellings are accepted in
 // the configuration file but only one is compared here.
-func IsInitialGlobalAdmin(admins []string, providerReference string) bool {
-	if providerReference == "" {
-		return false
-	}
+func MatchesInitialGlobalAdmin(admins []string, providerReference, verifiedEmail string) bool {
+	address := NormalizeInitialGlobalAdminEmail(verifiedEmail)
 	for _, admin := range admins {
-		if admin == providerReference {
+		candidate, isEmailEntry := strings.CutPrefix(admin, InitialGlobalAdminEmailPrefix)
+		if isEmailEntry {
+			if address != "" && NormalizeInitialGlobalAdminEmail(candidate) == address {
+				return true
+			}
+			continue
+		}
+		if providerReference != "" && admin == providerReference {
 			return true
 		}
 	}
 	return false
+}
+
+// NormalizeInitialGlobalAdminEmail folds an address to the form the comparison
+// uses. It answers "" for text that holds no address.
+func NormalizeInitialGlobalAdminEmail(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
+	return lowerLikePython(trimmed)
+}
+
+// InitialGlobalAdminShapes counts what an operator actually configured.
+//
+// It exists for a startup log line. `initial_global_admins` is applied at a
+// first login that can happen days later, so a misspelled entry is otherwise
+// found as "the administrator grant did nothing", with no way to tell a wrong
+// VALUE from a wrong SHAPE.
+type InitialGlobalAdminShapes struct {
+	// References counts the entries compared against a provider reference:
+	// `oidc:<sub>`, `saml:<nameid>`, or a bare subject.
+	References int
+
+	// Emails counts the well-formed `email:<address>` entries.
+	Emails int
+
+	// Malformed lists the entries that are neither. They are reported, never
+	// fatal: a boot that refuses to start over one bad list entry takes out a
+	// running deployment for a value that only changes a first login.
+	Malformed []string
+}
+
+// ClassifyInitialGlobalAdmins sorts the configured entries by shape.
+//
+// A BARE ADDRESS IS NOT MALFORMED. `alice@corp.com` with no prefix is a valid
+// reference entry: it names the pylon-era bare provider reference, and it
+// matches `saml:alice@corp.com` through the prefix strip in
+// internal/api/v2/auth/first_login.go. To report it would warn about a working
+// configuration.
+func ClassifyInitialGlobalAdmins(admins []string) InitialGlobalAdminShapes {
+	var shapes InitialGlobalAdminShapes
+	for _, admin := range admins {
+		candidate, isEmailEntry := strings.CutPrefix(admin, InitialGlobalAdminEmailPrefix)
+		switch {
+		case isEmailEntry && plausibleEmailAddress(candidate):
+			shapes.Emails++
+		case isEmailEntry:
+			shapes.Malformed = append(shapes.Malformed, admin)
+		case strings.TrimSpace(admin) != "":
+			shapes.References++
+		default:
+			shapes.Malformed = append(shapes.Malformed, admin)
+		}
+	}
+	return shapes
+}
+
+// plausibleEmailAddress is the shape test for the text after `email:`. It is
+// coarse on purpose: it refuses what can never equal an address claim, and it
+// leaves the exact grammar to the identity provider that issues the claim.
+func plausibleEmailAddress(value string) bool {
+	if value == "" || value != strings.TrimSpace(value) {
+		return false
+	}
+	local, domain, found := strings.Cut(value, "@")
+	if !found || local == "" || domain == "" {
+		return false
+	}
+	if strings.Contains(domain, "@") || !strings.Contains(domain, ".") {
+		return false
+	}
+	return utf8.ValidString(value) &&
+		!strings.ContainsFunc(value, unicode.IsSpace) &&
+		!strings.ContainsFunc(value, unicode.IsControl)
 }
 
 func lowerLikePython(value string) string {

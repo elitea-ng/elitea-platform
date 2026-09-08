@@ -11,7 +11,7 @@ import type { Dispatch, SetStateAction } from 'react';
 
 import {
   extractInformationFromCredentialError,
-  initialDataForSchema,
+  SchemaField,
   useAvailableConfigurationsType,
   useConfigurationDetail,
   useCreateConfiguration,
@@ -50,7 +50,16 @@ export interface CredentialFormPrefill {
 export interface CredentialFormControllerProps {
   readonly context: CredentialFormContext;
   readonly mode: CredentialFormMode;
-  readonly onSaved: () => void;
+  /**
+   * `savedId` is the just-saved row's own id (`String(ConfigurationWire.id)`),
+   * when the server's response carried one — `undefined` on any row that
+   * somehow doesn't (never in practice for a real save). The
+   * `/settings/*-configuration` routes forward it into the `reveal` search
+   * param on return, so the section that gained/changed this row can open on
+   * its own instead of the whole panel guessing (see `performSave`'s doc
+   * comment).
+   */
+  readonly onSaved: (savedId?: string) => void;
   readonly onDiscarded: () => void;
   readonly prefill?: CredentialFormPrefill;
   readonly onTypeChosen?: (type: string) => void;
@@ -99,7 +108,10 @@ function toCredentialApiError(error: unknown): { readonly data?: { readonly mess
   return { data: { message: record['error'] ?? record['message'], field: record['field'] } };
 }
 
-type SaveOutcome = { readonly status: 'ok' } | { readonly status: 'fieldErrors'; readonly errors: Readonly<Record<string, string>> } | { readonly status: 'genericError' };
+type SaveOutcome =
+  | { readonly status: 'ok'; readonly id?: string }
+  | { readonly status: 'fieldErrors'; readonly errors: Readonly<Record<string, string>> }
+  | { readonly status: 'genericError' };
 
 interface PerformSaveParams {
   readonly mode: CredentialFormMode;
@@ -130,12 +142,14 @@ async function performSave(params: PerformSaveParams): Promise<SaveOutcome> {
   const { mode, projectId, type, label, eliteaTitle, shared, data, schemaProperties, createConfiguration, updateConfiguration } = params;
   const body = { elitea_title: buildTitle(eliteaTitle, label, type), label, data, shared };
   try {
-    if (mode.kind === 'edit' && mode.configId) {
-      await updateConfiguration.mutateAsync({ projectId, configId: mode.configId, body });
-    } else {
-      await createConfiguration.mutateAsync({ projectId, body: { ...body, type } });
-    }
-    return { status: 'ok' };
+    // Captured on both branches (not just create): an edit-save's response
+    // carries the same row's id, and the caller (`save` below) treats the two
+    // uniformly — see `onSaved`'s doc comment on why the edit route also
+    // wants this to reveal the row's section on return.
+    const saved = mode.kind === 'edit' && mode.configId
+      ? await updateConfiguration.mutateAsync({ projectId, configId: mode.configId, body })
+      : await createConfiguration.mutateAsync({ projectId, body: { ...body, type } });
+    return { status: 'ok', ...(saved.id !== undefined ? { id: String(saved.id) } : {}) };
   } catch (error) {
     const { newErrors } = extractInformationFromCredentialError({ error: toCredentialApiError(error), schemaProperties, settings: data });
     if (Object.keys(newErrors).length > 0) return { status: 'fieldErrors', errors: newErrors };
@@ -200,10 +214,10 @@ function useFormSeeding(
       setName(detailData.label ?? detailData.elitea_title ?? '');
       setEliteaTitle(detailData.elitea_title);
       setShared(detailData.shared ?? false);
-      setData({ ...initialDataForSchema(dataSchema), ...detailData.data });
+      setData({ ...SchemaField.initialData(dataSchema), ...detailData.data });
       return;
     }
-    if (dataSchema) setData(initialDataForSchema(dataSchema));
+    if (dataSchema) setData(SchemaField.initialData(dataSchema));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- re-seeds only when the loaded detail or the resolved type schema actually changes.
   }, [mode.kind, detailData, dataSchema]);
 }
@@ -335,7 +349,7 @@ export function useCredentialFormController(props: CredentialFormControllerProps
       updateConfiguration,
     }).then((outcome) => {
       if (outcome.status === 'ok') {
-        onSaved();
+        onSaved(outcome.id);
       } else if (outcome.status === 'fieldErrors') {
         setFieldErrors(outcome.errors);
       } else {

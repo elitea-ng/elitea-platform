@@ -1,12 +1,11 @@
 import { StrictMode } from 'react';
 
-import { RouterProvider } from '@tanstack/react-router';
 import { createRoot } from 'react-dom/client';
 
 import { configureGeneratedClient } from '@/shared/api/generated/mutator';
-import { AppProviders } from '@/app/providers';
 import { adminApiBaseUrl } from '@/pages/admin/adminUiConfig';
-import { createAdminRouter } from '@/pages/admin/router';
+
+import { AdminApp } from './AdminApp';
 
 /**
  * Admin build entry (spec §7.4, contract C15). Served by the Go adminui handler
@@ -33,14 +32,16 @@ import { createAdminRouter } from '@/pages/admin/router';
  *    `/admin/app`, since the TanStack Router vite plugin generates a route tree
  *    for the main app target only.
  *
- * `AppProviders` is shared with the main app unchanged: error boundary, MUI
- * theme, i18n, query client. Its socket client degrades to the no-op one when
- * no socket config resolves, which is the admin bundle's normal state.
+ * `AdminApp` (`./AdminApp.tsx`, beside this file) is what actually composes
+ * `AppProviders` and the router now, rather than this file doing both inline —
+ * it also runs the boot-time access gate that keeps the router from mounting
+ * at all for a caller with no administration-mode permission. `AppProviders`
+ * is shared with the main app unchanged: error boundary, MUI theme, i18n,
+ * query client. Its socket client degrades to the no-op one when no socket
+ * config resolves, which is the admin bundle's normal state.
  */
 
 configureGeneratedClient({ baseUrl: adminApiBaseUrl() });
-
-const router = createAdminRouter();
 
 const container = document.getElementById('root');
 if (!container) {
@@ -49,8 +50,6 @@ if (!container) {
 
 createRoot(container).render(
   <StrictMode>
-    <AppProviders>
-      <RouterProvider router={router} />
-    </AppProviders>
+    <AdminApp />
   </StrictMode>,
 );

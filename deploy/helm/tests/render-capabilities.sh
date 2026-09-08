@@ -138,17 +138,97 @@ EXPECTED
 # instead. Re-add a loop here, with an issue reference, the next time a route
 # has to ship dark.
 
-# The default install must not turn on a capability that needs production
-# authentication, because fileConfig.authConfig is off by default and the
-# binary refuses to start on that pair.
+# The default install must not turn on a capability it cannot authenticate.
+# values.yaml states no authentication at all, and the binary refuses to start
+# on that pair.
+#
+# ELITEA_CONFIGURATIONS_ENABLED is DERIVED rather than stated (values.yaml
+# ships it empty), so this row also proves the derivation reaches "false" for
+# the shape that has neither authentication nor a public project id. The
+# OIDC-only render below is its other half: a derivation stuck at "false"
+# would pass here and fail there.
+# ELITEA_INDEX_TYPES_ENABLED and ELITEA_APPLICATION_SKILLS_ENABLED are derived
+# the same way now (#394, #395). values.yaml ships both EMPTY, so this row also
+# proves each derivation reaches "false" for an install with no authentication,
+# and the OIDC-only render below proves it reaches "true" for one that has it.
 for key in ELITEA_CONFIGURATIONS_ENABLED ELITEA_PROJECT_INFO_ENABLED ELITEA_APPLICATION_SKILLS_ENABLED ELITEA_INDEX_TYPES_ENABLED; do
   actual="$(data "$key" "$WORK/default.yaml")"
   if [ "$actual" = "false" ]; then
     pass "$key is off in a default install"
   else
-    fail "$key is \"$actual\" in a default install, which has no production authentication and would refuse to start"
+    fail "$key is \"$actual\" in a default install, which has no authentication and would refuse to start"
   fi
 done
+
+# The Configurations plane on an OIDC-ONLY install (gap G2).
+#
+# This is the shape a customer with corporate single sign-on runs: real
+# authentication, and NO Form authentication document. cmd/elitea-main used to
+# test the FormGraph, which only ELITEA_AUTH_CONFIG_FILE builds, so this
+# install got no credential routes, no model catalogue and no project vector
+# store — every LLM setup step fell back to seed-llm-api.py or raw SQL.
+#
+# The assertion reads the RENDERED ConfigMap, not values.yaml, because the
+# value is derived in the template. Nothing else in this suite renders an
+# install that authenticates without the Form document.
+helm template ${GATEWAY_RENDER_POSTURE} ${ONLY_MAIN} test-release "$CHART" \
+  --set-string main.env.OIDC_ISSUER_URL=https://sso.render-only.example.invalid \
+  --set-string main.env.ELITEA_AI_PROJECT_ID=1 \
+  --set-string main.env.DEPLOYMENT_URL=https://render-only.example.invalid \
+  >"$WORK/oidc-only.yaml"
+pass "the chart renders an OIDC-only install with no authentication document"
+
+if [ "$(data ELITEA_CONFIGURATIONS_ENABLED "$WORK/oidc-only.yaml")" = "true" ]; then
+  pass "an OIDC-only install renders ELITEA_CONFIGURATIONS_ENABLED=\"true\""
+else
+  fail "an OIDC-only install renders ELITEA_CONFIGURATIONS_ENABLED=\"$(data ELITEA_CONFIGURATIONS_ENABLED "$WORK/oidc-only.yaml")\": a deployment with real single sign-on gets no configuration or model-catalogue routes, and must seed its LLM rows with SQL (gap G2)"
+fi
+
+# The index-types and attached-skills capabilities on the SAME OIDC-only shape
+# (#394, #395).
+#
+# Each route is now the ONLY handler for its path: the prototype fallbacks are
+# deleted from internal/api/router.go. A derivation stuck at "false" therefore
+# does not degrade the answer, it removes the path — 404 where the published
+# contract declares a body. This is the row that catches that.
+for key in ELITEA_INDEX_TYPES_ENABLED ELITEA_APPLICATION_SKILLS_ENABLED; do
+  actual="$(data "$key" "$WORK/oidc-only.yaml")"
+  if [ "$actual" = "true" ]; then
+    pass "an OIDC-only install renders $key=\"true\""
+  else
+    fail "an OIDC-only install renders $key=\"$actual\": the reviewed route is the only handler for its path, so the deployment answers 404 where the published contract declares a body"
+  fi
+done
+
+# The operator's stated value still wins over the derivation, for these two as
+# well. A capability that cannot be turned off is not configurable.
+for key in ELITEA_INDEX_TYPES_ENABLED ELITEA_APPLICATION_SKILLS_ENABLED; do
+  helm template ${GATEWAY_RENDER_POSTURE} ${ONLY_MAIN} test-release "$CHART" \
+    --set-string main.env.OIDC_ISSUER_URL=https://sso.render-only.example.invalid \
+    --set-string main.env.ELITEA_AI_PROJECT_ID=1 \
+    --set-string main.env.DEPLOYMENT_URL=https://render-only.example.invalid \
+    --set-string "main.env.$key=false" \
+    >"$WORK/oidc-capability-off.yaml"
+  actual="$(data "$key" "$WORK/oidc-capability-off.yaml")"
+  if [ "$actual" = "false" ]; then
+    pass "a stated $key=false overrides the derivation"
+  else
+    fail "a stated $key=false renders \"$actual\": the operator cannot turn the capability off"
+  fi
+done
+
+# The operator's stated value still wins over the derivation, in BOTH
+# directions. Without this, "derived" would quietly mean "not configurable".
+stated_off="$(helm template ${GATEWAY_RENDER_POSTURE} ${ONLY_MAIN} test-release "$CHART" \
+  --set-string main.env.OIDC_ISSUER_URL=https://sso.render-only.example.invalid \
+  --set-string main.env.ELITEA_AI_PROJECT_ID=1 \
+  --set-string main.env.ELITEA_CONFIGURATIONS_ENABLED=false \
+  >"$WORK/oidc-stated-off.yaml" && data ELITEA_CONFIGURATIONS_ENABLED "$WORK/oidc-stated-off.yaml")"
+if [ "$stated_off" = "false" ]; then
+  pass "a stated ELITEA_CONFIGURATIONS_ENABLED=false overrides the derivation"
+else
+  fail "a stated ELITEA_CONFIGURATIONS_ENABLED=false renders \"$stated_off\": the operator cannot turn the plane off"
+fi
 
 # The project event stream and the admin console.
 if [ -n "$(data ADMIN_UI_STATIC_DIR "$WORK/default.yaml")" ]; then
@@ -201,7 +281,14 @@ fi
   # Named in a slice literal rather than in a call, so no pattern above sees
   # it. It is the switch the whole block hangs on.
   echo ELITEA_RUNTIME_ENABLED
-} | sort -u >"$WORK/required-names.txt"
+} | sort -u >"$WORK/required-names.all.txt"
+
+# A name config.go reads through lookup() but derives when absent is marked
+# `// helm-render-optional: NAME` beside its lookup; the chart may omit it.
+grep -oE 'helm-render-optional: ELITEA_RUNTIME_[A-Z0-9_]+' "$CONFIG_GO" |
+  sed -E 's/.*: //' | sort -u >"$WORK/optional-names.txt"
+comm -23 "$WORK/required-names.all.txt" "$WORK/optional-names.txt" \
+  >"$WORK/required-names.txt"
 
 required_count="$(wc -l <"$WORK/required-names.txt" | tr -d ' ')"
 if [ "$required_count" -lt 25 ]; then
@@ -756,8 +843,16 @@ refuses "the runtime without production authentication" \
   "fileConfig.authConfig.enabled" \
   -f "$CHART/values-standalone.yaml" --set main.fileConfig.authConfig.enabled=false
 
-refuses "the Configurations plane without production authentication" \
-  "fileConfig.authConfig.enabled" \
+refuses "the Configurations plane without ANY authentication" \
+  "needs an authenticated deployment" \
+  --set-string main.env.ELITEA_CONFIGURATIONS_ENABLED=true
+
+# The plane's OTHER prerequisite. cmd/elitea-main reads ELITEA_AI_PROJECT_ID
+# only on the enabled path and refuses to start without it, so the pair is a
+# CrashLoopBackOff whose cause is one log line. The chart states it instead.
+refuses "the Configurations plane without a public project id" \
+  "needs a public project id" \
+  --set-string main.env.OIDC_ISSUER_URL=https://sso.example.invalid \
   --set-string main.env.ELITEA_CONFIGURATIONS_ENABLED=true
 
 refuses "index ingest without the Configurations plane" \

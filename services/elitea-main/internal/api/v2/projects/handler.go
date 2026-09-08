@@ -54,10 +54,14 @@ func WithPermissionResolver(resolver auth.PermissionResolver) Option {
 }
 
 const (
-	CurrentProjectListPath       = "/api/v2/projects/project/default/1"
-	CurrentProjectListMode       = auth.PermissionModeDefault
-	CurrentProjectListProjectID  = "1"
-	CurrentProjectListPermission = "projects.projects.project.view"
+	CurrentProjectListPath = "/api/v2/projects/project/default/1"
+	CurrentProjectListMode = auth.PermissionModeDefault
+	// CurrentProjectListPublicProjectID is the public project the `default/1`
+	// path segment names. It reaches the QUERY, as the `check_public_role`
+	// filter's subject; it is no longer the project the route's permission gate
+	// resolves against (#830).
+	CurrentProjectListPublicProjectID = "1"
+	CurrentProjectListPermission      = "projects.projects.project.view"
 )
 
 func NewHandler(pool *pgxpool.Pool, options ...Option) *Handler {

@@ -26,9 +26,12 @@ func TestSessionCookieDoesNotFabricateLegacyRole(t *testing.T) {
 	_, _ = mac.Write([]byte(encoded))
 	token := encoded + "." + hex.EncodeToString(mac.Sum(nil))
 
-	user, ok := verifySessionCookie(token, secret)
+	user, refusal, ok := verifySessionCookie(token, secret)
 	if !ok {
 		t.Fatal("valid test cookie was rejected")
+	}
+	if refusal != "" {
+		t.Fatalf("refusal reason for an accepted cookie = %q, want empty", refusal)
 	}
 	if len(user.Roles) != 0 {
 		t.Fatalf("session roles = %v, want authoritative resolver only", user.Roles)

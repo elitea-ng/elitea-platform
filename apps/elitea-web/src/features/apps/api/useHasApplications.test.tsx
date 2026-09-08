@@ -45,6 +45,7 @@ describe('useHasApplications', () => {
             is_forked: false,
             meta: null,
             has_interrupt: false,
+            tags: [],
           },
         ],
         total: 1,

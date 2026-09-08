@@ -49,8 +49,8 @@ func (s stubRepo) GetAgentAnalytics(_ context.Context, _ domain.QueryParams) (do
 	return domain.AgentBreakdown{}, s.err
 }
 
-func (s stubRepo) GetToolAnalytics(_ context.Context, _ domain.QueryParams) ([]domain.ToolAnalytics, error) {
-	return nil, s.err
+func (s stubRepo) GetToolAnalytics(_ context.Context, _ domain.QueryParams) (domain.ToolBreakdown, error) {
+	return domain.ToolBreakdown{}, s.err
 }
 
 func (s stubRepo) GetUserActivity(_ context.Context, _ domain.QueryParams) ([]domain.UserActivity, bool, error) {
@@ -266,20 +266,34 @@ func TestAdoptionRateCannotExceedOneHundredPercent(t *testing.T) {
 	}
 }
 
-// A project whose membership table exists and holds nobody. 0/0 is not 0%.
-func TestAdoptionRateIsAbsentForAnEmptyProject(t *testing.T) {
+// A project whose membership table exists and holds nobody publishes NEITHER
+// figure. 0/0 is not 0%, and "of 0" is not a denominator.
+//
+// The tile prints the caller count over total_project_users: with a zero there
+// and one caller it read "AI ACTIVE 1 of 0 members" — one caller cannot be one
+// of none. A zero denominator says the membership source did not describe this
+// project rather than describing it, so the pair goes and the tile reports the
+// caller count alone.
+func TestAdoptionPairIsAbsentForAProjectWithNoMembers(t *testing.T) {
 	t.Parallel()
 
 	total, activeMembers := int64(0), int64(0)
-	repo := stubRepo{summary: domain.UsageSummary{TotalProjectUsers: &total, ActiveMembers: &activeMembers}}
+	repo := stubRepo{summary: domain.UsageSummary{
+		ActiveUsers:       1,
+		TotalProjectUsers: &total,
+		ActiveMembers:     &activeMembers,
+	}}
 	_, body := do(t, repo, "/")
 	kpis, _ := body["kpis"].(map[string]any)
 
-	if kpis["total_project_users"] != float64(0) {
-		t.Fatalf("total_project_users %v, want 0", kpis["total_project_users"])
+	for _, absent := range []string{"total_project_users", "active_project_members", "adoption_rate"} {
+		if v, present := kpis[absent]; present {
+			t.Fatalf("kpis.%s is %v for a project with no members", absent, v)
+		}
 	}
-	if v, present := kpis["adoption_rate"]; present {
-		t.Fatalf("adoption_rate is %v for a project with no members", v)
+	// The caller count survives: it is a true figure about real usage.
+	if kpis["ai_active_users"] != float64(1) {
+		t.Fatalf("ai_active_users %v, want 1", kpis["ai_active_users"])
 	}
 }
 
@@ -406,9 +420,9 @@ func (r recordingRepo) GetAgentAnalytics(_ context.Context, params domain.QueryP
 	return domain.AgentBreakdown{}, nil
 }
 
-func (r recordingRepo) GetToolAnalytics(_ context.Context, params domain.QueryParams) ([]domain.ToolAnalytics, error) {
+func (r recordingRepo) GetToolAnalytics(_ context.Context, params domain.QueryParams) (domain.ToolBreakdown, error) {
 	*r.seen = append(*r.seen, params)
-	return nil, nil
+	return domain.ToolBreakdown{}, nil
 }
 
 func (r recordingRepo) GetUserActivity(_ context.Context, params domain.QueryParams) ([]domain.UserActivity, bool, error) {

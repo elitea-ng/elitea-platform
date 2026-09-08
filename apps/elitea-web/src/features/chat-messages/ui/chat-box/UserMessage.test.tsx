@@ -99,9 +99,12 @@ describe('UserMessage author caption', () => {
     // empty name and NO `userId`.
     const queryClient = renderMessage({ name: '' });
 
-    // The bubble is all there is — no caption line above it, and in
-    // particular not the reader's name.
-    expect(screen.getByTestId('user-message').textContent).toBe('hello');
+    // The caption line is still there (avatar + timestamp — every production
+    // row has one), but it names NOBODY: no author, and in particular not the
+    // reader. Asserting on the whole row's textContent would pin the caption's
+    // layout rather than its attribution, so the name is asserted directly.
+    expect(screen.getByTestId('chat-message-body').textContent).toBe('hello');
+    expect(screen.getByTestId('chat-message-header').textContent).not.toContain(READER);
     expect(screen.queryByText(READER)).toBeNull();
     expect(queryClient.getQueryCache().getAll()).toHaveLength(0);
   });
@@ -151,5 +154,69 @@ describe('UserMessage author caption', () => {
     expect(screen.getByText(READER)).toBeTruthy();
     // ...and it came off the message, not off a re-read of the signed-in user.
     expect(queryClient.getQueryCache().getAll()).toHaveLength(0);
+  });
+});
+
+
+/**
+ * The caption line itself, which did not exist.
+ *
+ * Every production transcript row — user and assistant alike — opens with
+ * `<24px avatar> <author> to <recipient>` and closes with a right-aligned
+ * relative timestamp (measured live on next.elitea.ai at 2000px, and visible
+ * in every reference screenshot). This component rendered a right-aligned
+ * `primary.main` chat bubble with a bare `caption` name above it and no
+ * recipient and no timestamp at all — a layout the product has nowhere.
+ *
+ * Structural, so it is asserted structurally: the elements have to be
+ * PRESENT. A style-only assertion would keep passing if the header were
+ * dropped again.
+ */
+describe('UserMessage caption line', () => {
+  it('captions the row with the author, the recipient and the time', () => {
+    stubCurrentAuthor();
+    renderMessage({
+      name: 'Bob Reviewer',
+      userId: 'user-7',
+      sentTo: { entity_name: 'dummy', entity_meta: {}, meta: {} },
+    });
+
+    const header = screen.getByTestId('chat-message-header');
+    expect(header.textContent).toContain('Bob Reviewer');
+    // `to <recipient>`: a dummy participant resolves to the deployment's
+    // system sender name, which defaults to the baseline's 'Elitea'.
+    expect(screen.getByTestId('chat-message-recipient').textContent).toBe('Elitea');
+    expect(screen.getByTestId('chat-message-time')).toBeTruthy();
+    expect(screen.getByTestId('chat-message-avatar')).toBeTruthy();
+  });
+
+  it('drops the whole "to ..." clause when the row names no recipient', () => {
+    stubCurrentAuthor();
+    renderMessage({ name: 'Bob Reviewer', userId: 'user-7' });
+
+    expect(screen.getByTestId('chat-message-header').textContent).toContain('Bob Reviewer');
+    expect(screen.queryByTestId('chat-message-recipient')).toBeNull();
+  });
+
+  it('shows the copy action at rest, not only on hover', () => {
+    stubCurrentAuthor();
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <ThemeProvider theme={theme} defaultMode={DEFAULT_COLOR_SCHEME}>
+          <UserMessage
+            message={buildMessage(0, { name: 'Bob Reviewer' })}
+            messageId="q0"
+            onCopy={() => undefined}
+          />
+        </ThemeProvider>
+      </QueryClientProvider>,
+    );
+
+    // The production row's action strip is `visibility: visible` (measured);
+    // this one was hard-coded `hidden`, so the icons the reference screenshots
+    // show were simply never painted.
+    const actions = screen.getByRole('button', { name: 'Copy to clipboard' });
+    expect(actions).toBeTruthy();
+    expect(actions.closest('.actionButtons')).toBeTruthy();
   });
 });

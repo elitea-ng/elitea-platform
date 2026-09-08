@@ -239,6 +239,11 @@ func (h *Handler) callTool(r *http.Request, schema string, s scope, message rpcM
 	if params.Arguments == nil {
 		params.Arguments = map[string]any{}
 	}
+	// Preserve the original JSON bytes for the Python toolkit command.
+	var rawParams struct {
+		Arguments json.RawMessage `json:"arguments"`
+	}
+	_ = json.Unmarshal(message.Params, &rawParams)
 
 	// The name is resolved against the SAME listing tools/list serves, in the
 	// same scope. Without that, a call scoped to one toolkit could name a tool
@@ -292,23 +297,25 @@ func (h *Handler) callTool(r *http.Request, schema string, s scope, message rpcM
 		return newResult(message.ID, h.callInternalSecretTool(r, projectID, target, params.Arguments))
 	}
 
-	// Preserve the original whole-runtime refusal when neither execution seam
-	// is composed. This is the exact runtime.enabled=false deployment shape.
-	if h.start == nil && h.toolkitExecute == nil {
+	if h.start == nil && h.toolkitExecute == nil && h.toolRuns == nil {
 		return newResult(message.ID, errorResult(ToolExecutionUnavailableReason))
 	}
-	if target.runnableToolkit() {
-		if h.toolkitExecute == nil {
+	if target.runnableToolkitTool() {
+		if h.toolkitExecute == nil && h.toolRuns == nil {
 			return newResult(message.ID, errorResult(ToolkitExecutionUnavailableReason))
 		}
-		actorUserID, refusal := h.authorizePermission(
-			r, projectID, runPermission, "running a toolkit operation",
-		)
+		actorUserID, refusal := h.authorizePermission(r, projectID, runPermission, "running a toolkit operation")
 		if refusal != nil {
 			return newResult(message.ID, refusal)
 		}
+		// A read-only refusal must never fall through to an effectful worker.
+		if h.toolkitExecute != nil {
+			return newResult(message.ID, h.runReadToolkitTool(
+				r.Context(), projectID, actorUserID, target, params.Arguments,
+			))
+		}
 		return newResult(message.ID, h.runToolkitTool(
-			r.Context(), projectID, actorUserID, target, params.Arguments,
+			r.Context(), projectID, actorUserID, target, rawParams.Arguments,
 		))
 	}
 	if !target.runnableAgent() {

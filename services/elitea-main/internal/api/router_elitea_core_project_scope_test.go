@@ -15,6 +15,7 @@ import (
 	v2analytics "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/analytics"
 	v2convs "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
 	v2folders "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/folders"
+	v2pipelinetriggers "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/pipelinetriggers"
 	v2skills "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/skills"
 	v2tags "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/tags"
 )
@@ -133,7 +134,11 @@ var eliteaCoreProjectScopedRoutes = []eliteaCoreProjectScopedRoute{
 	{http.MethodPatch, "/api/v2/elitea_core/skill/prompt_lib/7/1", "/api/v2/elitea_core/skill/prompt_lib/8/1", "models.applications.skills.update"},
 	{http.MethodDelete, "/api/v2/elitea_core/skill/prompt_lib/7/1", "/api/v2/elitea_core/skill/prompt_lib/8/1", "models.applications.skills.delete"},
 	{http.MethodGet, "/api/v2/elitea_core/skill_export/prompt_lib/7/1", "/api/v2/elitea_core/skill_export/prompt_lib/8/1", "models.applications.skills.export"},
-	{http.MethodGet, "/api/v2/elitea_core/application_skills/prompt_lib/7/1", "/api/v2/elitea_core/application_skills/prompt_lib/8/1", "models.applications.applications.details"},
+	// NOTE(#395): GET /application_skills/... stood here. #395 deleted the
+	// prototype mount this table exercises; the reviewed route
+	// (internal/api/v2/applicationskills) answers the path now and brings its
+	// own cross-project and under-privileged cases in
+	// TestCurrentApplicationSkillsHTTPPostgresRBACAndTenantMatrix.
 	// Folders.
 	{http.MethodGet, "/api/v2/elitea_core/folder/prompt_lib/7", "/api/v2/elitea_core/folder/prompt_lib/8", "models.chat.folders.get"},
 	{http.MethodPost, "/api/v2/elitea_core/folder/prompt_lib/7", "/api/v2/elitea_core/folder/prompt_lib/8", "models.chat.folders.create"},
@@ -157,6 +162,9 @@ var eliteaCoreProjectScopedRoutes = []eliteaCoreProjectScopedRoute{
 	{http.MethodPost, "/api/v2/elitea_core/canvases/prompt_lib/7", "/api/v2/elitea_core/canvases/prompt_lib/8", "models.chat.canvas.create"},
 	{http.MethodGet, "/api/v2/elitea_core/canvas/prompt_lib/7/1", "/api/v2/elitea_core/canvas/prompt_lib/8/1", "models.chat.canvas.details"},
 	{http.MethodPut, "/api/v2/elitea_core/canvas/prompt_lib/7/1", "/api/v2/elitea_core/canvas/prompt_lib/8/1", "models.chat.canvas.update"},
+	// Canvas presence (#622) takes the canvas READ permission, not a new one:
+	// announcing presence on a canvas is not a wider claim than opening it.
+	{http.MethodPost, "/api/v2/elitea_core/canvas/prompt_lib/7/1/presence", "/api/v2/elitea_core/canvas/prompt_lib/8/1/presence", "models.chat.canvas.details"},
 	{http.MethodPost, "/api/v2/elitea_core/attachments/prompt_lib/7/1", "/api/v2/elitea_core/attachments/prompt_lib/8/1", "models.chat.attachments.create"},
 	{http.MethodDelete, "/api/v2/elitea_core/attachments/prompt_lib/7/1", "/api/v2/elitea_core/attachments/prompt_lib/8/1", "models.chat.attachments.delete"},
 	{http.MethodGet, "/api/v2/elitea_core/context_strategy/prompt_lib/7/1", "/api/v2/elitea_core/context_strategy/prompt_lib/8/1", "models.chat.conversation.details"},
@@ -171,7 +179,9 @@ var eliteaCoreProjectScopedRoutes = []eliteaCoreProjectScopedRoute{
 	{http.MethodGet, "/api/v2/elitea_core/toolkits/prompt_lib/7", "/api/v2/elitea_core/toolkits/prompt_lib/8", "models.applications.toolkits.details"},
 	{http.MethodGet, "/api/v2/elitea_core/toolkit_validator/prompt_lib/7/1", "/api/v2/elitea_core/toolkit_validator/prompt_lib/8/1", "models.applications.toolkit_validator.check"},
 	{http.MethodGet, "/api/v2/elitea_core/export_toolkit/prompt_lib/7/1", "/api/v2/elitea_core/export_toolkit/prompt_lib/8/1", "models.applications.export_toolkit.export"},
-	{http.MethodGet, "/api/v2/elitea_core/index_types/prompt_lib/7", "/api/v2/elitea_core/index_types/prompt_lib/8", "models.applications.index_types.details"},
+	// NOTE(#394): GET /index_types/... stood here, for the same reason and with
+	// the same replacement: TestCurrentIndexTypesHTTPPostgresRBACAndTenantMatrix
+	// (internal/api/v2/indextypes).
 	{http.MethodGet, "/api/v2/elitea_core/index_meta/prompt_lib/7/1", "/api/v2/elitea_core/index_meta/prompt_lib/8/1", "models.applications.index_meta.details"},
 	{http.MethodPatch, "/api/v2/elitea_core/index_meta/prompt_lib/7/1/2", "/api/v2/elitea_core/index_meta/prompt_lib/8/1/2", "models.applications.index_meta.edit"},
 	{http.MethodDelete, "/api/v2/elitea_core/index_meta/prompt_lib/7/1/2", "/api/v2/elitea_core/index_meta/prompt_lib/8/1/2", "models.applications.index_meta.delete"},
@@ -209,6 +219,16 @@ var eliteaCoreProjectScopedRoutes = []eliteaCoreProjectScopedRoute{
 	{http.MethodGet, "/api/v2/elitea_core/search_options/prompt_lib/7", "/api/v2/elitea_core/search_options/prompt_lib/8", "models.promptlib_shared.search"},
 	// Batch version replacement and the two attachment-storage writes.
 	{http.MethodPost, "/api/v2/elitea_core/batch_replace_version/prompt_lib/7/1/2", "/api/v2/elitea_core/batch_replace_version/prompt_lib/8/1/2", "models.applications.version.update"},
+	// The three AI-draft routes (#254 P1). They spend the PROJECT's provider
+	// budget on a model call keyed to the {projectID} segment, so they belong
+	// in this table for the same reason every write above does: the path
+	// segment must not be the authorization claim. The project-context row
+	// names `.edit` rather than legacy's `models.project_context.generate` —
+	// see the registration in router.go for why that substitution is the safe
+	// direction.
+	{http.MethodPost, "/api/v2/elitea_core/generate_application_draft/prompt_lib/7", "/api/v2/elitea_core/generate_application_draft/prompt_lib/8", "models.applications.applications.create"},
+	{http.MethodPost, "/api/v2/elitea_core/generate_skill_draft/prompt_lib/7", "/api/v2/elitea_core/generate_skill_draft/prompt_lib/8", "models.applications.skills.create"},
+	{http.MethodPost, "/api/v2/elitea_core/generate_project_context_draft/prompt_lib/7", "/api/v2/elitea_core/generate_project_context_draft/prompt_lib/8", "models.project_context.edit"},
 
 	// ── The three SIBLING groups #313 left behind ───────────────────────────
 	//
@@ -242,6 +262,28 @@ var eliteaCoreProjectScopedRoutes = []eliteaCoreProjectScopedRoute{
 	{http.MethodPost, "/api/v2/context_manager/optimize_context/7/1", "/api/v2/context_manager/optimize_context/8/1", "models.chat.conversation.edit"},
 	{http.MethodPut, "/api/v2/context_manager/summary/7/1/2", "/api/v2/context_manager/summary/8/1/2", "models.chat.conversation.edit"},
 	{http.MethodDelete, "/api/v2/context_manager/summary/7/1/2", "/api/v2/context_manager/summary/8/1/2", "models.chat.conversation.edit"},
+
+	// Pipeline triggers and schedules (issues 192, 193). Every one of these
+	// names {projectID} and then reads or writes THAT project's tenant schema,
+	// so they belong in this table for the reason every row above does: the
+	// path segment must not be the authorization claim.
+	//
+	// The permissions are the pipeline VERSION's own — a person who may edit a
+	// pipeline may configure how it starts. `secret` carries the WRITE
+	// permission on a GET, deliberately: it hands back a live credential, which
+	// is not the same act as reporting that one exists.
+	//
+	// The INBOUND trigger is NOT here and cannot be. It is mounted above the
+	// Auth group and its only credential is the per-pipeline secret; its own
+	// refusals are pinned by the pipelinetriggers package's tests, which assert
+	// that a token cannot reach another project at all.
+	{http.MethodGet, "/api/v2/pipeline_triggers/prompt_lib/7/1", "/api/v2/pipeline_triggers/prompt_lib/8/1", "models.applications.version.details"},
+	{http.MethodGet, "/api/v2/pipeline_triggers/secret/prompt_lib/7/1", "/api/v2/pipeline_triggers/secret/prompt_lib/8/1", "models.applications.version.update"},
+	{http.MethodPost, "/api/v2/pipeline_triggers/prompt_lib/7/1", "/api/v2/pipeline_triggers/prompt_lib/8/1", "models.applications.version.update"},
+	{http.MethodDelete, "/api/v2/pipeline_triggers/prompt_lib/7/1", "/api/v2/pipeline_triggers/prompt_lib/8/1", "models.applications.version.update"},
+	{http.MethodGet, "/api/v2/pipeline_schedules/prompt_lib/7/1", "/api/v2/pipeline_schedules/prompt_lib/8/1", "models.applications.version.details"},
+	{http.MethodPut, "/api/v2/pipeline_schedules/prompt_lib/7/1", "/api/v2/pipeline_schedules/prompt_lib/8/1", "models.applications.version.update"},
+	{http.MethodDelete, "/api/v2/pipeline_schedules/prompt_lib/7/1", "/api/v2/pipeline_schedules/prompt_lib/8/1", "models.applications.version.update"},
 
 	// The project member and role listings under /admin, in DEFAULT mode —
 	// what the project settings page calls as /admin/{users,roles}/default/.
@@ -309,6 +351,11 @@ func newEliteaCoreProjectScopeRouter(
 		AnalyticsRepo:             struct{ v2analytics.Repository }{},
 		ProjectAccessQuerier:      querier,
 		ProjectPermissionResolver: resolver,
+		// The pipeline trigger and schedule settings routes (issues 192, 193).
+		// A handler with NO pool is enough here: every row below asserts a
+		// REFUSAL produced by the gate above the handler, so the handler must
+		// exist and must never be reached.
+		PipelineTriggers: v2pipelinetriggers.NewHandler(nil),
 	})
 }
 

@@ -30,6 +30,7 @@ import Typography from '@mui/material/Typography';
 
 import { t } from '@/shared/i18n';
 
+import { ConfigurationHtmlField } from './ConfigurationHtmlField';
 import { ConfigurationLinksEditor, toConfigLinks } from './ConfigurationLinksEditor';
 import {
   ConfigurationListEditor,
@@ -295,6 +296,8 @@ function FieldRow(props: FieldProps) {
       return <NumberField {...props} />;
     case 'multiline':
       return <TextFieldRow {...props} multiline />;
+    case 'html':
+      return <ConfigurationHtmlField {...props} />;
     case 'text':
       return <TextFieldRow {...props} multiline={false} />;
   }

@@ -57,15 +57,19 @@ import type {
   BatchDeleteObjectsResponse,
   Bucket,
   BucketListResponse,
+  BucketPermissionListResponse,
+  BucketPermissionRow,
   CompleteMultipartRequest,
   CreateBucketRequest,
   CreateTransferGrantRequest,
+  DeleteBucketPermissionRequest,
   Error,
   ListObjectsParams,
   ListObjectsResponse,
   N401Response,
   N403Response,
   PresignUploadPartResponse,
+  SetBucketPermissionsRequest,
   TransferGrantResponse,
   UpdateBucketRequest,
   UploadObjectBody,
@@ -3830,6 +3834,702 @@ export function useAbortMultipartUpload<
   const queryOptions = getAbortMultipartUploadQueryOptions(
     projectID,
     grantID,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listBucketPermissionsResponse200 = {
+  data: BucketPermissionListResponse;
+  status: 200;
+};
+
+export type listBucketPermissionsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listBucketPermissionsResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listBucketPermissionsResponseSuccess =
+  listBucketPermissionsResponse200 & {
+    headers: Headers;
+  };
+export type listBucketPermissionsResponseError = (
+  listBucketPermissionsResponse401 | listBucketPermissionsResponse403
+) & {
+  headers: Headers;
+};
+
+export type listBucketPermissionsResponse =
+  listBucketPermissionsResponseSuccess | listBucketPermissionsResponseError;
+
+export const getListBucketPermissionsUrl = (projectID: number) => {
+  return `/artifacts/bucket_permissions/${projectID}`;
+};
+
+/**
+ * The access model is EXCEPTIONS to a default of full access, which is legacy's own model (legacy/plugins/artifacts utils/utils.py:99-132): a member with no entry for a bucket may read and write it. An entry with an empty permission list means no access. The route answers every exception in the project, per member, not the exceptions for one bucket.
+ * @summary List the per-bucket access exceptions in a project
+ */
+export const listBucketPermissions = async (
+  projectID: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listBucketPermissionsResponse> => {
+  return eliteaFetch<listBucketPermissionsResponse>(
+    getListBucketPermissionsUrl(projectID),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListBucketPermissionsQueryKey = (projectID: number) => {
+  return [`/artifacts/bucket_permissions/${projectID}`] as const;
+};
+
+export const getListBucketPermissionsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listBucketPermissions>>,
+  TError = N401Response | N403Response,
+>(
+  projectID: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listBucketPermissions>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListBucketPermissionsQueryKey(projectID);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listBucketPermissions>>
+  > = ({ signal }) =>
+    listBucketPermissions(projectID, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectID !== null && projectID !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listBucketPermissions>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListBucketPermissionsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listBucketPermissions>>
+>;
+export type ListBucketPermissionsQueryError = N401Response | N403Response;
+
+export function useListBucketPermissions<
+  TData = Awaited<ReturnType<typeof listBucketPermissions>>,
+  TError = N401Response | N403Response,
+>(
+  projectID: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listBucketPermissions>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listBucketPermissions>>,
+          TError,
+          Awaited<ReturnType<typeof listBucketPermissions>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListBucketPermissions<
+  TData = Awaited<ReturnType<typeof listBucketPermissions>>,
+  TError = N401Response | N403Response,
+>(
+  projectID: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listBucketPermissions>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listBucketPermissions>>,
+          TError,
+          Awaited<ReturnType<typeof listBucketPermissions>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListBucketPermissions<
+  TData = Awaited<ReturnType<typeof listBucketPermissions>>,
+  TError = N401Response | N403Response,
+>(
+  projectID: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listBucketPermissions>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List the per-bucket access exceptions in a project
+ */
+
+export function useListBucketPermissions<
+  TData = Awaited<ReturnType<typeof listBucketPermissions>>,
+  TError = N401Response | N403Response,
+>(
+  projectID: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listBucketPermissions>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListBucketPermissionsQueryOptions(projectID, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type setBucketPermissionsResponse200 = {
+  data: BucketPermissionRow;
+  status: 200;
+};
+
+export type setBucketPermissionsResponse400 = {
+  data: Error;
+  status: 400;
+};
+
+export type setBucketPermissionsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type setBucketPermissionsResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type setBucketPermissionsResponseSuccess =
+  setBucketPermissionsResponse200 & {
+    headers: Headers;
+  };
+export type setBucketPermissionsResponseError = (
+  | setBucketPermissionsResponse400
+  | setBucketPermissionsResponse401
+  | setBucketPermissionsResponse403
+) & {
+  headers: Headers;
+};
+
+export type setBucketPermissionsResponse =
+  setBucketPermissionsResponseSuccess | setBucketPermissionsResponseError;
+
+export const getSetBucketPermissionsUrl = (projectID: number) => {
+  return `/artifacts/bucket_permissions/${projectID}`;
+};
+
+/**
+ * REPLACES the member's whole map, which is what the reference does (rpc/s3_credentials.py:362). Removing one exception means sending the map without that key.
+ * @summary Replace one member's bucket access exceptions
+ */
+export const setBucketPermissions = async (
+  projectID: number,
+  setBucketPermissionsRequest: SetBucketPermissionsRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<setBucketPermissionsResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+  return eliteaFetch<setBucketPermissionsResponse>(
+    getSetBucketPermissionsUrl(projectID),
+    {
+      ...options,
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(setBucketPermissionsRequest),
+    },
+  );
+};
+
+export const getSetBucketPermissionsQueryKey = (
+  projectID: number,
+  setBucketPermissionsRequest?: SetBucketPermissionsRequest,
+) => {
+  return [
+    "PUT",
+    `/artifacts/bucket_permissions/${projectID}`,
+    setBucketPermissionsRequest,
+  ] as const;
+};
+
+export const getSetBucketPermissionsQueryOptions = <
+  TData = Awaited<ReturnType<typeof setBucketPermissions>>,
+  TError = Error | N401Response | N403Response,
+>(
+  projectID: number,
+  setBucketPermissionsRequest: SetBucketPermissionsRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setBucketPermissions>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getSetBucketPermissionsQueryKey(projectID, setBucketPermissionsRequest);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof setBucketPermissions>>
+  > = ({ signal }) =>
+    setBucketPermissions(projectID, setBucketPermissionsRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectID !== null && projectID !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof setBucketPermissions>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type SetBucketPermissionsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof setBucketPermissions>>
+>;
+export type SetBucketPermissionsQueryError =
+  Error | N401Response | N403Response;
+
+export function useSetBucketPermissions<
+  TData = Awaited<ReturnType<typeof setBucketPermissions>>,
+  TError = Error | N401Response | N403Response,
+>(
+  projectID: number,
+  setBucketPermissionsRequest: SetBucketPermissionsRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setBucketPermissions>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof setBucketPermissions>>,
+          TError,
+          Awaited<ReturnType<typeof setBucketPermissions>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSetBucketPermissions<
+  TData = Awaited<ReturnType<typeof setBucketPermissions>>,
+  TError = Error | N401Response | N403Response,
+>(
+  projectID: number,
+  setBucketPermissionsRequest: SetBucketPermissionsRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setBucketPermissions>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof setBucketPermissions>>,
+          TError,
+          Awaited<ReturnType<typeof setBucketPermissions>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSetBucketPermissions<
+  TData = Awaited<ReturnType<typeof setBucketPermissions>>,
+  TError = Error | N401Response | N403Response,
+>(
+  projectID: number,
+  setBucketPermissionsRequest: SetBucketPermissionsRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setBucketPermissions>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Replace one member's bucket access exceptions
+ */
+
+export function useSetBucketPermissions<
+  TData = Awaited<ReturnType<typeof setBucketPermissions>>,
+  TError = Error | N401Response | N403Response,
+>(
+  projectID: number,
+  setBucketPermissionsRequest: SetBucketPermissionsRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setBucketPermissions>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getSetBucketPermissionsQueryOptions(
+    projectID,
+    setBucketPermissionsRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type deleteBucketPermissionResponse204 = {
+  data: void;
+  status: 204;
+};
+
+export type deleteBucketPermissionResponse400 = {
+  data: Error;
+  status: 400;
+};
+
+export type deleteBucketPermissionResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type deleteBucketPermissionResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type deleteBucketPermissionResponse404 = {
+  data: Error;
+  status: 404;
+};
+
+export type deleteBucketPermissionResponseSuccess =
+  deleteBucketPermissionResponse204 & {
+    headers: Headers;
+  };
+export type deleteBucketPermissionResponseError = (
+  | deleteBucketPermissionResponse400
+  | deleteBucketPermissionResponse401
+  | deleteBucketPermissionResponse403
+  | deleteBucketPermissionResponse404
+) & {
+  headers: Headers;
+};
+
+export type deleteBucketPermissionResponse =
+  deleteBucketPermissionResponseSuccess | deleteBucketPermissionResponseError;
+
+export const getDeleteBucketPermissionUrl = (projectID: number) => {
+  return `/artifacts/bucket_permissions/${projectID}`;
+};
+
+/**
+ * The subject travels in the body, as it does in the reference (api/v2/bucket_permissions.py:130-163). 404 when there was no exception to remove.
+ * @summary Remove one member's exception for one bucket
+ */
+export const deleteBucketPermission = async (
+  projectID: number,
+  deleteBucketPermissionRequest: DeleteBucketPermissionRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<deleteBucketPermissionResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+  return eliteaFetch<deleteBucketPermissionResponse>(
+    getDeleteBucketPermissionUrl(projectID),
+    {
+      ...options,
+      method: "DELETE",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(deleteBucketPermissionRequest),
+    },
+  );
+};
+
+export const getDeleteBucketPermissionQueryKey = (
+  projectID: number,
+  deleteBucketPermissionRequest?: DeleteBucketPermissionRequest,
+) => {
+  return [
+    "DELETE",
+    `/artifacts/bucket_permissions/${projectID}`,
+    deleteBucketPermissionRequest,
+  ] as const;
+};
+
+export const getDeleteBucketPermissionQueryOptions = <
+  TData = Awaited<ReturnType<typeof deleteBucketPermission>>,
+  TError = Error | N401Response | N403Response,
+>(
+  projectID: number,
+  deleteBucketPermissionRequest: DeleteBucketPermissionRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteBucketPermission>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getDeleteBucketPermissionQueryKey(projectID, deleteBucketPermissionRequest);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof deleteBucketPermission>>
+  > = ({ signal }) =>
+    deleteBucketPermission(projectID, deleteBucketPermissionRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectID !== null && projectID !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof deleteBucketPermission>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type DeleteBucketPermissionQueryResult = NonNullable<
+  Awaited<ReturnType<typeof deleteBucketPermission>>
+>;
+export type DeleteBucketPermissionQueryError =
+  Error | N401Response | N403Response;
+
+export function useDeleteBucketPermission<
+  TData = Awaited<ReturnType<typeof deleteBucketPermission>>,
+  TError = Error | N401Response | N403Response,
+>(
+  projectID: number,
+  deleteBucketPermissionRequest: DeleteBucketPermissionRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteBucketPermission>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof deleteBucketPermission>>,
+          TError,
+          Awaited<ReturnType<typeof deleteBucketPermission>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDeleteBucketPermission<
+  TData = Awaited<ReturnType<typeof deleteBucketPermission>>,
+  TError = Error | N401Response | N403Response,
+>(
+  projectID: number,
+  deleteBucketPermissionRequest: DeleteBucketPermissionRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteBucketPermission>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof deleteBucketPermission>>,
+          TError,
+          Awaited<ReturnType<typeof deleteBucketPermission>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDeleteBucketPermission<
+  TData = Awaited<ReturnType<typeof deleteBucketPermission>>,
+  TError = Error | N401Response | N403Response,
+>(
+  projectID: number,
+  deleteBucketPermissionRequest: DeleteBucketPermissionRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteBucketPermission>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Remove one member's exception for one bucket
+ */
+
+export function useDeleteBucketPermission<
+  TData = Awaited<ReturnType<typeof deleteBucketPermission>>,
+  TError = Error | N401Response | N403Response,
+>(
+  projectID: number,
+  deleteBucketPermissionRequest: DeleteBucketPermissionRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteBucketPermission>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getDeleteBucketPermissionQueryOptions(
+    projectID,
+    deleteBucketPermissionRequest,
     options,
   );
 

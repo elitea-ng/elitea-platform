@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { applicationErrorMessage, applicationErrorMessageOrFallback } from './errorMessage';
+import { EliteaApiError } from '@/shared/api/generated/mutator';
+
+import {
+  applicationErrorMessage,
+  applicationErrorMessageOrFallback,
+  applicationServerErrorMessage,
+} from './errorMessage';
 
 describe('applicationErrorMessage', () => {
   it('returns the message of an Error instance', () => {
@@ -57,5 +63,50 @@ describe('applicationErrorMessageOrFallback', () => {
 
   it('falls back when the string error itself is empty', () => {
     expect(applicationErrorMessageOrFallback('', 'fallback')).toBe('fallback');
+  });
+});
+
+/**
+ * #147. The server explains a refusal in the response BODY. `EliteaApiError`'s
+ * own `message` is the `eliteaFetch: <status> from <url>` diagnostic that
+ * `mutator.ts`'s `describeFailure` builds, and showing that to a user says
+ * nothing. These cases pin which of the two a caller gets.
+ */
+describe('applicationServerErrorMessage', () => {
+  function httpError(status: number, body: unknown): EliteaApiError {
+    return new EliteaApiError({ kind: 'http', status, url: '/api/v2/elitea_core/version/x', body });
+  }
+
+  it('returns the server’s own `error` field, not the eliteaFetch diagnostic', () => {
+    const error = httpError(400, { error: 'Unpublish first. Cannot delete a published version.' });
+
+    expect(error.message).toContain('eliteaFetch: 400');
+    expect(applicationServerErrorMessage(error, 'fallback')).toBe(
+      'Unpublish first. Cannot delete a published version.',
+    );
+  });
+
+  it('accepts `message` as the body field too', () => {
+    expect(applicationServerErrorMessage(httpError(409, { message: 'in use' }), 'fallback')).toBe('in use');
+  });
+
+  it('accepts a plain-text body', () => {
+    expect(applicationServerErrorMessage(httpError(500, 'gateway said no'), 'fallback')).toBe('gateway said no');
+  });
+
+  it('falls back when the body explains nothing, rather than leaking the URL', () => {
+    for (const body of [undefined, null, {}, { error: '' }, 42, '']) {
+      expect(applicationServerErrorMessage(httpError(400, body), 'fallback')).toBe('fallback');
+    }
+  });
+
+  it('falls back for a non-http failure, which carries no body at all', () => {
+    const network = new EliteaApiError({ kind: 'network', url: '/x', message: 'offline', cause: undefined });
+    expect(applicationServerErrorMessage(network, 'fallback')).toBe('fallback');
+  });
+
+  it('still reports an ordinary Error’s own message', () => {
+    expect(applicationServerErrorMessage(new Error('boom'), 'fallback')).toBe('boom');
+    expect(applicationServerErrorMessage({ some: 'shape' }, 'fallback')).toBe('fallback');
   });
 });

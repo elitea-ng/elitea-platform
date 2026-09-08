@@ -236,6 +236,25 @@ const ADMIN_ROUTES: readonly AdminVisualRoute[] = [
     landmark: (page) => page.getByRole('table', { name: 'Schedules' }),
   },
   {
+    // @covers /admin/app/tasks
+    name: 'admin-tasks',
+    path: '/admin/app/tasks',
+    // The row COUNT, not the table and not the empty text.
+    //
+    // This stack runs no background jobs, so the union is empty and the table
+    // is not mounted at all — there is nothing with a table role to wait for.
+    // The empty text would be wrong for the opposite reason: it renders only
+    // once the query has resolved, but so does `Jobs: 0`, and the count is the
+    // one element present in BOTH the empty and the populated screen, so this
+    // landmark keeps working the day the stack does run a job.
+    //
+    // No mask: every value on the empty screen is a constant. A populated one
+    // would need `Started`/`Finished` masked, and this note is here so that
+    // fact is not rediscovered.
+    // Measured: loaded YES, stalled no.
+    landmark: (page) => page.getByTestId('admin-tasks-count'),
+  },
+  {
     // @covers /admin/app/app-requests
     name: 'admin-app-requests',
     path: '/admin/app/app-requests',
@@ -318,6 +337,33 @@ const ADMIN_ROUTES: readonly AdminVisualRoute[] = [
     landmark: (page) => page.getByRole('textbox', { name: 'Product name' }),
   },
   {
+    // @covers /admin/app/email
+    name: 'admin-email',
+    path: '/admin/app/email',
+    // The SMTP host input. The page renders its form only once the settings
+    // query resolved (`AdminEmailEditor` returns a bare `LinearProgress` while
+    // `state.isLoading` or the draft has not been seeded), so no field here can
+    // be mistaken for a loading state.
+    //
+    // NOT the "not configured" Alert: this stack configures no relay, so that
+    // Alert is the honest reference — but it is also the sentence the server
+    // gives, and the point of a landmark is to prove the QUERY resolved. The
+    // Alert renders from `state.data`, so it would do; the input is the
+    // smaller locator and matches what the Branding entry above uses.
+    landmark: (page) => page.getByRole('textbox', { name: 'SMTP host' }),
+  },
+  {
+    // @covers /admin/app/budgets
+    name: 'admin-budgets',
+    path: '/admin/app/budgets',
+    // The "Team (N)" tab. Its label carries the per-type COUNT the list query
+    // returns, so the tab text settles only once that query resolved; the
+    // bare "All" tab renders before any data and would prove nothing. The
+    // E2E gateway holds no NATS counter, so the enforcement-off banner above
+    // the table is the honest default state of this shot, not an edge case.
+    landmark: (page) => page.getByRole('tab', { name: /^Team \(\d+\)$/ }),
+  },
+  {
     // @covers /admin/app/service-descriptors
     name: 'admin-service-descriptors',
     path: '/admin/app/service-descriptors',
@@ -339,6 +385,24 @@ const ADMIN_ROUTES: readonly AdminVisualRoute[] = [
     // Measured: loaded YES, stalled no.
     landmark: (page) =>
       page.getByRole('grid', { name: 'Registered service descriptors' }),
+  },
+  {
+    // @covers /admin/app/toolkits
+    name: 'admin-toolkit-types',
+    path: '/admin/app/toolkits',
+    // The GRID, which this page renders only on `query.isSuccess` - during load
+    // it shows its title, its intro paragraph and a `LinearProgress`, so the
+    // grid cannot be mistaken for a loading state. The filter row renders in
+    // the same branch, so waiting on the grid also waits on it.
+    //
+    // Not the empty-state text: the DataGrid's `noRowsLabel` renders for an
+    // empty list AND for a page whose rows have not mounted, while the grid
+    // itself is present only after the listing resolved. This stack records no
+    // policy rows, so the reference is every served type at its DEFAULT - which
+    // is the state a fresh install has, and the one the absence rule protects.
+    // Measured: loaded YES, stalled no.
+    landmark: (page) =>
+      page.getByRole('grid', { name: 'Toolkit types this platform can serve' }),
   },
 ];
 

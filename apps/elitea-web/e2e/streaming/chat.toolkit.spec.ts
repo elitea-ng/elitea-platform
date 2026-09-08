@@ -354,10 +354,60 @@ test('an openapi toolkit authored in the form is offered to the model and its ca
   // Addressed by `data-tool-action-name` rather than by text: the tool name
   // also appears in the answer beside it (the mock quotes it), so a text match
   // cannot tell a rendered INVOCATION from a mention of one.
+  //
+  // OPENED FIRST, and this is a real change of what the assertion claims.
+  // The chat parity work (298dd2c7) put the tool rows where production keeps
+  // them: inside the turn's `Thought for …` panel, which is forced open while
+  // the turn streams and closes the moment it settles. By the time this line
+  // runs the turn is settled — §5 above waited on the STORED answer — so the
+  // row is mounted and hidden, which is what production shows a reader too.
+  // Asserting bare visibility here asserted a state production does not have.
+  //
+  // What the product owes the reader is DISCOVERABILITY: the panel is the one
+  // affordance, and opening it must reveal the call. So the check opens every
+  // thinking panel in the transcript the way a reader does and then requires
+  // the row. That keeps the original defect in range (no row at all, or a row
+  // under a different name, still fails) and adds the one this found: a panel
+  // that cannot be opened at all hides the call forever, and reads identically
+  // to a missing row from the outside.
+  //
+  // Polled rather than clicked once: `isStreaming` can still be true for a
+  // frame after the stored answer lands, and a click on an already-open panel
+  // would CLOSE it.
+  const toolRow = page
+    .locator(`[data-testid="chat-tool-action"][data-tool-action-name="${MOCK_TOOL_READ_OPERATION}"]`)
+    .first();
+  const thoughtSummaries = page
+    .getByTestId('chat-answer-thought-accordion')
+    .getByRole('button', { name: /Thought for/ });
   await expect(
-    page.locator(`[data-testid="chat-tool-action"][data-tool-action-name="${MOCK_TOOL_READ_OPERATION}"]`).first(),
-    'the runtime dispatched the call but the transcript shows no tool-action row for it',
+    thoughtSummaries.last(),
+    'the turn ran tools but rendered no thinking panel to hold their rows',
   ).toBeVisible({ timeout: 60_000 });
+  await expect
+    .poll(
+      async () => {
+        for (const summary of await thoughtSummaries.all()) {
+          try {
+            if ((await summary.getAttribute('aria-expanded')) !== 'true') {
+              await summary.click({ timeout: 5_000 });
+            }
+          } catch {
+            // A re-render between the read and the click detaches the node.
+            // The next tick of this poll addresses its replacement, so a
+            // detached handle is not a result — it is a retry.
+          }
+        }
+        return toolRow.isVisible();
+      },
+      {
+        timeout: 60_000,
+        message:
+          'the runtime dispatched the call but the transcript shows no tool-action row for it ' +
+          '(the row is missing, or its thinking panel does not open)',
+      },
+    )
+    .toBe(true);
 
   const transcript = await readStoredTranscript(page, projectId, conversationId);
   expect(

@@ -362,7 +362,7 @@ func TestTheAllowlistMatchesTheProvidersRules(t *testing.T) {
 func rewriter(t *testing.T, minter deepwiki.CallbackMinter) *deepwiki.InvokeRewriter {
 	t.Helper()
 	built, err := deepwiki.NewInvokeRewriter(
-		testCredentialResolver(t), minter, "https://elitea.test/", time.Hour)
+		testCredentialResolver(t), nil, minter, "https://elitea.test/", time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -546,7 +546,7 @@ func TestNoTokenIsMintedForARefusedResolution(t *testing.T) {
 				42: githubToolkit(42, 7, "https://ghe.attacker.example"),
 			}, "github.com")
 			return resolver
-		}(), minter, "https://elitea.test", time.Hour)
+		}(), nil, minter, "https://elitea.test", time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -595,7 +595,7 @@ func routeWith(
 	t.Helper()
 	built, err := deepwiki.NewRoute(cfg, authConfig(),
 		resolver(deepwiki.ReadPermission, deepwiki.GeneratePermission),
-		credentials, minter, nil)
+		credentials, nil, minter, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -753,7 +753,7 @@ func TestTheRewriterRefusesAnOutOfRangeProjectOnItsOwn(t *testing.T) {
 	}, "api.github.com")
 	minter := &recordingMinter{}
 	built, err := deepwiki.NewInvokeRewriter(
-		credentials, minter, "https://elitea.test", time.Hour)
+		credentials, nil, minter, "https://elitea.test", time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}

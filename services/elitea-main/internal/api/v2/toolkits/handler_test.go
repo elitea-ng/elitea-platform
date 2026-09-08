@@ -102,7 +102,6 @@ func setupRouter(repo toolkits.Repository) *chi.Mux {
 	r.Post("/fork_toolkit/prompt_lib/{projectID}", h.ForkToolkit)
 	r.Post("/test_tool/prompt_lib/{projectID}/{toolID}", h.TestTool)
 	r.Post("/test_toolkit_tool/prompt_lib/{projectID}", h.TestToolkitTool)
-	r.Get("/index_types/prompt_lib/{projectID}", h.IndexTypes)
 	return r
 }
 
@@ -536,40 +535,8 @@ func TestTestToolkitTool_NoTester_Returns503(t *testing.T) {
 	}
 }
 
-// --- IndexTypes ---
-
-// TestIndexTypes_RefusesInsteadOfServingAnInventedCatalogue replaces
-// TestIndexTypes_StaticResponse, which asserted the six hand-written entries
-// verbatim — including their invented `supported_extensions` lists. That test
-// could only ever confirm that the literal in the handler still matched the
-// literal in the test; it had no way to notice that neither matched anything
-// the deployment can actually index.
-//
-// This one fails on a 200: a deployment that has not enabled the real
-// index-types route must say so rather than answer with a guess.
-func TestIndexTypes_RefusesInsteadOfServingAnInventedCatalogue(t *testing.T) {
-	repo := &mockRepo{}
-	r := setupRouter(repo)
-
-	req := httptest.NewRequest(http.MethodGet, "/index_types/prompt_lib/proj-1", nil)
-	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, req)
-
-	if rec.Code == http.StatusOK {
-		t.Fatalf("status = 200 — the six hardcoded loaders were served as though a "+
-			"catalogue had been read; body=%s", rec.Body.String())
-	}
-	if rec.Code != http.StatusNotImplemented {
-		t.Fatalf("status = %d, want 501; body=%s", rec.Code, rec.Body.String())
-	}
-
-	var resp map[string]any
-	_ = json.NewDecoder(rec.Body).Decode(&resp)
-	if code, _ := resp["code"].(string); code != "index_types_not_available" {
-		t.Fatalf("code = %q, want a machine-readable index_types_not_available", code)
-	}
-	if _, present := resp["items"]; present {
-		t.Fatal("the refusal must not carry an items list — a client that reads it " +
-			"would be back where it started")
-	}
-}
+// NOTE(#394): TestIndexTypes_RefusesInsteadOfServingAnInventedCatalogue stood
+// here. It proved that the prototype index-types handler refused with 501
+// rather than serving six hand-written loaders. #394 deleted that handler and
+// its route; internal/api/v2/indextypes is the only implementation now, and
+// internal/api/v2/indextypes/published_envelope_test.go covers its body.

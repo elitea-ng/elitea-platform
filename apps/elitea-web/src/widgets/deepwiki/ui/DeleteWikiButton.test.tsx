@@ -44,7 +44,8 @@ function serveBucket(keys: string[], failed: string[] = []) {
       deleted = body.keys;
       return HttpResponse.json({
         deleted: body.keys.filter((k) => !failed.includes(k)),
-        errors: failed.map((key) => ({ key, error: 'locked' })),
+        // The server's envelope (BatchDeleteObjects): `failed`, not `errors`.
+        failed: failed.map((key) => ({ key, code: 'PreconditionFailed', message: 'locked' })),
       });
     }),
   );

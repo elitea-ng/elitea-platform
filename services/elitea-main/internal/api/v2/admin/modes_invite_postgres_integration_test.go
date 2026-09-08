@@ -13,6 +13,7 @@ package admin_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"testing"
@@ -21,6 +22,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/admin"
+	appmailer "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/mailer"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 )
 
@@ -122,7 +124,9 @@ ORDER BY role.name`, userID, mode)
 // newModesEnvironment reuses the roles-fixture database — it applies the same
 // two baseline projections and seeds the central role vocabulary these
 // endpoints assign from — and adds the two users this file acts on.
-func newModesEnvironment(t *testing.T, resolver auth.PermissionResolver) (*pgxpool.Pool, chi.Router, int, int) {
+func newModesEnvironment(
+	t *testing.T, resolver auth.PermissionResolver, extra ...admin.Option,
+) (*pgxpool.Pool, chi.Router, int, int) {
 	t.Helper()
 	pool := newRolesPool(t)
 	prepareRolesFixture(t, pool)
@@ -150,6 +154,7 @@ WHERE role.mode = 'administration' AND role.name = 'admin'`, operatorID); err !=
 	if resolver != nil {
 		options = append(options, admin.WithPermissionResolver(resolver))
 	}
+	options = append(options, extra...)
 	router := modesRouter(admin.NewHandler(pool, options...), &auth.User{ID: "1", UserID: "1"})
 	return pool, router, operatorID, memberID
 }
@@ -372,6 +377,7 @@ type inviteResponse struct {
 	Email               string `json:"email"`
 	Created             bool   `json:"created"`
 	InvitationDelivered bool   `json:"invitation_delivered"`
+	InvitationDelivery  string `json:"invitation_delivery"`
 	Error               string `json:"error"`
 }
 
@@ -392,10 +398,15 @@ func TestUserInviteCreatesThePlatformUserRecord(t *testing.T) {
 	if body.Email != address {
 		t.Fatalf("invite normalised the address to %q, want %q", body.Email, address)
 	}
-	// The endpoint sends nothing, and says so, rather than answering a bare
-	// {"ok": true} a console would render as "invitation sent".
+	// With no relay configured the endpoint sends nothing and SAYS so, rather
+	// than answering a bare {"ok": true} a console would render as "invitation
+	// sent". Gap G7 made the relay configurable; it did not make an
+	// unconfigured deployment start claiming deliveries.
 	if body.InvitationDelivered {
-		t.Fatal("invitation_delivered is true, but this service delivers no invitation")
+		t.Fatal("invitation_delivered is true on a deployment with no relay")
+	}
+	if body.InvitationDelivery == "" {
+		t.Fatal("no invitation_delivery reason: the console cannot tell the operator what to configure")
 	}
 
 	// THE assertion: the row exists, with the submitted name.
@@ -584,5 +595,84 @@ WHERE role.mode = 'administration' AND role.name = 'super_admin'`, memberID); er
 	if roles := storedModeRoles(t, pool, memberID, "administration"); len(roles) != 1 ||
 		roles[0] != "super_admin" {
 		t.Fatalf("stored administration roles = %v after a refused demotion, want [super_admin]", roles)
+	}
+}
+
+/* ── invitation DELIVERY (gap G7) ──────────────────────────────────────── */
+
+// invitationSink is a mailer that records what it was asked to send. It stands
+// where an SMTP relay would, so the assertions below are about the HANDLER's
+// decision — "was an invitation delivered" — rather than about a network.
+type invitationSink struct {
+	configured bool
+	fail       error
+	invited    []appmailer.Invitation
+}
+
+func (s *invitationSink) Configured(context.Context) bool { return s.configured }
+
+func (s *invitationSink) SendTest(context.Context, string) error { return nil }
+
+func (s *invitationSink) SendInvitation(_ context.Context, invitation appmailer.Invitation) error {
+	if s.fail != nil {
+		return s.fail
+	}
+	s.invited = append(s.invited, invitation)
+	return nil
+}
+
+// The gap G7 acceptance: with a relay resolved, the admin invite DELIVERS, and
+// the response says so.
+//
+// This is the field a console renders as "invitation sent". Before this change
+// it was false on every deployment whose environment did not carry SMTP_HOST
+// before the pods started, which is what made invitations impossible to turn
+// on from the admin console.
+func TestUserInviteDeliversWhenARelayIsConfigured(t *testing.T) {
+	sink := &invitationSink{configured: true}
+	_, router, _, _ := newModesEnvironment(t, nil, admin.WithMailer(sink))
+
+	recorder := adminDo(t, router, http.MethodPost, "/admin/user_invite/administration",
+		map[string]any{"user_name": "Delivered Person", "user_email": "delivered@autotest.local"})
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("POST status = %d, want 200 (body %s)", recorder.Code, recorder.Body.String())
+	}
+	var body inviteResponse
+	decodeJSONBody(t, recorder.Body.Bytes(), &body)
+	if !body.InvitationDelivered {
+		t.Fatalf("invitation_delivered = false with a configured relay: %+v", body)
+	}
+	if len(sink.invited) != 1 || sink.invited[0].Email != "delivered@autotest.local" {
+		t.Fatalf("the relay received %+v", sink.invited)
+	}
+	if sink.invited[0].Name != "Delivered Person" {
+		t.Errorf("the invitation lost the invited person's name: %+v", sink.invited[0])
+	}
+}
+
+// A relay that REFUSES the message must not be reported as a delivery, and the
+// record must still exist: the operator can grant roles now and resend later.
+func TestUserInviteReportsARefusedRelay(t *testing.T) {
+	sink := &invitationSink{configured: true, fail: errors.New("relay refused")}
+	pool, router, _, _ := newModesEnvironment(t, nil, admin.WithMailer(sink))
+
+	recorder := adminDo(t, router, http.MethodPost, "/admin/user_invite/administration",
+		map[string]any{"user_name": "Refused Person", "user_email": "refused@autotest.local"})
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("POST status = %d, want 200 (body %s)", recorder.Code, recorder.Body.String())
+	}
+	var body inviteResponse
+	decodeJSONBody(t, recorder.Body.Bytes(), &body)
+	if body.InvitationDelivered {
+		t.Fatal("a refused message was reported as delivered")
+	}
+	if body.InvitationDelivery == "" {
+		t.Fatal("a refused message reported no reason")
+	}
+	var exists bool
+	if err := pool.QueryRow(context.Background(),
+		`SELECT true FROM public.auth_core__user WHERE lower(email) = $1`,
+		"refused@autotest.local").Scan(&exists); err != nil || !exists {
+		t.Fatalf("the record was rolled back by a relay failure: %v", err)
 	}
 }

@@ -594,3 +594,71 @@ func newFlagsPool(t *testing.T) *pgxpool.Pool {
 	}
 	return pool
 }
+
+// TestMaintenanceSplashHTMLReachesThePublicSettings is the splash-body port,
+// from the consumer's end.
+//
+// pylon stored `splash_template` in a tunable and served it as a whole document
+// (legacy/plugins/bootstrap/tools/splash.py). Here it is one
+// `centry.platform_config` row that the SPA's app shell and the standalone
+// splash entry BOTH read off `platform_settings`, so the two screens cannot
+// show different words for the same window.
+//
+// The row is written directly, never through the admin PUT — see the file
+// header for why every case in this file does that.
+func TestMaintenanceSplashHTMLReachesThePublicSettings(t *testing.T) {
+	pool := newFlagsPool(t)
+	router := flagsRouter(eliteacore.NewHandler(pool))
+
+	read := func() map[string]any {
+		t.Helper()
+		body := decodeMap(t, flagsDo(t, router, http.MethodGet,
+			"/elitea_core/platform_settings/prompt_lib", nil))
+		maintenance, ok := body["maintenance"].(map[string]any)
+		if !ok {
+			t.Fatalf("platform_settings carries no `maintenance` object: %v", body)
+		}
+		return maintenance
+	}
+
+	t.Run("an unconfigured deployment reports an empty body, never a default one", func(t *testing.T) {
+		// A default here would put THIS platform's markup inside a field whose
+		// whole purpose is to hold the operator's. Empty is how a renderer
+		// knows to fall back to its own splash.
+		maintenance := read()
+		if html, _ := maintenance["html"].(string); html != "" {
+			t.Fatalf("an unconfigured deployment reports a splash body %q, want empty", html)
+		}
+	})
+
+	t.Run("the stored body is published verbatim", func(t *testing.T) {
+		const body = `<p>Upgrading the database.</p><p><a href="https://status.example.com">Status</a></p>`
+		setFlag(t, pool, "maintenance", "maintenance_enabled", true)
+		setFlag(t, pool, "maintenance", "maintenance_title", "Scheduled upgrade")
+		setFlag(t, pool, "maintenance", "maintenance_html", body)
+
+		maintenance := read()
+		if got, _ := maintenance["html"].(string); got != body {
+			t.Fatalf("splash body = %q, want %q", got, body)
+		}
+		// The title and the flag travel with it: a client reads one object.
+		if got, _ := maintenance["title"].(string); got != "Scheduled upgrade" {
+			t.Fatalf("splash title = %q, want %q", got, "Scheduled upgrade")
+		}
+		if enabled, _ := maintenance["enabled"].(bool); !enabled {
+			t.Fatal("maintenance reported as disabled while its row says enabled")
+		}
+		// The markdown message keeps its own default, because the two fields
+		// are alternatives and a client picks between them.
+		if got, _ := maintenance["message"].(string); got == "" {
+			t.Fatal("the markdown message lost its default when an HTML body was stored")
+		}
+	})
+
+	t.Run("a whitespace-only body reads as empty, so the renderer falls back", func(t *testing.T) {
+		setFlag(t, pool, "maintenance", "maintenance_html", "   \n\t ")
+		if html, _ := read()["html"].(string); html != "" {
+			t.Fatalf("a whitespace-only splash body reads as %q, want empty", html)
+		}
+	})
+}

@@ -1,7 +1,7 @@
 {
-  "recordedAt": "2026-08-08",
+  "recordedAt": "2026-09-06",
   "synthetic": true,
-  "note": "Shape recorded from the E2E stack (GET /api/v2/artifacts/buckets/1, elitea-main mountArtifactRoutes, router.go:279); names/dates substituted for stable demo values. Replaces the pre-#138 fixture, which described the legacy root-level /artifacts/s3/ bucket list elitea-main never served.",
+  "note": "Shape re-verified 2026-09-06 against the served route GET /api/v2/artifacts/buckets/{projectID} (elitea-main internal/api/router.go:594 -> Handler.ListBuckets, internal/api/v2/artifacts/handler.go:228). The envelope {\"buckets\": [...]} is written at handler.go:250 and every field below is the handler's own bucket struct, handler.go:28-39. Names/dates are stable demo values. Replaces the pre-#138 fixture, which described the legacy root-level /artifacts/s3/ bucket list elitea-main never served.",
   "body": {
     "buckets": [
       {

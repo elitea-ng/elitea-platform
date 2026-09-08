@@ -1,6 +1,7 @@
 package social_test
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -69,6 +70,38 @@ func TestGetAuthor_Unauthorized(t *testing.T) {
 
 	if rr.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", rr.Code)
+	}
+}
+
+// `provider_refs` carries the value `identity.initial_global_admins` names, so
+// its ABSENCE has to be as well defined as its content. A composition with no
+// database pool can read no references, and it must answer without them rather
+// than with an empty list an operator could paste into a chart.
+//
+// The populated case is
+// provider_refs_postgres_integration_test.go — only PostgreSQL can answer it.
+func TestGetAuthor_OmitsProviderRefsWithoutAPool(t *testing.T) {
+	h := newHandler()
+	r := chi.NewRouter()
+	r.Get("/author", func(w http.ResponseWriter, req *http.Request) {
+		u := auth.User{ID: "42", UserID: "42", Email: "operator@example.com"}
+		req = req.WithContext(auth.ContextWithUser(req.Context(), u))
+		h.GetAuthor(w, req)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/author", nil)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode %s: %v", rr.Body.String(), err)
+	}
+	if value, present := body["provider_refs"]; present {
+		t.Fatalf("provider_refs = %v, want the key to be absent", value)
 	}
 }
 

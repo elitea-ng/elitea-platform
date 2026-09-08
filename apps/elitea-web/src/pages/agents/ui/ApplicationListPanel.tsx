@@ -1,41 +1,37 @@
-import type { ReactNode } from 'react';
+import { useMemo, type ReactNode } from 'react';
 
 import Box from '@mui/material/Box';
-import List from '@mui/material/List';
-import ListItem from '@mui/material/ListItem';
-import ListItemButton from '@mui/material/ListItemButton';
-import ListItemText from '@mui/material/ListItemText';
-import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
-import { NoResultsMessage } from '@/shared/ui/NoResultsMessage';
-import { BaseBtn } from '@/shared/ui/BaseBtn';
 import { t } from '@/shared/i18n';
+import { BaseBtn } from '@/shared/ui/BaseBtn';
+import { EntityCardList, EntityEmptyState, entityTypeIcon, type EntityListItem } from '@/shared/ui/EntityCardList';
 
 /**
- * Shared row-rendering surface for `Latest`/`MyLiked`/`Trending`/
- * `PrivateAgentsList` (this unit, A1g) — the data-bearing replacement for
- * the baseline's `CardList` (`apps/elitea-ui/src/components/CardList.jsx`)
- * for THESE four pages' purposes only, same disclosed-scope-reduction shape
- * `pages/user-public/ui/EntityListPanel.tsx` and `pages/credentials/
- * CredentialsList.tsx` already established for this exact situation:
- * `CardList` itself (card grid, drag handles, per-card menus, infinite-
- * scroll sentinel, the `Categories`/`TrendingAuthors` right rail) has no
- * confirmed `shared/ui`/`widgets` port and is out of this unit's ownership
- * fence to add. This renders the same rows as a plain, accessible list plus
- * a "Load more" button instead of a card grid, and drops the tag-filter/
- * trending-authors side panel entirely.
+ * The card grid for `Latest`/`MyLiked`/`Trending`/`PrivateAgentsList` —
+ * the port of the baseline's `components/CardList.jsx` for these four
+ * pages, now that the grid itself exists as `shared/ui/EntityCardList`.
+ *
+ * This file used to render a plain MUI `<List>` of `name`/`description`
+ * rows, a disclosed scope reduction from the era when no card grid was
+ * ported anywhere. It is a grid of real entity cards now: round gradient
+ * icon tile, two-line title, and a bottom row of author avatars and tag
+ * chips, matching `apps/elitea-ui/src/components/Card.jsx` and the
+ * production reference. `?view=table` switches the same rows to the table
+ * rendering; the grid decides that from the search param itself.
  *
  * A page-owned component (`pages/agents/ui/`), not `features/` or
- * `entities/` — it holds no fetching or domain logic of its own, purely
- * list layout + empty/loading/error states, matching spec §3.3's
- * "pages/ = layout + slot composition" rule extended down into this
- * directory the same way `pages/user-public/ui/` already does.
+ * `entities/` — it holds no fetching or domain logic, purely list layout +
+ * empty/loading/error states, matching spec §3.3's "pages/ = layout + slot
+ * composition" rule.
  */
 export interface ApplicationListRow {
   readonly id: string;
   readonly name: string;
   readonly description: string;
+  readonly authors?: readonly { readonly id?: string; readonly name: string; readonly avatar?: string }[];
+  readonly tags?: readonly string[];
+  readonly createdAt?: string;
 }
 
 export interface ApplicationListPanelProps {
@@ -43,12 +39,15 @@ export interface ApplicationListPanelProps {
   readonly isLoading: boolean;
   readonly isError: boolean;
   readonly errorMessage: string;
-  readonly emptyTitle: ReactNode;
-  readonly emptyDescription: ReactNode;
+  readonly emptyTitle: string;
+  readonly emptyDescription: string;
   readonly onSelect: (id: string) => void;
   readonly hasMore: boolean;
   readonly isLoadingMore: boolean;
   readonly onLoadMore: () => void;
+  /** Wired to the empty state's `+ Create` CTA when the caller can route to a create page. */
+  readonly onCreate?: () => void;
+  readonly railVisible?: boolean;
 }
 
 export function ApplicationListPanel({
@@ -62,73 +61,56 @@ export function ApplicationListPanel({
   hasMore,
   isLoadingMore,
   onLoadMore,
+  onCreate,
+  railVisible = true,
 }: ApplicationListPanelProps): ReactNode {
-  if (isLoading) {
-    return <Typography variant="bodyMedium">{t('pages.agents.list.loading', 'Loading…')}</Typography>;
-  }
-  if (isError) {
-    return (
-      <Typography
-        role="alert"
-        variant="bodyMedium"
-      >
-        {errorMessage}
-      </Typography>
-    );
-  }
-  if (rows.length === 0) {
-    return (
-      <NoResultsMessage
-        title={emptyTitle}
-        description={emptyDescription}
-      />
-    );
-  }
+  const items = useMemo<EntityListItem[]>(
+    () =>
+      rows.map((row) => ({
+        id: row.id,
+        name: row.name,
+        description: row.description,
+        icon: entityTypeIcon('agent'),
+        authors: row.authors ?? [],
+        tags: (row.tags ?? []).map((tag) => ({ id: tag, name: tag })),
+        ...(row.createdAt === undefined ? {} : { createdAt: row.createdAt }),
+        onClick: () => {
+          onSelect(row.id);
+        },
+      })),
+    [rows, onSelect],
+  );
+
   return (
-    <Box sx={containerSx}>
-      <List>
-        {rows.map((row) => (
-          // <ListItem disablePadding> wrapping <ListItemButton> — MUI's own
-          // pattern, and the one `features/skills/ui/SkillsList.tsx` already
-          // uses. List emits a <ul>, and ListItemButton defaults to a
-          // <div role="button">, which axe's `list` rule rejects as a direct
-          // child (impact: serious). Putting `component="li"` on the BUTTON
-          // instead only trades that for `aria-allowed-role` — an <li> may not
-          // carry role="button". The wrapper gives a real <li> with the button
-          // inside it, which satisfies both.
-          <ListItem
-            key={row.id}
-            disablePadding
-          >
-            <ListItemButton
-              data-testid="application-list-row"
-              onClick={() => {
-                onSelect(row.id);
-              }}
-            >
-              <ListItemText
-                primary={row.name}
-                secondary={row.description}
-              />
-            </ListItemButton>
-          </ListItem>
-        ))}
-      </List>
+    <>
+      <EntityCardList
+        items={items}
+        isLoading={isLoading}
+        isError={isError}
+        errorMessage={errorMessage}
+        railVisible={railVisible}
+        emptyState={
+          <EntityEmptyState
+            title={emptyTitle}
+            description={emptyDescription}
+            art="applications"
+            {...(onCreate === undefined ? {} : { onCreateClick: onCreate })}
+          />
+        }
+      />
       {hasMore && (
-        <BaseBtn
-          variant="secondary"
-          disabled={isLoadingMore}
-          onClick={onLoadMore}
-        >
-          {t('pages.agents.list.loadMore', 'Load more')}
-        </BaseBtn>
+        <Box sx={loadMoreSx}>
+          <BaseBtn
+            variant="secondary"
+            disabled={isLoadingMore}
+            onClick={onLoadMore}
+          >
+            {t('pages.agents.list.loadMore', 'Load more')}
+          </BaseBtn>
+        </Box>
       )}
-    </Box>
+    </>
   );
 }
 
-const containerSx: SxProps<Theme> = (theme: Theme) => ({
-  display: 'flex',
-  flexDirection: 'column',
-  gap: theme.spacing(2),
-});
+const loadMoreSx: SxProps<Theme> = (theme: Theme) => ({ display: 'flex', justifyContent: 'center', padding: theme.spacing(2) });

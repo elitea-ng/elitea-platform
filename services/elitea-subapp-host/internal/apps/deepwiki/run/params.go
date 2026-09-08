@@ -185,6 +185,27 @@ func ArgumentsFor(tool string, params Params) map[string]any {
 			arguments["enable_subagents"] = get(params, "enable_subagents", true)
 		}
 		return arguments
+	case "list_wikis":
+		// The wiki_query family, from the legacy `_handle_wiki_query_tool`
+		// merge: each handler read its keywords off the merged `params`
+		// dict, so the keyword set is the keys each one actually reads.
+		return merge(common, map[string]any{
+			"include_metadata": get(params, "include_metadata", false),
+		})
+	case "resolve_and_ask", "resolve_and_deep_research":
+		arguments := merge(common, map[string]any{
+			"question":     get(params, "question", ""),
+			"wiki_id_hint": params["wiki_id_hint"],
+			"chat_history": get(params, "chat_history", []any{}),
+			"k":            get(params, "k", 15),
+		})
+		if tool == "resolve_and_deep_research" {
+			arguments["research_type"] = get(params, "research_type", "general")
+			arguments["enable_subagents"] = get(params, "enable_subagents", true)
+		}
+		return arguments
+	case "delete_wiki":
+		return merge(common, map[string]any{"wiki_id": get(params, "wiki_id", "")})
 	}
 	arguments := map[string]any{}
 	for k, v := range params {

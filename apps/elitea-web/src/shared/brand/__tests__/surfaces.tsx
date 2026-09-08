@@ -1,3 +1,6 @@
+import Accordion from '@mui/material/Accordion';
+import AccordionDetails from '@mui/material/AccordionDetails';
+import AccordionSummary from '@mui/material/AccordionSummary';
 import Alert from '@mui/material/Alert';
 import AppBar from '@mui/material/AppBar';
 import Autocomplete from '@mui/material/Autocomplete';
@@ -65,6 +68,21 @@ import OutlinedInput from '@mui/material/OutlinedInput';
  */
 
 const OVERRIDE_SURFACES: Record<string, () => React.ReactElement> = {
+  // Two siblings under one parent (no per-item wrapper) exercises the
+  // `:first-of-type`/`:last-of-type` selectors `MuiAccordion.ts` overrides;
+  // `expanded` on the first one also exercises `.Mui-expanded`.
+  MuiAccordion: () => (
+    <>
+      <Accordion expanded>
+        <AccordionSummary>accordion one</AccordionSummary>
+        <AccordionDetails>details one</AccordionDetails>
+      </Accordion>
+      <Accordion>
+        <AccordionSummary>accordion two</AccordionSummary>
+        <AccordionDetails>details two</AccordionDetails>
+      </Accordion>
+    </>
+  ),
   MuiButton: () => (
     <>
       <Button variant="contained">contained</Button>

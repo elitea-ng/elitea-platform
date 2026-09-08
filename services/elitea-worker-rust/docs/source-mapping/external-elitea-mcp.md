@@ -73,6 +73,11 @@ owned by the MCP handler or application service.
 
 ## Direct execution boundary
 
+The following section describes the Rust read path. Main also supports
+`toolkit.call_tool.v1` for toolkit Test and Python external-MCP execution.
+Rust must implement that broader contract; see [`toolkit-test.md`](toolkit-test.md).
+The read-only restriction is a staged safety gate, not final functional parity.
+
 Each descriptor keeps its exact toolkit row ID and original operation name in
 private server fields. `tools/call` passes that target to Main. Main then:
 
@@ -111,7 +116,7 @@ owning vault and fails closed if the vault is unavailable. This is an
 intentional availability hardening over the current eager `VaultClient`
 construction; it does not bypass secret redemption.
 
-Migration `0112_toolkit_execute_read.sql` extends both earlier allowlists. It
+Migration `0122_toolkit_execute_read.sql` extends both earlier allowlists. It
 admits the direct-tool protobuf media type through
 `input_bundle_entries_content_size` and admits
 `TOOLKIT_EXECUTE_READ_RESULT` through `output_inbox_payload_type`. Its isolated

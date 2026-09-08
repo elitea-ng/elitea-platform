@@ -188,3 +188,115 @@ describe('EditCredential — Test connection on a SAVED row', () => {
     expect(screen.queryByText('Connection test failed')).not.toBeInTheDocument();
   });
 });
+
+/**
+ * ROUTE-065 is where Settings -> AI Configuration cards now land (gap 6). What
+ * this pins is the other half of that fix: the screen a card opens actually
+ * LOADS the stored row it was given, in the three shapes a model configuration
+ * is made of — the free-text name, the `ai_credentials` REFERENCE to another
+ * stored row, and a declared `integer` — and saves it back with PUT.
+ *
+ * `max_output_tokens` is not an arbitrary field to pick. `classifySchemaField`
+ * used to route it to the masked secret widget on the word "tokens", which
+ * serialised 16000 as the string "16000" and made the server drop the whole
+ * model row. A numeric control here is the evidence that has not come back.
+ */
+describe('EditCredential loads a stored MODEL configuration (ROUTE-065)', () => {
+  const LLM_MODEL_TYPE = {
+    type: 'llm_model',
+    section: 'models',
+    config_schema: {
+      title: 'LLM model',
+      properties: {
+        data: {
+          properties: {
+            name: { type: 'string', title: 'Model name' },
+            /* The registry's own shape for a reference field. */
+            ai_credentials: {
+              title: 'AI credentials',
+              anyOf: [{ type: 'object' }, { type: 'null' }],
+              configuration_sections: ['ai_credentials'],
+              default: null,
+            },
+            max_output_tokens: { type: 'integer', title: 'Max output tokens' },
+          },
+        },
+      },
+    },
+  };
+
+  const STORED_MODEL = {
+    id: 42,
+    uid: '42',
+    type: 'llm_model',
+    section: 'models',
+    elitea_title: 'qwen3-0.6b',
+    label: 'qwen3-0.6b',
+    shared: false,
+    data: {
+      name: 'qwen3-0.6b',
+      ai_credentials: { elitea_title: 'local-vllm', private: false },
+      max_output_tokens: 16000,
+    },
+  };
+
+  /** The rows the `ai_credentials` picker draws its options from. */
+  const CREDENTIAL_ROWS = {
+    items: [{ id: 7, uid: '7', type: 'vllm', section: 'ai_credentials', elitea_title: 'local-vllm', label: 'local-vllm', data: {} }],
+    total: 1,
+    limit: 200,
+    offset: 0,
+  };
+
+  function renderStoredModel() {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    return renderWithTheme(
+      <QueryClientProvider client={client}>
+        <EditCredential
+          context={CONTEXT}
+          credentialUid="42"
+          configurationMode
+          onSaved={vi.fn()}
+          onDiscarded={vi.fn()}
+        />
+      </QueryClientProvider>,
+    );
+  }
+
+  it('seeds the form from the stored row and saves it back with PUT', async () => {
+    configureGeneratedClient({ baseUrl: BASE });
+    const puts: { url: string; body: string }[] = [];
+    server.use(
+      http.get(`${BASE}/configurations/available/`, () => HttpResponse.json([LLM_MODEL_TYPE])),
+      http.get(`${BASE}/configurations/configuration/7/42`, () => HttpResponse.json(STORED_MODEL)),
+      http.get(`${BASE}/configurations/configurations/7`, () => HttpResponse.json(CREDENTIAL_ROWS)),
+      http.put(`${BASE}/configurations/configuration/7/42`, async ({ request }) => {
+        puts.push({ url: new URL(request.url).pathname, body: await request.text() });
+        return HttpResponse.json(STORED_MODEL);
+      }),
+    );
+
+    renderStoredModel();
+
+    await waitFor(() => expect(screen.getByLabelText('Name')).toHaveValue('qwen3-0.6b'));
+
+    // The LINKED credential, shown in the picker rather than as a bare string.
+    expect(await screen.findByRole('combobox', { name: 'AI credentials' })).toHaveTextContent('local-vllm');
+
+    // Numeric, not masked: `type="tel"` is the integer branch of
+    // `CommonNumberField` (a baseline quirk it preserves), and the stored
+    // 16000 is in the box.
+    const tokens = screen.getByDisplayValue('16000');
+    expect(tokens).toHaveAttribute('type', 'tel');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(puts).toHaveLength(1));
+    expect(puts[0]?.url).toBe('/api/v2/configurations/configuration/7/42');
+    const body = JSON.parse(puts[0]?.body ?? '{}') as Record<string, unknown>;
+    // The stable lookup key other domains resolve this row by survives the
+    // round trip, and so does every value that was loaded into the form.
+    expect(body['elitea_title']).toBe('qwen3-0.6b');
+    expect(body['data']).toEqual(STORED_MODEL.data);
+  });
+});

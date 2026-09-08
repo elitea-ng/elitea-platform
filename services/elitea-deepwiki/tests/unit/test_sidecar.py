@@ -143,6 +143,9 @@ async def test_the_door_refuses_what_the_host_would_never_send():
     async with client_for(app) as client:
         for body, detail in [
             ({"tool": "ask", "arguments": {}}, "invocation_id is required"),
+            # list_wikis is a wiki_query TOOL and is served by the Go host
+            # over the artifact bucket; the sidecar never sees it, and a
+            # request carrying it is a host that lost track of the split.
             ({"invocation_id": "i", "tool": "list_wikis", "arguments": {}}, "Unknown tool: list_wikis"),
             ({"invocation_id": "i", "tool": "ask", "arguments": []}, "arguments must be an object"),
         ]:
@@ -150,7 +153,9 @@ async def test_the_door_refuses_what_the_host_would_never_send():
             assert response.status_code == 400 and response.json()["detail"] == detail, body
         health = await client.get("/engine/health")
         assert health.json() == {"status": "UP", "runner": "fixture", "active": 0}
-    assert ENGINE_TOOLS == ("generate_wiki", "ask", "deep_research")
+    # resolve_wiki is the wiki_query family's one model-backed step; the rest
+    # of that family is the Go host's, over the artifact bucket.
+    assert ENGINE_TOOLS == ("generate_wiki", "ask", "deep_research", "resolve_wiki")
 
 
 async def test_a_second_invoke_for_a_running_id_is_a_conflict():

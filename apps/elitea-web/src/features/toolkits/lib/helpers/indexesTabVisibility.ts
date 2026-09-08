@@ -28,6 +28,35 @@
  * Measured tool availability on that stack: `artifact` and `datasource`
  * offer `index_data`; `application`, `custom`, `database`, `github`, `jira`
  * and `openapi` offer none.
+ *
+ * ─────────────────────────────────────────────────────────────────────────
+ * THE WORKER-CAPABILITY VERDICT (the second gate, added here)
+ * ─────────────────────────────────────────────────────────────────────────
+ * Offering an indexing tool in the schema says the toolkit CLASS declares
+ * one. It does not say the worker that has to run it can import that class.
+ * elitea-main answers that separately, on the same type schema:
+ * `services/elitea-main/internal/api/v2/toolkits/type_catalogue.go:232-240`
+ * writes `metadata.unavailable = true` plus a `metadata.unavailable_reason`
+ * sentence whenever `workerCapability.SupportsToolkitType` says no, and the
+ * comment there is explicit that the verdict "is written LAST and is not
+ * negotiable".
+ *
+ * Until now NOTHING in this client read it except the type CHOOSER
+ * (`entities/toolkit/model/toolMenu.ts:113`, which filters on the sibling
+ * `metadata.hidden`). The chooser gate only stops such a type being created
+ * NEW — it does nothing for a toolkit that already exists, which is every
+ * toolkit created before the capability changed, imported, or seeded. Open
+ * one of those and the Indexes tab was fully drawn: a create form built
+ * from the very schema whose own metadata says the run cannot happen, an
+ * enabled `Index` button, and a run that dies in the worker with nothing on
+ * screen to explain why.
+ *
+ * So the verdict is resolved here, beside the tool rule, and returned as a
+ * REASON rather than as a second `hidden`. Hiding the tab would repeat the
+ * silence in a quieter key — the toolkit still has indexes, the user still
+ * followed a link to one, and "the tab vanished" explains nothing. The tab
+ * stays, and `IndexesTab` renders the server's own sentence in place of the
+ * form.
  */
 import { IndexesToolsEnum } from '../../indexes/lib/constants/indexDetails.constants';
 
@@ -40,6 +69,29 @@ interface SelectedToolsSchema {
 
 interface ToolkitTypeSchemaLike {
   readonly properties?: { readonly selected_tools?: SelectedToolsSchema | undefined } | undefined;
+  readonly metadata?: ToolkitTypeMetadataLike | undefined;
+}
+
+/** The two capability fields `type_catalogue.go` writes onto a type's metadata. */
+interface ToolkitTypeMetadataLike {
+  readonly unavailable?: unknown;
+  readonly unavailable_reason?: unknown;
+}
+
+/**
+ * The server's own sentence for why the worker cannot run this type, or
+ * `undefined` when it can.
+ *
+ * `unavailable` is the gate and the reason is only its explanation, so a
+ * verdict that arrives without a sentence still gates — it falls back to a
+ * generic line at the render site rather than being read as "available".
+ */
+function resolveUnavailableReason(schema: ToolkitTypeSchemaLike | undefined): string | undefined {
+  const metadata = schema?.metadata;
+  if (metadata === undefined || metadata === null) return undefined;
+  if (metadata.unavailable !== true) return undefined;
+  const reason = metadata.unavailable_reason;
+  return typeof reason === 'string' && reason.trim() !== '' ? reason : '';
 }
 
 /** The tool names a toolkit TYPE offers — `args_schemas` keys, or the baseline's `items.enum`. */
@@ -69,6 +121,13 @@ export interface IndexesTabVisibility {
    * the baseline's `disableIndexingReason.needToSelectIndexData`.
    */
   readonly selectedIndexTools: readonly string[];
+  /**
+   * Set when the served type schema carries the worker-capability verdict
+   * `metadata.unavailable === true`. The string is the server's own
+   * `unavailable_reason`; an empty string means "unavailable, no sentence
+   * given". `undefined` means the worker can run this type.
+   */
+  readonly unavailableReason?: string | undefined;
 }
 
 export function resolveIndexesTabVisibility(params: IndexesTabVisibilityParams): IndexesTabVisibility {
@@ -79,8 +138,13 @@ export function resolveIndexesTabVisibility(params: IndexesTabVisibilityParams):
 
   if (isMCP) return { hidden: true, selectedIndexTools };
 
-  const schemaTools = availableToolNames(toolkitTypeSchema as ToolkitTypeSchemaLike | undefined);
+  const schema = toolkitTypeSchema as ToolkitTypeSchemaLike | undefined;
+  const schemaTools = availableToolNames(schema);
   const hidden = schemaTools.length === 0 || !schemaTools.some((tool) => INDEX_TOOL_NAMES.includes(tool));
 
-  return { hidden, selectedIndexTools };
+  const unavailableReason = resolveUnavailableReason(schema);
+  // `exactOptionalPropertyTypes`: an available type must omit the KEY, not
+  // carry an explicit `undefined` — an empty string is a real verdict here.
+  if (unavailableReason === undefined) return { hidden, selectedIndexTools };
+  return { hidden, selectedIndexTools, unavailableReason };
 }

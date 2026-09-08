@@ -14,14 +14,16 @@
 # ELITEA_INVENTORY_RUNNER defaults to the refusing runner and GET /engine/health
 # says which runner is active.
 #
-# This image IS large — multi-GB. MEASURED from the resolved lock, not assumed:
-# torch 2.14, torchvision, timm, transformers and sentence-transformers are all
-# in it. They arrive TRANSITIVELY, through the ELITEA SDK's `tools` extra
-# (unstructured -> unstructured-inference), not from anything this service asks
-# for: removing the legacy plugin's local embedding model took away this port's
-# own reason to carry torch, and did not take away the SDK's. Narrowing that
-# extra to what a service reading git repositories actually needs is stage I8,
-# and it is a measurement, not a guess.
+# This image WAS multi-GB. Stage I8 replaced `elitea-sdk[runtime,tools]` with a
+# bare `elitea-sdk` plus an exact set measured against what this service really
+# imports, instantiates and runs (pyproject.toml states the ledger). The engine
+# closure went from 356 packages to 126: torch and its NVIDIA CUDA wheels,
+# torchvision, timm, transformers, sentence-transformers, unstructured,
+# opencv-python and chromadb are all gone, and none of them was ever used here.
+#
+# The `tools` extra was NOT where they came from — `elitea-sdk[runtime]` alone
+# resolves 255 packages and names chromadb itself. Dropping only `tools` would
+# have removed neither chromadb nor torch.
 #
 # Build from the repository root.
 
@@ -42,18 +44,25 @@ COPY services/elitea-inventory ./services/elitea-inventory
 
 # The resolution is uv's; the WHEEL BUILDING is pip's.
 #
-# MEASURED, over six image builds: pip cannot resolve the engine extra's
-# closure in any reasonable time. The ELITEA SDK's `tools` extra brings ~1,280
+# MEASURED, over six image builds, BEFORE I8: pip could not resolve the engine
+# extra's closure in any reasonable time. The blanket SDK extras brought 356
 # packages, and inside that set chromadb, mcp, langsmith, uvicorn[standard],
-# unstructured-client and their h11/httpcore/websockets constraints form a
-# search space pip explores one metadata download at a time — every build was
+# unstructured-client and their h11/httpcore/websockets constraints formed a
+# search space pip explored one metadata download at a time — every build was
 # killed while it was still walking backwards through some package's release
 # history. Pinning the offenders one at a time removed one dimension per build
 # and revealed the next.
 #
-# uv resolves the same set, to the same versions, in about twenty seconds. So
+# uv resolved the same set, to the same versions, in about twenty seconds. So
 # uv produces the lock and pip is given `--no-deps -r`, which asks it to build
 # exactly what it is told and resolve nothing.
+#
+# I8 narrowed the closure to 126 packages, and pip CAN now resolve it — a plain
+# `pip install -e '.[engine,test]'` completes on a developer machine, which is
+# how the full 304-test suite was run against it. The split stays anyway: the
+# `--no-deps -r` shape means a wheel that is missing is an error here rather
+# than a silent fall back to a version nobody resolved, and that property is
+# worth more than the one command it saves.
 #
 # The lock is generated HERE rather than committed, so it cannot go stale
 # against pyproject.toml — the failure mode a checked-in lock has.
@@ -87,7 +96,28 @@ FROM python:3.12.14-slim AS runtime
 # openssl is the only one of the base image's HIGH/CRITICAL findings that
 # Debian trixie has a fixed version for). --only-upgrade, so this installs
 # nothing new.
-RUN apt-get update \
+#
+# THE `ADD` BELOW IS NOT A FILE THE IMAGE NEEDS. It is a cache stamp, and it is
+# the same one services/elitea-deepwiki/Containerfile carries. The upgrade is a
+# layer whose command string never changes, so a layer cache serves it on every
+# build and freezes the package versions of the day it was first built. That
+# defect was measured on the nginx image (apps/elitea-web/Containerfile).
+# BuildKit re-resolves a remote source on every build, so the Debian release
+# files invalidate the upgrade exactly when Debian publishes new packages. apt
+# never reads these copies.
+#
+# THE SUITE NAMES MUST MOVE WITH THE BASE. The RUN asserts the codename, so a
+# base bump to a new Debian release FAILS the build instead of leaving the
+# stamp to watch a suite this image does not install from.
+ADD https://deb.debian.org/debian/dists/trixie/InRelease /usr/share/debian-index-stamp/trixie
+ADD https://deb.debian.org/debian/dists/trixie-updates/InRelease /usr/share/debian-index-stamp/trixie-updates
+ADD https://deb.debian.org/debian-security/dists/trixie-security/InRelease /usr/share/debian-index-stamp/trixie-security
+RUN . /etc/os-release \
+    && if [ "${VERSION_CODENAME}" != "trixie" ]; then \
+         echo "base is Debian ${VERSION_CODENAME}, the cache stamp watches trixie — update the ADD lines above" >&2; \
+         exit 1; \
+       fi \
+    && apt-get update \
     && apt-get install --no-install-recommends --only-upgrade -y \
          openssl libssl3t64 openssl-provider-legacy \
     && rm -rf /var/lib/apt/lists/*

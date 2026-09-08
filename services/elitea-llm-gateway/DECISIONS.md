@@ -305,6 +305,46 @@ decision]** are risk/policy calls an autonomous agent must NOT change without si
   `TestMemberSoftAlert_PlatformSwitchSuppressesMember`. *Not done:* spec §8.3
   still documents a project-only `budget.soft_alert` payload; it lives in
   `elitea-docs`, a different repository.
+- **2026-09-06 (issue #304) — the gateway REFUSES TO START in the one unwired
+  state that cannot recover and cannot be seen.** *Finding:* three states share
+  the symptom "the budget gate is not wired", and only one of them had no
+  control. (1) `GATEWAY_NATS_URL` is set and the dial failed: `/readyz` reports
+  not ready and `startBudgetRecovery` re-dials, so the pod drains and returns to
+  service on its own. (2) `GATEWAY_NATS_URL` is EMPTY while the database holds
+  an enforcing budget row: nothing re-dials a URL that was never given, and
+  `budgetEnforcementUnwired` is scoped to a CONFIGURED NATS, so `/readyz`
+  answers ready. That pod serves `/llm` with every authored ceiling ignored,
+  bills nothing, and reports healthy for its whole life. (3) nothing configured
+  and nothing authored: the supported bootstrap and local-development posture.
+  *Decision:* add `LLM_BUDGET_REQUIRE_ENFORCEMENT`, with three values, and
+  refuse BEFORE the listener opens (`cmd/elitea-llm-gateway/
+  budget_startup_gate.go`, called from `main` and asserted by the wiring gate).
+  `auto` (the shipped default) refuses state 2 only. `on` refuses every unwired
+  state, which is criterion 2 of the issue. `off` refuses nothing and is the
+  documented opt-out; `deploy/docker-compose.standalone-full.yml` states it,
+  because that stack runs no NATS on purpose. *Why `auto` does NOT refuse state
+  1:* that would replace a pod which recovers by itself (issue #315) with a
+  CrashLoopBackOff that cannot start until NATS does, and the outage and the
+  restart never overlap. This is a startup policy and NOT a fourth fail mode:
+  `LLM_BUDGET_NATS_FAIL_MODE` decides what a RUNNING gateway does when NATS
+  breaks, and it can only act on a connection that once succeeded. *Rules that
+  hold this up:* the probe counts a CEILING (`enabled AND NOT is_unlimited AND
+  hard_limit_usd IS NOT NULL`, and the member equivalent) and not a row, because
+  every project that opens a budget screen can get an unlimited row; a probe
+  that could not READ answers "unknown" and never "no budgets", so a database
+  blip cannot disarm the gate; and the table-existence probe is its own round
+  trip, because PostgreSQL resolves relations at parse time and a `to_regclass`
+  guard in the same statement guards nothing. The chart refuses the matching
+  render-time shapes (`templates/llmGateway/_helpers.tpl`, guard #3): an empty
+  effective `GATEWAY_NATS_URL`, a `LLM_BUDGET_REQUIRE_ENFORCEMENT` value the
+  binary does not read, and `off` without
+  `llmGateway.acknowledgeUnenforcedBudgets`. Guarded by
+  `TestBudgetStartupRefusal_Matrix`, `TestRequireEnforcementRejectsATypo`,
+  `TestProbeAuthoredBudgets`, `TestPostgresBudgetProbeReadsTheShippedSchema`,
+  `TestGatewayRefusesToStartWithoutEnforcement` (which runs the real `main` in a
+  subprocess and reads the exit status, with an `off` negative control), the
+  `budgetStartupGate(` wiring-gate entry, and six cases in
+  `deploy/helm/tests/render-llm-path.sh`.
 
 ## Authored governance (issue #218, 2026-08-23)
 
@@ -428,6 +468,22 @@ in a release note.**
   own check happens at connect time with no race. The check runs BEFORE
   `vault.Resolve`, so a non-allowlisted destination never causes a decrypt of
   the tenant's `{{secret.NAME}}` key material.
+- **2026-09-05 — The connection probe uses the DIALER's egress predicate, not a
+  second one.** The egress-governance work (gap G6) split one question into two:
+  `EgressAllowlistConfigured` answers "is an allowlist armed", and
+  `allowsPrivateNetwork` answers "does an entry EXPLICITLY name a private host
+  or CIDR". The dialer moved to the second question; `/llm/v1/check_connection`
+  and `/llm/v1/list_provider_models` kept the first. With a name-only entry —
+  the chart's own example — the two disagree. "Test connection" then reported
+  success and wrote `status_ok`, and every chat turn died in the dialer.
+  `EgressPolicy` now declares `EgressPrivateNetworkAllowed`, and
+  `probeAllowsPrivateNetwork` (internal/llmproxy/checkconnection.go) is the ONE
+  place both routes read it. Read it from the account's gate, never from the
+  environment: the gate merges the authored `egress_allowlist` governance rows
+  with the `GATEWAY_EGRESS_ALLOWLIST` floor. Guarded by
+  `TestProbeEgressPredicate_MatchesTheDialer`, which drives the real account and
+  compares the probe's decision with `GetConfigForProvider`; mutation-verified
+  2026-09-05.
 - **[human decision] 2026-08-09 — Upstream response bodies are NEVER echoed to
   callers (issue #13).** bifrost/core puts an unparsable non-2xx body verbatim
   into `Error.Message` (`core@v1.7.3 providers/utils/utils.go`, prefix
@@ -652,6 +708,53 @@ in a release note.**
   |---|---|
   | The widened price `SELECT` names four columns migration 0086 adds. What happens on a pod that rolls out ahead of `elitea-migrate`? | Postgres answers 42703 for EVERY model, and `lookupCatalog` reads any non-`ErrNoRows` error as "uncatalogued" — so the WHOLE catalog would silently bill at the default price table for the length of the skew. `queryCatalog` now catches 42703 alone, latches, and re-reads the same row with the pre-0086 two-column statement. Token pricing survives; only the audio rates go missing, so audio is UNPRICED and counted. The latch expires after 5 minutes and lifts itself when the migration lands. `gateway_price_catalog_schema_behind` (gauge) and `..._total` (counter) are the signal: one for the process, not one log line per model per cache TTL. |
   | The speech route bills a character count bifrost computed from OUR request (`BackfillParams`), not one a provider reported. Is that legitimate? | Yes, and `audio.go` says so plainly. A character-billed TTS provider charges for the input text it was sent, so a rune count of that exact text IS the billable quantity, not an estimate of one. Contrast `BifrostTranscriptionResponse.Duration`, which bifrost DERIVES from word timestamps: that is an observation of something the provider never stated, and `transcriptionUnits` still refuses it. The rule is "bill the quantity the sale is priced on, never an inference about it". Because bifrost backfills that count on every speech response and refuses an empty input, the speech "no usable usage" branch is unreachable through the real router; it is marked as a guard for a non-bifrost router, and the test for that shape now runs against the transcription route, where it is real. |
+
+- **[2026-09-07, issue 323] Voice listing is a TABLE, not a request, and it
+  lives here.** *The question the 501 was waiting on:* which provider scope owns
+  "which voices does this TTS model have". `GET /configurations/tts_voices`
+  refused for every project, and the refusal was honest — no route in any
+  dialect could ask a provider that question, and nothing wrote the
+  `meta.voices` cache the reference falls back on, so both of its two sources
+  were empty by construction.
+
+  *Finding:* for every provider this gateway speaks, the answer is not a request
+  at all. OpenAI publishes NO voices endpoint; its set is a fixed literal in the
+  API documentation. Azure OpenAI and AI-DIAL accept the same identifiers
+  because the proxy passes them through. Vertex maps only SIX of OpenAI's nine —
+  `ash`, `coral` and `sage` are forwarded literally and answered with 400 by the
+  Google API. Gemini accepts only its own native names, and nothing translates
+  an OpenAI name onto that path. The reference reached the same conclusion and
+  shipped a static table for exactly these families
+  (`legacy/plugins/configurations/data/tts_voices.json`), calling a provider API
+  only for the vendors it supported that DO publish a catalogue — ElevenLabs,
+  Deepgram, AWS Polly, PlayHT, IBM Watson, Azure Cognitive Services. This
+  gateway has an adapter for none of those six: `checkConnectionProviders`
+  covers `open_ai`, `azure_open_ai`, `open_ai_azure`, `ai_dial`, `ollama`,
+  `vllm`, `amazon_bedrock` and `vertex_ai`, and a voice lister without a checker
+  entry would be an ungated dial.
+
+  *Decision:* `POST /llm/v1/list_provider_voices`, beside `list_provider_models`
+  and behind the same identity signature, resolving the voice set from a table
+  keyed on the provider dialect and the model name
+  (`internal/llmproxy/listprovidervoices.go`). It DIALS NOTHING today, and the
+  route says so rather than implying a round trip it does not make. It is a
+  gateway route regardless, because provider knowledge is what decides the
+  answer: the day an enumerating provider gains a checker entry, it becomes a
+  lister function in that file and no caller changes.
+
+  *What a provider this build knows no catalogue for gets:* `success: true` with
+  an EMPTY list and `reason: unsupported_type`. That is a real answer — the
+  caller keeps its own default voice — and it must never be reported as a
+  failure, because a user whose TTS works perfectly would then see an error.
+  Nothing on this path answers 501 any more.
+
+  *Where the cache is, and why not here:* on `meta.voices` of the project's tts
+  configuration row, written by elitea-main
+  (`internal/api/v2/configurations/handler.go`'s `TTSVoices`), which is where
+  the reference put it. A TTL cache in this gateway would sit over a table
+  lookup, measure nothing, and read as a cache that does work it does not do.
+  When a live lister lands, the cache that matters is already in the right
+  layer.
 
   **Realtime ASR was NOT covered then. It is now** — see "Realtime sessions"
   below (2026-08-20). `indexer_asr_realtime.py` opens a WebSocket to
@@ -1155,6 +1258,53 @@ in a release note.**
   pool can exceed 50 ms. The number needs a k6 run on staging
   (`cmd/cutover-ctl/testdata/overhead_loadtest.js`); it cannot be measured from
   a unit test, so the threshold is unchanged for now.
+  **The direction of the error is safe, and that is why this waits for #19
+  rather than blocking it (2026-09-06).** The header is a strict SUPERSET of
+  what it reported before: the same start instant, a later stop instant. An
+  unchanged threshold over a larger measurement can therefore produce a FALSE
+  FAILURE and never a false pass, so the gate cannot sign off a hop it did not
+  measure. `parseK6SummaryForOverhead` already refuses the two ways a run could
+  report a flattering number it did not earn — a summary with no
+  `gateway_overhead_ms` metric, and one whose `gateway_overhead_fallback`
+  counter shows the header never arrived. What remains is a tuning decision on
+  real staging numbers, and it needs a deployed gateway (#19).
+  The measurement itself cannot silently narrow again:
+  `TestElapsedHeaderIsAlwaysFedByAMeter` reads the source and fails a stamp
+  that is not fed by `overhead.Meter.Overhead`, or a handler that stamps the
+  header without attaching a Meter.
+
+  **[2026-09-07] A local sample, not the BFC.1 staging measurement.** This
+  entry records `X-Elapsed-Ms` values from the standalone-full compose stack
+  (`ghcr.io/elitea-ng/elitea-llm-gateway:standalone`, built 2026-09-07T01:12Z,
+  the mTLS listener at `:8083`). It does not close this follow-up: BFC.1 still
+  needs the k6 p99 from the ArgoCD staging playground named in issue #19.
+
+  `/metrics` on this deployed image publishes no overhead or
+  credential-resolution series. It exposes only the allowlist in
+  `gatewayMetrics()` (budget-enforcement gauge, SSE gauge, model-map/audio/
+  realtime/budget-outage counters). The BFF.9d value stays a per-request
+  response header, read by k6 into the `gateway_overhead_ms` trend metric, by
+  design (bifrost v1.7.3 gives no round-trip seam, so a Prometheus histogram
+  cannot isolate the hop either).
+
+  20 unary `POST /llm/v1/chat/completions` requests carried project 1's real
+  `platform-qwen` configuration: provider `vllm`, `api_base
+  http://192.168.29.60:8000/v1`, model `Qwen/Qwen3.5-35B-A3B-FP8`. Credential
+  resolution ran for every request — each one reached the real vLLM host and
+  got back `"The model \`Qwen/Qwen3.5-35B-A3B-FP8\` does not exist"` (that vLLM
+  host now serves `unsloth/Qwen3.8-27B-NVFP4`; the model name drifted after
+  someone configured project 1, and it is not an issue-#17 defect). A 200
+  response needs a stored-configuration edit, and the read-only mandate on
+  this stack forbids that edit, so this sample has no successful completion in
+  it.
+
+  `X-Elapsed-Ms` (credential resolution included, provider round-trip
+  excluded): min 0.648 ms, avg 0.915 ms, max 2.313 ms, n=20. Every value stays
+  one to two orders of magnitude under the unchanged 50 ms default. This
+  single-process, single-connection sample cannot stand in for the k6 p99 that
+  BFC.1 needs, and it does not carry concurrent load. It does confirm the
+  SUPERSET direction argued above in a live deployment. The full sample and the
+  request recipe are on issue #17.
 - ~~Set `secrets.*.optional: false` ... for `GATEWAY_IDENTITY_SECRET`~~ — DONE
   2026-08-09 (issue #11, see the Trust-boundary entry above): it is `false` in
   the base chart for both the gateway and elitea-main. `SECRETS_MASTER_KEY`

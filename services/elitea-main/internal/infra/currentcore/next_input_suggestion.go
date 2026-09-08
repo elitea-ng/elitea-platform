@@ -13,14 +13,25 @@
 // that rule. The consumer is public. The server is not.
 //
 // This call is not dead code. Every chat send, regeneration, continuation and
-// ad-hoc turn reaches it. The route is registered at
-// internal/api/production_router.go:157-160.
+// ad-hoc turn reaches it: the agent turn routes that call it are registered in
+// internal/api/production_router.go. The POLICY path below is a different
+// thing, and no router in this repository registers that one.
 //
-// Both shipped deployments make the call fail. The hybrid edge sends the path to
-// legacy Centry, which registers no such rule. The standalone stack aims an
-// https origin at a cleartext port. The caller reads a failure as "no policy"
-// and continues (internal/application/agentexecution/start.go:281-295). Each
-// turn therefore carries `next_input_suggestion: null`.
+// Both shipped deployments make the call fail, and for the SAME reason: no
+// server answers the path. The hybrid edge sends it to legacy Centry, which
+// registers no such rule. The standalone stack calls this process, which
+// registers no such route, so the answer is 404. The caller reads a failure as
+// "no policy" and continues
+// (internal/application/agentexecution/start.go:281-295). Each turn therefore
+// carries `next_input_suggestion: null`.
+//
+// The standalone stack used to fail one layer EARLIER, on transport rather than
+// on routing: it aimed `https://elitea-main:8080` at this process's own
+// cleartext listener and every turn logged "server gave HTTP response to HTTPS
+// client". That hid the real gap behind a configuration fault. The self-call
+// origin is now derived from the listener
+// (internal/runtimecomposition/config.go, `currentMainBaseURL`), so what the
+// operator sees is the gap this package documents.
 //
 // The issue names two repairs. Both need the product owner. To own the policy,
 // you must invent its shape and its storage, because the original is unreadable.
@@ -45,6 +56,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
@@ -238,18 +250,44 @@ func (resolver *NextInputSuggestionResolver) ResolveNextInputSuggestionPolicy(
 	return canonical, nil
 }
 
+// parseCurrentCoreBaseURL accepts the two origins that can answer this call.
+//
+// An https origin is an address that terminates TLS: the hybrid stack's edge,
+// an ingress. An http origin is accepted only on a LOOPBACK host, because that
+// is this process's own cleartext listener — `cmd/elitea-main` starts one
+// plain `http.Server` and never a TLS one, so a SELF call has no other shape.
+// The request then stays on the loopback interface and the actor bearer token
+// it carries never reaches a network.
+//
+// Cleartext to any other host is refused here as it is in
+// `internal/runtimecomposition/config.go`, which validates the same string one
+// layer up: it would put that token on the wire.
 func parseCurrentCoreBaseURL(raw string) (*url.URL, error) {
 	if raw == "" || len(raw) > maxCurrentCoreBaseURLBytes || strings.TrimSpace(raw) != raw {
 		return nil, errors.New("current Core base URL is invalid")
 	}
 	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" ||
+	if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") ||
+		parsed.Hostname() == "" ||
 		parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" ||
 		parsed.ForceQuery || parsed.RawPath != "" || (parsed.Path != "" && parsed.Path != "/") {
-		return nil, errors.New("current Core base URL must be an HTTPS origin")
+		return nil, errors.New("current Core base URL must be an HTTPS origin, " +
+			"or an HTTP origin on a loopback address")
+	}
+	if parsed.Scheme == "http" && !loopbackHost(parsed.Hostname()) {
+		return nil, errors.New("current Core base URL may only use HTTP on a loopback address")
 	}
 	parsed.Path = ""
 	return parsed, nil
+}
+
+// loopbackHost reports whether a host name names this machine only.
+func loopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	address, err := netip.ParseAddr(host)
+	return err == nil && address.IsLoopback()
 }
 
 func validBearerToken(token string) bool {

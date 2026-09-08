@@ -1,0 +1,88 @@
+name: CI — Inventory
+
+# `services/elitea-inventory`'s tests had no CI job at all. Every other Python
+# package in the tree has one — pylon-indexer and elitea-worker-python in
+# ci-python.yml, elitea-deepwiki in ci-deepwiki-conformance.yml — and the only
+# workflows that named this package resolved its dependency closure without
+# running a line of it. So 305 tests, including the copy-is-verbatim digest
+# check that makes "the engine is a byte-for-byte copy" mean something, ran on
+# developer machines and nowhere else. Two defects found in the package during
+# stage I8 (#811) had been latent for exactly that reason.
+#
+# WHY THIS IS AFFORDABLE NOW, AND WAS NOT BEFORE. The package README recorded
+# that pip "cannot resolve this closure": the SDK's blanket extras brought ~356
+# packages whose chromadb/mcp/langsmith/uvicorn constraints pip explored one
+# metadata download at a time, and six image builds were killed while it was
+# still walking backwards through release histories. I8 replaced those extras
+# with an exact pinned set of 126 packages, which removes the search space.
+# MEASURED on this tree: `pip install -e ".[engine,test]"` resolves in 25s and
+# the suite runs in seconds. That is why this job installs the engine extra
+# rather than testing a subset — three engine test files and one unit file need
+# `langchain_core`, and skipping them would leave the copied engine untested.
+
+on:
+  pull_request:
+    paths:
+      - "services/elitea-inventory/**"
+      - ".github/workflows/ci-inventory.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "services/elitea-inventory/**"
+      - ".github/workflows/ci-inventory.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: Tests (engine closure installed)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: services/elitea-inventory
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the package with its engine and test extras
+        run: python -m pip install --disable-pip-version-check -e ".[engine,test]"
+
+      # A test job that collects nothing is green, which is the failure this
+      # repository keeps meeting: a gate that checks nothing still reports
+      # success. The floor arms this one against its own silence — a rename, a
+      # bad `testpaths`, or an import error that empties a directory fails here
+      # with a number rather than passing with none.
+      #
+      # The count is summed from `--collect-only -q`, whose output on this
+      # pytest is one `path: count` line per file (NOT node ids — the obvious
+      # `grep -c '::'` counts zero here, which would have failed every build).
+      # If a future pytest changes that format the sum becomes 0 and this step
+      # fails: the guard fails CLOSED, which is the only safe direction for a
+      # check whose whole job is noticing absence.
+      #
+      # 250 is deliberately below the current 305 so adding tests costs
+      # nothing, and it is a floor rather than an equality so it never needs
+      # updating for them.
+      - name: The suite is not vacuous
+        run: |
+          collected="$(python -m pytest tests --collect-only -q -p no:warnings \
+            | awk -F': ' '/^tests\/.*: [0-9]+$/{s+=$2} END{print s+0}')"
+          echo "collected ${collected} test(s)"
+          if [ "${collected}" -lt 250 ]; then
+            echo "FAIL: ${collected} test(s) collected, floor is 250."
+            echo "Either the suite is not running, or --collect-only's output format moved."
+            exit 1
+          fi
+
+      - name: Run the suite
+        run: python -m pytest tests -q

@@ -61,8 +61,10 @@ func NewRoute(
 	authConfig apimw.AuthConfig,
 	permissions auth.PermissionResolver,
 	credentials *CredentialResolver,
+	toolkits ToolkitReader,
 	minter CallbackMinter,
 	logger *slog.Logger,
+	options ...Option,
 ) (*Route, error) {
 	if !facade.Composable(authConfig, permissions) {
 		return nil, ErrInvalidRoute
@@ -79,13 +81,52 @@ func NewRoute(
 	// would do so having already passed authentication and permissions, which
 	// is the point at which a defect stops looking like a defect.
 	rewriter, err := NewInvokeRewriter(
-		credentials, minter, cfg.CallbackBaseURL, cfg.CallbackTokenTTL)
+		credentials, toolkits, minter, cfg.CallbackBaseURL, cfg.CallbackTokenTTL)
 	if err != nil {
 		return nil, err
 	}
 	if logger == nil {
 		logger = slog.Default()
 	}
+
+	// The options are applied BEFORE the table is built, because one of them
+	// (WithHistory) supplies the poll hop and the invoke wrapper the table
+	// then mounts. A variadic tail rather than another positional parameter:
+	// every caller of this constructor that does not record a transcript is
+	// unchanged, and a facade whose composition root cannot build a
+	// repository must still mount.
+	settings := routeOptions{}
+	for _, option := range options {
+		option(&settings)
+	}
+
+	// The rewriting invoke handler, and — when a transcript is being kept —
+	// the wrapper that reads the drawer's two headers off it. The wrapper is
+	// applied to THIS handler and not to the whole router: /slots is polled
+	// from the app shell and carries no conversation, so a router-wide
+	// wrapper would warn about a missing conversation key several times a
+	// minute for requests that have no business carrying one.
+	invoke := material.Invocation{
+		Provider: "DeepWiki",
+		// PER TOOLKIT, not one rewrite for all three: `Wikis` names a
+		// code toolkit, `wikis_query` names a Wikis toolkit, and
+		// `wiki_query` names nothing at all (wikis.go). One rewrite
+		// requiring code_toolkit refused the last two outright.
+		RewriteFor: rewriter.For,
+		Rewrite:    rewriter.Rewrite,
+		Forward:    proxy.Forward,
+		Path: func(r *http.Request) string {
+			return providerInvokePath(
+				chi.URLParam(r, "toolkit_name"), chi.URLParam(r, "tool_name"))
+		},
+		Minter: minter,
+		Status: invokeError,
+		Logger: logger,
+		// The question half of the wiki chat transcript (history.go). Nil
+		// when nothing records one, and material.Invocation then captures no
+		// bodies at all.
+		Observe: settings.history.Observer(),
+	}.Serve
 
 	// guard, the project accessor and the id rule all come from
 	// providerhost/facade now: DeepWiki and Inventory are two callers of the
@@ -105,23 +146,29 @@ func NewRoute(
 		// The one route this facade serves itself: the body is rewritten
 		// (credentials expanded, a callback grant minted) before the hop.
 		// The handler is the shared one; only the rewrite is DeepWiki's.
-		Invoke: material.Invocation{
-			Provider: "DeepWiki",
-			Rewrite:  rewriter.Rewrite,
-			Forward:  proxy.Forward,
-			Path: func(r *http.Request) string {
-				return providerInvokePath(
-					chi.URLParam(r, "toolkit_name"), chi.URLParam(r, "tool_name"))
-			},
-			Minter: minter,
-			Status: invokeError,
-			Logger: logger,
-		}.Serve,
+		Invoke: settings.history.WrapInvoke(invoke),
+		// The answer half of the transcript. The terminal poll is the only
+		// moment this facade sees what the provider produced, because the
+		// browser drains its answer through this hop.
+		Poll: settings.history.Poll(proxy.Forward),
 	})
 	if err != nil {
 		return nil, ErrInvalidRoute
 	}
 	return &Route{handler: handler}, nil
+}
+
+// Option configures the facade beyond its dependencies.
+type Option func(*routeOptions)
+
+type routeOptions struct {
+	history *History
+}
+
+// WithHistory records every wiki chat turn this facade serves. A nil History
+// is accepted and records nothing — see NewHistory.
+func WithHistory(history *History) Option {
+	return func(o *routeOptions) { o.history = history }
 }
 
 // ServeHTTP answers even when the route was never built, so a deployment with
@@ -146,11 +193,7 @@ func (route *Route) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // principal carries no owning user; llmproxy omits the header rather than
 // signing a blank one.
 func userIDFrom(r *http.Request) string {
-	principal, ok := auth.RuntimePrincipalFromContext(r.Context())
-	if !ok {
-		return ""
-	}
-	if owner, ok := principal.OwningUserID(); ok {
+	if owner := material.OwnerID(r); owner > 0 {
 		return strconv.FormatInt(owner, 10)
 	}
 	return ""

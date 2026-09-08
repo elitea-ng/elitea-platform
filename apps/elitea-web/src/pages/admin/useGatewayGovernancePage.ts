@@ -23,6 +23,7 @@ import { useCallback, useMemo, useState } from 'react';
 
 import {
   governanceFailureReason,
+  isGlobalGovernanceType,
   useCreateGovernanceRow,
   useDeleteGovernanceRow,
   useGovernanceRows,
@@ -74,6 +75,9 @@ export interface GovernanceDraft {
   // mcp_allowlist
   readonly mcpAllowlist: string;
 
+  // egress_allowlist
+  readonly egressAllowlist: string;
+
   // routing_rule
   readonly cel: string;
   readonly priority: string;
@@ -96,6 +100,7 @@ export const EMPTY_DRAFT: GovernanceDraft = {
   requestsPerMin: '',
   ratePolicy: 'billed',
   mcpAllowlist: '',
+  egressAllowlist: '',
   cel: '',
   priority: '0',
   targets: [{ provider: '', model: '', weight: '1' }],
@@ -136,6 +141,11 @@ function readString(source: Record<string, unknown>, key: string, fallback = '')
 
 /** The `scope` selector, or undefined when the draft constrains nothing. */
 function draftToScope(draft: GovernanceDraft): Record<string, unknown> | undefined {
+  // A global type carries no scope, and the server refuses one. Writing scope
+  // fields the dialog no longer shows would make a saved row unsavable on the
+  // next edit, with a 400 the operator cannot act on because the field that
+  // caused it is not on screen.
+  if (isGlobalGovernanceType(draft.type)) return undefined;
   const scope: Record<string, unknown> = {};
   const projectIds = splitIntList(draft.scopeProjectIds);
   if (projectIds.length > 0) scope.project_ids = projectIds;
@@ -213,6 +223,9 @@ export function draftToData(draft: GovernanceDraft): Record<string, unknown> {
     case 'mcp_allowlist':
       data.mcp = { allowlist: splitList(draft.mcpAllowlist) };
       break;
+    case 'egress_allowlist':
+      data.egress = { allowlist: splitList(draft.egressAllowlist) };
+      break;
     case 'routing_rule':
       Object.assign(data, draftToRoutingRule(draft));
       break;
@@ -230,6 +243,7 @@ export function rowToDraft(row: GovernanceRow): GovernanceDraft {
   const rateLimit = readRecord(row.data, 'rate_limit');
   const credential = readRecord(row.data, 'credential');
   const mcp = readRecord(row.data, 'mcp');
+  const egress = readRecord(row.data, 'egress');
   const rawTargets = (row.data as Record<string, unknown>).targets;
 
   return {
@@ -250,6 +264,7 @@ export function rowToDraft(row: GovernanceRow): GovernanceDraft {
     requestsPerMin: readString(rateLimit, 'requests_per_min'),
     ratePolicy: readString(credential, 'rate_policy', 'billed'),
     mcpAllowlist: joinList(mcp.allowlist),
+    egressAllowlist: joinList(egress.allowlist),
     cel: readString(row.data, 'cel'),
     priority: readString(row.data, 'priority', '0'),
     targets: Array.isArray(rawTargets) && rawTargets.length > 0

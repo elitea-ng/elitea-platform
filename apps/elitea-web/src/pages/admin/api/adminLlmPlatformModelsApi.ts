@@ -106,7 +106,20 @@ export interface PlatformModelDraft {
   };
 }
 
-const platformModelKeys = {
+/**
+ * Exported because a PROVIDER mutation has to invalidate this listing too.
+ *
+ * The listing carries `credential_names` — the platform providers a model may
+ * name — so it is the query that backs the model dialog's "Platform provider"
+ * select. Creating a provider invalidated only the providers query, and this
+ * one stayed cached: the operator added a provider, opened "Add a platform
+ * model", and the select still offered "None" alone until a full reload,
+ * although the server was already returning the new name.
+ *
+ * `adminLlmProvidersApi.ts` is the only importer, and it imports nothing else
+ * from this module, so the two files do not form a cycle.
+ */
+export const platformModelKeys = {
   all: ['admin', 'llmProxy', 'platformModels'] as const,
 };
 

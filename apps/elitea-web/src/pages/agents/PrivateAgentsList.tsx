@@ -8,6 +8,7 @@ import { useNavigate, useParams, useSearch } from '@tanstack/react-router';
 import { useListApplications } from '@/shared/api/generated/applications/applications';
 import type { Application, ApplicationList } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
+import { useRailTagSelection } from '@/shared/ui/EntityRail';
 import { SimpleSearchBar } from '@/shared/ui/SimpleSearchBar';
 
 import { sortApplicationsByField, type SortOrder } from './lib/sortApplicationsByField';
@@ -29,7 +30,14 @@ function applicationName(application: Application): string {
 }
 
 function toRow(application: Application): ApplicationListRow {
-  return { id: application.id, name: applicationName(application), description: application.description ?? '' };
+  return {
+    id: application.id,
+    name: applicationName(application),
+    description: application.description ?? '',
+    authors: (application.authors ?? []).map((author) => ({ id: author.id, name: author.name })),
+    tags: application.tags ?? [],
+    createdAt: application.created_at,
+  };
 }
 
 function matchesQuery(application: Application, query: string): boolean {
@@ -61,7 +69,12 @@ interface SortSearch {
  * comment for the full citation trail):**
  *  - `ListApplicationsParams` has no `statuses` field — this fetches the
  *    project's `agents_type: 'classic'` page ONCE (see the cap below) and
- *    filters by `application.status` locally.
+ *    filters by `application.status` locally. That field is REAL as of the
+ *    lifecycle change: `List` now reports each agent's publish state
+ *    (`internal/infra/db/repos/applications.go`), where it previously selected
+ *    no status at all, so `row.status` was always absent and every status tab
+ *    was empty whatever the user did. See `useApplicationTabs.tsx` for which
+ *    of the six tabs the server can fill and which it still cannot.
  *  - **Silent 20-row cap, honestly disclosed here:** `ListApplicationsParams`
  *    (the ORVAL-generated request-param type, `shared/api/generated/model/
  *    listApplicationsParams.zod.ts`) has no `limit`/`offset` fields. The Go
@@ -114,11 +127,24 @@ export function PrivateAgentsList({ statuses, cardContentType }: PrivateAgentsLi
 
   const [query, setQuery] = useState('');
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const { selectedTags } = useRailTagSelection();
 
   const trimmedQuery = query.trim();
+  // The rail's tag selection goes to the SERVER, as the `tags` request param
+  // the handler always read (`internal/api/v2/applications/handler.go`). The
+  // repository query behind it ignored the param and left every row's `tags`
+  // empty, so this page disclosed the rail as decorative. Both halves are
+  // real now (issue 841), and the filter is server-side because the list is
+  // capped at the backend's first page: a client-side filter would narrow one
+  // page instead of the project.
+  const tagFilter = selectedTags.join(',');
   const listQuery = useListApplications(
     projectId ?? '',
-    { agents_type: 'classic', ...(trimmedQuery === '' ? {} : { query: trimmedQuery }) },
+    {
+      agents_type: 'classic',
+      ...(trimmedQuery === '' ? {} : { query: trimmedQuery }),
+      ...(tagFilter === '' ? {} : { tags: tagFilter }),
+    },
     { query: { enabled: projectId !== undefined } },
   );
   // `.data.data`'s declared type includes the error-envelope variant — never
@@ -159,13 +185,19 @@ export function PrivateAgentsList({ statuses, cardContentType }: PrivateAgentsLi
         emptyTitle={
           query
             ? t('pages.agents.privateList.emptyFound.title', 'Nothing found.')
-            : t('pages.agents.privateList.empty.title', 'You have no agents.')
+            : t('pages.agents.privateList.empty.title', 'No agents yet')
         }
         emptyDescription={
           query
             ? t('pages.agents.privateList.emptyFound.description', 'Create yours now!')
-            : t('pages.agents.privateList.empty.description', 'Create your first agent to get started.')
+            : t(
+                'pages.agents.privateList.empty.description',
+                'Create your first agent to get started. Agents combine a prompt, a model and the toolkits they are allowed to call.',
+              )
         }
+        onCreate={() => {
+          void navigate({ to: '/agents/create' });
+        }}
         onSelect={(id) => {
           void navigate({ to: '/agents/$tab/$agentId', params: { tab: params.tab ?? 'all', agentId: id } });
         }}

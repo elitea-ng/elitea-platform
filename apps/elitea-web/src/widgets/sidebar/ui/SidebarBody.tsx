@@ -20,7 +20,7 @@ import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutlined';
 
 import { computeIsSelectedProjectPublic, navSections, selectedNavItem, visibleNavSections, type NavItemValue } from '../lib/navSections';
 import { ProjectSwitcher } from './ProjectSwitcher';
-import { SidebarFooter } from './SidebarFooter';
+import { SidebarBottomLinks, SidebarFooterBar } from './SidebarFooter';
 import { SidebarHeader } from './SidebarHeader';
 import { SidebarNavItem } from './SidebarNavItem';
 
@@ -49,6 +49,8 @@ export interface SidebarBodyProps {
   projects: readonly Project[];
   selectedProjectId: string | undefined;
   onSelectProject: (projectId: string, projectName: string) => void;
+  /** `SidebarBody.jsx`'s own `onToggleAssistant` prop — present only when the deployment enabled the support assistant. */
+  onToggleAssistant?: (() => void) | undefined;
 }
 
 /**
@@ -94,6 +96,7 @@ export function SidebarBody({
   projects,
   selectedProjectId,
   onSelectProject,
+  onToggleAssistant,
 }: SidebarBodyProps): ReactNode {
   const pathname = useRouterState({ select: (routerState) => routerState.location.pathname });
 
@@ -139,7 +142,7 @@ export function SidebarBody({
         <SidebarDivider />
       </Box>
 
-      <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', overflowY: 'auto', overflowX: 'hidden', paddingBottom: '1.25rem' }}>
+      <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', overflowY: 'auto', overflowX: 'hidden' }}>
         {sections.map((section, index) => {
           const selected = selectedNavItem(pathname, section.items);
           return (
@@ -160,9 +163,17 @@ export function SidebarBody({
             </Fragment>
           );
         })}
+
+        {/* `styles.bottomSection` — inside the scroll column, `flex: 1`, so
+            Settings + Catalog sit at the BOTTOM of the nav rather than
+            directly under the last group. */}
+        <SidebarBottomLinks collapsed={collapsed} />
       </Box>
 
-      <SidebarFooter collapsed={collapsed} />
+      <SidebarFooterBar
+        collapsed={collapsed}
+        onToggleAssistant={onToggleAssistant}
+      />
     </Box>
   );
 }

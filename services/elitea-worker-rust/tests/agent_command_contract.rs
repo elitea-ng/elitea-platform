@@ -8,8 +8,8 @@ use elitea_worker_rust::protocol::command::{
     TestOnlyConformanceHmacAuthenticator, parse_and_verify_agent_command,
 };
 use elitea_worker_rust::protocol::elitea::runtime::v1::{
-    DigestAlgorithmV1, SignatureProfileV1, SignedWorkerCommandEnvelopeV1, WorkerCommandTypeV1,
-    WorkerCommandV1, worker_command_v1,
+    DigestAlgorithmV1, SignatureProfileV1, SignedWorkerCommandEnvelopeV1, ToolkitCallToolCommandV1,
+    WorkerCommandTypeV1, WorkerCommandV1, worker_command_v1,
 };
 use prost::Message;
 use ring::signature::KeyPair;
@@ -345,6 +345,30 @@ fn capability_type_version_and_oneof_must_select_one_agent_entrypoint() {
 
     let mut command = command_fixture();
     command.capability_id = "configuration.validate.v1".to_owned();
+    assert_unsupported(&command);
+}
+
+// ToolkitCallTool is not yet implemented by Rust. This worker must REFUSE the
+// command with a typed error, and it must never treat an unrecognized
+// capability as work it silently declined: an unacknowledged command is
+// redelivered forever, and a skipped one settles nothing at all. The refusal
+// is the settlement.
+#[test]
+fn toolkit_call_tool_command_is_refused_with_a_typed_unsupported_capability() {
+    let mut command = command_fixture();
+    command.capability_id = "toolkit.call_tool.v1".to_owned();
+    command.capability_version = "1".to_owned();
+    command.command_type = WorkerCommandTypeV1::ToolkitCallTool as i32;
+    command.capability_command = Some(worker_command_v1::CapabilityCommand::ToolkitCallTool(
+        ToolkitCallToolCommandV1 {
+            toolkit_type: "github".to_owned(),
+            settings_entry_id: "settings".to_owned(),
+            tool_name: "get_issue".to_owned(),
+            arguments_entry_id: "arguments".to_owned(),
+            toolkit_id: "17".to_owned(),
+            toolkit_version: "1".to_owned(),
+        },
+    ));
     assert_unsupported(&command);
 }
 

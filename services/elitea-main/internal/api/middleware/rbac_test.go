@@ -461,3 +461,116 @@ func TestRequireResolvedPermissions_CanceledRequestGetsNo500(t *testing.T) {
 		t.Fatalf("status = %d, want anything but 500 for a canceled client request", rec.Code)
 	}
 }
+
+// membershipResolverFunc is the resolver shape the membership gate asks: no
+// project travels with the question.
+type membershipResolverFunc func(context.Context, auth.User, string) (auth.PermissionResolution, error)
+
+func (f membershipResolverFunc) ResolveMembershipPermissions(
+	ctx context.Context,
+	principal auth.User,
+	mode string,
+) (auth.PermissionResolution, error) {
+	return f(ctx, principal, mode)
+}
+
+// The membership gate admits a caller who holds the permission somewhere, and
+// refuses one whose union is empty. It reads no {projectID} URL parameter, so
+// it works on a route that has none — which is the point: the project list's
+// path project is the PUBLIC project, not the caller's (#830).
+func TestRequireResolvedMembershipPermissions(t *testing.T) {
+	for name, test := range map[string]struct {
+		resolver   auth.MembershipPermissionResolver
+		user       *auth.User
+		wantStatus int
+		wantRun    bool
+	}{
+		"holder is admitted": {
+			resolver: membershipResolverFunc(func(
+				_ context.Context, _ auth.User, mode string,
+			) (auth.PermissionResolution, error) {
+				if mode != auth.PermissionModeDefault {
+					t.Fatalf("mode = %q", mode)
+				}
+				return auth.PermissionResolution{
+					UserID:      9,
+					Permissions: []string{"projects.projects.project.view"},
+				}, nil
+			}),
+			user:       &auth.User{ID: "9", UserID: "9"},
+			wantStatus: http.StatusOK,
+			wantRun:    true,
+		},
+		"empty union is refused": {
+			resolver: membershipResolverFunc(func(
+				context.Context, auth.User, string,
+			) (auth.PermissionResolution, error) {
+				return auth.PermissionResolution{UserID: 8, Permissions: []string{}}, nil
+			}),
+			user:       &auth.User{ID: "8", UserID: "8"},
+			wantStatus: http.StatusForbidden,
+		},
+		"refusal is 403, not 500": {
+			resolver: membershipResolverFunc(func(
+				context.Context, auth.User, string,
+			) (auth.PermissionResolution, error) {
+				return auth.PermissionResolution{}, auth.ErrPermissionDenied
+			}),
+			user:       &auth.User{ID: "8", UserID: "8"},
+			wantStatus: http.StatusForbidden,
+		},
+		"database failure is 500, not 403": {
+			resolver: membershipResolverFunc(func(
+				context.Context, auth.User, string,
+			) (auth.PermissionResolution, error) {
+				return auth.PermissionResolution{}, errors.New("connection refused")
+			}),
+			user:       &auth.User{ID: "8", UserID: "8"},
+			wantStatus: http.StatusInternalServerError,
+		},
+		// Fail closed: a route composed without a resolver refuses everyone
+		// rather than running ungated.
+		"absent resolver refuses": {
+			user:       &auth.User{ID: "9", UserID: "9"},
+			wantStatus: http.StatusForbidden,
+		},
+		"no principal is 401": {
+			resolver: membershipResolverFunc(func(
+				context.Context, auth.User, string,
+			) (auth.PermissionResolution, error) {
+				t.Fatal("resolver asked without a principal")
+				return auth.PermissionResolution{}, nil
+			}),
+			wantStatus: http.StatusUnauthorized,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ran := false
+			gate := middleware.RequireResolvedMembershipPermissions(
+				test.resolver,
+				auth.PermissionModeDefault,
+				"projects.projects.project.view",
+			)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				ran = true
+				user, _ := auth.UserFromContext(r.Context())
+				if user.UserID != "9" {
+					t.Fatalf("resolved user id = %q, want the resolver's answer", user.UserID)
+				}
+			}))
+
+			request := httptest.NewRequest(http.MethodGet, "/api/v2/projects/project/default/1", nil)
+			if test.user != nil {
+				request = request.WithContext(auth.ContextWithUser(request.Context(), *test.user))
+			}
+			recorder := httptest.NewRecorder()
+			gate.ServeHTTP(recorder, request)
+
+			if recorder.Code != test.wantStatus {
+				t.Fatalf("status = %d, want %d (body %s)", recorder.Code, test.wantStatus, recorder.Body.String())
+			}
+			if ran != test.wantRun {
+				t.Fatalf("handler ran = %t, want %t", ran, test.wantRun)
+			}
+		})
+	}
+}

@@ -12,7 +12,7 @@ import { useMemo } from 'react';
 import type { ApplicationDetail, ApplicationVersionDetail } from '@/shared/api/generated/model';
 
 import { pipelineDetailDisplayName } from './editPipelineMappers';
-import type { PipelineChatSlotContext } from './pipelineConfigurationTabGaps';
+import type { PipelineChatSlotContext } from './pipelineConfigurationTabSlots';
 import type { PipelineEditorUser } from './usePipelineEditorUser';
 
 export interface UsePipelineChatSlotContextArgs {

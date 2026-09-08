@@ -10,6 +10,7 @@ import (
 	configurationapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/configurations"
 	executionapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/executions"
 	indexingapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indexing"
+	toolkitrun "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkitrun"
 	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
 	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
 	toolkitexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
@@ -25,6 +26,10 @@ type PublicRoutes struct {
 	// AgentStart owns only the initial, same-project configured-application
 	// turn. Unsupported advanced turns stay on the current Socket.IO path.
 	AgentStart agentexecutionapi.StartUseCase
+	// ToolkitCallTool runs ONE tool of ONE saved toolkit, synchronously
+	// (#340/#616). It is composed only with index ingest, because the worker
+	// that runs an index is the worker that can run that toolkit's tools.
+	ToolkitCallTool toolkitrun.UseCase
 	// AgentCancel preserves the current DELETE contract while atomically
 	// cancelling the exact durable execution and its current chat projection.
 	AgentCancel agentexecutionapi.CurrentAgentCanceller
@@ -32,6 +37,12 @@ type PublicRoutes struct {
 	// toolkit operation through the durable Rust worker path. It is nil whenever
 	// the agent/runtime plane is disabled.
 	ToolkitExecuteRead *toolkitexecutionapp.CurrentReadToolExecutionService
+	// AgentTaskStatus is the READ half of the legacy application_task surface.
+	// It is composed beside AgentCancel because the two resolve the same
+	// durable execution from the same response message and share one ownership
+	// predicate; a reader that outlived its canceller would disclose the state
+	// of runs the caller may not stop.
+	AgentTaskStatus agentexecutionapi.CurrentAgentTaskStatusReader
 	// IndexCancel preserves the current UI DELETE contract while selecting only
 	// Go-owned execution IDs at the compatibility edge.
 	IndexCancel indexingapi.CurrentIndexCanceller
@@ -64,6 +75,7 @@ func newPublicRoutes(
 	waiter executionapi.ReplayWaiter,
 	indexStart indexingapi.StartUseCase,
 	agentStart agentexecutionapi.StartUseCase,
+	toolkitCallTool toolkitrun.UseCase,
 	replayCapacity int,
 ) (PublicRoutes, error) {
 	validation, err := configurationapi.NewValidationHandler(authorizer, submitter)
@@ -84,6 +96,7 @@ func newPublicRoutes(
 		ExecutionEvents: http.HandlerFunc(events.Stream),
 		IndexStart:      indexStart,
 		AgentStart:      agentStart,
+		ToolkitCallTool: toolkitCallTool,
 	}, nil
 }
 

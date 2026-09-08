@@ -50,6 +50,7 @@ export type ConfigWidget =
   | 'boolean'
   | 'select'
   | 'multiline'
+  | 'html'
   | 'text'
   | 'number'
   | 'unavailable'
@@ -88,6 +89,10 @@ export function isToolMapField(field: AdminConfigField): boolean {
 /** The three shapes a `string` spec can take. Split out to keep `widgetFor` flat. */
 function stringWidgetFor(field: AdminConfigField): ConfigWidget {
   if (field.enum !== undefined && field.enum.length > 0) return 'select';
+  // `html` is a textarea WITH a rendered preview beside it. The distinction is
+  // not cosmetic: markup an operator cannot see rendered is markup they only
+  // find out about on the screen every refused user is looking at.
+  if (field.format === 'html') return 'html';
   return field.format === 'textarea' ? 'multiline' : 'text';
 }
 

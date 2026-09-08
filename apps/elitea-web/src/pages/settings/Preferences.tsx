@@ -10,9 +10,7 @@
 import { memo } from 'react';
 
 import Box from '@mui/material/Box';
-import Typography from '@mui/material/Typography';
-
-import { t } from '@/shared/i18n';
+import type { SxProps, Theme } from '@mui/material/styles';
 
 import { preferencesFeature } from '@/features/settings';
 
@@ -23,16 +21,16 @@ interface PreferencesProps {
   projectId: string;
 }
 
+/*
+ * NO HEADER ROW HERE. `routes/_shell/settings/preferences.tsx` already
+ * renders `DrawerPageHeader` above this component, so this page's own header
+ * drew the word "Preferences" a second time, 60px below the first, with a
+ * second hairline under it. Same defect on AI Personality, Memory and
+ * Personalization.
+ */
 const Preferences = memo(({ projectId }: PreferencesProps) => (
-  <Box sx={styles.container}>
-    <Box sx={styles.header}>
-      <Typography variant="labelMedium" color="text.secondary" sx={styles.title}>
-        {t('settings.preferences', 'Preferences')}
-      </Typography>
-    </Box>
-    <Box sx={styles.content}>
-      <PreferencesFormContent projectId={projectId} />
-    </Box>
+  <Box sx={styles.content}>
+    <PreferencesFormContent projectId={projectId} />
   </Box>
 ));
 
@@ -40,29 +38,13 @@ Preferences.displayName = 'Preferences';
 
 export default Preferences;
 
-const styles = {
-  container: {
-    display: 'flex',
-    flexDirection: 'column',
+const styles: Record<string, SxProps<Theme>> = {
+  content: (theme) => ({
+    // Baseline `preference/Preferences.jsx`'s `content`.
+    backgroundColor: theme.vars.palette.background.tabPanel,
     height: '100%',
     width: '100%',
-  },
-  header: {
-    height: '3.75rem',
-    minHeight: '3.75rem',
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: '0 1.5rem',
-    borderBottom: '0.0625rem solid',
-    borderColor: 'border.table',
-  },
-  title: {
-    fontWeight: 600,
-  },
-  content: {
-    flex: 1,
     minHeight: 0,
     overflowY: 'auto',
-  },
+  }),
 };

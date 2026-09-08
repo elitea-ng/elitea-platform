@@ -78,13 +78,61 @@ type inviteResult struct {
 	// address (ADR-0024 WP7); false when no mailer is configured, when the
 	// relay refused, or when the row was an error.
 	InvitationDelivered bool `json:"invitation_delivered"`
+	// Outcome is the MACHINE-READABLE half of `msg`, and it is additive on
+	// purpose. pylon carried the four cases of a bulk invite — added, already a
+	// member, malformed address, write failed — only in free English prose
+	// ("user a@b.c already exists in project 3"), so the reference SPA could not
+	// tell them apart and showed one toast for the whole batch. A client that
+	// wants to say "2 invited, 1 already a member, 1 invalid" per address must
+	// otherwise match on that prose, which changes with the wording.
+	//
+	// `status` keeps its two pylon values, so an old client reads this response
+	// exactly as before. New clients branch on this field.
+	Outcome string `json:"outcome"`
+}
+
+// The four values of inviteResult.Outcome. Each one is a state an operator acts
+// on differently: invited needs nothing, already_member is not an error to fix,
+// invalid_email is a typing mistake in the address list, and failed is the
+// server's problem.
+const (
+	inviteOutcomeInvited       = "invited"
+	inviteOutcomeAlreadyMember = "already_member"
+	inviteOutcomeInvalidEmail  = "invalid_email"
+	inviteOutcomeFailed        = "failed"
+)
+
+// MODE IS STATED, NEVER SNIFFED (F1).
+//
+// router.go registers the administration verbs on a STATIC `administration`
+// path segment, so chi's trie prefers them over the `{mode}` registrations
+// whose gate is project-scoped. A static segment binds NO URL parameter, so
+// `chi.URLParam(r, "mode")` comes back EMPTY on exactly the requests that are
+// administration requests. The empty string fell through the switch below to
+// `default:` and every "Manage project member" submit answered
+// `404 {"error":"unknown mode"}` — the GET beside it worked, because
+// Handler.Users never reads the parameter.
+//
+// The fix follows the convention the rest of this service already uses for the
+// same trap (internal/api/v2/scheduling/schedules.go,
+// internal/api/v2/moderation/requests.go,
+// internal/api/v2/admin/config_values.go): a handler mounted on a static mode
+// segment takes the mode as a Go value and does not look for a parameter that
+// cannot be there. The `{mode}` handlers keep reading the parameter.
+//
+// requestWriteMode is therefore used ONLY by the `{mode}` entry points.
+func requestWriteMode(r *http.Request) string {
+	return chi.URLParam(r, "mode")
 }
 
 // userWriteContext performs the three checks every write verb shares and
 // writes the failure response itself. The bool is false when the caller must
 // return immediately.
-func (h *Handler) userWriteContext(w http.ResponseWriter, r *http.Request) (int, bool) {
-	switch chi.URLParam(r, "mode") {
+//
+// `mode` is supplied by the entry point rather than read here; see the comment
+// above requestWriteMode for why reading it here was the defect.
+func (h *Handler) userWriteContext(w http.ResponseWriter, r *http.Request, mode string) (int, bool) {
+	switch mode {
 	// Both modes address the SAME project membership — see this file's header.
 	// The route-level gate is what distinguishes them, and it is applied before
 	// this function runs.
@@ -181,7 +229,19 @@ func validEmail(address string) bool {
 // GetAuthUserByEmailForProvisioning → LinkAuthProviderIfMissing). Writing a
 // provider_ref here would guess at an identity the IdP has not asserted yet.
 func (h *Handler) UsersCreate(w http.ResponseWriter, r *http.Request) {
-	projectID, ok := h.userWriteContext(w, r)
+	h.usersCreate(w, r, requestWriteMode(r))
+}
+
+// AdministrationUsersCreate implements
+// POST /api/v2/admin/users/administration/{projectID} — the admin Projects
+// page's "Manage project member" dialog. It states its mode because the route
+// carries `administration` as a static segment; see requestWriteMode.
+func (h *Handler) AdministrationUsersCreate(w http.ResponseWriter, r *http.Request) {
+	h.usersCreate(w, r, userWriteModeAdministration)
+}
+
+func (h *Handler) usersCreate(w http.ResponseWriter, r *http.Request, mode string) {
+	projectID, ok := h.userWriteContext(w, r, mode)
 	if !ok {
 		return
 	}
@@ -223,9 +283,10 @@ func (h *Handler) UsersCreate(w http.ResponseWriter, r *http.Request) {
 		if !validEmail(email) {
 			hasErrors = true
 			results = append(results, inviteResult{
-				Msg:    fmt.Sprintf("Invalid email: %s", strings.TrimSpace(raw)),
-				Status: "error",
-				Email:  strings.TrimSpace(raw),
+				Msg:     fmt.Sprintf("Invalid email: %s", strings.TrimSpace(raw)),
+				Status:  "error",
+				Email:   strings.TrimSpace(raw),
+				Outcome: inviteOutcomeInvalidEmail,
 			})
 			continue
 		}
@@ -235,16 +296,18 @@ func (h *Handler) UsersCreate(w http.ResponseWriter, r *http.Request) {
 		case err != nil:
 			hasErrors = true
 			results = append(results, inviteResult{
-				Msg:    fmt.Sprintf("failed to add %s to project %d", email, projectID),
-				Status: "error",
-				Email:  email,
+				Msg:     fmt.Sprintf("failed to add %s to project %d", email, projectID),
+				Status:  "error",
+				Email:   email,
+				Outcome: inviteOutcomeFailed,
 			})
 		case alreadyMember:
 			hasErrors = true
 			results = append(results, inviteResult{
-				Msg:    fmt.Sprintf("user %s already exists in project %d", email, projectID),
-				Status: "error",
-				Email:  email,
+				Msg:     fmt.Sprintf("user %s already exists in project %d", email, projectID),
+				Status:  "error",
+				Email:   email,
+				Outcome: inviteOutcomeAlreadyMember,
 			})
 		default:
 			delivered := h.deliverProjectInvitation(r, projectID, email)
@@ -254,6 +317,7 @@ func (h *Handler) UsersCreate(w http.ResponseWriter, r *http.Request) {
 				Email:               email,
 				ID:                  strconv.Itoa(userID),
 				InvitationDelivered: delivered,
+				Outcome:             inviteOutcomeInvited,
 			})
 		}
 	}
@@ -269,7 +333,7 @@ func (h *Handler) UsersCreate(w http.ResponseWriter, r *http.Request) {
 // (ADR-0024 WP7). The membership is already written; a relay failure is
 // logged and reported as not delivered, never as a failed invite.
 func (h *Handler) deliverProjectInvitation(r *http.Request, projectID int, email string) bool {
-	if h.mailer == nil || !h.mailer.Configured() {
+	if h.mailer == nil || !h.mailer.Configured(r.Context()) {
 		return false
 	}
 	projectName := ""
@@ -407,7 +471,18 @@ func (req usersUpdateRequest) userIDs() ([]int, error) {
 // it is the only place that revokes. TestUsersUpdateRoleChangeKeepsTokenProjectBindings
 // pins this.
 func (h *Handler) UsersUpdate(w http.ResponseWriter, r *http.Request) {
-	projectID, ok := h.userWriteContext(w, r)
+	h.usersUpdate(w, r, requestWriteMode(r))
+}
+
+// AdministrationUsersUpdate implements
+// PUT /api/v2/admin/users/administration/{projectID} — the role change the
+// same member dialog submits. It states its mode; see requestWriteMode.
+func (h *Handler) AdministrationUsersUpdate(w http.ResponseWriter, r *http.Request) {
+	h.usersUpdate(w, r, userWriteModeAdministration)
+}
+
+func (h *Handler) usersUpdate(w http.ResponseWriter, r *http.Request, mode string) {
+	projectID, ok := h.userWriteContext(w, r, mode)
 	if !ok {
 		return
 	}
@@ -551,8 +626,15 @@ WHERE binding.token_id = token.id
 // left — which is the exact state invariant 3 forbids, and it would persist
 // until someone noticed. The handler used to run the assignment delete as a
 // bare pool.Exec; a second bare Exec beside it would have been that split.
+//
+// IT HAS NO ADMINISTRATION TWIN, because no client asks for one.
+// router.go registers DELETE on the `{mode}` route alone, and the admin
+// Projects dialog (apps/elitea-web/src/pages/admin/ProjectMemberDialog.tsx)
+// invites and edits roles but never removes. A static administration DELETE
+// would be a destructive route with no caller and no test that could
+// discriminate a correct implementation from a wrong one.
 func (h *Handler) UsersDelete(w http.ResponseWriter, r *http.Request) {
-	projectID, ok := h.userWriteContext(w, r)
+	projectID, ok := h.userWriteContext(w, r, requestWriteMode(r))
 	if !ok {
 		return
 	}

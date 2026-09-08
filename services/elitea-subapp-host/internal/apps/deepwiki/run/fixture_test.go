@@ -286,6 +286,71 @@ func TestAskAnswersWithSourcesAndUploadsNothing(t *testing.T) {
 	}
 }
 
+// Deliberately pinned as part of DWIKI-012b. The fixture's deep_research
+// used to emit three lines of progress and a report, and no plan — so the
+// browser's research panel, which renders only when a run HAS one, stayed
+// empty on the fixture path and no journey could tell "no plan" from "the
+// panel is not wired up". The run now publishes one, and this is the test
+// that says what it publishes and in what envelope: a `todo_update`
+// structured event carried on the same thinking channel as the progress
+// lines, which is the only channel the SPI has.
+func TestDeepResearchPublishesItsPlanBeforeTheReport(t *testing.T) {
+	client := &fakeArtifactClient{}
+	request := fixtureRequest("", transport)
+	request["parameters"] = map[string]any{"question": "How does indexing work?", "research_type": "architecture"}
+	body, events, err := invokeWithEvents(t, fixtureRunner(client, 0), spi.Family{Name: "main"}, "deep_research", request, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report := str(objectsOf(t, body)[0]["data"]); !strings.Contains(report, "# Research report (architecture)") ||
+		!strings.Contains(report, "Question: How does indexing work?") {
+		t.Fatalf("report %q", report)
+	}
+	if len(client.uploads) != 0 {
+		t.Fatal("deep research uploaded something")
+	}
+
+	// The plan travels as ONE event, before the steps that work through it.
+	var plan map[string]any
+	planAt, readingAt := -1, -1
+	for i, event := range events {
+		switch {
+		case strings.Contains(event, `"todo_update"`):
+			if err := json.Unmarshal([]byte(event), &plan); err != nil {
+				t.Fatalf("event %d is not an envelope: %v", i, err)
+			}
+			if planAt >= 0 {
+				t.Fatalf("the plan was published twice: %v", events)
+			}
+			planAt = i
+		case event == "Reading the relevant pages":
+			readingAt = i
+		}
+	}
+	// Before the work it plans, not after it: a plan that arrives with the
+	// report is a summary, and says nothing while the run is going.
+	if planAt < 0 || readingAt < 0 || planAt > readingAt {
+		t.Fatalf("plan at %d, work at %d, of %v", planAt, readingAt, events)
+	}
+	if plan["event"] != "todo_update" {
+		t.Fatalf("event name %v", plan["event"])
+	}
+	items, _ := plan["data"].(map[string]any)["items"].([]any)
+	if len(items) != 3 {
+		t.Fatalf("items %v", items)
+	}
+	// `title` and `status`, not the engine's pre-normalisation `content`:
+	// the browser reads `title` and renders "Untitled step" without it.
+	first, _ := items[0].(map[string]any)
+	if first["title"] != "Plan the research" || first["status"] != "completed" {
+		t.Fatalf("first todo %v", first)
+	}
+	last, _ := items[2].(map[string]any)
+	if last["title"] != "Write the report" || last["status"] != "pending" {
+		t.Fatalf("last todo %v", last)
+	}
+}
+
 func TestACancelledRunStopsBeforeTheToolAnswers(t *testing.T) {
 	client := &fakeArtifactClient{}
 	body, events, err := invokeWithEvents(t, fixtureRunner(client, 30*time.Millisecond), spi.Family{Name: "main"}, "generate_wiki", fixtureRequest("GO", transport), "Cloning the repository")

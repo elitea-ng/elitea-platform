@@ -266,3 +266,79 @@ describe('DeleteEntityModal', () => {
     });
   });
 });
+
+/**
+ * #147's error slot. A destructive action can be refused AFTER the user
+ * confirms it, and this dialog had nowhere to say so: the caller kept it open
+ * (closing would read as "deleted") and the user saw a dialog that had simply
+ * stopped spinning.
+ */
+describe('DeleteEntityModal — the refusal slot', () => {
+  it('announces the message as an alert', () => {
+    const { getByRole } = renderWithTheme(
+      <DeleteEntityModal
+        open
+        onClose={() => {}}
+        onConfirm={() => {}}
+        name="v2"
+        errorMessage="Unpublish first. Cannot delete a published version."
+      />,
+    );
+
+    expect(getByRole('alert')).toHaveTextContent('Unpublish first. Cannot delete a published version.');
+  });
+
+  it('shows nothing when there is no refusal, and nothing for an empty one', () => {
+    const none = renderWithTheme(
+      <DeleteEntityModal open onClose={() => {}} onConfirm={() => {}} name="v2" />,
+    );
+    expect(none.queryByRole('alert')).not.toBeInTheDocument();
+    none.unmount();
+
+    const empty = renderWithTheme(
+      <DeleteEntityModal open onClose={() => {}} onConfirm={() => {}} name="v2" errorMessage="" />,
+    );
+    expect(empty.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  /*
+   * The refusal is about the ACTION, not the body. A caller that replaces the
+   * whole body with `content.custom` must still be able to report one — the
+   * previous shape returned `content.custom ?? <ConfirmationBody/>`, so
+   * anything appended inside that expression would have been dropped.
+   */
+  it('shows the message even when the caller overrides the whole body', () => {
+    const { getByRole, getByText } = renderWithTheme(
+      <DeleteEntityModal
+        open
+        onClose={() => {}}
+        onConfirm={() => {}}
+        content={{ custom: <p>my own body</p> }}
+        errorMessage="server said no"
+      />,
+    );
+
+    expect(getByText('my own body')).toBeInTheDocument();
+    expect(getByRole('alert')).toHaveTextContent('server said no');
+  });
+
+  /*
+   * A refusal must not silently unlock Confirm. The type-to-confirm safeguard
+   * and the refusal are independent, and a dialog that enabled Confirm once
+   * an error appeared would let a mistyped name through on the retry.
+   */
+  it('leaves the type-to-confirm safeguard in force while a refusal is shown', () => {
+    const { getByRole } = renderWithTheme(
+      <DeleteEntityModal
+        open
+        onClose={() => {}}
+        onConfirm={() => {}}
+        name="v2"
+        shouldRequestInputName
+        errorMessage="server said no"
+      />,
+    );
+
+    expect(getByRole('button', { name: /^delete$/i })).toBeDisabled();
+  });
+});

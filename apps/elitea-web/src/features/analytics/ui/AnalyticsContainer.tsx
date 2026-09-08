@@ -14,7 +14,7 @@ import { BriefcaseIcon } from '@/shared/ui/icons/briefcase-icon';
 import { TabGroupButton } from '@/shared/ui/TabGroupButton';
 
 import { useProjectAnalyticsQuery, useProjectCostsQuery } from '../api/useAnalytics';
-import { DATE_FILTER_PRESETS } from '../lib/constants';
+import { ANALYTICS_TAB, DATE_FILTER_PRESETS } from '../lib/constants';
 import { presetToDateRange, toIsoRange } from '../model/dateRange';
 import { AnalyticsTabContent } from './components/AnalyticsTabContent';
 import { DateRangeField } from './components/DateRangeField';
@@ -62,6 +62,8 @@ export interface AnalyticsContainerProps {
 
 const TAB_LABELS: readonly { readonly key: string; readonly fallback: string }[] = [
   { key: 'analytics.tabs.overview', fallback: 'Overview' },
+  { key: 'analytics.tabs.costs', fallback: 'Costs' },
+  { key: 'analytics.tabs.tokens', fallback: 'Tokens' },
   { key: 'analytics.tabs.agents', fallback: 'Agents' },
   { key: 'analytics.tabs.tools', fallback: 'Tools' },
   { key: 'analytics.tabs.users', fallback: 'Users' },
@@ -134,14 +136,13 @@ export function AnalyticsContainer({ projectId, projectName }: AnalyticsContaine
   const [dateTo, setDateTo] = useState<Date>(() => new Date());
   const [fromOpen, setFromOpen] = useState(false);
   const [toOpen, setToOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState(0);
+  const [activeTab, setActiveTab] = useState<number>(ANALYTICS_TAB.overview);
   const [pendingUserId, setPendingUserId] = useState<string | null>(null);
 
   const range = useMemo(() => toIsoRange({ from: dateFrom, to: dateTo }), [dateFrom, dateTo]);
 
-  // Overview and Health both render from the same `projectAnalytics` fetch
-  // (baseline: `needsOverview = activeTab === 0 || activeTab === 4`).
-  const needsOverview = activeTab === 0 || activeTab === 4;
+  // Overview and Health both render from the same `projectAnalytics` fetch.
+  const needsOverview = activeTab === ANALYTICS_TAB.overview || activeTab === ANALYTICS_TAB.health;
   const { data, isFetching, isError, error } = useProjectAnalyticsQuery(projectId, range, needsOverview);
 
   // Cost is a SEPARATE endpoint on purpose. `gateway.llm_budget_accumulators`
@@ -196,12 +197,12 @@ export function AnalyticsContainer({ projectId, projectName }: AnalyticsContaine
 
   const handleOverviewUserClick = useCallback((userId: string) => {
     setPendingUserId(userId);
-    setActiveTab(3);
+    setActiveTab(ANALYTICS_TAB.users);
   }, []);
 
   const handleBackToOverview = useCallback(() => {
     setPendingUserId(null);
-    setActiveTab(0);
+    setActiveTab(ANALYTICS_TAB.overview);
   }, []);
 
   return (

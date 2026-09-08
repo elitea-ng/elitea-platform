@@ -155,6 +155,29 @@ check_target() {
                    | { grep -v '_test.go' || true; } \
                    | sed -E 's/.*\("//; s/"$//')" \
               | sed '/^$/d' | sort -u)"
+  # Names carried in a STRUCT LITERAL FIELD: `facade.EnvNames{Enabled:
+  # "ELITEA_INVENTORY_ENABLED", …}`, which is how a provider facade tells the
+  # shared reader which variables are its own (internal/api/v2/inventory).
+  # The literal never sits inside a Getenv call and the field name is not
+  # `…Env`, so all eight of a provider's transport variables looked like dead
+  # chart config the moment the chart started setting them — the same shape as
+  # the `required(`/`integer(` gap below it, and the same WARN-tier-only
+  # treatment.
+  #
+  # ANCHORED ON THE `ELITEA_` PREFIX, and that narrowing is measured rather
+  # than cautious: a pattern that took any SCREAMING_CASE string after a colon
+  # also matched the gRPC and reconcile status tables
+  # (`codes.ResourceExhausted: "RESOURCE_EXHAUSTED"`, `"SNAPSHOT_INVALID"`, …)
+  # and turned twenty-five error codes into "read with a default but the chart
+  # offers no override knob" — it took the warning count from 11 to 36 and
+  # measured nothing new. Every variable this form actually carries is an
+  # elitea-main one.
+  code_all="$(printf '%s\n%s\n' "$code_all" \
+                "$({ grep -rhoE '[A-Za-z0-9_]+: *"ELITEA_[A-Z0-9_]+"' \
+                       "${srcs[@]}" --include='*.go' 2>/dev/null || true; } \
+                   | { grep -v '_test.go' || true; } \
+                   | sed -E 's/.*"(ELITEA_[A-Z0-9_]+)"/\1/')" \
+              | sed '/^$/d' | sort -u)"
   # Names BUILT BY CONCATENATION. `loadTLSFiles(prefix)` reads
   # prefix+"_CERT_FILE", prefix+"_KEY_FILE" and prefix+"_CLIENT_CA_FILE", so
   # the full name of all nine runtime TLS variables exists NOWHERE in the

@@ -354,15 +354,171 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// white-labeling is net-new, so the legacy catalogue has no string for
 	// it. A new file for 0082's reason — 0060 returns early on any configured
 	// deployment, and migrations are checksum-immutable.
+	// 111: shared/0111_default_project_roles_and_bootstrap_account.sql, two
+	// repairs to rows the BOOTSTRAP schema hand-writes and nothing else does.
+	// "Default Project" (id 1) got none of the four project roles every
+	// provisioned project gets, so nobody could be made a member of the
+	// shared/AI project and it appeared in no switcher. And the pre-seeded
+	// `dev@elitea.ai` account held `administration|admin` while holding no
+	// identity-provider link: it cannot sign in, but the OIDC path adopts an
+	// existing account BY E-MAIL, so anyone who obtained that address became a
+	// global administrator on first login. The revoke is fenced on the account
+	// still being the untouched seed, so an adopted one keeps its roles. It
+	// grants no permission string, so no grant ledger moves.
 	//
-	// 111: shared/0111_mcp_prebuilt_parameter_schema.sql adds the bounded
-	// operator-owned config_schema used to publish parameterized prebuilt MCP
-	// toolkit forms. Existing rows receive an empty properties object.
 	//
-	// 112: shared/0112_toolkit_execute_read.sql admits the read-only toolkit
-	// capability and binds its request and projected result to one execution
-	// generation. The tables retain the exact input entry and output event.
-	require.EqualValues(t, 112, Head(shared))
+	// 112: shared/0112_governance_config_egress_allowlist.sql, which widens
+	// 0093's `governance_config_type_known` CHECK with `egress_allowlist` — the
+	// LLM gateway's egress policy, which until now had one authoring surface:
+	// the GATEWAY_EGRESS_ALLOWLIST environment variable in the chart. An
+	// on-premise model endpoint therefore needed a chart edit and a pod restart.
+	// A new file for 0093's reason: migrations are checksum-immutable, so the
+	// value set is widened by REPLACING the constraint rather than by editing
+	// the file that added it.
+	//
+	// It was written as 0111 and renumbered when 0111 was taken by the
+	// default-project repair above; both authors were correct against a main
+	// whose head was 0110. LoadManifest sorts by version and Head() reads the
+	// last entry.
+	//
+	// 113: shared/0113_role_definition_permissions.sql, the three
+	// administration-mode grants behind role create, rename and delete (gap
+	// G9): `configuration.roles.roles.create`, `.edit` and `.delete` to
+	// super_admin, admin and system.
+	//
+	// Recovered rather than chosen, unlike 106, 108 and 110: all three strings
+	// are the `permissions` lists of legacy/plugins/admin/api/v2/roles.py, and
+	// all three are already in testdata/postgres/legacy-rbac-matrix.json's
+	// catalogue. 0068 and 0085 granted the fourth string of that group,
+	// `.view`, and left the three writes to no migration at all — which is the
+	// exact shape router_permission_grant_gate_test.go was written for. The
+	// routes that need them ship in the same change, so the gate never sees a
+	// window in which they are ungranted.
+	//
+	// A new file for 0110's reason: 0060 returns early on any configured
+	// deployment, and migrations are checksum-immutable.
+	//
+	// Written as 0111 and renumbered at merge: 0111 and 0112 were taken above.
+	//
+	// 114: shared/0114_toolkit_type_policy.sql, the store behind the new
+	// `Admin › Toolkits` page: centry.toolkit_type_policy (one deployment-wide
+	// decision per toolkit type — enabled, disabled, or restricted to granted
+	// projects — with a required reason and a recorded decider) and
+	// centry.toolkit_type_project_grant (the per-project exception, in either
+	// direction, cascading off the policy row).
+	//
+	// BOTH TABLES RECORD DEVIATIONS ONLY. There is no bootstrap INSERT, and an
+	// empty pair of tables serves the FULL default catalogue. An allow-list
+	// seeded at install would make a fresh deployment offer no toolkit at all,
+	// and the failure would read as a broken catalogue rather than a missing
+	// seed.
+	//
+	// It also grants `toolkit_catalogue.type.manage` to the administration-mode
+	// super_admin, admin and system. A NEW string, CHOSEN rather than recovered
+	// — the legacy platform has no add-or-remove-a-type surface, so there is no
+	// pylon declaration to transcribe — and deliberately not a reuse of
+	// `runtime.plugins`: that grant already reaches the guardrails deny-list
+	// editor, which stops a type WORKING, while this decides what the product
+	// OFFERS and to which projects.
+	//
+	// A new file for 0110's reason: 0060 returns early on any configured
+	// deployment, and migrations are checksum-immutable.
+	//
+	// 0115 (WP16, issues #340/#616) admits the worker's fourth capability,
+	// `toolkit.call_tool.v1`, into the kernel's capability allowlists so a
+	// single toolkit tool can run on the existing runtime plane. The producer
+	// in elitea-main is a follow-up; the acceptance lands first so the
+	// worker's manifest and the kernel agree on the capability name.
+	//
+	// 116: shared/0116_evaluation_dataset_run_permissions.sql, the six
+	// default-mode grants Agent Evaluation slice 2 needs — the dataset CRUD
+	// four plus `run.read` and `run.create`. It is the RBAC half of the slice;
+	// the tables are tenant/0132.
+	//
+	// It is the SECOND file here, after 0104, to seed permissions the pylon
+	// catalogue does not declare, and for the same verified reason: Agent
+	// Evaluation is not in the plugin corpus this repository carries. The
+	// search was repeated for this slice rather than inherited — `eval_dataset`,
+	// `eval_run`, `eval_result`, `eval_suite` and `eval_dimension` across
+	// legacy/plugins/* and legacy/centry/*/plugins/* return only three vestiges
+	// of a feature that was planned and never built. So the names come from the
+	// product's own UI constants and the routes gate through exported
+	// constants rather than router.go's `projectPermission` helper. The grant
+	// gate still binds; only the pylon-provenance assertion, which would be
+	// false, does not.
+	//
+	// `run.delete`, `suite.*` and `human_score.*` are declared by the reference
+	// and NOT granted here, because this slice serves no route for them: a
+	// grant nothing gates is a string nothing would notice was misspelled.
+	//
+	// A new file for 0110's reason: 0060 returns early on any configured
+	// deployment, and migrations are checksum-immutable.
+	//
+	// RENUMBERED from 0115 at merge — 0115 was free when it was written and the
+	// toolkit call-tool capability above claimed it first. 0102, 0103 and 0104
+	// carry the same note for the same reason: two streams each correctly claim
+	// the next free number, and only the merge can see the collision.
+	// 117: shared/0117_browser_sessions.sql, the server-side browser session
+	// table. The `elitea_session` cookie used to be a self-contained signed
+	// token, so nothing on the server knew a session existed: logout only
+	// deleted the browser's copy, there was no idle deadline, and SAML single
+	// logout had no session index to name. The row is now the session and the
+	// cookie carries only its opaque id.
+	//
+	// It lives in `elitea_auth`, beside 0095's identity providers and 0096's
+	// SCIM tables, and it takes NO foreign key to `auth_core__user`: that table
+	// belongs to the legacy runtime, and a shared migration that claims it
+	// breaks the repository seeds.
+	//
+	// 118: shared/0118_artifact_bucket_permissions.sql, the per-bucket access
+	// list the artifacts plugin calls `bucket_permissions`, plus the two
+	// default-mode grants its routes gate on
+	// (`configuration.artifacts.s3_credentials.view` and `.edit`).
+	//
+	// TWO CONCERNS IN ONE FILE, like 0072. The table and the grants are one
+	// feature: the routes that read and write the table are gated on strings no
+	// file in this corpus grants, so shipping the table without the grants
+	// leaves every ACL route answering 403 on a clean database — the class
+	// internal/api/router_permission_grant_gate_test.go names. Splitting them
+	// would take two numbers for one indivisible change.
+	//
+	// A new file for 0110's reason: 0060 returns early on any configured
+	// deployment, and migrations are checksum-immutable.
+	//
+	// 119: shared/0119_tool_call_records.sql, the durable per-tool-call record
+	// the Analytics Tools tab is built on. Two producers write it — the
+	// explicit tool run (toolkit.call_tool.v1, whose execution_jobs row carries
+	// a project but neither toolkit id nor tool name) and the agent turn's
+	// tool-call trace step (which carries a tool name but no toolkit id, and
+	// covers chat turns only). Either one alone under-reports by an unknown
+	// factor, which is why issue 618 stayed refused until a table existed.
+	//
+	// It is SHARED rather than tenant for the three reasons the analytics
+	// header gives: one project column, one clock, one statement. Nothing is
+	// backfilled — a window ending before this migration was applied is
+	// reported unavailable, and the read finds that moment in
+	// elitea_runtime.schema_migrations.
+	//
+	// It took 119 rather than 118 because the artifact-ACL package above ran
+	// concurrently off the same base and 0118 was reserved for it at dispatch,
+	// so the two streams could not both claim the next free number and discover
+	// it only at merge — the collision 0102, 0103, 0104 and 0115 each carry a
+	// note about. Both numbers are used, and the reservation worked.
+	//
+	// 120: shared/0120_application_task_status_permission.sql, the one
+	// default-mode grant the restored `application_task` GET needs
+	// (`models.applications.task.get`, issue 254 P2). 0068 transcribed the
+	// legacy default-mode matrix for the routes that EXISTED then;
+	// application_task had been deleted by #126, so its read string had no gate
+	// to reach and was left out while its sibling
+	// `models.applications.task.delete` went in. A new file for 0116's reason:
+	// 0068 is checksum-immutable and 0060 returns early on any configured
+	// deployment.
+	// 121 preserves parameterized static MCP configuration from the Rust branch.
+	// 122 adds the Rust read-only capability without removing Python tool runs.
+	// Branch versions 111 and 112 collided with main. Rehearsal upgrade needs
+	// the explicit ledger reconciliation in the merge source mapping.
+	require.EqualValues(t, 122, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
@@ -414,7 +570,43 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// `eval_bindings`, `eval_datasets`, `eval_dataset_cases`, `eval_runs`,
 	// `eval_results` and `eval_human_scores` are deliberately absent and must
 	// arrive with the code that reads them.
-	require.EqualValues(t, 130, Head(tenant))
+	//
+	// 131: tenant/0131_owner_id_meanings_and_guards.sql, the second half of
+	// issue #533. 0128 wrote the meanings onto the columns and added no
+	// constraint, so `applications.owner_id` stayed DISPUTED: the legacy
+	// runtime reads it as a project and every writer here stored a user. 0131
+	// settles it as the PROJECT, repairs the rows that hold a user id, and
+	// gives the PROJECT-kind columns a FOREIGN KEY to centry.project(id). It
+	// also states the meaning of both `prompt_collections` columns, which 0128
+	// deliberately left blank, and it replaces the NO ACTION foreign key that
+	// 0130 put on eval_dimensions.application_id with the same key ON DELETE
+	// CASCADE, so an agent with a dimension can still be deleted.
+	//
+	// 132: tenant/0132_eval_datasets_runs.sql, Agent Evaluation slice 2 — the
+	// four tables the smallest end-to-end slice needs: eval_datasets,
+	// eval_dataset_cases, eval_runs and eval_results. 0130's header listed all
+	// seven remaining tables as "must arrive with the code that reads them";
+	// this file brings four of them with that code. eval_suites, eval_bindings
+	// and eval_human_scores stay absent, and the run carries a per-run
+	// `snapshot` instead of a suite: a dimension is editable, so a scorecard
+	// that re-read the live library would silently re-scale a finished run
+	// (the normalisation divides by the scale range and flips on polarity).
+	//
+	// Every foreign key to `applications` is ON DELETE CASCADE from the start,
+	// which is 0131's decision applied rather than re-litigated: 0130's NO
+	// ACTION key made an agent carrying an evaluation row undeletable and
+	// stopped a project delete on the same row, and 0131 had to repair it.
+	// `ON DELETE SET NULL` is not the alternative here, because a NULL
+	// application_id means "a project-wide dataset" — SET NULL would promote
+	// one agent's dataset into the whole project's library.
+	//
+	// 133: tenant/0133_pipeline_triggers_and_schedules.sql, the storage for the
+	// two unattended pipeline entry points legacy had and this stack did not —
+	// an inbound signed trigger (issue 192) and a per-pipeline cron (issue
+	// 193). It introduces NO permission, so it has no shared sibling: the read
+	// is `models.applications.version.details` and every write is
+	// `models.applications.version.update`, both already seeded.
+	require.EqualValues(t, 133, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own

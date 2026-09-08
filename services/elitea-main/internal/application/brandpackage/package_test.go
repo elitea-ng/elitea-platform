@@ -296,6 +296,54 @@ func TestParse_Refusals(t *testing.T) {
 			t.Fatal("accepted")
 		}
 	})
+	t.Run("directory entries are skipped, not refused", func(t *testing.T) {
+		// Finder, Explorer, JSZip and most archivers write `assets/` before
+		// the files under it. archive/zip's Create makes one for a name that
+		// ends in "/". Before the fix every such package was refused with
+		// "entry name is not a plain relative path" on the directory itself.
+		imported, problems := svc.Parse(buildZip(t, map[string][]byte{
+			"assets/":              nil,
+			"assets/fonts/":        nil,
+			"brand-pack.json":      bytes.Replace(packJSON, []byte(`"logoFull": "./brand/logo-full.svg"`), []byte(`"logoFull": "assets/logo-full.svg"`), 1),
+			"assets/logo-full.svg": []byte(`<svg xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1"/></svg>`),
+		}))
+		if len(problems) != 0 {
+			t.Fatalf("problems %+v", problems)
+		}
+		for _, w := range imported.Warnings {
+			if strings.Contains(w, "assets/") {
+				t.Fatalf("directory entries must be silent, got warning %q", w)
+			}
+		}
+	})
+	t.Run("the package is named by its pack, not by the exported manifest", func(t *testing.T) {
+		// A customer edits brand-pack.json and leaves manifest.json as the
+		// export wrote it. The dialog and the versions list must say the
+		// customer's product, not the one the package was exported from.
+		restyled := bytes.Replace(packJSON, []byte(`"name": "Elitea"`), []byte(`"name": "Acme Corp"`), 1)
+		if bytes.Equal(restyled, packJSON) {
+			t.Fatalf("fixture pack does not carry the default product name: %s", packJSON[:200])
+		}
+		imported, problems := svc.Parse(buildZip(t, map[string][]byte{
+			"manifest.json":   goodEntries["manifest.json"],
+			"brand-pack.json": restyled,
+		}))
+		if len(problems) != 0 {
+			t.Fatalf("problems %+v", problems)
+		}
+		if imported.Manifest == nil || imported.Manifest.Product != "Acme Corp" {
+			t.Fatalf("manifest product = %+v, want the pack's", imported.Manifest)
+		}
+		if imported.Manifest.ExportedAt.IsZero() {
+			t.Fatal("the manifest's own export time must be kept")
+		}
+	})
+	t.Run("a directory entry that climbs out is still refused", func(t *testing.T) {
+		_, problems := svc.Parse(buildZip(t, map[string][]byte{"brand-pack.json": packJSON, "../evil/": nil}))
+		if len(problems) == 0 {
+			t.Fatal("accepted")
+		}
+	})
 	t.Run("extra entries are ignored with a warning", func(t *testing.T) {
 		imported, problems := svc.Parse(buildZip(t, map[string][]byte{"brand-pack.json": packJSON, "notes.txt": []byte("hi")}))
 		if len(problems) != 0 || len(imported.Warnings) == 0 {

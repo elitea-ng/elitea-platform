@@ -43,6 +43,14 @@ func Message(data string) Object {
 	return Object{ObjectType: "message", ResultTarget: "response", ResultEncoding: "plain", Data: data}
 }
 
+// Response is a message object under another object_type. The wiki_query
+// family answered `wiki_list`, `answer`, `report` and `message` — the same
+// four fields in the same order, only the type differing — and an agent
+// reading the result list branches on it.
+func Response(objectType, data string) Object {
+	return Object{ObjectType: objectType, ResultTarget: "response", ResultEncoding: "plain", Data: data}
+}
+
 // Artifact is a bucket-bound object. A nil name is the legacy `None`.
 func Artifact(name *string, objectType, extension, data string) Object {
 	return Object{Name: name, ObjectType: objectType, ResultTarget: "artifact", ResultExtension: extension,
@@ -141,6 +149,14 @@ func stringOr(result map[string]any, key, fallback string) string {
 // the repository context. Pinned by composed_result.json.
 func ComposeResultObjects(tool string, result map[string]any) []Object {
 	var objects []Object
+	// The wiki_query family composes to exactly ONE response object and
+	// nothing else — no partial-failure messages, no artifacts, no
+	// repository context. None of those tools produces an artifact, and the
+	// legacy handlers wrote their one-object list themselves.
+	switch tool {
+	case "list_wikis", "resolve_and_ask", "resolve_and_deep_research", "delete_wiki":
+		return []Object{Response(stringOr(result, "object_type", "message"), str(result["data"]))}
+	}
 	switch tool {
 	case "ask":
 		objects = append(objects, Message(stringOr(result, "answer", "Question answered successfully")))

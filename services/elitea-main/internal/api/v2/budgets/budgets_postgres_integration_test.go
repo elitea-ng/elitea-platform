@@ -517,6 +517,222 @@ func TestProjectBudgetSoftAlertThresholdRoundTripsAndDefaults(t *testing.T) {
 	}
 }
 
+/* ── budget_period and nats_fail_mode (gap G4) ─────────────────────────── */
+
+// policyColumns reads the two project-only policy columns straight from the
+// table the GATEWAY reads. Both had no writer at all before this: the upsert
+// hard-coded 'monthly' and never named nats_fail_mode, so the column the
+// gateway's failmode resolver consults was reachable only by direct SQL.
+func policyColumns(t *testing.T, pool *pgxpool.Pool, projectID int) (period string, failMode *string) {
+	t.Helper()
+	err := pool.QueryRow(context.Background(),
+		`SELECT budget_period, nats_fail_mode FROM gateway.project_budget WHERE project_id = $1`,
+		projectID).Scan(&period, &failMode)
+	if err != nil {
+		t.Fatalf("read policy columns: %v", err)
+	}
+	return period, failMode
+}
+
+func TestProjectBudgetWriteStoresTheFailModeTheGatewayResolves(t *testing.T) {
+	pool, router := newBudgetsEnvironment(t)
+
+	recorder := budgetsDo(t, router, http.MethodPut,
+		fmt.Sprintf("/project_budget/administration/%d/budget", budgetProjectID), budgetAdminUser,
+		map[string]any{"monthly_limit": 100, "budget_period": "monthly", "nats_fail_mode": "fail_closed"})
+	requireStatus(t, recorder, http.StatusOK)
+
+	body := decodeMap(t, recorder)
+	wantString(t, body, "budget_period", "monthly")
+	wantString(t, body, "nats_fail_mode", "fail_closed")
+
+	// The assertion an echo could not pass. The response is assembled from a
+	// re-read, but only the COLUMN is what
+	// services/elitea-llm-gateway/internal/failmode/store.go point-reads.
+	period, failMode := policyColumns(t, pool, budgetProjectID)
+	if period != "monthly" {
+		t.Fatalf("budget_period = %q, want monthly", period)
+	}
+	if failMode == nil || *failMode != "fail_closed" {
+		t.Fatalf("nats_fail_mode = %v, want fail_closed", failMode)
+	}
+}
+
+// The tri-state that a *string could not carry. Absent must leave the stored
+// mode alone; explicit null must clear it back to the platform baseline.
+func TestProjectBudgetFailModeDistinguishesAbsentFromNull(t *testing.T) {
+	pool, router := newBudgetsEnvironment(t)
+	url := fmt.Sprintf("/project_budget/administration/%d/budget", budgetProjectID)
+
+	budgetsDo(t, router, http.MethodPut, url, budgetAdminUser,
+		map[string]any{"monthly_limit": 100, "nats_fail_mode": "fail_open"})
+
+	// An edit that moves only the limit must not reset the policy.
+	requireStatus(t, budgetsDo(t, router, http.MethodPut, url, budgetAdminUser,
+		map[string]any{"monthly_limit": 250}), http.StatusOK)
+	if _, failMode := policyColumns(t, pool, budgetProjectID); failMode == nil || *failMode != "fail_open" {
+		t.Fatalf("nats_fail_mode = %v after an omitted field, want the stored fail_open", failMode)
+	}
+
+	// An explicit null is a request, and it must land.
+	recorder := budgetsDo(t, router, http.MethodPut, url, budgetAdminUser,
+		map[string]any{"monthly_limit": 250, "nats_fail_mode": nil})
+	requireStatus(t, recorder, http.StatusOK)
+	wantNull(t, decodeMap(t, recorder), "nats_fail_mode")
+	if _, failMode := policyColumns(t, pool, budgetProjectID); failMode != nil {
+		t.Fatalf("nats_fail_mode = %v after an explicit null, want NULL (inherit the baseline)", *failMode)
+	}
+}
+
+// A project nobody has configured reports the defaults rather than failing:
+// there is no row at all, and that is the default state.
+func TestProjectBudgetReportsThePolicyDefaultsWithNoRow(t *testing.T) {
+	_, router := newBudgetsEnvironment(t)
+
+	recorder := budgetsDo(t, router, http.MethodGet,
+		fmt.Sprintf("/project_budget/administration/%d/budget", budgetProjectID), budgetAdminUser, nil)
+	requireStatus(t, recorder, http.StatusOK)
+	body := decodeMap(t, recorder)
+	wantString(t, body, "budget_period", "monthly")
+	wantNull(t, body, "nats_fail_mode")
+}
+
+func TestProjectBudgetPolicyRejectionsPersistNothing(t *testing.T) {
+	pool, router := newBudgetsEnvironment(t)
+	url := fmt.Sprintf("/project_budget/administration/%d/budget", budgetProjectID)
+
+	for _, body := range []map[string]any{
+		{"monthly_limit": 10, "budget_period": "weekly"},
+		{"monthly_limit": 10, "nats_fail_mode": "fail_sideways"},
+	} {
+		requireStatus(t, budgetsDo(t, router, http.MethodPut, url, budgetAdminUser, body),
+			http.StatusBadRequest)
+	}
+
+	var rows int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT COUNT(*) FROM gateway.project_budget WHERE project_id = $1`,
+		budgetProjectID).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 0 {
+		t.Fatalf("a rejected write left %d rows: the limit landed with the bad policy", rows)
+	}
+}
+
+// The member PUT REFUSES the two project-scoped fields rather than answering
+// 200 over a payload it discarded. gateway.user_budget has neither column.
+func TestMemberBudgetWriteRefusesTheProjectPolicyFields(t *testing.T) {
+	_, router := newBudgetsEnvironment(t)
+	url := fmt.Sprintf("/user_budget/administration/%d/user_budget/%d", budgetProjectID, budgetMemberUser)
+
+	for _, body := range []map[string]any{
+		{"monthly_limit": 10, "budget_period": "monthly"},
+		{"monthly_limit": 10, "nats_fail_mode": "fail_open"},
+	} {
+		requireStatus(t, budgetsDo(t, router, http.MethodPut, url, budgetAdminUser, body),
+			http.StatusBadRequest)
+	}
+}
+
+/* ── clearing back to the default (gap G4) ─────────────────────────────── */
+
+func TestClearingAProjectBudgetRemovesTheAuthoredRow(t *testing.T) {
+	pool, router := newBudgetsEnvironment(t)
+	url := fmt.Sprintf("/project_budget/administration/%d/budget", budgetProjectID)
+
+	budgetsDo(t, router, http.MethodPut, url, budgetAdminUser,
+		map[string]any{"monthly_limit": 100, "soft_alert_pct": 55, "nats_fail_mode": "fail_closed"})
+
+	recorder := budgetsDo(t, router, http.MethodDelete, url, budgetAdminUser, nil)
+	requireStatus(t, recorder, http.StatusOK)
+
+	// The response is the RESULT, not the request: after a clear the project is
+	// unlimited and inherits the platform threshold again.
+	body := decodeMap(t, recorder)
+	wantNull(t, body, "monthly_limit")
+	wantNull(t, body, "effective_limit")
+	wantNull(t, body, "nats_fail_mode")
+	wantString(t, body, "limit_source", "unlimited")
+	wantBool(t, body, "enabled", false)
+	if got := body["warning_pct"]; fmt.Sprint(got) != "80" {
+		t.Fatalf("warning_pct = %v after a clear, want the inherited 80 rather than the authored 55", got)
+	}
+
+	// `enabled: false` was the nearest thing available before this route, and
+	// it is a DIFFERENT state: it keeps a row. A clear must leave none.
+	var rows int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT COUNT(*) FROM gateway.project_budget WHERE project_id = $1`,
+		budgetProjectID).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 0 {
+		t.Fatalf("gateway.project_budget still holds %d rows after a clear", rows)
+	}
+}
+
+// The trap this route could have shipped. gateway.llm_budget_accumulators
+// declares `budget_rule_id UUID REFERENCES gateway.project_budget(id) ON DELETE
+// CASCADE`, so if anything ever populates that column, clearing a limit would
+// delete the period's billing history as a side effect. Nothing writes it
+// today — this pins that the spend survives, and fails the day it stops being
+// true.
+func TestClearingAProjectBudgetKeepsTheSpend(t *testing.T) {
+	pool, router := newBudgetsEnvironment(t)
+	url := fmt.Sprintf("/project_budget/administration/%d/budget", budgetProjectID)
+
+	budgetsDo(t, router, http.MethodPut, url, budgetAdminUser, map[string]any{"monthly_limit": 100})
+	plantAccumulator(t, pool, "project", fmt.Sprint(budgetProjectID), budgetProjectID,
+		periodStart(), periodEnd(), "42.50")
+
+	requireStatus(t, budgetsDo(t, router, http.MethodDelete, url, budgetAdminUser, nil), http.StatusOK)
+
+	read := budgetsDo(t, router, http.MethodGet, url, budgetAdminUser, nil)
+	requireStatus(t, read, http.StatusOK)
+	// accumulated_cost is NUMERIC(20,8), and the exact scale PostgreSQL
+	// produces is what reaches the wire — the money path never rounds through
+	// float64.
+	wantNumber(t, decodeMap(t, read), "spend", "42.50000000")
+}
+
+// Clearing a project that has no budget states an intent that is already true,
+// so it succeeds. A 404 would make a retry after a lost response look like a
+// failure.
+func TestClearingAnUnconfiguredProjectBudgetSucceeds(t *testing.T) {
+	_, router := newBudgetsEnvironment(t)
+
+	recorder := budgetsDo(t, router, http.MethodDelete,
+		fmt.Sprintf("/project_budget/administration/%d/budget", budgetProjectID), budgetAdminUser, nil)
+	requireStatus(t, recorder, http.StatusOK)
+	wantNull(t, decodeMap(t, recorder), "monthly_limit")
+}
+
+// A member cap IS enforced (#321), so lifting one set by mistake has to be
+// possible. `enabled: false` stores the different fact "deliberately exempt".
+func TestClearingAMemberBudgetRemovesTheCap(t *testing.T) {
+	pool, router := newBudgetsEnvironment(t)
+	url := fmt.Sprintf("/user_budget/administration/%d/user_budget/%d", budgetProjectID, budgetMemberUser)
+
+	budgetsDo(t, router, http.MethodPut, url, budgetAdminUser, map[string]any{"monthly_limit": 25})
+
+	recorder := budgetsDo(t, router, http.MethodDelete, url, budgetAdminUser, nil)
+	requireStatus(t, recorder, http.StatusOK)
+	body := decodeMap(t, recorder)
+	wantNull(t, body, "monthly_limit")
+	wantString(t, body, "limit_source", "unlimited")
+
+	var rows int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT COUNT(*) FROM gateway.user_budget WHERE project_id = $1 AND user_id = $2`,
+		budgetProjectID, budgetMemberUser).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 0 {
+		t.Fatalf("gateway.user_budget still holds %d rows after a clear", rows)
+	}
+}
+
 /* ── the admin listing ─────────────────────────────────────────────────── */
 
 func TestListProjectBudgetsCarriesLimitsSpendAndOwnerIdentity(t *testing.T) {

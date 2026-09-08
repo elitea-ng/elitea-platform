@@ -321,6 +321,94 @@ func currentAgentPartialFrame(
 	}
 }
 
+// TestPostgresCurrentAgentTraceRecordsToolCallsForAnalytics is the AGENT half
+// of issue 618's producer, driven through the real projector rather than
+// through the record repository.
+//
+// This is the half that matters most: everything an agent reaches for inside a
+// chat turn used to be recorded only in p_<id>.chat_message_trace_step, which
+// is per-tenant, carries no toolkit id, and covers chat turns only — so the
+// Tools tab could not be built from it without silently excluding the other
+// producer.
+//
+// It asserts the STREAMING case, because that is where a naive insert breaks:
+// the same tool call is projected twice, first without a finish time and then
+// with one, and it must be ONE record whose duration settles.
+func TestPostgresCurrentAgentTraceRecordsToolCallsForAnalytics(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	seedCurrentActivitySchemas(t, pool)
+
+	const (
+		conversationID   = "10000000-0000-4000-8000-000000000618"
+		responseID       = "20000000-0000-4000-8000-000000000618"
+		clientGeneration = "30000000-0000-4000-8000-000000000618"
+	)
+	admitted := admitPostgresAgentExecution(t, pool, conversationID, responseID, clientGeneration)
+	seedCurrentAgentResponseGroup(t, pool, conversationID, responseID, clientGeneration, admitted.ExecutionID)
+
+	projector := &postgresCurrentAgentTraceProjector{}
+	store, err := newPostgresSharedStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := time.Now().UTC().Add(-time.Minute)
+	body := func(finish string) string {
+		return fmt.Sprintf(`{
+  "tool_calls":{"tool-run":{"tool_name":"list_issues","tool_run_id":"tool-run","run_id":"tool-run","tool_inputs":{"repo":"elitea"},"metadata":{"toolkit_name":"GitHub","toolkit_type":"github"},"timestamp_start":%q%s}},
+  "thinking_steps":[]
+}`, base.Format(time.RFC3339Nano), finish)
+	}
+	projectCurrentAgentFrame(t, store, projector, currentAgentPartialFrame(
+		admitted.ExecutionID, conversationID, responseID, clientGeneration, body("")))
+	projectCurrentAgentFrame(t, store, projector, currentAgentPartialFrame(
+		admitted.ExecutionID, conversationID, responseID, clientGeneration,
+		body(`,"timestamp_finish":"`+base.Add(750*time.Millisecond).Format(time.RFC3339Nano)+`"`)))
+
+	var (
+		rows        int64
+		projectID   int64
+		source      string
+		toolName    string
+		toolkitName string
+		toolkitType string
+		toolkitID   *int64
+		durationMS  float64
+	)
+	if err := pool.QueryRow(t.Context(), `
+SELECT count(*),
+       max(project_id),
+       max(source),
+       max(tool_name),
+       max(toolkit_name),
+       max(toolkit_type),
+       max(toolkit_id),
+       max(EXTRACT(EPOCH FROM (finished_at - started_at)) * 1000)
+FROM elitea_runtime.tool_call_records
+WHERE source = 'agent_turn' AND tool_name = 'list_issues'`).Scan(
+		&rows, &projectID, &source, &toolName, &toolkitName, &toolkitType,
+		&toolkitID, &durationMS,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 1 {
+		t.Fatalf("a re-projected tool call must be ONE record, got %d", rows)
+	}
+	if projectID != 1 || source != "agent_turn" || toolName != "list_issues" {
+		t.Fatalf("record identity: project=%d source=%q tool=%q", projectID, source, toolName)
+	}
+	if toolkitName != "GitHub" || toolkitType != "github" {
+		t.Fatalf("the toolkit the producer KNEW was not recorded: name=%q type=%q", toolkitName, toolkitType)
+	}
+	if toolkitID != nil {
+		// The worker's tool metadata carries a toolkit name and type and no id.
+		// Storing a resolved id here would be a guess presented as a fact.
+		t.Fatalf("toolkit_id must stay NULL for an agent turn, got %d", *toolkitID)
+	}
+	if durationMS < 700 || durationMS > 800 {
+		t.Fatalf("the second projection must settle the duration, got %.1fms", durationMS)
+	}
+}
+
 func projectCurrentAgentFrame(
 	t *testing.T,
 	store *postgresSharedStore,

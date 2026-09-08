@@ -48,7 +48,13 @@ export const ProjectBudget = zod
     budget_period: zod
       .enum(["monthly"])
       .describe(
-        "Reported, not settable. The gateway derives the period from the\ncalendar month unconditionally, so any other value would be one\nnothing honours.\n",
+        "The STORED period, read back from the row rather than reported\nas a constant. `monthly` is the only accepted value: the gateway\nderives the billing window from the calendar month\nunconditionally, so any other value would be one nothing\ncomputes and nothing bills against.\n",
+      ),
+    nats_fail_mode: zod
+      .enum(["tiered_hybrid", "fail_open", "fail_closed"])
+      .nullable()
+      .describe(
+        "The per-project NATS-failure policy the gateway applies when the\nbudget counter is unreachable.\n\nNULL means this project authors none and inherits the platform\nbaseline (`LLM_BUDGET_NATS_FAIL_MODE`). That is a distinct state\nfrom any of the three modes, so it is reported as null rather\nthan resolved to the baseline here — a client that showed the\ninherited value as if it were authored would make a later change\nto the baseline look like a change nobody made.\n",
       ),
   })
   .and(BudgetState);

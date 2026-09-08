@@ -16,6 +16,7 @@ import (
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/publicproject"
 )
 
 // newHandler creates a Handler with a nil pool. Safe only for static handlers
@@ -127,6 +128,87 @@ func TestPlatformSettings(t *testing.T) {
 		if v, _ := body[key].(bool); v {
 			t.Errorf("%s should be false", key)
 		}
+	}
+}
+
+// TestPlatformSettingsPublishesPublicProjectID covers the key the SPA reads
+// instead of its build-time VITE_PUBLIC_PROJECT_ID copy. The default and the
+// configured value are BOTH asserted: a handler that published a constant 1
+// would pass the default case on its own, and a deployment whose public project
+// is not id 1 is exactly the case this key exists for.
+func TestPlatformSettingsPublishesPublicProjectID(t *testing.T) {
+	t.Run("default", func(t *testing.T) {
+		for _, name := range append([]string{publicproject.Canonical}, publicproject.Deprecated...) {
+			t.Setenv(name, "")
+		}
+		h := newHandler()
+		w := httptest.NewRecorder()
+		h.PlatformSettings(w, httptest.NewRequest(http.MethodGet, "/", nil))
+		assertStatus(t, w, http.StatusOK)
+		if got := decodeObj(t, w)["public_project_id"]; got != float64(publicproject.Default) {
+			t.Errorf("public_project_id = %v, want %d", got, publicproject.Default)
+		}
+	})
+
+	t.Run("configured", func(t *testing.T) {
+		for _, name := range append([]string{publicproject.Canonical}, publicproject.Deprecated...) {
+			t.Setenv(name, "")
+		}
+		t.Setenv(publicproject.Canonical, "42")
+		h := newHandler()
+		w := httptest.NewRecorder()
+		h.PlatformSettings(w, httptest.NewRequest(http.MethodGet, "/", nil))
+		assertStatus(t, w, http.StatusOK)
+		if got := decodeObj(t, w)["public_project_id"]; got != float64(42) {
+			t.Errorf("public_project_id = %v, want 42", got)
+		}
+	})
+}
+
+// cost_budgets_enabled gates Settings → Usage, exactly as the reference's own
+// platform_settings endpoint gated it. Two properties matter and neither is
+// observable from the tab itself:
+//
+//   - it is ALWAYS present. An absent key is read by the client as a boolean
+//     that is not false, so a deployment with no gateway would show a Usage tab
+//     of structural zeroes as if they were measurements.
+//   - it tracks the composed gateway rather than defaulting open. This is the
+//     one flag on this endpoint whose safe direction is CLOSED: every other one
+//     hides a feature that still works, this one hides a page that has no data
+//     behind it at all.
+func TestPlatformSettingsPublishesCostBudgets(t *testing.T) {
+	for _, testCase := range []struct {
+		name    string
+		enabled bool
+	}{
+		{name: "no gateway composed", enabled: false},
+		{name: "gateway composed", enabled: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			h := eliteacore.NewHandler(nil, eliteacore.WithCostBudgets(testCase.enabled))
+			w := httptest.NewRecorder()
+			h.PlatformSettings(w, httptest.NewRequest(http.MethodGet, "/", nil))
+			assertStatus(t, w, http.StatusOK)
+
+			body := decodeObj(t, w)
+			value, present := body["cost_budgets_enabled"]
+			if !present {
+				t.Fatal("cost_budgets_enabled is absent; the client reads that as enabled")
+			}
+			if got, _ := value.(bool); got != testCase.enabled {
+				t.Fatalf("cost_budgets_enabled = %#v, want %v", value, testCase.enabled)
+			}
+		})
+	}
+}
+
+// The default is the closed one: a handler nobody told about a gateway must not
+// claim this platform tracks cost.
+func TestPlatformSettingsDefaultsCostBudgetsOff(t *testing.T) {
+	w := httptest.NewRecorder()
+	newHandler().PlatformSettings(w, httptest.NewRequest(http.MethodGet, "/", nil))
+	if got, _ := decodeObj(t, w)["cost_budgets_enabled"].(bool); got {
+		t.Fatal("cost_budgets_enabled defaulted to true with no gateway configured")
 	}
 }
 

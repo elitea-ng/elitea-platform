@@ -39,7 +39,7 @@ describe('Skills page', () => {
     const user = userEvent.setup();
     const { router } = renderSkillsRoute(<Skills />);
     expect(await screen.findByText('Reviewer')).toBeInTheDocument();
-    await user.click(screen.getByTestId('skill-list-row'));
+    await user.click(screen.getByTestId('entity-card'));
     await waitFor(() => expect(router.state.location.pathname).toBe('/skills/all/skill-1'));
   });
 
@@ -78,5 +78,19 @@ describe('Skills page', () => {
     renderSkillsRoute(<Skills />);
     await user.click(await screen.findByRole('button', { name: 'Export' }));
     await waitFor(() => expect(click).toHaveBeenCalled());
+  });
+
+  /**
+   * COMPOSITION ROOT — the title row is `widgets/page-header` now (issue
+   * 841). The page's only level-1 heading and both header actions must
+   * survive the move; `routes/__tests__/guardsIntegration.test.tsx` reads
+   * that heading as its "the page rendered" landmark.
+   */
+  it('renders its heading, import and create controls inside the shared page header', async () => {
+    renderSkillsRoute(<Skills />);
+
+    const header = await screen.findByTestId('page-header');
+    expect(header).toContainElement(screen.getByRole('heading', { name: 'Skills', level: 1 }));
+    expect(header).toContainElement(screen.getByRole('button', { name: 'Create skill' }));
   });
 });

@@ -101,6 +101,20 @@ function isPersonalSpaceBlocked(projectId: string | undefined, personalProjectId
   return projectId === publicProjectId;
 }
 
+/**
+ * The merged-pill corners of the split button
+ * (`CreateEntityButton.jsx`'s `mainButton`/`chevronButton`: `0.875rem
+ * 0.125rem 0.125rem 0.875rem` and its mirror). Composed from the radius
+ * TOKENS rather than those literals (R-T10): on a 28px-tall control the
+ * browser clamps `radiusPill` to 14px, which is the baseline's `0.875rem`
+ * exactly, and `radiusSm` stands in for the 2px interior join.
+ */
+function splitRadius(theme: Theme, side: 'start' | 'end'): string {
+  const pill = theme.vars.shape.radiusPill;
+  const flat = theme.vars.shape.radiusSm;
+  return side === 'start' ? `${pill} ${flat} ${flat} ${pill}` : `${flat} ${pill} ${pill} ${flat}`;
+}
+
 interface TriggerProps {
   isSimple: boolean;
   collapsed: boolean;
@@ -154,13 +168,14 @@ function CreateEntityTrigger({
         startIcon={<PlusIcon />}
         onClick={onMainClick}
         data-testid="sidebar-create-button"
-        // [S1-D precedent] Grouped split-button corners are square, not the
-        // old app's asymmetric merged-pill radius — `radiusPill` (uniform)
-        // cannot express "square at the interior join, rounded only at the
-        // outer end" without a per-position asymmetric token that does not
-        // exist yet. Same documented, deliberate deviation as
-        // `TabButtonItem`/`TabGroupButton` (decision record, S1-D).
-        sx={{ flex: '1 1 auto' }}
+        // The two halves are one MERGED pill: rounded at the group's outer
+        // ends, near-square at the interior join
+        // (`CreateEntityButton.jsx`'s `mainButton`/`chevronButton`). The port
+        // had left both halves on the uniform `radiusPill`, which rendered
+        // the split button as two separate lozenges with a visible seam —
+        // the shape is not expressible as a single radius token, so the
+        // baseline's own four-corner literals are used verbatim.
+        sx={(theme: Theme) => ({ flex: '1 1 auto', borderRadius: splitRadius(theme, 'start') })}
       >
         {currentLabel}
       </BaseBtn>
@@ -169,9 +184,17 @@ function CreateEntityTrigger({
         disabled={disabled}
         onClick={onToggleMenu}
         aria-label={t('widgets.createButton.chooseEntity', 'Choose what to create')}
-        sx={{ padding: '0 0.5rem', minWidth: 'unset' }}
+        sx={(theme: Theme) => ({
+          padding: '0 0.5rem',
+          minWidth: 'unset',
+          width: 'fit-content',
+          borderRadius: splitRadius(theme, 'end'),
+        })}
       >
-        <ExpandMoreIcon style={{ transform: menuOpen ? 'rotate(180deg)' : 'none' }} />
+        {/* `ArrowDownIcon` is a 1rem glyph in the baseline (measured 16x16 in
+            production); MUI's default `medium` SvgIcon is 24px, which is what
+            made this half of the split button 6px wider than production's. */}
+        <ExpandMoreIcon style={{ width: '1rem', height: '1rem', transform: menuOpen ? 'rotate(180deg)' : 'none' }} />
       </BaseBtn>
     </>
   );

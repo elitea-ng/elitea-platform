@@ -12,9 +12,11 @@
 import CssBaseline from '@mui/material/CssBaseline';
 import { ThemeProvider } from '@mui/material/styles';
 import {
+  Outlet,
   RouterProvider,
   createMemoryHistory,
   createRootRoute,
+  createRoute,
   createRouter,
 } from '@tanstack/react-router';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -50,6 +52,25 @@ const LLM_CONFIG = {
 
 const SECOND_CONFIG = { ...LLM_CONFIG, id: 2, elitea_title: 'Claude Opus', label: 'anthropic', type: 'anthropic', data: { name: 'opus' } };
 const THIRD_CONFIG = { ...LLM_CONFIG, id: 3, elitea_title: 'Ollama Local', label: 'ollama', type: 'ollama', data: { name: 'llama' } };
+
+/**
+ * THE MODEL CATALOGUE, which is what the default-model selects offer (#80).
+ *
+ * `name` and `elitea_title` differ on purpose, exactly as they do in
+ * production: the configuration row is titled `gpt-56-luna` while the model it
+ * points at is `global.openai.gpt-5.6-luna`. The select's own value is built
+ * from `default_model_name`, so options built from the CONFIGURATION titles
+ * could never match it — the defect this fixture exists to keep out.
+ */
+const CATALOGUE = {
+  items: [
+    { id: '1_gpt-4o', name: 'gpt-4o', display_name: 'OpenAI GPT-4o', project_id: PROJECT_ID, default: true, low_tier: false, high_tier: true },
+    { id: '1_opus', name: 'opus', display_name: 'Claude Opus', project_id: PROJECT_ID, default: false, low_tier: true, high_tier: false },
+  ],
+  total: 2,
+  default_model_name: 'gpt-4o',
+  default_model_project_id: PROJECT_ID,
+};
 
 function setConfig(): void {
   globals['elitea_ui_config'] = {
@@ -107,9 +128,7 @@ describe('ConfigurationsPanel default-model saving', () => {
     configureGeneratedClient({ baseUrl: BASE });
     mockEditPermission();
     server.use(
-      http.get(`${BASE}/configurations/models/${PROJECT_ID}`, () =>
-        HttpResponse.json({ items: [], total: 0, default_model_name: '', default_model_project_id: '' }),
-      ),
+      http.get(`${BASE}/configurations/models/${PROJECT_ID}`, () => HttpResponse.json(CATALOGUE)),
       http.post(`${BASE}/configurations/models/${PROJECT_ID}`, () =>
         HttpResponse.json({ error: 'insufficient permissions' }, { status: 403 }),
       ),
@@ -123,7 +142,7 @@ describe('ConfigurationsPanel default-model saving', () => {
     const combobox = (await screen.findAllByRole('combobox'))[0] as HTMLElement;
     await waitFor(() => expect(combobox).not.toHaveAttribute('aria-disabled', 'true'));
     await userEvent.click(combobox);
-    await userEvent.click(await screen.findByRole('option', { name: 'OpenAI GPT-4o' }));
+    await userEvent.click(await screen.findByRole('option', { name: 'Claude Opus' }));
 
     expect(await screen.findByText('insufficient permissions')).toBeInTheDocument();
   });
@@ -132,13 +151,13 @@ describe('ConfigurationsPanel default-model saving', () => {
     setConfig();
     configureGeneratedClient({ baseUrl: BASE });
     mockEditPermission();
+    let posted: Record<string, unknown> = {};
     server.use(
-      http.get(`${BASE}/configurations/models/${PROJECT_ID}`, () =>
-        HttpResponse.json({ items: [], total: 0, default_model_name: '', default_model_project_id: '' }),
-      ),
-      http.post(`${BASE}/configurations/models/${PROJECT_ID}`, () =>
-        HttpResponse.json({ items: [], total: 0 }),
-      ),
+      http.get(`${BASE}/configurations/models/${PROJECT_ID}`, () => HttpResponse.json(CATALOGUE)),
+      http.post(`${BASE}/configurations/models/${PROJECT_ID}`, async ({ request }) => {
+        posted = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({ items: [], total: 0 });
+      }),
     );
 
     renderPanel();
@@ -149,9 +168,77 @@ describe('ConfigurationsPanel default-model saving', () => {
     const combobox = (await screen.findAllByRole('combobox'))[0] as HTMLElement;
     await waitFor(() => expect(combobox).not.toHaveAttribute('aria-disabled', 'true'));
     await userEvent.click(combobox);
-    await userEvent.click(await screen.findByRole('option', { name: 'OpenAI GPT-4o' }));
+    await userEvent.click(await screen.findByRole('option', { name: 'Claude Opus' }));
 
+    // THE MODEL NAME, not the configuration title (#80). The endpoint stores
+    // `name` as the project's default model, and the options used to carry
+    // `elitea_title`, so this POST used to save a title no model answers to.
+    await waitFor(() => expect(posted['name']).toBe('opus'));
+    expect(posted['target_project_id']).toBe(PROJECT_ID);
+    expect(posted['section']).toBe('llm');
     await waitFor(() => expect(screen.queryByText('insufficient permissions')).not.toBeInTheDocument());
+  });
+
+  /**
+   * The select could not show the model that WAS the default. Its value is
+   * `${default_model_name}<<>>${default_model_project_id}` — a model name —
+   * and the options were built from the configuration rows' `elitea_title`.
+   * Nothing ever matched, so every Default select rendered blank.
+   */
+  it('shows the model the server reports as the default', async () => {
+    setConfig();
+    configureGeneratedClient({ baseUrl: BASE });
+    mockEditPermission();
+    server.use(http.get(`${BASE}/configurations/models/${PROJECT_ID}`, () => HttpResponse.json(CATALOGUE)));
+
+    renderPanel();
+
+    const combobox = (await screen.findAllByRole('combobox'))[0] as HTMLElement;
+    await waitFor(() => expect(combobox).toHaveTextContent('OpenAI GPT-4o'));
+  });
+
+  /**
+   * The catalogue is bigger than the configuration list. Production project 1
+   * holds nine LLM models and six configuration rows, so three models could
+   * not be picked as a default at all. `renderPanel()` passes ONE
+   * configuration row against a two-model catalogue; both models must be
+   * offered.
+   */
+  it('offers every model in the catalogue, not only the ones with a configuration row', async () => {
+    setConfig();
+    configureGeneratedClient({ baseUrl: BASE });
+    mockEditPermission();
+    server.use(http.get(`${BASE}/configurations/models/${PROJECT_ID}`, () => HttpResponse.json(CATALOGUE)));
+
+    renderPanel();
+
+    const combobox = (await screen.findAllByRole('combobox'))[0] as HTMLElement;
+    await waitFor(() => expect(combobox).not.toHaveAttribute('aria-disabled', 'true'));
+    await userEvent.click(combobox);
+
+    expect(await screen.findByRole('option', { name: 'OpenAI GPT-4o' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Claude Opus' })).toBeInTheDocument();
+    // …and the configuration TITLE is not what the list is labelled with.
+    expect(screen.queryByRole('option', { name: 'Ollama Local' })).not.toBeInTheDocument();
+  });
+
+  /**
+   * The tier lists read `low_tier`/`high_tier` from the CATALOGUE row, which
+   * is where the server puts them.
+   */
+  it('filters the tier selects by the catalogue tier flags', async () => {
+    setConfig();
+    configureGeneratedClient({ baseUrl: BASE });
+    mockEditPermission();
+    server.use(http.get(`${BASE}/configurations/models/${PROJECT_ID}`, () => HttpResponse.json(CATALOGUE)));
+
+    renderPanel();
+
+    const comboboxes = await screen.findAllByRole('combobox');
+    // High-tier is the second LLM select; only `gpt-4o` carries `high_tier`.
+    await userEvent.click(comboboxes[1] as HTMLElement);
+    expect(await screen.findByRole('option', { name: 'OpenAI GPT-4o' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'Claude Opus' })).not.toBeInTheDocument();
   });
 });
 
@@ -261,5 +348,190 @@ describe('ConfigurationsPanel connection health', () => {
     expect(screen.getByText(/In Progress/)).toBeInTheDocument();
     // Re-deriving admission needs nothing from the client.
     expect(revalidateBody).toBe('');
+  });
+});
+
+/**
+ * DEFECT this pins (gap 6). A card on Settings -> AI Configuration is the ONLY
+ * way to open a stored configuration, and every one of them routed to
+ * `/settings/create-configuration` — the type chooser for a NEW configuration.
+ * The id went into a `state.routeStack[].pagePath` breadcrumb nothing reads, so
+ * clicking `local-vllm` opened an empty "New Configuration" form and the stored
+ * row could not be edited at all.
+ *
+ * The assertion is about the DESTINATION, so the router here carries the real
+ * edit route (ROUTE-065) rather than a lone root route: a `navigate` to a path
+ * this tree does not declare would not be a passing test, it would be a route
+ * that never resolves.
+ */
+describe('ConfigurationsPanel card navigation', () => {
+  /** Renders the panel at `/`, with the real edit route mounted beside it. */
+  function renderPanelWithRoutes(configs: Record<string, unknown>[] = [LLM_CONFIG]): void {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    const theme = buildEliteaTheme(DEFAULT_BRAND_PACK);
+    const rootRoute = createRootRoute({
+      component: () => (
+        <QueryClientProvider client={queryClient}>
+          <ThemeProvider theme={theme} defaultMode={DEFAULT_COLOR_SCHEME}>
+            <CssBaseline />
+            <Outlet />
+          </ThemeProvider>
+        </QueryClientProvider>
+      ),
+    });
+    const indexRoute = createRoute({
+      getParentRoute: () => rootRoute,
+      path: '/',
+      component: () => (
+        <ConfigurationsPanel
+          configurationsBySection={{ llm: configs }}
+          projectId={PROJECT_ID}
+          isLoading={false}
+        />
+      ),
+    });
+    const editRoute = createRoute({
+      getParentRoute: () => rootRoute,
+      path: '/settings/edit-configuration/$credential_uid',
+      component: function EditConfigurationStub() {
+        const { credential_uid: credentialUid } = editRoute.useParams();
+        return <div data-testid="edit-configuration-route">{credentialUid}</div>;
+      },
+    });
+    const router = createRouter({
+      routeTree: rootRoute.addChildren([indexRoute, editRoute]),
+      history: createMemoryHistory({ initialEntries: ['/'] }),
+    });
+    render(<RouterProvider router={router} />);
+  }
+
+  it('opens the clicked configuration in the edit route, carrying its id', async () => {
+    setConfig();
+    configureGeneratedClient({ baseUrl: BASE });
+    mockEditPermission();
+    server.use(
+      http.get(`${BASE}/configurations/models/${PROJECT_ID}`, () =>
+        HttpResponse.json({ items: [], total: 0, default_model_name: '', default_model_project_id: '' }),
+      ),
+    );
+
+    renderPanelWithRoutes();
+
+    // `getConfigurationDisplayName` reads `label` first, so this is the card's
+    // own title row.
+    const card = await screen.findByText('openai');
+    // The card opens nothing until the permission answer lands: before that it
+    // renders "No edit permissions" and the click is a no-op by design.
+    await waitFor(() => expect(screen.queryByText('No edit permissions')).not.toBeInTheDocument());
+    await userEvent.click(card);
+
+    // The id, not a breadcrumb string: this is what the edit screen loads the
+    // stored row by.
+    expect(await screen.findByTestId('edit-configuration-route')).toHaveTextContent('1');
+  });
+});
+
+/**
+ * DEFECT this pins (J19b, `credentials.lifecycle.spec.ts:179`). A row saved
+ * into a non-LLM section (e.g. "AI Credentials") landed in a COLLAPSED
+ * accordion on return from `/settings/create-configuration`, because only
+ * the LLMs section ever passed `defaultExpanded: true`. `revealConfigurationId`
+ * (the route's `?reveal=` search param) is what fixes it: the section whose
+ * `configurations` include that id opens too, everything else keeps its
+ * production default.
+ */
+describe('ConfigurationsPanel reveal (?reveal=) opens the saved row\'s section', () => {
+  const AI_CREDENTIAL_CONFIG = {
+    id: 42,
+    project_id: PROJECT_ID,
+    elitea_title: 'GitHub token',
+    label: 'GitHub token',
+    type: 'custom',
+    section: 'ai_credentials',
+    shared: false,
+    data: {},
+  };
+  // A second non-LLM, non-matching section — proves `revealConfigurationId`
+  // opens ONLY the section holding it, not every non-LLM section at once.
+  const EMBEDDING_CONFIG = {
+    id: 7,
+    project_id: PROJECT_ID,
+    elitea_title: 'Embed model',
+    label: 'embed',
+    type: 'openai',
+    section: 'embedding',
+    shared: false,
+    data: { name: 'text-embed' },
+  };
+
+  function mockModels(): void {
+    server.use(
+      http.get(`${BASE}/configurations/models/${PROJECT_ID}`, () =>
+        HttpResponse.json({ items: [], total: 0, default_model_name: '', default_model_project_id: '' }),
+      ),
+    );
+  }
+
+  it('reveal id inside AI Credentials expands that section; LLMs stays expanded too', async () => {
+    setConfig();
+    configureGeneratedClient({ baseUrl: BASE });
+    mockEditPermission();
+    mockModels();
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const theme = buildEliteaTheme(DEFAULT_BRAND_PACK);
+    const rootRoute = createRootRoute({
+      component: () => (
+        <QueryClientProvider client={queryClient}>
+          <ThemeProvider theme={theme} defaultMode={DEFAULT_COLOR_SCHEME}>
+            <CssBaseline />
+            <ConfigurationsPanel
+              configurationsBySection={{ llm: [LLM_CONFIG], embedding: [EMBEDDING_CONFIG], ai_credentials: [AI_CREDENTIAL_CONFIG] }}
+              projectId={PROJECT_ID}
+              isLoading={false}
+              revealConfigurationId="42"
+            />
+          </ThemeProvider>
+        </QueryClientProvider>
+      ),
+    });
+    const router = createRouter({ routeTree: rootRoute, history: createMemoryHistory({ initialEntries: ['/'] }) });
+    render(<RouterProvider router={router} />);
+
+    expect(await screen.findByTestId('ai-providers-section-ai-credentials')).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByTestId('ai-providers-section-llms')).toHaveAttribute('aria-expanded', 'true');
+    // A section with no reveal match keeps its own (collapsed) default.
+    expect(screen.getByTestId('ai-providers-section-embedding-models')).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('no reveal id: AI Credentials stays collapsed, LLMs is still expanded', async () => {
+    setConfig();
+    configureGeneratedClient({ baseUrl: BASE });
+    mockEditPermission();
+    mockModels();
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const theme = buildEliteaTheme(DEFAULT_BRAND_PACK);
+    const rootRoute = createRootRoute({
+      component: () => (
+        <QueryClientProvider client={queryClient}>
+          <ThemeProvider theme={theme} defaultMode={DEFAULT_COLOR_SCHEME}>
+            <CssBaseline />
+            <ConfigurationsPanel
+              configurationsBySection={{ llm: [LLM_CONFIG], ai_credentials: [AI_CREDENTIAL_CONFIG] }}
+              projectId={PROJECT_ID}
+              isLoading={false}
+            />
+          </ThemeProvider>
+        </QueryClientProvider>
+      ),
+    });
+    const router = createRouter({ routeTree: rootRoute, history: createMemoryHistory({ initialEntries: ['/'] }) });
+    render(<RouterProvider router={router} />);
+
+    expect(await screen.findByTestId('ai-providers-section-llms')).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByTestId('ai-providers-section-ai-credentials')).toHaveAttribute('aria-expanded', 'false');
   });
 });

@@ -355,8 +355,184 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
  * landed (ADR-0024 WP9): exportBrandingPackage, importBrandingPackage,
  * listBrandingPackageVersions and restoreBrandingPackageVersion — the
  * Branding page's download/import/rollback actions.
+ *
+ * 176 -> 178, MANIFEST_ENTRY_COUNT unchanged, when per-project and per-user
+ * budgets became clearable (gap G4): clearProjectBudget and clearMemberBudget,
+ * the DELETE twins of the two PUT routes that already existed. Described for
+ * the generated client the admin Budgets page calls.
+ *
+ * 178 -> 182, MANIFEST_ENTRY_COUNT unchanged, when the spec-truth pass landed
+ * (issue 621, plus issue 36 items 9 and 11). Four operations arrived:
+ * getProjectInfo and updateProjectInfo (the project-info path, whose GET now
+ * answers 501 with a machine-readable `code` when ELITEA_PROJECT_INFO_ENABLED
+ * is off, and whose refusal no client could see because the path was in no
+ * document at all), listConfigurations and listConfigurationModels (the two
+ * `/configurations/*` reads that four separate elitea-web slices had each
+ * hand-written).
+ *
+ * MANIFEST_ENTRY_COUNT does not move, for the reason every step above gives:
+ * the app still calls all four through its hand-written clients
+ * (entities/project/api/projectContextApi.ts,
+ * features/credentials/api/configurations.ts and configurationConnections.ts).
+ * The operations are described so a generated client exists to migrate those
+ * files onto; the migration is the change that moves the manifest.
  */
-const GENERATED_OPERATION_COUNT = 176;
+
+/*
+ * 182 -> 185 when fix/ci-wave-reds described the three Inventory facade
+ * operations in v2.yaml (invokeInventoryTool, getInventoryInvocation,
+ * cancelInventoryInvocation) so that elitea-main's manifest reverse-check
+ * could find a spec entry for the `inventory.*` manifest ids the Inventory UI
+ * unit added. orval generates a hook for each, which is the whole delta; the
+ * app keeps calling them through entities/inventory/api, so
+ * MANIFEST_ENTRY_COUNT is unchanged. The tripwire was left at 182 by that
+ * fix and read RED on the wave head — the same late reading as the #440 case.
+ */
+
+/*
+ * 185 -> 188, when the three AI-draft endpoints were routed (#254 P1):
+ * generateApplicationDraft, generateSkillDraft and generateProjectContextDraft.
+ * They are the last three routes of router.go's NOTE(#126) tombstone, now
+ * served by internal/api/v2/drafts and described in v2.yaml, so orval
+ * generates a hook and a zod model for each.
+ *
+ * Worth recording beside the number, because it is what this ledger exists to
+ * make somebody justify: the three MANIFEST entries do not move by three. Two
+ * already existed as `handwritten` with `operationId: null`
+ * (applications.generateAgentDraft, skills.generateDraft) and only gain the
+ * operationId elitea-main's TestSpecRouterConformance/manifest_reverse_check
+ * matches on — which is what lets both ids be DELETED from
+ * internal/api/oapiserver/testdata/reverse_check_allowlist.txt, 78 -> 76. The
+ * app keeps calling all three through its hand-written modules, because orval
+ * shapes every write endpoint as a `useQuery` gated by `enabled` and these are
+ * click-to-generate buttons.
+ */
+/*
+ * 188 -> 189, when canvas editor presence was served over the project SSE plane
+ * (#622): heartbeatCanvasPresence, POST
+ * /elitea_core/canvas/prompt_lib/{project_id}/{canvas_id}/presence. orval
+ * generates a hook and three zod models (CanvasPresence, CanvasPresenceRequest,
+ * CanvasEditor) for it.
+ */
+/*
+ * 189 -> 190: `setSkillRelation`, the PATCH the lifecycle unit's
+ * agentSkills.setSkillRelation manifest entry named all along. Splitting the
+ * fused manifest objects (205 -> 206) made elitea-main's reverse check see the
+ * entry again, and the allowlist may only shrink, so the operation is now
+ * described. MANIFEST_ENTRY_COUNT is unchanged: the entry existed.
+ */
+/*
+ * 190 -> 203 and 206 -> 219, when Agent Evaluation slice 2 landed (#617): the
+ * dataset, the run and the read-only scorecard.
+ *
+ * BOTH NUMBERS MOVE TOGETHER, which most entries above this one do not, and the
+ * reason is worth the line. The thirteen operations are described in
+ * api/openapi/v2.yaml AND called from a UI that ships in the same change, so
+ * each one produces a generated operation and a manifest entry.
+ *
+ * The four DIMENSION routes of slice 1 move neither number, and still do not.
+ * They are served, and their client is hand-written, and they are absent from
+ * the manifest on purpose: elitea-main's
+ * TestSpecRouterConformance/manifest_reverse_check refuses a manifest entry the
+ * spec does not describe, and the allowlist that would excuse one is at its cap
+ * and may only shrink. Describing them is additive and separate; when it
+ * happens, both numbers move by four.
+ *
+ * WRITTEN AS 189 -> 202 AND REBASED. The setSkillRelation entry above landed
+ * first and moved the base to 190; both streams counted correctly from where
+ * they stood, and only the merge can add them up.
+ */
+/*
+ * 203 -> 211 and 219 -> 227, when a pipeline got the two UNATTENDED ways to
+ * start it: an inbound signed trigger (issue 192) and a cron schedule (issue
+ * 193).
+ *
+ * BOTH NUMBERS MOVE, and by DIFFERENT amounts, which is the part worth the
+ * line. Eight operations are described in api/openapi/v2.yaml; SEVEN of them
+ * are called from the pipeline settings tab that ships in the same change, and
+ * the eighth — `runPipelineInboundTrigger` — has no first-party client and
+ * never will. It is the door an EXTERNAL system calls with the pipeline's own
+ * secret; the SPA shows the URL and does not call it.
+ *
+ * That eighth one STILL gets a manifest entry, with an empty `usedBy` and a
+ * `$comment` saying why. The alternative would be an allowlist entry, and the
+ * allowlist is at its cap and may only shrink — but more to the point, "no
+ * first-party caller" is a FACT about this endpoint rather than an omission to
+ * excuse, and the manifest is where that fact belongs. So the manifest moves by
+ * eight as well.
+ */
+/*
+ * 211 -> 212, when the "Test tool" run finally got a description. The entry
+ * below recorded the route as "Not in v2.yaml", and the Go reverse check
+ * (TestSpecRouterConformance/manifest_reverse_check) refused that: the
+ * allowlist that holds undescribed endpoints is at its cap of 76 and may only
+ * shrink, so a NEW manifest endpoint the spec does not cover fails the gate by
+ * design. `testToolkitTool` is the operation, and orval generates one client
+ * for it, so this number moves by one.
+ *
+ * MANIFEST_ENTRY_COUNT does NOT move. The endpoint already had its entry; the
+ * entry gained an `operationId` and a real `responseSchema`. It also stays
+ * `source: 'handwritten'`, because the caller
+ * (features/toolkits/api/toolkitTestRun.ts) folds six status codes into one
+ * settled-outcome union and never rejects — orval's hook hands back a thrown
+ * error instead, so switching to it would move that mapping into every call
+ * site rather than delete it.
+ */
+/*
+ * 212 -> 215 and 228 -> 231, when a bucket got a per-bucket ACCESS LIST — the
+ * surface the artifacts plugin calls `bucket_permissions`.
+ *
+ * BOTH NUMBERS MOVE BY THREE, which is the simple case: the three operations
+ * (list, replace one member's map, remove one entry) are described in
+ * api/openapi/v2.yaml AND all three are called from the Artifacts page's
+ * "Manage access" dialog that ships with them, so each produces a generated
+ * operation and a manifest entry.
+ */
+/*
+ * 215 -> 217 and 231 -> 233, when Admin › Tasks got the union read and the
+ * cancel (`listBackgroundJobs`, `cancelBackgroundJob`).
+ *
+ * BOTH NUMBERS MOVE BY TWO, the simple case again: both operations are
+ * described in api/openapi/v2.yaml AND both are called from the Admin › Tasks
+ * page that ships with them.
+ */
+/*
+ * 217 -> 231 and 233 -> 247, when the four undescribed route families of issue
+ * 36 items 1, 5, 6 and 7 were described: the skill icon gallery (five
+ * operations), the project icon gallery (three), personal access tokens (four)
+ * and the two Help Center reads (`getResourcesConfigValues`, `getSystemInfo`).
+ *
+ * THE TWO NUMBERS MOVE BY DIFFERENT AMOUNTS, and both differences are facts
+ * about callers rather than rounding.
+ *
+ * Fourteen operations are described, so GENERATED_OPERATION_COUNT moves by
+ * fourteen. Only TWELVE of them have a first-party caller, and the two that do
+ * not get no manifest entry:
+ *
+ *   - `getSystemInfo` answers 501 in every deployment and always will while
+ *     this service loads no plugins. `pages/help-center`'s useResourcesConfig
+ *     deliberately does not call it, because a request whose only possible
+ *     answer is a refusal buys nothing and puts a 501 in the network log of
+ *     every visit. It is described so a generated client carries the refusal
+ *     instead of inventing a shape.
+ *   - `getPersonalToken` (the single-token read) is served and has no screen:
+ *     the settings page lists and creates and revokes, and never reads one
+ *     token by uuid.
+ *
+ * MANIFEST_ENTRY_COUNT nevertheless moves by FOURTEEN, not twelve, because two
+ * entries arrive that are not new operations at all: `projectInfo.get` and
+ * `projectInfo.update` were described back in issue 621 and had no manifest
+ * entry, because the app still called them through a hand-written module. It
+ * calls them through the generated client now, so the entries land with the
+ * migration rather than with the description.
+ *
+ * None of the fourteen appears in
+ * internal/api/oapiserver/testdata/reverse_check_allowlist.txt, so that list is
+ * unchanged: it holds ids the manifest carries and the spec does not describe,
+ * and these four families were absent from the manifest entirely rather than
+ * excused on it.
+ */
+const GENERATED_OPERATION_COUNT = 231;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -368,8 +544,76 @@ const GENERATED_OPERATION_COUNT = 176;
  * .Predictor gate nothing ever assigned, so it 404s everywhere. The manifest
  * entry describes a sender that exists and is gated off, which is why it is
  * counted rather than withheld.
+ *
+ * 191 -> 199. The admin Budgets page and Settings > Usage (gap G4) call
+ * eight budget routes the app never called before: listProjectBudgets,
+ * getProjectBudgetAdmin, setProjectBudget, clearProjectBudget,
+ * listMemberBudgetsAdmin, setMemberBudget, clearMemberBudget and
+ * getProjectUsage. All eight are described in v2.yaml, so the generated
+ * count moved by the two DELETE ops only (176 -> 178 above); the other six
+ * already existed in the contract with no caller.
+ *
+ * 199 -> 202. The native Inventory screens call the Inventory facade's three
+ * routes — invokeInventoryTool, getInventoryInvocation and
+ * cancelInventoryInvocation. NONE of the three is in v2.yaml: the facade
+ * mounts them by hand on the router root
+ * (internal/api/v2/inventory/inventory.go's SlotsPath/InvokePath/
+ * InvocationPath), so orval generates no client for them and the GENERATED
+ * count is unchanged. `entities/inventory/api` calls `eliteaFetch` directly,
+ * which is exactly the `source: 'handwritten'` case these entries are for.
+ *
+ * 202 -> 203 at the wave merge: the agent-skills entries (lifecycle unit) and
+ * the three Inventory invoke/poll/cancel entries (Inventory UI unit) were
+ * counted from different bases; the union holds one more than either side.
+ *
+ * 203 -> 204, when the AI-draft endpoints were routed (#254 P1). ONE entry,
+ * not three: `draft.generate`, the project-context draft. Its call site
+ * (entities/project/api/projectContextApi.ts) already carried the
+ * `manifest: draft.generate` comment R-A5 requires and the file it names
+ * never had the entry — an omission this count could not see, because a
+ * MISSING entry lowers the number rather than raising it. The other two draft
+ * call sites were already counted here; they change source, not existence.
  */
-const MANIFEST_ENTRY_COUNT = 191;
+/*
+ * 204 -> 205, with the same change. ONE entry, `canvas.presenceHeartbeat`, and
+ * the app calls it through a hand-written sender
+ * (features/chat-messages/api/canvasPresence.ts) rather than the generated hook,
+ * for the reason that entry's $comment gives: orval shapes every write endpoint
+ * as a `useQuery` gated by `enabled`, and this beat is sent from an effect and
+ * from a `visibilitychange` listener.
+ *
+ * Recorded beside the number because it is what this ledger is for: the SSE half
+ * of the same feature adds NO entry. It is a subscription to
+ * /elitea_core/events/prompt_lib/{projectId}, which is a stream and not an
+ * endpoint the manifest describes — no manifest entry has ever covered a
+ * `useEventSource` url, including the notifications stream that predates this.
+ */
+/*
+ * 205 -> 206: not a new entry. The wave merge that recorded "202 -> 203" had
+ * fused two objects — agentSkills.setSkillRelation's closing brace was lost,
+ * so inventory.invokeTool's keys landed inside it and JSON.parse kept the
+ * later duplicates: setSkillRelation was effectively missing from the
+ * manifest while its file still claimed it. Splitting them back restores the
+ * entry the lifecycle unit added.
+ */
+/* 219 -> 227: the eight pipeline trigger and schedule entries. See the note on
+ * GENERATED_OPERATION_COUNT for why the eighth has an empty `usedBy`. */
+/*
+ * 227 -> 228, when the toolkit "Test tool" action moved off `chat_predict`
+ * onto the synchronous REST run (WP16b/platform-parity-wave, `toolkits.
+ * testTool`, `POST /elitea_core/test_tool/prompt_lib/{projectId}/{toolId}`).
+ * GENERATED_OPERATION_COUNT is unchanged: the route is mounted by hand
+ * alongside the other toolkit routes, not described in v2.yaml, so orval
+ * generates no client for it — the same `source: 'handwritten'` case the
+ * "199 -> 202" Inventory entries above are for.
+ */
+// See the note above GENERATED_OPERATION_COUNT: both numbers moved together.
+/*
+ * 233 -> 247: the fourteen entries of issue 36 items 1, 5, 6 and 7. See the
+ * note above GENERATED_OPERATION_COUNT for why this number and that one move
+ * by the same amount for different reasons.
+ */
+const MANIFEST_ENTRY_COUNT = 247;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

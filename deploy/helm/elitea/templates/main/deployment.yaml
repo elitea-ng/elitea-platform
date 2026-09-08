@@ -266,6 +266,14 @@ spec:
               mountPath: {{ .Values.main.fileConfig.deepwikiClientMaterial.mountPath }}
               readOnly: true
             {{- end }}
+            {{- if .Values.main.fileConfig.inventoryClientMaterial.enabled }}
+            # The Inventory hop's client material. A SEPARATE mount from
+            # DeepWiki's, from a separate Secret: one provider's certificate
+            # must be revocable without touching the other's.
+            - name: inventory-client-material
+              mountPath: {{ .Values.main.fileConfig.inventoryClientMaterial.mountPath }}
+              readOnly: true
+            {{- end }}
             {{- if .Values.main.fileConfig.brandPack.enabled }}
             # BRAND_PACK_PATH is "one pack file per deployment" (branding
             # package doc), read with os.ReadFile — a subPath mount, same as
@@ -373,6 +381,16 @@ spec:
           secret:
             secretName: {{ required "fileConfig.deepwikiClientMaterial.enabled=true needs secretName or volume" .Values.main.fileConfig.deepwikiClientMaterial.secretName }}
             defaultMode: {{ .Values.main.fileConfig.deepwikiClientMaterial.defaultMode }}
+          {{- end }}
+        {{- end }}
+        {{- if .Values.main.fileConfig.inventoryClientMaterial.enabled }}
+        - name: inventory-client-material
+          {{- with .Values.main.fileConfig.inventoryClientMaterial.volume }}
+          {{- toYaml . | nindent 10 }}
+          {{- else }}
+          secret:
+            secretName: {{ required "fileConfig.inventoryClientMaterial.enabled=true needs secretName or volume" .Values.main.fileConfig.inventoryClientMaterial.secretName }}
+            defaultMode: {{ .Values.main.fileConfig.inventoryClientMaterial.defaultMode }}
           {{- end }}
         {{- end }}
         {{- if .Values.main.fileConfig.brandPack.enabled }}

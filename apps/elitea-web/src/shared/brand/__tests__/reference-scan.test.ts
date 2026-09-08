@@ -28,6 +28,38 @@ afterEach(() => {
 });
 
 describe('scanThemeVarReferences', () => {
+  /*
+   * The scan skips the Babel parse for files whose raw text cannot spell
+   * `palette` (see CANDIDATE_RE). These two pin the escape clause that makes
+   * that skip sound: both files reference a real token, and NEITHER contains
+   * the literal seven characters, so a filter that only looked for `palette`
+   * would silently stop protecting them.
+   */
+  it('sees a token read through a unicode-escaped identifier', () => {
+    const dir = fixture({
+      'a/Escaped.tsx': 'export const s = ({ theme }: never) => ({\n' +
+        '  color: theme.vars.\\u0070alette.border.lines,\n});',
+    });
+    expect(scanThemeVarReferences(dir).map((r) => r.token)).toEqual(['border.lines']);
+  });
+
+  it('sees a custom property named with an escape in a string literal', () => {
+    const dir = fixture({
+      'a/Escaped.ts': "export const s = 'var(--el-\\x70alette-border-lines)';",
+    });
+    expect(scanThemeVarReferences(dir).map((r) => r.cssVar)).toEqual([
+      '--el-palette-border-lines',
+    ]);
+  });
+
+  it('skips a file that cannot spell the prefix, and finds one that can', () => {
+    const dir = fixture({
+      'a/Plain.ts': 'export const n = 1 + 2;',
+      'a/Uses.ts': "export const s = 'var(--el-palette-border-lines)';",
+    });
+    expect(scanThemeVarReferences(dir).map((r) => r.file)).toEqual(['a/Uses.ts']);
+  });
+
   it('records the longest static chain once, with file and line', () => {
     const dir = fixture({
       'a/Widget.tsx': [

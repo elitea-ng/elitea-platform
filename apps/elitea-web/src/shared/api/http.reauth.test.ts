@@ -111,6 +111,21 @@ describe('behaviour 2 — a real 401 is the PRIMARY re-auth signal', () => {
     expect(result.error).toMatchObject({ kind: 'auth', status: 401 });
   });
 
+  /*
+   * The failure carries the server's own name for the refusal (#538). This
+   * fixture's body is the FLAT `{error: string}` shape no real endpoint
+   * writes, so it names nothing — which is the case that must stay silent
+   * rather than inventing a code. `reauth-policy.refusal.test.ts` holds the
+   * nested shapes elitea-main actually writes.
+   */
+  it('carries no refusal name when the 401 body names none', async () => {
+    server.use(probeAuthGated({ authed: false }, 401));
+    const result = await client().get(PROBE);
+    if (result.ok) throw new Error('expected failure');
+    if (result.error.kind !== 'auth') throw new Error('expected an auth failure');
+    expect(result.error.refusal).toBeUndefined();
+  });
+
   it('returns a kind:auth failure when re-auth itself fails', async () => {
     const gate: SessionGate = { authed: false };
     server.use(probeAuthGated(gate, 401));

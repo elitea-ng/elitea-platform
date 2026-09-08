@@ -1,0 +1,129 @@
+{
+  "_source": {
+    "source_repository": "deepwiki_plugin",
+    "source_revision": "ce679f11dc31c209cc67f13565b286d5bb28ce58",
+    "files": [
+      {
+        "path": "methods/invoke.py",
+        "bytes": 82868,
+        "sha256": "959f745102c8500df69ae657d99565f7da16348cba2d913b9bad2ff5b896f253"
+      },
+      {
+        "path": "plugin_implementation/registry_manager.py",
+        "bytes": 15798,
+        "sha256": "7b0bea20cd1fabf2ebf8a744d22e9cdc9b1b86542e13fec24977dfba838721cf"
+      }
+    ]
+  },
+  "producer": "methods/invoke.py::Method._resolve_and_ask",
+  "how_recorded": "the artifact client, _resolve_wiki_with_llm and self.ask are stubbed; resolution handling, repo_config construction and composition are legacy code",
+  "cases": {
+    "resolved": {
+      "parameters": {
+        "question": "How does notes-service store notes?"
+      },
+      "ask_arguments": {
+        "question": "How does notes-service store notes?",
+        "llm_settings": {
+          "model_name": "gpt-4o",
+          "api_base": "http://elitea/llm/v1",
+          "api_key": "<redacted>",
+          "organization": "90200"
+        },
+        "embedding_model": null,
+        "repo_config": {
+          "provider_type": "github",
+          "provider_config": {},
+          "repository": "acme/notes-service",
+          "branch": "main"
+        },
+        "chat_history": [],
+        "k": 15,
+        "repo_identifier_override": "acme/notes-service:main:0000000",
+        "analysis_key_override": "acme--notes-service--main/analysis/repository_analysis.json"
+      },
+      "result_objects": [
+        {
+          "object_type": "answer",
+          "result_target": "response",
+          "result_encoding": "plain",
+          "data": "*Querying wiki: acme--notes-service--main*\n\nThe notes service stores notes in Postgres."
+        }
+      ]
+    },
+    "wiki_id_hint": {
+      "parameters": {
+        "question": "What is release-2?",
+        "wiki_id_hint": "acme--billing--release-2"
+      },
+      "ask_arguments": {
+        "question": "What is release-2?",
+        "llm_settings": {
+          "model_name": "gpt-4o",
+          "api_base": "http://elitea/llm/v1",
+          "api_key": "<redacted>",
+          "organization": "90200"
+        },
+        "embedding_model": null,
+        "repo_config": {
+          "provider_type": "gitlab",
+          "provider_config": {},
+          "repository": "acme/billing",
+          "branch": "release-2"
+        },
+        "chat_history": [],
+        "k": 15,
+        "repo_identifier_override": "acme/billing:release-2",
+        "analysis_key_override": null
+      },
+      "result_objects": [
+        {
+          "object_type": "answer",
+          "result_target": "response",
+          "result_encoding": "plain",
+          "data": "*Querying wiki: acme--billing--release-2*\n\nThe notes service stores notes in Postgres."
+        }
+      ]
+    },
+    "unresolved": {
+      "result_objects": [
+        {
+          "object_type": "answer",
+          "result_target": "response",
+          "result_encoding": "plain",
+          "data": "Could not determine which wiki to query for: 'How does anything work?'. Available wikis: acme--notes-service--main, acme--billing--release-2"
+        }
+      ]
+    },
+    "wiki_not_in_registry": {
+      "result_objects": [
+        {
+          "object_type": "answer",
+          "result_target": "response",
+          "result_encoding": "plain",
+          "data": "Wiki 'acme--nope--main' not found in registry."
+        }
+      ]
+    },
+    "no_wikis": {
+      "result_objects": [
+        {
+          "object_type": "answer",
+          "result_target": "response",
+          "result_encoding": "plain",
+          "data": "No wikis available. Please generate wikis using the Deepwiki toolkit first."
+        }
+      ]
+    },
+    "retrieval_failed": {
+      "result_objects": [
+        {
+          "object_type": "answer",
+          "result_target": "response",
+          "result_encoding": "plain",
+          "data": "Failed to query wiki acme--notes-service--main: index unavailable"
+        }
+      ]
+    }
+  }
+}

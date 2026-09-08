@@ -40,7 +40,7 @@ func TestAuth_ForwardedHeadersAreNotACredential(t *testing.T) {
 
 			validatorCalls := 0
 			handler := middleware.Auth(middleware.AuthConfig{
-				Client: newTestClient(),
+				Validator: unusedTokenValidator(),
 				PrincipalValidator: principalValidatorFunc(func(context.Context, auth.User) (auth.User, error) {
 					validatorCalls++
 					return auth.User{}, nil
@@ -78,7 +78,7 @@ func TestAuth_VerifiedForwardedIdentityStillAuthenticates(t *testing.T) {
 	var gotUser auth.User
 	var gotSource auth.AuthenticationSource
 	handler := middleware.Auth(middleware.AuthConfig{
-		Client:                    newTestClient(),
+		Validator:                 unusedTokenValidator(),
 		ForwardedIdentityVerifier: forwardedIdentityVerifierFunc(allowForwardedIdentity),
 		PrincipalValidator: principalValidatorFunc(func(_ context.Context, user auth.User) (auth.User, error) {
 			user.Email = "authoritative@example.com"
@@ -123,7 +123,7 @@ func TestAuth_ForwardedHeadersRefusedWhenPrincipalIsRefused(t *testing.T) {
 	t.Setenv("TRUSTED_PROXY_CIDRS", "192.0.2.0/24")
 
 	handler := middleware.Auth(middleware.AuthConfig{
-		Client:                    newTestClient(),
+		Validator:                 unusedTokenValidator(),
 		ForwardedIdentityVerifier: forwardedIdentityVerifierFunc(allowForwardedIdentity),
 		PrincipalValidator: principalValidatorFunc(func(context.Context, auth.User) (auth.User, error) {
 			// The sentinel, and not a bare error: a deactivated principal is

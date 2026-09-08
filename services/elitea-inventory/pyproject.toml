@@ -16,15 +16,16 @@ dependencies = [
   # fastapi and uvicorn are pinned EXACTLY, not ranged, and the pins are
   # load-bearing rather than cautious.
   #
-  # MEASURED, four times: with ranges (`fastapi>=0.115,<1`,
-  # `uvicorn[standard]>=0.34,<1`) a clean `pip wheel` of the `engine` extra
-  # never finished. The SDK's tools extra brings a ~1,280-package closure in
-  # which chromadb, mcp and langsmith each bound starlette, uvicorn and
+  # MEASURED, four times, when the `engine` extra was still the SDK's blanket
+  # extras: with ranges (`fastapi>=0.115,<1`, `uvicorn[standard]>=0.34,<1`) a
+  # clean `pip wheel` of that extra never finished. It resolved 356 packages,
+  # inside which chromadb, mcp and langsmith each bound starlette, uvicorn and
   # websockets differently; pip explores that space by downloading one
   # release's metadata at a time, and every build was killed while it was
   # still walking backwards through uvicorn releases. Narrowing the ranges and
   # then pinning chromadb and mcp each removed one dimension and revealed the
-  # next.
+  # next. I8 removed all three packages from the closure; the pins stay,
+  # because they are still the answer and stating it costs nothing.
   #
   # The set IS satisfiable and these ARE the versions it is satisfiable at —
   # `uv pip compile` reaches fastapi 0.115.9 / uvicorn 0.52.4 / starlette
@@ -39,7 +40,13 @@ dependencies = [
   #
   # To move them: re-run `uv pip compile` over this file's dependencies plus
   # the engine extra, and take what it lands on.
-  "fastapi==0.141.1",
+  #
+  # #740 (a grouped Dependabot bump) moved this pin to 0.141.1 WITHOUT doing
+  # that, and the closure stopped resolving the same day: elitea-sdk 0.9.40
+  # pins `fastapi==0.115.9` exactly, so the two requirements cannot both hold.
+  # Nothing reported it, because nothing in CI resolves this extra — which is
+  # what scripts/ci/check-engine-closures.sh now does.
+  "fastapi==0.115.9",
   "pydantic>=2.10,<3",
   # The artifact READ path (elitea_inventory.artifacts) speaks `requests`, and
   # it is in the shell, not the engine: a query tool with no engine still has
@@ -53,23 +60,36 @@ dependencies = [
 #
 # NOTE what is NOT here, against the legacy `requirements.txt`:
 #
-#   torch / sentence-transformers / transformers, as DIRECT dependencies
+#   torch / sentence-transformers / transformers / chromadb / unstructured
 #       the legacy plugin embedded entities with a local all-MiniLM-L6-v2 and
-#       named these itself. v1 embeds through the platform gateway
+#       named torch itself. v1 embeds through the platform gateway
 #       (elitea_inventory.embeddings), so nothing here asks for them.
 #
-#       They still arrive, TRANSITIVELY, through elitea-sdk[tools]
-#       (unstructured -> unstructured-inference -> timm/torch). MEASURED from
-#       the resolved lock: torch 2.14.0, torchvision 0.29.0, timm 1.0.29,
-#       transformers 4.57.6, sentence-transformers 2.7.0. So this extra is
-#       multi-GB, and the honest statement is that the port removed its OWN
-#       reason to carry torch, not that the image no longer carries it.
-#       Narrowing the SDK extra is stage I8.
+#       Until I8 they arrived anyway, TRANSITIVELY. The note that used to
+#       stand here blamed `elitea-sdk[tools]` for that, and it was WRONG —
+#       measured, at the gate's own target (3.12 / x86_64-manylinux_2_28):
+#
+#         elitea-sdk               (no extras)      40 packages, none heavy
+#         elitea-sdk[runtime]                      255 packages, INCLUDING
+#                                                  chromadb 1.5.9, torch 2.14.0
+#                                                  with its NVIDIA CUDA wheels,
+#                                                  unstructured, timm,
+#                                                  transformers,
+#                                                  sentence-transformers,
+#                                                  opencv-python
+#         elitea-sdk[runtime,tools] + this extra   356 packages
+#
+#       chromadb is named by the SDK's `runtime` extra directly AND by
+#       langchain-chroma, which that extra also names; torch arrives under it
+#       through unstructured -> unstructured-inference/effdet/timm and through
+#       sentence-transformers. Dropping `tools` alone would have removed
+#       neither. So I8 replaces BOTH extras with the exact set below.
 #
 #       The copied `engine/routing.py` imports sentence-transformers for its
 #       semantic query classifier; the import is inside a try and the router
-#       falls back to its regex tier when the MODEL is unavailable, which it is
-#       here — nothing downloads all-MiniLM-L6-v2 at runtime.
+#       falls back to its regex tier. It now falls back always, because
+#       sentence-transformers is no longer installed — the same behaviour the
+#       image already had, since the MODEL was never present either.
 #   kubernetes
 #       v1 runs ingestion in this sidecar. There is no ingestion Job.
 #   nest-asyncio
@@ -79,34 +99,117 @@ dependencies = [
 #   langfuse
 #       optional in the legacy plugin too; the copied
 #       `engine/utils/langfuse_callback.py` degrades without it.
+#
+# CLOSURE-STAMP. The line below names the sha256 of this package's engine copy
+# manifest (src/*/engine/COPY_MANIFEST.json). It exists because the pins in
+# this extra ARE the resolution of THAT copy: moving one without the other
+# leaves a frozen engine running against versions nobody resolved it against,
+# and neither the copy's digest test nor a resolution check can see that on its
+# own. scripts/ci/check-engine-closures.sh refuses a tree where the two
+# disagree, and scripts/ci/refresh-engine-closure.py is what re-resolves the
+# closure as a SET and re-writes this line.
+# closure-stamp: COPY_MANIFEST.json sha256 5096daf12f7039a84b307c3bc7006c286bff53960adba0ed5bb1d6b35b4b86c3
 engine = [
   # Pinned to the SAME version services/elitea-worker-python pins, not to the
   # legacy plugin's floor (>=0.6.33). Two services on one platform resolving
   # different SDK majors is how a toolkit that instantiates in the worker fails
   # to instantiate here, with a message about a settings key.
-  "elitea-sdk[runtime,tools]==0.9.40",
-  # chromadb is TRANSITIVE — it arrives with the SDK's tools extra, nothing
-  # here uses it, and nothing here bounded it. It is pinned anyway, for the
-  # same measured reason the fastapi/uvicorn bounds above exist: the SDK
-  # accepts a wide chromadb range, each release in that range bounds fastapi,
-  # starlette, tokenizers and opentelemetry differently, and pip explores that
-  # space one metadata download at a time. Two engine image builds were killed
-  # while it was still walking backwards through chromadb and uvicorn releases.
   #
-  # 1.5.9 is the version the resolution actually lands on. Pinning it removes
-  # the search dimension rather than changing the answer.
-  "chromadb==1.5.9",
-  # mcp is the other one, and it is the SAME package
-  # services/elitea-worker-python already pins for the same reason ("state the
-  # boundary explicitly so a clean build cannot silently cross it" — it pins
-  # 1.27.1 for its own closure). It arrives here transitively through
-  # langchain-mcp-adapters, nothing in this service uses it, and every release
-  # bounds uvicorn differently.
+  # NO EXTRAS, and the block below intentionally replaces them — the same shape
+  # services/elitea-worker-python uses ("elitea-sdk==0.9.8" plus an exact
+  # `indexing-current` extra that "intentionally replaces elitea-sdk[all]").
+  "elitea-sdk==0.9.40",
+  # ── the SDK surface this service actually uses ─────────────────────────────
   #
-  # chromadb and mcp are the only two transitive packages that bound uvicorn in
-  # the resolution; pinning chromadb alone was not enough, and the build was
-  # still walking backwards through uvicorn releases.
-  "mcp==2.1.1",
+  # MEASURED, not chosen. Starting from a BARE `elitea-sdk` these were added
+  # ONE AT A TIME until every SDK import this package performs resolved, both
+  # DEFAULT_SOURCE_TYPES toolkits instantiated through
+  # `elitea_sdk.tools.instantiate_toolkit`, and both chunkers RAN over a real
+  # .py and a real .md file. The imports being measured are, exactly:
+  #
+  #   sources.py:148 / tool_operations.py:935  elitea_sdk.tools.instantiate_toolkit
+  #   tool_operations.py:143                   elitea_sdk.runtime.clients.client.EliteAClient
+  #   chat_operations.py:2039, 2479            langraph_agent.create_graph, toolkits.tools.get_tools
+  #   engine/inventory/ingestion.py:3058-3059  the two chunkers
+  #
+  # A green IMPORT proves nothing here: `elitea_sdk.tools` imports every
+  # toolkit module and SWALLOWS the failures (it logs
+  # "Failed imports: github, ado_repos, …" and carries on), so the two source
+  # toolkits are imported by name and then instantiated. `github` builds 38
+  # tools and hands back an EliteAGitHubAPIWrapper; `ado_repos` calls the live
+  # Azure DevOps API from its constructor and gets as far as TF400813 (a
+  # credential refusal FROM Azure), which is the whole dependency path.
+  #
+  # The versions are the ones the OLD blanket resolution landed on, so this
+  # narrowing cannot move a version as a side effect.
+  #
+  # (Comments go ABOVE a requirement, never after it:
+  # scripts/ci/refresh-engine-closure.py parses these lines and refuses a line
+  # it does not understand rather than half-reading the set.)
+  #
+  # what each one unlocked, in the order it was needed:
+  #
+  # nothing on its own; everything else sits on it
+  "langchain-core==1.5.3",
+  # `elitea_sdk.tools` imports at all
+  "langgraph==1.2.10",
+  # the `github` module elitea_sdk.tools.github imports
+  "PyGithub==2.3.0",
+  "langchain-text-splitters==1.1.2",
+  "tree-sitter==0.20.2",
+  # the SDK's code chunker wants the OLDER `tree_sitter_languages`, not
+  # `tree-sitter-language-pack`; probing the pack does not satisfy it.
+  # With this one, parse_code_files_for_db RUNS.
+  "tree-sitter-languages==1.10.2",
+  # distutils left the standard library in 3.12 and the SDK still imports it.
+  "setuptools==84.0.0",
+  # chunk_single_document RUNS, over a real .py and a real .md
+  "numpy==1.26.4",
+  "langchain-community==0.4.2",
+  # ── the SDK's document-loader chain ───────────────────────────────────────
+  # elitea_sdk.runtime.langchain.document_loaders.constants imports every
+  # loader at MODULE scope, and both `elitea_sdk.tools.github` and
+  # `elitea_sdk.runtime.clients.client` import it. None of these is optional
+  # for this service; they are the price of those two imports.
+  "python-dateutil==2.9.0.post0",
+  "gensim==4.3.3",
+  "openpyxl==3.1.5",
+  "mammoth==1.9.0",
+  "markdownify==1.1.0",
+  "python-docx==1.1.2",
+  "pandas==2.2.3",
+  "xlrd==1.2.0",
+  # reportlab with svglib is the image loader's renderer
+  "reportlab==4.2.5",
+  "svglib==1.5.1",
+  "pymupdf==1.24.9",
+  "python-pptx==1.0.2",
+  # [binary], not bare psycopg: with the bare distribution the github toolkit
+  # is one of `elitea_sdk.tools`' SWALLOWED failures, and the only visible
+  # symptom is instantiate_toolkit saying github "is not available". The real
+  # message is inside FAILED_IMPORTS: "no pq wrapper available".
+  # Unlocks elitea_sdk.tools.github, langraph_agent and get_tools together.
+  "psycopg[binary]==3.3.5",
+  # elitea_sdk.tools.ado.repos
+  "azure-devops==7.1.0b4",
+  "langchain-openai==1.4.1",
+  "langchain-anthropic==1.5.3",
+  # EliteAClient
+  "langchain==1.3.14",
+  # ── bounds this closure still needs ───────────────────────────────────────
+  #
+  # chromadb's pin is GONE, and with it four open advisories — two CRITICAL
+  # (GHSA-36p7-vc44-83pf, GHSA-f4j7-r4q5-qw2c) and two high
+  # (GHSA-2wm9-hf6c-p5cr, GHSA-xph7-9rjv-w5fr), none of which has a patched
+  # version published. chromadb was never used by anything here; it arrived
+  # with the SDK's `runtime` extra, and it leaves with it.
+  #
+  # mcp's pin is gone for a different reason: nothing in the narrowed set asks
+  # for it (it came through langchain-mcp-adapters, which the `runtime` extra
+  # named), so there is no version to bound. If a future SDK release puts it
+  # back, bound it again — the reason the old pin gave, that every mcp release
+  # bounds uvicorn differently, has not stopped being true.
+  #
   # langsmith, bounded for the reason services/elitea-worker-python states at
   # length and this build then reproduced verbatim:
   #
@@ -119,17 +222,45 @@ engine = [
   # needs h11>=0.16; the rest of this closure resolves httpcore 1.0.7, which
   # needs h11<0.15. The two cannot coexist. langsmith is TRANSITIVE
   # (langchain-core requires it), so nothing here named it and nothing here
-  # bounded it — the same shape as the two pins above.
+  # bounded it.
   #
   # The bound is the worker's, unchanged, because it is one platform-wide fact
   # and two services disagreeing about it is worse than either answer. Lift it
   # when the SDK's own stack moves to httpx2 — not before, or the conflict
   # simply returns.
   "langsmith>=0.3.45,<0.12",
-  "langchain-core>=0.3,<2",
-  "langchain-openai>=0.2,<2",
+  # ── six versions held where the blanket extra left them ───────────────────
+  #
+  # These are TRANSITIVE and nothing here uses them directly. They are pinned
+  # because removing 230 packages removed whatever was holding each of them
+  # DOWN, and a re-resolution floated seven upward at once:
+  #
+  #   anthropic          0.120.2 -> 0.125.0     langgraph-checkpoint 4.1.1 -> 4.2.0
+  #   azure-core         1.30.2  -> 1.41.0      lxml                 5.2.2  -> 6.1.3
+  #   beautifulsoup4     4.12.2  -> 4.15.0      langsmith            0.10.15 -> 0.11.2
+  #   charset-normalizer 3.3.2   -> 3.5.1
+  #
+  # Six of the seven are pinned here. langsmith is the exception and stays a
+  # RANGE: its bound above is a platform-wide fact about h11, 0.11.2 is inside
+  # it, and replacing that reasoning with a number would lose the reason.
+  #
+  # I8 is a change to what the image CARRIES. Letting it also change what the
+  # frozen engine RUNS AGAINST would put two changes behind one measurement,
+  # and #677 is what that costs: an anthropic 0.84 -> 1.2.0 bump resolved
+  # perfectly and changed an API the copy calls. Held here, moved by
+  # scripts/ci/refresh-engine-closure.py with the rest of the set.
+  "anthropic==0.120.2",
+  "azure-core==1.30.2",
+  "beautifulsoup4==4.12.2",
+  "charset-normalizer==3.3.2",
+  "langgraph-checkpoint==4.1.1",
+  "lxml==5.2.2",
+  # ── the graph engine's OWN libraries ──────────────────────────────────────
+  # These are this package's, not the SDK's: the knowledge graph, its Leiden
+  # communities and their igraph backing. They keep ranges because nothing in
+  # the closure fights them. numpy is NOT here — it is pinned above, in the
+  # measured set, because the chunkers needed it first.
   "networkx>=3.0,<4",
-  "numpy>=1.26,<3",
   "python-igraph>=0.11,<2",
   "leidenalg>=0.10,<1",
 ]

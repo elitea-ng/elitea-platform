@@ -107,9 +107,18 @@ func pollUntilTerminal(t *testing.T, h http.Handler, path string) map[string]any
 	return nil
 }
 
+// DeepWikiDescriptorRevision is the revision the host serves for DeepWiki.
+// It moved from legacy-v0 to legacy-v1 when the wiki chat gained reader
+// attachments: `ask` and `deep_research` declare `context_paths` and
+// `context_wiki_version_id`, and the `chat_history` the legacy plugin read
+// on every turn and never declared. legacy-v0 stays in the fixtures as the
+// record of what the legacy plugin ACTUALLY declared — the test below reads
+// both, so deleting either fails rather than passing quietly.
+const DeepWikiDescriptorRevision = "legacy-v1"
+
 func TestDescriptorIsByteIdenticalToTheGoldenFixture(t *testing.T) {
 	recorder, _ := do(host(t, spi.UnavailableRunner{}), http.MethodGet, "/descriptor", nil)
-	golden := rawFixture(t, "descriptor", "legacy-v0", "provider_descriptor.json")
+	golden := rawFixture(t, "descriptor", DeepWikiDescriptorRevision, "provider_descriptor.json")
 	if recorder.Code != 200 {
 		t.Fatalf("%d", recorder.Code)
 	}
@@ -489,5 +498,58 @@ func TestTheEchoApplicationWalksTheSamePath(t *testing.T) {
 	recorder, _ = do(server, http.MethodGet, "/tools/Echo/nope/invocations/x", nil)
 	if recorder.Code != 404 {
 		t.Fatal(recorder.Code)
+	}
+}
+
+// TestDeepWikiLegacyV1AddsThreeArgumentsAndChangesNothingElse is the review a
+// 17 KB generated document cannot get by being read. The revision's whole
+// claim is "three arguments on two tools"; anything else that moved — a
+// renamed tool, a dropped toolkit, an altered result_composition — would ship
+// under cover of the same diff.
+func TestDeepWikiLegacyV1AddsThreeArgumentsAndChangesNothingElse(t *testing.T) {
+	added := []string{"chat_history", "context_paths", "context_wiki_version_id"}
+	carrying := map[string]bool{"ask": true, "deep_research": true}
+
+	read := func(revision string) map[string]any {
+		var document map[string]any
+		if err := json.Unmarshal(rawFixture(t, "descriptor", revision, "provider_descriptor.json"), &document); err != nil {
+			t.Fatal(err)
+		}
+		return document
+	}
+	v0, v1 := read("legacy-v0"), read(DeepWikiDescriptorRevision)
+
+	// Strip the added keys out of v1 and the two documents must be equal.
+	// Comparing the WHOLE document, rather than walking the tools, is what
+	// makes "and changes nothing else" an assertion rather than a comment.
+	toolkits, _ := v1["provided_toolkits"].([]any)
+	if len(toolkits) != len(v0["provided_toolkits"].([]any)) {
+		t.Fatalf("legacy-v1 has %d toolkits, legacy-v0 has %d", len(toolkits), len(v0["provided_toolkits"].([]any)))
+	}
+	seen := 0
+	for _, raw := range toolkits {
+		tools, _ := raw.(map[string]any)["provided_tools"].([]any)
+		for _, rawTool := range tools {
+			tool := rawTool.(map[string]any)
+			schema, _ := tool["args_schema"].(map[string]any)
+			for _, name := range added {
+				_, present := schema[name]
+				if present != carrying[tool["name"].(string)] {
+					t.Fatalf("%s: %s present=%v, want %v", tool["name"], name, present, carrying[tool["name"].(string)])
+				}
+				if present {
+					seen++
+					delete(schema, name)
+				}
+			}
+		}
+	}
+	if seen == 0 {
+		t.Fatal("legacy-v1 declares none of the new arguments")
+	}
+	stripped, _ := json.Marshal(v1)
+	original, _ := json.Marshal(v0)
+	if string(stripped) != string(original) {
+		t.Fatalf("legacy-v1 differs from legacy-v0 by more than the added arguments\n got: %.400s\nwant: %.400s", stripped, original)
 	}
 }

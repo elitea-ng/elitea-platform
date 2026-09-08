@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	appmailer "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/mailer"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/emailsettings"
 	"net/http"
 	"os"
 	"strings"
@@ -16,7 +17,6 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/health"
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
 	scimapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/scim"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/shadow"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/admin"
 	v2analytics "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/analytics"
 	v2apps "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/applications"
@@ -25,10 +25,12 @@ import (
 	v2auth "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/auth"
 	v2branding "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/branding"
 	v2budgets "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/budgets"
+	v2canvaspresence "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/canvaspresence"
 	v2configs "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/configurations"
 	v2contextmgr "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/contextmgr"
 	v2convs "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
 	v2deepwiki "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
+	v2drafts "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/drafts"
 	v2core "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
 	v2evaluation "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/evaluation"
 	v2events "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/events"
@@ -39,6 +41,7 @@ import (
 	v2messagetraces "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/messagetraces"
 	v2moderation "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/moderation"
 	v2openapidocs "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/openapidocs"
+	v2pipelinetriggers "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/pipelinetriggers"
 	v2predict "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/predict"
 	v2projectinfo "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/projectinfo"
 	v2projects "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/projects"
@@ -51,6 +54,7 @@ import (
 	v2social "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/social"
 	v2support "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/supportassistant"
 	v2tags "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/tags"
+	toolkitrun "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkitrun"
 	v2toolkits "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkits"
 	v2tracing "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/tracing"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/webhook"
@@ -58,12 +62,11 @@ import (
 	notificationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/notifications"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/personalproject"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcatalogue"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
 	platformauth "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/cutover"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/identityproviders"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/authsvc"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/migrate"
 	dbrepos "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
@@ -72,6 +75,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/scimdirectory"
 	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
 	"github.com/jackc/pgx/v5/pgxpool"
 	goredis "github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/otel"
@@ -81,7 +85,6 @@ import (
 // AuthDeps preserves the current-main grouped dependency contract while the
 // parity composition continues to accept the established flat fields.
 type AuthDeps struct {
-	Client                    *authsvc.Client
 	Validator                 apimw.TokenValidator
 	PrincipalValidator        apimw.PrincipalValidator
 	ForwardedIdentityVerifier apimw.ForwardedIdentityPeerVerifier
@@ -89,6 +92,14 @@ type AuthDeps struct {
 	OIDCHandler               *v2auth.OIDCHandler
 	SAMLHandler               *v2auth.SAMLHandler
 	SessionSecret             string
+	// SessionStore validates the server-side browser session an
+	// `elitea_session` cookie names (migrations/shared/0117). It reaches every
+	// apimw.AuthConfig this file builds, and it must: a group that dropped it
+	// would read a server-side identifier with the legacy HMAC reader and
+	// refuse every browser holding one.
+	SessionStore apimw.BrowserSessionValidator
+	// RejectLegacySessionCookies ends the pre-0117 signed-cookie window.
+	RejectLegacySessionCookies bool
 }
 
 // NOTE(#126): IndexerDeps and its six fields — Predictor, LLMService,
@@ -112,7 +123,6 @@ type AuthDeps struct {
 
 type RouterConfig struct {
 	Auth               AuthDeps
-	AuthClient         *authsvc.Client
 	AuthValidator      apimw.TokenValidator
 	PrincipalValidator apimw.PrincipalValidator
 	SessionHandler     *v2auth.SessionHandler
@@ -133,6 +143,13 @@ type RouterConfig struct {
 	// notices, the Branding page's test message. Nil means none is sent and
 	// every invite reports invitation_delivered: false.
 	Mailer *appmailer.Composer
+	// EmailSettings resolves the mail transport per send: the admin E-mail
+	// page's rows laid over the environment defaults (gap G7). main.go builds
+	// one and shares it with the Mailer above, so the page that says a relay
+	// is configured and the composer that dials it cannot disagree. Nil builds
+	// one here over Pool with an EMPTY environment layer — the shape every
+	// test uses, where there is no process environment to inherit.
+	EmailSettings *emailsettings.Resolver
 	// BrandingPackages exports and imports the branding package (ADR-0024
 	// decision 9). Nil means the package routes answer 503; the router does
 	// not build one because the previews it renders belong to main.go's
@@ -180,6 +197,15 @@ type RouterConfig struct {
 	// Unassigned, the endpoint serves settings schemas with no argument schemas
 	// and every tool form in the web client renders empty.
 	ToolkitArgumentSchemas v2toolkits.ToolkitArgumentSchemaSource
+	// ToolkitCatalogue supplies the same endpoint with the SETTINGS schema and
+	// the METADATA of every built-in SDK toolkit type. Unassigned, the endpoint
+	// serves only the eight hand-written types, and the create page's chooser
+	// offers seven tiles against the reference deployment's sixty.
+	ToolkitCatalogue v2toolkits.ToolkitCatalogueSource
+	// ToolkitWorkerCapability decides which of those types this deployment can
+	// run. Unassigned, every catalogued type is offered — the honest answer
+	// when nothing has said which worker image is deployed.
+	ToolkitWorkerCapability v2toolkits.ToolkitCapabilitySource
 	// ToolkitSettingsDefinitions supplies the same endpoint with the "$defs"
 	// block each type's settings properties reference. It is injected for the
 	// same reason as ToolkitArgumentSchemas: the implementation joins two
@@ -236,6 +262,19 @@ type RouterConfig struct {
 	// an empty list would be indistinguishable, in the browser, from a working
 	// library that happens to be empty.
 	EvalDimensionsRepo v2evaluation.Repository
+	// EvalDatasetsRepo and EvalRunsRepo back Agent Evaluation SLICE 2 — the
+	// dataset, the run and the read-only scorecard. Unassigned, the thirteen
+	// routes below are not registered at all, for the reason the dimension
+	// four give: a stubbed 200 with an empty list is indistinguishable, in the
+	// browser, from a working feature with no data.
+	EvalDatasetsRepo v2evaluation.DatasetRepository
+	EvalRunsRepo     v2evaluation.RunRepository
+	// EvalOrchestrator executes runs. It may be nil while the repositories are
+	// not: a deployment with no LLM plane still stores and lists runs, and a
+	// `created` row that nothing executes is visibly stuck rather than
+	// invisibly absent. The run START route reports the row it wrote either
+	// way, so a queued run is never claimed to be running.
+	EvalOrchestrator v2evaluation.Enqueuer
 	// ProjectVectorStore provisions a new project's PgVector credentials and
 	// its `vectorstorage` configuration row (#371). It is injected because the
 	// composition needs the Configurations runtime's finder, unsecreter and
@@ -243,10 +282,6 @@ type RouterConfig struct {
 	// which imports this layer. Unassigned, a created project has no vector
 	// store and cannot index — see createProjectVectorStore.
 	ProjectVectorStore projectprovisioning.ProjectVectorStore
-	Shadow             *shadow.Comparator
-	ShadowMetrics      *shadow.Metrics
-	CutoverTracker     *cutover.Tracker
-	CutoverRouter      *cutover.Router
 	AdminUI            *adminui.Config
 	// ObjectStore is the new S3/Azure/GCS-compatible backend (see
 	// docs/plans/storage-migration-plan.md). S8 reads it for the bucket-plane
@@ -274,11 +309,7 @@ type RouterConfig struct {
 	//
 	// Leave it nil for the OIDC-only shape, where APPLICATION_SECRET_KEY both
 	// signs the token and reads it back. Never box a nil pointer into it.
-	PATSigner v2auth.TokenSigner
-	// InternalAdminToken is a disabled-by-default transitional control for
-	// shadow/cutover operations, not production workload identity. Empty leaves
-	// those routes unmounted.
-	InternalAdminToken            string
+	PATSigner                     v2auth.TokenSigner
 	RuntimeRoutes                 RuntimeRoutes
 	ProductionAuth                *ProductionAuthRoutes
 	ProductionRuntime             *ProductionRuntimeRoutes
@@ -319,8 +350,35 @@ type RouterConfig struct {
 	MCPAgentStart v2mcp.AgentStartUseCase
 	// MCPToolkitExecute is the durable direct read-tool seam. Nil keeps toolkit
 	// discovery available and makes calls fail closed with an honest MCP result.
-	MCPToolkitExecute          v2mcp.ToolkitExecuteReadUseCase
-	CurrentAgentCancel         http.Handler
+	MCPToolkitExecute v2mcp.ToolkitExecuteReadUseCase
+	// MCPToolkitRun is the toolkit half of `tools/call` (#616). Nil keeps the
+	// refusal ToolkitExecutionUnavailableReason, which is the honest answer on
+	// a deployment with no worker.
+	MCPToolkitRun v2mcp.ToolkitRunUseCase
+	// ToolkitToolRun runs one toolkit tool synchronously (#340). Nil keeps the
+	// `503 indexer service not available` both test routes have always given.
+	ToolkitToolRun toolkitrun.UseCase
+	// PipelineTriggers serves the two UNATTENDED ways to start a pipeline —
+	// the inbound signed trigger (issue 192) and the cron schedule (issue 193).
+	//
+	// It is built at the composition root rather than here, because the SAME
+	// handler is also registered as the platform scheduler's
+	// `pipeline.schedule.scan.v1` job. Two handlers over one table would be two
+	// chances for the HTTP half and the tick to disagree on a dependency — a
+	// tick wired without the permission resolver would refuse every scheduled
+	// run while the settings tab kept working, and nothing would report it.
+	//
+	// Left nil, none of the seven routes is registered at all. That is
+	// deliberate and is not a silent 200: an unregistered route answers the
+	// group's own 404, while a registered route with no runtime behind it is
+	// the "answers 200, nothing is wired" defect this repository keeps
+	// rediscovering.
+	PipelineTriggers   *v2pipelinetriggers.Handler
+	CurrentAgentCancel http.Handler
+	// CurrentApplicationTask serves the legacy application_task path (issue
+	// 254 P2): GET polls the run bound to a response message, DELETE stops
+	// it through the SAME use case CurrentAgentCancel runs.
+	CurrentApplicationTask     http.Handler
 	CurrentIndexCancel         http.Handler
 	CurrentIndexMeta           http.Handler
 	CurrentIndexMetaDelete     http.Handler
@@ -387,6 +445,21 @@ func notImplementedArtifact(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(`{"error":{"code":"NotImplemented","message":"pending S8/S9"}}`))
 }
 
+// adminEvalRunCanceller adapts the evaluation repository to
+// admin.EvalRunCanceller: the same CancelRun, with the updated row dropped.
+//
+// The adapter exists so the admin package holds no dependency on the
+// evaluation model for a value it never reads — and so the admin Tasks page's
+// cancel and the evaluation page's own cancel remain ONE implementation.
+type adminEvalRunCanceller struct {
+	runs *dbrepos.EvalRunsRepo
+}
+
+func (c adminEvalRunCanceller) CancelRun(ctx context.Context, projectID, runID string) error {
+	_, err := c.runs.CancelRun(ctx, projectID, runID)
+	return err
+}
+
 // artifactRepoAdapter satisfies v2artifacts.Repository by embedding both S6
 // repositories — they share no method names, so Go's method promotion does
 // the rest. Neither constructor accepts a nil pool without erroring, unlike
@@ -396,6 +469,7 @@ type artifactRepoAdapter struct {
 	*dbrepos.ArtifactBucketsRepository
 	*dbrepos.ArtifactObjectsRepository
 	*dbrepos.ArtifactTransferGrantsRepository
+	*dbrepos.ArtifactBucketPermissionsRepository
 }
 
 // newArtifactHandler builds the S6/S1-backed artifacts.Handler when
@@ -420,7 +494,14 @@ func newArtifactHandler(cfg RouterConfig) (h *v2artifacts.Handler, ok bool) {
 	if err != nil {
 		return nil, false
 	}
-	return v2artifacts.NewHandler(artifactRepoAdapter{bucketsRepo, objectsRepo, grantsRepo}, cfg.ObjectStore), true
+	permissionsRepo, err := dbrepos.NewArtifactBucketPermissionsRepository(cfg.Pool)
+	if err != nil {
+		return nil, false
+	}
+	return v2artifacts.NewHandler(
+		artifactRepoAdapter{bucketsRepo, objectsRepo, grantsRepo, permissionsRepo},
+		cfg.ObjectStore,
+	), true
 }
 
 // bucketBootstrapRepoAdapter satisfies artifactbootstrap.Repository the same
@@ -521,6 +602,13 @@ const (
 	artifactPermissionCreate = "configuration.artifacts.artifacts.create"
 	artifactPermissionEdit   = "configuration.artifacts.artifacts.edit"
 	artifactPermissionDelete = "configuration.artifacts.artifacts.delete"
+	// The per-bucket ACL routes. legacy/plugins/artifacts declares these two
+	// on api/v2/bucket_permissions.py (:36 for the GET, :69 and :123 for the
+	// writes) — DISTINCT strings from the four above, because in pylon the
+	// access list lives inside an s3_api_credentials row. Shared migration
+	// 0118 grants them.
+	artifactPermissionACLView = "configuration.artifacts.s3_credentials.view"
+	artifactPermissionACLEdit = "configuration.artifacts.s3_credentials.edit"
 )
 
 // ArtifactDeps is mountArtifactRoutes' dependency bundle. Handler nil means
@@ -533,18 +621,18 @@ type ArtifactDeps struct {
 	Resolver     platformauth.PermissionResolver
 }
 
-// mountArtifactRoutes registers all 21 artifact routes (13 from S7, plus
+// mountArtifactRoutes registers all 24 artifact routes (13 from S7, plus
 // S16's 3 native-multipart continuation routes, plus the 5 S3-shaped ones
 // the Python SDK speaks: list, download, upload, delete, stat) on r, wrapped in
 // deps.Authenticate and per-route RBAC (S11). Called once, from
 // newProductionRouter, so the oapiserver conformance suite and production
-// see an identical route shape. Deliberately NOT nested inside the
-// shadow-wrapped /api/v2 group: the shadow middleware buffers the entire
-// response into a bytes.Buffer and has no Unwrap method, which would defeat
-// ResponseController deadlines and buffer every downloaded object in memory
-// (S12).
+// see an identical route shape. Deliberately NOT nested inside the /api/v2
+// group: that group compresses JSON responses, which would buffer and encode
+// every downloaded object rather than streaming it (S12).
 func mountArtifactRoutes(r chi.Router, deps ArtifactDeps) {
 	view := apimw.RequireResolvedPermissions(deps.Resolver, platformauth.PermissionModeDefault, artifactPermissionView)
+	aclView := apimw.RequireResolvedPermissions(deps.Resolver, platformauth.PermissionModeDefault, artifactPermissionACLView)
+	aclEdit := apimw.RequireResolvedPermissions(deps.Resolver, platformauth.PermissionModeDefault, artifactPermissionACLEdit)
 	create := apimw.RequireResolvedPermissions(deps.Resolver, platformauth.PermissionModeDefault, artifactPermissionCreate)
 	edit := apimw.RequireResolvedPermissions(deps.Resolver, platformauth.PermissionModeDefault, artifactPermissionEdit)
 	del := apimw.RequireResolvedPermissions(deps.Resolver, platformauth.PermissionModeDefault, artifactPermissionDelete)
@@ -583,6 +671,7 @@ func mountArtifactRoutes(r chi.Router, deps ArtifactDeps) {
 	presignUploadPart, completeMultipartUpload, abortMultipartUpload := notImplementedArtifact, notImplementedArtifact, notImplementedArtifact
 	listObjectsS3, downloadObjectS3 := notImplementedArtifact, notImplementedArtifact
 	uploadObjectS3, deleteObjectS3, statObjectS3 := notImplementedArtifact, notImplementedArtifact, notImplementedArtifact
+	listBucketPermissions, setBucketPermissions, deleteBucketPermission := notImplementedArtifact, notImplementedArtifact, notImplementedArtifact
 	if deps.Handler != nil {
 		listBuckets, createBucket, getBucket, updateBucket, deleteBucket =
 			deps.Handler.ListBuckets, deps.Handler.CreateBucket, deps.Handler.GetBucket, deps.Handler.UpdateBucket, deps.Handler.DeleteBucket
@@ -594,6 +683,8 @@ func mountArtifactRoutes(r chi.Router, deps ArtifactDeps) {
 		listObjectsS3, downloadObjectS3 = deps.Handler.ListObjectsS3, deps.Handler.DownloadObjectS3
 		uploadObjectS3, deleteObjectS3, statObjectS3 =
 			deps.Handler.UploadObjectS3, deps.Handler.DeleteObjectS3, deps.Handler.StatObjectS3
+		listBucketPermissions, setBucketPermissions, deleteBucketPermission =
+			deps.Handler.ListBucketPermissions, deps.Handler.SetBucketPermissions, deps.Handler.DeleteBucketPermission
 	}
 
 	r.Group(func(r chi.Router) {
@@ -629,6 +720,16 @@ func mountArtifactRoutes(r chi.Router, deps ArtifactDeps) {
 			r.With(create).Post("/grants/{projectID}/{grantID}/parts/{partNumber}", presignUploadPart)
 			r.With(create).Post("/grants/{projectID}/{grantID}:completeMultipart", completeMultipartUpload)
 			r.With(create).Post("/grants/{projectID}/{grantID}:abortMultipart", abortMultipartUpload)
+
+			// Per-bucket access lists — the legacy `bucket_permissions`
+			// resource module. The MODE segment legacy carries
+			// (`/bucket_permissions/default/{pid}`) is dropped here, as it is
+			// on every other artifact route above: this surface resolves
+			// PermissionModeDefault unconditionally, so a mode in the path
+			// would name something the router does not read.
+			r.With(aclView).Get("/bucket_permissions/{projectID}", listBucketPermissions)
+			r.With(aclEdit).Put("/bucket_permissions/{projectID}", setBucketPermissions)
+			r.With(aclEdit).Delete("/bucket_permissions/{projectID}", deleteBucketPermission)
 		})
 
 		// S3-shaped bucket listing and object read — the two calls the SDK's
@@ -688,7 +789,7 @@ func mountArtifactRoutes(r chi.Router, deps ArtifactDeps) {
 // routes are: these paths live outside /api/v2 (pylon serves them from the app
 // blueprint, and the internal-toolkit URLs written into existing projects
 // hardcode `/app/{project_id}/mcp/...`), so they cannot inherit the /api/v2
-// group's middleware, and they must not inherit shadow's response buffering.
+// group's middleware, and they must not inherit its JSON compression.
 //
 // RequireProjectAccess is unconditional here. The endpoint reads one tenant's
 // agents and toolkits by name, and authentication alone would let any
@@ -712,11 +813,19 @@ func mountMCPServerRoutes(
 	secretsHandler *v2secrets.Handler,
 	notificationStore notificationapp.Store,
 	toolkitArgumentSchemas v2mcp.ToolkitArgumentSchemaSource,
+	toolkitRun v2mcp.ToolkitRunUseCase,
+	personalProjects personalproject.AsyncEnsurer,
 ) {
-	handler := v2mcp.NewHandler(
-		pool,
-		apimw.NewDBPersonalProjectResolver(pool),
-		agentStart,
+	// The resolver ASKS for the personal project it could not find, for the
+	// reason stated at `withPersonalProjects`: an MCP client authenticates
+	// with a personal access token and never calls `/social/author`, so this
+	// was one more reader that answered "no personal project" forever.
+	resolver := apimw.NewDBPersonalProjectResolver(pool)
+	if personalProjects != nil {
+		resolver = resolver.WithPersonalProjectEnsurer(personalProjects)
+	}
+	handler := v2mcp.NewHandlerWithToolkitRuns(
+		pool, resolver, agentStart, toolkitRun,
 		legacyrbac.NewPostgresResolver(pool),
 		v2mcp.WithInternalToolkitHandler(toolkitHandler),
 		v2mcp.WithInternalConfigurationHandler(configurationsHandler),
@@ -747,6 +856,16 @@ func newToolkitHandler(
 	options := []v2toolkits.Option{
 		v2toolkits.WithArgumentSchemas(cfg.ToolkitArgumentSchemas),
 		v2toolkits.WithSettingsDefinitions(cfg.ToolkitSettingsDefinitions),
+		v2toolkits.WithTypePolicy(toolkitcatalogue.NewStore(cfg.Pool)),
+	}
+	if cfg.ToolkitCatalogue != nil {
+		options = append(options, v2toolkits.WithCatalogue(cfg.ToolkitCatalogue))
+	}
+	if cfg.ToolkitToolRun != nil {
+		options = append(options, v2toolkits.WithToolRuns(cfg.ToolkitToolRun))
+	}
+	if cfg.ToolkitWorkerCapability != nil {
+		options = append(options, v2toolkits.WithWorkerCapability(cfg.ToolkitWorkerCapability))
 	}
 	if cfg.Pool != nil {
 		options = append(options,
@@ -803,9 +922,6 @@ func compressJSONResponses() func(http.Handler) http.Handler {
 // of the routes registered here have not been assigned an exact legacy route
 // policy, but real deployments need them anyway (#243).
 func newProductionRouter(cfg RouterConfig) chi.Router {
-	if cfg.AuthClient == nil {
-		cfg.AuthClient = cfg.Auth.Client
-	}
 	if cfg.AuthValidator == nil {
 		cfg.AuthValidator = cfg.Auth.Validator
 	}
@@ -852,6 +968,27 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		cfg.SessionSecret = cfg.Auth.SessionSecret
 	}
 
+	// THE PERSONAL PROJECT IS ASKED FOR AT SIGN-IN, not only when a screen
+	// happens to read it.
+	//
+	// `GET /social/author` and the `/llm` project resolver already ask, and
+	// both are lazy: a new user whose first screen calls neither is left with
+	// no personal project and parks on `/onboarding`. A login is the one
+	// moment every account passes through exactly once, so both federation
+	// planes ask here as well. The call is idempotent and off the request
+	// path, so a login that follows a hundred others costs two reads.
+	//
+	// It is attached HERE and not in cmd/elitea-main/main.go because the one
+	// shared *personalproject.Ensurer is built in this file, from the one
+	// project provisioner. A second ensurer composed in main.go would be a
+	// second provisioner, which is the shape newProjectProvisioner warns about.
+	if personalProjects != nil {
+		cfg.OIDCHandler.WithPersonalProjectEnsurer(personalProjects)
+		cfg.SAMLHandler.WithPersonalProjectEnsurer(personalProjects)
+		cfg.Auth.OIDCHandler.WithPersonalProjectEnsurer(personalProjects)
+		cfg.Auth.SAMLHandler.WithPersonalProjectEnsurer(personalProjects)
+	}
+
 	r := chi.NewRouter()
 	permissionResolver := legacyrbac.NewPostgresResolver(cfg.Pool)
 
@@ -888,7 +1025,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	r.Mount("/", health.RoutesWithDeps(cfg.HealthDeps))
 
 	// Traefik forward-auth endpoint (no auth middleware — this IS the auth check)
-	forwardAuth := v2auth.NewForwardAuthHandler(cfg.AuthClient, cfg.AuthValidator)
+	forwardAuth := v2auth.NewForwardAuthHandler(cfg.AuthValidator)
 	r.Get("/auth", forwardAuth.ServeHTTP)
 
 	// Browser-facing OIDC session lifecycle. Legacy form authentication is not
@@ -1004,6 +1141,23 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// SPA already speaks.
 	mountSharedChatAnonymousRoutes(r, cfg)
 
+	// The INBOUND pipeline trigger — issue 192.
+	//
+	// Registered HERE, on the root mux, for exactly the reason the two routes
+	// above are: everything below `r.Group(...)`/`r.Use(apimw.Auth(...))` is
+	// authenticated, and this route must not be. Its only credential is the
+	// per-pipeline secret, compared in constant time against a digest stored
+	// beside the row; see internal/api/v2/pipelinetriggers for the four
+	// authorization rules and for why nothing the caller sends selects a
+	// tenant.
+	//
+	// It carries its full /api/v2 prefix because it is a SIBLING of the
+	// /api/v2 subrouter rather than a child of it, which is what keeps the URL
+	// an external system was given stable.
+	if cfg.PipelineTriggers != nil {
+		r.Post(v2pipelinetriggers.InboundPath, cfg.PipelineTriggers.Trigger)
+	}
+
 	// Served API docs (S251): the legacy shared plugin's openapi/swagger-ui
 	// routes had no Go counterpart at all — public/unauthenticated like the
 	// branding bootstrap above, since API documentation predates any session.
@@ -1018,18 +1172,6 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		r.Mount(cfg.AdminUI.BasePath, adminUIHandler.Routes())
 	}
 
-	if len(cfg.InternalAdminToken) >= apimw.MinimumInternalAdminTokenBytes {
-		r.Group(func(r chi.Router) {
-			r.Use(apimw.RequireInternalAdminToken(cfg.InternalAdminToken))
-			if cfg.Shadow != nil && cfg.ShadowMetrics != nil {
-				r.Mount("/internal/shadow", shadow.NewAdminHandler(cfg.Shadow, cfg.ShadowMetrics).Routes())
-			}
-			if cfg.CutoverTracker != nil {
-				r.Mount("/internal/cutover", cutover.NewAdminHandler(cfg.CutoverTracker).Routes())
-			}
-		})
-	}
-
 	// Strip doubled /api/v2/api/v2/... prefix caused by admin_ui RTK Query
 	// baseUrl + explicit V2_BASE prefix in projectsApi/configurationApi/serviceDescriptorsApi
 	r.HandleFunc("/api/v2/api/v2/*", func(w http.ResponseWriter, req *http.Request) {
@@ -1038,9 +1180,9 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		r.ServeHTTP(w, req)
 	})
 
-	// Artifacts (S11): mounted here, outside the shadow-wrapped group below,
-	// on its own Auth-wrapped subrouter so it never inherits shadow's
-	// response buffering.
+	// Artifacts (S11): mounted here, outside the /api/v2 group below, on its
+	// own Auth-wrapped subrouter so it never inherits that group's JSON
+	// compression.
 	artifactResolver := cfg.ArtifactPermissionResolver
 	if artifactResolver == nil {
 		artifactResolver = permissionResolver
@@ -1128,12 +1270,19 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	if artifactHandler == nil {
 		artifactHandler, _ = newArtifactHandler(cfg)
 	}
+	// Declared at function scope (not inside the "Conversations" block below,
+	// where it used to live) so the Support Assistant mount can reuse this
+	// EXACT instance for its own attachment routes (issue #625 item 2) —
+	// the same object store, the same attachment metadata tables, the same
+	// AddAttachments code, not a second implementation of any of them.
+	var convHandler *v2convs.Handler
 	authenticate := apimw.Auth(apimw.AuthConfig{
-		Client:                    cfg.AuthClient,
-		Validator:                 cfg.AuthValidator,
-		PrincipalValidator:        cfg.PrincipalValidator,
-		ForwardedIdentityVerifier: cfg.Auth.ForwardedIdentityVerifier,
-		SessionSecret:             cfg.SessionSecret,
+		Validator:                  cfg.AuthValidator,
+		PrincipalValidator:         cfg.PrincipalValidator,
+		ForwardedIdentityVerifier:  cfg.Auth.ForwardedIdentityVerifier,
+		SessionSecret:              cfg.SessionSecret,
+		SessionStore:               cfg.Auth.SessionStore,
+		RejectLegacySessionCookies: cfg.Auth.RejectLegacySessionCookies,
 	})
 	mountArtifactRoutes(r, ArtifactDeps{
 		Handler:      artifactHandler,
@@ -1160,6 +1309,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		v2core.WithInviteMailer(inviteMailer),
 		v2core.WithPrebuiltMCPCatalogue(prebuiltMCPStore, prebuiltMCPVault),
 		v2core.WithDelegatedAuthToolkitSettingsResolver(cfg.DelegatedAuthToolkitSettings),
+		v2core.WithCostBudgets(cfg.GatewayStatus != nil),
 	)
 
 	// The MCP server (issue 252). Outside the /api/v2 group for the reasons in
@@ -1167,50 +1317,35 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	mountMCPServerRoutes(
 		r, cfg.Pool, authenticate, cfg.MCPAgentStart, cfg.MCPToolkitExecute,
 		toolkitHandler, configurationsHandler, coreHandler, prebuiltMCPVault, cfg.CurrentNotificationStore,
-		cfg.ToolkitArgumentSchemas,
+		cfg.ToolkitArgumentSchemas, cfg.MCPToolkitRun, personalProjects,
 	)
 
 	// This group holds the whole JSON API — the `/api/v2` route below is its
-	// only member. Compression sits at the top of it, ABOVE the shadow
-	// comparator: shadow buffers what the handler writes. A compressor under
-	// it would hand the comparator gzip bytes to diff against pylon's JSON.
-	// The comparator would then report a mismatch on every sampled request.
+	// only member. Compression sits at the top of it, so every handler in the
+	// group writes plain JSON and only the outermost layer encodes it.
 	r.Group(func(r chi.Router) {
 		r.Use(compressJSONResponses())
 		r.Use(apimw.Auth(apimw.AuthConfig{
-			Client:                    cfg.AuthClient,
-			Validator:                 cfg.AuthValidator,
-			PrincipalValidator:        cfg.PrincipalValidator,
-			ForwardedIdentityVerifier: cfg.Auth.ForwardedIdentityVerifier,
-			SessionSecret:             cfg.SessionSecret,
+			Validator:                  cfg.AuthValidator,
+			PrincipalValidator:         cfg.PrincipalValidator,
+			ForwardedIdentityVerifier:  cfg.Auth.ForwardedIdentityVerifier,
+			SessionSecret:              cfg.SessionSecret,
+			SessionStore:               cfg.Auth.SessionStore,
+			RejectLegacySessionCookies: cfg.Auth.RejectLegacySessionCookies,
 		}))
 
 		// Maintenance mode, immediately AFTER authentication and before
 		// anything that does work.
 		//
-		// The ordering is load-bearing in both directions. It has to be after
-		// Auth, because the only caller it admits is one whose administration
-		// permissions can be resolved, and that needs a principal on the
-		// context. It has to be before the cutover router and the shadow
-		// comparator, because during a maintenance window a refused request must
-		// not be proxied to pylon or sampled for comparison — a window that
-		// stops elitea-main while traffic keeps reaching the legacy runtime is
-		// not a maintenance window.
+		// The ordering is load-bearing. It has to be after Auth, because the
+		// only caller it admits is one whose administration permissions can be
+		// resolved, and that needs a principal on the context. It has to be
+		// above everything that does work, so a refused request reaches no
+		// handler.
 		r.Use(apimw.Maintenance(apimw.MaintenanceConfig{
 			Pool:     cfg.Pool,
 			Resolver: permissionResolver,
 		}))
-
-		if cfg.CutoverRouter != nil {
-			r.Use(cfg.CutoverRouter.Middleware)
-		}
-
-		if cfg.Shadow != nil {
-			r.Use(shadow.MiddlewareWithMetrics(shadow.MiddlewareConfig{
-				Comparator: cfg.Shadow,
-				Metrics:    cfg.ShadowMetrics,
-			}))
-		}
 
 		// The audit-trail emitter for `centry.audit_events` — the producer the
 		// admin Audit Trail page never had (internal/api/middleware/audit.go
@@ -1221,17 +1356,35 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		//   - BELOW Auth, so the row carries the principal. Above it, the
 		//     handler's context — where the principal lives — is invisible,
 		//     because a context flows down and never back up.
-		//   - BELOW the cutover router and the shadow comparator. A request the
-		//     cutover router proxies to pylon is audited BY pylon's own tracing
-		//     plugin; recording it here as well would double every row during
-		//     the migration window, and the Audit Trail has no way to tell the
-		//     two copies apart.
 		//   - ABOVE the per-route RBAC gates, so a caller refused a permission
 		//     (403) is recorded rather than silently disappearing — which is
 		//     the question an audit trail is most often opened to answer.
 		r.Use(apimw.Audit(auditRecorder))
 
 		r.Route("/api/v2", func(r chi.Router) {
+			// THE GROUP'S OWN "no such route" ANSWER (F3).
+			//
+			// Auth runs ABOVE this subrouter, so a path nobody registered is
+			// already authenticated by the time chi looks for it. That
+			// ordering is the contract: an unknown path answers 404 to a
+			// caller with a credential and 401 only to one without. A retired
+			// path that answers 401 to a logged-in browser is read by the SPA
+			// as an expired session, and it opens a fresh OIDC round-trip on
+			// every visit to the page that still calls it.
+			//
+			// What was missing is the BODY. chi's default fallback writes
+			// `404 page not found` as text/plain, so the one answer a client
+			// cannot parse is the answer it gets for a route that moved. These
+			// two make the group's misses typed, like every other error it
+			// returns, and chi propagates them into the subrouters mounted
+			// below that declare none of their own.
+			r.NotFound(func(w http.ResponseWriter, r *http.Request) {
+				apierr.WriteStatus(w, http.StatusNotFound, "not found")
+			})
+			r.MethodNotAllowed(func(w http.ResponseWriter, r *http.Request) {
+				apierr.WriteStatus(w, http.StatusMethodNotAllowed, "method not allowed")
+			})
+
 			mountRuntimeRoutes(r, cfg.RuntimeRoutes)
 
 			// The PRE-BUILT MCP server catalogue (shared migration 0094) and
@@ -1255,6 +1408,22 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			// database holds the credential.
 			identityProviderStore := identityproviders.NewStore(cfg.Pool)
 
+			// The toolkit TYPE availability policy (shared migration 0114) —
+			// the store behind `Admin › Toolkits` AND behind the served
+			// catalogue's project filter. ONE store for both, so the page and
+			// the catalogue cannot disagree about which types a project gets.
+			toolkitTypePolicyStore := toolkitcatalogue.NewStore(cfg.Pool)
+
+			// Outbound e-mail settings (gap G7). The SAME vault handler again,
+			// for the reason stated above: the SMTP password is sealed into the
+			// hidden bucket, and a second handler on a second pool is how the
+			// page that seals it and the resolver that reads it come to
+			// disagree about which vault holds it.
+			emailResolver := cfg.EmailSettings
+			if emailResolver == nil {
+				emailResolver = emailsettings.NewResolver(
+					emailsettings.NewStore(cfg.Pool, prebuiltMCPVault), emailsettings.Settings{}, "")
+			}
 			// === Auth endpoints ===
 			//
 			// Sign a personal access token with the key that THIS deployment's
@@ -1286,20 +1455,49 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			r.Mount("/projects", v2projects.NewHandler(cfg.Pool, projectOptions...).Routes())
 
 			// === Admin endpoints ===
+			//
+			// The Tasks page's job store and its evaluation-run cancel. Both
+			// are built here rather than inside the handler for the reason
+			// every other store is: a nil pool means the option is skipped and
+			// the routes answer 503, instead of the handler discovering it has
+			// no database at request time.
+			var backgroundJobsStore *dbrepos.AdminBackgroundJobsRepository
+			if cfg.Pool != nil {
+				if store, err := dbrepos.NewAdminBackgroundJobsRepository(cfg.Pool); err == nil {
+					backgroundJobsStore = store
+				}
+			}
+			adminOptions := []admin.Option{}
+			if backgroundJobsStore != nil {
+				adminOptions = append(adminOptions,
+					admin.WithBackgroundJobs(backgroundJobsStore),
+					// The SAME repository method the evaluation API's own
+					// cancel route calls, adapted only to drop the row this
+					// page does not read — see admin.EvalRunCanceller.
+					admin.WithEvalRunCancel(adminEvalRunCanceller{
+						runs: dbrepos.NewEvalRunsRepo(cfg.Pool),
+					}),
+				)
+			}
 			adminHandler := admin.NewHandler(
 				cfg.Pool,
-				admin.WithPermissionResolver(permissionResolver),
-				admin.WithToolkitRegistry(cfg.ToolkitRegistry),
-				admin.WithPrebuiltMCPCatalogue(prebuiltMCPStore, prebuiltMCPVault),
-				admin.WithIdentityProviders(identityProviderStore, prebuiltMCPVault),
-				admin.WithBranding(brandingResolver),
-				admin.WithBrandingAssets(brandingAssets),
-				admin.WithMailer(adminMailer),
-				admin.WithBrandingPackages(brandingPackages),
-				// The same store the SCIM tree writes through. One store, so
-				// the screen and a group push can never disagree about which
-				// project a binding names.
-				admin.WithSCIMGroupBindings(scimdirectory.NewStore(cfg.Pool)),
+				append([]admin.Option{
+					admin.WithPermissionResolver(permissionResolver),
+					admin.WithToolkitRegistry(cfg.ToolkitRegistry),
+					admin.WithPrebuiltMCPCatalogue(prebuiltMCPStore, prebuiltMCPVault),
+					admin.WithIdentityProviders(identityProviderStore, prebuiltMCPVault),
+					admin.WithBranding(brandingResolver),
+					admin.WithBrandingAssets(brandingAssets),
+					admin.WithMailer(adminMailer),
+					admin.WithEmailSettings(emailResolver.Store(), emailResolver),
+					admin.WithBrandingPackages(brandingPackages),
+					// The same store the SCIM tree writes through. One store, so
+					// the screen and a group push can never disagree about which
+					// project a binding names.
+					admin.WithSCIMGroupBindings(scimdirectory.NewStore(cfg.Pool)),
+					// The toolkit type policy the served catalogue also reads.
+					admin.WithToolkitTypePolicy(toolkitTypePolicyStore),
+				}, adminOptions...)...,
 			)
 			moderationHandler := v2moderation.NewHandler(cfg.Pool, v2moderation.WithMailer(decisionMailer))
 			// The admin panel's surface. Every route below is gated on the same
@@ -1553,6 +1751,47 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					Put("/identity_providers/administration/{key}", adminHandler.IdentityProviderSave)
 				r.With(requireRuntimePlugins).
 					Delete("/identity_providers/administration/{key}", adminHandler.IdentityProviderDelete)
+				// The TOOLKIT TYPE catalogue policy — `Admin › Toolkits`
+				// (shared migration 0114). Five routes: the listing, one
+				// decision, the two per-project exception verbs, and a bulk
+				// apply.
+				//
+				// ITS OWN PERMISSION, and not `runtime.plugins` above. That
+				// grant already reaches the guardrails deny-list editor, which
+				// stops a toolkit type WORKING. This surface decides what the
+				// product OFFERS, and to which projects, which is a different
+				// authority: an operator trusted to edit a plugin's
+				// configuration values is not automatically the operator who
+				// decides which clients may build a Salesforce toolkit. The two
+				// must be separately grantable, and a reuse cannot be undone
+				// later without breaking every deployment that relied on it.
+				// Shared migration 0114 grants the string, so the grant gate in
+				// router_permission_grant_gate_test.go stays green.
+				//
+				// The mode segment is static `administration`: the catalogue
+				// decision is a platform fact and there is no project-scoped
+				// view of it. The per-project EXCEPTION is a path parameter on
+				// the two grant routes, which is a different thing from a
+				// project-scoped copy of the whole surface.
+				//
+				// `bulk` is a POST on a STATIC segment, and chi's trie prefers
+				// it over `{type}`. It is a POST rather than a second PUT
+				// because it is not idempotent in the useful sense: it reports
+				// which types landed, and a partial result is a real outcome
+				// this surface returns rather than hides.
+				requireToolkitCatalogue := central(admin.ToolkitTypeManagePermission)
+				r.With(requireToolkitCatalogue).
+					Get("/toolkit_types/administration", adminHandler.ToolkitTypeList)
+				r.With(requireToolkitCatalogue).
+					Post("/toolkit_types/administration/bulk", adminHandler.ToolkitTypeBulk)
+				r.With(requireToolkitCatalogue).
+					Put("/toolkit_types/administration/{type}", adminHandler.ToolkitTypeSave)
+				r.With(requireToolkitCatalogue).
+					Put("/toolkit_types/administration/{type}/projects/{projectID}",
+						adminHandler.ToolkitTypeGrantSave)
+				r.With(requireToolkitCatalogue).
+					Delete("/toolkit_types/administration/{type}/projects/{projectID}",
+						adminHandler.ToolkitTypeGrantDelete)
 				// The brand pack's database layer (ADR-0024 decision 5). Its own
 				// permission, granted by shared migration 0109: a rebrand
 				// changes what every user sees, and `runtime.plugins` is
@@ -1562,6 +1801,29 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				r.With(requireBranding).Put("/branding/administration", adminHandler.BrandingSave)
 				r.With(requireBranding).Post("/branding/assets/{kind}", adminHandler.BrandingAssetUpload)
 				r.With(requireBranding).Post("/branding/test_email/administration", adminHandler.BrandingTestEmail)
+				// OUTBOUND E-MAIL — the real surface behind the Configuration
+				// page's "E-mail" section, which stays unavailable because its
+				// rows are plaintext and the SMTP password is a credential
+				// (config_schemas.go).
+				//
+				// The permission is the SAME `runtime.plugins` that section
+				// already required, so an operator who could edit it can
+				// configure the relay, and no new permission string arrives
+				// without a grant (router_permission_grant_gate_test.go).
+				//
+				// The mode segment is static `administration`: a mail relay is
+				// a deployment fact with no project-scoped view, so another
+				// mode 404s rather than being answered under a scope that does
+				// not apply.
+				//
+				// The test route is a SECOND test-mail route beside the
+				// branding one above, deliberately: they differ in permission,
+				// not in behaviour, and an operator who may configure the relay
+				// must be able to verify it without also holding the grant that
+				// lets them re-brand the product.
+				r.With(requireRuntimePlugins).Get("/email/administration", adminHandler.EmailSettingsRead)
+				r.With(requireRuntimePlugins).Put("/email/administration", adminHandler.EmailSettingsSave)
+				r.With(requireRuntimePlugins).Post("/email/test/administration", adminHandler.EmailTestSend)
 				// The branding package (ADR-0024 decision 9): export, import
 				// with a dry run, and the kept versions for rollback.
 				r.With(requireBranding).Get("/branding/package/administration", adminHandler.BrandingPackageExport)
@@ -1588,6 +1850,26 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				r.With(requireRuntimePlugins).Get("/tasks/{mode}/", adminHandler.Tasks)
 				r.With(requireRuntimePlugins).Get("/tasks/{mode}", adminHandler.Tasks)
 				r.With(requireRuntimePlugins).Get("/active_tasks/{mode}", adminHandler.ActiveTasks)
+				// Admin › Tasks — the PLATFORM's own background jobs, not
+				// pylon's Arbiter task node. The two routes above keep
+				// answering 501 (arbiterTaskNodeUnavailable); these two answer
+				// the question that page asked, from this platform's tables.
+				//
+				// Same `runtime.plugins` gate in administration mode, because
+				// that is what the legacy Tasks page declares
+				// (legacy/plugins/admin/api/v2/tasks.py:43). No new permission
+				// string arrives, so the grant gate stays untripped and every
+				// operator who could open the legacy page can open this one.
+				//
+				// A STATIC `administration` segment, not `{mode}`: pylon reaches
+				// this surface only through its administration AdminAPI, so a
+				// mode variable would name a resolution this router does not
+				// perform — the same argument the moderation routes below make.
+				r.With(requireRuntimePlugins).Get("/background_jobs/administration", adminHandler.BackgroundJobs)
+				r.With(requireRuntimePlugins).Post(
+					"/background_jobs/administration/{kind}/{jobID}:cancel",
+					adminHandler.CancelBackgroundJob,
+				)
 
 				// Regular app admin endpoints (with projectID)
 				//
@@ -1678,14 +1960,22 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// same permission resolved in administration mode
 				// (legacy/plugins/admin/api/v2/users.py maps BOTH modes to the
 				// same body, and its `recommended_roles` names `administration`).
+				//
+				// THEY TAKE THE `Administration…` HANDLERS, not the `{mode}`
+				// ones. A static segment binds no URL parameter, so the shared
+				// handler's `chi.URLParam(r, "mode")` was empty on every one of
+				// these requests and the dialog's submit answered
+				// `404 {"error":"unknown mode"}`. The GET above never showed it,
+				// because Handler.Users reads no mode. See the header of
+				// internal/api/v2/eliteacore/users_write.go.
 				r.With(apimw.RequireCentralPermissions(
 					permissionResolver, platformauth.PermissionModeAdministration,
 					"configuration.users.users.create",
-				)).Post("/users/administration/{projectID}", coreHandler.UsersCreate)
+				)).Post("/users/administration/{projectID}", coreHandler.AdministrationUsersCreate)
 				r.With(apimw.RequireCentralPermissions(
 					permissionResolver, platformauth.PermissionModeAdministration,
 					"configuration.users.users.edit",
-				)).Put("/users/administration/{projectID}", coreHandler.UsersUpdate)
+				)).Put("/users/administration/{projectID}", coreHandler.AdministrationUsersUpdate)
 				// The project ROLE listing, gated the same way and for the same
 				// reason as the member listing above: `coreHandler.Roles` reads
 				// auth_core__project_role for the named project, pylon declares
@@ -1705,6 +1995,45 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					Get("/roles/{mode}/{projectID}", coreHandler.Roles)
 				r.With(central("configuration.roles.roles.view")).
 					Get("/roles/administration/{projectID}", coreHandler.Roles)
+
+				// Role DEFINITIONS — create, rename, delete (gap G9).
+				//
+				// The two GETs above LIST roles. Nothing could add one, rename
+				// one, or take one away, while pylon's
+				// legacy/plugins/admin/api/v2/roles.py is full CRUD. A
+				// deployment that wanted a `security_reviewer` role had to
+				// INSERT it into auth_core__role by hand.
+				//
+				// THE SECOND SEGMENT IS NOT A PROJECT ID HERE. These three take
+				// `{scope}/{mode}` — the shape /admin/permissions already uses,
+				// where the first segment picks the matrix (administration,
+				// public, support) and the second the target mode. That is the
+				// pair the admin Roles page's four tabs are keyed on, and the
+				// role columns those tabs render come from exactly that pair.
+				//
+				// chi keeps the two shapes apart: `{mode}` and `{scope}` are
+				// separate param nodes, and the static `administration` node
+				// the GET above registers carries no POST/PUT/DELETE, so those
+				// fall through to `{scope}`.
+				// TestAdminRoleWriteRoutesResolve pins that resolution, because
+				// it is a property of chi's trie rather than of this file.
+				//
+				// Gated on the three permissions roles.py declares, resolved in
+				// ADMINISTRATION mode like every other admin-panel gate above.
+				// They are distinct from `configuration.roles.permissions.*`:
+				// moving a checkbox in the matrix and deleting the role that
+				// checkbox belongs to are different privileges, and pylon
+				// separates them too.
+				//
+				// migrations/shared/0111 grants them. No migration did before,
+				// so all three would have answered 403 to every caller on a
+				// clean database.
+				r.With(central(admin.RolesCreatePermission)).
+					Post("/roles/{scope}/{mode}", adminHandler.AdminRoleCreate)
+				r.With(central(admin.RolesEditPermission)).
+					Put("/roles/{scope}/{mode}", adminHandler.AdminRoleRename)
+				r.With(central(admin.RolesDeletePermission)).
+					Delete("/roles/{scope}/{mode}", adminHandler.AdminRoleDelete)
 
 				// App requests / moderation (unit A14). Four routes, of which
 				// three did not exist and the fourth answered from a constant:
@@ -1742,6 +2071,15 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					permissionResolver, platformauth.PermissionModeDefault,
 					"admin.moderation.create",
 				)).Post("/moderation_status/{mode}/{projectID}/{entityID}", moderationHandler.RequestCreate)
+				// Withdraw (#544). The same permission as the POST, on purpose:
+				// a person who may file a request may take it back, so no
+				// deployment needs a new grant. The handler scopes the delete to
+				// the CALLER's own rows in SQL, so an `administration` value on
+				// `{mode}` does not let a moderator erase what they answered.
+				r.With(apimw.RequireResolvedPermissions(
+					permissionResolver, platformauth.PermissionModeDefault,
+					"admin.moderation.create",
+				)).Delete("/moderation_status/{mode}/{projectID}/{entityID}", moderationHandler.RequestDelete)
 
 				// Preserve current-main gateway administration. Server-side
 				// permission enforcement is required even when the UI hides
@@ -1750,8 +2088,8 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// This gate used `apimw.RequirePermissions`, which reads
 				// `auth.User.Permissions` instead of asking the resolver.
 				// Production never fills that field. The only source that
-				// assigns it is the legacy Redis-RPC validator at
-				// internal/infra/authsvc/rpc.go:121, and production wires
+				// assigned it was the legacy Redis-RPC validator that #383
+				// deleted, and production wires
 				// `authsvc.NewPrincipalValidator` instead, which leaves the
 				// field nil. So the gate refused EVERY caller by construction,
 				// the operator included, and no migration could reach it. That
@@ -2107,19 +2445,28 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						Delete("/skill/{mode}/{projectID}/{skillID}", skillHandler.Delete)
 					r.With(requireSkillUpdate).
 						Patch("/skill_default_version/{mode}/{projectID}/{skillID}", skillHandler.Update)
-					// application_skills.py declares the APPLICATION read, not
-					// the skill one: the resource is an agent's skill list.
+					// NOTE(#395): GET
+					// /application_skills/{mode}/{projectID}/{appVersionID}
+					// stood here, on skillHandler.ListForApplication. It was
+					// the PROTOTYPE fallback for the attached-skills read.
 					//
-					// This pointed at skillHandler.List until #367. List reads
-					// {projectID} and never looks at {appVersionID}, so opening
-					// any agent version answered with EVERY skill in the
-					// project — at 200, in the same envelope, so no caller
-					// could see it. The reviewed route that does read the
-					// attachment (internal/api/v2/applicationskills) is gated
-					// on a flag no deployment sets, so this handler is the one
-					// every deployment reaches.
-					r.With(projectPermission("models.applications.applications.details")).
-						Get("/application_skills/{mode}/{projectID}/{appVersionID}", skillHandler.ListForApplication)
+					// It is deleted, not moved. The reviewed route,
+					// internal/api/v2/applicationskills, is the only handler
+					// for this path now; production_router.go registers it at
+					// the exact contract path, and the chart and the compose
+					// stacks turn it on wherever the install authenticates.
+					// Two handlers for one path were never a fallback pair:
+					// chi resolved the explicitly registered path first, so
+					// this mount only ever answered where the reviewed route
+					// was absent, and there it answered a different envelope
+					// from a different read.
+					//
+					// The published contract fixes the mode segment to
+					// `prompt_lib` (getListApplicationSkillsUrl in
+					// apps/elitea-web/src/shared/api/generated/skills/skills.ts),
+					// and projectPermission resolved PermissionModeDefault for
+					// every value of {mode}, so the deleted wildcard carried no
+					// authorization meaning and no client used another mode.
 					r.With(requireSkillCreate).Post("/skill_import/{mode}/{projectID}", skillHandler.Import)
 					r.With(requireSkillExport).Get("/skill_export/{mode}/{projectID}/{skillID}", skillHandler.Export)
 					r.With(requireSkillExport).
@@ -2210,8 +2557,18 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					Post("/test_toolkit_tool/prompt_lib/{projectID}", toolkitHandler.TestToolkitTool)
 				r.With(toolkitGate("models.applications.export_toolkit.export")).
 					Get("/export_toolkit/prompt_lib/{projectID}/{toolkitID}", toolkitHandler.ExportToolkit)
-				r.With(toolkitGate("models.applications.index_types.details")).
-					Get("/index_types/prompt_lib/{projectID}", toolkitHandler.IndexTypes)
+				// NOTE(#394): GET /index_types/prompt_lib/{projectID} stood
+				// here, on toolkitHandler.IndexTypes. It was the PROTOTYPE
+				// fallback for the index-type catalogue: first a static
+				// six-loader list that no data backs, then a 501 refusal.
+				//
+				// It is deleted. internal/api/v2/indextypes answers this path
+				// from the snapshot pinned out of the SDK, production_router.go
+				// registers it at the exact contract path, and the chart and
+				// the compose stacks turn it on wherever the install
+				// authenticates. A second registration of the same path is not
+				// a fallback: chi resolved the explicit path first, so this
+				// mount only ever answered where the reviewed route was absent.
 				r.With(requireIndexMetaRead).
 					Get("/index_meta/prompt_lib/{projectID}/{toolkitID}", toolkitHandler.IndexMeta)
 				r.With(requireIndexMetaRead).
@@ -2301,12 +2658,18 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// shared/0100_evaluation_dimension_permissions.sql is that
 				// grant, and it lands with this registration rather than after
 				// it — either alone is the #354/#359 defect.
+				//
+				// ONE gate constructor for every evaluation route, hoisted out
+				// of the dimension block that first declared it: slice 2's
+				// dataset and run routes are registered behind their own nil
+				// checks, and a second copy of this closure would be a second
+				// place for the resolver or the mode to drift.
+				evaluationGate := func(permission string) func(http.Handler) http.Handler {
+					return apimw.RequireResolvedPermissions(
+						coreResolver, platformauth.PermissionModeDefault, permission)
+				}
 				if cfg.EvalDimensionsRepo != nil {
 					evaluationHandler := v2evaluation.NewHandler(cfg.EvalDimensionsRepo)
-					evaluationGate := func(permission string) func(http.Handler) http.Handler {
-						return apimw.RequireResolvedPermissions(
-							coreResolver, platformauth.PermissionModeDefault, permission)
-					}
 					r.With(evaluationGate(v2evaluation.PermissionDimensionRead)).
 						Get("/eval_dimensions/prompt_lib/{projectID}", evaluationHandler.List)
 					r.With(evaluationGate(v2evaluation.PermissionDimensionCreate)).
@@ -2317,6 +2680,86 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						Delete("/eval_dimension/prompt_lib/{projectID}/{dimensionID}", evaluationHandler.Delete)
 				}
 
+				// Agent Evaluation SLICE 2 — the dataset, the run and the
+				// read-only scorecard. Thirteen routes: five for the dataset,
+				// three for its cases, four for the run and one scorecard.
+				//
+				// STILL NOT REGISTERED, and absent rather than stubbed: the
+				// suite and binding families, the dataset import and the
+				// conversation promote, the human-score writes, the platform
+				// catalogue and `generate_eval_dimensions`. Twelve of the
+				// reference's thirty-eight operations are here; the rest answer
+				// 404, which is what an unbuilt route should answer.
+				//
+				// The gates use the same package constants and the same
+				// `apimw.RequireResolvedPermissions` construction the dimension
+				// four use, and NOT router.go's `projectPermission` helper, for
+				// the reason recorded above and in
+				// migrations/shared/0115_evaluation_dataset_run_permissions.sql:
+				// Agent Evaluation is not in the pylon corpus this repository
+				// carries, so these names have no `check_api` to be transcribed
+				// from and the helper's provenance assertion would be false.
+				// router_permission_grant_gate_test.go still binds them to a
+				// shared migration, and 0115 is that migration.
+				//
+				// CANCEL is gated on `run.create` and not on a `run.cancel`
+				// string, because the reference's vocabulary has no such
+				// string: the right that started a run is the right that stops
+				// it. Inventing a name would ship either a widened vocabulary
+				// or a permanent 403 (#313).
+				if cfg.EvalDatasetsRepo != nil {
+					datasetHandler := v2evaluation.NewDatasetHandler(cfg.EvalDatasetsRepo)
+					requireDatasetRead := evaluationGate(v2evaluation.PermissionDatasetRead)
+					requireDatasetUpdate := evaluationGate(v2evaluation.PermissionDatasetUpdate)
+
+					r.With(requireDatasetRead).
+						Get("/eval_datasets/prompt_lib/{projectID}", datasetHandler.List)
+					r.With(evaluationGate(v2evaluation.PermissionDatasetCreate)).
+						Post("/eval_datasets/prompt_lib/{projectID}", datasetHandler.Create)
+					r.With(requireDatasetRead).
+						Get("/eval_dataset/prompt_lib/{projectID}/{datasetID}", datasetHandler.Get)
+					r.With(requireDatasetUpdate).
+						Put("/eval_dataset/prompt_lib/{projectID}/{datasetID}", datasetHandler.Update)
+					r.With(evaluationGate(v2evaluation.PermissionDatasetDelete)).
+						Delete("/eval_dataset/prompt_lib/{projectID}/{datasetID}", datasetHandler.Delete)
+
+					// A CASE is part of its dataset, so its writes take the
+					// dataset UPDATE permission rather than a permission of
+					// their own. The reference declares none for cases, and a
+					// caller who may not edit a dataset must not be able to
+					// change what it asks.
+					r.With(requireDatasetUpdate).
+						Post("/eval_dataset_cases/prompt_lib/{projectID}/{datasetID}", datasetHandler.AddCase)
+					r.With(requireDatasetUpdate).
+						Put("/eval_dataset_case/prompt_lib/{projectID}/{datasetID}/{caseID}", datasetHandler.UpdateCase)
+					r.With(requireDatasetUpdate).
+						Delete("/eval_dataset_case/prompt_lib/{projectID}/{datasetID}/{caseID}", datasetHandler.DeleteCase)
+				}
+
+				// The run routes need BOTH repositories: the run one for the
+				// rows, and the dimension one to freeze the snapshot a run is
+				// scored against. Registering them on the run repository alone
+				// would produce a route that starts runs whose snapshot has no
+				// dimensions in it, and every case would then score nothing
+				// behind a 201.
+				if cfg.EvalRunsRepo != nil && cfg.EvalDimensionsRepo != nil {
+					runHandler := v2evaluation.NewRunHandler(
+						cfg.EvalRunsRepo, cfg.EvalDimensionsRepo, cfg.EvalOrchestrator)
+					requireRunRead := evaluationGate(v2evaluation.PermissionRunRead)
+					requireRunWrite := evaluationGate(v2evaluation.PermissionRunCreate)
+
+					r.With(requireRunRead).
+						Get("/eval_runs/prompt_lib/{projectID}", runHandler.List)
+					r.With(requireRunWrite).
+						Post("/eval_runs/prompt_lib/{projectID}", runHandler.Start)
+					r.With(requireRunRead).
+						Get("/eval_run/prompt_lib/{projectID}/{runID}", runHandler.Get)
+					r.With(requireRunWrite).
+						Post("/eval_run_cancel/prompt_lib/{projectID}/{runID}", runHandler.Cancel)
+					r.With(requireRunRead).
+						Get("/eval_results/prompt_lib/{projectID}/{runID}", runHandler.Results)
+				}
+
 				// Conversations
 				if cfg.ConvsRepo != nil {
 					// S20a: chat attachment byte path — WithPool/WithObjectStore/
@@ -2324,7 +2767,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					// cfg.ObjectStore are unset, so AddAttachments' JSON-metadata
 					// branch keeps working exactly as before wherever storage isn't
 					// wired (matching newArtifactHandler's own degrade convention).
-					convHandler := v2convs.NewHandler(cfg.ConvsRepo).
+					convHandler = v2convs.NewHandler(cfg.ConvsRepo).
 						WithPool(cfg.Pool).
 						WithObjectStore(cfg.ObjectStore).
 						WithAttachmentStore(newAttachmentStore(cfg.Pool)).
@@ -2389,6 +2832,27 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						Get("/canvas/prompt_lib/{projectID}/{canvasID}", convHandler.GetCanvas)
 					r.With(projectPermission("models.chat.canvas.update")).
 						Put("/canvas/prompt_lib/{projectID}/{canvasID}", convHandler.UpdateCanvas)
+					// Canvas editor presence (#622). A heartbeat, published onto
+					// events.ProjectChannel({projectID}) — the SSE room primitive
+					// mounted further down this same group — instead of the
+					// socket.io server #615 decided not to rebuild.
+					//
+					// It takes `projectPermission`, the SAME composition root as
+					// the three canvas routes above it, and the same permission
+					// string as the canvas READ: announcing presence on a canvas
+					// is not a wider claim than reading it, and reusing the
+					// string is what keeps this route out of a new migration.
+					//
+					// WithRedis is called UNCONDITIONALLY on purpose. It is a
+					// no-op on a nil client, and the route serves either way on
+					// the package's in-process store, so this is not a
+					// registration gate — see the option's own note.
+					r.With(projectPermission(v2canvaspresence.Permission)).
+						Post("/canvas/prompt_lib/{projectID}/{canvasID}/presence",
+							v2canvaspresence.NewHandler(
+								cfg.ConvsRepo,
+								v2canvaspresence.WithRedis(cfg.RedisClient),
+							).Heartbeat)
 					// attachment_storage has no pylon module; it writes the
 					// conversation's own storage setting, so it takes
 					// context_strategy.py's string — the other per-conversation
@@ -2445,21 +2909,28 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// Predictor, ChatService or PipelineRunner field. Nothing ever
 				// assigned those fields, so the groups were never registered
 				// and the paths 404'd in every deployment:
-				//   DELETE /task/prompt_lib/{projectID}/{taskID}
-				//   GET    /application_task/prompt_lib/{projectID}/{taskID}
 				//   POST   /chat/prompt_lib/{projectID}/{conversationID}/messages
-				//   GET    /chat_config/prompt_lib/{projectID}
 				//   GET|POST|PUT /pipeline_trigger/prompt_lib/{projectID}/pipeline/{versionID}/trigger
 				// See the IndexerDeps note at the top of this file for why the
 				// transport behind them was retired rather than repaired, and
 				// #192/#193/#93 for the capability records.
 				//
-				// POST /predict_llm/prompt_lib/{projectID} was on that list and
-				// is NOT any more — it is registered immediately below (#194).
-				// A comment that keeps claiming a route is absent after it has
+				// FOUR paths have left that list and are NOT in it any more. A
+				// comment that keeps claiming a route is absent after it has
 				// landed is the "disclosed gap goes stale" failure this
-				// repository has produced repeatedly, so the line was removed
-				// from the list rather than annotated.
+				// repository has produced repeatedly, so each line was removed
+				// rather than annotated:
+				//   POST   /predict_llm/prompt_lib/{projectID} — registered
+				//          immediately below (#194).
+				//   GET    /chat_config/prompt_lib/{projectID} — served by
+				//          internal/api/v2/promptcontextreads, mounted in
+				//          production_router.go (#194).
+				//   DELETE /task/prompt_lib/{projectID}/{responseMessageID} —
+				//          served by internal/api/v2/agentexecution, mounted in
+				//          production_router.go under the runtime plane.
+				//   GET|DELETE /application_task/prompt_lib/{projectID}/
+				//          {responseMessageID} — served by the same package and
+				//          mounted the same way (#254 P2).
 
 				// Predict LLM — one stateless turn, no agent, no tools, no
 				// version id (#194). Registered UNCONDITIONALLY, unlike the
@@ -2494,16 +2965,48 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				r.With(projectPermission("models.applications.version.update")).
 					Put("/application_attachment_storage/prompt_lib/{projectID}/{applicationID}/{versionID}", coreHandler.UpdateAttachmentStorage)
 
-				// NOTE(#126): webchat and the three AI-draft-generation routes
-				// stood here behind the same nil gate on RouterConfig.Predictor,
-				// and were never registered either:
-				//   POST /webchat/prompt_lib/{projectID}/{versionID}
-				//   POST /generate_application_draft/prompt_lib/{projectID}
-				//   POST /generate_project_context_draft/prompt_lib/{projectID}
-				//   POST /generate_skill_draft/prompt_lib/{projectID}
-				// v2skills.DraftHandler survives the deletion — it depends only
-				// on a narrow Predictor interface the current runtime could
-				// supply — but it now has no caller. #194 records that.
+				// The three AI-draft routes (#254 P1). They stood in the
+				// NOTE(#126) tombstone here with webchat, behind the same nil
+				// gate on RouterConfig.Predictor, and answered 404 in every
+				// deployment. They are pure LLM plays — one blocking turn each,
+				// no runtime, no task — so they take the same PredictCompleter
+				// predict_llm above takes, and are registered UNCONDITIONALLY
+				// for the same reason it is: the handler answers 503 naming
+				// LLM_GATEWAY_URL when no LLM plane is composed, so an
+				// unconfigured deployment stays distinguishable from a missing
+				// route. Gating the registration on the dependency is exactly
+				// what produced #126.
+				//
+				// The permissions are legacy's own check_api declarations, with
+				// ONE deliberate substitution. generate_project_context_draft
+				// declares `models.project_context.generate`, a string this
+				// repository's migration history does not grant and legacy's
+				// own catalogue reaches only through that one module; gating on
+				// it would ship a permanent 403 nobody can clear (#313).
+				// `models.project_context.edit` is granted by 0068 to exactly
+				// the roles legacy's recommended_roles gives .generate — admin
+				// and editor, never viewer — and it is the permission the
+				// caller needs anyway, since the only thing to do with a
+				// generated Project Background is save it.
+				//
+				// NOT restored, here or anywhere: webchat. It is not a chat
+				// surface. legacy/plugins/elitea_core/api/v2/webchat.py is an
+				// unauthenticated Microsoft Bot Framework webhook stub that
+				// echoes the caller's own text back through a connector URL
+				// taken from the request body, with the literal placeholder
+				// strings 'MICROSOFT-APP-ID' and 'MICROSOFT-APP-PASSWORD' as
+				// its credentials and a `# FIXME: auth` where the permission
+				// gate belongs. It never predicts, never reads its own
+				// {version_id}, and creates no conversation. #254 carries the
+				// full finding and a bounded design for a real public chat
+				// surface, which is a NEW feature and not a restoration.
+				draftHandler := v2drafts.NewHandler(cfg.PredictCompleter)
+				r.With(projectPermission("models.applications.applications.create")).
+					Post("/generate_application_draft/prompt_lib/{projectID}", draftHandler.GenerateApplicationDraft)
+				r.With(projectPermission("models.applications.skills.create")).
+					Post("/generate_skill_draft/prompt_lib/{projectID}", draftHandler.GenerateSkillDraft)
+				r.With(projectPermission("models.project_context.edit")).
+					Post("/generate_project_context_draft/prompt_lib/{projectID}", draftHandler.GenerateProjectContextDraft)
 
 				// Fork, and the application publish plane. These are the
 				// routes #302 names explicitly: publish writes a catalogue row
@@ -2875,7 +3378,13 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// internal/api/v2/mcp/registry.go. It is registered rather than
 				// left off so the refusal is explicit and pinned by a test: a
 				// 404 leaves the next person free to wire a stub up.
-				mcpHandler := v2mcp.NewHandler(cfg.Pool, apimw.NewDBPersonalProjectResolver(cfg.Pool), cfg.MCPAgentStart, permissionResolver)
+				// The resolver asks for the personal project it could not
+				// find, exactly as the MCP server route above does.
+				mcpResolver := apimw.NewDBPersonalProjectResolver(cfg.Pool)
+				if personalProjects != nil {
+					mcpResolver = mcpResolver.WithPersonalProjectEnsurer(personalProjects)
+				}
+				mcpHandler := v2mcp.NewHandlerWithToolkitRuns(cfg.Pool, mcpResolver, cfg.MCPAgentStart, cfg.MCPToolkitRun, permissionResolver)
 				r.Group(func(r chi.Router) {
 					r.Use(projectScoped)
 					r.Get("/tools_list/{projectID}", mcpHandler.ToolsList)
@@ -3036,6 +3545,14 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					Get("/project_budget/administration/{projectID}/budget", budgetsHandler.GetProjectBudgetAdmin)
 				r.With(requireBudgetsEdit).
 					Put("/project_budget/administration/{projectID}/budget", budgetsHandler.PutProjectBudget)
+				// Clearing a budget is the same authority as setting one, so it
+				// takes the SAME permission rather than a new string. A separate
+				// `…delete` permission would need its own grant migration to
+				// reach anybody and would be 403-for-everyone until it did
+				// (#386), while the operator who may set a ceiling to any value
+				// can already remove it in every way that matters.
+				r.With(requireBudgetsEdit).
+					Delete("/project_budget/administration/{projectID}/budget", budgetsHandler.DeleteProjectBudget)
 				r.With(requireBudgetsView).
 					Get("/project_budgets/administration", budgetsHandler.ListProjectBudgets)
 				r.With(requireProjectBudgetRead).
@@ -3044,6 +3561,8 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					Get("/user_budget/administration/{projectID}/user_budget/{userID}", budgetsHandler.GetUserBudgetAdmin)
 				r.With(requireBudgetsEdit).
 					Put("/user_budget/administration/{projectID}/user_budget/{userID}", budgetsHandler.PutUserBudget)
+				r.With(requireBudgetsEdit).
+					Delete("/user_budget/administration/{projectID}/user_budget/{userID}", budgetsHandler.DeleteUserBudget)
 				r.With(requireProjectBudgetRead).
 					Get("/user_budgets/prompt_lib/{projectID}", budgetsHandler.ListUserBudgets)
 				r.With(requireBudgetsView).
@@ -3122,10 +3641,9 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			r.Mount("/tracing", tracingHandler.Routes(requireTracingAdminStatus))
 
 			// Artifacts are mounted by mountArtifactRoutes below, outside
-			// this /api/v2 group — see S11: the shadow middleware wrapping
-			// this group buffers the whole response and has no Unwrap, which
-			// would break download streaming and ResponseController
-			// deadlines (S12).
+			// this /api/v2 group — see S11: this group's JSON compression
+			// would buffer and encode a downloaded object rather than
+			// streaming it (S12).
 
 			// === Context Manager ===
 			//
@@ -3170,6 +3688,47 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			// not the current body.
 			requireConversationContextRead := projectPermission("models.chat.conversation.details")
 			requireConversationContextWrite := projectPermission("models.chat.conversation.edit")
+			// === Pipeline triggers and schedules (issues 192, 193) ===
+			//
+			// The SETTINGS half of both. These six ARE session-authenticated
+			// and project-gated; only the inbound call mounted above the Auth
+			// group is not.
+			//
+			// The gates are the pipeline VERSION's own read and update
+			// permissions, so a person who may edit a pipeline may configure
+			// how it starts and a person who may only look at one may only look
+			// at this. No new permission is introduced, which is what keeps
+			// this feature off the "a new grant needs a new shared migration
+			// AND a manifest head bump" path.
+			//
+			// `reveal` is separated from the plain read and carries the WRITE
+			// permission, because handing back a live credential is a different
+			// act from reporting that one exists. See the package's
+			// triggers.go.
+			if cfg.PipelineTriggers != nil {
+				pipelineTriggers := cfg.PipelineTriggers
+				requirePipelineRead := projectPermission(v2pipelinetriggers.ReadPermission)
+				requirePipelineWrite := projectPermission(v2pipelinetriggers.WritePermission)
+				r.Route("/pipeline_triggers", func(r chi.Router) {
+					r.With(requirePipelineRead).
+						Get("/prompt_lib/{projectID}/{versionID}", pipelineTriggers.GetTrigger)
+					r.With(requirePipelineWrite).
+						Get("/secret/prompt_lib/{projectID}/{versionID}", pipelineTriggers.RevealTrigger)
+					r.With(requirePipelineWrite).
+						Post("/prompt_lib/{projectID}/{versionID}", pipelineTriggers.CreateOrRotateTrigger)
+					r.With(requirePipelineWrite).
+						Delete("/prompt_lib/{projectID}/{versionID}", pipelineTriggers.RevokeTrigger)
+				})
+				r.Route("/pipeline_schedules", func(r chi.Router) {
+					r.With(requirePipelineRead).
+						Get("/prompt_lib/{projectID}/{versionID}", pipelineTriggers.GetSchedule)
+					r.With(requirePipelineWrite).
+						Put("/prompt_lib/{projectID}/{versionID}", pipelineTriggers.SaveSchedule)
+					r.With(requirePipelineWrite).
+						Delete("/prompt_lib/{projectID}/{versionID}", pipelineTriggers.DeleteSchedule)
+				})
+			}
+
 			ctxMgrHandler := v2contextmgr.NewHandler(cfg.Pool)
 			r.Route("/context_manager", func(r chi.Router) {
 				r.With(requireConversationContextWrite).
@@ -3228,6 +3787,21 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				if projectProvisionerOK {
 					supportOptions = append(supportOptions,
 						v2support.WithProvisioner(supportProjectProvisioner{projectProvisioner}))
+				}
+				// Attachments (issue #625 item 2): the SAME artifact path chat
+				// itself uses, not a second store — `convHandler` (this
+				// function's one instance, S20a-wired above) writes the bytes
+				// exactly as `POST .../attachments/prompt_lib/{p}/{c}` does, and
+				// `artifactHandler` (also this function's one instance) serves
+				// them back exactly as the generic `GET .../artifacts/objects/
+				// {p}/{bucket}/*` route does. Both are nil-guarded the same way
+				// every other optional dependency here is: absent storage means
+				// the support routes answer 503, not a panic.
+				if convHandler != nil {
+					supportOptions = append(supportOptions, v2support.WithAttachmentUploader(convHandler))
+				}
+				if artifactHandler != nil {
+					supportOptions = append(supportOptions, v2support.WithAttachmentDownloader(artifactHandler))
 				}
 				r.Mount("/support_assistant", v2support.NewHandler(cfg.Pool, supportOptions...).Routes())
 			}
@@ -3310,11 +3884,12 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	mountLLM := func(proxy http.Handler, resolver apimw.PersonalProjectResolver) {
 		r.Group(func(r chi.Router) {
 			r.Use(apimw.Auth(apimw.AuthConfig{
-				Client:                    cfg.AuthClient,
-				Validator:                 cfg.AuthValidator,
-				PrincipalValidator:        cfg.PrincipalValidator,
-				ForwardedIdentityVerifier: cfg.Auth.ForwardedIdentityVerifier,
-				SessionSecret:             cfg.SessionSecret,
+				Validator:                  cfg.AuthValidator,
+				PrincipalValidator:         cfg.PrincipalValidator,
+				ForwardedIdentityVerifier:  cfg.Auth.ForwardedIdentityVerifier,
+				SessionSecret:              cfg.SessionSecret,
+				SessionStore:               cfg.Auth.SessionStore,
+				RejectLegacySessionCookies: cfg.Auth.RejectLegacySessionCookies,
 			}))
 			// Membership admits the caller-supplied project selector header
 			// (issue #318). Without it the edge admits no selector that names

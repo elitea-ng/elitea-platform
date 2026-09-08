@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/ownership"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
 )
@@ -63,12 +64,12 @@ func seedUser(t *testing.T, pool *pgxpool.Pool, id int64, email string) {
 	}
 }
 
-func createTestApplication(t *testing.T, repo *ApplicationsRepo, name string, ownerID int64, version *applications.Version) applications.Application {
+func createTestApplication(t *testing.T, repo *ApplicationsRepo, name string, authorID int64, version *applications.Version) applications.Application {
 	t.Helper()
 	app, err := repo.Create(testContext(t), applications.CreateRequest{
 		ProjectID:      testProjectID,
 		Name:           name,
-		OwnerID:        ownerID,
+		AuthorID:       ownership.UserID(authorID),
 		InitialVersion: version,
 	})
 	if err != nil {
@@ -81,12 +82,22 @@ func createTestApplication(t *testing.T, repo *ApplicationsRepo, name string, ow
 // Create — owner threading, atomic initial version, returned identifiers
 // ─────────────────────────────────────────────────────────────────────────────
 
-func TestApplicationsRepoPostgres_CreateStoresAuthenticatedOwnerNotUserOne(t *testing.T) {
+// The two columns hold two different kinds of number, and this test reads both
+// back from one row (#533).
+//
+// `applications.owner_id` is the owning PROJECT. This repository wrote the
+// authenticated principal into it, so the row said that project 7 owned an
+// agent that lives in schema p_1. Every legacy read filters
+// `Application.owner_id == project_id`, so the agent was invisible to the
+// legacy runtime and to any join written on the project meaning.
+//
+// `application_versions.author_id` is the USER, and it keeps the principal.
+func TestApplicationsRepoPostgres_CreateStoresTheProjectAsOwnerAndThePrincipalAsAuthor(t *testing.T) {
 	repo, pool := newApplicationsTestRepo(t)
 	ctx := testContext(t)
 	seedUser(t, pool, 7, "seven@elitea.ai")
 
-	app := createTestApplication(t, repo, "owned-by-seven", 7, &applications.Version{Name: "base"})
+	app := createTestApplication(t, repo, "authored-by-seven", 7, &applications.Version{Name: "base"})
 
 	var ownerID, authorID int64
 	if err := pool.QueryRow(ctx, `
@@ -95,14 +106,17 @@ func TestApplicationsRepoPostgres_CreateStoresAuthenticatedOwnerNotUserOne(t *te
 		WHERE a.id = $1`, app.ID).Scan(&ownerID, &authorID); err != nil {
 		t.Fatalf("read back owner: %v", err)
 	}
-	if ownerID != 7 {
-		t.Errorf("applications.owner_id = %d, want the authenticated principal 7", ownerID)
+	if ownerID != 1 {
+		t.Errorf("applications.owner_id = %d, want the project of schema p_1, which is 1", ownerID)
 	}
 	if authorID != 7 {
 		t.Errorf("application_versions.author_id = %d, want the authenticated principal 7", authorID)
 	}
-	if app.OwnerID != "7" || app.CreatedBy != "7" {
-		t.Errorf("response owner_id=%q created_by=%q, want both \"7\"", app.OwnerID, app.CreatedBy)
+	if app.OwnerID != "1" {
+		t.Errorf("response owner_id = %q, want the project \"1\"", app.OwnerID)
+	}
+	if app.CreatedBy != "" {
+		t.Errorf("response created_by = %q, want it empty: the table has no creator column", app.CreatedBy)
 	}
 }
 
@@ -228,7 +242,7 @@ func TestApplicationsRepoPostgres_CreateRollsBackWhenTheInitialVersionFails(t *t
 	_, err := repo.Create(ctx, applications.CreateRequest{
 		ProjectID:      testProjectID,
 		Name:           "half-created",
-		OwnerID:        1,
+		AuthorID:       1,
 		InitialVersion: &applications.Version{Name: strings.Repeat("v", 129)},
 	})
 	if err == nil {
@@ -279,7 +293,7 @@ func TestApplicationsRepoPostgres_NonNumericProjectIDNeverReachesSQL(t *testing.
 				}(),
 				"Get": func() error { _, err := repo.Get(ctx, projectID, "1"); return err }(),
 				"Create": func() error {
-					_, err := repo.Create(ctx, applications.CreateRequest{ProjectID: projectID, Name: "x", OwnerID: 1})
+					_, err := repo.Create(ctx, applications.CreateRequest{ProjectID: projectID, Name: "x", AuthorID: 1})
 					return err
 				}(),
 				"Update": func() error {
@@ -410,15 +424,17 @@ func TestApplicationsRepoPostgres_ListFiltersPaginatesAndAttributes(t *testing.T
 		t.Errorf("page=%d page_size=%d, want 2/2", paged.Page, paged.PageSize)
 	}
 
-	// Author attribution joins public.auth_core__user on owner_id.
+	// Author attribution joins public.auth_core__user on the VERSION author.
+	// `owner_id` is the owning project, so the row's owner_id is the project
+	// and the author is the principal that wrote the version (#533).
 	if len(classic.Rows) == 0 || len(classic.Rows[0].Authors) != 1 {
 		t.Fatalf("rows[0] = %+v, want exactly one author", classic.Rows)
 	}
 	if classic.Rows[0].Authors[0].Email != "five@elitea.ai" || classic.Rows[0].Authors[0].ID != "5" {
 		t.Errorf("author = %+v, want id 5 five@elitea.ai", classic.Rows[0].Authors[0])
 	}
-	if classic.Rows[0].OwnerID != "5" {
-		t.Errorf("row owner_id = %q, want \"5\"", classic.Rows[0].OwnerID)
+	if classic.Rows[0].OwnerID != "1" {
+		t.Errorf("row owner_id = %q, want the project \"1\"", classic.Rows[0].OwnerID)
 	}
 }
 
@@ -432,7 +448,7 @@ func TestApplicationsRepoPostgres_UpdateWritesOnlySuppliedFields(t *testing.T) {
 	seedUser(t, pool, 1, "one@elitea.ai")
 
 	app, err := repo.Create(ctx, applications.CreateRequest{
-		ProjectID: testProjectID, Name: "before", Description: "keep me", Icon: "icon-a", OwnerID: 1,
+		ProjectID: testProjectID, Name: "before", Description: "keep me", Icon: "icon-a", AuthorID: 1,
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -703,6 +719,67 @@ func TestApplicationsRepoPostgres_UpdateVersionWritesOnlySuppliedFields(t *testi
 	}
 }
 
+// TestApplicationsRepoPostgres_UpdateVersionClearsExplicitEmptyStrings covers
+// #824. The test above proves an OMITTED field is left alone; that behaviour
+// was implemented as "an empty value is left alone", so a client that cleared
+// its welcome message got a 201 and read the old text back. The two cases only
+// come apart when both are asserted in one test, which is why they live side
+// by side.
+func TestApplicationsRepoPostgres_UpdateVersionClearsExplicitEmptyStrings(t *testing.T) {
+	repo, pool := newApplicationsTestRepo(t)
+	ctx := testContext(t)
+	seedUser(t, pool, 1, "one@elitea.ai")
+
+	app := createTestApplication(t, repo, "clearable", 1, &applications.Version{
+		Name:           "base",
+		Instructions:   "x",
+		WelcomeMessage: "x",
+	})
+	versionID := app.Versions[0].ID
+
+	// Present with an empty value CLEARS the column.
+	cleared, err := repo.UpdateVersion(ctx, testProjectID, app.ID, versionID, applications.Version{
+		Present: applications.VersionFieldSet{Instructions: true, WelcomeMessage: true},
+	})
+	if err != nil {
+		t.Fatalf("clearing update: %v", err)
+	}
+	if cleared.Instructions != "" {
+		t.Errorf("instructions = %q, want cleared", cleared.Instructions)
+	}
+	if cleared.WelcomeMessage != "" {
+		t.Errorf("welcome_message = %q, want cleared", cleared.WelcomeMessage)
+	}
+
+	// Read it back through the repository's own read path, not the UPDATE's
+	// RETURNING projection: a SET list that never ran would still echo the
+	// values it was handed if the echo came from the request.
+	readBack, err := repo.GetVersion(ctx, testProjectID, app.ID, versionID)
+	if err != nil {
+		t.Fatalf("get version: %v", err)
+	}
+	if readBack.Instructions != "" || readBack.WelcomeMessage != "" {
+		t.Errorf("stored row still holds the old text: %+v", readBack)
+	}
+
+	// Write a value back, then omit the fields: the row must not change.
+	if _, err := repo.UpdateVersion(ctx, testProjectID, app.ID, versionID, applications.Version{
+		Instructions:   "y",
+		WelcomeMessage: "y",
+	}); err != nil {
+		t.Fatalf("rewriting update: %v", err)
+	}
+	untouched, err := repo.UpdateVersion(ctx, testProjectID, app.ID, versionID, applications.Version{
+		Meta: map[string]any{"note": "unrelated"},
+	})
+	if err != nil {
+		t.Fatalf("unrelated update: %v", err)
+	}
+	if untouched.Instructions != "y" || untouched.WelcomeMessage != "y" {
+		t.Errorf("an omitted field was blanked: %+v", untouched)
+	}
+}
+
 func TestApplicationsRepoPostgres_ListVersionsIsNewestFirstAndScopedToTheApplication(t *testing.T) {
 	repo, pool := newApplicationsTestRepo(t)
 	ctx := testContext(t)
@@ -962,7 +1039,7 @@ func TestApplicationsRepoPostgres_WritingTheDerivedVersionConfigIsRejected(t *te
 			}
 
 			if _, err := repo.Create(ctx, applications.CreateRequest{
-				ProjectID: testProjectID, Name: "cfg-app-" + label, OwnerID: 1, Config: &cfg,
+				ProjectID: testProjectID, Name: "cfg-app-" + label, AuthorID: 1, Config: &cfg,
 			}); err == nil {
 				t.Fatal("Create silently accepted a derived config field")
 			}

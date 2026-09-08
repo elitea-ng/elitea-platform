@@ -90,6 +90,38 @@ these checks on every values file.
 {{- if and (eq $posture "public-unrestricted") $allowlist -}}
 {{- fail "egressPosture=\"public-unrestricted\" contradicts env.GATEWAY_EGRESS_ALLOWLIST, which is not empty. A non-empty allowlist makes the gateway restrict api_base hosts and permit private destinations, which is the \"allowlist\" posture. Set egressPosture=\"allowlist\", or clear env.GATEWAY_EGRESS_ALLOWLIST." -}}
 {{- end -}}
+
+{{/*
+  Guard #3, budget enforcement at startup — issue #304.
+
+  The budget counters live in NATS. A gateway with no GATEWAY_NATS_URL wires no
+  budget gate, admits every request, bills nothing, AND reports ready: the
+  /readyz gate is scoped to a CONFIGURED NATS, so an unconfigured one looks like
+  the deliberate NATS-less posture it also is. Every ceiling an operator authors
+  on the governance page is then ignored, with no probe and no log line at the
+  moment the ceiling is saved.
+
+  deployment.yaml fills GATEWAY_NATS_URL from the top-level `nats` block when
+  env does not set it, so the empty case reaches a pod only when that block
+  names no service. This refuses that combination at render time.
+
+  LLM_BUDGET_REQUIRE_ENFORCEMENT is checked here as well, because it is the one
+  setting that can turn the binary's own startup refusal off. Only three values
+  exist; the binary reads any other one as "auto", and a values file that says
+  "false" while the operator believes it says "off" is exactly the silent-drift
+  shape this file exists to stop.
+*/}}
+{{- $require := get $env "LLM_BUDGET_REQUIRE_ENFORCEMENT" | toString -}}
+{{- $requireAllowed := list "" "auto" "on" "off" -}}
+{{- if not (has $require $requireAllowed) -}}
+{{- fail (printf "env.LLM_BUDGET_REQUIRE_ENFORCEMENT must be one of auto, on or off, and it is %q. cmd/elitea-llm-gateway reads any other value as \"auto\", so this value does not do what it says. Use \"on\" to refuse to start whenever the budget gate is not wired, \"auto\" (the default) to refuse only when budgets are authored and GATEWAY_NATS_URL is empty, or \"off\" to serve unmetered on purpose (issue #304)." $require) -}}
+{{- end -}}
+{{- if and (eq $require "off") (not .Values.llmGateway.acknowledgeUnenforcedBudgets) -}}
+{{- fail "env.LLM_BUDGET_REQUIRE_ENFORCEMENT=\"off\" turns off the startup refusal, so this gateway starts and serves /llm even when it can enforce no budget at all. Set llmGateway.acknowledgeUnenforcedBudgets=true to state that this deployment accepts unmetered spend, or remove the setting to keep the default \"auto\" posture (issue #304)." -}}
+{{- end -}}
+{{- if and (not (get $env "GATEWAY_NATS_URL")) (not .Values.nats.service) -}}
+{{- fail "the gateway would render with an empty GATEWAY_NATS_URL: env.GATEWAY_NATS_URL is unset and the top-level nats.service names no NATS. The budget counters live in NATS, so that pod enforces no ceiling, bills nothing, and still reports ready — and it refuses to start once a budget row exists (issue #304). Set nats.service, or set env.GATEWAY_NATS_URL to the address of a NATS this deployment shares with the scheduler." -}}
+{{- end -}}
 {{- end }}
 
 {{- define "elitea-llm-gateway.serviceAccountName" -}}

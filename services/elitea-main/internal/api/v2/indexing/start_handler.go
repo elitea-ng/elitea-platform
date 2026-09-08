@@ -13,6 +13,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	toolkitrun "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkitrun"
 	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
 	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
@@ -34,6 +35,18 @@ type StartUseCase interface {
 
 type StartHandler struct {
 	useCase StartUseCase
+	// toolRuns owns the SYNCHRONOUS branch of this path (#340).
+	//
+	// This handler is registered at indexingapi.CurrentIndexStartPath, which is
+	// the SAME string as the toolkits router's `test_toolkit_tool` route, and
+	// chi resolves this explicit registration before that subrouter's wildcard.
+	// So wherever the runtime is composed, THIS is the handler a tool run
+	// reaches — which is why the synchronous branch belongs here and not only
+	// on the shadowed sibling. The full route decision is recorded in
+	// internal/application/toolkitcalltool/doc.go.
+	//
+	// Nil keeps the two refusals below exactly as they were.
+	toolRuns toolkitrun.UseCase
 }
 
 func NewStartHandler(useCase StartUseCase) (*StartHandler, error) {
@@ -43,9 +56,30 @@ func NewStartHandler(useCase StartUseCase) (*StartHandler, error) {
 	return &StartHandler{useCase: useCase}, nil
 }
 
-// Start maps only the current asynchronous index_data branch. Synchronous
-// toolkit tests and every other tool remain on the current implementation
-// until their terminal result and streaming contracts are migrated.
+// NewStartHandlerWithToolRuns adds the synchronous tool-run branch. The
+// asynchronous index_data half is unchanged.
+func NewStartHandlerWithToolRuns(useCase StartUseCase, toolRuns toolkitrun.UseCase) (*StartHandler, error) {
+	handler, err := NewStartHandler(useCase)
+	if err != nil {
+		return nil, err
+	}
+	if toolRuns == nil {
+		return nil, errors.New("tool-run use case is required")
+	}
+	handler.toolRuns = toolRuns
+	return handler, nil
+}
+
+// Start serves two branches of one path, selected by `await_response` exactly
+// as pylon selects them:
+//
+//	await_response=false  the asynchronous index_data admission (task id only)
+//	anything else         one synchronous tool run, answered with its result
+//
+// The synchronous branch used to be a validation refusal — "Only asynchronous
+// index_data admission is supported" — because nothing in this service could
+// run a tool. It is now the tool run, when one is composed; without a use case
+// the refusal is unchanged.
 func (h *StartHandler) Start(w http.ResponseWriter, r *http.Request) {
 	projectID, ok := positiveCanonicalID(chi.URLParam(r, "projectID"))
 	if !ok {
@@ -53,6 +87,10 @@ func (h *StartHandler) Start(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !strings.EqualFold(r.URL.Query().Get("await_response"), "false") {
+		if h.toolRuns != nil {
+			h.runTool(w, r, projectID)
+			return
+		}
 		writeValidationError(w, "await_response", "Only asynchronous index_data admission is supported")
 		return
 	}
@@ -85,6 +123,10 @@ func (h *StartHandler) Start(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if body.ToolName != indexingapp.IndexDataToolName {
+		// The asynchronous branch is index_data's alone. A caller that asked
+		// for another tool asynchronously is asking for a durable run whose
+		// result nothing on this path would ever hand back, which is why this
+		// stays a refusal while the synchronous branch above became a run.
 		writeValidationError(w, "tool_name", "Input should be 'index_data'")
 		return
 	}
@@ -320,4 +362,37 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(value)
+}
+
+// runTool is the synchronous branch. It takes the caller's identity from the
+// authenticated context and the toolkit from the body, never the settings — see
+// toolkitrun.Body for that rule and what it costs.
+func (h *StartHandler) runTool(w http.ResponseWriter, r *http.Request, projectID int64) {
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/json" {
+		writeError(w, http.StatusUnsupportedMediaType, "Content-Type must be application/json")
+		return
+	}
+	user, ok := auth.UserFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	actorUserID, ok := user.OwningUserID()
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, toolkitrun.MaxRequestBodyBytes)
+	request, err := toolkitrun.DecodeRequest(r, projectID, actorUserID, 0)
+	if err != nil {
+		toolkitrun.WriteInvalidRequest(w)
+		return
+	}
+	outcome, err := h.toolRuns.RunTool(r.Context(), request)
+	if err != nil {
+		toolkitrun.WriteError(w, err)
+		return
+	}
+	toolkitrun.WriteOutcome(w, outcome)
 }

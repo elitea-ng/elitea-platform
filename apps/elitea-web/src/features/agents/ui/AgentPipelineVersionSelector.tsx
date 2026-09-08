@@ -3,7 +3,6 @@ import { useCallback, useMemo, useState } from 'react';
 
 import CheckIcon from '@mui/icons-material/Check';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
-import PushPinOutlinedIcon from '@mui/icons-material/PushPinOutlined';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import Box from '@mui/material/Box';
 import CircularProgress from '@mui/material/CircularProgress';
@@ -13,13 +12,13 @@ import MenuItem from '@mui/material/MenuItem';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 
-import { isSetDefaultDisabled } from '@/entities/version';
 import { t } from '@/shared/i18n';
 import { combineSx } from '@/shared/ui/lib/combineSx';
 import { RefreshIcon } from '@/shared/ui/icons/refresh-icon';
 
 import type { AgentPipelineVersionOption } from '../lib/types';
 
+import { renderDeleteItem, renderSetDefaultItem } from './AgentVersionMenuCommands';
 import {
   contentWrapperSx,
   defaultMarkerSx,
@@ -33,8 +32,6 @@ import {
   selectedCheckIconSx,
   selectedMenuItemSx,
   selectorSx,
-  setDefaultIconSx,
-  setDefaultItemSx,
   versionHeaderSx,
   versionHeaderTitleSx,
   versionTextInvalidSx,
@@ -86,7 +83,9 @@ const LATEST_VERSION_NAME = 'base';
  * own function scope for the `oxlint` `complexity` budget (≤12; this
  * component measured 17 with everything inline), without also creating a
  * NEW component the §3.5 12-props budget would apply to (its checker keys
- * on a capitalised function name).
+ * on a capitalised function name). The two COMMAND items the menu ends with
+ * are the same kind of function, moved to `AgentVersionMenuCommands.tsx` for
+ * the §3.5 400-line file budget.
  */
 export interface AgentPipelineVersionSelectorProps {
   readonly applicationVersionId: number | string | undefined;
@@ -122,6 +121,24 @@ export interface AgentPipelineVersionSelectorProps {
    */
   readonly defaultVersionId?: number | undefined;
   readonly onSetDefaultVersion?: ((version: AgentPipelineVersionOption) => void) | undefined;
+  /**
+   * #147 — the "delete version" item, the other half of JRNY-015's middle
+   * step. It acts on the version the menu currently marks as selected, the
+   * same subject `onSetDefaultVersion` acts on, and it is the SAME kind of
+   * command item for the same `nested-interactive` reason recorded above.
+   *
+   * The baseline reaches this behaviour from the "..." control's menu
+   * (`ApplicationControls.jsx:145-156`), beside "Set as a default". This app
+   * has no such control on the agent editor, and the version bar is where
+   * every other version-scoped affordance already lives, so both items sit
+   * in this one menu.
+   *
+   * Caller-owned like the other two callbacks: this component opens no
+   * dialog and sends no request. Omit `onDeleteVersion` and no delete item
+   * is rendered — that is how the read-only viewer and the tool card keep
+   * the plain version list they had.
+   */
+  readonly onDeleteVersion?: ((version: AgentPipelineVersionOption) => void) | undefined;
 }
 
 interface DisplayVersion extends AgentPipelineVersionOption {
@@ -184,49 +201,6 @@ function renderTrigger(params: { displayText: string; isInvalid: boolean; isSwit
   );
 }
 
-/**
- * #147's command item — see the `onSetDefaultVersion` prop doc for why the
- * affordance is one item here and a per-row pin in the baseline.
- *
- * Eligibility is `entities/version`'s promoted `isSetDefaultDisabled`, whose
- * own doc comment cites the baseline's `disableSetAsADefault` (already the
- * default, no default recorded yet and this is the "base" fallback, or the
- * version is published). That selector was written for `VersionSummary`
- * (string ids, from the normalised entity layer) and this menu's option
- * carries a numeric id, so the row is ADAPTED rather than the rule copied —
- * a second, drifting definition of "which versions may be pinned" is
- * exactly the cost this app has already paid elsewhere.
- */
-function renderSetDefaultItem(params: {
-  selectedVersion: DisplayVersion | undefined;
-  defaultVersionId: number | undefined;
-  onSetDefaultVersion: ((version: AgentPipelineVersionOption) => void) | undefined;
-}): ReactNode {
-  const { selectedVersion, defaultVersionId, onSetDefaultVersion } = params;
-  if (onSetDefaultVersion === undefined || selectedVersion === undefined) return null;
-  const disabled = isSetDefaultDisabled(
-    {
-      id: String(selectedVersion.id),
-      name: selectedVersion.name,
-      status: selectedVersion.status ?? '',
-      agentType: '',
-      createdAt: selectedVersion.created_at ?? '',
-    },
-    defaultVersionId === undefined ? undefined : String(defaultVersionId),
-  );
-  return (
-    <MenuItem
-      data-testid="agent-version-set-default"
-      disabled={disabled}
-      onClick={() => onSetDefaultVersion(selectedVersion)}
-      sx={setDefaultItemSx}
-    >
-      <PushPinOutlinedIcon sx={setDefaultIconSx} />
-      <Typography variant="bodyMedium">{t('agents.versionSelector.setDefault', 'Set as default')}</Typography>
-    </MenuItem>
-  );
-}
-
 function renderMenu(params: {
   anchorEl: HTMLElement | null;
   onClose: () => void;
@@ -237,9 +211,10 @@ function renderMenu(params: {
   onVersionClick: (version: DisplayVersion) => () => void;
   defaultVersionId: number | undefined;
   onSetDefaultVersion: ((version: AgentPipelineVersionOption) => void) | undefined;
+  onDeleteVersion: ((version: AgentPipelineVersionOption) => void) | undefined;
 }): ReactNode {
   const { anchorEl, onClose, isRefreshingVersions, onRefresh, displayVersions, selectedVersion, onVersionClick } = params;
-  const { defaultVersionId, onSetDefaultVersion } = params;
+  const { defaultVersionId, onSetDefaultVersion, onDeleteVersion } = params;
   const selectedVersionId = selectedVersion?.id;
   return (
     <Menu
@@ -300,6 +275,7 @@ function renderMenu(params: {
       })}
 
       {renderSetDefaultItem({ selectedVersion, defaultVersionId, onSetDefaultVersion })}
+      {renderDeleteItem({ selectedVersion, defaultVersionId, onDeleteVersion })}
     </Menu>
   );
 }
@@ -314,6 +290,7 @@ export function AgentPipelineVersionSelector({
   onSelectVersion,
   defaultVersionId,
   onSetDefaultVersion,
+  onDeleteVersion,
 }: AgentPipelineVersionSelectorProps): ReactNode {
   const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
 
@@ -365,6 +342,17 @@ export function AgentPipelineVersionSelector({
     [onSetDefaultVersion],
   );
 
+  /* Same reason as `handleSetDefaultClick`: the caller answers this with a
+     confirm dialog, and an open `Menu` behind a modal stacks two focus
+     traps. */
+  const handleDeleteClick = useCallback(
+    (version: AgentPipelineVersionOption) => {
+      setAnchorEl(null);
+      onDeleteVersion?.(version);
+    },
+    [onDeleteVersion],
+  );
+
   const content = (
     <Box sx={contentWrapperSx}>
       {renderTrigger({ displayText, isInvalid: isInvalidVersionReference, isSwitching: isSwitchingVersion, disabled, isOpen: !!anchorEl, onClick: handleClick })}
@@ -378,6 +366,7 @@ export function AgentPipelineVersionSelector({
         onVersionClick: handleVersionClick,
         defaultVersionId,
         onSetDefaultVersion: onSetDefaultVersion === undefined ? undefined : handleSetDefaultClick,
+        onDeleteVersion: onDeleteVersion === undefined ? undefined : handleDeleteClick,
       })}
     </Box>
   );

@@ -62,6 +62,24 @@ type BrandSource interface {
 // ErrSuppressed is returned when sending is disabled by shadow mode.
 var ErrSuppressed = errors.New("outbound e-mail is suppressed on a shadow deployment")
 
+// TransportResolver supplies the transport for ONE send.
+//
+// It exists because outbound e-mail is configurable at runtime (gap G7):
+// `internal/emailsettings` merges the admin page's rows over the environment
+// defaults, so a corrected relay host takes effect on the next message rather
+// than on the next deployment. The resolver is consulted per send, never
+// cached here — a Composer that remembered the first answer would be the
+// boot-time read this change removed, one layer up.
+//
+// The seam is declared with plain values rather than the settings package's
+// own type so that this package does not import it; the dependency runs one
+// way, from the resolver to the transport.
+type TransportResolver interface {
+	// Transport returns the transport to submit through, the public base URL
+	// links are absolutised against, and whether a message can be sent at all.
+	Transport(ctx context.Context) (transport.Transport, string, bool)
+}
+
 // Config wires a Composer.
 type Config struct {
 	Transport transport.Transport
@@ -71,6 +89,10 @@ type Config struct {
 	PublicBaseURL string
 	// Suppressed renders but never sends (shadow mode).
 	Suppressed bool
+	// Resolver, when set, decides the transport and the base URL per send.
+	// Transport and PublicBaseURL above then serve only as the answer for a
+	// resolver that reports nothing configured.
+	Resolver TransportResolver
 }
 
 // Composer renders and sends.
@@ -79,6 +101,7 @@ type Composer struct {
 	brand      BrandSource
 	baseURL    string
 	suppressed bool
+	resolver   TransportResolver
 	html       *template.Template
 	text       *texttemplate.Template
 }
@@ -109,16 +132,62 @@ func New(config Config) (*Composer, error) {
 		brand:      config.Brand,
 		baseURL:    base,
 		suppressed: config.Suppressed,
+		resolver:   config.Resolver,
 		html:       html,
 		text:       text,
 	}, nil
 }
 
-// Configured reports whether a real transport is wired — the fact the invite
-// handlers report as `invitation_delivered`'s precondition.
-func (c *Composer) Configured() bool {
+// resolved is one send's effective transport and origin.
+type resolved struct {
+	transport  transport.Transport
+	baseURL    string
+	configured bool
+}
+
+// resolve answers what this send may use.
+//
+// It takes a context because the resolver reads the database, and it is called
+// on EVERY send rather than once: the whole point of the settings surface is
+// that a save takes effect without a restart, and a Composer that resolved at
+// construction would have reintroduced the restart.
+func (c *Composer) resolve(ctx context.Context) resolved {
+	if c.resolver != nil {
+		chosen, base, configured := c.resolver.Transport(ctx)
+		if configured {
+			if base == "" {
+				base = c.baseURL
+			}
+			return resolved{transport: chosen, baseURL: strings.TrimRight(base, "/"), configured: true}
+		}
+		// The resolver is authoritative when it can answer. When it cannot,
+		// the statically wired transport is still the deployment's, so it is
+		// the fallback rather than an immediate refusal.
+		if base != "" {
+			return resolved{transport: c.transport, baseURL: strings.TrimRight(base, "/"), configured: c.staticConfigured()}
+		}
+	}
+	return resolved{transport: c.transport, baseURL: c.baseURL, configured: c.staticConfigured()}
+}
+
+// staticConfigured is the pre-G7 test: a transport that is not the null one.
+func (c *Composer) staticConfigured() bool {
 	_, null := c.transport.(transport.NullTransport)
-	return !null && !c.suppressed
+	return !null
+}
+
+// Configured reports whether a message can actually be submitted — the fact
+// the invite handlers report as `invitation_delivered`'s precondition.
+//
+// It takes a context because the answer now depends on rows an administrator
+// can change while the process runs. A parameterless version would have had to
+// answer from boot-time state, which is exactly the staleness this surface
+// exists to remove.
+func (c *Composer) Configured(ctx context.Context) bool {
+	if c.suppressed {
+		return false
+	}
+	return c.resolve(ctx).configured
 }
 
 // Invitation is the data an invitation e-mail carries.
@@ -135,34 +204,47 @@ type ModerationDecision struct {
 	Message string
 }
 
-// SendInvitation mails the invitation. The recipient is the invited address.
+// SendInvitation mails the invitation.
+//
+// The recipient is the invited address and the action link is the deployment's
+// sign-in URL under the RESOLVED public base URL — so an operator who corrects
+// that origin on Admin › E-mail fixes the link in the next invitation, not in
+// the next release.
 func (c *Composer) SendInvitation(ctx context.Context, invitation Invitation) error {
-	brand := c.brandView(ctx)
+	send := c.resolve(ctx)
+	brand := c.brandView(ctx, send.baseURL)
 	brand.Invitation = invitation
 	brand.Subject = "You've been invited to " + brand.ProductName
 	brand.ActionLabel = "Sign in to " + brand.ProductName
-	brand.ActionURL = c.absolute("/")
-	return c.send(ctx, "invitation", invitation.Email, invitation.Name, brand)
+	brand.ActionURL = absolute(send.baseURL, "/")
+	return c.send(ctx, send, "invitation", invitation.Email, invitation.Name, brand)
 }
 
 // SendModerationDecision mails the pre-rendered decision sentence the
 // notification row already carries.
 func (c *Composer) SendModerationDecision(ctx context.Context, decision ModerationDecision) error {
-	brand := c.brandView(ctx)
+	send := c.resolve(ctx)
+	brand := c.brandView(ctx, send.baseURL)
 	brand.Moderation = decision
 	brand.Subject = brand.ProductName + ": moderation decision"
 	brand.ActionLabel = "Open " + brand.ProductName
-	brand.ActionURL = c.absolute("/")
-	return c.send(ctx, "moderation", decision.Email, "", brand)
+	brand.ActionURL = absolute(send.baseURL, "/")
+	return c.send(ctx, send, "moderation", decision.Email, "", brand)
 }
 
-// SendTest mails the Branding page's test message.
+// SendTest mails the test message the E-mail and Branding pages both offer.
+//
+// It goes through the SAME resolution as every other message, which is what
+// makes the button a test of the settings rather than a test of the process's
+// environment: an operator who has just saved a relay host presses it and
+// finds out whether that host works.
 func (c *Composer) SendTest(ctx context.Context, to string) error {
-	brand := c.brandView(ctx)
+	send := c.resolve(ctx)
+	brand := c.brandView(ctx, send.baseURL)
 	brand.Subject = brand.ProductName + ": test e-mail"
 	brand.ActionLabel = "Open " + brand.ProductName
-	brand.ActionURL = c.absolute("/")
-	return c.send(ctx, "test", to, "", brand)
+	brand.ActionURL = absolute(send.baseURL, "/")
+	return c.send(ctx, send, "test", to, "", brand)
 }
 
 // Render returns the HTML and text bodies without sending — the preview and
@@ -179,7 +261,7 @@ var PreviewKinds = []string{"invitation", "moderation", "test"}
 // The brand view is derived from `pack` rather than the live resolver, so a
 // package previews the brand it contains.
 func (c *Composer) Preview(pack *v2branding.Pack, kind string) (html, text string, err error) {
-	view := c.viewFor(pack)
+	view := c.viewFor(pack, c.baseURL)
 	switch kind {
 	case "invitation":
 		view.Invitation = Invitation{Email: "ada@example.com", Name: "Ada", InvitedBy: "grace@example.com", ProjectName: "Example project"}
@@ -195,7 +277,7 @@ func (c *Composer) Preview(pack *v2branding.Pack, kind string) (html, text strin
 	default:
 		return "", "", fmt.Errorf("mailer: unknown preview kind %q", kind)
 	}
-	view.ActionURL = c.absolute("/")
+	view.ActionURL = absolute(c.baseURL, "/")
 	return c.render(kind, view)
 }
 
@@ -229,7 +311,7 @@ var defaultColors = Colors{
 
 // BrandView derives the view from the resolved pack, or the product default
 // when nothing is served.
-func (c *Composer) brandView(ctx context.Context) View {
+func (c *Composer) brandView(ctx context.Context, baseURL string) View {
 	view := View{
 		ProductName: "Elitea",
 		FontFamily:  `Helvetica Neue, Helvetica, Arial, sans-serif`,
@@ -240,11 +322,16 @@ func (c *Composer) brandView(ctx context.Context) View {
 		return view
 	}
 	snapshot := c.brand.Current(ctx)
-	return c.viewFor(snapshot.Pack)
+	return c.viewFor(snapshot.Pack, baseURL)
 }
 
 // viewFor derives the view from one pack; nil means the product default.
-func (c *Composer) viewFor(pack *v2branding.Pack) View {
+//
+// baseURL is a PARAMETER rather than the Composer's field because the origin
+// is resolved per send (gap G7): the logo in a message must be absolutised
+// against the origin that message's configuration names, not against the one
+// the process booted with.
+func (c *Composer) viewFor(pack *v2branding.Pack, baseURL string) View {
 	view := View{
 		ProductName: "Elitea",
 		FontFamily:  `Helvetica Neue, Helvetica, Arial, sans-serif`,
@@ -284,18 +371,21 @@ func (c *Composer) viewFor(pack *v2branding.Pack) View {
 		view.Radius = radius
 	}
 	if pack.Assets.LogoEmail != nil {
-		if path := safeAssetPath(*pack.Assets.LogoEmail); path != "" && c.baseURL != "" {
-			view.LogoURL = c.baseURL + path
+		if path := safeAssetPath(*pack.Assets.LogoEmail); path != "" && baseURL != "" {
+			view.LogoURL = baseURL + path
 		}
 	}
 	return view
 }
 
-func (c *Composer) absolute(path string) string {
-	if c.baseURL == "" {
+// absolute joins a resolved origin and a path. An empty origin yields an empty
+// link rather than a relative one: a relative href in an e-mail resolves
+// against the mail client, which is nowhere.
+func absolute(baseURL, path string) string {
+	if baseURL == "" {
 		return ""
 	}
-	return c.baseURL + path
+	return baseURL + path
 }
 
 func (c *Composer) render(kind string, view View) (string, string, error) {
@@ -317,7 +407,13 @@ func (c *Composer) render(kind string, view View) (string, string, error) {
 	return html.String(), strings.TrimSpace(text.String()) + "\n", nil
 }
 
-func (c *Composer) send(ctx context.Context, kind, to, toName string, view View) error {
+// send submits one rendered message through the transport this send resolved.
+//
+// The transport is a PARAMETER rather than the Composer's field, and the
+// caller resolved it before building the view: the view's logo and action link
+// are absolutised against the same resolution, so a message cannot carry one
+// deployment's origin over another deployment's relay.
+func (c *Composer) send(ctx context.Context, send resolved, kind, to, toName string, view View) error {
 	address, err := mail.ParseAddress(to)
 	if err != nil || address.Address != to {
 		return fmt.Errorf("mailer: recipient %q is not a plain address", to)
@@ -330,7 +426,7 @@ func (c *Composer) send(ctx context.Context, kind, to, toName string, view View)
 		slog.Info("mailer: suppressed on a shadow deployment", "kind", kind, "to", to)
 		return ErrSuppressed
 	}
-	err = c.transport.Send(ctx, transport.Message{
+	err = send.transport.Send(ctx, transport.Message{
 		To:       mail.Address{Name: toName, Address: address.Address},
 		Subject:  view.Subject,
 		Text:     text,

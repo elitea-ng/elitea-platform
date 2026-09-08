@@ -1,0 +1,69 @@
+{
+  "_source": {
+    "source_repository": "deepwiki_plugin",
+    "source_revision": "ce679f11dc31c209cc67f13565b286d5bb28ce58",
+    "files": [
+      {
+        "path": "methods/invoke.py",
+        "bytes": 82868,
+        "sha256": "959f745102c8500df69ae657d99565f7da16348cba2d913b9bad2ff5b896f253"
+      },
+      {
+        "path": "plugin_implementation/registry_manager.py",
+        "bytes": 15798,
+        "sha256": "7b0bea20cd1fabf2ebf8a744d22e9cdc9b1b86542e13fec24977dfba838721cf"
+      }
+    ]
+  },
+  "producer": "methods/invoke.py::Method._resolve_and_deep_research",
+  "how_recorded": "as resolve_and_ask, with self.deep_research stubbed",
+  "cases": {
+    "resolved": {
+      "parameters": {
+        "question": "How is notes-service put together?",
+        "research_type": "architecture"
+      },
+      "deep_research_arguments": {
+        "question": "How is notes-service put together?",
+        "llm_settings": {
+          "model_name": "gpt-4o",
+          "api_base": "http://elitea/llm/v1",
+          "api_key": "<redacted>",
+          "organization": "90200",
+          "max_tokens": 16384
+        },
+        "embedding_model": null,
+        "repo_config": {
+          "provider_type": "github",
+          "provider_config": {},
+          "repository": "acme/notes-service",
+          "branch": "main"
+        },
+        "chat_history": [],
+        "k": 15,
+        "research_type": "architecture",
+        "enable_subagents": true,
+        "repo_identifier_override": "acme/notes-service:main:0000000",
+        "analysis_key_override": "acme--notes-service--main/analysis/repository_analysis.json"
+      },
+      "result_objects": [
+        {
+          "object_type": "report",
+          "result_target": "response",
+          "result_encoding": "plain",
+          "data": "*Deep research on wiki: acme--notes-service--main*\n\n# Architecture\n\nThe notes service is three processes."
+        }
+      ]
+    },
+    "unresolved": {
+      "result_objects": [
+        {
+          "object_type": "report",
+          "result_target": "response",
+          "result_encoding": "plain",
+          "data": "Could not determine which wiki to query for: '?'"
+        }
+      ]
+    }
+  }
+}

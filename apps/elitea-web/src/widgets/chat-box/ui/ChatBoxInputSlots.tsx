@@ -17,7 +17,7 @@ import type { ComponentProps, ReactNode, RefObject } from 'react';
 
 import { AttachmentButton, ChatInternalToolsConfigButton, PlusChatButton, SendButton, VoiceButton } from '@/widgets/chat';
 import type { AttachmentButtonHandle, PlusChatButtonEntitySubmenus, VoiceButtonHandle, VoiceButtonInputHandle } from '@/widgets/chat';
-import { HighlightedText } from '@/features/chat-messages';
+import { FileList, HighlightedText } from '@/features/chat-messages';
 import { NewChatInput } from '@/features/chat-input';
 import { LLMModelSelector } from '@/widgets/llm-model-selector';
 
@@ -27,6 +27,7 @@ import { optField } from './ChatBox.helpers';
 type NewChatInputSlotsType = NonNullable<ComponentProps<typeof NewChatInput>['slots']>;
 type SendControlSlotProps = Parameters<NonNullable<NewChatInputSlotsType['sendControl']>>[0];
 type HighlightOverlaySlotProps = Parameters<NonNullable<NewChatInputSlotsType['highlightOverlay']>>[0];
+type AttachmentListSlotProps = Parameters<NonNullable<NewChatInputSlotsType['attachmentList']>>[0];
 
 type LLMSettingsValues = NonNullable<ComponentProps<typeof LLMModelSelector>['llmSettings']>;
 type LLMModelListItem = NonNullable<ComponentProps<typeof LLMModelSelector>['models']>[number];
@@ -77,11 +78,40 @@ export interface ChatBoxInputSlotsProps {
 export interface ChatBoxInputSlotsResult {
   readonly sendControl: (props: SendControlSlotProps) => ReactNode;
   readonly highlightOverlay: (props: HighlightOverlaySlotProps) => ReactNode;
+  /** The staged-file chips above the text area — `UserInput` invokes it only when a file is staged. */
+  readonly attachmentList: (props: AttachmentListSlotProps) => ReactNode;
   readonly attachmentButton: ReactNode;
   /** `undefined` on the chat surface — the "+" menu owns the modules there. */
   readonly internalToolsConfig: ReactNode;
   readonly voiceButton: ReactNode;
   readonly modelSelector: ReactNode;
+}
+
+/**
+ * The composer's `attachments` PROP bundle — the staged files it shows, as
+ * opposed to the slot that draws them.
+ *
+ * Its own function, and in this file rather than at the call site, for the
+ * reason the whole file exists: `ChatBox.tsx` sits on the §3.5 400-line
+ * ceiling. It is also where the defect was. `ChatBox` held the attachment
+ * state, handed it to the "+" menu (whose capacity counter ticked down) and to
+ * the send path (which uploaded it), and passed NO `attachments` prop to
+ * `NewChatInput` — so `resolveAttachments` defaulted `items` to `[]` and the
+ * composer showed a picked file to nobody. `isUploading`/`uploadProgress` were
+ * missing the same way, which is what left `UploadProgressIndicator`'s
+ * determinate variant unreachable.
+ */
+export function buildChatBoxAttachmentProps(attachments: {
+  readonly state: { readonly attachments: readonly File[]; readonly onAttachFiles: (files: readonly File[]) => void; readonly onDeleteAttachment: (index: number) => void };
+  readonly upload: { readonly isUploading: boolean; readonly uploadProgress: number };
+}): NonNullable<ComponentProps<typeof NewChatInput>['attachments']> {
+  return {
+    items: attachments.state.attachments,
+    onAttachFiles: attachments.state.onAttachFiles,
+    onDeleteAttachment: attachments.state.onDeleteAttachment,
+    isUploading: attachments.upload.isUploading,
+    uploadProgress: attachments.upload.uploadProgress,
+  };
 }
 
 /** `sendControl`'s props depend on its own per-invocation callback argument, so (unlike the other slot props below) they can't be precomputed eagerly — this stays a plain, non-JSX helper (same reasoning as this file's other prop builders: no JSXElement ancestor, so `optField`'s string-literal keys aren't parsed as JSX-nested literals by the `i18next/no-literal-string` gate). */
@@ -143,6 +173,16 @@ export function buildChatBoxInputSlots({ attachments, internalTools, model, refs
   return {
     sendControl: (props: SendControlSlotProps) => <SendButton {...buildSendButtonProps(props)} />,
     highlightOverlay: (props: HighlightOverlaySlotProps) => <HighlightedText text={props.text} ranges={props.ranges} />,
+    // The chips for the files staged on the next message. `UserInput` calls
+    // this slot only when there IS at least one staged file, so the empty
+    // case needs no branch here (`renderAttachmentList`).
+    attachmentList: (props: AttachmentListSlotProps) => (
+      <FileList
+        attachments={props.attachments}
+        onDeleteAttachment={props.onDeleteAttachment}
+        disabled={props.disabled}
+      />
+    ),
     // Baseline `NewChatInput.jsx:239-274`: on the chat surface the "+" menu IS
     // the left-hand control and it SUBSUMES both the paperclip and the
     // internal-tools gear (its own "Attach Files" row and "Modules" submenu).

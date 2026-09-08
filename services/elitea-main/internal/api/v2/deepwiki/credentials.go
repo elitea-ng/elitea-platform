@@ -25,7 +25,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/url"
 	"strings"
 
 	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
@@ -249,32 +248,11 @@ func (r *CredentialResolver) Resolve(
 	return ResolvedToolkit{Payload: payload, Host: host}, nil
 }
 
-// providerHost reads the host the clone will reach.
-//
-// It reads the URL field, not the whole row, and it refuses a value that still
-// carries a secret placeholder: a host assembled from a secret cannot be
-// checked before the decrypt that would reveal it, so such a configuration has
-// no safe order and is refused outright rather than checked against a string
-// containing braces.
+// providerHost reads the host the clone will reach, from the UNEXPANDED
+// row: a host is not a secret, and reading it before the vault is opened is
+// what makes the check-before-decrypt order possible. The parse, and the
+// refusal of a URL assembled from a secret, are material.HostFrom's.
 func providerHost(data map[string]any, provider repositoryProvider) (string, error) {
-	raw := provider.defaultHost
-	if value, ok := data[provider.hostField].(string); ok && strings.TrimSpace(value) != "" {
-		raw = strings.TrimSpace(value)
-	}
-	if raw == "" {
-		return "", fmt.Errorf(
-			"%w: no %s to check against the allowlist",
-			ErrEgressRefused, provider.hostField)
-	}
-	if strings.Contains(raw, "{{secret.") {
-		return "", fmt.Errorf(
-			"%w: %s is built from a secret, so it cannot be checked before decrypting it",
-			ErrEgressRefused, provider.hostField)
-	}
-
-	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Hostname() == "" {
-		return "", fmt.Errorf("%w: %s %q is not a URL", ErrEgressRefused, provider.hostField, raw)
-	}
-	return strings.ToLower(parsed.Hostname()), nil
+	value, _ := data[provider.hostField].(string)
+	return material.HostFrom(value, provider.defaultHost, provider.hostField)
 }

@@ -106,6 +106,9 @@ describe('Pipelines', () => {
             version_name: 'base',
             agent_type: 'pipeline',
             meta: null,
+            tags: [],
+            likes: 0,
+            is_liked: false,
           },
           {
             project_id: '1',
@@ -116,6 +119,9 @@ describe('Pipelines', () => {
             version_name: 'base',
             agent_type: 'pipeline',
             meta: null,
+            tags: [],
+            likes: 0,
+            is_liked: false,
           },
         ],
         total: 2,
@@ -124,5 +130,15 @@ describe('Pipelines', () => {
     renderPipelinesRoute(<Pipelines />, '/pipelines/latest', { projectId: '1' });
 
     expect(await screen.findByText('Latest (2)')).toBeInTheDocument();
+  });
+
+  /** COMPOSITION ROOT — see `pages/agents/Applications.test.tsx` (issue 841). */
+  it('renders its tabs and its import control inside the shared page header', async () => {
+    renderPipelinesRoute(<Pipelines />, '/pipelines/all', { projectId: '9' });
+
+    const header = await screen.findByTestId('page-header');
+    expect(header).toContainElement(await screen.findByTestId('pipelines-tab-all'));
+    expect(header).toContainElement(screen.getByRole('tablist', { name: 'Pipelines' }));
+    expect(header).toContainElement(screen.getByTestId('pipelines-import-button'));
   });
 });

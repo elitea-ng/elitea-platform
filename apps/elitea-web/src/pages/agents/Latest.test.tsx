@@ -20,6 +20,9 @@ function apps(names: readonly string[]) {
       version_name: 'base',
       agent_type: 'classic',
       meta: null,
+      tags: [],
+      likes: 0,
+      is_liked: false,
     })),
     total: names.length,
   };

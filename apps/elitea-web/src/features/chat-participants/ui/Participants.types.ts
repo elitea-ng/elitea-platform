@@ -82,6 +82,16 @@ export interface ParticipantsProps {
   readonly conversationId?: string | number | undefined;
   readonly renderContextBudget?: (props: {
     conversationId: string | number | undefined;
+    /**
+     * True while the rail is showing its 3.25rem collapsed strip. The widget
+     * must render its MINIMAL form there — baseline
+     * `Participants.jsx:120` passes exactly this
+     * (`collapsed && !isSmallWindow`) to `ContextBudgetInfo`, which switches
+     * to `ContextBudgetCollapsed`. Without it the full card was rendered into
+     * a 44px-wide rail, where every line wrapped and the panel overflowed
+     * past the right edge of the viewport.
+     */
+    collapsed?: boolean;
     contextStrategy?: Record<string, unknown>;
     setActiveConversation?: (update: unknown) => void;
     conversationInstructions?: string;

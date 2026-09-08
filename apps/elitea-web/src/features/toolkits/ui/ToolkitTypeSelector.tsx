@@ -1,6 +1,5 @@
-import { type ChangeEvent, type ReactNode, useCallback, useMemo, useState } from 'react';
+import { type ReactNode, useCallback, useMemo } from 'react';
 
-import Box from '@mui/material/Box';
 import Link from '@mui/material/Link';
 import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
@@ -9,10 +8,15 @@ import { ToolInitialValues } from '@/entities/toolkit';
 import type { ToolkitTypeSchemaMap } from '@/entities/toolkit';
 import { docsLink } from '@/shared/brand';
 import { t } from '@/shared/i18n';
+import { useGroupedCategories } from '@/shared/lib/hooks/useGroupedCategories';
 import { CategoryFilter } from '@/shared/ui/CategoryFilter';
 import { CategorySection } from '@/shared/ui/CategorySection';
+import type { CategoryItem } from '@/shared/ui/CategoryItemCard';
+import { GroupedCategory } from '@/shared/ui/GroupedCategory';
 import { NoResultsMessage } from '@/shared/ui/NoResultsMessage';
+import { ToolkitTypeIcon } from '@/shared/ui/ToolkitTypeIcon';
 
+import { McpCategory } from '../lib/constants/mcp.constants';
 import { convertToolkitSchema } from '../lib/helpers/toolkitSchema.helpers';
 import { useIsMcpVisible } from '../api/useIsMcpVisible';
 import { useToolMenuItems } from '../lib/hooks/useToolMenuItems';
@@ -133,18 +137,23 @@ function resolveToolSelection(toolType: string, toolSchemas: ToolkitTypeSchemaMa
  *    map alone (the baseline's own fallback when the schema-derived
  *    function returns nothing) — a real, disclosed narrowing, not an
  *    invented replacement.
- *  - `Category.GroupedCategory` (a single search+chips+grouped-list
- *    component in the baseline) has no matching `shared/ui` component —
- *    `shared/ui/GroupedCategory`'s OWN doc comment documents the identical
- *    split this port makes: `CategoryFilter` (search chrome) composing
- *    `CategorySection` (the item grid) as `children`, rather than one
- *    monolithic component. This selector renders every toolkit-type entry
- *    under a single, un-grouped `CategorySection` (baseline's own
- *    `renderCategory` callback is invoked once per real "category" key the
- *    baseline's `useToolkitSearch` computed; that hook is not in this
- *    unit's owned files and its category-grouping source was not
- *    determinable from the baseline's available context) — client-side text
- *    search over the label is preserved, category-chip grouping is not.
+ *  - `Category.GroupedCategory` is one monolithic search+chips+grouped-list
+ *    component in the baseline; here it is the documented two-part split
+ *    (`CategoryFilter`'s chrome composing `GroupedCategory`'s item region as
+ *    `children`) — the same screen, assembled by composition.
+ *
+ *    **CORRECTED — the grouping itself is no longer dropped.** This file used
+ *    to render every toolkit type under ONE un-grouped `CategorySection` with
+ *    no category chips, on the stated grounds that `useToolkitSearch`'s
+ *    category source "was not determinable from the baseline's available
+ *    context". It is determinable, and it is implemented now:
+ *    `metadata.categories[0]` off the toolkit-type schema for the toolkit and
+ *    application tabs, `Local`/`Remote` for the MCP tab
+ *    (`lib/hooks/useToolMenuItems.ts`'s `toolkitCategory`), with
+ *    `shared/lib/hooks/useGroupedCategories` — the ported baseline hook —
+ *    owning search, chip selection and grouping. That gap was the visible one:
+ *    the production screens show a category-chip row and uppercase
+ *    per-category section headings, and this screen showed neither.
  *  - The `isApplication`/`appType`-URL auto-select effect (baseline lines
  *    155-163, `useParams().appType` + `react-router-dom`) is dropped: this
  *    component owns no route-matching, and no caller in this unit's owned
@@ -176,7 +185,6 @@ function resolveSearchPlaceholder(isApplication: boolean, isMCP: boolean): strin
  */
 const MCP_CREATION_DOCS_PATH = 'integrations/mcp/create-and-use-server-stdio';
 
-const mcpEmptyStateContainerSx: SxProps<Theme> = { display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '12.5rem', textAlign: 'center' };
 const mcpEmptyStateLinkSx: SxProps<Theme> = { textDecoration: 'underline', '&:hover': { cursor: 'pointer', textDecoration: 'underline' } };
 
 /**
@@ -185,39 +193,67 @@ const mcpEmptyStateLinkSx: SxProps<Theme> = { textDecoration: 'underline', '&:ho
  * message (reserved for the non-MCP / genuinely-no-match case below): when
  * there are zero local MCP toolkit types to show, this points the user at
  * the docs page that explains how to create one, rather than telling them
- * to adjust a search that has nothing to search over. Baseline rendered
- * this via `Category.GroupedCategory`'s `allowEmptyCategory={isMCP}` +
- * `renderCategory`'s own `EmptyPlaceholder` slot; this port has no matching
- * grouped-category component (see the module doc comment's own disclosed
- * `Category.GroupedCategory` deviation), so it is rendered as a sibling
- * branch of the plain "no items" case instead.
+ * to adjust a search that has nothing to search over. It is now wired the way
+ * the baseline wires it — `allowEmptyCategory={isMCP}` keeps the empty `Local`
+ * category rendered, and this goes into `CategorySection`'s
+ * `emptyPlaceholder` slot INSIDE the item grid, so it sits left-aligned under
+ * the LOCAL rule (verified against the live production screen) rather than
+ * centred in a 12.5rem box of its own, which is what the previous
+ * sibling-branch rendering produced.
  */
 function McpNoLocalServersMessage(): ReactNode {
   const docsUrl = useMemo(() => docsLink(MCP_CREATION_DOCS_PATH), []);
   return (
-    <Box sx={mcpEmptyStateContainerSx}>
-      <Typography
-        variant="bodyMedium"
-        color="text.primary"
+    <Typography
+      variant="bodyMedium"
+      color="text.primary"
+    >
+      {t('toolkits.toolkitTypeSelector.mcpEmptyStatePrefix', 'Still no local MCP available. Follow creation guides in our ')}
+      <Link
+        href={docsUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        sx={mcpEmptyStateLinkSx}
       >
-        {t('toolkits.toolkitTypeSelector.mcpEmptyStatePrefix', 'Still no local MCP available. Follow creation guides in our ')}
-        <Link
-          href={docsUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          sx={mcpEmptyStateLinkSx}
-        >
-          {t('toolkits.toolkitTypeSelector.mcpEmptyStateLinkText', 'Documentation')}
-        </Link>
-        {t('toolkits.toolkitTypeSelector.mcpEmptyStateSuffix', '.')}
-      </Typography>
-    </Box>
+        {t('toolkits.toolkitTypeSelector.mcpEmptyStateLinkText', 'Documentation')}
+      </Link>
+      {t('toolkits.toolkitTypeSelector.mcpEmptyStateSuffix', '.')}
+    </Typography>
   );
 }
 
-export function ToolkitTypeSelector({ onSelectTool, setFormikInitialValues, isMCP = false, isApplication = false }: ToolkitTypeSelectorProps): ReactNode {
-  const [searchQuery, setSearchQuery] = useState('');
+/**
+ * The grouped-item region sits inside `CategoryFilter`'s centred flex column,
+ * so it has to be the full-width, centred, 1.5rem-gapped column the baseline's
+ * `itemsContainer` was for the sections themselves — otherwise every section
+ * shrinks to its content width and the 4-column grid stops lining up with the
+ * search box above it.
+ */
+const groupedItemsSx: SxProps<Theme> = (theme: Theme) => ({
+  width: '100%',
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  gap: theme.spacing(3),
+});
 
+interface ToolkitTypeMenuItem {
+  readonly key: string;
+  readonly label: string;
+  readonly category: string;
+  readonly icon: ReactNode;
+  readonly onClick: () => void;
+}
+
+function categoryOfToolkit(item: ToolkitTypeMenuItem): string {
+  return item.category;
+}
+
+function selectToolkit(item: ToolkitTypeMenuItem): void {
+  item.onClick();
+}
+
+export function ToolkitTypeSelector({ onSelectTool, setFormikInitialValues, isMCP = false, isApplication = false }: ToolkitTypeSelectorProps): ReactNode {
   const onAddTool = useCallback(
     (toolType: string, toolSchemas: ToolkitTypeSchemaMap) => () => {
       const { detail, initialFormValues } = resolveToolSelection(toolType, toolSchemas);
@@ -230,13 +266,42 @@ export function ToolkitTypeSelector({ onSelectTool, setFormikInitialValues, isMC
   const isMcpVisible = useIsMcpVisible();
   const { toolMenuItems, isFetchingToolkitTypes } = useToolMenuItems({ onAddTool, isMCP, isApplication });
 
-  const filteredItems = useMemo(() => {
-    const query = searchQuery.trim().toLowerCase();
-    if (query === '') return toolMenuItems;
-    return toolMenuItems.filter((item) => item.label.toLowerCase().includes(query));
-  }, [toolMenuItems, searchQuery]);
+  /**
+   * Baseline `useToolkitSearch.js`'s `localGroupForMCP`: with nothing but the
+   * pre-built "Remote MCP" entry to show, `Local` is pinned into the chip row
+   * anyway so its empty section — and with it the "Still no local MCP
+   * available" guidance below — is reachable at all.
+   */
+  const localGroupForMCP = useMemo(() => (!isMCP || toolMenuItems.some((item) => item.label !== 'Remote MCP') ? undefined : McpCategory.Local), [isMCP, toolMenuItems]);
 
-  const handleSearchChange = useCallback((event: ChangeEvent<HTMLInputElement>) => setSearchQuery(event.target.value), []);
+  /**
+   * The baseline resolves each tile's brand glyph in `useToolkitSearch.js`
+   * (`icon: child.icon || getToolIcon(child.key, theme)`); this port dropped
+   * it because no per-type icon resolver existed, so every tile rendered
+   * label-only. `shared/ui/ToolkitTypeIcon` is that resolver.
+   */
+  const itemsWithIcons = useMemo<readonly ToolkitTypeMenuItem[]>(
+    () => toolMenuItems.map((item) => ({ ...item, icon: <ToolkitTypeIcon type={item.key} /> })),
+    [toolMenuItems],
+  );
+
+  const { allCategories, groupedItems, selectedCategories, searchQuery, onSearchChange, onSelectCategory } = useGroupedCategories<ToolkitTypeMenuItem>(
+    itemsWithIcons,
+    categoryOfToolkit,
+    selectToolkit,
+    localGroupForMCP,
+  );
+
+  const renderCategory = useCallback(
+    (category: string, items: readonly CategoryItem[]): ReactNode => (
+      <CategorySection
+        category={category}
+        items={items}
+        {...(isMCP ? { emptyPlaceholder: <McpNoLocalServersMessage /> } : {})}
+      />
+    ),
+    [isMCP],
+  );
 
   if (isMCP && !isMcpVisible) return null;
 
@@ -248,22 +313,26 @@ export function ToolkitTypeSelector({ onSelectTool, setFormikInitialValues, isMC
       title={title}
       searchPlaceholder={resolveSearchPlaceholder(isApplication, isMCP)}
       searchQuery={searchQuery}
-      onSearchChange={handleSearchChange}
+      onSearchChange={onSearchChange}
+      allCategories={[...allCategories]}
+      selectedCategories={[...selectedCategories]}
+      onSelectCategory={onSelectCategory}
     >
-      {isFetchingToolkitTypes ? null : filteredItems.length > 0 ? (
-        <CategorySection
-          category={title}
-          items={filteredItems}
-          showCategory={false}
-        />
-      ) : isMCP ? (
-        <McpNoLocalServersMessage />
-      ) : (
-        <NoResultsMessage
-          title={noResultsTitle}
-          description={t('toolkits.toolkitTypeSelector.noResultsDescription', 'Try adjusting your search terms')}
-        />
-      )}
+      <GroupedCategory
+        isLoading={isFetchingToolkitTypes}
+        allCategories={allCategories}
+        selectedCategories={selectedCategories}
+        groupedItems={groupedItems}
+        allowEmptyCategory={isMCP}
+        renderCategory={renderCategory}
+        noResultsSlot={
+          <NoResultsMessage
+            title={noResultsTitle}
+            description={t('toolkits.toolkitTypeSelector.noResultsDescription', 'Try adjusting your search terms')}
+          />
+        }
+        sx={groupedItemsSx}
+      />
     </CategoryFilter>
   );
 }

@@ -76,6 +76,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	saml2 "github.com/russellhaering/gosaml2"
 
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/personalproject"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browsersession"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/identityproviders"
 )
 
@@ -116,8 +118,54 @@ type SAMLHandler struct {
 	providers    IdentityProviderSource
 	secretSource IdentitySecretSource
 
+	// sessions and personalProjects are the two things router.go attaches
+	// after construction. See OIDCHandler.WithSessionManager for why they are
+	// setters.
+	sessions         *browsersession.Manager
+	personalProjects personalproject.AsyncEnsurer
+
+	// personalProjectWait bounds how long a successful login waits for the
+	// personal project it just asked for. Zero means defaultSignInProvisionWait;
+	// only a test sets it, so the production path cannot be given a wait an
+	// operator did not review. See signin.go's ensurePersonalProject.
+	personalProjectWait time.Duration
+
 	runtimeMu    sync.Mutex
 	runtimeCache map[string]*samlRuntime
+}
+
+// WithSessionManager gives this plane the server-side session store.
+//
+// SAML is the plane that needs it most: a LogoutRequest names the assertion's
+// SessionIndex, and until the row existed there was nowhere to keep one. The
+// row now carries it, which is what makes single logout buildable at all —
+// router.go still mounts `/auth_saml/logout` as a local clear, and that is the
+// remaining half of the work.
+func (h *SAMLHandler) WithSessionManager(manager *browsersession.Manager) *SAMLHandler {
+	if h == nil || manager == nil {
+		return h
+	}
+	h.sessions = manager
+	return h
+}
+
+// WithPersonalProjectEnsurer is the sign-in half of the personal-project fix.
+func (h *SAMLHandler) WithPersonalProjectEnsurer(ensurer personalproject.AsyncEnsurer) *SAMLHandler {
+	if h == nil || ensurer == nil {
+		return h
+	}
+	h.personalProjects = ensurer
+	return h
+}
+
+// WithPersonalProjectWait replaces the bound on the sign-in wait. See the OIDC
+// plane's copy: it exists for the tests that measure the bound.
+func (h *SAMLHandler) WithPersonalProjectWait(wait time.Duration) *SAMLHandler {
+	if h == nil || wait <= 0 {
+		return h
+	}
+	h.personalProjectWait = wait
+	return h
 }
 
 // NewSAMLHandler builds the handler.
@@ -297,15 +345,24 @@ func (h *SAMLHandler) ACS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	http.SetCookie(w, &http.Cookie{
-		Name:     "elitea_session",
-		Value:    makeSessionToken(h.secretKey, userID, email),
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   h.secureCookies,
-		SameSite: http.SameSiteLaxMode,
-		MaxAge:   86400,
-	})
+	numericUserID, ok := sessionUserID(userID)
+	if !ok {
+		slog.Error("SAML: provisioning returned an unusable user id", "user_id", userID)
+		http.Error(w, "user provisioning failed", http.StatusInternalServerError)
+		return
+	}
+	if !issueBrowserSession(w, h.sessions, h.secretKey, h.secureCookies, browsersession.NewSession{
+		UserID:   numericUserID,
+		Email:    email,
+		Provider: browsersession.ProviderSAML,
+		// The value a LogoutRequest must name. Empty when the identity
+		// provider sent no SessionIndex, which is legal and only means single
+		// logout cannot address this session.
+		ProviderSessionIndex: assertion.SessionIndex,
+	}, r) {
+		return
+	}
+	ensurePersonalProject(h.personalProjects, userID, h.personalProjectWait)
 	slog.Info("SAML login successful", "email", email, "user_id", userID, "provider", runtime.origin)
 	http.Redirect(w, r, target, http.StatusFound)
 }
@@ -511,6 +568,18 @@ func samlAttribute(assertion *saml2.AssertionInfo, authored string, fallbacks []
 // `email_verified` claim: an assertion's attributes are what the identity
 // provider asserts, and there is no separate statement about the address to
 // require. Passing true would refuse every SAML login.
+//
+// FOR THE SAME REASON THE VERIFIED ADDRESS PASSED BELOW IS "". An `email:`
+// entry of `initial_global_admins` matches a STATED verification, and a SAML
+// assertion states nothing about the address it carries. To treat the address
+// as verified here would hand the administration role to whoever the identity
+// provider says the person is, which is the takeover class this plane refuses
+// by construction. A SAML deployment names its first administrator by
+// `saml:<nameid>` — a value the operator can read off
+// `GET /api/v2/social/author` after one sign-in, and one that is often the
+// address already. If a future SAML document gains an explicit operator flag
+// that marks its address attribute trusted, this is the ONE call site that
+// reads it.
 func (h *SAMLHandler) provisionUser(ctx context.Context, nameID, email, name string) (string, error) {
 	tx, err := h.pool.Begin(ctx)
 	if err != nil {
@@ -523,7 +592,7 @@ func (h *SAMLHandler) provisionUser(ctx context.Context, nameID, email, name str
 	if err != nil {
 		return "", err
 	}
-	if err := applyFirstLoginGrants(ctx, tx, userID, providerRef, h.firstLogin); err != nil {
+	if err := applyFirstLoginGrants(ctx, tx, userID, providerRef, "", h.firstLogin); err != nil {
 		return "", err
 	}
 	if err := tx.Commit(ctx); err != nil {

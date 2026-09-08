@@ -10,9 +10,7 @@
 import { memo } from 'react';
 
 import Box from '@mui/material/Box';
-import Typography from '@mui/material/Typography';
-
-import { t } from '@/shared/i18n';
+import type { SxProps, Theme } from '@mui/material/styles';
 
 import { aiPersonalityFeature, memoryFeature } from '@/features/settings';
 
@@ -24,18 +22,12 @@ interface MemoryProps {
   projectId?: string;
 }
 
+/* No header row — the route renders it. See `Preferences.tsx`. */
 const Memory = memo(({ projectId }: MemoryProps) => (
-  <Box sx={styles.container}>
-    <Box sx={styles.header}>
-      <Typography variant="labelMedium" color="text.secondary">
-        {t('settings.memory', 'Memory')}
-      </Typography>
-    </Box>
-    <Box sx={styles.content}>
-      <SettingsFormProvider {...(projectId === undefined ? {} : { projectId })}>
-        <MemoryFormContent />
-      </SettingsFormProvider>
-    </Box>
+  <Box sx={styles.content}>
+    <SettingsFormProvider {...(projectId === undefined ? {} : { projectId })}>
+      <MemoryFormContent />
+    </SettingsFormProvider>
   </Box>
 ));
 
@@ -43,26 +35,12 @@ Memory.displayName = 'Memory';
 
 export default Memory;
 
-const styles = {
-  container: {
-    display: 'flex',
-    flexDirection: 'column',
+const styles: Record<string, SxProps<Theme>> = {
+  content: (theme) => ({
+    backgroundColor: theme.vars.palette.background.tabPanel,
     height: '100%',
     width: '100%',
-  },
-  header: {
-    height: '3.75rem',
-    minHeight: '3.75rem',
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: '0 1.5rem',
-    borderBottom: '0.0625rem solid',
-    borderColor: 'border.table',
-  },
-  content: {
-    flex: 1,
     minHeight: 0,
     overflowY: 'auto',
-  },
+  }),
 };

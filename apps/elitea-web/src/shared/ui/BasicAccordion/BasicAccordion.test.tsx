@@ -108,6 +108,32 @@ describe('BasicAccordion', () => {
     expect(getByText('Body')).not.toBeVisible();
   });
 
+  /*
+   * THE STRUCTURAL HALF OF THE SHIELD, and the one axe measures.
+   *
+   * `nested-interactive` fails on any focusable descendant of the summary
+   * button — a `<button>`, or a `role="button"` element with a `tabIndex`.
+   * The propagation tests above pass either way, so this asserts the DOM
+   * relationship itself: the action is a sibling of the summary, never a
+   * child of it.
+   */
+  it('renders the summaryAction outside the summary button', () => {
+    const { getByRole } = renderWithTheme(
+      <BasicAccordion
+        items={[
+          {
+            title: 'With action',
+            content: 'Body',
+            summaryAction: <button type="button">Action</button>,
+          },
+        ]}
+      />,
+    );
+    const summary = getByRole('button', { name: 'With action' });
+    expect(summary).not.toContainElement(getByRole('button', { name: 'Action' }));
+    expect(summary.querySelector('button, [tabindex], a[href]')).toBeNull();
+  });
+
   it('forwards a controlled expanded/onChange pair to every panel', async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { EMPTY_AGENT_DRAFT, filterEmptyStrings, mapPredictResponseToAgentDraft } from './agentDraft';
+import { EMPTY_AGENT_DRAFT, filterEmptyStrings, mapApplicationDraft } from './agentDraft';
 
 describe('filterEmptyStrings', () => {
   it('drops blank and whitespace-only entries', () => {
@@ -17,22 +17,33 @@ describe('filterEmptyStrings', () => {
   });
 });
 
-describe('mapPredictResponseToAgentDraft', () => {
-  it('seeds instructions from content and leaves every other field at the empty default', () => {
-    const draft = mapPredictResponseToAgentDraft('Draft agent instructions from the model.');
-    expect(draft).toEqual({
+describe('mapApplicationDraft', () => {
+  const served = {
+    name: 'Incident Triager',
+    description: 'Triages incoming incidents',
+    instructions: 'Sort by severity, then page the owner.',
+    welcome_message: 'What broke?',
+    conversation_starters: ['Triage this page', 'Summarise the last hour'],
+  };
+
+  it('carries every served field into the draft the review form edits', () => {
+    expect(mapApplicationDraft(served)).toEqual({
       ...EMPTY_AGENT_DRAFT,
-      instructions: 'Draft agent instructions from the model.',
+      name: 'Incident Triager',
+      description: 'Triages incoming incidents',
+      instructions: 'Sort by severity, then page the owner.',
+      welcome_message: 'What broke?',
+      conversation_starters: ['Triage this page', 'Summarise the last hour'],
     });
   });
 
-  it('falls back to an empty string when content is undefined', () => {
-    const draft = mapPredictResponseToAgentDraft(undefined);
-    expect(draft.instructions).toBe('');
+  it('drops a blank conversation starter rather than rendering an empty chip', () => {
+    const draft = mapApplicationDraft({ ...served, conversation_starters: ['Keep me', '   ', ''] });
+    expect(draft.conversation_starters).toEqual(['Keep me']);
   });
 
-  it('never fabricates suggested resources', () => {
-    const draft = mapPredictResponseToAgentDraft('anything');
+  it('never fabricates suggested resources — the endpoint carries none', () => {
+    const draft = mapApplicationDraft(served);
     expect(draft.suggested_toolkits).toEqual([]);
     expect(draft.suggested_mcp).toEqual([]);
     expect(draft.suggested_pipelines).toEqual([]);

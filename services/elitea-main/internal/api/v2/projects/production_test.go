@@ -36,20 +36,33 @@ func (f permissionResolverFunc) ResolvePermissions(
 	return f(ctx, principal, mode, projectID)
 }
 
+// membershipResolverFunc is the gate the project-list route uses since #830:
+// it is asked for the caller's permissions across their OWN memberships, and
+// no project id travels with the question.
+type membershipResolverFunc func(context.Context, auth.User, string) (auth.PermissionResolution, error)
+
+func (f membershipResolverFunc) ResolveMembershipPermissions(
+	ctx context.Context,
+	principal auth.User,
+	mode string,
+) (auth.PermissionResolution, error) {
+	return f(ctx, principal, mode)
+}
+
 func TestNewCurrentProjectListRouteRejectsIncompleteSecurityComposition(t *testing.T) {
 	store := projectListerFunc(func(context.Context, sqlcgen.ListCurrentUserProjectsParams) ([]sqlcgen.ListCurrentUserProjectsRow, error) {
 		return nil, nil
 	})
 	principal := principalValidatorFunc(func(_ context.Context, user auth.User) (auth.User, error) { return user, nil })
 	peer := forwardedPeerVerifierFunc(func(*http.Request) error { return nil })
-	permissions := permissionResolverFunc(func(context.Context, auth.User, string, string) (auth.PermissionResolution, error) {
+	permissions := membershipResolverFunc(func(context.Context, auth.User, string) (auth.PermissionResolution, error) {
 		return auth.PermissionResolution{}, nil
 	})
 
 	for name, test := range map[string]struct {
 		store       handler.CurrentProjectLister
 		authConfig  apimw.AuthConfig
-		permissions auth.PermissionResolver
+		permissions auth.MembershipPermissionResolver
 	}{
 		// Only store and permissions are required; PrincipalValidator and
 		// ForwardedIdentityVerifier are optional (OIDC-only deployments use
@@ -87,10 +100,9 @@ func TestCurrentProjectListRouteValidatesPeerPrincipalRBACBeforeQuery(t *testing
 		}
 		return nil
 	})
-	permissions := permissionResolverFunc(func(_ context.Context, user auth.User, mode, projectID string) (auth.PermissionResolution, error) {
-		if user.Email != "server-derived@example.test" || mode != handler.CurrentProjectListMode ||
-			projectID != handler.CurrentProjectListProjectID {
-			t.Fatalf("permission input = user=%+v mode=%q project=%q", user, mode, projectID)
+	permissions := membershipResolverFunc(func(_ context.Context, user auth.User, mode string) (auth.PermissionResolution, error) {
+		if user.Email != "server-derived@example.test" || mode != handler.CurrentProjectListMode {
+			t.Fatalf("permission input = user=%+v mode=%q", user, mode)
 		}
 		return auth.PermissionResolution{
 			UserID:      7,
@@ -131,7 +143,7 @@ func TestCurrentProjectListRouteRejectsForgedPeerAndMissingPermission(t *testing
 		}
 		return nil
 	})
-	permissions := permissionResolverFunc(func(context.Context, auth.User, string, string) (auth.PermissionResolution, error) {
+	permissions := membershipResolverFunc(func(context.Context, auth.User, string) (auth.PermissionResolution, error) {
 		return auth.PermissionResolution{UserID: 7, Permissions: []string{}}, nil
 	})
 	route, err := handler.NewCurrentProjectListRoute(store, apimw.AuthConfig{

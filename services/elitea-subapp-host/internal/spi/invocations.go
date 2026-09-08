@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"sync"
@@ -146,6 +147,59 @@ func (c *Context) Tool() string    { return c.invocation.Tool }
 // Thinking emits one progress event (the legacy invocation_thinking).
 func (c *Context) Thinking(ctx context.Context, message string) error {
 	return c.manager.store.AppendEvent(ctx, c.invocation.ID, message)
+}
+
+// Token emits one fragment of the ANSWER (issue #701).
+//
+// It travels down the same read-once event list as the progress, so the two
+// keep the order the tool produced them in, but it is wrapped in the
+// structured `{event, data}` envelope the event text already carries for
+// todo_update and tool_start. That is what lets a consumer tell an answer
+// fragment from a progress line without guessing: a reader that does not
+// know `llm_chunk` shows it as one more step, and a reader that does
+// appends it to the answer as it is written.
+//
+// The envelope is frozen with the rest of the SPI's event vocabulary in
+// conformance/provider/fixtures/deepwiki/stream/token_events.json.
+//
+// An empty fragment is DROPPED. The poll drain discards an event whose
+// message is empty, but this message would not be empty — it would be a
+// well-formed envelope around nothing — so it would survive the drain and
+// reach the browser as a token that adds no text.
+func (c *Context) Token(ctx context.Context, text string) error {
+	if text == "" {
+		return nil
+	}
+	return c.manager.store.AppendEvent(ctx, c.invocation.ID, TokenEvent(text))
+}
+
+// tokenEvent is the envelope one answer fragment travels in. A STRUCT and
+// not a map, so the keys come out in the declared order and the text on the
+// wire is the text the golden fixture spells out; a map would order them
+// alphabetically and the two would only be comparable after parsing.
+type tokenEvent struct {
+	Event string         `json:"event"`
+	Data  tokenEventText `json:"data"`
+}
+
+type tokenEventText struct {
+	Text string `json:"text"`
+}
+
+// TokenEvent is one answer fragment in the event text that carries it.
+//
+// Exported because the fixture runner and the tests build the same string,
+// and a second spelling of it would be a second thing to keep in step with
+// the browser's adapter.
+func TokenEvent(text string) string {
+	event, err := json.Marshal(tokenEvent{Event: "llm_chunk", Data: tokenEventText{Text: text}})
+	if err != nil {
+		// A string always marshals. Returning the raw text rather than an
+		// empty event keeps the fragment visible in the thinking log if
+		// this ever becomes reachable.
+		return text
+	}
+	return string(event)
 }
 
 // Checkpoint is the cooperative cancellation point: nil to go on,

@@ -40,6 +40,17 @@ func Internal(message string) error {
 	return &APIError{Status: http.StatusInternalServerError, Code: "internal_error", Message: message}
 }
 
+// NotImplemented is a NAMED refusal for a capability this release does not
+// serve. It exists so a handler never has the choice between 200-with-nothing
+// and a bare 500: an empty list and a zero score are indistinguishable, in a
+// browser, from a feature that works and has no data, while a 501 carrying the
+// reason tells the reader which of the two they are looking at. The precedent
+// is internal/api/v2/budgets/usage_dimensions.go, and #617's evidence bar asks
+// for this shape by name.
+func NotImplemented(message string) error {
+	return &APIError{Status: http.StatusNotImplemented, Code: "not_implemented", Message: message}
+}
+
 func Conflict(message string) error {
 	return &APIError{Status: http.StatusConflict, Code: "conflict", Message: message}
 }

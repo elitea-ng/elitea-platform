@@ -61,7 +61,7 @@ describe('useDeleteWiki', () => {
         requests += 1;
         const body = (await request.json()) as { keys: string[] };
         sentKeys = body.keys;
-        return HttpResponse.json({ deleted: body.keys, errors: [] });
+        return HttpResponse.json({ deleted: body.keys, failed: [] });
       }),
     );
 
@@ -84,7 +84,14 @@ describe('useDeleteWiki', () => {
     // so the screen can say what is still there.
     server.use(
       http.post('/api/v2/artifacts/objects/1/wiki-artifacts:batchDelete', () =>
-        HttpResponse.json({ deleted: ['w/a.md'], errors: [{ key: 'w/b.md' }] }),
+        HttpResponse.json({
+          // The server's real envelope (BatchDeleteObjects): the field is
+          // `failed`, each entry {key, code, message}. This mock once said
+          // `errors`, mirroring the hook's bug, and the test passed against
+          // a shape the server never sends.
+          deleted: ['w/a.md'],
+          failed: [{ key: 'w/b.md', code: 'PreconditionFailed', message: 'object changed' }],
+        }),
       ),
     );
 
@@ -96,12 +103,28 @@ describe('useDeleteWiki', () => {
     expect(outcome).toEqual({ deleted: 1, failed: ['w/b.md'] });
   });
 
+  it('still reads an envelope that names the survivors `errors`', async () => {
+    // Accepted alongside `failed` so a change of envelope form never again
+    // turns a partial delete silent.
+    server.use(
+      http.post('/api/v2/artifacts/objects/1/wiki-artifacts:batchDelete', () =>
+        HttpResponse.json({ deleted: [], errors: [{ key: 'w/a.md' }, { key: 'w/b.md' }] }),
+      ),
+    );
+    const { result } = renderHookWithProviders(() => useDeleteWiki());
+    let outcome;
+    await act(async () => {
+      outcome = await result.current.mutateAsync({ projectId: 1, keys: ['w/a.md', 'w/b.md'] });
+    });
+    expect(outcome).toEqual({ deleted: 0, failed: ['w/a.md', 'w/b.md'] });
+  });
+
   it('refuses an empty batch rather than reporting a deleted wiki', async () => {
     let requests = 0;
     server.use(
       http.post('/api/v2/artifacts/objects/1/wiki-artifacts:batchDelete', () => {
         requests += 1;
-        return HttpResponse.json({ deleted: [], errors: [] });
+        return HttpResponse.json({ deleted: [], failed: [] });
       }),
     );
 
@@ -121,7 +144,7 @@ describe('useDeleteWiki', () => {
     server.use(
       http.post('*/artifacts/objects/*', ({ request }) => {
         url = new URL(request.url).pathname;
-        return HttpResponse.json({ deleted: ['k'], errors: [] });
+        return HttpResponse.json({ deleted: ['k'], failed: [] });
       }),
     );
     const { result } = renderHookWithProviders(() => useDeleteWiki());

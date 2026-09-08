@@ -12,6 +12,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	applicationskillsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/applicationskills"
 	skillsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/skills"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
@@ -28,7 +29,8 @@ type internalSkillExecutor interface {
 }
 
 type repositoryInternalSkillExecutor struct {
-	repo skillsapi.Repository
+	repo     skillsapi.Repository
+	attached applicationskillsapi.CurrentApplicationSkillsReader
 }
 
 var internalSkillNamePattern = regexp.MustCompile(`^[a-z0-9]$|^[a-z0-9][a-z0-9-]*[a-z0-9]$`)
@@ -37,7 +39,11 @@ func newPostgresInternalSkillExecutor(pool *pgxpool.Pool) internalSkillExecutor 
 	if pool == nil {
 		return nil
 	}
-	return &repositoryInternalSkillExecutor{repo: repos.NewSkillsRepo(pool)}
+	attached, err := applicationskillsapi.NewCurrentApplicationSkillsRepository(pool)
+	if err != nil {
+		return nil
+	}
+	return &repositoryInternalSkillExecutor{repo: repos.NewSkillsRepo(pool), attached: attached}
 }
 
 func (executor *repositoryInternalSkillExecutor) Execute(
@@ -297,21 +303,29 @@ func (executor *repositoryInternalSkillExecutor) listAttached(
 	if err != nil {
 		return internalSkillBadRequest(err.Error())
 	}
-	result, err := executor.repo.ListForApplicationVersion(ctx, projectID, versionID)
+	project, projectErr := strconv.ParseInt(projectID, 10, 32)
+	version, versionErr := strconv.ParseInt(versionID, 10, 32)
+	if projectErr != nil || versionErr != nil {
+		return internalSkillBadRequest("project and application version IDs must fit PostgreSQL integer keys")
+	}
+	if executor.attached == nil {
+		return internalApplicationExecution{}, errors.New("attached skill reader is unavailable")
+	}
+	result, err := executor.attached.ListCurrentApplicationSkills(ctx, int32(project), int32(version))
 	if err != nil {
 		return internalSkillRepositoryError(err)
 	}
-	attached := make([]map[string]any, 0, len(result.Items))
-	for _, skill := range result.Items {
+	attached := make([]map[string]any, 0, len(result))
+	for _, skill := range result {
 		item := map[string]any{
 			"name":        skill.Name,
 			"description": skill.Description,
-			"skill_id":    skill.ID,
+			"skill_id":    strconv.FormatInt(int64(skill.SkillID), 10),
 		}
-		if skill.VersionDetails != nil {
-			item["version_id"] = skill.VersionDetails.ID
-			item["version_name"] = skill.VersionDetails.Name
-			item["instructions"] = skill.VersionDetails.Instructions
+		if skill.VersionID != nil && !skill.VersionMissing {
+			item["version_id"] = strconv.FormatInt(int64(*skill.VersionID), 10)
+			item["version_name"] = skill.VersionName
+			item["instructions"] = skill.Instructions
 		}
 		attached = append(attached, item)
 	}

@@ -8,7 +8,7 @@ import (
 	v2branding "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/branding"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/brandpackage"
 	appmailer "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/mailer"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/mailer"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/emailsettings"
 	"log/slog"
 	"net/http"
 	"os"
@@ -40,6 +40,7 @@ import (
 	v2inventory "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/inventory"
 	v2mcp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/mcp"
 	notificationsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/notifications"
+	v2pipelinetriggers "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/pipelinetriggers"
 	predictapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/predict"
 	projectinfoapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/projectinfo"
 	v2projects "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/projects"
@@ -50,15 +51,22 @@ import (
 	socialapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/social"
 	v2support "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/supportassistant"
 	v2tags "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/tags"
+	toolkitrun "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkitrun"
 	v2toolkits "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkits"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/webhook"
 	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
+	identityapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/identity"
 	notificationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/notifications"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
+	schedulingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/scheduling"
 	socialapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/social"
 	toolkitexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browsersession"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/authcomposition"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/wikichat"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/identityproviders"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/authsvc"
 	infradb "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db"
@@ -153,6 +161,15 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		return err
 	}
 
+	// The ONE public project id. See resolvePublicProject for why an
+	// environment that names two of them stops the process here rather than
+	// producing a deployment whose surfaces silently disagree.
+	publicProjectID, err := resolvePublicProject(logger, os.LookupEnv)
+	if err != nil {
+		return err
+	}
+	logger.Info("public project resolved", "public_project_id", publicProjectID)
+
 	// The project vault's master key (#412).
 	//
 	// This runs BEFORE the database pool and before every handler, because the
@@ -239,6 +256,23 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	}
 	defer pool.Close()
 
+	// The `centry.audit_events` writer.
+	//
+	// It is built HERE, once, and given to BOTH the router (which mounts the
+	// audit middleware over the whole /api/v2 group) and the pipeline-trigger
+	// handler (whose inbound route sits ABOVE that group and so writes its own
+	// row). Two recorders would mean two background writers and two queues over
+	// one table; one recorder is also what makes an inbound refusal and an
+	// ordinary 403 land in the same trail with the same drop policy.
+	auditRecorder := audit.NewPostgresRecorder(pool, logger)
+	defer func() {
+		flushCtx, cancelFlush := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancelFlush()
+		if flushErr := auditRecorder.Flush(flushCtx); flushErr != nil {
+			logger.Warn("could not flush the audit trail on shutdown", "err", flushErr)
+		}
+	}()
+
 	// Object store. Production remains fail-closed: when the capability is
 	// enabled, startup requires a working S3/Azure/GCS backend. The mixed
 	// migration deployment explicitly disables these still-incomplete Go
@@ -309,28 +343,38 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		Pool:     pool,
 	})
 
-	// Outbound e-mail (ADR-0024 WP7): a real SMTP transport only when the
-	// environment names a relay; otherwise the composer holds the null
-	// transport and every invite reports that nothing was delivered.
+	// Outbound e-mail (ADR-0024 WP7, gap G7). The environment is the BOOTSTRAP
+	// DEFAULT; the admin E-mail page's rows lay over it, and the resolver
+	// merges the two on every send. So a deployment that ships SMTP_HOST in
+	// its chart keeps working with no rows at all, and an operator who has
+	// never touched the chart can still turn e-mail on.
+	//
+	// There is no transport built here any more, and that absence is the
+	// change: a transport built at boot is a transport that needs a restart to
+	// correct, which is why every invitation on a mis-set deployment reported
+	// `invitation_delivered: false` until a redeploy.
 	mailSettings, err := mailerConfigFromEnv(os.LookupEnv)
 	if err != nil {
 		return fmt.Errorf("load outbound e-mail settings: %w", err)
 	}
-	var mailTransport mailer.Transport
-	if mailSettings.Enabled {
-		smtpTransport, err := mailer.New(mailSettings.Transport)
-		if err != nil {
-			return fmt.Errorf("configure outbound e-mail: %w", err)
-		}
-		mailTransport = smtpTransport
-		logger.Info("outbound e-mail enabled", "host", mailSettings.Transport.Host, "port", mailSettings.Transport.Port,
-			"tls", string(mailSettings.Transport.TLS), "suppressed", mailSettings.Suppressed)
-	}
+	// ONE store and ONE resolver, shared by the composer that sends and the
+	// admin surface that writes (wired through api.Config.EmailSettings).
+	// Building two would let the page that reports a relay configured and the
+	// composer that dials it disagree.
+	emailResolver := emailsettings.NewResolver(
+		emailsettings.NewStore(pool, v2secrets.NewHandler(pool)),
+		mailSettings.Settings,
+		mailSettings.Password,
+	)
+	logger.Info("outbound e-mail settings loaded",
+		"environment_complete", mailSettings.Complete(),
+		"environment_host", mailSettings.Settings.Host,
+		"suppressed", mailSettings.Suppressed)
 	mailComposer, err := appmailer.New(appmailer.Config{
-		Transport:     mailTransport,
 		Brand:         brandingResolver,
-		PublicBaseURL: mailSettings.PublicBaseURL,
+		PublicBaseURL: mailSettings.Settings.PublicBaseURL,
 		Suppressed:    mailSettings.Suppressed,
+		Resolver:      emailResolver,
 	})
 	if err != nil {
 		return fmt.Errorf("compose outbound e-mail: %w", err)
@@ -368,119 +412,6 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		}
 		principalValidator = authsvc.NewPrincipalValidator(pool)
 		forwardedIdentityVerifier = formGraph.ForwardedIdentityVerifier()
-		// The browser's `elitea_session` cookie, accepted on the notification
-		// routes composed below.
-		//
-		// Those routes carry a ForwardedIdentityVerifier and no SessionSecret, so
-		// apimw.Auth's cookie branch is inert on them and a browser has NO
-		// credential they accept. Composing them here also makes them non-nil,
-		// which SKIPS the OIDC-only arm further down that would have supplied the
-		// cookie — so a deployment configured with BOTH a form config and OIDC
-		// (this is the standalone stack) ends up strictly worse off than an
-		// OIDC-only one, on routes only a browser ever calls.
-		//
-		// The edge is what makes it unreachable rather than merely awkward:
-		// deploy/traefik/dynamic.yml STRIPS every inbound X-Auth-* header and runs
-		// no forwardAuth ("elitea-main authenticates the session cookie itself"),
-		// so forwarded identity never arrives and cannot be made to.
-		//
-		// Measured: GET /api/v2/notifications/notifications/prompt_lib/{id}
-		// answered `401 missing authorization header` to a browser holding a valid
-		// session, while the same request with a PAT answered 200.
-		//
-		// This is NOT a new trust decision. It is the same cookie, verified with
-		// the same APPLICATION_SECRET_KEY and the same PrincipalValidator that
-		// oidcSessionAuthConfig already applies to these exact routes; it only
-		// stops the form config from taking that credential away. Adding a
-		// credential cannot widen a route's authorization either — the
-		// per-project permission gate in front of each handler is unchanged.
-		formSessionSecret := os.Getenv("APPLICATION_SECRET_KEY")
-		currentProjectList, err = v2projects.NewCurrentProjectListRoute(
-			sqlcgen.New(pool),
-			apimw.AuthConfig{
-				Validator:                 formGraph,
-				PrincipalValidator:        principalValidator,
-				ForwardedIdentityVerifier: forwardedIdentityVerifier,
-				SessionSecret:             formSessionSecret,
-			},
-			legacyrbac.NewPostgresResolver(pool),
-		)
-		if err != nil {
-			return fmt.Errorf("compose current project-list route: %w", err)
-		}
-		socialAuthorsRepository, repositoryErr := dbrepos.NewCurrentSocialAuthorsRepository(pool)
-		if repositoryErr != nil {
-			return fmt.Errorf("compose current Social authors repository: %w", repositoryErr)
-		}
-		socialAuthorsService, serviceErr := socialapp.NewCurrentAuthorsService(socialAuthorsRepository)
-		if serviceErr != nil {
-			return fmt.Errorf("compose current Social authors service: %w", serviceErr)
-		}
-		currentSocialAuthors, err = socialapi.NewCurrentAuthorsRoute(
-			socialAuthorsService,
-			apimw.AuthConfig{
-				Validator:                 formGraph,
-				PrincipalValidator:        principalValidator,
-				ForwardedIdentityVerifier: forwardedIdentityVerifier,
-			},
-			legacyrbac.NewPostgresResolver(pool),
-		)
-		if err != nil {
-			return fmt.Errorf("compose current Social authors route: %w", err)
-		}
-		socialAvatarRepository, repositoryErr := dbrepos.NewCurrentSocialAvatarRepository(pool)
-		if repositoryErr != nil {
-			return fmt.Errorf("compose current Social avatar repository: %w", repositoryErr)
-		}
-		currentSocialAvatar, err = socialapi.NewCurrentAvatarRoute(
-			socialAvatarRepository,
-			objectStore,
-			apimw.AuthConfig{
-				Validator:                 formGraph,
-				PrincipalValidator:        principalValidator,
-				ForwardedIdentityVerifier: forwardedIdentityVerifier,
-			},
-			legacyrbac.NewPostgresResolver(pool),
-		)
-		if err != nil {
-			return fmt.Errorf("compose current Social avatar route: %w", err)
-		}
-		notificationRepository, repositoryErr := dbrepos.NewCurrentNotificationRepository(pool)
-		if repositoryErr != nil {
-			return fmt.Errorf("compose current notification repository: %w", repositoryErr)
-		}
-		currentNotificationStore = notificationRepository
-		currentNotifications, err = notificationsapi.NewCurrentNotificationAPIRoute(
-			notificationRepository,
-			apimw.AuthConfig{
-				Validator:                 formGraph,
-				PrincipalValidator:        principalValidator,
-				ForwardedIdentityVerifier: forwardedIdentityVerifier,
-				SessionSecret:             formSessionSecret,
-			},
-			legacyrbac.NewPostgresResolver(pool),
-		)
-		if err != nil {
-			return fmt.Errorf("compose current notification API route: %w", err)
-		}
-		notificationEventsRepository, repositoryErr :=
-			dbrepos.NewCurrentNotificationEventRepository(pool)
-		if repositoryErr != nil {
-			return fmt.Errorf("compose current notification events repository: %w", repositoryErr)
-		}
-		currentNotificationEvents, err = notificationsapi.NewCurrentNotificationEventsRoute(
-			notificationEventsRepository,
-			apimw.AuthConfig{
-				Validator:                 formGraph,
-				PrincipalValidator:        principalValidator,
-				ForwardedIdentityVerifier: forwardedIdentityVerifier,
-				SessionSecret:             formSessionSecret,
-			},
-			legacyrbac.NewPostgresResolver(pool),
-		)
-		if err != nil {
-			return fmt.Errorf("compose current notification events route: %w", err)
-		}
 		authReadiness = formGraph
 		logger.Info("production Form authentication enabled")
 	}
@@ -493,6 +424,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// there before assuming any second browser-auth plane can simply be added.
 	var oidcSessionHandler *v2auth.SessionHandler
 	var oidcOIDCHandler *v2auth.OIDCHandler
+	// sessionManager is declared out here because apiGroupAuthConfig below
+	// needs it and the block that builds it is conditional. Nil is the
+	// "no server-side sessions" value every consumer accepts.
+	var sessionManager *browsersession.Manager
 	oidcCfg, err := v2auth.OIDCConfigFromEnv()
 	if err != nil {
 		return fmt.Errorf("load OIDC configuration: %w", err)
@@ -546,15 +481,43 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		if len(firstLoginPolicy.InitialGlobalAdmins) == 0 {
 			firstLoginPolicy.InitialGlobalAdmins = v2auth.InitialGlobalAdminsFromEnv()
 		}
-		if len(firstLoginPolicy.InitialGlobalAdmins) != 0 {
-			logger.Info("initial global administrators configured for the single sign-on plane",
-				"count", len(firstLoginPolicy.InitialGlobalAdmins))
+		// The server-side browser session (migrations/shared/0117).
+		//
+		// ONE manager for every plane. The session handler, the OIDC plane, the
+		// SAML plane and apimw.Auth all reach the same rows, so a second
+		// manager built anywhere would give one of them a different policy and
+		// a different clock. The policy is read here because a bad duration
+		// must stop the boot, not be defaulted away hours later.
+		//
+		// A deployment with no pool composes no manager and keeps the legacy
+		// signed cookie. Every consumer treats nil that way on purpose; see
+		// internal/auth/browsersession.
+		sessionPolicy, policyErr := browsersession.PolicyFromEnv()
+		if policyErr != nil {
+			return fmt.Errorf("read the browser session policy: %w", policyErr)
 		}
-		oidcSessionHandler = v2auth.NewSessionHandler(pool, appSecretKey)
+		if pool != nil {
+			store, storeErr := browsersession.NewPostgresStore(pool)
+			if storeErr != nil {
+				return fmt.Errorf("compose the browser session store: %w", storeErr)
+			}
+			browserSessions, managerErr := browsersession.NewManager(store, sessionPolicy)
+			if managerErr != nil {
+				return fmt.Errorf("compose the browser session manager: %w", managerErr)
+			}
+			sessionManager = browserSessions
+			logger.Info("server-side browser sessions are enabled",
+				"idle_timeout", sessionPolicy.IdleTimeout,
+				"absolute_lifetime", sessionPolicy.AbsoluteLifetime,
+				"reject_legacy_cookies", sessionPolicy.RejectLegacyCookies)
+		}
+		oidcSessionHandler = v2auth.NewSessionHandler(pool, appSecretKey).
+			WithSessionManager(sessionManager)
 		oidcOIDCHandler, err = v2auth.NewOIDCHandler(ctx, oidcCfg, pool, appSecretKey)
 		if err != nil {
 			return fmt.Errorf("initialize OIDC handler: %w", err)
 		}
+		oidcOIDCHandler = oidcOIDCHandler.WithSessionManager(sessionManager)
 		vault := v2secrets.NewHandler(pool)
 		oidcOIDCHandler = oidcOIDCHandler.
 			WithProviderStore(identityProviderStore, vault).
@@ -576,108 +539,177 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		oidcSAMLHandler = v2auth.NewSAMLHandler(
 			pool, appSecretKey, identityProviderStore, vault,
 			os.Getenv("COOKIE_SECURE") != "false",
-		).WithFirstLoginPolicy(firstLoginPolicy)
+		).WithFirstLoginPolicy(firstLoginPolicy).WithSessionManager(sessionManager)
 		if storedSAMLProvider {
 			logger.Info("SAML authentication enabled from an authored identity provider")
 		}
 	}
 
-	// Wire currentProjectList with OIDC-only auth when formGraph is absent.
-	// formGraph (ELITEA_AUTH_CONFIG_FILE) wires it above with full validators;
-	// OIDC-only deployments (E2E stack) only have session-cookie auth.
+	// ONE call site, placed AFTER both assignments above.
 	//
-	// authsvc.NewPrincipalValidator(pool) is built here rather than reusing the
-	// `principalValidator` variable because that variable is nil in exactly
-	// this branch: it is only assigned inside the `authEnabled` block, which is
-	// also the only place formGraph is set. See oidcSessionAuthConfig for why
-	// nil is not survivable (#314).
-	if currentProjectList == nil && oidcSessionHandler != nil {
-		var oidcProjectListErr error
-		currentProjectList, oidcProjectListErr = v2projects.NewCurrentProjectListRoute(
+	// `initial_global_admins` reaches this variable from two sources — the
+	// authentication configuration document, and the environment fallback that
+	// only a single-sign-on-only deployment uses — and the value is final here
+	// whichever one supplied it. The line the SSO block used to print reported
+	// a bare count, and it printed nothing at all for a deployment that
+	// configures the list in a document and mounts no SSO plane.
+	logInitialGlobalAdminShapes(logger, firstLoginPolicy.InitialGlobalAdmins)
+
+	// The credential set the whole /api/v2 group authenticates with — and now
+	// the credential set EVERY per-route composition in this file uses.
+	//
+	// It is built here, immediately after both browser-authentication planes
+	// are final, because every field it reads is final at this point:
+	// formGraph, principalValidator and forwardedIdentityVerifier are assigned
+	// only inside the `authEnabled` block above, and oidcSessionHandler only
+	// inside the single-sign-on block above. Nothing between there and here
+	// assigns any of them.
+	//
+	// Under production Form authentication the set is the graph's token
+	// validator, the forwarded-identity verifier and the browser session
+	// secret; under OIDC-only it is the session cookie plus the LocalValidator
+	// for the tokens APPLICATION_SECRET_KEY signs — which is also how a
+	// provider's callback bearer, minted by the same key, is read back on its
+	// upload. See apiGroupAuthConfig for both shapes and why each carries a
+	// principal validator.
+	//
+	// It is ALSO the input to productionAuthenticationComposed, the predicate
+	// the capability gates below ask.
+	//
+	// Every route that a browser reaches now takes this value. It used to be
+	// one composition among many: sixteen of the twenty-one AuthConfig
+	// literals in this file left SessionSecret empty, so apimw.Auth's cookie
+	// branch was inert on them and a browser holding a VALID session got
+	// `401 missing authorization header`. The SPA reads that 401 as a lost
+	// session and opens a fresh OIDC authorize window, so the symptom was a
+	// login loop on a healthy backend. Measured on GET
+	// /api/v2/elitea_core/project_info/prompt_lib/{id}, GET
+	// /api/v2/social/authors/{id} and GET /api/v2/social/avatar/{id}.
+	//
+	// Reusing one value — rather than adding the missing field to each literal
+	// — is what makes the drift impossible to repeat: there is one composition
+	// left to keep in sync with itself. TestNoPrivateAuthConfigLiteralsInMain
+	// fails the build if a second one appears. See chatConfigAuthConfig, which
+	// took this shape first (#301).
+	var sessionTokens apimw.TokenValidator
+	if secretKey := os.Getenv("APPLICATION_SECRET_KEY"); secretKey != "" && pool != nil {
+		sessionTokens = authsvc.NewLocalValidator(pool, secretKey)
+	}
+	apiGroupAuth := apiGroupAuthConfig(
+		formGraph,
+		principalValidator,
+		forwardedIdentityVerifier,
+		authsvc.NewPrincipalValidator(pool),
+		sessionTokens,
+		os.Getenv("APPLICATION_SECRET_KEY"),
+		oidcSessionHandler != nil,
+		sessionManager,
+	)
+
+	// The browser-only routes: the project switcher, the notification list and
+	// the notification event stream.
+	//
+	// Each one used to be composed TWICE — once inside the `authEnabled`
+	// block, from formGraph and friends, and once again here for the OIDC-only
+	// shape — and the two drifted. The OIDC-only composition left Validator
+	// empty, so a personal access token that every other /api/v2 route accepts
+	// answered 401 on exactly these three. That is the defect #301 fixed on
+	// chat_config, in a third place.
+	//
+	// One composition, one gate. productionAuthenticationComposed is true in
+	// exactly the union of the two former gates — `formGraph != nil ||
+	// oidcSessionHandler != nil` — because apiGroupAuthConfig returns the zero
+	// AuthConfig when neither plane exists. So no route gains or loses a
+	// deployment. What each one gains is the credential the other composition
+	// already had: a DELIBERATE widening on an OIDC-only deployment, on the
+	// same three properties apiGroupAuthConfig states — the token row is read
+	// live, its owner must be active, and a session cookie carries no `uuid`
+	// claim, so no cookie can be replayed as a bearer token.
+	if productionAuthenticationComposed(apiGroupAuth) {
+		currentProjectList, err = v2projects.NewCurrentProjectListRoute(
 			sqlcgen.New(pool),
-			oidcSessionAuthConfig(
-				authsvc.NewPrincipalValidator(pool),
-				os.Getenv("APPLICATION_SECRET_KEY"),
-			),
+			apiGroupAuth,
 			legacyrbac.NewPostgresResolver(pool),
 		)
-		if oidcProjectListErr != nil {
-			return fmt.Errorf("compose OIDC-only project-list route: %w", oidcProjectListErr)
+		if err != nil {
+			return fmt.Errorf("compose current project-list route: %w", err)
 		}
-		logger.Info("project-list route enabled (OIDC-only auth)")
-	}
-
-	// Same shape, same reason, for the notification SSE stream (#152). This is
-	// the route `useNotificationsSSE` opens on every page that mounts the
-	// sidebar — GET /api/v2/notifications/events/prompt_lib/{projectID} — and
-	// it was composed ONLY inside the `authEnabled` (ELITEA_AUTH_CONFIG_FILE)
-	// branch above. OIDC-only deployments, which is what the E2E stack and any
-	// SSO-only install are, therefore 404'd it on every load, and the client
-	// degraded to its list-query fallback with only a console warning to show
-	// for it. That 404 was previously attributed to RouterConfig.EventSource /
-	// RedisClient being unwired; those gate a DIFFERENT route
-	// (/api/v2/events/prompt_lib/{projectID}, no client) and fixing them alone
-	// would not have moved this one.
-	if currentNotificationEvents == nil && oidcSessionHandler != nil {
+		notificationRepository, repositoryErr := dbrepos.NewCurrentNotificationRepository(pool)
+		if repositoryErr != nil {
+			return fmt.Errorf("compose current notification repository: %w", repositoryErr)
+		}
+		currentNotifications, err = notificationsapi.NewCurrentNotificationAPIRoute(
+			notificationRepository,
+			apiGroupAuth,
+			legacyrbac.NewPostgresResolver(pool),
+		)
+		if err != nil {
+			return fmt.Errorf("compose current notification API route: %w", err)
+		}
+		currentNotificationStore = notificationRepository
 		notificationEventsRepository, repositoryErr :=
 			dbrepos.NewCurrentNotificationEventRepository(pool)
 		if repositoryErr != nil {
-			return fmt.Errorf("compose OIDC-only notification events repository: %w", repositoryErr)
+			return fmt.Errorf("compose current notification events repository: %w", repositoryErr)
 		}
-		// Same principal-validator reasoning as the project-list branch above:
-		// the session cookie is the only credential here, and without a
-		// validator a deactivated user's unexpired cookie opens the stream
-		// (#314).
-		var oidcNotificationEventsErr error
-		currentNotificationEvents, oidcNotificationEventsErr = notificationsapi.NewCurrentNotificationEventsRoute(
+		currentNotificationEvents, err = notificationsapi.NewCurrentNotificationEventsRoute(
 			notificationEventsRepository,
-			oidcSessionAuthConfig(
-				authsvc.NewPrincipalValidator(pool),
-				os.Getenv("APPLICATION_SECRET_KEY"),
-			),
+			apiGroupAuth,
 			legacyrbac.NewPostgresResolver(pool),
 		)
-		if oidcNotificationEventsErr != nil {
-			return fmt.Errorf("compose OIDC-only notification events route: %w", oidcNotificationEventsErr)
+		if err != nil {
+			return fmt.Errorf("compose current notification events route: %w", err)
 		}
-		logger.Info("notification events route enabled (OIDC-only auth)")
+		logger.Info("browser project-list and notification routes enabled")
 	}
 
-	// Same shape, same reason, for the notification LIST route (#413). The SSE
-	// branch above moved the stream, and left the list behind. The notification
-	// screen reads GET /api/v2/notifications/notifications/prompt_lib/
-	// {projectID}, and internal/api/production_router.go registers that path
-	// only when CurrentNotifications is non-nil. So the path answered 404 on
-	// every OIDC-only deployment, the E2E stack included, and the client turned
-	// the 404 into "No notifications yet".
+	// The Social author and avatar routes.
 	//
-	// Setting ELITEA_AUTH_CONFIG_FILE on the E2E stack does not fix this. The
-	// AuthConfig the `authEnabled` block builds leaves SessionSecret empty, so
-	// apimw.Auth refuses a browser session cookie. That change turns the 404
-	// into a 401 and the screen stays broken.
-	if currentNotifications == nil && oidcSessionHandler != nil {
-		notificationRepository, repositoryErr := dbrepos.NewCurrentNotificationRepository(pool)
+	// Both answered `401 missing authorization header` to a browser holding a
+	// valid session: their AuthConfig carried the forwarded-identity verifier
+	// and no SessionSecret, and deploy/traefik/dynamic.yml strips every
+	// inbound X-Auth-* header and runs no forwardAuth, so forwarded identity
+	// never arrives and cannot be made to. The avatar route is what renders
+	// the user menu, so the failure was visible on every page.
+	//
+	// The gate stays `formGraph != nil`. It does NOT move to
+	// productionAuthenticationComposed. internal/api/router.go mounts a
+	// compatibility `/social` handler in the same group, so composing these
+	// routes on a deployment that does not have them today would shadow it.
+	// That is a route-availability change, not an authentication fix, and it
+	// belongs to its own change. An OIDC-only deployment therefore still
+	// answers 404 on these two paths.
+	if formGraph != nil {
+		socialAuthorsRepository, repositoryErr := dbrepos.NewCurrentSocialAuthorsRepository(pool)
 		if repositoryErr != nil {
-			return fmt.Errorf("compose OIDC-only notification repository: %w", repositoryErr)
+			return fmt.Errorf("compose current Social authors repository: %w", repositoryErr)
 		}
-		currentNotificationStore = notificationRepository
-		// Same principal-validator reasoning as the two branches above: the
-		// session cookie is the only credential here, and without a validator a
-		// deactivated user's unexpired cookie reads and deletes notifications
-		// (#314).
-		var oidcNotificationsErr error
-		currentNotifications, oidcNotificationsErr = notificationsapi.NewCurrentNotificationAPIRoute(
-			notificationRepository,
-			oidcSessionAuthConfig(
-				authsvc.NewPrincipalValidator(pool),
-				os.Getenv("APPLICATION_SECRET_KEY"),
-			),
+		socialAuthorsService, serviceErr := socialapp.NewCurrentAuthorsService(socialAuthorsRepository)
+		if serviceErr != nil {
+			return fmt.Errorf("compose current Social authors service: %w", serviceErr)
+		}
+		currentSocialAuthors, err = socialapi.NewCurrentAuthorsRoute(
+			socialAuthorsService,
+			apiGroupAuth,
 			legacyrbac.NewPostgresResolver(pool),
 		)
-		if oidcNotificationsErr != nil {
-			return fmt.Errorf("compose OIDC-only notification API route: %w", oidcNotificationsErr)
+		if err != nil {
+			return fmt.Errorf("compose current Social authors route: %w", err)
 		}
-		logger.Info("notification API route enabled (OIDC-only auth)")
+		socialAvatarRepository, repositoryErr := dbrepos.NewCurrentSocialAvatarRepository(pool)
+		if repositoryErr != nil {
+			return fmt.Errorf("compose current Social avatar repository: %w", repositoryErr)
+		}
+		currentSocialAvatar, err = socialapi.NewCurrentAvatarRoute(
+			socialAvatarRepository,
+			objectStore,
+			apiGroupAuth,
+			legacyrbac.NewPostgresResolver(pool),
+		)
+		if err != nil {
+			return fmt.Errorf("compose current Social avatar route: %w", err)
+		}
+		logger.Info("current Social author and avatar routes enabled")
 	}
 
 	currentProjectInfoSettings, err := currentProjectInfoConfigFromEnv(os.LookupEnv)
@@ -697,11 +729,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		}
 		currentProjectInfo, err = projectinfoapi.NewCurrentProjectInfoRoute(
 			currentProjectInfoRepository,
-			apimw.AuthConfig{
-				Validator:                 formGraph,
-				PrincipalValidator:        principalValidator,
-				ForwardedIdentityVerifier: forwardedIdentityVerifier,
-			},
+			apiGroupAuth,
 			legacyrbac.NewPostgresResolver(pool),
 		)
 		if err != nil {
@@ -714,9 +742,23 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if err != nil {
 		return fmt.Errorf("load current index-types settings: %w", err)
 	}
-	if currentIndexTypesSettings.Enabled &&
-		(formGraph == nil || principalValidator == nil || forwardedIdentityVerifier == nil) {
-		return errors.New("ELITEA_INDEX_TYPES_ENABLED requires production authentication")
+	// The gate is the credential plane, NOT the FormGraph — the same correction
+	// gap G2 made for ELITEA_CONFIGURATIONS_ENABLED below.
+	//
+	// This used to read `formGraph == nil || principalValidator == nil ||
+	// forwardedIdentityVerifier == nil`. All three are assigned only inside the
+	// `authEnabled` block, so ELITEA_AUTH_CONFIG_FILE was the ONLY way to
+	// satisfy it and an install with corporate single sign-on could not turn
+	// the capability on at all. That mattered more once the prototype fallback
+	// was deleted (#394): an OIDC install would answer 404 on a path the
+	// published contract declares.
+	//
+	// productionAuthenticationComposed asks what the route actually needs: one
+	// reader of the caller's credential plus a PrincipalValidator. A deployment
+	// with NO authentication still fails it, because apiGroupAuthConfig hands
+	// back the zero AuthConfig there.
+	if currentIndexTypesSettings.Enabled && !productionAuthenticationComposed(apiGroupAuth) {
+		return errors.New("ELITEA_INDEX_TYPES_ENABLED requires an authenticated deployment")
 	}
 	var currentIndexTypes *indextypesapi.CurrentIndexTypesRoute
 	if currentIndexTypesSettings.Enabled {
@@ -727,11 +769,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		}
 		currentIndexTypes, err = indextypesapi.NewCurrentIndexTypesRoute(
 			currentIndexTypesSnapshot,
-			apimw.AuthConfig{
-				Validator:                 formGraph,
-				PrincipalValidator:        principalValidator,
-				ForwardedIdentityVerifier: forwardedIdentityVerifier,
-			},
+			apiGroupAuth,
 			legacyrbac.NewPostgresResolver(pool),
 		)
 		if err != nil {
@@ -751,9 +789,12 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if err != nil {
 		return fmt.Errorf("load current application-skills settings: %w", err)
 	}
-	if currentApplicationSkillsSettings.Enabled &&
-		(formGraph == nil || principalValidator == nil || forwardedIdentityVerifier == nil) {
-		return errors.New("ELITEA_APPLICATION_SKILLS_ENABLED requires production authentication")
+	// Same correction, same reason, as the index-types gate above (#395). The
+	// attached-skills route is the ONLY handler for its path now that the
+	// prototype fallback is deleted, so a Form-only gate would leave an OIDC
+	// install with a 404 where the published contract declares a list.
+	if currentApplicationSkillsSettings.Enabled && !productionAuthenticationComposed(apiGroupAuth) {
+		return errors.New("ELITEA_APPLICATION_SKILLS_ENABLED requires an authenticated deployment")
 	}
 	var currentApplicationSkills *applicationskillsapi.CurrentApplicationSkillsRoute
 	if currentApplicationSkillsSettings.Enabled {
@@ -768,11 +809,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		currentApplicationSkills, err =
 			applicationskillsapi.NewCurrentApplicationSkillsRoute(
 				currentApplicationSkillsRepository,
-				apimw.AuthConfig{
-					Validator:                 formGraph,
-					PrincipalValidator:        principalValidator,
-					ForwardedIdentityVerifier: forwardedIdentityVerifier,
-				},
+				apiGroupAuth,
 				legacyrbac.NewPostgresResolver(pool),
 			)
 		if err != nil {
@@ -785,8 +822,23 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if err != nil {
 		return fmt.Errorf("load current Configurations settings: %w", err)
 	}
-	if currentConfigurationsConfig.Enabled && (formGraph == nil || principalValidator == nil || forwardedIdentityVerifier == nil) {
-		return errors.New("ELITEA_CONFIGURATIONS_ENABLED requires production authentication")
+	// The gate is the credential plane, NOT the FormGraph (gap G2).
+	//
+	// This used to read `formGraph == nil || principalValidator == nil ||
+	// forwardedIdentityVerifier == nil`, and all three are assigned only
+	// inside the `authEnabled` block. ELITEA_AUTH_CONFIG_FILE was therefore
+	// the only way to satisfy it, so an install with real corporate single
+	// sign-on — the shape deploy/helm/elitea/values-auth-minimal.yaml
+	// describes — was refused the whole Configurations plane: no credential
+	// create, no model catalogue, no project vector store. Every LLM setup
+	// step fell back to deploy/scripts/seed-llm-api.py or raw SQL.
+	//
+	// productionAuthenticationComposed asks what the routes actually need: a
+	// reader of the caller's credential plus a PrincipalValidator. A
+	// deployment with NO authentication still fails it, because
+	// apiGroupAuthConfig hands back the zero AuthConfig there.
+	if currentConfigurationsConfig.Enabled && !productionAuthenticationComposed(apiGroupAuth) {
+		return errors.New("ELITEA_CONFIGURATIONS_ENABLED requires an authenticated deployment")
 	}
 	var currentConfigurationsRoot *runtimecomposition.CurrentConfigurationsRuntime
 	// The toolkit settings resolver the Inventory facade expands a source with.
@@ -797,18 +849,38 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// The project vector-store collaborator the project-create route provisions
 	// with (#371). It is composed from the Configurations runtime, so it exists
 	// only where that runtime does; without it a created project cannot index.
-	var projectVectorStore *runtimecomposition.ProjectVectorStore
+	//
+	// DECLARED AS THE INTERFACE, never as the concrete pointer (#377). A nil
+	// `*runtimecomposition.ProjectVectorStore` assigned into an interface field
+	// is a TYPED NIL: `cfg.ProjectVectorStore != nil` in internal/api/router.go
+	// is then true, the provisioner takes the collaborator, and every step of
+	// the create pipeline runs until `project_pgvector` answers "project vector
+	// store is not configured" — so a deployment that composes no Configurations
+	// runtime could not create a project at all. It answered 500 and rolled the
+	// whole tenant back. Measured on the end-to-end stack by J31g.
+	//
+	// Same rule as toolkitSettingsValidator below: the concrete value is
+	// assigned inside the branch that composes it, and the variable is a nil
+	// INTERFACE everywhere else.
+	var projectVectorStore projectprovisioning.ProjectVectorStore
 	// The save-time credential gate for the toolkit write path (#613). It is
 	// composed from the same Configurations graph agent-version freezing uses,
 	// so it exists only where that graph does.
 	//
-	// DISCLOSED: deploy/helm/elitea/values.yaml leaves
-	// ELITEA_CONFIGURATIONS_ENABLED "false", so a DEFAULT install still saves
-	// toolkit credential references unresolved. Only values-standalone.yaml and
-	// the standalone compose file turn it on. Composing a second graph from a
-	// second vault key source to close that would reproduce #399's
-	// one-key-source defect on the model catalogue the resolver reads, which is
-	// a worse failure than the one it would fix.
+	// DISCLOSED, and now SMALLER: an install that composes no Configurations
+	// runtime still saves toolkit credential references unresolved. That used
+	// to mean every Kubernetes install except values-standalone.yaml, because
+	// deploy/helm/elitea/values.yaml stated ELITEA_CONFIGURATIONS_ENABLED
+	// "false" and no OIDC-only install could state otherwise. The chart now
+	// derives the flag from the deployment (see
+	// elitea-main.configurationsEnabled in the chart's _helpers.tpl), so an
+	// install with any authentication and a public project id composes the
+	// graph. What is left is the shape with NO authentication.
+	//
+	// Composing a second graph from a second vault key source to close the
+	// remainder would reproduce #399's one-key-source defect on the model
+	// catalogue the resolver reads, which is a worse failure than the one it
+	// would fix.
 	var toolkitSettingsValidator v2toolkits.ToolkitSettingsValidator
 	var delegatedAuthToolkitSettings *toolkitexecutionapp.CurrentDelegatedAuthToolkitSettings
 	var currentConfigurationRead http.Handler
@@ -844,13 +916,18 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		// deliberately NOT used here: it keys off ELITEA_VAULT_MASTER_KEY_FILE,
 		// which no file under deploy/ sets, so it could not open the vault the
 		// handler had just created.
-		projectVectorStore, err = currentConfigurationsRoot.NewProjectVectorStore(
+		vectorStore, err := currentConfigurationsRoot.NewProjectVectorStore(
 			pool,
 			v2secrets.NewHandler(pool),
 			logger,
 		)
 		if err != nil {
 			return fmt.Errorf("compose project vector-store provisioning: %w", err)
+		}
+		// Through the concrete value, and only when there IS one. See the
+		// declaration above for what a typed nil costs here.
+		if vectorStore != nil {
+			projectVectorStore = vectorStore
 		}
 		toolkitSettingsResolver, err := currentConfigurationsRoot.NewToolkitSettingsValidator(pool)
 		if err != nil {
@@ -871,22 +948,35 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		// read is what the provider receives; a second would be a second answer
 		// to "which credentials can this caller see".
 		inventorySourceSettings = toolkitSettingsResolver
-		currentAuth := apimw.AuthConfig{
-			Validator:                 formGraph,
-			PrincipalValidator:        principalValidator,
-			ForwardedIdentityVerifier: forwardedIdentityVerifier,
-			// The browser's only credential (#292), same reasoning as the
-			// agent-start route above. These are the configuration reads the
-			// UI makes on every chat page — the model catalogue among them —
-			// and without a session they answered 401 to the product's own
-			// model picker, which then rendered empty. A user could not choose
-			// a model, so the turn was rejected for not naming one: a chat that
-			// cannot run, with every configuration row present and correct.
-			//
-			// Reads only widen to a session; each route still resolves
-			// permissions through currentPermissions below.
-			SessionSecret: os.Getenv("APPLICATION_SECRET_KEY"),
-		}
+		// The SAME credential set the /api/v2 group authenticates with.
+		//
+		// These routes are registered on the ROOT mux by
+		// mountReviewedProductionRoutes, so they carry their own AuthConfig
+		// and inherit nothing from the group. This block used to build one
+		// inline from formGraph, which is nil on an OIDC-only deployment.
+		// Reusing apiGroupAuth keeps the two planes symmetric and, on
+		// OIDC-only, keeps the personal access token working: the reviewed
+		// read routes shadow the compatibility handler at the same patterns,
+		// so an AuthConfig without a token validator would turn an SDK call
+		// that answered 200 into a 401.
+		//
+		// The Form shape is byte-identical to the AuthConfig this block built
+		// before: the graph as token validator, the production principal
+		// validator, the forwarded-identity verifier, and the browser session
+		// secret.
+		//
+		// The session secret is the browser's only credential (#292), same
+		// reasoning as the agent-start route above. These are the
+		// configuration reads the UI makes on every chat page — the model
+		// catalogue among them — and without a session they answered 401 to
+		// the product's own model picker, which then rendered empty. A user
+		// could not choose a model, so the turn was rejected for not naming
+		// one: a chat that cannot run, with every configuration row present
+		// and correct.
+		//
+		// Reads only widen to a session; each route still resolves
+		// permissions through currentPermissions below.
+		currentAuth := apiGroupAuth
 		currentPermissions := legacyrbac.NewPostgresResolver(pool)
 		currentConfigurationAvailable, err = configurationapi.NewCurrentAvailableRoute(
 			currentConfigurationsRoot.AvailableCatalog(),
@@ -1074,21 +1164,18 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		if readerErr != nil {
 			return fmt.Errorf("compose ungated project-context reader: %w", readerErr)
 		}
-		// authsvc.NewPrincipalValidator(pool) is built here rather than reusing
-		// the `principalValidator` variable because that variable is nil in
-		// exactly the branch that needs it: it is only assigned inside the
-		// `authEnabled` block, which is also the only place formGraph is set.
-		// See chatConfigAuthConfig for why nil is not survivable (#301).
+		// apiGroupAuth, not a fresh composition from formGraph/
+		// principalValidator/forwardedIdentityVerifier: those are the SAME
+		// inputs apiGroupAuth was already built from above, and the gate on
+		// this block (formGraph != nil || oidcSessionHandler != nil) makes
+		// the two compositions identical in both branches. See
+		// chatConfigAuthConfig for why reusing the value, rather than
+		// recomposing it, is what keeps the OIDC-only branch from silently
+		// losing a validator again (#301, and the token validator this fixes).
 		currentPromptContextReads, err = promptcontextreadsapi.NewCurrentRoutes(
 			chatConfigReader,
 			projectContextReader,
-			chatConfigAuthConfig(
-				formGraph,
-				principalValidator,
-				forwardedIdentityVerifier,
-				authsvc.NewPrincipalValidator(pool),
-				os.Getenv("APPLICATION_SECRET_KEY"),
-			),
+			chatConfigAuthConfig(apiGroupAuth),
 			legacyrbac.NewPostgresResolver(pool),
 		)
 		if err != nil {
@@ -1109,28 +1196,6 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	}
 	var runtimeRoot *runtimecomposition.Runtime
 	var productionRuntime *api.ProductionRuntimeRoutes
-	// The credential set the whole /api/v2 group authenticates with — built
-	// here, ahead of the provider facades, because they take the SAME set
-	// (ADR-0023 decision 5): under production Form authentication that is the
-	// graph's token validator and the forwarded-identity verifier; under
-	// OIDC-only it is the session cookie plus the LocalValidator for the
-	// tokens APPLICATION_SECRET_KEY signs — which is also how a provider's
-	// callback bearer, minted by the same key, is read back on its upload.
-	// See apiGroupAuthConfig for the two shapes and why each carries a
-	// principal validator.
-	var sessionTokens apimw.TokenValidator
-	if secretKey := os.Getenv("APPLICATION_SECRET_KEY"); secretKey != "" && pool != nil {
-		sessionTokens = authsvc.NewLocalValidator(pool, secretKey)
-	}
-	apiGroupAuth := apiGroupAuthConfig(
-		formGraph,
-		principalValidator,
-		forwardedIdentityVerifier,
-		authsvc.NewPrincipalValidator(pool),
-		sessionTokens,
-		os.Getenv("APPLICATION_SECRET_KEY"),
-		oidcSessionHandler != nil,
-	)
 
 	// The DeepWiki facade (ADR-0022 P2). Composed OUTSIDE the runtime-plane
 	// block: it proxies to an independently deployed service and needs nothing
@@ -1293,19 +1358,96 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 					Timeout:        deepwikiConfig.Timeout,
 				}, v2deepwiki.BaseURLEnv))
 
+		// The application-toolkit reader, for the `wikis_query` rewrite: a
+		// query toolkit names a Wikis toolkit, and its OWN code toolkit is
+		// what gets expanded (internal/api/v2/deepwiki/wikis.go). A reader
+		// that will not build is not fatal — the facade then serves `Wikis`
+		// and `wiki_query` and refuses `wikis_query` with a message saying
+		// why, which is better than refusing to boot a DeepWiki deployment
+		// that uses neither.
+		deepwikiToolkits, toolkitsErr := dbrepos.NewCurrentToolkitsRepository(pool)
+		if toolkitsErr != nil {
+			logger.Warn("DeepWiki mounts without wikis_query expansion",
+				"error", toolkitsErr)
+			deepwikiToolkits = nil
+		}
+		// Assigned through a nil-INTERFACE, never a typed nil: the rewriter's
+		// only fallback is a nil-interface check, and a typed nil would pass
+		// it and then panic on the first wikis_query invoke.
+		var deepwikiToolkitReader v2deepwiki.ToolkitReader
+		if deepwikiToolkits != nil {
+			deepwikiToolkitReader = deepwikiToolkits
+		}
+
+		// The wiki chat's transcript store. A deployment that cannot build it
+		// still mounts DeepWiki: the chat works exactly as it did before the
+		// history existed, and the drawer's listing simply comes back empty.
+		// Recording is a feature of the chat, not a precondition for it.
+		deepwikiHistoryRepo, historyErr := dbrepos.NewDeepWikiHistoryRepo(pool)
+		if historyErr != nil {
+			logger.Warn("DeepWiki mounts without server-side chat history",
+				"error", historyErr)
+		}
+		// Through a nil INTERFACE, never a typed nil — the same rule the
+		// toolkit reader above follows, and for the same reason: NewHistory
+		// decides on `store == nil`, and a typed nil would pass that check
+		// and then call methods on a nil pointer.
+		var deepwikiHistoryStore wikichat.Store
+		if deepwikiHistoryRepo != nil {
+			deepwikiHistoryStore = deepwikiHistoryRepo
+		}
+
 		deepwikiRoute, err = v2deepwiki.NewRoute(
 			deepwikiConfig,
 			// The API group's credential set, in either authentication mode.
 			apiGroupAuth,
 			legacyrbac.NewPostgresResolver(pool),
 			deepwikiCredentials,
+			deepwikiToolkitReader,
 			v2deepwiki.NewAuthCallbackMinter(deepwikiTokens),
 			slog.Default(),
+			v2deepwiki.WithHistory(
+				v2deepwiki.NewHistory(deepwikiHistoryStore, slog.Default())),
 		)
 		if err != nil {
 			return fmt.Errorf("compose DeepWiki facade: %w", err)
 		}
 	}
+	// The same endpoint serves every SDK toolkit type's settings schema and its
+	// metadata — the label, categories and icon the create page groups it by.
+	// This is a second pinned file rather than a larger first one: the argument
+	// schemas already measure 596 KB against a 1 MiB ceiling.
+	toolkitCatalogue, err := runtimecomposition.LoadPinnedCurrentToolkitCatalogueSnapshot()
+	if err != nil {
+		return fmt.Errorf("load pinned current toolkit catalogue snapshot: %w", err)
+	}
+	// Which of those types the deployment can actually run depends on the
+	// worker image it starts. The catalogue holds 52 types; the Python image
+	// imports 39 of them and the Rust worker materializes 22 families. A type
+	// the worker cannot run is served hidden, with the reason, so the operator
+	// can see why rather than hunting a tile that is simply absent.
+	workerImplementation, err := runtimecomposition.WorkerImplementationFromEnv(os.LookupEnv)
+	if err != nil {
+		return fmt.Errorf("read worker implementation: %w", err)
+	}
+	workerToolkitCapability, err := runtimecomposition.LoadPinnedWorkerToolkitCapability(
+		workerImplementation,
+	)
+	if err != nil {
+		return fmt.Errorf("load pinned worker toolkit capability: %w", err)
+	}
+	logger.Info(
+		"toolkit type catalogue composed",
+		"worker_implementation", workerImplementation,
+		"catalogued_types", toolkitCatalogue.EntryCount(),
+	)
+	// Both are loaded HERE, ahead of the runtime, rather than beside the router
+	// config they also feed: the tool-run producer composed inside the runtime
+	// block below asks the SAME pair whether a type is runnable, and a second
+	// answer to that question is how a deployment would offer a type it then
+	// refuses. Loading is pure — two embedded snapshots — so moving it earlier
+	// changes nothing but the order.
+
 	var currentIndexStart http.Handler
 	var currentAgentStart http.Handler
 	// The support assistant's half of the agent-execution wiring. It is
@@ -1320,7 +1462,20 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// SAME use case; left nil it keeps answering the refusal it always has.
 	var mcpAgentStart v2mcp.AgentStartUseCase
 	var mcpToolkitExecute v2mcp.ToolkitExecuteReadUseCase
+	// The tool-run halves, assigned ONLY inside the guard below and for the
+	// same typed-nil reason: a nil concrete value in a non-nil interface reads
+	// as "configured" downstream, and both consumers decide on `!= nil`.
+	var toolkitToolRun toolkitrun.UseCase
+	var mcpToolkitRun v2mcp.ToolkitRunUseCase
+	// The unattended pipeline entry points (issues 192, 193).
+	//
+	// ONE handler serves both the HTTP surface and the platform scheduler's
+	// `pipeline.schedule.scan.v1` job, which is why it is built here rather
+	// than inside the router: two handlers over one table would be two chances
+	// for the tick and the settings routes to disagree on a dependency.
+	var pipelineTriggers *v2pipelinetriggers.Handler
 	var currentAgentCancel http.Handler
+	var currentApplicationTask http.Handler
 	var currentIndexCancel http.Handler
 	var currentIndexMeta http.Handler
 	var currentIndexMetaDelete http.Handler
@@ -1367,6 +1522,8 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			PermissionResolver:               legacyrbac.NewPostgresResolver(pool),
 			Logger:                           logger,
 			ObjectStore:                      objectStore,
+			ToolkitCatalogue:                 toolkitCatalogue,
+			WorkerToolkitCapability:          workerToolkitCapability,
 		})
 		if err != nil {
 			return fmt.Errorf("compose optional runtime: %w", err)
@@ -1385,11 +1542,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			}
 			currentConfigurationMutation, mutationErr = configurationapi.NewCurrentConfigurationMutationRoute(
 				mutationService,
-				apimw.AuthConfig{
-					Validator:                 formGraph,
-					PrincipalValidator:        principalValidator,
-					ForwardedIdentityVerifier: forwardedIdentityVerifier,
-				},
+				apiGroupAuth,
 				legacyrbac.NewPostgresResolver(pool),
 			)
 			if mutationErr != nil {
@@ -1403,39 +1556,65 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			principalValidator,
 			forwardedIdentityVerifier,
 			// The browser's only credential for the events stream: an
-			// EventSource sends a cookie and nothing else (#93). Same secret
-			// the rest of the router uses, so a session is accepted here on
-			// exactly the terms it is accepted everywhere else.
-			os.Getenv("APPLICATION_SECRET_KEY"),
+			// EventSource sends a cookie and nothing else (#93). The GROUP's
+			// own credential set is handed over whole, so a session is
+			// accepted here on exactly the terms it is accepted everywhere
+			// else — including the server-side session store, which the
+			// literal that used to stand here did not carry. Only the cookie
+			// fields are read; NewProductionRuntimeRoutes drops the token
+			// validators, so these two routes stay narrower than the group.
+			//
+			// A deployment with no authentication plane hands over the zero
+			// AuthConfig, whose SessionSecret is empty. That is the same
+			// nothing the whole /api/v2 group admits there, rather than a
+			// cookie honoured on one route and refused on every other.
+			apiGroupAuth,
 		)
 		if err != nil {
 			return fmt.Errorf("compose production runtime HTTP routes: %w", err)
 		}
-		// The browser's credential for the runtime routes the WEB APP calls
-		// directly (#93 Surface A): the index list, an index run and its
-		// cancel, and the chat stop button. Each was composed for forwarded
-		// identity alone, so every one of them answered `401 missing
-		// authorization header` to the product's own UI while working for the
-		// worker — the same shape as #291 on the chat start route, and the
-		// reason Surface A's REST path could not be exercised from a browser
-		// at all.
+		// Every route below takes apiGroupAuth — the runtime routes the WEB APP
+		// calls directly (#93 Surface A: the index list, an index run and its
+		// cancel, and the chat stop button), and the index-schedule writes.
+		// Each was once composed for forwarded identity alone, so every one of
+		// them answered `401 missing authorization header` to the product's own
+		// UI while working for the worker — the same shape as #291 on the chat
+		// start route, and the reason Surface A's REST path could not be
+		// exercised from a browser at all.
 		//
-		// Additive: the peer verifier and principal validator are unchanged,
-		// so the worker and the forward-auth edge authenticate exactly as
-		// before, and each route still resolves permissions through the RBAC
-		// resolver it is given.
-		browserRuntimeAuth := apimw.AuthConfig{
-			Validator:                 formGraph,
-			PrincipalValidator:        principalValidator,
-			ForwardedIdentityVerifier: forwardedIdentityVerifier,
-			SessionSecret:             os.Getenv("APPLICATION_SECRET_KEY"),
-		}
+		// Additive: the peer verifier and principal validator come with the
+		// same value, so the worker and the forward-auth edge authenticate
+		// exactly as before, and each route still resolves permissions through
+		// the RBAC resolver it is given.
+		//
+		// This block does NOT gate on formGraph, so a private literal reading
+		// `Validator: formGraph` here boxed a nil *FormGraph into a non-nil
+		// interface on every OIDC-only deployment — the #86 typed-nil trap,
+		// where `!= nil` downstream reads as "configured". apiGroupAuth cannot
+		// carry that: apiGroupAuthConfig picks the branch by testing the
+		// pointer.
 		if publicRoutes.IndexStart != nil {
-			currentIndexStart, err = indexingapi.NewCurrentIndexStartRoute(
-				publicRoutes.IndexStart,
-				browserRuntimeAuth,
-				legacyrbac.NewPostgresResolver(pool),
-			)
+			if publicRoutes.ToolkitCallTool != nil {
+				// The SAME path, the same credentials, the same permission —
+				// plus the synchronous branch its `await_response` refusal used
+				// to occupy (#340). This route is what a tool run actually
+				// reaches wherever the runtime is composed; see
+				// internal/application/toolkitcalltool/doc.go.
+				toolkitToolRun = publicRoutes.ToolkitCallTool
+				mcpToolkitRun = publicRoutes.ToolkitCallTool
+				currentIndexStart, err = indexingapi.NewCurrentIndexStartRouteWithToolRuns(
+					publicRoutes.IndexStart,
+					publicRoutes.ToolkitCallTool,
+					apiGroupAuth,
+					legacyrbac.NewPostgresResolver(pool),
+				)
+			} else {
+				currentIndexStart, err = indexingapi.NewCurrentIndexStartRoute(
+					publicRoutes.IndexStart,
+					apiGroupAuth,
+					legacyrbac.NewPostgresResolver(pool),
+				)
+			}
 			if err != nil {
 				return fmt.Errorf("compose current index-start route: %w", err)
 			}
@@ -1443,53 +1622,91 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		if publicRoutes.AgentStart != nil {
 			supportAssistantStart = publicRoutes.AgentStart
 			mcpAgentStart = publicRoutes.AgentStart
+			// The pipeline trigger and schedule handler. It runs pipelines
+			// through the SAME use case as chat, MCP and the support widget —
+			// see internal/api/v2/pipelinetriggers for why there is one
+			// admission path and not four.
+			pipelineTriggers = v2pipelinetriggers.NewPlatformHandler(
+				pool,
+				publicRoutes.AgentStart,
+				v2secrets.NewHandler(pool),
+				legacyrbac.NewPostgresResolver(pool),
+				auditRecorder,
+				logger,
+			)
+			// The schedule TICK. It rides elitea-main's platform scheduler —
+			// the same framework `index.schedule.scan.v1` uses — so the clock,
+			// the cross-replica occurrence lease and the claim fence are the
+			// framework's and are not re-implemented. See the package doc for
+			// why the tick is not in services/elitea-scheduler, and what was
+			// carried across from it (the maintenance gate and the
+			// no-catch-up-storm rule, both ported literally).
+			if scheduleErr := startPipelineScheduleRunner(
+				ctx, runtimePools.Admission, pipelineTriggers,
+				runtimeConfig.SchedulerInstanceID, logger,
+			); scheduleErr != nil {
+				return fmt.Errorf("compose pipeline schedule job: %w", scheduleErr)
+			}
 			currentAgentStart, err = agentexecutionapi.NewCurrentApplicationStartRoute(
 				publicRoutes.AgentStart,
-				apimw.AuthConfig{
-					Validator:                 formGraph,
-					PrincipalValidator:        principalValidator,
-					ForwardedIdentityVerifier: forwardedIdentityVerifier,
-					// The browser's only credential (#291). This handler serves
-					// START, REGENERATE and CONTINUE (production_router.go),
-					// i.e. every write path a chat conversation has, and the UI
-					// authenticates with a session cookie and nothing else — no
-					// bearer, no forwarded identity. Without this the product's
-					// own chat cannot start a turn while every server-side hop
-					// can, the same shape #93 found on the events stream, which
-					// this is the other half of: the UI could read a stream it
-					// was not allowed to open.
-					//
-					// It does not widen what a caller may DO. The route still
-					// resolves permissions through legacyrbac below, so
-					// membership and `models.chat.messages.create` are checked
-					// exactly as before; this only lets a session prove who it
-					// is. A deployment reached solely through a forward-auth
-					// edge is unaffected — it simply never presents a cookie.
-					SessionSecret: os.Getenv("APPLICATION_SECRET_KEY"),
-				},
+				// The browser's session cookie is this route's only credential
+				// (#291). This handler serves START, REGENERATE and CONTINUE
+				// (production_router.go), i.e. every write path a chat
+				// conversation has, and the UI authenticates with a cookie and
+				// nothing else — no bearer, no forwarded identity. Without it
+				// the product's own chat cannot start a turn while every
+				// server-side hop can, the same shape #93 found on the events
+				// stream, which this is the other half of: the UI could read a
+				// stream it was not allowed to open.
+				//
+				// apiGroupAuth carries that cookie in both deployment shapes,
+				// so the credential no longer depends on a private literal
+				// keeping one field.
+				//
+				// It does not widen what a caller may DO. The route still
+				// resolves permissions through legacyrbac below, so membership
+				// and `models.chat.messages.create` are checked exactly as
+				// before; this only lets a session prove who it is.
+				apiGroupAuth,
 				legacyrbac.NewPostgresResolver(pool),
 			)
 			if err != nil {
 				return fmt.Errorf("compose current agent-start route: %w", err)
 			}
 		}
-		if publicRoutes.ToolkitExecuteRead != nil {
+		if workerImplementation == "rust" && publicRoutes.ToolkitExecuteRead != nil {
 			mcpToolkitExecute = publicRoutes.ToolkitExecuteRead
 		}
 		if publicRoutes.AgentCancel != nil {
 			currentAgentCancel, err = agentexecutionapi.NewCurrentAgentCancelRoute(
 				publicRoutes.AgentCancel,
-				browserRuntimeAuth,
+				apiGroupAuth,
 				legacyrbac.NewPostgresResolver(pool),
 			)
 			if err != nil {
 				return fmt.Errorf("compose current agent-cancel route: %w", err)
 			}
 		}
+		// The legacy application_task path (issue 254 P2). It needs BOTH halves
+		// — the poll reader and the canceller — so it is composed only when the
+		// runtime supplies both. It takes the same apiGroupAuth the cancel route
+		// takes, for the reason recorded on the start route above: the browser's
+		// session cookie is the only credential the chat surface carries.
+		if publicRoutes.AgentTaskStatus != nil && publicRoutes.AgentCancel != nil {
+			currentApplicationTask, err = agentexecutionapi.NewCurrentApplicationTaskRoute(
+				publicRoutes.AgentTaskStatus,
+				publicRoutes.AgentCancel,
+				apiGroupAuth,
+				legacyrbac.NewPostgresResolver(pool),
+			)
+			if err != nil {
+				return fmt.Errorf("compose current application-task route: %w", err)
+			}
+		}
 		if publicRoutes.IndexCancel != nil {
 			currentIndexCancel, err = indexingapi.NewCurrentIndexCancelRoute(
 				publicRoutes.IndexCancel,
-				browserRuntimeAuth,
+				apiGroupAuth,
 				legacyrbac.NewPostgresResolver(pool),
 			)
 			if err != nil {
@@ -1499,7 +1716,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		if publicRoutes.IndexMeta != nil {
 			currentIndexMeta, err = indexingapi.NewCurrentIndexMetaRoute(
 				publicRoutes.IndexMeta,
-				browserRuntimeAuth,
+				apiGroupAuth,
 				legacyrbac.NewPostgresResolver(pool),
 			)
 			if err != nil {
@@ -1510,7 +1727,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			currentIndexMetaDelete, err =
 				indexingapi.NewCurrentIndexMetaDeleteRoute(
 					publicRoutes.IndexMetaDelete,
-					browserRuntimeAuth,
+					apiGroupAuth,
 					legacyrbac.NewPostgresResolver(pool),
 				)
 			if err != nil {
@@ -1524,11 +1741,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			currentIndexScheduleUpdate, err =
 				indexingapi.NewCurrentIndexScheduleRoute(
 					publicRoutes.IndexScheduleUpdate,
-					apimw.AuthConfig{
-						Validator:                 formGraph,
-						PrincipalValidator:        principalValidator,
-						ForwardedIdentityVerifier: forwardedIdentityVerifier,
-					},
+					apiGroupAuth,
 					legacyrbac.NewPostgresResolver(pool),
 				)
 			if err != nil {
@@ -1542,11 +1755,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			currentIndexScheduleDelete, err =
 				indexingapi.NewCurrentIndexScheduleDeleteRoute(
 					publicRoutes.IndexScheduleDelete,
-					apimw.AuthConfig{
-						Validator:                 formGraph,
-						PrincipalValidator:        principalValidator,
-						ForwardedIdentityVerifier: forwardedIdentityVerifier,
-					},
+					apiGroupAuth,
 					legacyrbac.NewPostgresResolver(pool),
 				)
 			if err != nil {
@@ -1629,6 +1838,35 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			"the route stays registered and answers 503")
 	}
 
+	// Agent Evaluation runs execute HERE, in this process: a bounded worker
+	// pool of goroutines driven by the run rows themselves. The reasoning for
+	// not using the runtime plane or the scheduler is in the package doc of
+	// internal/api/v2/evaluation (orchestrator.go).
+	//
+	// The judge and the agent turn both take `predictCompleter`, the SAME
+	// client /predict_llm and the three AI-draft routes take. There is no
+	// second LLM client in this service, and adding one would mean a second
+	// place that resolves credentials and a second egress path to keep
+	// SSRF-safe.
+	//
+	// A nil completer is a supported state and does NOT unregister the routes:
+	// runs are still stored and listed, every case fails with the reason
+	// "no LLM plane is composed", and the run finishes `errored` carrying it.
+	// An operator can then see the run, read why, and fix the deployment —
+	// which a 404 would not let them do (#126).
+	evalRunsRepo := evalRunsRepository(pool)
+	var evalOrchestrator v2evaluation.Enqueuer
+	if evalRunsRepo != nil {
+		orchestrator := v2evaluation.NewOrchestrator(
+			evalRunsRepo, v2evaluation.NewAIJudge(predictCompleter), predictCompleter, logger)
+		// Started with the PROCESS context, so the workers and the recovery
+		// sweep stop on SIGTERM. A run in flight then leaves its row `running`
+		// with a fresh heartbeat, and the next process re-queues it once the
+		// heartbeat goes stale — which is what makes a restart lose nothing.
+		orchestrator.Start(ctx)
+		evalOrchestrator = orchestrator
+	}
+
 	// The admin LLM Proxy section reads the gateway's own enforcement status.
 	// Same four settings again, for the third and last consumer of the hop, so
 	// an operator configures the gateway once. No identity secret: the gateway
@@ -1691,7 +1929,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			return html, err
 		},
 		App: previewer,
-	}, mailSettings.PublicBaseURL)
+	}, mailSettings.Settings.PublicBaseURL)
 
 	var adminUICfg *adminui.Config
 	if dir := os.Getenv("ADMIN_UI_STATIC_DIR"); dir != "" {
@@ -1713,7 +1951,12 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			// and the SPA renders a sidebar with no items — see adminui's
 			// ServeSPA. A nil verifier (no form graph) still degrades closed.
 			ForwardedIdentityVerifier: forwardedIdentityVerifier,
-			Emails:                    adminUIEmails{pool: pool},
+			// The OIDC path's credential after shared migration 0117. The
+			// cookie carries an opaque identifier and no claims, so without
+			// this the HMAC reader below finds nothing and the sidebar is
+			// empty again. A nil manager keeps the legacy reader.
+			Sessions: adminUISessions(sessionManager),
+			Emails:   adminUIEmails{pool: pool},
 		}
 	}
 
@@ -1761,7 +2004,6 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if err != nil {
 		return fmt.Errorf("compose current toolkit settings definitions: %w", err)
 	}
-
 	// patSigner signs the personal access tokens /api/v2/auth/token returns.
 	//
 	// The form graph validates a personal access token with the bytes of
@@ -1782,12 +2024,15 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		Pool:                         pool,
 		Branding:                     brandingResolver,
 		Mailer:                       mailComposer,
+		EmailSettings:                emailResolver,
 		BrandingPackages:             brandingPackages,
 		ToolkitArgumentSchemas:       toolkitArgumentSchemas,
+		ToolkitCatalogue:             toolkitCatalogue,
+		ToolkitWorkerCapability:      workerToolkitCapability,
 		ToolkitSettingsDefinitions:   toolkitSettingsDefinitions,
 		ToolkitSettingsValidator:     toolkitSettingsValidator,
-		DelegatedAuthToolkitSettings: delegatedAuthToolkitSettings,
 		ToolkitRegistry:              toolkitArgumentSchemas,
+		DelegatedAuthToolkitSettings: delegatedAuthToolkitSettings,
 		HealthDeps: health.Deps{
 			DB:    &poolChecker{pool: pool},
 			Redis: authReadiness,
@@ -1797,10 +2042,12 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		SessionSecret:      apiGroupAuth.SessionSecret,
 		PATSigner:          patSigner,
 		Auth: api.AuthDeps{
-			ForwardedIdentityVerifier: apiGroupAuth.ForwardedIdentityVerifier,
-			SessionHandler:            oidcSessionHandler,
-			OIDCHandler:               oidcOIDCHandler,
-			SAMLHandler:               oidcSAMLHandler,
+			ForwardedIdentityVerifier:  apiGroupAuth.ForwardedIdentityVerifier,
+			SessionStore:               apiGroupAuth.SessionStore,
+			RejectLegacySessionCookies: apiGroupAuth.RejectLegacySessionCookies,
+			SessionHandler:             oidcSessionHandler,
+			OIDCHandler:                oidcOIDCHandler,
+			SAMLHandler:                oidcSAMLHandler,
 		},
 		ProductionAuth:                productionAuth,
 		ProductionRuntime:             productionRuntime,
@@ -1827,7 +2074,12 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		SupportAssistantStart:      supportAssistantStart,
 		MCPAgentStart:              mcpAgentStart,
 		MCPToolkitExecute:          mcpToolkitExecute,
+		MCPToolkitRun:              mcpToolkitRun,
+		ToolkitToolRun:             toolkitToolRun,
+		PipelineTriggers:           pipelineTriggers,
+		AuditRecorder:              auditRecorder,
 		CurrentAgentCancel:         currentAgentCancel,
+		CurrentApplicationTask:     currentApplicationTask,
 		CurrentIndexCancel:         currentIndexCancel,
 		CurrentIndexMeta:           currentIndexMeta,
 		CurrentIndexMetaDelete:     currentIndexMetaDelete,
@@ -1875,6 +2127,13 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		// records — both halves correct, the wiring the defect, and 2475 green
 		// unit tests unable to see it.
 		EvalDimensionsRepo: evalDimensionsRepository(pool),
+		// Agent Evaluation slice 2, composed in the SAME change as its routes
+		// for the reason above. The orchestrator is started below, after the
+		// config is built, so that a nil pool leaves all three fields nil
+		// together and the thirteen routes are simply not registered.
+		EvalDatasetsRepo: evalDatasetsRepository(pool),
+		EvalRunsRepo:     evalRunsRepo,
+		EvalOrchestrator: evalOrchestrator,
 		// WebhookRepo is the sixth instance of the same defect, and it hid one
 		// step deeper than the other five. Its gate mounts a subrouter —
 		// `r.Mount("/webhooks/prompt_lib/{projectID}", webhook.NewHandler(...).Routes())`
@@ -1996,6 +2255,25 @@ func evalDimensionsRepository(pool *pgxpool.Pool) v2evaluation.Repository {
 	return dbrepos.NewEvalDimensionsRepo(pool)
 }
 
+func evalDatasetsRepository(pool *pgxpool.Pool) v2evaluation.DatasetRepository {
+	if pool == nil {
+		return nil
+	}
+	return dbrepos.NewEvalDatasetsRepo(pool)
+}
+
+// evalRunsRepository returns a nil INTERFACE and not a boxed nil pointer when
+// there is no pool. The router's `cfg.EvalRunsRepo != nil` gate is an interface
+// comparison, and a typed nil satisfies it — the route would then register and
+// call a method on a nil receiver, which is the /healthz panic recorded in the
+// gateway's own composition notes.
+func evalRunsRepository(pool *pgxpool.Pool) v2evaluation.RunRepository {
+	if pool == nil {
+		return nil
+	}
+	return dbrepos.NewEvalRunsRepo(pool)
+}
+
 func tagsRepository(pool *pgxpool.Pool) v2tags.Repository {
 	if pool == nil {
 		return nil
@@ -2024,6 +2302,35 @@ func configuredAuthConfigPath(lookup func(string) (string, bool)) (string, bool,
 		return "", false, errors.New("ELITEA_AUTH_CONFIG_FILE is invalid")
 	}
 	return path, true, nil
+}
+
+// logInitialGlobalAdminShapes reports what `identity.initial_global_admins`
+// holds, BY SHAPE.
+//
+// The list is consumed at a first login that can happen days after this boot,
+// and a wrong entry produces silence: the person signs in and simply is not an
+// administrator. The count alone did not separate the two shapes, so an
+// operator who wrote `alice@corp.com` when they meant `email:alice@corp.com`
+// saw the same log line as one who wrote it correctly.
+//
+// A MALFORMED ENTRY WARNS AND DOES NOT STOP THE BOOT. This value only changes
+// what a first login receives; refusing to start would turn one bad list entry
+// into an outage of a running deployment.
+func logInitialGlobalAdminShapes(logger *slog.Logger, admins []string) {
+	if logger == nil || len(admins) == 0 {
+		return
+	}
+	shapes := identityapp.ClassifyInitialGlobalAdmins(admins)
+	logger.Info("initial global administrators configured",
+		"total", len(admins),
+		"provider_references", shapes.References,
+		"verified_emails", shapes.Emails)
+	if len(shapes.Malformed) != 0 {
+		logger.Warn("initial global administrator entries match nothing and are ignored",
+			"count", len(shapes.Malformed),
+			"entries", shapes.Malformed,
+			"accepted_shapes", "oidc:<sub>, saml:<nameid>, <bare subject>, email:<verified address>")
+	}
 }
 
 type publicServerLifecycle interface {
@@ -2171,13 +2478,15 @@ func (p *poolChecker) Ping(ctx context.Context) error {
 // this process wraps with SECRETS_MASTER_KEY, so no SQL migration can write it
 // — a migration could only store material the readers cannot open. This is the
 // first point after the pool and the master key are both settled, and it is
-// before the listeners accept a request, so no project serves a request with
-// the guessable default while the pass is still running.
+// before the listeners accept a request, so no project is asked for its
+// X-SECRET value while the pass is still running.
 //
-// IT NEVER STOPS THE SERVICE. A project that keeps the default `secret` value
-// is the state every project is in today, so a failed pass is no worse than no
-// pass. It is logged at error level with the counts it reached, because a
-// silent pass is exactly how the operator would come to believe work happened
+// IT NEVER STOPS THE SERVICE. A project the pass does not reach has no X-SECRET
+// value, and the version-details route then refuses every caller for it (#408
+// step 3) rather than accepting the guessable literal. That is a narrow, loud
+// and repairable outage on one route, so a failed pass must not keep the whole
+// service down. It is logged at error level with the counts it reached, because
+// a silent pass is exactly how the operator would come to believe work happened
 // that did not.
 //
 // IT IS CHEAP TO RE-RUN. Every project that holds a value is counted and left
@@ -2189,7 +2498,7 @@ func backfillProjectSecretsHeaderValues(ctx context.Context, pool *pgxpool.Pool,
 	report, err := v2secrets.NewHandler(pool).BackfillProjectSecretsHeaderValues(ctx)
 	if err != nil {
 		logger.ErrorContext(ctx, "the project X-SECRET backfill did not finish; "+
-			"the projects it did not reach still accept the default value",
+			"the version details route refuses every caller for the projects it did not reach",
 			"vaults", report.Vaults,
 			"written", report.Written,
 			"already_set", report.AlreadySet,
@@ -2216,4 +2525,77 @@ func backfillProjectSecretsHeaderValues(ctx context.Context, pool *pgxpool.Pool,
 		"written", report.Written,
 		"already_set", report.AlreadySet,
 		"skipped", report.Skipped)
+}
+
+// startPipelineScheduleRunner registers `pipeline.schedule.scan.v1` on the
+// platform scheduler and starts it.
+//
+// It builds its OWN registry and runner rather than joining the index scan's,
+// and that is a deliberate separation of failure domains rather than an
+// oversight. The index runner is configured `MaxParallel: 1, PageSize: 1`
+// because one index scan observes every project and a second concurrent claim
+// only makes the product runner release occurrences for retry. A pipeline
+// schedule pass has no such property, and more importantly a tenant workload
+// that is slow or wedged must not delay the platform's own indexing — the
+// coupling issue 193 names as the reason not to put tenant work in the ops
+// scheduler in the first place. Two runners over ONE occurrence store, keyed by
+// distinct job ids, keep the lease semantics and drop the coupling.
+func startPipelineScheduleRunner(
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	handler *v2pipelinetriggers.Handler,
+	instanceID string,
+	logger *slog.Logger,
+) error {
+	if pool == nil || handler == nil {
+		return nil
+	}
+	job, err := v2pipelinetriggers.NewScheduleJob(handler)
+	if err != nil {
+		return fmt.Errorf("construct pipeline schedule job: %w", err)
+	}
+	cadence, err := schedulingapp.ParseCron(v2pipelinetriggers.ScheduleJobCadence)
+	if err != nil {
+		return fmt.Errorf("parse pipeline schedule cadence: %w", err)
+	}
+	config := schedulingapp.Config{
+		// Not `instanceID` directly: the caller passes
+		// runtimeConfig.SchedulerInstanceID, which is EMPTY unless
+		// ELITEA_RUNTIME_INDEX_SCHEDULING_ENABLED is on, and an empty name
+		// makes NewRunner below refuse — which used to stop the whole process.
+		// See pipeline_schedule_instance.go.
+		InstanceID:      pipelineScheduleInstanceID(instanceID),
+		LeaseDuration:   2 * time.Minute,
+		MaxParallel:     1,
+		PageSize:        1,
+		MaxPagesPerTick: 2,
+	}
+	registry, err := schedulingapp.NewRegistry(config.LeaseDuration, schedulingapp.Job{
+		ID:       v2pipelinetriggers.ScheduleJobID,
+		Revision: v2pipelinetriggers.ScheduleJobRevision,
+		Mode:     schedulingapp.ModeDurableAdmission,
+		Schedule: cadence,
+		Timeout:  v2pipelinetriggers.ScheduleJobTimeout,
+		Handler:  job,
+	})
+	if err != nil {
+		return fmt.Errorf("register pipeline schedule job: %w", err)
+	}
+	occurrences, err := dbrepos.NewScheduleOccurrenceRepository(pool)
+	if err != nil {
+		return fmt.Errorf("construct pipeline schedule occurrence repository: %w", err)
+	}
+	runner, err := schedulingapp.NewRunner(occurrences, registry, config, logger)
+	if err != nil {
+		return fmt.Errorf("construct pipeline schedule runner: %w", err)
+	}
+	// Run returns only when ctx is cancelled, which is process shutdown. The
+	// error is logged rather than dropped: a runner that stopped early would
+	// otherwise take every tenant's schedules with it, silently.
+	go func() {
+		if err := runner.Run(ctx); err != nil && ctx.Err() == nil {
+			logger.Error("the pipeline schedule runner stopped", "err", err)
+		}
+	}()
+	return nil
 }

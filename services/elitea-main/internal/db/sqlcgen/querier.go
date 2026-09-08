@@ -216,6 +216,16 @@ type Querier interface {
 	GetAuthUserByProviderForProvisioning(ctx context.Context, providerRef string) (AuthCoreUser, error)
 	GetCurrentActiveAuthUser(ctx context.Context, userID int32) (AuthCoreUser, error)
 	GetCurrentAgentInvokedSkills(ctx context.Context, messageGroupID int64) (string, error)
+	// The read half of the legacy `application_task` surface. It resolves the
+	// durable execution from the RESPONSE MESSAGE, exactly the way
+	// CancelCurrentAgentExecution does, so a caller can never name a foreign
+	// execution id and read another project's run state.
+	//
+	// The ownership predicate is byte-for-byte the cancel query's: the caller owns
+	// the conversation, or the caller wrote the question this response answers.
+	// A reader that could see more than the canceller could stop would be a
+	// disclosure the cancel path already refuses.
+	GetCurrentAgentTaskStatus(ctx context.Context, arg GetCurrentAgentTaskStatusParams) (GetCurrentAgentTaskStatusRow, error)
 	GetCurrentAgentTraceBinding(ctx context.Context, arg GetCurrentAgentTraceBindingParams) (GetCurrentAgentTraceBindingRow, error)
 	GetCurrentConfiguration(ctx context.Context, arg GetCurrentConfigurationParams) (GetCurrentConfigurationRow, error)
 	GetCurrentConfigurationRenameToolkit(ctx context.Context, arg GetCurrentConfigurationRenameToolkitParams) (GetCurrentConfigurationRenameToolkitRow, error)
@@ -235,6 +245,11 @@ type Querier interface {
 	GetDurableIndexResultArtifact(ctx context.Context, arg GetDurableIndexResultArtifactParams) (GetDurableIndexResultArtifactRow, error)
 	GetExpectedAgentExecutionHeader(ctx context.Context, arg GetExpectedAgentExecutionHeaderParams) (GetExpectedAgentExecutionHeaderRow, error)
 	GetExpectedIndexIngestHeader(ctx context.Context, arg GetExpectedIndexIngestHeaderParams) (GetExpectedIndexIngestHeaderRow, error)
+	// GetExpectedToolkitCallToolHeader is the output plane's admitted-binding read.
+	// Unlike its agent counterpart it needs no capability-owned table: everything
+	// it returns is on execution_jobs, input_bundles and input_bundle_entries.
+	//
+	GetExpectedToolkitCallToolHeader(ctx context.Context, arg GetExpectedToolkitCallToolHeaderParams) (GetExpectedToolkitCallToolHeaderRow, error)
 	GetExpectedToolkitExecuteReadHeader(ctx context.Context, arg GetExpectedToolkitExecuteReadHeaderParams) (GetExpectedToolkitExecuteReadHeaderRow, error)
 	// S20c: keyed only by the table's actual primary key, no execution_jobs
 	// join — used both by CommitArtifact's duplicate-PK reconciliation (decide
@@ -255,6 +270,34 @@ type Querier interface {
 	GetPreparedToolkitExecuteReadEnvelope(ctx context.Context, arg GetPreparedToolkitExecuteReadEnvelopeParams) (GetPreparedToolkitExecuteReadEnvelopeRow, error)
 	GetRuntimeAdmissionByIdempotency(ctx context.Context, arg GetRuntimeAdmissionByIdempotencyParams) (GetRuntimeAdmissionByIdempotencyRow, error)
 	GetScheduledJobCursorForUpdate(ctx context.Context, jobID string) (GetScheduledJobCursorForUpdateRow, error)
+	// toolkit.call_tool.v1 — the producer's durable half.
+	//
+	// WHY THERE IS NO PER-CAPABILITY BINDING TABLE HERE. index.ingest.v1 and
+	// agent.execute.*.v1 each own one (`index_ingest_jobs`, `agent_execution_jobs`)
+	// because a BACKGROUND publisher rebuilds their command minutes later, from the
+	// database alone. A tool run is admitted and dispatched inside ONE bounded
+	// synchronous request, so the command scalars the worker needs — toolkit type,
+	// tool name, toolkit id and version — never leave the process that built them
+	// and never need a row. The two input entry ids are recovered from
+	// `input_bundle_entries.semantic_role`, which is already durable.
+	//
+	// What that costs, stated rather than hidden: a crash between admission and the
+	// Redis append leaves an outbox row that nothing will ever publish. That is the
+	// right answer for a synchronous run — the caller's request died with the
+	// process, so "nothing ran" is true — but the row must not go on consuming
+	// admission capacity, which is what
+	// LockExpiredNoAuthorityToolkitCallToolExecutions below is for.
+	//
+	// Every JOIN the agent queries make to `agent_execution_jobs` is replaced by the
+	// capability predicate those queries ALREADY carry beside it. The join was
+	// scoping, not data, on every one of them except the pending-dispatch load,
+	// which this capability does not have.
+	GetToolkitCallToolAdmissionByIdempotency(ctx context.Context, arg GetToolkitCallToolAdmissionByIdempotencyParams) (GetToolkitCallToolAdmissionByIdempotencyRow, error)
+	// GetToolkitCallToolInputEntries recovers the two entry ids the worker command
+	// names, from the roles that are already durable. It is the reason this
+	// capability needs no binding table of its own.
+	//
+	GetToolkitCallToolInputEntries(ctx context.Context, arg GetToolkitCallToolInputEntriesParams) ([]GetToolkitCallToolInputEntriesRow, error)
 	GetToolkitExecuteReadAdmissionByIdempotency(ctx context.Context, arg GetToolkitExecuteReadAdmissionByIdempotencyParams) (GetToolkitExecuteReadAdmissionByIdempotencyRow, error)
 	GetToolkitExecuteReadCompletion(ctx context.Context, arg GetToolkitExecuteReadCompletionParams) (GetToolkitExecuteReadCompletionRow, error)
 	HasAuthAdministrationAdminRole(ctx context.Context, userID int32) (bool, error)
@@ -317,6 +360,7 @@ type Querier interface {
 	InsertRuntimeInputBundleEntry(ctx context.Context, arg InsertRuntimeInputBundleEntryParams) error
 	InsertScheduledJobCursor(ctx context.Context, arg InsertScheduledJobCursorParams) error
 	InsertScheduledOccurrence(ctx context.Context, arg InsertScheduledOccurrenceParams) error
+	InsertToolkitCallToolJob(ctx context.Context, arg InsertToolkitCallToolJobParams) (string, error)
 	InsertToolkitExecuteReadBinding(ctx context.Context, arg InsertToolkitExecuteReadBindingParams) error
 	InsertToolkitExecuteReadJob(ctx context.Context, arg InsertToolkitExecuteReadJobParams) (string, error)
 	InsertToolkitExecuteReadResult(ctx context.Context, arg InsertToolkitExecuteReadResultParams) error
@@ -391,9 +435,17 @@ type Querier interface {
 	LockCurrentIndexScheduleToolkit(ctx context.Context, toolkitID int32) (LockCurrentIndexScheduleToolkitRow, error)
 	LockCurrentIndexScheduleToolkitMeta(ctx context.Context, toolkitID int32) ([]byte, error)
 	LockExpiredNoAuthorityAgentExecutions(ctx context.Context, arg LockExpiredNoAuthorityAgentExecutionsParams) ([]LockExpiredNoAuthorityAgentExecutionsRow, error)
+	// LockExpiredNoAuthorityToolkitCallToolExecutions reclaims the capacity a run
+	// that never reached Redis would otherwise hold forever. It selects only work
+	// past its deadline that no worker ever claimed, which is exactly the crash
+	// window this capability accepts in exchange for having no binding table.
+	//
+	LockExpiredNoAuthorityToolkitCallToolExecutions(ctx context.Context, arg LockExpiredNoAuthorityToolkitCallToolExecutionsParams) ([]LockExpiredNoAuthorityToolkitCallToolExecutionsRow, error)
 	LockExpiredNoAuthorityToolkitExecuteReads(ctx context.Context, arg LockExpiredNoAuthorityToolkitExecuteReadsParams) ([]LockExpiredNoAuthorityToolkitExecuteReadsRow, error)
 	LockPATByUUID(ctx context.Context, uuid string) (LockPATByUUIDRow, error)
 	LockRuntimeAdmissionPolicy(ctx context.Context, capabilityID string) (int64, error)
+	LockToolkitCallToolEnvelope(ctx context.Context, arg LockToolkitCallToolEnvelopeParams) (LockToolkitCallToolEnvelopeRow, error)
+	LockToolkitCallToolPublication(ctx context.Context, arg LockToolkitCallToolPublicationParams) (LockToolkitCallToolPublicationRow, error)
 	LockToolkitExecuteReadEnvelope(ctx context.Context, arg LockToolkitExecuteReadEnvelopeParams) (LockToolkitExecuteReadEnvelopeRow, error)
 	LockToolkitExecuteReadPublication(ctx context.Context, arg LockToolkitExecuteReadPublicationParams) (LockToolkitExecuteReadPublicationRow, error)
 	MarkAgentExecutionDispatched(ctx context.Context, arg MarkAgentExecutionDispatchedParams) (int64, error)
@@ -412,6 +464,8 @@ type Querier interface {
 	MarkConfigurationLifecycleRetry(ctx context.Context, arg MarkConfigurationLifecycleRetryParams) (int64, error)
 	MarkCurrentNotificationSeen(ctx context.Context, arg MarkCurrentNotificationSeenParams) (MarkCurrentNotificationSeenRow, error)
 	MarkIndexMetaInitialized(ctx context.Context, arg MarkIndexMetaInitializedParams) (pgtype.Timestamptz, error)
+	MarkToolkitCallToolDispatched(ctx context.Context, arg MarkToolkitCallToolDispatchedParams) (int64, error)
+	MarkToolkitCallToolPublished(ctx context.Context, arg MarkToolkitCallToolPublishedParams) (int64, error)
 	MarkToolkitExecuteReadDispatched(ctx context.Context, arg MarkToolkitExecuteReadDispatchedParams) (int64, error)
 	MarkToolkitExecuteReadPublished(ctx context.Context, arg MarkToolkitExecuteReadPublishedParams) (int64, error)
 	ProjectCurrentAgentStop(ctx context.Context, arg ProjectCurrentAgentStopParams) (ProjectCurrentAgentStopRow, error)
@@ -573,6 +627,7 @@ type Querier interface {
 	SetCurrentConfigurationLifecycleStatus(ctx context.Context, arg SetCurrentConfigurationLifecycleStatusParams) (int64, error)
 	SoftDeleteArtifactBucket(ctx context.Context, id int64) (int64, error)
 	StorePreparedAgentExecutionEnvelope(ctx context.Context, arg StorePreparedAgentExecutionEnvelopeParams) (int64, error)
+	StorePreparedToolkitCallToolEnvelope(ctx context.Context, arg StorePreparedToolkitCallToolEnvelopeParams) (int64, error)
 	StorePreparedToolkitExecuteReadEnvelope(ctx context.Context, arg StorePreparedToolkitExecuteReadEnvelopeParams) (int64, error)
 	SumArtifactBucketBytes(ctx context.Context, bucketID int64) (int64, error)
 	SumArtifactProjectBytes(ctx context.Context, projectID int64) (int64, error)

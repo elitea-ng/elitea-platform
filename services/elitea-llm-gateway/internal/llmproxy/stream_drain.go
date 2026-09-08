@@ -52,6 +52,8 @@ import (
 	"time"
 
 	"github.com/maximhq/bifrost/core/schemas"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/requestlog"
 )
 
 // Stream-grace bounds (DECISIONS.md 2026-08-05). At a typical 40–120 output
@@ -359,6 +361,16 @@ type streamSettler struct {
 	gotUsage         bool
 	observedOutBytes int64
 	settled          bool
+	// logUsage is the request log's enrichment handle, captured while the
+	// request context still carries it.
+	//
+	// It cannot be reached through billingContext(): that context is
+	// context.Background() by design, so requestlog.FromContext() answers nil
+	// there and the chokepoint in updateUsageUnits records nothing. Every
+	// streamed request therefore logged 0 prompt and 0 completion tokens, while
+	// its provider, model and call count were correct — the shape that makes an
+	// analytics TOKENS tile read 0 next to a correct CALLS tile.
+	logUsage *requestlog.Enrichment
 	// chanClosed records that the provider channel reached closure. It gates
 	// the read of the accumulated-usage handle in accumulatedUsage(): the
 	// handle is a pointer the provider goroutine mutates IN PLACE, and every
@@ -383,6 +395,7 @@ func (h *Handler) newChatSettler(
 		userID:      identityUserFromCtx(ctx),
 		executionID: identityExecutionFromCtx(ctx),
 		ctx:         ctx, sc: sc, ch: ch,
+		logUsage:  requestlog.FromContext(ctx),
 		usageFrom: chatUsageFromChunk, deltaFrom: chatDeltaBytes,
 	}
 }
@@ -402,6 +415,7 @@ func (h *Handler) newResponsesSettler(
 		userID:      identityUserFromCtx(ctx),
 		executionID: identityExecutionFromCtx(ctx),
 		ctx:         ctx, sc: sc, ch: ch,
+		logUsage:  requestlog.FromContext(ctx),
 		usageFrom: responsesUsageFromChunk, deltaFrom: responsesDeltaBytes,
 	}
 }
@@ -459,6 +473,29 @@ func (s *streamSettler) accumulatedUsage() (int64, int64, bool) {
 	return in, out, true
 }
 
+// recordLogTokens attaches the stream's token counts to the request log row.
+//
+// It runs on the REQUEST goroutine, at the moment the settle starts, and that
+// is the whole point. The middleware emits the row from a defer when the
+// handler returns, so a count written by the detached drain arrives too late
+// and is dropped by the seal. Everything this function needs is already known
+// here: the trailer if one arrived, and otherwise the provider's accumulated
+// count, which is readable as soon as the channel closed.
+//
+// A stream that the client cut still records 0. That is honest — the gateway
+// answered before it knew the count — and the money is not lost with it: the
+// drain still bills, and a refused increment still publishes
+// `budget.unbilled_stream`.
+func (s *streamSettler) recordLogTokens() {
+	in, out, ok := s.in, s.out, s.gotUsage
+	if !ok {
+		in, out, ok = s.accumulatedUsage()
+	}
+	if ok {
+		s.logUsage.SetTokens(in, out)
+	}
+}
+
 // settleClean settles a stream whose channel the SSE loop consumed to closure.
 // The producer is finished, so there is nothing left to drain: bill the
 // authoritative usage if the trailer arrived, else fall through to report(),
@@ -478,6 +515,9 @@ func (s *streamSettler) settleClean() {
 	// finished. That is the happens-before edge accumulatedUsage() needs.
 	s.chanClosed = true
 	s.sc.cancel()
+	// Record the tokens BEFORE the branch below: one of its two arms hands the
+	// settle to a goroutine, and the row is written by then.
+	s.recordLogTokens()
 	if s.gotUsage {
 		// Billing is already async (spawnBillingGoroutine); nothing blocks here.
 		s.report(lossReasonCleanCloseNoTrai, drainOutcomeInline)
@@ -511,6 +551,9 @@ func (s *streamSettler) settleEarly(reason string) {
 		return
 	}
 	s.settled = true
+	// Record what is known now. The drain that follows runs after the row is
+	// written, so a count it recovers cannot reach the log.
+	s.recordLogTokens()
 
 	if s.ch == nil {
 		s.sc.cancel()

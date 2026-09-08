@@ -16,6 +16,7 @@ const (
 	AgentApplicationCapability        = "agent.execute.application.v1"
 	AgentAdhocCapability              = "agent.execute.adhoc.v1"
 	ToolkitExecuteReadCapability      = "toolkit.execute.read.v1"
+	ToolkitCallToolCapability         = "toolkit.call_tool.v1"
 	SettingsJSONMediaType             = "application/json"
 	AgentExecutionInputMediaType      = "application/vnd.elitea.agent-execution-input.v1+protobuf"
 	ToolkitExecuteReadInputMediaType  = "application/vnd.elitea.toolkit-execute-read-input.v1+protobuf"
@@ -33,8 +34,14 @@ const (
 	IndexEmbeddingBindingRole     = "index.embedding_binding"
 	AgentExecutionRequestRole     = "agent.execution_request"
 	ToolkitExecuteReadRequestRole = "toolkit.execute_read_request"
+	ToolkitCallToolSettingsRole   = "toolkit.call_tool.settings"
+	ToolkitCallToolArgumentsRole  = "toolkit.call_tool.arguments"
 	MaxIndexMetaIDBytes           = 256
 	MaxIndexMetaCorrelationBytes  = 512
+	// MaxSafeCommandStringBytes is the bound every worker applies to a bounded
+	// command string. Exceeding it here would produce a command the worker
+	// refuses, so the refusal belongs on this side where the caller can see it.
+	MaxSafeCommandStringBytes = 256
 )
 
 var (
@@ -181,7 +188,8 @@ func SupportedCapability(capabilityID string) bool {
 		IndexIngestCapability,
 		AgentApplicationCapability,
 		AgentAdhocCapability,
-		ToolkitExecuteReadCapability:
+		ToolkitExecuteReadCapability,
+		ToolkitCallToolCapability:
 		return true
 	default:
 		return false
@@ -344,6 +352,48 @@ func (b AgentExecutionBinding) Validate(bundle InputBundle) error {
 		entry.SemanticRole != AgentExecutionRequestRole ||
 		entry.MediaType != AgentExecutionInputMediaType {
 		return ErrInvalidInputBundle
+	}
+	return nil
+}
+
+// ToolkitCallToolBinding connects one tool run to the exact immutable entries
+// the SDK call will consume.
+//
+// The settings and the arguments are two SEPARATE entries, not one blob,
+// because they carry different trust. The settings are redeemed by this service
+// from the saved toolkit row and hold credentials. The arguments come from the
+// caller. Binding them apart is what lets the worker refuse a bundle that put
+// caller content where the platform's own settings belong.
+type ToolkitCallToolBinding struct {
+	ToolkitType      string
+	ToolName         string
+	ToolkitID        int64
+	ToolkitVersion   string
+	SettingsEntryID  string
+	ArgumentsEntryID string
+}
+
+func (b ToolkitCallToolBinding) Validate(bundle InputBundle) error {
+	if b.ToolkitType == "" || b.ToolName == "" || b.ToolkitID <= 0 ||
+		b.SettingsEntryID == "" || b.ArgumentsEntryID == "" ||
+		b.SettingsEntryID == b.ArgumentsEntryID ||
+		!validIndexMetaText(b.ToolkitType, MaxSafeCommandStringBytes) ||
+		!validIndexMetaText(b.ToolName, MaxSafeCommandStringBytes) ||
+		!validOptionalIndexMetaText(b.ToolkitVersion, MaxSafeCommandStringBytes) ||
+		len(bundle.Entries) != 2 {
+		return ErrInvalidInputBundle
+	}
+	for _, reference := range []struct {
+		id   string
+		role string
+	}{
+		{id: b.SettingsEntryID, role: ToolkitCallToolSettingsRole},
+		{id: b.ArgumentsEntryID, role: ToolkitCallToolArgumentsRole},
+	} {
+		entry, found := bundle.entryByID(reference.id)
+		if !found || entry.SemanticRole != reference.role {
+			return fmt.Errorf("%w: tool-run input binding mismatch", ErrInvalidInputBundle)
+		}
 	}
 	return nil
 }

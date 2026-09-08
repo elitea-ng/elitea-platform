@@ -37,6 +37,14 @@ because each was a real bug found across 3 review rounds.
 ## Enforcement policy (do not weaken without a human)
 - **Fail CLOSED** on a budget-store / Postgres read error while NATS is up — never
   substitute a zero/unlimited snapshot. A DB blip must not grant unlimited spend.
+- **The gateway REFUSES TO START when it can enforce nothing and nothing else
+  would say so** (issue #304, `cmd/elitea-llm-gateway/budget_startup_gate.go`).
+  `LLM_BUDGET_REQUIRE_ENFORCEMENT` selects the posture: `auto` (default) refuses
+  when `GATEWAY_NATS_URL` is empty AND the database holds an enforcing budget
+  row, `on` refuses whenever the gate is not wired, `off` is the documented
+  opt-out. Do NOT make `auto` refuse a CONFIGURED-but-unreachable NATS: that
+  state drains through `/readyz` and recovers by itself (issue #315). Do NOT let
+  a probe that FAILED to read the budget tables be read as "no budgets".
 - Budget gate runs **before** the provider on EVERY /llm endpoint (chat,
   responses, text, embeddings, images, messages). Adding a new endpoint? It MUST
   call checkBudget before dispatch and updateUsage after.

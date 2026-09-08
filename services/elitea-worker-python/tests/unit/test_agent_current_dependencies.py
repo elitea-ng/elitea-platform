@@ -54,18 +54,18 @@ def test_profile_digest_and_exact_requirements_match_project_dependencies() -> N
     assert profile["profile_sha256"] == _profile_digest(profile)
     assert profile["python_requirements"] == [
         "elitea-sdk==0.9.8",
-        "langchain-core==1.2.7",
+        "langchain-core==1.3.3",
         "langgraph==1.0.7",
         "langchain-mcp-adapters==0.1.14",
-        "mcp==1.27.1",
-        "langgraph-checkpoint-postgres==2.0.21",
+        "mcp==1.28.1",
+        "langgraph-checkpoint-postgres==3.0.0",
     ]
     assert "elitea-sdk==0.9.8" in dependencies
-    assert "langchain-core==1.2.7" in dependencies
+    assert "langchain-core==1.3.3" in dependencies
     assert "langgraph==1.0.7" in dependencies
     assert "langchain-mcp-adapters>=0.1.14,<0.2.0" in extras
-    assert "mcp==1.27.1" in extras
-    assert "langgraph-checkpoint-postgres==2.0.21" in extras
+    assert "mcp==1.28.1" in extras
+    assert "langgraph-checkpoint-postgres==3.0.0" in extras
 
 
 def test_complete_profile_is_admitted() -> None:

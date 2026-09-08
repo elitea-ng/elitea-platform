@@ -127,6 +127,38 @@ func TestNextInputSuggestionResolverRejectsUnsafeOriginsAndTokens(t *testing.T) 
 	}
 }
 
+func TestNextInputSuggestionResolverAcceptsTheLoopbackSelfCall(t *testing.T) {
+	// The standalone stack's shape after the fix: this process serves
+	// cleartext, and the policy call reaches its OWN listener over the
+	// loopback interface. httptest.NewServer listens on 127.0.0.1, so the
+	// server URL here is exactly what `runtimecomposition` derives.
+	//
+	// Before this, only an https origin parsed. The stack therefore aimed
+	// `https://elitea-main:8080` at a cleartext port and every turn logged
+	// "server gave HTTP response to HTTPS client".
+	issuer := &actorTokenIssuerStub{token: "actor-pat"}
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("Authorization") != "Bearer actor-pat" {
+			t.Fatalf("unexpected policy request headers: %v", request.Header)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"enabled":true,"min_response_chars":150,"timeout_seconds":15}`))
+	}))
+	defer server.Close()
+
+	resolver, err := NewNextInputSuggestionResolver(server.URL, issuer, server.Client())
+	if err != nil {
+		t.Fatalf("the loopback self-call origin %q was refused: %v", server.URL, err)
+	}
+	policy, err := resolver.ResolveNextInputSuggestionPolicy(context.Background(), 7, 11)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(policy) != `{"enabled":true,"min_response_chars":150,"timeout_seconds":15}` {
+		t.Fatalf("policy=%s", policy)
+	}
+}
+
 func TestPolicyJSONShapeIsStable(t *testing.T) {
 	raw, err := json.Marshal(struct {
 		Enabled          bool `json:"enabled"`

@@ -11,25 +11,19 @@
  * event and takes the plain path, which is why `plain-metadata-json-without-event`
  * is in the oracle: a reader that branched on "did it parse" would render the
  * raw JSON as a structured event of type `undefined`.
+ *
+ * `structuredEvent` itself moved to ./shared when the poll adapter grew a
+ * reader for the same envelope — see the note there.
  */
-import { capSteps, appendStep, field, primitiveText, updateActiveBlock } from './shared';
+import {
+  capSteps,
+  appendStep,
+  field,
+  primitiveText,
+  structuredEvent,
+  updateActiveBlock,
+} from './shared';
 import type { ChatFrame, ChatState, ChatThinkingStep, ChatTodo } from '../types';
-
-/** Parse the structured envelope, or report that there is not one. */
-function structuredEvent(raw: unknown): { event: string; data: unknown } | null {
-  let parsed: unknown = raw;
-  if (typeof raw === 'string') {
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      return null;
-    }
-  }
-  const name = field(parsed, 'event');
-  return typeof name === 'string' && name !== ''
-    ? { event: name, data: field(parsed, 'data') }
-    : null;
-}
 
 /** `eventData.items`, then `.todos`, then the payload itself — and [] if none is a list. */
 function todosFrom(data: unknown): readonly ChatTodo[] {

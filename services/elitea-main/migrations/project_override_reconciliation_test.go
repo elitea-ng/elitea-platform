@@ -105,8 +105,8 @@ func TestReconciliationDeliversCentralGrantsToAProjectWithItsOwnRows(t *testing.
 	// One member of project 1, holding a project `admin` role that states one
 	// permission of its own. That single row suppresses the whole central set.
 	seedUser(t, pool, 890)
-	seedRoleMembership(t, pool, 8901, "admin", 890)
-	seedOverrideRows(t, pool, 1, 8901, "models.something.else")
+	adminRoleID := seedRoleMembership(t, pool, 8901, "admin", 890)
+	seedOverrideRows(t, pool, 1, adminRoleID, "models.something.else")
 
 	before := resolveDefaultModeFor(t, pool, "890", "1")
 	if !slices.Equal(before.Permissions, []string{"models.something.else"}) {
@@ -156,9 +156,9 @@ func TestReconciliationDeliversCentralGrantsToAProjectWithItsOwnRows(t *testing.
 
 	// A role that carries NO rows of its own still falls back, so it must not
 	// be handed a snapshot it never had.
-	seedProjectRole(t, pool, 8904, 1, "viewer")
+	viewerRoleID := seedProjectRole(t, pool, 8904, 1, "viewer")
 	applyReconciliation(t, pool)
-	if rows := overrideRowsFor(t, pool, 1, 8904); len(rows) != 0 {
+	if rows := overrideRowsFor(t, pool, 1, viewerRoleID); len(rows) != 0 {
 		t.Errorf("reconciliation wrote rows for a role that had none, which switches that "+
 			"role from the central fallback to a frozen snapshot: %v", rows)
 	}
@@ -191,15 +191,29 @@ VALUES ($1, 'reconciliation@example.com', 'Reconciliation')`, userID); err != ni
 	}
 }
 
-func seedProjectRole(t *testing.T, pool *pgxpool.Pool, roleID, projectID int, name string) {
+// seedProjectRole returns the id the role actually has.
+//
+// `roleID` is the id to mint it WITH, and it is used only when the project does
+// not already carry that role. shared/0111 gives project 1 the four roles every
+// provisioned project has, so `viewer` and `admin` are already there under ids
+// this fixture did not choose.
+func seedProjectRole(t *testing.T, pool *pgxpool.Pool, roleID, projectID int, name string) int {
 	t.Helper()
 	ctx, cancel := testContext()
 	defer cancel()
-	if _, err := pool.Exec(ctx,
-		`INSERT INTO public.auth_core__project_role (id, project_id, name) VALUES ($1, $2, $3)`,
+	if _, err := pool.Exec(ctx, `
+INSERT INTO public.auth_core__project_role (id, project_id, name) VALUES ($1, $2, $3)
+ON CONFLICT (project_id, name) DO NOTHING`,
 		roleID, projectID, name); err != nil {
 		t.Fatalf("seed project role %d: %v", roleID, err)
 	}
+	var assigned int
+	if err := pool.QueryRow(ctx,
+		`SELECT id FROM public.auth_core__project_role WHERE project_id = $1 AND name = $2`,
+		projectID, name).Scan(&assigned); err != nil {
+		t.Fatalf("resolve project role %q of project %d: %v", name, projectID, err)
+	}
+	return assigned
 }
 
 func seedOverrideRows(t *testing.T, pool *pgxpool.Pool, projectID, roleID int, permissions ...string) {

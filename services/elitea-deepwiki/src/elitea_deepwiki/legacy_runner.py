@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 #: invoke-time value is the one that reached the platform, so it is the one
 #: that is preserved.
 class ToolHost:
-    """The five hooks the copied tool layer expects from its Pylon module.
+    """The hooks the copied tool layer expects from its Pylon module.
 
     ``tool_operations.Method`` is a mixin: every method it defines calls back
     into ``self`` for progress events, cancellation, child-process tracking and
@@ -46,7 +46,9 @@ class ToolHost:
 
     Discovering that the tool layer needed exactly five hooks — and no Pylon
     behaviour beyond them — is what made copying it viable instead of
-    rewriting 1400 lines.
+    rewriting 1400 lines. ``invocation_token`` is a sixth, added with the
+    answer-token channel (issue #701); it is OURS, not the legacy module's,
+    which is why it is optional on the context side.
     """
 
     def __init__(self, settings, context: Any) -> None:
@@ -82,6 +84,20 @@ class ToolHost:
 
     def invocation_thinking(self, message: str) -> None:
         self._call_async(self._context.thinking(message))
+
+    def invocation_token(self, text: str) -> None:
+        """One fragment of the answer, on the token channel (issue #701).
+
+        The SIXTH hook, and the only one the legacy Pylon module never had:
+        the legacy service streamed tokens over socket.io, which ADR-0022
+        removed. A context that predates the channel has no ``token``, so
+        this degrades to progress-only rather than failing the tool — the
+        answer still arrives whole with the result.
+        """
+        emit = getattr(self._context, "token", None)
+        if emit is None:
+            return
+        self._call_async(emit(text))
 
     def invocation_stop_checkpoint(self) -> None:
         self._call_async(self._context.checkpoint())
@@ -168,6 +184,18 @@ def _install_job_path() -> None:
     _JOB_PATH_INSTALLED = True
 
 
+def wiki_query_tools() -> dict[str, Callable[..., Any]]:
+    """The wiki_query family's engine-side tools.
+
+    Imported lazily for the same reason everything else here is: a default
+    build carries no langchain, and importing it at module scope would make
+    an engine-less deployment fail to boot rather than refuse per tool.
+    """
+    from .wiki_query import WIKI_QUERY_TOOLS  # noqa: PLC0415
+
+    return WIKI_QUERY_TOOLS
+
+
 _BOUND_HOST_CACHE: dict[type, type] = {}
 
 
@@ -213,6 +241,15 @@ class LegacyToolRunner:
                 return self._tools[name]
             except KeyError:
                 raise FileNotFoundError(f"Unknown tool: {name}") from None
+
+        # The wiki_query family's resolver is OURS, not the copied engine's:
+        # it is a port of methods/invoke.py::_resolve_wiki_with_llm, which
+        # lived in the handler rather than in plugin_implementation/, so it
+        # is not in the digest-guarded copy and must not be added to it.
+        # It needs no engine closure beyond a langchain chat model, so it is
+        # bound before the copied tool layer is imported at all.
+        if name in wiki_query_tools():
+            return wiki_query_tools()[name]
 
         # Imported here, not at module scope: the default image does not carry
         # the engine closure, and importing it at startup would make an
@@ -286,8 +323,84 @@ class LegacyToolRunner:
                 f"{counts['embeddings']} vectors"
             )
 
+    def _artifact_download(self, arguments: dict[str, Any]):
+        """The read half of the artifact transport this request carries.
+
+        Derived from ``llm_settings`` exactly as the upload half is — there
+        is no deployment-wide credential to build one from, and there must
+        not be: the grant is the caller's, minted by the facade for the
+        caller's project, which is what scopes a page read to a project at
+        all. ``None`` when the request carried no transport.
+        """
+        llm_settings = arguments.get("llm_settings") or {}
+        if not isinstance(llm_settings, dict) or not llm_settings:
+            return None
+        from .engine.artifacts_platform_client import (  # noqa: PLC0415
+            create_platform_client_from_llm_settings,
+        )
+
+        client = create_platform_client_from_llm_settings(llm_settings)
+        if client is None:
+            return None
+        return client.download_artifact
+
+    def _apply_context_paths(self, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        """Resolve reader-selected pages into ``question``.
+
+        WHERE THIS RUNS, AND WHY NOT IN ``tool_operations.py``. The tool
+        layer is a guarded verbatim copy of the legacy ``Method`` mixin with
+        four declared substitutions (``engine/COPY_MANIFEST.json`` records
+        its digest, and ``tools/refresh_engine_copy.py --check`` compares
+        it); adding a feature to it would falsify the claim the manifest
+        exists to make. This seam — the sidecar's entry into the engine —
+        is ours, and it is the last point before the tool sees its keywords.
+
+        NORMALLY A NO-OP, deliberately. The Go sub-application host resolves
+        the same selection in front of its tool table
+        (``internal/apps/deepwiki/run/contextpaths.go``) and REMOVES the two
+        keys, so a request that came through the host arrives here with
+        nothing left to do. What this covers is a sidecar called directly —
+        a host that does not resolve, or a harness — where the alternative
+        is an attachment the reader made being silently ignored.
+        """
+        from .wiki_context import (  # noqa: PLC0415
+            PATHS_PARAM,
+            ContextRefused,
+            consume,
+            prepend_context,
+            resolve_context_paths,
+            wiki_id_for,
+        )
+
+        if not arguments.get(PATHS_PARAM):
+            return consume(arguments)
+        if tool_name not in ("ask", "deep_research"):
+            raise ContextRefused(
+                f"{PATHS_PARAM} is not supported by {tool_name}; attach pages "
+                f"to ask or deep_research"
+            )
+        repo_config = arguments.get("repo_config") or {}
+        wiki_id = wiki_id_for(repo_config, repo_config.get("branch"))
+        block = resolve_context_paths(
+            parameters=arguments,
+            wiki_id=wiki_id,
+            download=self._artifact_download(arguments),
+        )
+        resolved = consume(arguments)
+        resolved["question"] = prepend_context(arguments.get("question") or "", block)
+        return resolved
+
     async def _paced(self, tool_name: str, context: Any) -> None:
         """Progress emitted before the engine answers; the fixture paces here."""
+
+    async def _streamed(self, tool_name: str, result: Any, context: Any) -> None:
+        """The answer token channel; the fixture streams here.
+
+        A no-op for the real engine, which emits its own tokens from inside
+        the tool (``invocation_token``) while it is still writing. The
+        fixture has no model to write with, so it streams the answer it has
+        already computed — see :mod:`elitea_deepwiki.fixture_runner`.
+        """
 
     async def run_engine_tool(
         self, tool_name: str, arguments: dict[str, Any], context: Any
@@ -304,9 +417,12 @@ class LegacyToolRunner:
         import asyncio  # noqa: PLC0415
         import functools  # noqa: PLC0415
 
+        arguments = self._apply_context_paths(tool_name, arguments)
         await self._paced(tool_name, context)
         tool = self._bound_tool(tool_name, context)
-        return await asyncio.to_thread(functools.partial(tool, **arguments))
+        result = await asyncio.to_thread(functools.partial(tool, **arguments))
+        await self._streamed(tool_name, result, context)
+        return result
 
     async def publish(self, result: dict[str, Any], context: Any) -> None:
         """Publish a generated index — the sidecar's name for ``_publish``."""

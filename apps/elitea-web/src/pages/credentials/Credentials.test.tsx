@@ -31,6 +31,26 @@ describe('Credentials (ROUTE-022 target)', () => {
       </QueryClientProvider>,
     );
     expect(screen.getByText('Credentials')).toBeInTheDocument();
-    expect(await screen.findByText('You have no credentials.')).toBeInTheDocument();
+    expect(await screen.findByText('No credentials yet')).toBeInTheDocument();
+  });
+
+  /** COMPOSITION ROOT — see `pages/skills/Skills.test.tsx` (issue 841). */
+  it('renders its heading inside the shared page header', () => {
+    configureGeneratedClient({ baseUrl: BASE });
+    server.use(http.get(`${BASE}/configurations/configurations/7`, () => HttpResponse.json({ items: [], total: 0, limit: 20, offset: 0 })));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    renderWithTheme(
+      <QueryClientProvider client={client}>
+        <Credentials
+          tab="all"
+          projectId="7"
+          onSelectCredential={vi.fn()}
+          onCreateNew={vi.fn()}
+        />
+      </QueryClientProvider>,
+    );
+
+    const header = screen.getByTestId('page-header');
+    expect(header).toContainElement(screen.getByRole('heading', { name: 'Credentials', level: 1 }));
   });
 });

@@ -7,10 +7,11 @@ without the analysis engine's dependency closure, a git host or a model.
 The browser journeys run against it.
 
 It is :class:`LegacyToolRunner` with its tools injected, plus paced progress
-events so a client sees a run in flight and can stop it. Everything
-downstream of the tool call is the real code — the Go host's merge, egress
-check, composition and upload, this package's publish. What is canned is
-only what the engine would have computed.
+events so a client sees a run in flight and can stop it, and the answer
+streamed down the token channel so a client sees it being written (issue
+#701). Everything downstream of the tool call is the real code — the Go
+host's merge, egress check, composition and upload, this package's publish.
+What is canned is only what the engine would have computed.
 
 The canned wiki is deterministic and derived from the request, so a test can
 predict the keys that land: ``{owner}--{repo}--{branch}/…``. One page carries
@@ -24,6 +25,9 @@ import json
 from typing import Any
 
 from .legacy_runner import LegacyToolRunner
+# The ONE wiki-id derivation in this package. A fixture that derived a
+# different one would land its pages under keys nothing reads.
+from .wiki_context import display_repository_for, wiki_id_for
 
 #: Progress the fixture emits before each tool answers, in order. The legacy
 #: engine emitted prose like this through ``invocation_thinking``; the UI's
@@ -39,10 +43,70 @@ STEPS: dict[str, tuple[str, ...]] = {
     "ask": ("Searching the wiki index", "Composing the answer"),
     "deep_research": (
         "Planning the research",
+        # A STRUCTURED event, not prose — see RESEARCH_TODOS below.
+        "__RESEARCH_TODOS__",
         "Reading the relevant pages",
         "Writing the report",
     ),
 }
+
+#: The plan a fixture deep_research run publishes.
+#:
+#: The browser's research panel renders whatever the run's ``todo_update``
+#: events carry, and renders NOTHING when there are none — correct for ``ask``
+#: and indistinguishable from a panel wired up wrong. Until this list existed
+#: no journey could tell those apart (DWIKI-012b is that journey). The Go
+#: host's fixture (run/fixture.go, ResearchTodos) carries the SAME list: the
+#: E2E stack runs that one, the standalone stack runs this one, and the
+#: journey must pass on both. Shape is the browser-facing normalised one
+#: (id/title/description/status) — the pre-normalisation ``content`` key
+#: renders as "Untitled step".
+RESEARCH_TODOS: tuple[dict[str, Any], ...] = (
+    {"id": 1, "title": "Plan the research", "description": "", "status": "completed"},
+    {"id": 2, "title": "Read the relevant pages", "description": "", "status": "in_progress"},
+    {"id": 3, "title": "Write the report", "description": "", "status": "pending"},
+)
+
+
+#: Which key of each tool's canned result holds the ANSWER, and therefore what
+#: the fixture streams down the token channel (issue #701). ``generate_wiki``
+#: is absent on purpose: it produces a wiki, not an answer, and its result
+#: string ("Wiki generated: 3 pages") is a status line no reader waits on.
+#: The Go host's fixture (run/fixture.go, StreamedAnswerKey) carries the SAME
+#: table — the E2E stack runs that one, the standalone stack runs this one,
+#: and the streaming journey must pass on both.
+STREAMED_ANSWER_KEY: dict[str, str] = {"ask": "answer", "deep_research": "report"}
+
+#: How many fragments one fixture answer is cut into.
+#:
+#: More than one, because a single fragment cannot tell a reader that reads
+#: the whole answer at once from one that streams. Small, because every
+#: fragment is paced like a progress step and the browser journeys wait for
+#: the run to finish.
+STREAM_FRAGMENTS = 3
+
+
+def answer_fragments(answer: str, count: int = STREAM_FRAGMENTS) -> tuple[str, ...]:
+    """Cut one answer into ``count`` fragments that JOIN BACK to it exactly.
+
+    Joined with no separator, in order — the rule the token channel states —
+    so a test can assert the concatenation against the answer the tool
+    returns rather than against a copy of it.
+    """
+    if not answer:
+        return ()
+    size = max(1, -(-len(answer) // count))  # ceiling division
+    return tuple(answer[start:start + size] for start in range(0, len(answer), size))
+
+
+def todo_update_event(todos: tuple[dict[str, Any], ...] = RESEARCH_TODOS) -> str:
+    """The ``{event, data}`` envelope the browser's chat reducer routes to the research panel."""
+    return json.dumps({"event": "todo_update", "data": {"items": list(todos)}})
+
+
+def steps_for(tool_name: str) -> tuple[str, ...]:
+    """STEPS with the structured placeholders resolved to their envelopes."""
+    return tuple(todo_update_event() if step == "__RESEARCH_TODOS__" else step for step in STEPS.get(tool_name, ()))
 
 BROKEN_MERMAID_PAGE = """# Request flow
 
@@ -58,19 +122,6 @@ After the diagram.
 """
 
 
-def wiki_id_for(repo_config: dict[str, Any] | None, branch: str | None) -> str:
-    """The canonical ``{owner}--{repo}--{branch}`` the engine would derive."""
-    repository = ""
-    if isinstance(repo_config, dict):
-        repository = str(repo_config.get("repository") or "")
-        if not repository:
-            provider = repo_config.get("provider_config")
-            if isinstance(provider, dict):
-                repository = str(provider.get("repository") or "")
-    repository = repository.strip().strip("/") or "fixture/repository"
-    return f"{repository.replace('/', '--')}--{(branch or 'main').strip() or 'main'}"
-
-
 def generate_wiki(
     *,
     query: str,
@@ -80,7 +131,10 @@ def generate_wiki(
 ) -> dict[str, Any]:
     """A completed generation: manifest, structure, three pages, context."""
     wiki_id = wiki_id_for(repo_config, active_branch)
-    repository = wiki_id.rsplit("--", 1)[0].replace("--", "/")
+    # Read from the repo_config, not reversed out of the wiki id: an artifact
+    # folder's name holds a "/" of its own, and turning every "--" back into a
+    # "/" would rebuild a path that never existed.
+    repository = display_repository_for(repo_config) or "fixture/repository"
     pages = {
         "wiki_pages/overview/getting-started.md": (
             f"# Getting started\n\nGenerated by the fixture runner for `{repository}` "
@@ -101,7 +155,7 @@ def generate_wiki(
         "canonical_repo_identifier": repository,
         "repository": repository,
         "branch": active_branch or "main",
-        "provider_type": "github",
+        "provider_type": (repo_config or {}).get("provider_type") or "github",
         "pages": list(pages),
     }
     structure = {
@@ -155,10 +209,38 @@ def deep_research(*, question: str, research_type: str = "general", **_ignored: 
     }
 
 
+def resolve_wiki(*, question: str, wikis: list | None = None, **_ignored: Any) -> dict[str, Any]:
+    """The wiki resolver, without a model.
+
+    Word overlap between the question and each candidate's id and title —
+    which is what the model is asked for, and is decidable without one. The
+    Go host's own fixture table (``run/fixture.go::fixtureResolveWiki``)
+    scores identically, so a stack that runs either sidecar resolves the
+    same wiki for the same question.
+    """
+    lowered = (question or "").lower()
+    best, best_score = "", 0
+    for candidate in wikis or []:
+        if not isinstance(candidate, dict):
+            continue
+        wiki_id = str(candidate.get("wiki_id") or "")
+        text = f"{wiki_id} {candidate.get('wiki_title') or ''}".lower()
+        for separator in "-_/.":
+            text = text.replace(separator, " ")
+        score = sum(1 for word in text.split() if len(word) >= 3 and word in lowered)
+        if score > best_score:
+            best, best_score = wiki_id, score
+    if not best and len(wikis or []) == 1:
+        candidate = (wikis or [])[0]
+        best = str(candidate.get("wiki_id") or "") if isinstance(candidate, dict) else ""
+    return {"success": True, "wiki_id": best or "NONE"}
+
+
 FIXTURE_TOOLS = {
     "generate_wiki": generate_wiki,
     "ask": ask,
     "deep_research": deep_research,
+    "resolve_wiki": resolve_wiki,
 }
 
 
@@ -172,10 +254,32 @@ class FixtureToolRunner(LegacyToolRunner):
         self._step_seconds = float(getattr(settings, "fixture_step_seconds", 0.0) or 0.0)
 
     async def _paced(self, tool_name: str, context: Any) -> None:
-        for step in STEPS.get(tool_name, ()):
+        for step in steps_for(tool_name):
             # The checkpoint is what makes Stop work mid-run: a cancelled
             # invocation raises here instead of finishing and uploading.
             await context.checkpoint()
             await context.thinking(step)
+            if self._step_seconds > 0:
+                await asyncio.sleep(self._step_seconds)
+
+    async def _streamed(self, tool_name: str, result: Any, context: Any) -> None:
+        """Stream the answer this run is about to return, in fragments.
+
+        AFTER the tool rather than before it, so what is streamed is the
+        answer itself and not a second copy that could drift from it. The
+        real engine streams while it writes; a fixture has nothing to write
+        with, and the property that matters to every consumer downstream —
+        fragments arrive in order, join to the answer, and stop when the
+        invocation completes — is the same either way.
+        """
+        key = STREAMED_ANSWER_KEY.get(tool_name)
+        if key is None or not isinstance(result, dict):
+            return
+        answer = result.get(key)
+        if not isinstance(answer, str):
+            return
+        for fragment in answer_fragments(answer):
+            await context.checkpoint()
+            await context.token(fragment)
             if self._step_seconds > 0:
                 await asyncio.sleep(self._step_seconds)

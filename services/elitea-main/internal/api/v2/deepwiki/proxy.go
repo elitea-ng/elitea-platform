@@ -54,22 +54,6 @@ func (p *Proxy) Forward(
 	p.hop.Forward(w, r, providerPath, projectID, userID)
 }
 
-// ForwardObserved is Forward that also reports the provider's status — 0
-// when the provider was never reached. The invoke path revokes the callback
-// grant it minted when the provider refused the invocation; without the
-// status it could only guess.
-func (p *Proxy) ForwardObserved(
-	w http.ResponseWriter,
-	r *http.Request,
-	providerPath string,
-	projectID string,
-	userID string,
-) int {
-	outcome := &proxy.Outcome{}
-	p.Forward(w, r.WithContext(proxy.WithOutcome(r.Context(), outcome)), providerPath, projectID, userID)
-	return outcome.Status
-}
-
 // hop is the shared facade configuration this one carries; the DeepWiki
 // extras (callback base, token lifetime, git egress) stay on the facade.
 func (c Config) hop() facade.Config {

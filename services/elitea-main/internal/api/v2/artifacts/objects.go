@@ -140,7 +140,23 @@ func mimeFromExtension(key string) string {
 // return immediately when ok is false. Returns the fetched row so callers
 // that need the bucket's database ID (object metadata read/write, S12)
 // don't have to look it up a second time.
-func (h *Handler) requireBucket(w http.ResponseWriter, r *http.Request, projectID int64, bucket string) (repos.BucketRow, bool) {
+//
+// `need` is the per-bucket access list check (bucket_permissions.go): pass
+// accessRead for a verb that only observes the bucket and accessWrite for one
+// that changes it. THE ACCESS LIST IS CHECKED BEFORE THE BUCKET IS FETCHED,
+// which is legacy's order — its decorator runs ahead of the handler
+// (utils/utils.py:177-238) — and it keeps a refused caller from learning
+// whether a bucket they may not touch exists.
+func (h *Handler) requireBucket(w http.ResponseWriter, r *http.Request, projectID int64, bucket, need string) (repos.BucketRow, bool) {
+	allowed, err := h.authorizeBucket(r.Context(), projectID, bucket, need)
+	if err != nil {
+		h.writeInternal(w, r, "authorize bucket", err)
+		return repos.BucketRow{}, false
+	}
+	if !allowed {
+		writeError(w, http.StatusForbidden, "Forbidden", denyMessage(need))
+		return repos.BucketRow{}, false
+	}
 	row, err := h.repo.GetBucket(r.Context(), projectID, bucket)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
@@ -155,7 +171,16 @@ func (h *Handler) requireBucket(w http.ResponseWriter, r *http.Request, projectI
 
 // requireBucketNoBody is requireBucket for HEAD responses, which must not
 // carry a body.
-func (h *Handler) requireBucketNoBody(w http.ResponseWriter, r *http.Request, projectID int64, bucket string) (repos.BucketRow, bool) {
+func (h *Handler) requireBucketNoBody(w http.ResponseWriter, r *http.Request, projectID int64, bucket, need string) (repos.BucketRow, bool) {
+	allowed, err := h.authorizeBucket(r.Context(), projectID, bucket, need)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return repos.BucketRow{}, false
+	}
+	if !allowed {
+		w.WriteHeader(http.StatusForbidden)
+		return repos.BucketRow{}, false
+	}
 	row, err := h.repo.GetBucket(r.Context(), projectID, bucket)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
@@ -263,7 +288,7 @@ func (h *Handler) ListObjects(w http.ResponseWriter, r *http.Request) {
 	}
 	projectIDStr := chi.URLParam(r, "projectID")
 	bucket := chi.URLParam(r, "bucket")
-	if _, ok := h.requireBucket(w, r, projectID, bucket); !ok {
+	if _, ok := h.requireBucket(w, r, projectID, bucket, accessRead); !ok {
 		return
 	}
 
@@ -429,7 +454,7 @@ func (h *Handler) UploadObject(w http.ResponseWriter, r *http.Request) {
 	}
 	projectIDStr := chi.URLParam(r, "projectID")
 	bucket := chi.URLParam(r, "bucket")
-	bucketRow, ok := h.requireBucket(w, r, projectID, bucket)
+	bucketRow, ok := h.requireBucket(w, r, projectID, bucket, accessWrite)
 	if !ok {
 		return
 	}
@@ -543,7 +568,7 @@ func (h *Handler) BatchDeleteObjects(w http.ResponseWriter, r *http.Request) {
 	}
 	projectIDStr := chi.URLParam(r, "projectID")
 	bucket := chi.URLParam(r, "bucket")
-	bucketRow, ok := h.requireBucket(w, r, projectID, bucket)
+	bucketRow, ok := h.requireBucket(w, r, projectID, bucket, accessWrite)
 	if !ok {
 		return
 	}
@@ -693,7 +718,7 @@ func (h *Handler) DownloadObject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, ok := h.requireBucket(w, r, projectID, bucket); !ok {
+	if _, ok := h.requireBucket(w, r, projectID, bucket, accessRead); !ok {
 		return
 	}
 
@@ -718,7 +743,7 @@ func (h *Handler) StatObject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, ok := h.requireBucketNoBody(w, r, projectID, bucket); !ok {
+	if _, ok := h.requireBucketNoBody(w, r, projectID, bucket, accessRead); !ok {
 		return
 	}
 
@@ -765,7 +790,7 @@ func (h *Handler) DeleteObject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	bucketRow, ok := h.requireBucket(w, r, projectID, bucket)
+	bucketRow, ok := h.requireBucket(w, r, projectID, bucket, accessWrite)
 	if !ok {
 		return
 	}

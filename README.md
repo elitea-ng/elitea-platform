@@ -10,8 +10,7 @@ elitea-platform/
 │   ├── elitea-llm-gateway/  # LLM gateway service
 │   ├── elitea-main/         # Go API server (chi/v5, pgx/v5, go-redis/v9)
 │   ├── elitea-scheduler/    # Scheduled job runner (Go, cron + Redis RPC)
-│   ├── elitea-worker-python/# Python worker runtime and SDK
-│   └── pylon-indexer/       # Transitional Pylon runtime (plugin-driven)
+│   └── elitea-worker-python/# Python worker runtime and SDK
 ├── apps/
 │   ├── elitea-ui/           # React SPA (git submodule)
 │   └── elitea-web/          # React SPA rewrite; also builds the admin console
@@ -21,7 +20,7 @@ elitea-platform/
 ├── libs/go/                 # Shared Go libraries
 ├── deploy/
 │   ├── docker/              # Containerfiles for UI and helper images
-│   ├── docker-compose.yml   # Local dev environment (pylon-indexer, legacy)
+│   ├── docker-compose.yml   # Local dev environment (legacy shape, Go services)
 │   ├── docker-compose.standalone-full.yml  # Target-architecture stack (Go + Bifrost, no pylon)
 │   └── helm/                # Kubernetes Helm charts
 └── .github/workflows/       # CI/CD pipelines
@@ -42,7 +41,7 @@ elitea-platform/
 git clone --recurse-submodules https://github.com/EliteaAI/elitea-platform.git
 cd elitea-platform
 
-# Start everything (postgres, redis, traefik, elitea-main, elitea-ui, pylon-indexer)
+# Start everything (postgres, redis, traefik, elitea-main, elitea-ui)
 task up
 
 # Or manually:
@@ -63,9 +62,9 @@ Services will be available at:
 
 ## Standalone full stack
 
-`deploy/docker-compose.yml` above still includes `pylon-indexer` and fronts the
-old plugin runtime. `deploy/docker-compose.standalone-full.yml` is a separate,
-self-contained recipe for the **target** architecture: Go `elitea-main` +
+`deploy/docker-compose.yml` above is the older local shape and keeps the
+legacy database and routing conventions. `deploy/docker-compose.standalone-full.yml`
+is a separate, self-contained recipe for the **target** architecture: Go `elitea-main` +
 `elitea-web` + the Bifrost `elitea-llm-gateway` + postgres/redis/rustfs/traefik
 + a mock OIDC provider — no pylon, no centry, no LiteLLM.
 
@@ -130,15 +129,12 @@ task vet             # Run go vet
 task ui:build        # Build EliteaUI SPA
 task ui:lint         # Lint EliteaUI
 
-task pylon:validate  # Validate pylon-indexer YAML configs
-
 task images          # Build all container images
 task images:go       # Build elitea-main image only
 task images:scheduler # Build elitea-scheduler image only
 task images:gateway  # Build elitea-llm-gateway image only
 task images:ui       # Build elitea-ui image only
 task images:web      # Build elitea-web image only
-task images:pylon    # Build pylon-indexer image only
 
 task helm:lint       # Lint all Helm charts
 task all             # Run all checks
@@ -153,7 +149,7 @@ The core platform API. Handles authentication, project management, prompt librar
 ```bash
 cd services/elitea-main
 go run ./cmd/elitea-main     # Run directly
-go run ./cmd/cutover-ctl     # Migration cutover CLI
+go run ./cmd/cutover-ctl     # LLM-path cutover verification gates
 go run ./cmd/elitea-auth-validate -form-users-file /absolute/private/form-users.json
                              # Validate a resolved Form snapshot; success is silent
 ```
@@ -170,30 +166,22 @@ prints only fixed generic failures and never prints the file path or contents.
 |----------|---------|-------------|
 | `DATABASE_URL` | — | PostgreSQL connection string |
 | `REDIS_URL` | — | Redis host:port |
-| `LEGACY_URL` | (empty) | Legacy pylon_main URL (enables cutover routing) |
-| `CANARY_WEIGHT` | `0` | Canary traffic percentage (0-100) |
 
-### pylon-indexer (Python/Pylon)
+### The index plane, and the service that used to serve it
 
-Agent runtime and SDK execution engine. Uses the shared pylon base image and loads plugins dynamically from the [bootstrap](https://github.com/EliteaAI/bootstrap) repository at startup.
+`pylon-indexer` was the transitional Pylon runtime: it cloned its plugins at
+container start and served index ingest, provider descriptors and agent
+execution. It is **deleted** (issue #339). The Go runtime plane dispatches index
+ingest to `elitea-worker-python` on the same command stream and consumer group
+as agent execution, so one worker serves both capabilities and no plugin is
+loaded at run time.
 
-**Plugins loaded:** shared, auth, worker_core, sdk_plugin, indexer_worker, provider_worker, tracing
-
-`runtime_engine_litellm` is deliberately absent (issue #323). It ran a LiteLLM
-proxy inside this container, which was a second LLM data plane with no budget
-and no billing. The LLM data plane is `elitea-llm-gateway`, reached through
+`runtime_engine_litellm`, the LiteLLM proxy that ran inside that container, had
+already gone (issue #323): it was a second LLM data plane with no budget and no
+billing. The LLM data plane is `elitea-llm-gateway`, reached through
 `elitea-main` at `/llm/v1`.
 
-**Key environment variables:**
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ELITEA_RELEASE` | `main` | Bootstrap branch / release tag for plugins |
-| `PYLON_VERSION` | `1.2.25` | Base pylon image version (build arg) |
-| `REDIS_HOST` | `redis` | Redis hostname |
-| `POSTGRES_HOST` | `postgres` | PostgreSQL hostname |
-
-First startup takes 1-2 minutes while plugins are cloned and requirements installed. Subsequent starts use the cache volume.
+`deploy/INDEX_V2_CUTOVER.md` holds the cutover procedure and the rollback.
 
 ### elitea-ui (React)
 
@@ -214,7 +202,7 @@ All workflows are in `.github/workflows/`:
 |----------|---------|---------|
 | `ci-go.yml` | PR/push to Go paths | Lint, test, build validation |
 | `ci-ui.yml` | PR/push to UI paths | Lint, build SPA |
-| `ci-python.yml` | PR/push to pylon-indexer | Validate YAML configs |
+| `ci-python.yml` | PR/push to the Python worker, the SDK gates or the gateway | Worker suite, SDK conformance, projection checks |
 | `helm-lint.yml` | PR/push to helm paths | Lint charts, template dry-run |
 | `publish.yml` | Push to main/next | Semantic release → build → publish-image (scan, manifest, sign) → chart |
 

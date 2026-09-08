@@ -6,16 +6,19 @@ import type { SxProps, Theme } from '@mui/material/styles';
 
 import type { ProjectAnalytics } from '@/shared/api/generated/model';
 
+import { ANALYTICS_TAB } from '../../lib/constants';
 import { AnalyticsAgents } from '../AnalyticsAgents';
+import { AnalyticsCosts } from '../AnalyticsCosts';
 import { AnalyticsGuide } from '../AnalyticsGuide';
 import { AnalyticsHealth } from '../AnalyticsHealth';
 import { AnalyticsOverview } from '../AnalyticsOverview';
+import { AnalyticsTokens } from '../AnalyticsTokens';
 import { AnalyticsTools } from '../AnalyticsTools';
 import { AnalyticsUsers } from '../AnalyticsUsers';
 import { AnalyticsLoadError } from './DetailStatus';
 
 /**
- * The six-tab body of `AnalyticsContainer`'s content area. Extracted purely
+ * The eight-tab body of `AnalyticsContainer`'s content area. Extracted purely
  * to bring `AnalyticsContainer` itself under the `eslint(complexity)`
  * budget (12) — the eight-plus branch points below (loading/error/six
  * tabs) were the bulk of that function's complexity of 19. The `switch` is
@@ -69,7 +72,7 @@ function renderTabBody({
   onBackToSource,
 }: TabBodyProps): ReactNode {
   switch (activeTab) {
-    case 0:
+    case ANALYTICS_TAB.overview:
       return data === undefined ? null : (
         <AnalyticsOverview
           data={data}
@@ -77,7 +80,23 @@ function renderTabBody({
           totalCost={totalCost}
         />
       );
-    case 1:
+    case ANALYTICS_TAB.costs:
+      return (
+        <AnalyticsCosts
+          projectId={projectId}
+          dateFrom={dateFrom}
+          dateTo={dateTo}
+        />
+      );
+    case ANALYTICS_TAB.tokens:
+      return (
+        <AnalyticsTokens
+          projectId={projectId}
+          dateFrom={dateFrom}
+          dateTo={dateTo}
+        />
+      );
+    case ANALYTICS_TAB.agents:
       return (
         <AnalyticsAgents
           projectId={projectId}
@@ -85,7 +104,7 @@ function renderTabBody({
           dateTo={dateTo}
         />
       );
-    case 2:
+    case ANALYTICS_TAB.tools:
       return (
         <AnalyticsTools
           projectId={projectId}
@@ -93,7 +112,7 @@ function renderTabBody({
           dateTo={dateTo}
         />
       );
-    case 3:
+    case ANALYTICS_TAB.users:
       return (
         <AnalyticsUsers
           projectId={projectId}
@@ -103,13 +122,13 @@ function renderTabBody({
           onBackToSource={onBackToSource}
         />
       );
-    case 4:
+    case ANALYTICS_TAB.health:
       // `data.health`, not `data.daily_activity`. This used to pass the daily
       // series and NOT the `health` prop the component branches on, so the tab
       // returned its empty state for the whole life of the component — and the
       // series it did pass carried neither of the two fields the chart read.
       return data === undefined ? null : <AnalyticsHealth health={data.health} />;
-    case 5:
+    case ANALYTICS_TAB.guide:
       return <AnalyticsGuide />;
     default:
       return null;

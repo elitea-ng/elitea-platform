@@ -208,8 +208,15 @@ export default memo(
     const statusText = useMemo(() => getConfigurationStatus(health?.statusOk ?? true, isShared), [health?.statusOk, isShared]);
 
     const handleCardClick = useCallback(() => {
-      if (!disabled) {
-        onClick?.(configuration.id as string);
+      // `configuration.id` is a NUMBER on this wire (`ConfigurationItem.id`),
+      // and the `as string` cast that used to sit here handed that number to
+      // a `(configurationId: string)` callback — a declaration the value never
+      // satisfied. `toConfigurationId` is the same narrowing the health dot
+      // beside this title already uses. A row with no usable id opens nothing,
+      // rather than routing to an edit URL with `undefined` in it.
+      const configurationId = toConfigurationId(configuration.id);
+      if (!disabled && configurationId !== '') {
+        onClick?.(configurationId);
       }
     }, [disabled, onClick, configuration.id]);
 
@@ -223,6 +230,9 @@ export default memo(
       <Box
         onClick={handleCardClick}
         sx={styles.cardContainer(disabled)}
+        // Anchor for `ConfigurationsPanel`'s reveal-scroll effect — not a
+        // new prop, just a DOM marker on data this card already has.
+        data-configuration-id={toConfigurationId(configuration.id)}
       >
         <Box sx={styles.content}>
           <Box sx={styles.iconContainer}>
@@ -284,18 +294,25 @@ function getStyles(theme: ReturnType<typeof useTheme>) {
       flexDirection: 'row',
       justifyContent: 'space-between',
       alignItems: 'center',
-      flex: '0 0 calc((100% - 1.5rem) / 3)',
-      maxWidth: 'calc((100% - 1.5rem) / 3)',
+      // THREE per row with a 1rem gutter: the subtrahend must equal the two
+      // gutters between the three cards (2 x 1rem), and the container's `gap`
+      // must be that same 1rem. It was `1.5rem` against a `0.75rem` gap, so
+      // each row left a 0.5rem strip of dead space on the right and the cards
+      // were 8px narrower than production's.
+      flex: '0 0 calc((100% - 2rem) / 3)',
+      maxWidth: 'calc((100% - 2rem) / 3)',
       minWidth: '20rem',
-      background: `linear-gradient(135deg, ${t.vars.palette.background.eliteaDefault} 0%, ${t.vars.palette.border.lines} 100%)`,
+      height: '4.4375rem',
+      background: t.vars.palette.background.card.gradientDark,
       border: '1px solid transparent',
-      borderRadius: 'var(--el-shape-radiusMd, 8px)',
+      // oxlint-disable-next-line elitea/ad-hoc-radius -- baseline literal; the radius tokens are 4/8/16px and the production card is 12px.
+      borderRadius: '0.75rem',
       padding: '0.5rem',
       cursor: disabled ? 'default' : 'pointer',
       transition: 'all 0.2s ease-in-out',
       '&:hover': !disabled ? {
-        border: `1px solid ${t.vars.palette.scrollbar.thumb}`,
-        backgroundColor: t.vars.palette.background.eliteaDefault,
+        border: `1px solid ${t.vars.palette.border.cardsOutlines}`,
+        background: t.vars.palette.background.card.hover,
       } : {},
       '@media (max-width: 1200px)': {
         flex: '0 0 calc((100% - 1.5rem) / 2)',
@@ -352,12 +369,21 @@ function getStyles(theme: ReturnType<typeof useTheme>) {
       gap: '0.625rem',
       alignItems: 'center',
     },
+    /* A CHIP, not bare text. The `Default` / `High-Tier` / `Low-Tier` marks
+       had a radius and a padding but no background, so on the card's own
+       gradient they read as a third run of status text rather than as the
+       green pill production draws. `icon.fill.is_default` is the token that
+       colour comes from. */
     badge: {
       display: 'inline-flex',
       alignItems: 'center',
       justifyContent: 'center',
-      borderRadius: 'var(--el-shape-radiusLg, 16px)',
+      height: '1.25rem',
+      // oxlint-disable-next-line elitea/ad-hoc-radius -- baseline literal (1.25rem); a pill on a 20px-tall chip, and `radiusPill` would also do but the baseline pins this number.
+      borderRadius: '1.25rem',
       padding: '0.125rem 0.5rem',
+      backgroundColor: t.vars.palette.icon.fill.is_default,
+      whiteSpace: 'nowrap',
     },
   };
 }

@@ -182,3 +182,46 @@ describe('pollWikiChat', () => {
     expect(seenPath).toBe('7/wiki/ask/inv-1');
   });
 });
+
+describe('attached wiki pages', () => {
+  it('sends the ids and the version pin together', () => {
+    const request = buildInvokeRequest(
+      { ...TARGET, wikiVersionId: 'fixture-1', contextPaths: ['wiki_pages/components/storage.md'] },
+      INPUT,
+    );
+    expect(request.parameters).toMatchObject({
+      context_paths: ['wiki_pages/components/storage.md'],
+      context_wiki_version_id: 'fixture-1',
+    });
+  });
+
+  it('sends page IDS, never page text', () => {
+    // The whole reason the control is a picker over the manifest rather than a
+    // free-text box or an upload: what leaves the browser can only NAME
+    // something the wiki already published, so it cannot choose what the
+    // server reads.
+    const request = buildInvokeRequest(
+      { ...TARGET, wikiVersionId: 'fixture-1', contextPaths: ['wiki_pages/a.md'] },
+      INPUT,
+    );
+    const body = JSON.stringify(request.parameters);
+    expect(body).toContain('wiki_pages/a.md');
+    expect(body).not.toContain('http');
+  });
+
+  it('omits the selection when there is no version to pin it to', () => {
+    // The provider REFUSES context_paths without a version, so sending the
+    // selection alone would turn every attached question into an error the
+    // reader cannot act on. A manifest with no wiki_version_id is that case:
+    // better to answer unattached than to fail.
+    const request = buildInvokeRequest({ ...TARGET, contextPaths: ['wiki_pages/a.md'] }, INPUT);
+    expect(request.parameters).not.toHaveProperty('context_paths');
+    expect(request.parameters).not.toHaveProperty('context_wiki_version_id');
+  });
+
+  it('omits both keys when nothing is attached', () => {
+    const request = buildInvokeRequest({ ...TARGET, wikiVersionId: 'fixture-1' }, INPUT);
+    expect(request.parameters).not.toHaveProperty('context_paths');
+    expect(request.parameters).not.toHaveProperty('context_wiki_version_id');
+  });
+});

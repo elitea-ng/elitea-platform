@@ -3,6 +3,8 @@ package eliteacore
 import (
 	"fmt"
 	"strconv"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/ownership"
 )
 
 // tenantOwnerID converts the project id in an import route's path into the
@@ -12,12 +14,21 @@ import (
 // error rather than a substitute value: the import path already has one
 // silent substitution (a failed fmt.Sscanf on the principal gives every row to
 // user 1) and it is a defect, not a pattern to repeat.
-func tenantOwnerID(projectID string) (int, error) {
-	ownerID, err := strconv.Atoi(projectID)
-	if err != nil || ownerID <= 0 {
+//
+// The return type is ownership.ProjectID and not int, because the same import
+// path also holds a USER id (the caller). Both were plain integers, and #533
+// measured what that costs: one number reached the wrong column and the
+// database accepted it. The types now refuse the swap at compile time.
+func tenantOwnerID(projectID string) (ownership.ProjectID, error) {
+	ownerID, err := strconv.ParseInt(projectID, 10, 64)
+	if err != nil {
 		return 0, fmt.Errorf("%q is not a project id", projectID)
 	}
-	return ownerID, nil
+	typed, err := ownership.NewProjectID(ownerID)
+	if err != nil {
+		return 0, fmt.Errorf("%q is not a project id", projectID)
+	}
+	return typed, nil
 }
 
 // importToolkitInsertSQL builds the elitea_tools INSERT that the toolkit import

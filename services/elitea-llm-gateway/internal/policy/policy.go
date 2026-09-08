@@ -57,6 +57,17 @@ const (
 	TypeMCPAllowlist     = "mcp_allowlist"
 	TypeCredentialPolicy = "credential_policy"
 
+	// TypeEgressAllowlist is the operator's runtime egress policy: the hosts a
+	// tenant-authored credential `api_base` may name (gap G6, shared migration
+	// 0112).
+	//
+	// It exists because GATEWAY_EGRESS_ALLOWLIST was the ONLY way to state that
+	// policy, so an on-premise model endpoint could not be reached without a
+	// chart edit and a pod restart, and the environment variable answered two
+	// different questions with one value. The rows here are UNIONED with the
+	// environment floor; nothing authored can withdraw a host the chart named.
+	TypeEgressAllowlist = "egress_allowlist"
+
 	// TypeBudgetAlert is the platform soft-alert row written by
 	// PUT /admin/gateway/budget-alerts (issue #322). This package does NOT
 	// enforce it and must not treat it as unknown: it is read directly in SQL,
@@ -233,6 +244,24 @@ type MCPAllowlistDef struct {
 	Allowlist []string
 }
 
+// EgressAllowlistDef is an authored set of permitted egress destinations
+// (admin schema `egress.allowlist`).
+//
+// It carries NO Scope, and that is a decision rather than an omission. The
+// allowlist governs two things: which api_base a credential may name, and
+// whether bifrost's SSRF-safe dialer is relaxed for the self-hosted provider
+// classes. The second is decided in GetConfigForProvider, which bifrost calls
+// with no context and no project — so a project scope could be honoured for
+// half the definition and silently ignored for the other half. Compile REJECTS
+// a scoped row rather than applying it more widely than it was authored.
+type EgressAllowlistDef struct {
+	Name string
+	// Entries are the normalised host patterns. Parsing happens at compile, so
+	// a malformed entry is named in Snapshot.Rejected rather than reaching the
+	// credential path.
+	Entries []string
+}
+
 // RoutingTarget is one weighted destination of a routing rule.
 type RoutingTarget struct {
 	Provider string
@@ -271,6 +300,7 @@ type Snapshot struct {
 	credPolicies []CredentialPolicyDef
 	modelConfigs []ModelConfigDef
 	mcpLists     []MCPAllowlistDef
+	egressLists  []EgressAllowlistDef
 	routing      []RoutingRuleDef
 
 	// LoadedAt is when the rows were read. A caller that must not act on a
@@ -479,6 +509,37 @@ func (s *Snapshot) CheckMCP(sub Subject, requested []string) MCPDecision {
 	return dec
 }
 
+// EgressAllowlist returns the union of every authored egress entry, sorted and
+// deduplicated.
+//
+// The union, not the narrowest row: every row is an operator statement that a
+// destination is legitimate, and a second row must not silently revoke the
+// first. This is the same rule model_config follows and the opposite of the one
+// mcp_allowlist follows — the difference is that this list is merged with an
+// environment floor rather than selected among competing scopes.
+//
+// It satisfies account.EgressSource. The account merges the result with
+// GATEWAY_EGRESS_ALLOWLIST and re-parses; entries are already validated here,
+// so that merge only ever widens.
+func (s *Snapshot) EgressAllowlist() []string {
+	if s == nil || len(s.egressLists) == 0 {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(s.egressLists))
+	for _, d := range s.egressLists {
+		for _, e := range d.Entries {
+			if _, dup := seen[e]; dup {
+				continue
+			}
+			seen[e] = struct{}{}
+			out = append(out, e)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 // Diagnostics is the operator-facing report of what this snapshot holds and
 // what it refused. It backs the gateway's /governance/status surface so the
 // admin page can show an operator that the rule they saved is actually loaded.
@@ -491,6 +552,7 @@ type Diagnostics struct {
 	MCPAllowlists    int           `json:"mcp_allowlists"`
 	CredentialPolicy int           `json:"credential_policies"`
 	RoutingRules     int           `json:"routing_rules"`
+	EgressAllowlists int           `json:"egress_allowlists"`
 	Rejected         []RejectedRow `json:"rejected"`
 	Inert            []InertRow    `json:"inert"`
 }
@@ -509,6 +571,7 @@ func (s *Snapshot) Diagnostics() Diagnostics {
 		MCPAllowlists:    len(s.mcpLists),
 		CredentialPolicy: len(s.credPolicies),
 		RoutingRules:     len(s.routing),
+		EgressAllowlists: len(s.egressLists),
 		Rejected:         s.Rejected,
 		Inert:            s.Inert,
 	}

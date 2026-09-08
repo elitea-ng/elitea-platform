@@ -170,6 +170,8 @@ func validateCommand(command *runtimev1.WorkerCommandV1, config commandValidatio
 		return validateAgentExecutionCommand(command, config)
 	case executiondomain.ToolkitExecuteReadCapability:
 		return validateToolkitExecuteReadCommand(command, config)
+	case executiondomain.ToolkitCallToolCapability:
+		return validateToolkitCallToolCommand(command, config)
 	default:
 		return ErrCommandIncompatible
 	}
@@ -182,6 +184,40 @@ func validateToolkitExecuteReadCommand(command *runtimev1.WorkerCommandV1, confi
 		command.GetParentExecutionId() != "" || command.GetParentCallId() != "" ||
 		toolkit.GetRequestEntryId() == "" || len(toolkit.GetRequestEntryId()) > config.MaxStringBytes ||
 		strings.ContainsAny(toolkit.GetRequestEntryId(), "\x00\r\n") {
+		return ErrMalformedWorkerCommand
+	}
+	return nil
+}
+
+// validateToolkitCallToolCommand pins the one tool run this command may name.
+//
+// The two entry ids must DIFFER. Settings are redeemed by this service from the
+// saved toolkit row and carry credentials; arguments come from the caller. One
+// entry standing for both would let caller content be claimed where the
+// platform's own authorized settings belong.
+func validateToolkitCallToolCommand(command *runtimev1.WorkerCommandV1, config commandValidationConfig) error {
+	if command.GetCommandType() != runtimev1.WorkerCommandTypeV1_WORKER_COMMAND_TYPE_V1_TOOLKIT_CALL_TOOL {
+		return ErrCommandIncompatible
+	}
+	call := command.GetToolkitCallTool()
+	if call == nil ||
+		command.GetRootExecutionId() != command.GetExecutionId() ||
+		command.GetParentExecutionId() != "" || command.GetParentCallId() != "" {
+		return ErrMalformedWorkerCommand
+	}
+	for _, value := range []string{
+		call.GetToolkitType(), call.GetToolName(),
+		call.GetSettingsEntryId(), call.GetArgumentsEntryId(), call.GetToolkitId(),
+	} {
+		if value == "" || len(value) > config.MaxStringBytes || strings.ContainsAny(value, "\x00\r\n") {
+			return ErrMalformedWorkerCommand
+		}
+	}
+	if len(call.GetToolkitVersion()) > config.MaxStringBytes ||
+		strings.ContainsAny(call.GetToolkitVersion(), "\x00\r\n") {
+		return ErrMalformedWorkerCommand
+	}
+	if call.GetSettingsEntryId() == call.GetArgumentsEntryId() {
 		return ErrMalformedWorkerCommand
 	}
 	return nil

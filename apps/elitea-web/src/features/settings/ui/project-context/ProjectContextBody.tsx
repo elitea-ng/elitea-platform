@@ -8,17 +8,14 @@
  */
 import Box from '@mui/material/Box';
 import Snackbar from '@mui/material/Snackbar';
-import Typography from '@mui/material/Typography';
-import { useTheme } from '@mui/material/styles';
 
 import Alert from '@mui/material/Alert';
 import { BannerMessage } from '@/shared/ui/BannerMessage';
 import { BaseBtn } from '@/shared/ui/BaseBtn';
 import { DrawerPage } from '@/shared/ui/settings/DrawerPage';
+import { DrawerPageHeader } from '@/shared/ui/settings/DrawerPageHeader';
 import { t } from '@/shared/i18n';
 import { projectContextStyles } from './ProjectContext.styles';
-import { ProjectParamsHeader } from './ProjectParamsHeader';
-import type { SelectedProjectIcon } from './ProjectIconDialog';
 import { EnableToggleCard } from './EnableToggleCard';
 import { EditorSection } from './EditorSection';
 
@@ -46,6 +43,8 @@ interface EditorState {
   canEdit: boolean;
   isDirty: boolean;
   isSaving: boolean;
+  /** Set when the reader arrived here through the empty state's "Build with AI". */
+  openAiOnMount: boolean;
 }
 
 interface ContentActions {
@@ -62,7 +61,6 @@ interface EditorActions {
 }
 
 interface SaveActions {
-  handleIconChange: (icon: SelectedProjectIcon | null) => Promise<void>;
   handleSave: () => Promise<void>;
   handleDiscard: () => void;
 }
@@ -83,7 +81,6 @@ export interface ProjectContextBodyProps {
 export function ProjectContextBody({
   project, pageState, editorState, contentActions, editorActions, saveActions,
 }: ProjectContextBodyProps) {
-  const theme = useTheme();
   const s = projectContextStyles;
   return (
     /*
@@ -99,28 +96,23 @@ export function ProjectContextBody({
      */
     <Box sx={s.root} data-testid="project-context-body">
       <DrawerPage>
-        <Box
-          sx={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.75rem',
-            padding: '1rem 1.5rem',
-            borderBottom: `1px solid ${theme.vars.palette.border.lines}`,
-          }}
-        >
-          <Typography variant="headingSmall" color="text.secondary">
-            {t('entities.projectContext.content.title', 'Project Context')}
-          </Typography>
-        </Box>
+        {/* The SHARED header, not a hand-rolled Box. The reference renders
+          * `<DrawerPageHeader title="Project Context" showBorder />`
+          * (`ProjectContextEmptyState.jsx`, `ProjectContextSavedView.jsx`), and
+          * every other settings page here already does. The local copy was
+          * 3.5rem tall with `1rem` of top padding against the shared header's
+          * 3.8rem and vertical centring, so this one page's title sat two
+          * pixels high and its rule two pixels short of every sibling tab. */}
+        <DrawerPageHeader
+          title={t('entities.projectContext.content.title', 'Project Context')}
+          showBorder
+        />
 
         <Box sx={s.body}>
-          <ProjectParamsHeader
-            projectId={project.projectId}
-            projectName={project.projectName}
-            canEdit={editorState.canEdit}
-            onIconChange={(icon: SelectedProjectIcon | null) => void saveActions.handleIconChange(icon)}
-          />
-
+          {/* The project avatar / name / teammates row is NOT here.
+            * Production puts it in Settings › General's "General" accordion
+            * (`ProjectGeneralContent.jsx`), and showed it on this tab only
+            * because this port had no General tab to put it on. */}
           {pageState.showReadOnlyBanner && (
             <BannerMessage
               message={t('entities.projectContext.content.readOnlyBanner', "You don't have permission to edit this setting.")}
@@ -153,7 +145,10 @@ export function ProjectContextBody({
               onModeChange={contentActions.handleModeChange}
               onFocus={editorActions.onFocus}
               onBlur={editorActions.handleEditorBlur}
-              onAIGenerated={contentActions.handleAIGenerated}
+              generate={{
+                onApply: contentActions.handleAIGenerated,
+                openOnMount: editorState.openAiOnMount,
+              }}
               onImportClick={editorActions.onImportClick}
             />
           )}
@@ -163,6 +158,7 @@ export function ProjectContextBody({
               variant="contained"
               color="primary"
               disabled={!editorState.canEdit || !editorState.isDirty || editorState.isSaving}
+              data-testid="project-context-save-button"
               onClick={() => void saveActions.handleSave()}
             >
               {t('entities.projectContext.content.save', 'Save')}
@@ -171,6 +167,7 @@ export function ProjectContextBody({
               variant="secondary"
               color="secondary"
               disabled={!editorState.canEdit || !editorState.isDirty}
+              data-testid="project-context-discard-button"
               onClick={() => saveActions.handleDiscard()}
             >
               {t('entities.projectContext.content.discard', 'Discard')}
@@ -187,6 +184,13 @@ export interface ProjectContextToastsProps {
   showErrorToast: boolean;
   onCloseSave: () => void;
   onCloseError: () => void;
+  /**
+   * What went wrong. Defaults to the save failure, which used to be the only
+   * thing that could fail here. The markdown import reports through this
+   * pair now too, and "Failed to save Project Context" is the wrong sentence
+   * for a file that is too long (issue 841).
+   */
+  errorMessage?: string | undefined;
 }
 
 export function ProjectContextToasts({
@@ -194,6 +198,7 @@ export function ProjectContextToasts({
   showErrorToast,
   onCloseSave,
   onCloseError,
+  errorMessage,
 }: ProjectContextToastsProps) {
   return (
     <>
@@ -214,7 +219,7 @@ export function ProjectContextToasts({
         anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
       >
         <Alert onClose={onCloseError} severity="error" variant="filled">
-          {t('entities.projectContext.content.saveError', 'Failed to save Project Context')}
+          {errorMessage ?? t('entities.projectContext.content.saveError', 'Failed to save Project Context')}
         </Alert>
       </Snackbar>
     </>

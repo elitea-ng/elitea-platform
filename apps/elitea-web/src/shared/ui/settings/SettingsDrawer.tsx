@@ -8,16 +8,21 @@ import SvgIcon from '@mui/material/SvgIcon';
 import type { SxProps, Theme } from '@mui/material/styles';
 
 import { AnalyticsIcon } from '../icons/analytics-icon';
+import { BellIcon } from '../icons/bell-icon';
 import { BriefcaseIcon } from '../icons/briefcase-icon';
+import { CompassIcon } from '../icons/compass-icon';
 import { ConfigurationIcon } from '../icons/configuration-icon';
+import { DialIcon } from '../icons/dial-icon';
 import { EnvironmentIcon } from '../icons/environment-icon';
 import { HumanIcon } from '../icons/human-icon';
-import { InfoIcon } from '../icons/info-icon';
 import { KeyIcon } from '../icons/key-icon';
 import { LockIcon } from '../icons/lock-icon';
 import { LogoutIcon } from '../icons/logout-icon';
+import { MemoryIcon } from '../icons/memory-icon';
+import { ModelIcon } from '../icons/model-icon';
 import { PersonalizationIcon } from '../icons/personalization-icon';
 import { PromptIcon } from '../icons/prompt-icon';
+import { ReasonIcon } from '../icons/reason-icon';
 
 import { SETTINGS_LAYOUT } from './settings.constants';
 import { t } from '@/shared/i18n';
@@ -47,17 +52,37 @@ export interface SettingsDrawerProps {
   onItemClick?: (tabId: string) => void;
 }
 
+/*
+ * ONE ENTRY PER TAB ID THAT `settings-layout.tsx` ACTUALLY RENDERS.
+ *
+ * This map used to be keyed on ids the layout no longer emits, so
+ * `getIconComponent`'s `?? ConfigurationIcon` fallback answered for
+ * `preferences`, `ai-personality`, `memory`, `usage` and `profile` — five of
+ * the twelve nav rows drew the same generic gear. The baseline
+ * (`[fsd]/features/settings/ui/settings-drawer/SettingsDrawer.jsx:26-42`)
+ * gives each row its own glyph; these are that map, resolved against this
+ * app's own icon set.
+ */
 const ICON_COMPONENTS: Record<string, React.ComponentType> = {
-  'model-configuration': ConfigurationIcon,
+  'model-configuration': ModelIcon,
   prompts: PromptIcon,
   environment: EnvironmentIcon,
   tokens: KeyIcon,
-  'project-params': BriefcaseIcon,
+  // The reference gives the briefcase to `project-general` and the compass to
+  // `project-context` (`SettingsDrawer.jsx:30-31`). This app's slug for the
+  // latter is `project-params`; the glyph follows the tab, not the slug.
+  'project-general': BriefcaseIcon,
+  'project-params': CompassIcon,
   secrets: LockIcon,
   users: HumanIcon,
   analytics: AnalyticsIcon,
+  usage: DialIcon,
+  profile: HumanIcon,
   personalization: PersonalizationIcon,
-  notifications: InfoIcon,
+  preferences: PersonalizationIcon,
+  'ai-personality': ReasonIcon,
+  memory: MemoryIcon,
+  notifications: BellIcon,
   logout: LogoutIcon,
 };
 
@@ -75,13 +100,13 @@ const menuItemSx =
     border: 'none',
     font: 'inherit',
     textAlign: 'left',
-    width: 'calc(100% - 2rem)',
-    padding: '0.5rem 1rem',
-    margin: '0 1rem',
+    width: 'calc(100% - 1.5rem)',
+    padding: '0.5rem 0.75rem',
+    margin: '0 0.75rem',
     gap: '0.5rem',
     display: 'flex',
     alignItems: 'center',
-    maxWidth: 'calc(100% - 2rem)',
+    maxWidth: 'calc(100% - 1.5rem)',
     height: '2rem',
     background: isActive
       ? theme.vars.palette.background.userInputBackgroundActive
@@ -101,12 +126,12 @@ const iconWrapperSx =
   (theme) => ({
     display: 'flex',
     alignItems: 'center',
-    minWidth: '0.875rem',
+    minWidth: '1rem',
     color: isActive ? theme.vars.palette.text.secondary : theme.vars.palette.icon.fill.stateButtonHover,
     '& svg': {
       fill: isActive ? theme.vars.palette.text.secondary : theme.vars.palette.icon.fill.stateButtonHover,
-      width: '0.875rem',
-      height: '0.875rem',
+      width: '1rem',
+      height: '1rem',
     },
   });
 
@@ -193,7 +218,7 @@ export const SettingsDrawer = memo(function SettingsDrawer({ sections, onItemCli
                   <SvgIcon
                     component={IconComponent}
                     inheritViewBox
-                    sx={{ width: '0.875rem', height: '0.875rem' }}
+                    sx={{ width: '1rem', height: '1rem' }}
                   />
                 </Box>
                 <Box
@@ -244,11 +269,23 @@ const headerSx: SxProps<Theme> = (theme) => ({
   borderBottom: `0.0625rem solid ${theme.vars.palette.border.table ?? 'transparent'}`,
 });
 
+/*
+ * `headingSmall`, NOT a hand-written 1rem/500.
+ *
+ * The baseline renders this title as
+ * `<Typography variant="headingSmall">` (`SettingsDrawer.jsx:125`), which is
+ * 0.875rem/600. This port wrote 1rem/500 instead, so the drawer title was two
+ * steps off production in both axes: measured on a live deployment the title
+ * computes to `14px/600/24px`, and this app drew `16px/500/24px`. The extra
+ * 2px of line box also pushed the whole nav list down by 1px against the
+ * reference. Take the size and weight from the typography token so the two
+ * cannot drift apart again.
+ */
 const headerTextSx: SxProps<Theme> = (theme) => ({
   color: theme.vars.palette.text.secondary,
-  // oxlint-disable-next-line elitea/ad-hoc-font-size — ported from baseline
-  fontSize: '1rem',
-  fontWeight: 500,
+  fontSize: theme.typography.headingSmall.fontSize,
+  fontWeight: theme.typography.headingSmall.fontWeight,
+  lineHeight: theme.typography.headingSmall.lineHeight,
 });
 
 const menuContainerSx: SxProps<Theme> = {
@@ -263,6 +300,9 @@ const sectionGroupSx: SxProps<Theme> = {
   display: 'flex',
   flexDirection: 'column',
   gap: '0.5rem',
+  // Baseline `SettingsDrawer.jsx:180`. Without it PERSONAL's last row sat
+  // flush against the bottom of the drawer and the two groups read as one.
+  marginBottom: '1rem',
 };
 
 const sectionHeaderSx: SxProps<Theme> = (theme) => ({
@@ -274,7 +314,10 @@ const sectionHeaderSx: SxProps<Theme> = (theme) => ({
   lineHeight: '1rem',
   letterSpacing: '0.06em',
   textTransform: 'uppercase',
-  padding: '1rem',
+  // Baseline `SettingsDrawer.jsx:190`: the group label lines up with the
+  // "Settings" title above it (both 1.5rem from the drawer's left edge), not
+  // with the nav rows' 1rem.
+  padding: '1rem 1rem 1rem 1.5rem',
 });
 
 const sectionDividerSx: SxProps<Theme> = (theme) => ({

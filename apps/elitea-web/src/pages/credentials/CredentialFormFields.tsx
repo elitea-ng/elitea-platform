@@ -4,18 +4,33 @@
  * file (out of `CredentialForm.tsx`) purely to keep each function under the
  * §3.5 cyclomatic-complexity budget — see that file's own doc comment for
  * the field-kind design rationale (secret/boolean/number/string, chosen by
- * `classifySchemaField`).
+ * `SchemaField.classify`).
+ *
+ * The `'configuration'` kind is the newest one and is a REFERENCE field, not
+ * a value field: it names another stored configuration row instead of
+ * carrying data of its own. `CredentialConfigurationField` below renders the
+ * picker and writes the object shape every reader expects.
  */
 import type { ReactNode } from 'react';
+import { useId, useMemo } from 'react';
 
+import FormControl from '@mui/material/FormControl';
+import FormHelperText from '@mui/material/FormHelperText';
+import InputLabel from '@mui/material/InputLabel';
+import MenuItem from '@mui/material/MenuItem';
+import Select from '@mui/material/Select';
+
+import { t } from '@/shared/i18n';
 import { CommonBooleanField } from '@/shared/ui/CommonBooleanField';
 import { CommonNumberField } from '@/shared/ui/CommonNumberField';
 import { CommonStringField } from '@/shared/ui/CommonStringField';
 import { SecretManagementInput } from '@/shared/ui/SecretManagementInput';
 
 import { useSecretFieldOptions } from '@/entities/secret';
-import { classifySchemaField } from '@/features/credentials';
+import { SchemaField, useConfigurationsList } from '@/features/credentials';
 import type { ConfigSchemaNode } from '@/features/credentials';
+
+import { buildConfigurationReference, configurationReferenceTitle, toConfigurationReference } from './configurationReference';
 
 export interface CredentialSchemaFieldProps {
   readonly fieldKey: string;
@@ -23,6 +38,8 @@ export interface CredentialSchemaFieldProps {
   readonly value: unknown;
   readonly error: string | undefined;
   readonly required: boolean;
+  /** The project whose stored rows a `'configuration'` reference field picks from. */
+  readonly projectId: string;
   readonly onChange: (fieldKey: string, value: unknown) => void;
 }
 
@@ -66,6 +83,106 @@ function CredentialSecretField({ field, label }: { readonly field: CredentialSch
       secrets={secrets}
       {...(error !== undefined ? { error: true, helperText: error } : {})}
     />
+  );
+}
+
+/**
+ * The pool a linked-configuration picker reads. Same page size the
+ * AI-Configuration screen uses for its own section lists: enough to cover
+ * every credential a project realistically holds, without paging a control
+ * that has to show them all at once.
+ */
+const LINKED_CONFIGURATION_PAGE_SIZE = 200;
+
+/**
+ * The `'configuration'` kind: a picker over the rows already stored in the
+ * sections the schema names, writing a REFERENCE object.
+ *
+ * DEFECT this replaces: the property fell through to the plain string
+ * widget, so `ai_credentials` on the LLM/embedding/image/ASR/TTS model
+ * schemas rendered as a free-text box and the form stored
+ * `"ai_credentials": "vllm_creds"` — a bare string. See
+ * `./configurationReference.ts` for the three readers that want the object.
+ *
+ * `private` is written as `false`, which is what the options listed here
+ * mean: the picker lists rows visible in THIS project (its own plus the
+ * shared platform ones), and `private: true` tells the gateway to resolve
+ * the title in the CALLER's personal project instead. A stored row that
+ * already carries `private: true` keeps it.
+ *
+ * A component, not a helper called from `CredentialSchemaField`: the query
+ * mounts only on this branch.
+ */
+function CredentialConfigurationField({
+  field,
+  label,
+  sections,
+}: {
+  readonly field: CredentialSchemaFieldProps;
+  readonly label: string;
+  readonly sections: readonly string[];
+}): ReactNode {
+  const { fieldKey, value, error, required, projectId, onChange } = field;
+  const labelId = useId();
+  const listQuery = useConfigurationsList(
+    { projectId, section: sections, includeShared: true, pageSize: LINKED_CONFIGURATION_PAGE_SIZE },
+    { enabled: projectId !== '' && sections.length > 0 },
+  );
+
+  const options = useMemo(() => {
+    const rows = [...(listQuery.data?.items ?? []), ...(listQuery.data?.shared?.items ?? [])];
+    const titles: string[] = [];
+    for (const row of rows) {
+      const title = row.elitea_title;
+      if (typeof title === 'string' && title !== '' && !titles.includes(title)) titles.push(title);
+    }
+    return titles;
+  }, [listQuery.data]);
+
+  // A saved row whose linked configuration is not in the list (deleted, or
+  // owned by another project) must still be VISIBLE. Dropping it would make
+  // the control read as "nothing linked", and the next save would then clear
+  // a link the user never touched.
+  const selected = toConfigurationReference(value);
+  const selectedTitle = configurationReferenceTitle(value);
+  const allOptions = selectedTitle !== '' && !options.includes(selectedTitle) ? [selectedTitle, ...options] : options;
+
+  return (
+    <FormControl
+      variant="standard"
+      fullWidth
+      required={required}
+      error={error !== undefined}
+    >
+      {/* `id`/`labelId` pair up so the visible label becomes the select's
+          accessible name — the same reason `CredentialsSelect` does it. */}
+      <InputLabel
+        shrink
+        id={labelId}
+      >
+        {label}
+      </InputLabel>
+      <Select<string>
+        labelId={labelId}
+        value={selectedTitle}
+        displayEmpty
+        onChange={(event) => {
+          const next = event.target.value;
+          onChange(fieldKey, next === '' ? null : buildConfigurationReference(next, selected?.private ?? false));
+        }}
+      >
+        <MenuItem value="">{t('credentials.form.noLinkedConfiguration', 'None')}</MenuItem>
+        {allOptions.map((title) => (
+          <MenuItem
+            key={title}
+            value={title}
+          >
+            {title}
+          </MenuItem>
+        ))}
+      </Select>
+      {error !== undefined && <FormHelperText>{error}</FormHelperText>}
+    </FormControl>
   );
 }
 
@@ -123,9 +240,9 @@ function renderStringField({ fieldKey, property, value, error, onChange }: Crede
   );
 }
 
-/** Dispatches to the right widget for one schema property, by `classifySchemaField`'s kind. */
+/** Dispatches to the right widget for one schema property, by `SchemaField.classify`'s kind. */
 export function CredentialSchemaField(props: CredentialSchemaFieldProps): ReactNode {
-  const kind = classifySchemaField(props.fieldKey, props.property);
+  const kind = SchemaField.classify(props.fieldKey, props.property);
   const meta = metaFor(props.fieldKey, props.property, props.required);
   if (kind === 'secret')
     return (
@@ -133,6 +250,15 @@ export function CredentialSchemaField(props: CredentialSchemaFieldProps): ReactN
         key={props.fieldKey}
         field={props}
         label={meta.label}
+      />
+    );
+  if (kind === 'configuration')
+    return (
+      <CredentialConfigurationField
+        key={props.fieldKey}
+        field={props}
+        label={meta.label}
+        sections={SchemaField.configurationSections(props.property) ?? []}
       />
     );
   if (kind === 'boolean') return renderBooleanField(props, meta);

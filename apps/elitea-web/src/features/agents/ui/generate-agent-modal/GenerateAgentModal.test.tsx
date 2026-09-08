@@ -5,7 +5,7 @@ import type { ReactElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { getCreateApplicationMockHandler } from '@/shared/api/generated/applications/applications.msw';
-import type { PredictResponse } from '@/shared/api/generated/model';
+import type { ApplicationDraft } from '@/shared/api/generated/model';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 import { server } from '@/test/setup';
@@ -13,19 +13,24 @@ import { server } from '@/test/setup';
 import { GenerateAgentModal, type GenerateAgentModalProps } from './GenerateAgentModal';
 
 /**
- * NOTE(#126): orval's `getGenerateAgentDraftMockHandler` disappeared when the
- * `generateAgentDraft` operation was removed from `api/openapi/v2.yaml` — its
- * route was gated on a `RouterConfig.Predictor` nothing ever assigned and
- * answered 404 in every deployment. This local factory stands in for it and
- * matches the same URL and response shape, so the assertions below are
- * unchanged.
+ * The endpoint is served (#254 P1) and orval generates
+ * `getGenerateApplicationDraftMockHandler` again, but this local factory is
+ * kept: it takes a PARTIAL draft over a realistic default, so each test names
+ * only the field it is asserting on instead of restating the whole contract.
  */
-function generateAgentDraftHandler(body?: PredictResponse) {
+const DEFAULT_DRAFT: ApplicationDraft = {
+  name: 'Support Bot',
+  description: 'Answers support questions',
+  instructions: 'draft',
+  welcome_message: 'How can I help?',
+  conversation_starters: ['Where are my orders?'],
+};
+
+function generateAgentDraftHandler(body?: Partial<ApplicationDraft>) {
   return http.post('*/elitea_core/generate_application_draft/prompt_lib/:projectId', () =>
-    HttpResponse.json(body ?? { message_group_uid: 'mg-default', content: 'draft', is_streaming: false }),
+    HttpResponse.json({ ...DEFAULT_DRAFT, ...body }),
   );
 }
-
 
 function renderModal(overrides: Partial<GenerateAgentModalProps> = {}): ReturnType<typeof renderWithTheme> {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
@@ -56,8 +61,8 @@ describe('GenerateAgentModal', () => {
     expect(screen.getByText('Generate').closest('button')).not.toBeDisabled();
   });
 
-  it('generates a draft and transitions to the review step, seeding instructions from the response content', async () => {
-    server.use(generateAgentDraftHandler({ message_group_uid: 'm1', content: 'Answer support questions.', is_streaming: false }));
+  it('generates a draft and transitions to the review step, filling in every served field', async () => {
+    server.use(generateAgentDraftHandler({ instructions: 'Answer support questions.' }));
     renderModal();
 
     fireEvent.change(screen.getByPlaceholderText(/Describe your agent/), { target: { value: 'A support bot' } });
@@ -65,6 +70,12 @@ describe('GenerateAgentModal', () => {
 
     await waitFor(() => expect(screen.getByDisplayValue('Answer support questions.')).toBeInTheDocument());
     expect(screen.getByText('Create Agent')).toBeInTheDocument();
+    // #254 P1: before the endpoint was served, name/description/welcome
+    // message arrived blank because the route answered with a chat-completion
+    // envelope and only `instructions` could be honestly recovered from it.
+    expect(screen.getByDisplayValue('Support Bot')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Answers support questions')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('How can I help?')).toBeInTheDocument();
   });
 
   it('shows an inline error and stays on the input step when generation fails', async () => {
@@ -87,7 +98,7 @@ describe('GenerateAgentModal', () => {
   });
 
   it('going back to the prompt clears the draft', async () => {
-    server.use(generateAgentDraftHandler({ message_group_uid: 'm1', content: 'Draft text', is_streaming: false }));
+    server.use(generateAgentDraftHandler({ instructions: 'Draft text' }));
     renderModal();
 
     fireEvent.change(screen.getByPlaceholderText(/Describe your agent/), { target: { value: 'A support bot' } });
@@ -101,7 +112,7 @@ describe('GenerateAgentModal', () => {
 
   it('creates the agent and calls onAgentCreated on approve', async () => {
     server.use(
-      generateAgentDraftHandler({ message_group_uid: 'm1', content: 'Draft text', is_streaming: false }),
+      generateAgentDraftHandler({ instructions: 'Draft text' }),
       getCreateApplicationMockHandler({
         id: '42',
         name: 'New Agent',
@@ -120,9 +131,9 @@ describe('GenerateAgentModal', () => {
     fireEvent.click(screen.getByText('Generate'));
     await waitFor(() => expect(screen.getByText('Create Agent')).toBeInTheDocument());
 
-    // Both `name` and `description` are required by `validateAgentDraft` — the generated
-    // draft only ever seeds `instructions` (see `mapPredictResponseToAgentDraft`'s own doc
-    // comment), so both must be filled in before "Create Agent" becomes clickable.
+    // `validateAgentDraft` requires both `name` and `description`. The served
+    // draft now fills them in, and the user edits them — which is what the
+    // review step is for.
     fireEvent.change(screen.getByTestId('agent-draft-name-input'), { target: { value: 'New Agent' } });
     fireEvent.change(screen.getByTestId('agent-draft-description-input'), { target: { value: 'A helpful agent' } });
     await waitFor(() => expect(screen.getByText('Create Agent').closest('button')).not.toBeDisabled());
@@ -134,7 +145,7 @@ describe('GenerateAgentModal', () => {
 
   it('reports a failed approve via onApproveError instead of throwing', async () => {
     server.use(
-      generateAgentDraftHandler({ message_group_uid: 'm1', content: 'Draft text', is_streaming: false }),
+      generateAgentDraftHandler({ instructions: 'Draft text' }),
       http.post('*/elitea_core/applications/prompt_lib/:projectId', () =>
         HttpResponse.json({ error: 'create failed' }, { status: 500 }),
       ),
@@ -157,16 +168,23 @@ describe('GenerateAgentModal', () => {
     await waitFor(() => expect(onApproveError).toHaveBeenCalledWith('Failed to create the agent.'));
   });
 
-  it('disables Create Agent while the draft is invalid (blank name)', async () => {
-    server.use(generateAgentDraftHandler({ message_group_uid: 'm1', content: 'Draft text', is_streaming: false }));
+  it('disables Create Agent when the user clears the name', async () => {
+    // Before #254 P1 the served draft carried no name, so this case arrived
+    // for free. It now takes an edit — which is the real path anyway: the
+    // review step exists so the user can change what the model produced, and
+    // emptying a required field must block the create.
+    server.use(generateAgentDraftHandler({ instructions: 'Draft text' }));
     renderModal();
 
     fireEvent.change(screen.getByPlaceholderText(/Describe your agent/), { target: { value: 'A support bot' } });
     fireEvent.click(screen.getByText('Generate'));
     await waitFor(() => expect(screen.getByText('Create Agent')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Create Agent').closest('button')).not.toBeDisabled());
 
-    // `isDraftValid` starts `true` and only flips once `GenerateAgentReviewForm`'s own
-    // validation effect runs post-mount — wait for it rather than asserting synchronously.
+    fireEvent.change(screen.getByTestId('agent-draft-name-input'), { target: { value: '' } });
+
+    // `isDraftValid` only flips once `GenerateAgentReviewForm`'s own validation
+    // effect runs — wait for it rather than asserting synchronously.
     await waitFor(() => expect(screen.getByText('Create Agent').closest('button')).toBeDisabled());
   });
 
@@ -176,7 +194,7 @@ describe('GenerateAgentModal', () => {
   });
 
   it('pressing Enter in the description field triggers Generate', async () => {
-    server.use(generateAgentDraftHandler({ message_group_uid: 'm1', content: 'From Enter', is_streaming: false }));
+    server.use(generateAgentDraftHandler({ instructions: 'From Enter' }));
     renderModal();
 
     const textarea = screen.getByPlaceholderText(/Describe your agent/);
@@ -206,7 +224,7 @@ describe('GenerateAgentModal', () => {
     server.use(
       http.post('*/elitea_core/generate_application_draft/prompt_lib/:projectId', async () => {
         await responseGate;
-        return HttpResponse.json({ message_group_uid: 'm1', content: 'Stale draft text', is_streaming: false });
+        return HttpResponse.json({ ...DEFAULT_DRAFT, instructions: 'Stale draft text' });
       }),
     );
 

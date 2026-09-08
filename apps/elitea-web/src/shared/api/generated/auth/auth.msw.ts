@@ -44,7 +44,7 @@ import { faker } from "@faker-js/faker";
 import { HttpResponse, delay, http } from "msw";
 import type { RequestHandlerOptions } from "msw";
 
-import type { Permission } from "../model";
+import type { Permission, PersonalAccessToken } from "../model";
 
 export const getPermissionListResponseMock = (): Permission[] =>
   Array.from(
@@ -54,6 +54,73 @@ export const getPermissionListResponseMock = (): Permission[] =>
     name: faker.string.alpha({ length: { min: 10, max: 20 } }),
     enabled: faker.datatype.boolean(),
   }));
+
+export const getListPersonalTokensResponseMock = (): PersonalAccessToken[] =>
+  Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    id: faker.number.int(),
+    uuid: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    expires: faker.helpers.arrayElement([
+      faker.date.past().toISOString().slice(0, 19) + "Z",
+      null,
+    ]),
+    user_id: faker.number.int(),
+    name: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    project_id: faker.helpers.arrayElement([faker.number.int(), null]),
+    token: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  }));
+
+export const getCreatePersonalTokenResponseMock = (
+  overrideResponse: Partial<Extract<PersonalAccessToken, object>> = {},
+): PersonalAccessToken => ({
+  id: faker.number.int(),
+  uuid: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  expires: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  user_id: faker.number.int(),
+  name: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  project_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  token: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  ...overrideResponse,
+});
+
+export const getGetPersonalTokenResponseMock = (
+  overrideResponse: Partial<Extract<PersonalAccessToken, object>> = {},
+): PersonalAccessToken => ({
+  id: faker.number.int(),
+  uuid: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  expires: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  user_id: faker.number.int(),
+  name: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  project_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  token: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  ...overrideResponse,
+});
 
 export const getPermissionListMockHandler = (
   overrideResponse?:
@@ -80,4 +147,110 @@ export const getPermissionListMockHandler = (
     options,
   );
 };
-export const getAuthMock = () => [getPermissionListMockHandler()];
+
+export const getListPersonalTokensMockHandler = (
+  overrideResponse?:
+    | PersonalAccessToken[]
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<PersonalAccessToken[]> | PersonalAccessToken[]),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/auth/token/",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListPersonalTokensResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getCreatePersonalTokenMockHandler = (
+  overrideResponse?:
+    | PersonalAccessToken
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<PersonalAccessToken> | PersonalAccessToken),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/auth/token/",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getCreatePersonalTokenResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getGetPersonalTokenMockHandler = (
+  overrideResponse?:
+    | PersonalAccessToken
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<PersonalAccessToken> | PersonalAccessToken),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/auth/token/:tokenUuid",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetPersonalTokenResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getDeletePersonalTokenMockHandler = (
+  overrideResponse?:
+    | void
+    | ((
+        info: Parameters<Parameters<typeof http.delete>[1]>[0],
+      ) => Promise<void> | void),
+  options?: RequestHandlerOptions,
+) => {
+  return http.delete(
+    "*/auth/token/:tokenUuid",
+    async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
+      await delay(0);
+      if (typeof overrideResponse === "function") {
+        await overrideResponse(info);
+      }
+
+      return new HttpResponse(null, { status: 204 });
+    },
+    options,
+  );
+};
+export const getAuthMock = () => [
+  getPermissionListMockHandler(),
+  getListPersonalTokensMockHandler(),
+  getCreatePersonalTokenMockHandler(),
+  getGetPersonalTokenMockHandler(),
+  getDeletePersonalTokenMockHandler(),
+];

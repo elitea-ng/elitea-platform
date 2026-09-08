@@ -193,11 +193,20 @@ describe('§4.6 check 7 — brand-pack round trip', () => {
       expect(ref.cssVar.startsWith(`--${CSS_VAR_PREFIX}-palette-`)).toBe(true);
     }
     // [F2] explicit timeout, not the 5000ms default: `scanThemeVarReferences`
-    // Babel-parses every source file under `src/` (~2400 files as of Wave 2
-    // batch 2) — legitimately slower than 5s under CI's shared runners when
-    // this test lands near the tail of the full, highly-parallel suite run
-    // (observed: PR #21's first batch-2 run, real timeout at 5000ms with
-    // 813/815 other files already passed).
+    // reads every source file under `src/` (4294 as of #806) and Babel-parses
+    // the ones that can carry a reference — legitimately slower than 5s under
+    // CI's shared runners when this test lands near the tail of the full,
+    // highly-parallel suite run (observed: PR #21's first batch-2 run, real
+    // timeout at 5000ms with 813/815 other files already passed).
+    //
+    // The budget stays 20s, but the scan no longer needs most of it. It
+    // exceeded even 20s once (PR #806, shard 2 of 5 of the coverage run),
+    // because the cost is paid TWICE over under `--coverage`: the walk of
+    // every file's AST runs through instrumented statements. Measured here,
+    // same machine, this file under `--coverage`: 7.12s of test time before
+    // the scan learned to skip files that cannot contribute, 2.07s after
+    // (`reference-scan.ts`'s CANDIDATE_RE — ~90% of the tree is skipped, and
+    // the results are identical). Without coverage it is ~2.2s and ~0.9s.
   }, 20_000);
 
   it('(c) renders the available surface under a hostile pack with zero default-pack colours', () => {

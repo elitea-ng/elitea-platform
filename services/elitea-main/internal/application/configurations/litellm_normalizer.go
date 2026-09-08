@@ -64,11 +64,11 @@ func normalizeCurrentLiteLLMCredentialCreate(typeName string, data map[string]an
 }
 
 func normalizeCurrentOpenAICredential(data map[string]any) (map[string]any, error) {
-	apiBase, err := currentLiteLLMRequiredString(data, "api_base")
+	apiBase, err := currentCredentialRequiredString(data, "api_base")
 	if err != nil {
 		return nil, err
 	}
-	apiKey, err := currentLiteLLMOptionalString(data, "api_key")
+	apiKey, err := currentCredentialOptionalString(data, "api_key")
 	if err != nil {
 		return nil, err
 	}
@@ -79,15 +79,15 @@ func normalizeCurrentOpenAICredential(data map[string]any) (map[string]any, erro
 }
 
 func normalizeCurrentAzureCredential(data map[string]any) (map[string]any, error) {
-	apiBase, err := currentLiteLLMRequiredString(data, "api_base")
+	apiBase, err := currentCredentialRequiredString(data, "api_base")
 	if err != nil {
 		return nil, err
 	}
-	apiKey, err := currentLiteLLMOptionalString(data, "api_key")
+	apiKey, err := currentCredentialOptionalString(data, "api_key")
 	if err != nil {
 		return nil, err
 	}
-	apiVersion, err := currentLiteLLMOptionalString(data, "api_version")
+	apiVersion, err := currentCredentialOptionalString(data, "api_version")
 	if err != nil {
 		return nil, err
 	}
@@ -99,15 +99,15 @@ func normalizeCurrentAzureCredential(data map[string]any) (map[string]any, error
 }
 
 func normalizeCurrentAmazonBedrockCredential(data map[string]any) (map[string]any, error) {
-	accessKey, err := currentLiteLLMOptionalString(data, "aws_access_key_id")
+	accessKey, err := currentCredentialOptionalString(data, "aws_access_key_id")
 	if err != nil {
 		return nil, err
 	}
-	secretKey, err := currentLiteLLMOptionalString(data, "aws_secret_access_key")
+	secretKey, err := currentCredentialOptionalString(data, "aws_secret_access_key")
 	if err != nil {
 		return nil, err
 	}
-	region, err := currentLiteLLMOptionalString(data, "aws_region_name")
+	region, err := currentCredentialOptionalString(data, "aws_region_name")
 	if err != nil {
 		return nil, err
 	}
@@ -119,15 +119,15 @@ func normalizeCurrentAmazonBedrockCredential(data map[string]any) (map[string]an
 }
 
 func normalizeCurrentVertexAICredential(data map[string]any) (map[string]any, error) {
-	project, err := currentLiteLLMRequiredString(data, "vertex_project")
+	project, err := currentCredentialRequiredString(data, "vertex_project")
 	if err != nil {
 		return nil, err
 	}
-	location, err := currentLiteLLMRequiredString(data, "vertex_location")
+	location, err := currentCredentialRequiredString(data, "vertex_location")
 	if err != nil {
 		return nil, err
 	}
-	credentials, err := currentLiteLLMRequiredString(data, "vertex_credentials")
+	credentials, err := currentCredentialRequiredString(data, "vertex_credentials")
 	if err != nil {
 		return nil, err
 	}
@@ -139,37 +139,41 @@ func normalizeCurrentVertexAICredential(data map[string]any) (map[string]any, er
 }
 
 func normalizeCurrentOllamaCredential(data map[string]any) (map[string]any, error) {
-	apiBase, err := currentLiteLLMRequiredString(data, "api_base")
+	apiBase, err := currentCredentialRequiredString(data, "api_base")
 	if err != nil {
 		return nil, err
 	}
 	return map[string]any{"api_base": apiBase}, nil
 }
 
-func currentLiteLLMRequiredString(data map[string]any, field string) (string, error) {
+// currentCredentialRequiredString, currentCredentialOptionalString and
+// currentCredentialInvalidField are shared with gateway_credential_normalizer.go.
+// Both normalizers read the same credential field shapes, and a second copy of
+// these three readers is a second place for them to drift.
+func currentCredentialRequiredString(data map[string]any, field string) (string, error) {
 	raw, present := data[field]
 	if !present {
-		return "", currentLiteLLMInvalidField(field)
+		return "", currentCredentialInvalidField(field)
 	}
 	value, ok := raw.(string)
 	if !ok {
-		return "", currentLiteLLMInvalidField(field)
+		return "", currentCredentialInvalidField(field)
 	}
 	return value, nil
 }
 
-func currentLiteLLMOptionalString(data map[string]any, field string) (any, error) {
+func currentCredentialOptionalString(data map[string]any, field string) (any, error) {
 	raw, present := data[field]
 	if !present || raw == nil {
 		return nil, nil
 	}
 	value, ok := raw.(string)
 	if !ok {
-		return nil, currentLiteLLMInvalidField(field)
+		return nil, currentCredentialInvalidField(field)
 	}
 	return value, nil
 }
 
-func currentLiteLLMInvalidField(field string) error {
+func currentCredentialInvalidField(field string) error {
 	return currentMutationFieldError(CurrentConfigurationMutationInvalid, "data."+field)
 }

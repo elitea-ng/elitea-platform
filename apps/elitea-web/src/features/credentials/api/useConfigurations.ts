@@ -138,6 +138,30 @@ export function useCreateConfiguration(): UseMutationResult<
 
 /* ── API-150 ───────────────────────────────────────────────────────────── */
 
+/**
+ * An id this hook may build a URL from.
+ *
+ * BLANK IS NOT READY, and `!== undefined` was not enough to say so. The
+ * selected-project store starts at `null` and hydrates from storage in an
+ * effect (`widgets/app-shell`'s `useSelectedProject`), and every consumer of
+ * it reads `state.project?.id ?? ''` — so on the FIRST render of a deep link
+ * such as `/settings/edit-configuration/{id}` the project id is the empty
+ * string. `'' !== undefined`, so this query fired against
+ * `/configurations/configuration//{id}`: a request for no project, answered
+ * by nothing, and then abandoned when the store resolved and the query key
+ * changed.
+ *
+ * Measured as an E2E failure rather than a screen defect (the second, real
+ * read seeds the form, so the page looks right): journey J19b matched the
+ * abandoned request, and chromium then has no body to give for it —
+ * `Protocol error (Network.getResponseBody): No data found for resource with
+ * given identifier`. Webkit kept the body and passed, which is exactly the
+ * kind of engine-shaped signal a wasted request produces.
+ */
+function isResolvedId(id: string | number | undefined): boolean {
+  return id !== undefined && String(id) !== '';
+}
+
 export function useConfigurationDetail(
   projectId: string | number | undefined,
   configId: string | number | undefined,
@@ -146,7 +170,7 @@ export function useConfigurationDetail(
   return useQuery({
     queryKey: [...CONFIGURATIONS_QUERY_ROOT, 'detail', projectId, configId],
     queryFn: ({ signal }) => getConfigurationDetail(projectId as string | number, configId as string | number, signal),
-    enabled: (options.enabled ?? true) && projectId !== undefined && configId !== undefined,
+    enabled: (options.enabled ?? true) && isResolvedId(projectId) && isResolvedId(configId),
   });
 }
 

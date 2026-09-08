@@ -106,7 +106,10 @@ func (t Tool) runnableAgent() bool {
 	return t.applicationID > 0 && t.applicationVersionID > 0
 }
 
-func (t Tool) runnableToolkit() bool {
+// runnableToolkitTool reports whether this descriptor names a toolkit tool this
+// service can run. The two predicates are mutually exclusive by construction:
+// each listing query populates one pair of fields and never the other.
+func (t Tool) runnableToolkitTool() bool {
 	return t.toolkitID > 0 && t.toolkitToolName != ""
 }
 

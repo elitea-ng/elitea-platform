@@ -97,6 +97,7 @@
  * importer, so grouping was the only move that did not cost reach.
  */
 import { useCheckStoredConfigurationConnection, useTestConfigurationConnection } from './api/useConfigurations';
+import { classifySchemaField, configurationSectionsOf, initialDataForSchema } from './lib/schemaField';
 import { useCredentialWarningModal } from './model/useCredentialWarningModal';
 import { CredentialsControls } from './ui/CredentialsControls';
 import { CredentialsTabBar } from './ui/CredentialsTabBar';
@@ -117,12 +118,29 @@ export {
   useDeleteConfiguration,
   useUpdateConfiguration,
 } from './api/useConfigurations';
-export { classifySchemaField, initialDataForSchema } from './lib/schemaField';
 export { extractInformationFromCredentialError } from './lib/credentialError';
 export { generateCredentialTagList } from './lib/credentialTags';
 export { normalizeCredentialPage } from './lib/normalizeCredential';
 export { useCredentialValidation } from './model/useCredentialValidation';
 export { CredentialsSelect } from './ui/CredentialsSelect';
+
+/**
+ * The schema-field classifier and its two companions, grouped for the same
+ * budget reason as `CredentialWarning`/`CredentialsActions` below (this
+ * barrel was at 20/20 and the picker field needed a third symbol).
+ *
+ * They are one unit: `classify` decides a property's widget kind,
+ * `configurationSections` answers the follow-up question the new
+ * `'configuration'` kind raises ("which sections does this reference draw
+ * from?"), and `initialData` seeds a form with values that agree with
+ * `classify`'s own decisions. A caller that has one always needs at least
+ * one of the others.
+ */
+export const SchemaField = {
+  classify: classifySchemaField,
+  configurationSections: configurationSectionsOf,
+  initialData: initialDataForSchema,
+} as const;
 
 /** See this file's own doc comment above for why these three are grouped into one export instead of three. */
 export const CredentialWarning = {

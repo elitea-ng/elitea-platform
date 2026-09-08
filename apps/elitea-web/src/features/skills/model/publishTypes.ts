@@ -84,3 +84,15 @@ export interface AttachOutcome {
   readonly http_status?: number;
   readonly error?: string;
 }
+
+/**
+ * One row of `GET /agents_with_skill/prompt_lib/{project}/{skill}` — an agent
+ * version in this project that already has a fork of the public skill
+ * attached. Matches `ListAgentsWithSkill200`'s row shape
+ * (`shared/api/generated/model/listAgentsWithSkill200.zod.ts`).
+ */
+export interface AgentWithSkill {
+  readonly application_id?: number;
+  readonly name?: string;
+  readonly entity_version_id?: number;
+}

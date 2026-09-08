@@ -5,10 +5,10 @@ import type { SxProps, Theme } from '@mui/material/styles';
 
 import { useNavigate, useParams } from '@tanstack/react-router';
 
+import { EntityImportButton, useEntityImport } from '@/features/agent-lifecycle';
 import { t } from '@/shared/i18n';
-import { BaseTab } from '@/shared/ui/BaseTab';
-import { BaseTabs } from '@/shared/ui/BaseTabs';
-import { EntityListRail, RAIL_CONTENT_WIDTH, useEntityRailVisible } from '@/shared/ui/EntityRail';
+import { EntityListRail } from '@/shared/ui/EntityRail';
+import { PageHeader } from '@/widgets/page-header';
 import { useSidebarCollapsedStore } from '@/widgets/sidebar';
 
 import { isPublicPipelinesProject } from './lib/isPublicPipelinesProject';
@@ -23,12 +23,6 @@ const pageSx: SxProps<Theme> = {
   flexDirection: 'column',
 };
 
-const tabBarSx: SxProps<Theme> = {
-  flexShrink: 0,
-  borderBottom: 1,
-  borderColor: 'divider',
-  padding: '0 1.5rem',
-};
 
 const tabPanelSx: SxProps<Theme> = {
   flex: 1,
@@ -37,7 +31,6 @@ const tabPanelSx: SxProps<Theme> = {
 };
 
 /** `CARD_LIST_WIDTH` (`apps/elitea-ui/src/common/constants.js:511`) — see `pages/agents/Applications.tsx` for the shared rationale. */
-const contentWidthSx = (railVisible: boolean): SxProps<Theme> => ({ width: railVisible ? RAIL_CONTENT_WIDTH : '100%' });
 
 /** The public feeds plus the Admin tab pin the rail to "Trending Authors" (`pages/Applications/PrivateAgentsList.jsx:141-151`, the same component the pipelines domain reuses). */
 const TRENDING_AUTHOR_TABS: readonly string[] = ['latest', 'my-liked', 'trending', 'admin'];
@@ -95,6 +88,7 @@ export function Pipelines(): ReactNode {
   const hasAdminPermission = useHasAdminPermission(isPublicProject ? projectId : undefined);
   const navRailCollapsed = useSidebarCollapsedStore((state) => state.collapsed);
   const totals = usePipelinesData(projectId, hasAdminPermission);
+  const entityImport = useEntityImport(projectId);
   const tabs = usePipelineTabs(isPublicProject, totals, hasAdminPermission);
 
   const visibleTabs = useMemo(() => tabs.filter((tab) => tab.hidden !== true), [tabs]);
@@ -113,30 +107,45 @@ export function Pipelines(): ReactNode {
     void navigate({ to: '/pipelines/$tab', params: { tab: nextTab.value } });
   };
 
-  const railVisible = useEntityRailVisible(navRailCollapsed);
 
   return (
     <Box sx={pageSx}>
-      <Box sx={tabBarSx}>
-        <BaseTabs
-          value={selectedIndex === -1 ? false : selectedIndex}
-          onChange={handleChangeTab}
-          aria-label={t('pages.pipelines.pipelines.tabsAriaLabel', 'Pipelines')}
-        >
-          {visibleTabs.map((tab) => (
-            <BaseTab
-              key={tab.value}
-              label={tab.count === undefined ? tab.label : `${tab.label} (${tab.count})`}
-              data-testid={`pipelines-tab-${tab.value}`}
+      <PageHeader
+        tabs={{
+          items: visibleTabs.map((tab) => ({
+            value: tab.value,
+            label: tab.count === undefined ? tab.label : `${tab.label} (${tab.count})`,
+          })),
+          selectedIndex: selectedIndex === -1 ? false : selectedIndex,
+          onChange: handleChangeTab,
+          ariaLabel: t('pages.pipelines.pipelines.tabsAriaLabel', 'Pipelines'),
+          testIdPrefix: 'pipelines-tab',
+        }}
+        /*
+         * Import (validation-matrix gap 12). Production carries this control
+         * on the Agents, Pipelines and Skills list headers; this app had it on
+         * Skills only, so an agent could be exported and never brought back —
+         * `POST /elitea_core/import_wizard/prompt_lib/{project}` was generated
+         * and had `"usedBy": []`. Hidden for the PUBLIC project's lists, which
+         * are read-only catalogues, matching the create button's own rule.
+         */
+        slots={{
+          actions: isPublicProject ? undefined : (
+            <EntityImportButton
+              testIdPrefix="pipelines"
+              isImporting={entityImport.run.isPending}
+              onImport={async (document) => {
+                await entityImport.run.mutateAsync(document);
+              }}
             />
-          ))}
-        </BaseTabs>
-      </Box>
+          ),
+        }}
+      />
       <Box
         sx={tabPanelSx}
         role="tabpanel"
       >
-        <Box sx={contentWidthSx(railVisible)}>{selectedIndex !== -1 ? visibleTabs[selectedIndex]?.content : null}</Box>
+        {selectedIndex !== -1 ? visibleTabs[selectedIndex]?.content : null}
       </Box>
       <EntityListRail
         projectId={projectId}

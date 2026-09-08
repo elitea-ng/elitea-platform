@@ -206,7 +206,7 @@ func writeKey(t *testing.T, path string, key *ecdsa.PrivateKey) {
 func route(t *testing.T, cfg deepwiki.Config, granted ...string) *deepwiki.Route {
 	t.Helper()
 	built, err := deepwiki.NewRoute(cfg, authConfig(), resolver(granted...),
-		testCredentialResolver(t), &recordingMinter{}, slog.New(
+		testCredentialResolver(t), nil, &recordingMinter{}, slog.New(
 			slog.NewTextHandler(&strings.Builder{}, nil)))
 	if err != nil {
 		t.Fatal(err)
@@ -499,18 +499,18 @@ func TestCompositionRefusesAHalfWiredAuthenticationChain(t *testing.T) {
 		"neither": {},
 	}
 	for name, broken := range cases {
-		if _, err := deepwiki.NewRoute(cfg, broken, resolver(), testCredentialResolver(t), &recordingMinter{}, nil); !errors.Is(err, deepwiki.ErrInvalidRoute) {
+		if _, err := deepwiki.NewRoute(cfg, broken, resolver(), testCredentialResolver(t), nil, &recordingMinter{}, nil); !errors.Is(err, deepwiki.ErrInvalidRoute) {
 			t.Fatalf("%s was accepted: %v", name, err)
 		}
 	}
 
-	if _, err := deepwiki.NewRoute(cfg, full, nil, testCredentialResolver(t), &recordingMinter{}, nil); !errors.Is(err, deepwiki.ErrInvalidRoute) {
+	if _, err := deepwiki.NewRoute(cfg, full, nil, testCredentialResolver(t), nil, &recordingMinter{}, nil); !errors.Is(err, deepwiki.ErrInvalidRoute) {
 		t.Fatalf("a nil permission resolver was accepted: %v", err)
 	}
 	// The OIDC-only credential set — a token validator in place of the
 	// forwarded-identity verifier — composes (ADR-0023 decision 5).
 	oidcOnly := apimw.AuthConfig{PrincipalValidator: full.PrincipalValidator, Validator: stubTokenValidator{}, SessionSecret: "s"}
-	if _, err := deepwiki.NewRoute(cfg, oidcOnly, resolver(), testCredentialResolver(t), &recordingMinter{}, nil); err != nil {
+	if _, err := deepwiki.NewRoute(cfg, oidcOnly, resolver(), testCredentialResolver(t), nil, &recordingMinter{}, nil); err != nil {
 		t.Fatalf("the OIDC-only credential set was refused: %v", err)
 	}
 }
@@ -521,7 +521,7 @@ func TestAPlainHTTPProviderURLIsRefusedAtComposition(t *testing.T) {
 	_, cfg := provider(t)
 	cfg.BaseURL = strings.Replace(cfg.BaseURL, "https://", "http://", 1)
 
-	if _, err := deepwiki.NewRoute(cfg, authConfig(), resolver(), testCredentialResolver(t), &recordingMinter{}, nil); !errors.Is(err, deepwiki.ErrInvalidProxy) {
+	if _, err := deepwiki.NewRoute(cfg, authConfig(), resolver(), testCredentialResolver(t), nil, &recordingMinter{}, nil); !errors.Is(err, deepwiki.ErrInvalidProxy) {
 		t.Fatalf("a plain-HTTP provider URL was accepted: %v", err)
 	}
 }

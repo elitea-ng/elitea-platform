@@ -54,6 +54,8 @@ type CurrentApplicationSkill struct {
 	// key, and adding one would break the byte parity the rest of this type
 	// exists to hold.
 	CreatedAt time.Time `json:"-"`
+	// Instructions serve internal MCP without changing the public list body.
+	Instructions string `json:"-"`
 }
 
 type CurrentApplicationSkillsReader interface {
@@ -111,7 +113,8 @@ SELECT
         WHEN version.id IS NULL THEN 'null'::jsonb
         ELSE COALESCE(version.meta -> 'icon_meta', 'null'::jsonb)
     END,
-    skill.created_at
+    skill.created_at,
+    COALESCE(version.instructions, '')
 FROM entity_skill_mapping AS mapping
 JOIN skills AS skill
   ON skill.id = mapping.skill_id
@@ -138,6 +141,7 @@ WHERE mapping.entity_version_id = $1
 					&skill.VersionMissing,
 					&iconMeta,
 					&skill.CreatedAt,
+					&skill.Instructions,
 				); err != nil {
 					return fmt.Errorf("scan current application skill: %w", err)
 				}
@@ -169,8 +173,12 @@ func NewCurrentApplicationSkillsRoute(
 	authConfig apimw.AuthConfig,
 	permissions auth.PermissionResolver,
 ) (*CurrentApplicationSkillsRoute, error) {
-	if reader == nil || authConfig.PrincipalValidator == nil ||
-		authConfig.ForwardedIdentityVerifier == nil || permissions == nil {
+	// ForwardedIdentityVerifier is OPTIONAL, PrincipalValidator is not. See
+	// internal/api/v2/indextypes/handler.go for the full reason: only the Form
+	// plane builds a verifier, an OIDC or SAML install authenticates the same
+	// caller through a cookie or a bearer token, and this route is the ONLY
+	// handler for its path now that the prototype fallback is deleted (#395).
+	if reader == nil || authConfig.PrincipalValidator == nil || permissions == nil {
 		return nil, ErrInvalidCurrentApplicationSkillsRoute
 	}
 
@@ -242,9 +250,11 @@ const currentApplicationSkillType = "skill"
 
 // newCurrentApplicationSkillsResponse builds both halves from one row set.
 //
-// The pagination numbers copy SkillsRepo.ListForApplicationVersion, which
-// serves this path where the capability is off: one page, sized by the
-// attached set, so the SAME request gets the SAME body from either handler.
+// The pagination numbers are one page, sized by the attached set. They copied
+// SkillsRepo.ListForApplicationVersion, the prototype handler that served this
+// path where the capability was off, so the same request got the same body from
+// either handler. #395 deleted that handler; the numbers stay, because a client
+// that read them from the old route must keep reading the same values.
 //
 // Only the fields the published Skill schema requires, plus `description`, are
 // filled. `instructions`, `tags` and `versions` stay absent, because this read

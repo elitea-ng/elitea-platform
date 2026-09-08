@@ -381,7 +381,7 @@ fn scan_toolkit_execute_read_worker_command(raw: &[u8]) -> Result<(), ProtocolEr
     let input_digest = input_fields.length_field(3, "the input bundle digest is missing")?;
     scan_message(input_digest, Schema::Digest)?;
     let toolkit_command =
-        fields.length_field(36, "the direct toolkit execution command is missing")?;
+        fields.length_field(64, "the direct toolkit execution command is missing")?;
     scan_message(toolkit_command, Schema::ToolkitExecuteReadCommand)?;
     Ok(())
 }

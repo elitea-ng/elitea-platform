@@ -41,8 +41,21 @@
  */
 import * as zod from "zod";
 
+export const listPublicApplicationsParamsAgentsTypeDefault = `all`;
+export const listPublicApplicationsParamsSortByDefault = `created_at`;
+export const listPublicApplicationsParamsSortOrderDefault = `desc`;
 export const ListPublicApplicationsParams = zod.object({
   category: zod.string().optional(),
+  query: zod.string().optional(),
+  statuses: zod.string().optional(),
+  agents_type: zod
+    .string()
+    .default(listPublicApplicationsParamsAgentsTypeDefault),
+  sort_by: zod.string().default(listPublicApplicationsParamsSortByDefault),
+  sort_order: zod
+    .string()
+    .default(listPublicApplicationsParamsSortOrderDefault),
+  my_liked: zod.boolean().optional(),
 });
 
 export type ListPublicApplicationsParams = zod.input<

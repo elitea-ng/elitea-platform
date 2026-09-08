@@ -1,6 +1,10 @@
 package applications
 
-import "time"
+import (
+	"time"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/ownership"
+)
 
 type Author struct {
 	ID    string `json:"id"`
@@ -13,19 +17,29 @@ type Application struct {
 	// UUID is the applications.uuid column. It is a second, stable identity
 	// for the row; ID is the SERIAL primary key every other endpoint and the
 	// UI's /agents/$tab/$agentId route address the application by.
-	UUID         string         `json:"uuid,omitempty"`
-	ProjectID    string         `json:"project_id,omitempty"`
-	Name         string         `json:"name"`
-	Description  string         `json:"description,omitempty"`
-	Type         string         `json:"type,omitempty"`
-	Icon         string         `json:"icon,omitempty"`
-	Tags         []string       `json:"tags,omitempty"`
-	FolderID     string         `json:"folder_id,omitempty"`
-	Status       string         `json:"status,omitempty"`
-	Metadata     map[string]any `json:"metadata,omitempty"`
-	CreatedAt    time.Time      `json:"created_at"`
-	UpdatedAt    time.Time      `json:"updated_at,omitempty"`
-	CreatedBy    string         `json:"created_by,omitempty"`
+	UUID        string `json:"uuid,omitempty"`
+	ProjectID   string `json:"project_id,omitempty"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Type        string `json:"type,omitempty"`
+	Icon        string `json:"icon,omitempty"`
+	// Tags are the names of every tag on every version of the application,
+	// deduplicated and sorted. List fills them; the wire always carries the
+	// key, and an application with no tags carries `[]` (#841). Get and
+	// Create build their own response maps and do not use this field.
+	Tags      []string       `json:"tags"`
+	FolderID  string         `json:"folder_id,omitempty"`
+	Status    string         `json:"status,omitempty"`
+	Metadata  map[string]any `json:"metadata,omitempty"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at,omitempty"`
+	// CreatedBy stays empty for an application. The table has no creator
+	// column: `owner_id` is the project. The list path leaves it empty as
+	// well, so an empty value is what every read of this type answers with.
+	CreatedBy string `json:"created_by,omitempty"`
+	// OwnerID is the owning PROJECT of the application, as
+	// `applications.owner_id` holds it (#533). It is not the creator. The
+	// creator of a version is Version.AuthorID.
 	OwnerID      string         `json:"owner_id"`
 	Authors      []Author       `json:"authors,omitempty"`
 	IsForked     bool           `json:"is_forked"`
@@ -67,6 +81,39 @@ type Version struct {
 	// caller did not send the key"; the repository then leaves the stored
 	// value alone rather than blanking it.
 	PipelineSettings map[string]any `json:"pipeline_settings,omitempty"`
+
+	// Present names the string-valued columns above that the caller
+	// EXPLICITLY sent. The map-valued and slice-valued fields carry their own
+	// absent marker — nil is "not sent" and an empty map/slice is a real
+	// value — but a string cannot: "" is both "the caller cleared this" and
+	// "the caller said nothing". Without this flag UpdateVersion read "" as
+	// absence, so a client that cleared the welcome message got a 201 and
+	// read the old text back (#824).
+	//
+	// It is a separate flag rather than a *string on each field because the
+	// same struct is the READ surface: every caller of GetVersion /
+	// ListVersions dereferences Name and Instructions directly, and the
+	// scanner writes them from the row. Only the write paths set Present.
+	// It is not part of the wire shape — the HTTP layer decodes presence
+	// from the request body and sets it here.
+	Present VersionFieldSet `json:"-"`
+}
+
+// VersionFieldSet marks which string-valued columns a version write carries.
+//
+// A false flag with a non-empty value still writes the column, so a caller
+// that only fills the value keeps working. A true flag with an empty value
+// CLEARS the column, which is the whole point of the type.
+//
+// Whether an empty value is ALLOWED is the caller's policy, not the
+// repository's: the HTTP layer refuses an explicit empty `name` or
+// `agent_type` (both NOT NULL, both given a default when the create path sees
+// "") and accepts an explicit empty `instructions` or `welcome_message`.
+type VersionFieldSet struct {
+	Name           bool
+	AgentType      bool
+	Instructions   bool
+	WelcomeMessage bool
 }
 
 // VersionConfig is a derived projection over the application_versions columns
@@ -139,10 +186,16 @@ type CreateRequest struct {
 	Icon        string   `json:"icon,omitempty"`
 	Tags        []string `json:"tags,omitempty"`
 	FolderID    string   `json:"folder_id,omitempty"`
-	// OwnerID is the authenticated principal's owning auth_core__user id. It
+	// AuthorID is the authenticated principal's owning auth_core__user id. It
 	// is never decoded from the request body — the transport layer sets it
 	// from the request context (auth.User.OwningUserID).
-	OwnerID int64 `json:"-"`
+	//
+	// It was called OwnerID, and the repository wrote it into
+	// `applications.owner_id`. That column holds the owning PROJECT (#533), so
+	// the name promised the wrong column and the writer stored the wrong kind
+	// of number. The value is the AUTHOR of the first version, and the type
+	// says which kind of number it is.
+	AuthorID ownership.UserID `json:"-"`
 	// InitialVersion, when set, is created in the SAME transaction as the
 	// application row. An application with no version row is invisible to
 	// List (which INNER JOINs application_versions), so a create that only

@@ -20,6 +20,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browsersession"
 
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
 )
@@ -43,11 +44,28 @@ type Config struct {
 	// verifier yields no identity from headers — never a trusted one.
 	ForwardedIdentityVerifier apimw.ForwardedIdentityPeerVerifier
 
+	// Sessions validates the SERVER-SIDE browser session an `elitea_session`
+	// cookie names (shared migration 0117).
+	//
+	// It is required, not optional, on any deployment that has one. The cookie
+	// no longer carries claims: after 0117 its value is an opaque identifier,
+	// so the HMAC reader below finds nothing in it and this page falls back to
+	// an empty permission list — the exact empty-sidebar defect this file's
+	// comment records, reintroduced from the other side. A nil value keeps the
+	// pre-0117 behaviour for a deployment that composes no store.
+	Sessions BrowserSessions
+
 	// Emails resolves the operator's address for the nav footer. Optional:
 	// without it the footer falls back to the generic word "Admin", which is
 	// what it already did for every load served through the forwarded-identity
 	// path (the headers carry an ID, never an address).
 	Emails EmailLookup
+}
+
+// BrowserSessions is the one read this page makes against the session store.
+// *browsersession.Manager satisfies it.
+type BrowserSessions interface {
+	Validate(ctx context.Context, cookieValue string) (browsersession.Session, error)
 }
 
 // EmailLookup reads one user's address. *pgxpool.Pool does not satisfy it
@@ -148,16 +166,23 @@ func (h *Handler) ServeSPA(w http.ResponseWriter, r *http.Request) {
 				cfg.UserName = email
 			}
 		}
-	} else if cookie, err := r.Cookie("elitea_session"); err == nil && h.cfg.SecretKey != "" {
-		if claims := h.verifySession(cookie.Value); claims != nil {
-			if email, ok := claims["email"].(string); ok {
+	} else if cookie, err := r.Cookie("elitea_session"); err == nil {
+		// SOURCE 2 IS NOW TWO SHAPES, and the prefix decides which. After
+		// shared migration 0117 the cookie carries an opaque identifier and no
+		// claims at all, so reading only the HMAC form would leave every
+		// OIDC-authenticated operator with an empty sidebar — the same defect
+		// the comment above records, from the other side.
+		if userID, email, ok := h.sessionIdentity(r, cookie.Value); ok {
+			if email != "" {
 				cfg.UserEmail = email
 				cfg.UserName = email
 			}
-			// The minting code writes the claim as `uid`. The old code read
-			// `user_id`, so window.admin_ui_config.user_id was null on every
-			// page load. See internal/api/v2/auth/session.go makeSessionToken.
-			if userID, ok := sessionClaimUserID(claims); ok {
+			// The address and the id are set INDEPENDENTLY. A legacy cookie
+			// can carry one and not the other — the shape
+			// handler_injection_test.go drives — and dropping the address
+			// because the id claim is missing would change what that test
+			// guards for no reason.
+			if userID > 0 {
 				cfg.UserID = userID
 				cfg.Permissions = h.resolvePermissions(r.Context(), userID)
 			}
@@ -387,6 +412,42 @@ func sessionClaimUserID(claims map[string]any) (int64, bool) {
 	default:
 		return 0, false
 	}
+}
+
+// sessionIdentity reads whichever of the two cookie formats arrived.
+//
+// The server-side form is tried FIRST, and only when this deployment composed
+// a store; a value without the `s1.` prefix can only be the legacy signed
+// cookie, and a value with it can only be an identifier. See
+// browsersession.LooksServerSide for why the two cannot be confused.
+//
+// A refused session yields no identity and no reason. This page is the admin
+// SPA's shell, not an API: it degrades to the empty permission list, which
+// hides every control, and the operator is sent to the login start by the
+// SPA's own session probe.
+func (h *Handler) sessionIdentity(r *http.Request, value string) (int64, string, bool) {
+	if h.cfg.Sessions != nil && browsersession.LooksServerSide(value) {
+		session, err := h.cfg.Sessions.Validate(r.Context(), value)
+		if err != nil {
+			return 0, "", false
+		}
+		return session.UserID, session.Email, true
+	}
+	if h.cfg.SecretKey == "" {
+		return 0, "", false
+	}
+	claims := h.verifySession(value)
+	if claims == nil {
+		return 0, "", false
+	}
+	// The minting code writes the claim as `uid`. The old code read `user_id`,
+	// so window.admin_ui_config.user_id was null on every page load. See
+	// internal/api/v2/auth/session.go makeSessionToken. A cookie with no
+	// usable `uid` still names an address, and the caller uses each half only
+	// if it is there.
+	userID, _ := sessionClaimUserID(claims)
+	email, _ := claims["email"].(string)
+	return userID, email, true
 }
 
 func (h *Handler) verifySession(token string) map[string]any {

@@ -207,6 +207,14 @@ var (
 		// and no editor: activation is a fact about the deployment.
 		{"provider_hub.descriptor.activate", []string{"admin", "super_admin"}},
 		{"configuration.governance", []string{"admin", "super_admin"}},
+		// shared/0114_toolkit_type_policy.sql. A CHOSEN string with no pylon
+		// original — the legacy platform has no add-or-remove-a-type surface,
+		// only the guardrails deny-list — kept separate from `runtime.plugins`
+		// so that editing a plugin's configuration values and deciding which
+		// clients may build a toolkit type are separately grantable. 0114 also
+		// names `system`, which a clean database seeds no administration role
+		// for, so the holder set here is the same two.
+		{"toolkit_catalogue.type.manage", []string{"admin", "super_admin"}},
 		{"admin.moderation.edit", []string{"admin", "editor", "super_admin"}},
 	}
 )
@@ -228,13 +236,17 @@ var defaultModeSurfaces = map[string][]surfaceGrant{
 // asserted rather than trusted, so a table edited down to fewer strings cannot
 // pass quietly.
 //
+// 42 → 43: `toolkit_catalogue.type.manage`, granted by
+// shared/0114_toolkit_type_policy.sql for the five routes of the new
+// `Admin › Toolkits` surface.
+//
 // 41 → 42: `provider_hub.descriptor.activate`, granted by
 // shared/0109_provider_policy_overlay.sql. This ledger is the holder test for
 // every string it lists, so a new central grant belongs in it or the grant is
 // unmeasured on a clean database — which is the whole failure class #386 exists
 // for. The number moves with the table on purpose: a count derived with len()
 // would agree with any table, including one somebody deleted rows from.
-const remainingPermissionCount = 42
+const remainingPermissionCount = 43
 
 /* ── the ledger: what a clean database grants ──────────────────────────── */
 
@@ -387,13 +399,13 @@ func TestANonMemberIsRefusedEveryDefaultModeGate(t *testing.T) {
 // what an existing deployment's members may do.
 func TestAProjectWithItsOwnGrantsIsRefusedEveryGate(t *testing.T) {
 	pool := newMigratedPool(t)
-	seedRoleMembership(t, pool, 3863, "admin", 1)
+	roleID := seedRoleMembership(t, pool, 3863, "admin", 1)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	if _, err := pool.Exec(ctx, `
 INSERT INTO public.auth_core__project_role_permission (project_id, role_id, permission)
-VALUES (1, 3863, 'models.something.else')`); err != nil {
+VALUES (1, $1, 'models.something.else')`, roleID); err != nil {
 		t.Fatalf("seed the per-project grant: %v", err)
 	}
 

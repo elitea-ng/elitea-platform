@@ -8,12 +8,71 @@
  * All entities created here use the `autotest_` prefix (per qa/ convention)
  * so failed runs' leftovers are identifiable and sweepable.
  */
-import type { APIRequestContext, Page } from '@playwright/test';
+import type { APIRequestContext, APIResponse, Locator, Page } from '@playwright/test';
 import { expect, request as playwrightRequest } from '@playwright/test';
 
 import { BASE_URL, STORAGE_STATE } from '../../playwright.config';
 
 export const AUTOTEST_PREFIX = 'autotest_';
+
+/**
+ * What a 401 MEANS, in the words the server itself used.
+ *
+ * ## Why this exists
+ *
+ * elitea-main used to write ONE body — `{"code":"unauthenticated","message":
+ * "missing authorization header"}` — for four different findings: no cookie
+ * arrived, a cookie signed by another secret arrived, the cookie had expired,
+ * or a server-side session had been revoked. A journey that hit it could not
+ * say which, and a CI run keeps nothing but the response. #538 spent a whole
+ * investigation on one occurrence for exactly that reason, and #832 spent
+ * another on the revoked-session case.
+ *
+ * `middleware/auth.go` now names the finding in `error.code`
+ * (`internal/api/credential_refusal_code_route_test.go` pins one case per
+ * code). This turns that code into the sentence the next reader needs, so the
+ * failure explains itself in the report instead of in a later investigation.
+ *
+ * It returns '' for anything that is not a named refusal, so a caller can
+ * append it unconditionally.
+ */
+export async function describeRefusal(response: APIResponse): Promise<string> {
+  if (response.status() !== 401) return '';
+  let code = '';
+  try {
+    const body = (await response.json()) as { error?: { code?: unknown } } | null;
+    const named = body?.error?.code;
+    code = typeof named === 'string' ? named : '';
+  } catch {
+    return '\nauth refusal: the 401 carried no JSON body.';
+  }
+  if (code === '') return '';
+  const hints: Readonly<Record<string, string>> = {
+    no_credential:
+      'the request context sent NO cookie of ours. Pass `page.request` (which shares the ' +
+      'browser context cookies), not the bare `request` fixture.',
+    session_revoked:
+      'the session was REVOKED — some journey signed this persona out. The suite shares one ' +
+      'session per persona, so a logout journey must own the session it ends ' +
+      '(e2e/fixtures/session.ts, rule 3 of scripts/e2e-journey-shape.test.mjs).',
+    session_expired: 'the server-side session reached its lifetime. The run outlived the session.',
+    session_idle: 'the server-side session was idle past its timeout.',
+    session_unknown:
+      'the server has no row for this session id. The stack was re-seeded or restarted, and the ' +
+      'storage state belongs to the previous one — re-run `auth.setup.ts`.',
+    session_cookie_signature_mismatch:
+      'the cookie was signed with ANOTHER secret. The stack restarted with a new session secret ' +
+      'while this storage state was kept.',
+    session_cookie_expired: 'the signed cookie passed its `exp`. The suite outlived the cookie.',
+    session_cookie_malformed: 'the cookie value is not the signed form this deployment writes.',
+    token_rejected: 'the bearer token or API key was refused. It is not a session problem.',
+    unauthenticated:
+      'the server refused without naming a finding. On elitea-main that is the deployment-side ' +
+      'case (no session secret composed), which is written to the server log only.',
+  };
+  const hint = hints[code] ?? 'no hint recorded for this code yet.';
+  return `\nauth refusal: code=${code} — ${hint}`;
+}
 
 /**
  * Wait for the sidebar create button to become enabled, then click it.
@@ -50,10 +109,9 @@ export async function createConversation(
   // instead, so the next caller diagnoses it in one read.
   if (!resp.ok()) {
     throw new Error(
-      `createConversation: POST ${url} -> ${resp.status()} ${resp.statusText()}\n` +
-      `${(await resp.text()).slice(0, 300)}\n` +
-      'If this is a 401, the request context is unauthenticated — pass `page.request` ' +
-      '(which shares the browser context cookies), not the bare `request` fixture.',
+      `createConversation: POST ${url} -> ${resp.status()} ${resp.statusText()}` +
+      `${await describeRefusal(resp)}\n` +
+      `${(await resp.text()).slice(0, 300)}`,
     );
   }
   const body = (await resp.json()) as { id?: string };
@@ -532,7 +590,8 @@ export async function readStoredTranscript(
   const response = await page.request.get(url);
   if (!response.ok()) {
     throw new Error(
-      `readStoredTranscript: GET ${url} -> ${response.status()} ${response.statusText()}\n` +
+      `readStoredTranscript: GET ${url} -> ${response.status()} ${response.statusText()}` +
+      `${await describeRefusal(response)}\n` +
       `${(await response.text()).slice(0, 300)}`,
     );
   }
@@ -676,7 +735,8 @@ export async function readStoredMessageGroups(
   const response = await page.request.get(url);
   if (!response.ok()) {
     throw new Error(
-      `readStoredMessageGroups: GET ${url} -> ${response.status()} ${response.statusText()}\n` +
+      `readStoredMessageGroups: GET ${url} -> ${response.status()} ${response.statusText()}` +
+      `${await describeRefusal(response)}\n` +
       `${(await response.text()).slice(0, 300)}`,
     );
   }
@@ -744,16 +804,19 @@ export interface McpConnectionSettings {
  * a schema-driven form whose type tiles come from the project's toolkit-type
  * catalogue, filtered to the mcp-flavoured entries
  * (`src/features/toolkits/lib/hooks/useGetCurrentMCPSchemas.hooks.ts:54-56`).
- * This stack's catalogue publishes NO such entry — `GET /elitea_core/toolkits/
- * prompt_lib/{project}` answers with `application, artifact, custom, database,
- * datasource, github, jira, openapi` and nothing else — so the selector is
- * empty and the page shows its "Still no local MCP available" state, the same
- * one `e2e/visual/routes.visual.spec.ts:369-374` snapshots. There is no tile to
- * click and therefore no form to fill: a connection can only be authored
- * through this route today, which is also what `e2e/journeys/mcps/
- * mcps.oauth.spec.ts:229-232` does inline. Should the catalogue ever publish an
- * mcp type, a spec that wants the form should drive it and this helper should
- * stay for the setup-only callers.
+ * The catalogue now publishes ONE such entry. `GET /elitea_core/toolkits/
+ * prompt_lib/{project}` serves every type the pinned SDK snapshot holds, and
+ * `mcp` — "Remote MCP" — is one of them; `mcp_config` is served hidden, because
+ * it is the container the pre-built servers are declared in and the reference
+ * deployment shows no tile for it. So the MCP selector renders a Remote tile,
+ * and the LOCAL group is still empty, which keeps the page's "Still no local
+ * MCP available" state and the shot `e2e/visual/routes.visual.spec.ts` takes
+ * of it.
+ *
+ * A remote-MCP connection needs a URL and an authorization flow that this
+ * helper's callers do not want to drive, so setup still goes through this
+ * route, as `e2e/journeys/mcps/mcps.oauth.spec.ts` also does inline. A spec
+ * that wants to prove the FORM should now drive the Remote MCP tile.
  *
  * `settings` is returned as the SERVER stored it, not as the caller sent it, so
  * a test asserting on the endpoint asserts on the value the runtime will read.
@@ -832,7 +895,8 @@ export async function readAttachedToolkits(
   const response = await page.request.get(url);
   if (!response.ok()) {
     throw new Error(
-      `readAttachedToolkits: GET ${url} -> ${response.status()} ${response.statusText()}\n` +
+      `readAttachedToolkits: GET ${url} -> ${response.status()} ${response.statusText()}` +
+      `${await describeRefusal(response)}\n` +
       `${(await response.text()).slice(0, 300)}`,
     );
   }
@@ -1330,4 +1394,39 @@ export async function readStoredHitlInterrupt(
     )
     .toBe(true);
   return interrupt ?? {};
+}
+
+/**
+ * Put `prompt` in the chat composer and hand back its Send control, ready to
+ * click.
+ *
+ * WHY THE FILL IS RETRIED RATHER THAN DONE ONCE. `chat-send-button` is
+ * rendered only while the composer holds text, and a chat pane that is still
+ * resolving its conversation re-renders after the composer first becomes
+ * editable. A fill that lands inside that window is discarded, and a spec that
+ * clicks straight afterwards waits out its whole budget for a control that
+ * will never appear — `locator.click: Test ended` under `waiting for
+ * getByTestId('chat-send-button')`, which is what run 33812152063 recorded for
+ * `chat.pipeline.spec.ts`. Waiting for the button instead of retrying the fill
+ * does not help: the text is already gone, so no amount of waiting brings the
+ * control back.
+ *
+ * Callers must arm any `waitForResponse` AFTER this resolves. Armed before it,
+ * the budget covers the composer settling as well as the request, so a slow
+ * stack reports "the start was never admitted" about a turn that was never
+ * sent — which is how the cause above stayed hidden through run 33810201650.
+ *
+ * `chat.streaming.spec.ts` deliberately does NOT use this: it asserts the Send
+ * control is ABSENT before the fill, which is a claim about the app this
+ * helper's retry loop would swallow.
+ */
+export async function fillComposer(scope: Page | Locator, prompt: string) {
+  const input = scope.getByTestId('chat-message-input');
+  await expect(input).toBeEditable({ timeout: 20_000 });
+  const sendButton = scope.getByTestId('chat-send-button');
+  await expect(async () => {
+    await input.fill(prompt);
+    await expect(sendButton).toBeEnabled({ timeout: 2_000 });
+  }).toPass({ timeout: 30_000 });
+  return sendButton;
 }

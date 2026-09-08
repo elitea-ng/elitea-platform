@@ -17,9 +17,14 @@ import type { ResolvedToolkitFormProps } from './ToolkitForm.types';
 
 const TOOLKIT_TYPES_URL = '/api/v2/elitea_core/toolkits/prompt_lib/:projectId';
 
+const DISCOVER_TOOLS_URL = '/api/v2/elitea_core/toolkit_discover_tools/prompt_lib/:projectId/:toolkitType';
+
 beforeEach(() => {
   configureGeneratedClient({ baseUrl: '/api/v2' });
   server.use(http.get(TOOLKIT_TYPES_URL, () => HttpResponse.json({})));
+  // The catalogue read (#440) runs for a type that declares no tools of its
+  // own. A per-test `server.use` still wins: msw puts run-time handlers first.
+  server.use(http.post(DISCOVER_TOOLS_URL, () => HttpResponse.json({ tools: [], total: 0 })));
 });
 
 afterEach(() => {
@@ -151,5 +156,84 @@ describe('useToolkitFormCore editField', () => {
         await box.current?.editField('settings.embedding_model', 'new-model', undefined, { isAutoSelect: true });
       }),
     ).resolves.not.toThrow();
+  });
+
+  /**
+   * #440. `effectiveToolSchema` was the static schema and nothing else, so a
+   * toolkit type that publishes its tools at run time offered none in the
+   * "Tools" section — the same empty section a lost read produced. The cases
+   * below discriminate a list, a failure, and a real empty catalogue.
+   */
+  describe('dynamic tool catalogue (#440)', () => {
+    /** A type whose settings schema declares a `selected_tools` array with no tools of its own. */
+    const RUNTIME_TYPE_SCHEMAS = { openapi_tool: { properties: { selected_tools: { type: 'array' } } } };
+    const runtimeDetail = { type: 'openapi_tool', settings: {} };
+
+    function readEnum(box: { current: CoreState | undefined }): unknown {
+      const properties = box.current?.effectiveToolSchema?.properties as Record<string, { items?: { enum?: unknown } }> | undefined;
+      return properties?.['selected_tools']?.items?.enum;
+    }
+
+    it('writes the published tool names into selected_tools.items.enum, where the Tools section reads them', async () => {
+      server.use(http.get(TOOLKIT_TYPES_URL, () => HttpResponse.json(RUNTIME_TYPE_SCHEMAS)));
+      server.use(http.post(DISCOVER_TOOLS_URL, () => HttpResponse.json({ tools: [{ id: '1', name: 'alpha_op', type: 'openapi_tool' }], total: 1 })));
+
+      const { box } = renderCore(baseProps({ editToolDetail: runtimeDetail, formValues: runtimeDetail, formInitialValues: runtimeDetail }));
+
+      await waitFor(() => expect(readEnum(box)).toEqual(['alpha_op']));
+      expect(box.current?.toolListReadFailed).toBe(false);
+    });
+
+    it('reports a failed catalogue read as its own state, with the enum still empty', async () => {
+      server.use(http.get(TOOLKIT_TYPES_URL, () => HttpResponse.json(RUNTIME_TYPE_SCHEMAS)));
+      server.use(http.post(DISCOVER_TOOLS_URL, () => HttpResponse.json({ error: 'discover tools failed' }, { status: 500 })));
+
+      const { box } = renderCore(baseProps({ editToolDetail: runtimeDetail, formValues: runtimeDetail, formInitialValues: runtimeDetail }));
+
+      await waitFor(() => expect(box.current?.toolListReadFailed).toBe(true));
+      expect(readEnum(box)).toBeUndefined();
+    });
+
+    it('reports a successful read with no tools as no failure, with the enum still empty', async () => {
+      server.use(http.get(TOOLKIT_TYPES_URL, () => HttpResponse.json(RUNTIME_TYPE_SCHEMAS)));
+      let requestCount = 0;
+      server.use(
+        http.post(DISCOVER_TOOLS_URL, () => {
+          requestCount += 1;
+          return HttpResponse.json({ tools: [], total: 0 });
+        }),
+      );
+
+      const { box } = renderCore(baseProps({ editToolDetail: runtimeDetail, formValues: runtimeDetail, formInitialValues: runtimeDetail }));
+
+      await waitFor(() => expect(requestCount).toBe(1));
+      await waitFor(() => expect(box.current?.toolListReadFailed).toBe(false));
+      expect(readEnum(box)).toBeUndefined();
+    });
+
+    it('keeps the declared tool list and reads no catalogue for a type that declares its own tools', async () => {
+      let requestCount = 0;
+      server.use(http.get(TOOLKIT_TYPES_URL, () => HttpResponse.json({ github: { properties: { selected_tools: { items: { enum: ['create_issue'] } } } } })));
+      server.use(
+        http.post(DISCOVER_TOOLS_URL, () => {
+          requestCount += 1;
+          return HttpResponse.json({ tools: [{ id: '1', name: 'should_not_appear', type: 'github' }], total: 1 });
+        }),
+      );
+
+      const { box } = renderCore(baseProps());
+
+      await waitFor(() => expect(readEnum(box)).toEqual(['create_issue']));
+      expect(requestCount).toBe(0);
+      expect(box.current?.toolListReadFailed).toBe(false);
+    });
+
+    it('reports a failed toolkit type schema read as a failed tool list', async () => {
+      server.use(http.get(TOOLKIT_TYPES_URL, () => HttpResponse.json({ error: 'schemas unavailable' }, { status: 500 })));
+
+      const { box } = renderCore(baseProps({ editToolDetail: runtimeDetail, formValues: runtimeDetail, formInitialValues: runtimeDetail }));
+
+      await waitFor(() => expect(box.current?.toolListReadFailed).toBe(true));
+    });
   });
 });

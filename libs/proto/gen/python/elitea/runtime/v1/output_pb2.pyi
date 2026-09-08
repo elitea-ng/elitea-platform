@@ -22,6 +22,7 @@ class ExecutionOutputEventTypeV1(int, metaclass=_enum_type_wrapper.EnumTypeWrapp
     EXECUTION_OUTPUT_EVENT_TYPE_V1_INDEX_INGEST_RESULT: _ClassVar[ExecutionOutputEventTypeV1]
     EXECUTION_OUTPUT_EVENT_TYPE_V1_NODE_EVENT: _ClassVar[ExecutionOutputEventTypeV1]
     EXECUTION_OUTPUT_EVENT_TYPE_V1_AGENT_EXECUTION_RESULT: _ClassVar[ExecutionOutputEventTypeV1]
+    EXECUTION_OUTPUT_EVENT_TYPE_V1_TOOLKIT_CALL_TOOL_RESULT: _ClassVar[ExecutionOutputEventTypeV1]
     EXECUTION_OUTPUT_EVENT_TYPE_V1_TOOLKIT_EXECUTE_READ_RESULT: _ClassVar[ExecutionOutputEventTypeV1]
 EXECUTION_OUTPUT_EVENT_TYPE_V1_UNSPECIFIED: ExecutionOutputEventTypeV1
 EXECUTION_OUTPUT_EVENT_TYPE_V1_CONFIGURATION_VALIDATION_RESULT: ExecutionOutputEventTypeV1
@@ -30,6 +31,7 @@ EXECUTION_OUTPUT_EVENT_TYPE_V1_TOOLKIT_AVAILABLE_TOOLS_RESULT: ExecutionOutputEv
 EXECUTION_OUTPUT_EVENT_TYPE_V1_INDEX_INGEST_RESULT: ExecutionOutputEventTypeV1
 EXECUTION_OUTPUT_EVENT_TYPE_V1_NODE_EVENT: ExecutionOutputEventTypeV1
 EXECUTION_OUTPUT_EVENT_TYPE_V1_AGENT_EXECUTION_RESULT: ExecutionOutputEventTypeV1
+EXECUTION_OUTPUT_EVENT_TYPE_V1_TOOLKIT_CALL_TOOL_RESULT: ExecutionOutputEventTypeV1
 EXECUTION_OUTPUT_EVENT_TYPE_V1_TOOLKIT_EXECUTE_READ_RESULT: ExecutionOutputEventTypeV1
 
 class SettlementProposalV1(_message.Message):
@@ -51,7 +53,7 @@ class SettlementProposalV1(_message.Message):
     def __init__(self, proposal_id: _Optional[str] = ..., requested_outcome: _Optional[_Union[_common_pb2.ExecutionOutcomeV1, str]] = ..., terminal_logical_output_id: _Optional[str] = ..., terminal_event_id: _Optional[str] = ..., terminal_sequence: _Optional[int] = ..., terminal_payload_digest: _Optional[_Union[_common_pb2.DigestV1, _Mapping]] = ..., prepare_idempotency_key: _Optional[str] = ...) -> None: ...
 
 class ExecutionOutputFrameV1(_message.Message):
-    __slots__ = ("output_schema_revision", "stream_id", "identity", "fence", "logical_output_id", "event_id", "sequence", "claim_handoff_watermark", "event_type", "occurred_at_unix_millis", "payload_digest", "terminal", "settlement_proposal", "configuration_validation", "runtime_error", "toolkit_available_tools", "index_ingest", "agent_execution", "toolkit_execute_read", "node_event")
+    __slots__ = ("output_schema_revision", "stream_id", "identity", "fence", "logical_output_id", "event_id", "sequence", "claim_handoff_watermark", "event_type", "occurred_at_unix_millis", "payload_digest", "terminal", "settlement_proposal", "configuration_validation", "runtime_error", "toolkit_available_tools", "index_ingest", "agent_execution", "toolkit_call_tool", "toolkit_execute_read", "node_event")
     OUTPUT_SCHEMA_REVISION_FIELD_NUMBER: _ClassVar[int]
     STREAM_ID_FIELD_NUMBER: _ClassVar[int]
     IDENTITY_FIELD_NUMBER: _ClassVar[int]
@@ -70,6 +72,7 @@ class ExecutionOutputFrameV1(_message.Message):
     TOOLKIT_AVAILABLE_TOOLS_FIELD_NUMBER: _ClassVar[int]
     INDEX_INGEST_FIELD_NUMBER: _ClassVar[int]
     AGENT_EXECUTION_FIELD_NUMBER: _ClassVar[int]
+    TOOLKIT_CALL_TOOL_FIELD_NUMBER: _ClassVar[int]
     TOOLKIT_EXECUTE_READ_FIELD_NUMBER: _ClassVar[int]
     NODE_EVENT_FIELD_NUMBER: _ClassVar[int]
     output_schema_revision: str
@@ -90,9 +93,10 @@ class ExecutionOutputFrameV1(_message.Message):
     toolkit_available_tools: _toolkit_pb2.ToolkitAvailableToolsResultV1
     index_ingest: _indexing_pb2.IndexIngestResultV1
     agent_execution: _agent_pb2.AgentExecutionResultV1
+    toolkit_call_tool: _toolkit_pb2.ToolkitCallToolResultV1
     toolkit_execute_read: _toolkit_pb2.ToolkitExecuteReadResultV1
     node_event: _node_event_pb2.NodeEventV1
-    def __init__(self, output_schema_revision: _Optional[str] = ..., stream_id: _Optional[str] = ..., identity: _Optional[_Union[_common_pb2.ExecutionIdentityV1, _Mapping]] = ..., fence: _Optional[_Union[_common_pb2.ExecutionFenceV1, _Mapping]] = ..., logical_output_id: _Optional[str] = ..., event_id: _Optional[str] = ..., sequence: _Optional[int] = ..., claim_handoff_watermark: _Optional[int] = ..., event_type: _Optional[_Union[ExecutionOutputEventTypeV1, str]] = ..., occurred_at_unix_millis: _Optional[int] = ..., payload_digest: _Optional[_Union[_common_pb2.DigestV1, _Mapping]] = ..., terminal: bool = ..., settlement_proposal: _Optional[_Union[SettlementProposalV1, _Mapping]] = ..., configuration_validation: _Optional[_Union[_validation_pb2.ConfigurationValidationResultV1, _Mapping]] = ..., runtime_error: _Optional[_Union[_errors_pb2.RuntimeErrorV1, _Mapping]] = ..., toolkit_available_tools: _Optional[_Union[_toolkit_pb2.ToolkitAvailableToolsResultV1, _Mapping]] = ..., index_ingest: _Optional[_Union[_indexing_pb2.IndexIngestResultV1, _Mapping]] = ..., agent_execution: _Optional[_Union[_agent_pb2.AgentExecutionResultV1, _Mapping]] = ..., toolkit_execute_read: _Optional[_Union[_toolkit_pb2.ToolkitExecuteReadResultV1, _Mapping]] = ..., node_event: _Optional[_Union[_node_event_pb2.NodeEventV1, _Mapping]] = ...) -> None: ...
+    def __init__(self, output_schema_revision: _Optional[str] = ..., stream_id: _Optional[str] = ..., identity: _Optional[_Union[_common_pb2.ExecutionIdentityV1, _Mapping]] = ..., fence: _Optional[_Union[_common_pb2.ExecutionFenceV1, _Mapping]] = ..., logical_output_id: _Optional[str] = ..., event_id: _Optional[str] = ..., sequence: _Optional[int] = ..., claim_handoff_watermark: _Optional[int] = ..., event_type: _Optional[_Union[ExecutionOutputEventTypeV1, str]] = ..., occurred_at_unix_millis: _Optional[int] = ..., payload_digest: _Optional[_Union[_common_pb2.DigestV1, _Mapping]] = ..., terminal: bool = ..., settlement_proposal: _Optional[_Union[SettlementProposalV1, _Mapping]] = ..., configuration_validation: _Optional[_Union[_validation_pb2.ConfigurationValidationResultV1, _Mapping]] = ..., runtime_error: _Optional[_Union[_errors_pb2.RuntimeErrorV1, _Mapping]] = ..., toolkit_available_tools: _Optional[_Union[_toolkit_pb2.ToolkitAvailableToolsResultV1, _Mapping]] = ..., index_ingest: _Optional[_Union[_indexing_pb2.IndexIngestResultV1, _Mapping]] = ..., agent_execution: _Optional[_Union[_agent_pb2.AgentExecutionResultV1, _Mapping]] = ..., toolkit_call_tool: _Optional[_Union[_toolkit_pb2.ToolkitCallToolResultV1, _Mapping]] = ..., toolkit_execute_read: _Optional[_Union[_toolkit_pb2.ToolkitExecuteReadResultV1, _Mapping]] = ..., node_event: _Optional[_Union[_node_event_pb2.NodeEventV1, _Mapping]] = ...) -> None: ...
 
 class ExecutionOutputAckV1(_message.Message):
     __slots__ = ("stream_id", "identity", "fence", "committed_contiguous_sequence", "claim_handoff_watermark", "credit_frames", "credit_bytes", "desired_state", "rejection")

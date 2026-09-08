@@ -9,9 +9,9 @@ import { useFormContext } from 'react-hook-form';
 import type { ApplicationCreationInput } from '@/entities/application-form';
 import { AgentVersionControls } from '@/features/agents';
 import { useLivePipelineGraphAdmission, usePipelineGraphDraft } from '@/features/pipelines';
-import type { AgentLlmSettings } from '@/shared/api/agentLlmSettings';
 import type { ApplicationVersionDetail, ApplicationVersionSummary } from '@/shared/api/generated/model';
 
+import type { EditPipelineVersionFields } from '../lib/useEditPipelineVersionFields';
 import { usePipelineVersionControls } from '../lib/usePipelineVersionControls';
 
 const wrapperSx: SxProps<Theme> = { display: 'flex', alignItems: 'center', gap: '0.75rem' };
@@ -25,8 +25,8 @@ export interface EditPipelineVersionBarProps {
   /** Public-project viewer — the selector stays, the write affordances go. */
   readonly isReadOnly: boolean;
   readonly isFetching: boolean;
-  /** The live model pick, which a cloned version inherits over the stored blob. */
-  readonly llmSettings: AgentLlmSettings | undefined;
+  /** The live version-level edits, which a cloned version inherits over the stored blob. */
+  readonly versionFields: EditPipelineVersionFields;
 }
 
 /**
@@ -57,7 +57,7 @@ export function EditPipelineVersionBar({
   activeVersion,
   isReadOnly,
   isFetching,
-  llmSettings,
+  versionFields,
 }: EditPipelineVersionBarProps): ReactNode {
   const { control } = useFormContext<ApplicationCreationInput>();
   const readGraphDraft = usePipelineGraphDraft();
@@ -82,7 +82,7 @@ export function EditPipelineVersionBar({
     versions,
     activeVersion,
     control,
-    llmSettings,
+    versionFields,
     readGraphDraft,
     isReadOnly,
     isFetching,

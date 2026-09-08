@@ -56,9 +56,14 @@ case "$CMD" in
   up)
     # The facade → provider hop is mTLS with no plaintext fallback on either
     # side; the script is idempotent and keeps fresh material.
-    echo "→ Generating the DeepWiki mTLS material…"
+    echo "→ Generating the provider mTLS material…"
     DEEPWIKI_CERT_SANS="DNS:elitea-deepwiki,DNS:localhost,IP:127.0.0.1" \
       bash "${REPO_ROOT}/deploy/scripts/gen-deepwiki-certs.sh"
+    # The second provider's server cert, off the same CA and the same client
+    # certificate. Issued after DeepWiki's, so a CA this run created is already
+    # in place and neither hop is signed by a root the other does not trust.
+    INVENTORY_CERT_SANS="DNS:elitea-inventory,DNS:localhost,IP:127.0.0.1" \
+      bash "${REPO_ROOT}/deploy/scripts/gen-inventory-certs.sh"
     echo "→ Bringing up E2E stack (${COMPOSE_BIN})…"
     # --wait: wait for every healthcheck to report healthy before returning.
     # elitea-main runs migrations on startup; postgres is its dependency.
@@ -656,6 +661,15 @@ CROSS JOIN (VALUES
     ('configuration.artifacts.buckets.view'),
     ('configuration.artifacts.buckets.edit'),
     ('configuration.artifacts.buckets.delete'),
+    -- The per-bucket ACCESS LIST routes (`/api/v2/artifacts/bucket_permissions/
+    -- {projectID}`) are gated on the two strings the artifacts plugin declares
+    -- for them, which are DISTINCT from the four above: pylon keeps the access
+    -- map inside an `s3_api_credentials` row, so it gates it on that resource.
+    -- Shared migration 0118 grants both centrally; project 1 carries
+    -- per-project rows, which SUPPRESS that central fallback, so they have to
+    -- be listed here as well or the "Manage access" dialog 403s.
+    ('configuration.artifacts.s3_credentials.view'),
+    ('configuration.artifacts.s3_credentials.edit'),
     -- #496 gated the whole /api/v2/configurations mount, which until then
     -- applied no permission of any kind. Project 1 carries per-project rows,
     -- so the central default-mode fallback shared/0072 seeds is SUPPRESSED
@@ -785,13 +799,48 @@ ON CONFLICT (project_id, user_id, role_id) DO NOTHING;
 -- `project_not_resolved` and an agent turn streams `agent_llm_start` straight
 -- to `pipeline_finish` with no token ever produced: admitted, streamed, empty.
 --
--- A SEPARATE persona rather than giving `e2e-member`/`e2e-admin` a personal
--- project, and that separation is load-bearing: the app auto-selects the
--- signed-in user's personal project over the one `auth.setup.ts` writes to
--- localStorage. Handing the existing personas one silently moves every journey
--- off project 1 — measured: the chat page began issuing
--- `…/conversations/prompt_lib/90102`, so every journey asserting a project-1
--- URL would break for a reason unrelated to its own subject.
+-- A SEPARATE persona rather than driving chat as `e2e-member`/`e2e-admin`.
+--
+-- THE PERSONAS ALL HAVE A PERSONAL PROJECT NOW, AND THIS SEED NO LONGER
+-- DECIDES THAT. Sign-in provisions one for every account that reaches it
+-- (`ensurePersonalProject`, services/elitea-main/internal/api/v2/auth/
+-- signin.go), which is the product behaviour: a new user lands in Private.
+-- So the property this comment used to rely on — that only the chat driver
+-- owns a `project_user_%` row — is gone, and anything written on top of it is
+-- gone with it.
+--
+-- IT USED TO BE TRUE ONLY BECAUSE `auth.setup.ts` MADE IT TRUE. "Sign-in
+-- provisions one" was what sign-in ASKED for, not what it guaranteed: the
+-- provisioner ran one attempt at a time and DROPPED the rest
+-- (`maxConcurrentProvisions = 1`, internal/application/personalproject/
+-- ensurer.go), and the three sign-ins used to run in parallel. One persona won
+-- the slot; the others got nothing, and `GET /social/author` hid it by
+-- answering the lowest-id project they hold a role in — project 1 — so nothing
+-- ever asked again. Two self-consistent worlds per run, decided by worker
+-- scheduling (issue #839).
+--
+-- Issue 843 fixed both halves in the product: the ensurer now QUEUES the
+-- callers beyond its one slot instead of discarding them, and the resolver no
+-- longer answers a shared project as somebody's personal one — it answers ""
+-- and provisioning re-arms. `auth.setup.ts` still signs the personas in
+-- sequentially and waits for each persona's own project, which keeps the
+-- harness independent of how long a queued attempt takes.
+--
+-- What is still true is why the chat driver is a persona of its own: the
+-- permissions below are granted INSIDE its personal project, and the `/llm`
+-- hop resolves the caller's personal project for the provider credential
+-- (#290). Granting the same list inside `e2e-member`'s personal project would
+-- widen a persona that ~230 journeys share, for one journey's benefit.
+--
+-- WHY THE OTHER PERSONAS STILL WORK IN PROJECT 1. Every journey and every
+-- visual baseline is written against the seeded project 1, and the app selects
+-- the caller's personal project when nothing is selected. `auth.setup.ts`
+-- therefore PINS project 1 for those two personas — through the switcher, the
+-- product's own path — and records that in the storage state, instead of
+-- deriving it from whether a personal project happens to exist yet. It used to
+-- derive it, and the answer changed per continuous-integration job (the
+-- provisioning wait is bounded at three seconds), which moved fifty journeys
+-- and forty-three screenshots off project 1 in three jobs out of four.
 --
 -- The resolver needs BOTH halves — a `project_user_<uid>` project AND a
 -- project-role assignment on it — so the pair is created together; the project
@@ -832,12 +881,14 @@ ON CONFLICT (project_id, user_id, role_id) DO NOTHING;
 --     the project in its URL, while the embedding hop underneath it resolves
 --     the CALLER's PERSONAL project for the provider credential — so the one
 --     caller who can drive an index run end to end is a caller who has both.
---     Only this persona has a personal project at all (measured: the sole
---     `project_user_%` row belongs to it), and only project 1 grants
---     `tool.patch` — the two never met, which is why an index run used to die
---     on `project_not_resolved` before the permission was even consulted.
---   * Giving `e2e-member`/`e2e-admin` a personal project instead is the option
---     the comment above already rules out, for a reason that has not changed.
+--     Only this persona has a personal project the SEED can name (sign-in
+--     provisions one for the others, with an id nothing here can predict), and
+--     only project 1 grants `tool.patch` — the two never met, which is why an
+--     index run used to die on `project_not_resolved` before the permission
+--     was even consulted.
+--   * Granting the same list inside `e2e-member`/`e2e-admin`'s personal
+--     project is the option the comment above rules out: it widens a persona
+--     ~230 journeys share, and the seed cannot address those projects anyway.
 --   * A fourth persona would need its own OIDC login, storageState, Playwright
 --     project, `social_users` row, vault blob and tenant schema — and would
 --     still end up with exactly this permission list. Widening one autotest
@@ -1234,6 +1285,47 @@ INSERT INTO auth_core__project_user_role (project_id, user_id, role_id)
 SELECT 90200, u.id, r.id
 FROM auth_core__user u
 JOIN auth_core__project_role r ON r.project_id = 90200 AND r.name = 'editor'
+WHERE u.email = 'e2e-member@autotest.local'
+ON CONFLICT (project_id, user_id, role_id) DO NOTHING;
+
+-- ── the Inventory journeys' own project (INV-001..010) ───────────────────────
+--
+-- A SECOND dedicated project, and NOT 90200. The two applications are
+-- independent — an Inventory toolkit is `type = 'inventory'` and a wiki one is
+-- `type = 'wikis'` — but `/inventory` RESOLVES ITS OWN TOOLKIT and renders the
+-- chooser only when the project holds more than one. Sharing 90200 would make
+-- the count of Inventory toolkits a function of what the DeepWiki fixtures
+-- happen to seed, so INV-001's chooser assertion would break for a change
+-- nobody made to Inventory.
+--
+-- Its rows are HERE and not beside the toolkit block below for the reason the
+-- comment under the schema loop gives: `centry.project` must exist before the
+-- loop runs, or `p_90300` is never created and the tenant migration pass that
+-- follows refuses the WHOLE stack on its preflight.
+INSERT INTO centry.project (id, name, owner_id, keycloak_groups, create_success, suspended)
+VALUES (90300, 'e2e-inventory', 1, '{}', true, false)
+ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, suspended = EXCLUDED.suspended;
+
+INSERT INTO auth_core__project_role (project_id, name) VALUES
+    (90300, 'admin'), (90300, 'editor'), (90300, 'viewer')
+ON CONFLICT (project_id, name) DO NOTHING;
+
+-- Copied from project 1's overrides, not restated — 90200's block above says
+-- why: a hand-written subset drifts the moment a permission is added.
+INSERT INTO auth_core__project_role_permission (project_id, role_id, permission)
+SELECT 90300, target.id, source.permission
+FROM auth_core__project_role_permission source
+JOIN auth_core__project_role origin
+  ON origin.id = source.role_id AND origin.project_id = 1
+JOIN auth_core__project_role target
+  ON target.project_id = 90300 AND target.name = origin.name
+WHERE source.project_id = 1
+ON CONFLICT (project_id, role_id, permission) DO NOTHING;
+
+INSERT INTO auth_core__project_user_role (project_id, user_id, role_id)
+SELECT 90300, u.id, r.id
+FROM auth_core__user u
+JOIN auth_core__project_role r ON r.project_id = 90300 AND r.name = 'editor'
 WHERE u.email = 'e2e-member@autotest.local'
 ON CONFLICT (project_id, user_id, role_id) DO NOTHING;
 
@@ -1697,12 +1789,18 @@ ENDFIXTURE
 -- INSERT never mentioned, because the positional row it prints is the table's
 -- order and not the statement's.
 --
--- `max_tokens` is NOT seeded, and its absence is deliberate. The read endpoint
--- strips it: `isSensitiveSettingKey` matches the substring "token", so both
--- `max_tokens` and `toolkit_configuration_max_tokens` are redacted out of every
--- response (issue #705). Seeding it would put a value in the database that no
--- client can read back, and a fixture nothing can observe is a fixture that
--- teaches the next reader something false.
+-- `max_tokens` is NOT seeded. The reason recorded here before is no longer
+-- true and must not be copied: it said the read endpoint STRIPS the key,
+-- because `isSensitiveSettingKey` matched the substring "token". Issue #705
+-- replaced that substring rule with a whole-word rule
+-- (services/elitea-main/internal/api/v2/toolkits/secret_settings_key.go), so
+-- `max_tokens` and `toolkit_configuration_max_tokens` now survive every read
+-- and only a credential is removed.
+--
+-- The key stays out of this fixture for a different reason:
+-- src/widgets/deepwiki/api/wikiChatApi.ts reads it and puts it in
+-- `llm_settings.max_tokens`, so seeding it changes the request every DeepWiki
+-- journey sends. Seed it in a test that asserts that request, not here.
 INSERT INTO p_90200.elitea_tools (id, name, type, description, owner_id, author_id, settings)
 VALUES (
     9001,
@@ -1883,6 +1981,174 @@ WIKI_PAGE
         ;;
     esac
     echo "  ✓ DeepWiki project 90200, toolkit 9001 and wiki ${WIKI_ID} seeded"
+
+    # ── Inventory: two toolkits and one source (INV-001..010) ────────────────
+    #
+    # NOTHING IS PRE-SEEDED INTO THE BUCKET, and that is the difference from
+    # the DeepWiki block above. A wiki is READ AS OBJECTS — the browser fetches
+    # `wiki_manifest_1.json` through the artifacts API — so a stack with no
+    # provider still needs the objects put there by hand. Every Inventory read
+    # is an INVOCATION instead (`get_stats`, `search_graph`, `get_entity`, …),
+    # and this stack DOES run a provider: `elitea-inventory` with
+    # `ELITEA_INVENTORY_RUNNER=fixture`, whose canned graph
+    # (services/elitea-subapp-host/internal/apps/inventory/run/fixture.go) is
+    # what answers. So the browsing journeys need no graph in the bucket: the
+    # six entities and five relations they assert on come from the runner.
+    #
+    # The bucket rows below are still required — `run_ingestion` UPLOADS
+    # graph.json, sources_status.json and the checkpoint through the artifacts
+    # surface, and `requireBucket` 404s every object route for a bucket with no
+    # row (the same trap the DeepWiki block records).
+    echo "  → Seeding two Inventory toolkits and their source…"
+
+    $EXEC_BIN exec -i "$POSTGRES_CONTAINER" psql -U elitea -d elitea -v ON_ERROR_STOP=1 >/dev/null <<'INVENTORY_SQL'
+-- `type = 'inventory'` is the provider's own toolkit name lowercased, the way
+-- the SPI addresses it in /tools/{toolkit_name}/{tool_name}/invoke. It is also
+-- what `entities/inventory`'s INVENTORY_TOOLKIT_TYPE filters the project's
+-- toolkit listing by, so a different spelling here empties `/inventory`.
+--
+-- `inventory_search` is deliberately NOT seeded as a second toolkit row. That
+-- family is served by the SAME toolkit — the ask drawer sends `investigate` to
+-- family `inventory_search` for toolkit 9101 — and a row of that type would
+-- only add an entry to the chooser that owns no graph.
+--
+-- `owner_id` AND `author_id`, both NOT NULL: see the DeepWiki block's note.
+INSERT INTO p_90300.elitea_tools (id, name, type, description, owner_id, author_id, settings)
+VALUES (
+    9101,
+    'E2E Inventory',
+    'inventory',
+    'Seeded by scripts/e2e-stack.sh for the Inventory browsing journeys',
+    90300,
+    1,
+    '{"bucket": "inventory-graph", "llm_model": "gpt-4o-mini",
+      "sources": [9110], "source_configs": {"9110": {"branch": "main"}}}'::jsonb
+)
+ON CONFLICT (id) DO UPDATE
+    SET type = EXCLUDED.type, name = EXCLUDED.name, settings = EXCLUDED.settings;
+
+-- The MUTABLE one, for INV-009. Its bucket differs from 9101's so the objects
+-- an ingestion lands can never overwrite anything a browsing journey reads —
+-- spec files run in any order and in parallel, the same rule 9002 follows for
+-- DeepWiki.
+INSERT INTO p_90300.elitea_tools (id, name, type, description, owner_id, author_id, settings)
+VALUES (
+    9102,
+    'E2E Inventory Mutable',
+    'inventory',
+    'Seeded by scripts/e2e-stack.sh for the Inventory ingestion journey',
+    90300,
+    1,
+    '{"bucket": "inventory-graph-mutable", "llm_model": "gpt-4o-mini",
+      "sources": [9110], "source_configs": {"9110": {"branch": "main"}}}'::jsonb
+)
+ON CONFLICT (id) DO UPDATE
+    SET type = EXCLUDED.type, name = EXCLUDED.name, settings = EXCLUDED.settings;
+
+-- The Inventory permissions, on THIS project's roles. Migration 0108 grants
+-- them centrally and to every project that had role overrides at migration
+-- time; 90300 is created afterwards and copies project 1's overrides, which
+-- predate 0108 too — so without these rows every facade call answers 403.
+-- Project 1 gets them for the same reason. The read/invoke split is 0108's:
+-- read for admin+editor+viewer, invoke for admin+editor.
+INSERT INTO auth_core__project_role_permission (project_id, role_id, permission)
+SELECT r.project_id, r.id, grant_row.permission
+FROM auth_core__project_role r
+JOIN (VALUES
+    ('admin',  'models.applications.inventory.read'),
+    ('editor', 'models.applications.inventory.read'),
+    ('viewer', 'models.applications.inventory.read'),
+    ('admin',  'models.applications.inventory.invoke'),
+    ('editor', 'models.applications.inventory.invoke')
+) AS grant_row(role_name, permission) ON grant_row.role_name = r.name
+WHERE r.project_id IN (1, 90300)
+ON CONFLICT (project_id, role_id, permission) DO NOTHING;
+
+-- The source toolkit both Inventory toolkits name in `sources`. THE FACADE
+-- REQUIRES IT: `run_ingestion` is one of the three ExpandingTools, and the
+-- expander resolves `toolkit_id: 9110` against a p_90300.configuration row of
+-- an admitted type through the project's vault before the request reaches the
+-- provider (internal/api/v2/inventory/sources.go). An id naming no row is
+-- refused with 403 "not one of this Inventory toolkit's configured sources".
+--
+-- `github`, because SourceKinds wires exactly two types and its DefaultHost
+-- (https://api.github.com) is what the stack's ELITEA_INVENTORY_GIT_ALLOWLIST
+-- (`github.com,*.github.com`) admits. A type outside that pair, or a base_url
+-- outside that allowlist, turns INV-009 into an egress refusal.
+--
+-- The token is a literal rather than a {{secret.NAME}} reference, for the
+-- reason the DeepWiki row gives: the unsecreter leaves plain values alone, and
+-- the fixture runner never clones, so nothing presents it to GitHub.
+INSERT INTO p_90300.configuration
+    (id, project_id, elitea_title, type, section, data, meta, shared, status_ok, source, created_at, updated_at)
+VALUES
+    (9110, 90300, 'e2e-inventory-source', 'github', 'toolkits',
+     '{"base_url":"https://api.github.com","access_token":"e2e-not-a-real-token"}',
+     '{}', false, true, 'user', NOW(), NOW())
+ON CONFLICT (id) DO UPDATE
+    SET type = EXCLUDED.type, section = EXCLUDED.section, data = EXCLUDED.data, updated_at = NOW();
+
+-- The project vault the resolver opens to read that row. Copied from
+-- project-1: the blobs are Fernet, psql cannot mint them, and project-1's pair
+-- is a valid, consistent, empty vault. A project with NO vault rows fails the
+-- whole resolve (ErrCredentialsUnavailable → 503), which on screen is a "Run
+-- ingestion" button that always fails.
+INSERT INTO centry.secrets_key (id, data)
+SELECT 'project-90300', data FROM centry.secrets_key WHERE id = 'project-1'
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO centry.secrets_data (id, data)
+SELECT 'project-90300', data FROM centry.secrets_data WHERE id = 'project-1'
+ON CONFLICT (id) DO NOTHING;
+
+-- One bucket per toolkit. `requireBucket` refuses every object route for a
+-- bucket with no row, so an ingestion would run, compose its three artifacts
+-- and fail on the upload — a run that streams six progress lines and then
+-- reports a transport error.
+INSERT INTO elitea_storage.buckets (project_id, name, display_name, bucket_type)
+VALUES
+    (90300, 'inventory-graph', 'Inventory graph', 'local'),
+    (90300, 'inventory-graph-mutable', 'Inventory graph (mutable)', 'local')
+ON CONFLICT (project_id, name) WHERE deleted_at IS NULL DO NOTHING;
+
+-- ── postcondition, in SQL, because every one of these is silent on screen ──
+--
+-- A missing permission is a 403 the workspace renders as "this toolkit could
+-- not be loaded"; a missing bucket is a 404 the ingestion reports as a
+-- transport error; a missing source row is a 403 on the run. None of them can
+-- be told apart from the other by a journey, so they are asserted here where
+-- the failure names itself.
+DO $inventory$
+DECLARE
+    toolkits INTEGER;
+    grants INTEGER;
+    buckets INTEGER;
+    sources INTEGER;
+    vaults INTEGER;
+BEGIN
+    SELECT count(*) INTO toolkits
+      FROM p_90300.elitea_tools WHERE id IN (9101, 9102) AND type = 'inventory';
+    SELECT count(*) INTO grants
+      FROM auth_core__project_role_permission
+     WHERE project_id = 90300 AND permission LIKE 'models.applications.inventory.%';
+    SELECT count(*) INTO buckets
+      FROM elitea_storage.buckets
+     WHERE project_id = 90300 AND name IN ('inventory-graph', 'inventory-graph-mutable');
+    SELECT count(*) INTO sources
+      FROM p_90300.configuration WHERE id = 9110 AND type = 'github';
+    SELECT count(*) INTO vaults
+      FROM centry.secrets_key WHERE id = 'project-90300';
+
+    IF toolkits <> 2 OR grants < 5 OR buckets <> 2 OR sources <> 1 OR vaults <> 1 THEN
+        RAISE EXCEPTION
+            'Inventory seed incomplete: % toolkits (want 2), % grants (want >=5), % buckets (want 2), % sources (want 1), % vaults (want 1)',
+            toolkits, grants, buckets, sources, vaults;
+    END IF;
+END
+$inventory$;
+INVENTORY_SQL
+
+    echo "  ✓ Inventory project 90300, toolkits 9101/9102 and source 9110 seeded"
+    echo "    (no graph objects: the fixture runner answers every read from its canned graph)"
 
     echo "→ Seed complete."
     ;;

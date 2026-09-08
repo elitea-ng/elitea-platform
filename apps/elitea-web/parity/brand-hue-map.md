@@ -287,7 +287,27 @@ would break W3's mirror.
 
 ## 8. HUMAN DECISION — which hue does Elitea declare?
 
-> **This section is for the operator. Unit T1 does not make this call.**
+> **DECIDED — cyan, `#6ae8fa`, the recommendation in §8.5 as generated.** Closed by
+> ADR-0024 (runtime branding, elitea-docs #25; this note is its WP0). `default.pack.json`
+> keeps `brand.hue = "#6ae8fa"` and every stated token, so nothing shipped changed (N4 holds).
+> What the value now governs, as built:
+>
+> 1. **A deployment hue derives everything.** A stored `brand_hue` that differs from the
+>    product default's makes the server drop the default's stated scheme tokens
+>    (`services/elitea-main/internal/api/v2/branding/resolver.go`), so the served pack
+>    states only the hue and the client derives all 362 ids per scheme from it. The ramps in
+>    §8.3 are exactly what such a deployment renders; the "cyan-unified" column is the one
+>    a hue-only pack that restates `#6ae8fa` gets.
+> 2. **Hand-tuned tokens ride in `scheme_tokens`** (ADR-0024 decision 9, the branding
+>    package): a pack that wants more than derivation states tokens there, and stated tokens
+>    win over derivation exactly as §3 describes.
+> 3. **The admin Branding page starts here.** Its swatch strip and WCAG warning are computed
+>    by the same `resolveScheme` from the draft hue, with this value as the initial state.
+>
+> The magenta alternative remains one line plus a regeneration, as §8.5 says; it is simply
+> no longer open. The rest of this section is kept as the record of how the call was made.
+
+> **This section was for the operator. Unit T1 did not make this call.**
 
 ### 8.1 What is actually being decided
 

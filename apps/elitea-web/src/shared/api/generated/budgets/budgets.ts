@@ -65,6 +65,7 @@ import type {
   N500Response,
   ProjectBudget,
   ProjectBudgetListing,
+  ProjectBudgetWrite,
   UsageReport,
 } from "../model";
 
@@ -610,11 +611,15 @@ export const getSetProjectBudgetUrl = (projectId: string) => {
  * `currency` other than `USD` is rejected rather than stored. Nothing in
  * the money path converts, so an accepted label would sit on a limit the
  * gateway still enforces in dollars.
+ *
+ * `budget_period` and `nats_fail_mode` are settable here and nowhere else.
+ * Both are columns the gateway reads and nothing in the platform used to
+ * write.
  * @summary Set a project's monthly budget (admin)
  */
 export const setProjectBudget = async (
   projectId: string,
-  budgetWrite: BudgetWrite,
+  projectBudgetWrite: ProjectBudgetWrite,
   options?: Parameters<typeof eliteaFetch>[1],
 ): Promise<setProjectBudgetResponse> => {
   const getHeaders = (
@@ -634,19 +639,19 @@ export const setProjectBudget = async (
         "Content-Type": "application/json",
         ...getHeaders(options?.headers),
       },
-      body: JSON.stringify(budgetWrite),
+      body: JSON.stringify(projectBudgetWrite),
     },
   );
 };
 
 export const getSetProjectBudgetQueryKey = (
   projectId: string,
-  budgetWrite?: BudgetWrite,
+  projectBudgetWrite?: ProjectBudgetWrite,
 ) => {
   return [
     "PUT",
     `/elitea_core/project_budget/administration/${projectId}/budget`,
-    budgetWrite,
+    projectBudgetWrite,
   ] as const;
 };
 
@@ -655,7 +660,7 @@ export const getSetProjectBudgetQueryOptions = <
   TError = ErrorResponse | N401Response | N403Response | N500Response,
 >(
   projectId: string,
-  budgetWrite: BudgetWrite,
+  projectBudgetWrite: ProjectBudgetWrite,
   options?: {
     query?: Partial<
       UseQueryOptions<
@@ -671,12 +676,15 @@ export const getSetProjectBudgetQueryOptions = <
 
   const queryKey =
     queryOptions?.queryKey ??
-    getSetProjectBudgetQueryKey(projectId, budgetWrite);
+    getSetProjectBudgetQueryKey(projectId, projectBudgetWrite);
 
   const queryFn: QueryFunction<
     Awaited<ReturnType<typeof setProjectBudget>>
   > = ({ signal }) =>
-    setProjectBudget(projectId, budgetWrite, { signal, ...requestOptions });
+    setProjectBudget(projectId, projectBudgetWrite, {
+      signal,
+      ...requestOptions,
+    });
 
   return {
     queryKey,
@@ -701,7 +709,7 @@ export function useSetProjectBudget<
   TError = ErrorResponse | N401Response | N403Response | N500Response,
 >(
   projectId: string,
-  budgetWrite: BudgetWrite,
+  projectBudgetWrite: ProjectBudgetWrite,
   options: {
     query: Partial<
       UseQueryOptions<
@@ -729,7 +737,7 @@ export function useSetProjectBudget<
   TError = ErrorResponse | N401Response | N403Response | N500Response,
 >(
   projectId: string,
-  budgetWrite: BudgetWrite,
+  projectBudgetWrite: ProjectBudgetWrite,
   options?: {
     query?: Partial<
       UseQueryOptions<
@@ -757,7 +765,7 @@ export function useSetProjectBudget<
   TError = ErrorResponse | N401Response | N403Response | N500Response,
 >(
   projectId: string,
-  budgetWrite: BudgetWrite,
+  projectBudgetWrite: ProjectBudgetWrite,
   options?: {
     query?: Partial<
       UseQueryOptions<
@@ -781,7 +789,7 @@ export function useSetProjectBudget<
   TError = ErrorResponse | N401Response | N403Response | N500Response,
 >(
   projectId: string,
-  budgetWrite: BudgetWrite,
+  projectBudgetWrite: ProjectBudgetWrite,
   options?: {
     query?: Partial<
       UseQueryOptions<
@@ -798,9 +806,242 @@ export function useSetProjectBudget<
 } {
   const queryOptions = getSetProjectBudgetQueryOptions(
     projectId,
-    budgetWrite,
+    projectBudgetWrite,
     options,
   );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type clearProjectBudgetResponse200 = {
+  data: ProjectBudget;
+  status: 200;
+};
+
+export type clearProjectBudgetResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type clearProjectBudgetResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type clearProjectBudgetResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type clearProjectBudgetResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type clearProjectBudgetResponseSuccess =
+  clearProjectBudgetResponse200 & {
+    headers: Headers;
+  };
+export type clearProjectBudgetResponseError = (
+  | clearProjectBudgetResponse400
+  | clearProjectBudgetResponse401
+  | clearProjectBudgetResponse403
+  | clearProjectBudgetResponse500
+) & {
+  headers: Headers;
+};
+
+export type clearProjectBudgetResponse =
+  clearProjectBudgetResponseSuccess | clearProjectBudgetResponseError;
+
+export const getClearProjectBudgetUrl = (projectId: string) => {
+  return `/elitea_core/project_budget/administration/${projectId}/budget`;
+};
+
+/**
+ * Removes the authored row, so the project inherits the platform's
+ * soft-alert threshold and NATS-failure policy again and is unlimited.
+ *
+ * This is NOT the same as `enabled: false`. That stores "deliberately
+ * exempt" — an authored decision that keeps the old ceiling on the screen
+ * and pins the threshold that was chosen with it. A cleared project has no
+ * authored budget at all and follows the platform as it changes.
+ *
+ * The response is the resulting state, for the same reason the PUT's is:
+ * after a clear the effective figures are the inherited ones, and a 204
+ * would leave the caller to guess them.
+ *
+ * Clearing a project that has no budget succeeds. The endpoint states an
+ * intent that is already true, so a retry after a lost response is not a
+ * failure. Current-period spend is untouched.
+ * @summary Clear a project's budget back to the platform default (admin)
+ */
+export const clearProjectBudget = async (
+  projectId: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<clearProjectBudgetResponse> => {
+  return eliteaFetch<clearProjectBudgetResponse>(
+    getClearProjectBudgetUrl(projectId),
+    {
+      ...options,
+      method: "DELETE",
+    },
+  );
+};
+
+export const getClearProjectBudgetQueryKey = (projectId: string) => {
+  return [
+    "DELETE",
+    `/elitea_core/project_budget/administration/${projectId}/budget`,
+  ] as const;
+};
+
+export const getClearProjectBudgetQueryOptions = <
+  TData = Awaited<ReturnType<typeof clearProjectBudget>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof clearProjectBudget>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getClearProjectBudgetQueryKey(projectId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof clearProjectBudget>>
+  > = ({ signal }) =>
+    clearProjectBudget(projectId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof clearProjectBudget>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ClearProjectBudgetQueryResult = NonNullable<
+  Awaited<ReturnType<typeof clearProjectBudget>>
+>;
+export type ClearProjectBudgetQueryError =
+  N400Response | N401Response | N403Response | N500Response;
+
+export function useClearProjectBudget<
+  TData = Awaited<ReturnType<typeof clearProjectBudget>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof clearProjectBudget>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof clearProjectBudget>>,
+          TError,
+          Awaited<ReturnType<typeof clearProjectBudget>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useClearProjectBudget<
+  TData = Awaited<ReturnType<typeof clearProjectBudget>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof clearProjectBudget>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof clearProjectBudget>>,
+          TError,
+          Awaited<ReturnType<typeof clearProjectBudget>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useClearProjectBudget<
+  TData = Awaited<ReturnType<typeof clearProjectBudget>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof clearProjectBudget>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Clear a project's budget back to the platform default (admin)
+ */
+
+export function useClearProjectBudget<
+  TData = Awaited<ReturnType<typeof clearProjectBudget>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof clearProjectBudget>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getClearProjectBudgetQueryOptions(projectId, options);
 
   const query = useQuery(queryOptions, queryClient) as UseQueryResult<
     TData,
@@ -1566,8 +1807,11 @@ export const getSetMemberBudgetUrl = (projectId: string, userId: number) => {
 /**
  * Caps a single member's share without changing the project's own limit.
  *
- * NOT ENFORCED: see `enforced` on the response. The row is stored and read
- * back faithfully, but nothing in the gateway blocks a call on it today.
+ * ENFORCED since issue #321: see `enforced` on the response.
+ *
+ * `budget_period` and `nats_fail_mode` are REFUSED with a 400 rather than
+ * ignored. Both are project-scoped, and a 200 over a discarded field is
+ * indistinguishable from one that took effect.
  * @summary Set one member's budget within a project (admin)
  */
 export const setMemberBudget = async (
@@ -1772,6 +2016,252 @@ export function useSetMemberBudget<
     projectId,
     userId,
     budgetWrite,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type clearMemberBudgetResponse200 = {
+  data: MemberBudget;
+  status: 200;
+};
+
+export type clearMemberBudgetResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type clearMemberBudgetResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type clearMemberBudgetResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type clearMemberBudgetResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type clearMemberBudgetResponseSuccess = clearMemberBudgetResponse200 & {
+  headers: Headers;
+};
+export type clearMemberBudgetResponseError = (
+  | clearMemberBudgetResponse400
+  | clearMemberBudgetResponse401
+  | clearMemberBudgetResponse403
+  | clearMemberBudgetResponse500
+) & {
+  headers: Headers;
+};
+
+export type clearMemberBudgetResponse =
+  clearMemberBudgetResponseSuccess | clearMemberBudgetResponseError;
+
+export const getClearMemberBudgetUrl = (projectId: string, userId: number) => {
+  return `/elitea_core/user_budget/administration/${projectId}/user_budget/${userId}`;
+};
+
+/**
+ * Removes the member's authored cap, so they are bounded by the project
+ * ceiling alone.
+ *
+ * It matters more here than at project scope, because a member cap is
+ * enforced: the gateway refuses an over-cap member with 402
+ * `member_budget_exceeded`. Without this route the only way to lift a cap
+ * set by mistake was `enabled: false`, which stores the different fact
+ * "this member is deliberately exempt" and leaves the wrong number beside
+ * it.
+ *
+ * Clearing a member who has no cap succeeds, and the member's
+ * current-period spend is untouched.
+ * @summary Clear one member's budget back to the project default (admin)
+ */
+export const clearMemberBudget = async (
+  projectId: string,
+  userId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<clearMemberBudgetResponse> => {
+  return eliteaFetch<clearMemberBudgetResponse>(
+    getClearMemberBudgetUrl(projectId, userId),
+    {
+      ...options,
+      method: "DELETE",
+    },
+  );
+};
+
+export const getClearMemberBudgetQueryKey = (
+  projectId: string,
+  userId: number,
+) => {
+  return [
+    "DELETE",
+    `/elitea_core/user_budget/administration/${projectId}/user_budget/${userId}`,
+  ] as const;
+};
+
+export const getClearMemberBudgetQueryOptions = <
+  TData = Awaited<ReturnType<typeof clearMemberBudget>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  userId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof clearMemberBudget>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getClearMemberBudgetQueryKey(projectId, userId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof clearMemberBudget>>
+  > = ({ signal }) =>
+    clearMemberBudget(projectId, userId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      userId !== null &&
+      userId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof clearMemberBudget>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ClearMemberBudgetQueryResult = NonNullable<
+  Awaited<ReturnType<typeof clearMemberBudget>>
+>;
+export type ClearMemberBudgetQueryError =
+  N400Response | N401Response | N403Response | N500Response;
+
+export function useClearMemberBudget<
+  TData = Awaited<ReturnType<typeof clearMemberBudget>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  userId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof clearMemberBudget>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof clearMemberBudget>>,
+          TError,
+          Awaited<ReturnType<typeof clearMemberBudget>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useClearMemberBudget<
+  TData = Awaited<ReturnType<typeof clearMemberBudget>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  userId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof clearMemberBudget>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof clearMemberBudget>>,
+          TError,
+          Awaited<ReturnType<typeof clearMemberBudget>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useClearMemberBudget<
+  TData = Awaited<ReturnType<typeof clearMemberBudget>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  userId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof clearMemberBudget>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Clear one member's budget back to the project default (admin)
+ */
+
+export function useClearMemberBudget<
+  TData = Awaited<ReturnType<typeof clearMemberBudget>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  userId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof clearMemberBudget>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getClearMemberBudgetQueryOptions(
+    projectId,
+    userId,
     options,
   );
 

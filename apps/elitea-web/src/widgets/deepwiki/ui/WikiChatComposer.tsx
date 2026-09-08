@@ -21,6 +21,8 @@ import Tooltip from '@mui/material/Tooltip';
 import { t } from '@/shared/i18n';
 import type { ChatCapability } from '@/features/wiki-chat';
 
+import { WikiContextPicker } from './WikiContextPicker';
+
 export interface WikiChatComposerProps {
   readonly mode: ChatCapability;
   readonly onModeChange: (mode: ChatCapability) => void;
@@ -29,6 +31,15 @@ export interface WikiChatComposerProps {
   readonly onClear: () => void;
   readonly isLoading: boolean;
   readonly canRegenerate: boolean;
+  /**
+   * The open wiki version's page ids, offered as attachable context. Empty
+   * (or a wiki with no pages) hides the control entirely rather than
+   * offering a picker with nothing in it.
+   */
+  readonly contextPages: readonly string[];
+  /** The ids attached to the NEXT question, in selection order. */
+  readonly contextPaths: readonly string[];
+  readonly onContextPathsChange: (selected: readonly string[]) => void;
 }
 
 export const WikiChatComposer = memo(function WikiChatComposer({
@@ -39,6 +50,9 @@ export const WikiChatComposer = memo(function WikiChatComposer({
   onClear,
   isLoading,
   canRegenerate,
+  contextPages,
+  contextPaths,
+  onContextPathsChange,
 }: WikiChatComposerProps) {
   const [question, setQuestion] = useState('');
 
@@ -81,6 +95,13 @@ export const WikiChatComposer = memo(function WikiChatComposer({
             {t('widgets.deepwiki.chat.modeResearch', 'Research')}
           </ToggleButton>
         </ToggleButtonGroup>
+
+        <WikiContextPicker
+          pages={contextPages}
+          selected={contextPaths}
+          onChange={onContextPathsChange}
+          disabled={isLoading}
+        />
 
         <Stack sx={{ flexDirection: 'row', gap: 0.5, marginLeft: 'auto' }}>
           <Tooltip title={t('widgets.deepwiki.chat.regenerate', 'Ask again')}>

@@ -12,6 +12,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/EliteaAI/elitea-platform/libs/go/egresslib"
 )
 
 // weightSumEpsilon bounds float error when re-verifying that a routing rule's
@@ -250,6 +252,90 @@ func validateGovernanceRow(row GovernanceRow) error {
 		return validateRoutingRule(row.Data)
 	case alertConfigType:
 		return validateBudgetAlertData(row.Data)
+	case egressAllowlistType:
+		return validateEgressAllowlistData(row.Data)
+	}
+	return nil
+}
+
+// egressAllowlistType is the governance row that carries the LLM gateway's
+// egress policy: the hosts a tenant-authored credential `api_base` may name
+// (gap G6, shared migration 0112).
+const egressAllowlistType = "egress_allowlist"
+
+// validateEgressAllowlistData refuses a row the gateway would drop.
+//
+// It uses libs/go/egresslib — the SAME parser the gateway compiles the row with
+// and the same one that reads GATEWAY_EGRESS_ALLOWLIST. That is the whole point
+// of the shared module: a host this form accepts and the gateway silently
+// ignores would leave an operator looking at a saved rule while their provider
+// keeps failing.
+//
+// Two rules beyond the grammar:
+//
+//   - The list may not be EMPTY. An empty egress list is not the empty
+//     mcp_allowlist, which turns that control off. This one permits nothing and
+//     widens nothing, so saving it is always a mistake.
+//   - The row may not be SCOPED. Half of what it governs — whether bifrost's
+//     SSRF-safe dialer is relaxed for the self-hosted provider classes — is
+//     decided with no project in hand, so a scoped row could only be
+//     half-honoured. Applying it globally would be wider than it was authored.
+func validateEgressAllowlistData(data map[string]any) error {
+	if err := requireGlobalScope(data); err != nil {
+		return err
+	}
+	raw, err := egressAllowlistEntries(data)
+	if err != nil {
+		return err
+	}
+	if len(raw) == 0 {
+		return errors.New("egress.allowlist must name at least one host: an empty list permits no destination " +
+			"and widens nothing. Delete the entry instead")
+	}
+	for _, entry := range raw {
+		if _, perr := egresslib.ParseEntry(entry); perr != nil {
+			return perr
+		}
+	}
+	return nil
+}
+
+// egressAllowlistEntries reads the list from either the grouped shape the admin
+// form writes (`egress.allowlist`) or the flat one a hand-written row carries.
+// A non-string member is refused rather than skipped: a dropped entry is a
+// destination the operator believes they permitted.
+func egressAllowlistEntries(data map[string]any) ([]string, error) {
+	raw, ok := data["allowlist"].([]any)
+	if !ok {
+		group, _ := data["egress"].(map[string]any)
+		raw, _ = group["allowlist"].([]any)
+	}
+	out := make([]string, 0, len(raw))
+	for _, v := range raw {
+		s, ok := v.(string)
+		if !ok {
+			return nil, errors.New("every egress.allowlist entry must be a string")
+		}
+		if strings.TrimSpace(s) == "" {
+			return nil, errors.New("an egress.allowlist entry must not be empty")
+		}
+		out = append(out, s)
+	}
+	return out, nil
+}
+
+// requireGlobalScope refuses any scope dimension on a row that is global.
+func requireGlobalScope(data map[string]any) error {
+	scope, ok := data["scope"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	for _, key := range []string{"project_ids", "providers", "models", "team_ids"} {
+		if list, ok := scope[key].([]any); ok && len(list) > 0 {
+			return errors.New("an egress_allowlist entry is global and carries no scope: the private-network " +
+				"half of the decision is made without a project, so a scoped entry would apply to every " +
+				"project anyway. Remove the scope")
+		}
 	}
 	return nil
 }

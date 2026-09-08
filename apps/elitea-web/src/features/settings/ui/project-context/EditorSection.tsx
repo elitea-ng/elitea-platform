@@ -10,7 +10,9 @@ import { GenerateProjectContextButton } from './GenerateProjectContextButton';
 import { BaseTabs } from '@/shared/ui/BaseTabs';
 import { BaseTab } from '@/shared/ui/BaseTab';
 import { BaseBtn } from '@/shared/ui/BaseBtn';
+import { ClipboardIcon } from '@/shared/ui/icons/clipboard-icon';
 import { ImportIcon } from '@/shared/ui/icons/import-icon';
+import { handleCopy } from '@/shared/lib/clipboard';
 import { t } from '@/shared/i18n';
 import { projectContextStyles } from './ProjectContext.styles';
 import { memo, useMemo } from 'react';
@@ -29,7 +31,19 @@ export interface EditorSectionProps {
   onModeChange: (e: React.SyntheticEvent, newValue: 'edit' | 'preview') => void;
   onFocus: () => void;
   onBlur: (e: React.FocusEvent) => void;
-  onAIGenerated: (generatedContent: string) => void;
+  /**
+   * The "Generate with AI" affordance, as ONE prop rather than two.
+   *
+   * `onApply` was `onAIGenerated`; `openOnMount` is new, and it is how the
+   * empty state's "Build with AI" button reaches the dialog (the reference
+   * does it with router state, `onNavigate('create', { openAi: true })`).
+   * They are grouped because adding a thirteenth flat prop here breaks §3.5's
+   * 12-prop component budget, and because the two only ever travel together.
+   */
+  generate: {
+    onApply: (generatedContent: string) => void;
+    openOnMount?: boolean;
+  };
   onImportClick: () => void;
 }
 
@@ -44,7 +58,7 @@ export const EditorSection = memo(function EditorSection({
   onModeChange,
   onFocus,
   onBlur,
-  onAIGenerated,
+  generate,
   onImportClick,
 }: EditorSectionProps) {
   const s = projectContextStyles.editor();
@@ -74,7 +88,8 @@ export const EditorSection = memo(function EditorSection({
             <GenerateProjectContextButton
               projectId={projectId}
               existingContent={content}
-              onApply={onAIGenerated}
+              onApply={generate.onApply}
+              openAiOnMount={generate.openOnMount ?? false}
             />
             <BaseBtn
               variant="secondary"
@@ -83,6 +98,20 @@ export const EditorSection = memo(function EditorSection({
               onClick={onImportClick}
               title={t('entities.projectContext.content.importTitle', 'Import markdown file')}
               aria-label={t('entities.projectContext.content.importTitle', 'Import markdown file')}
+            />
+            {/* Copy the whole context out. The reference carries this beside
+              * Import in the editor toolbar and again in the saved view's
+              * menu; this port had it in neither place, so the only way to
+              * take the text elsewhere was to select it by hand (issue 841). */}
+            <BaseBtn
+              variant="secondary"
+              size="small"
+              startIcon={<ClipboardIcon />}
+              disabled={content === ''}
+              onClick={() => void handleCopy(content)}
+              data-testid="project-context-copy-button"
+              title={t('entities.projectContext.content.copyTitle', 'Copy to clipboard')}
+              aria-label={t('entities.projectContext.content.copyTitle', 'Copy to clipboard')}
             />
             <BaseTabs value={mode} onChange={onModeChange}>
               {modeButtons.map((btn) => (
@@ -113,6 +142,7 @@ export const EditorSection = memo(function EditorSection({
       {showEditorControls && (
         <Typography
           variant="bodySmall"
+          data-testid="project-context-char-counter"
           sx={{
             color: limitReached ? 'error.main' : 'text.primary',
             visibility: isEditorFocused ? 'visible' : 'hidden',
@@ -121,6 +151,10 @@ export const EditorSection = memo(function EditorSection({
         >
           {MAX_CHARS - content.length}{' '}
           {t('entities.projectContext.content.charactersLeft', 'characters left.')}
+          {/* The space belongs here. Splitting the sentence into two `t()`
+            * calls dropped it, so the counter read
+            * "0 characters left.You have reached…" (issue 841). */}
+          {limitReached && ' '}
           {limitReached && t('entities.projectContext.content.maxReached', 'You have reached the maximum character limit.')}
         </Typography>
       )}

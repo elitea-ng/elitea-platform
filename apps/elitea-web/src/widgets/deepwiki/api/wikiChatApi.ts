@@ -30,6 +30,19 @@ export interface WikiChatTarget {
   readonly settings: Readonly<Record<string, unknown>>;
   readonly repoIdentifierOverride?: string | undefined;
   readonly analysisKeyOverride?: string | undefined;
+  /**
+   * The wiki version the reader has OPEN. It pins an attachment: the provider
+   * resolves `context_paths` against this version's manifest and refuses a
+   * page that is not published there, so a question asked against the version
+   * on screen cannot be answered from a newer one that landed mid-read.
+   */
+  readonly wikiVersionId?: string | undefined;
+  /**
+   * Wiki page IDS attached to the next question. Never page text: the bodies
+   * are resolved server-side from this project's own artifacts, which is what
+   * keeps the browser from being able to choose what the server reads.
+   */
+  readonly contextPaths?: readonly string[] | undefined;
 }
 
 /**
@@ -66,6 +79,15 @@ export function buildInvokeRequest(target: WikiChatTarget, input: ChatInvokeInpu
       // widen the envelope for nothing.
       ...(target.repoIdentifierOverride ? { repo_identifier_override: target.repoIdentifierOverride } : {}),
       ...(target.analysisKeyOverride ? { analysis_key_override: target.analysisKeyOverride } : {}),
+      // Both keys or neither. The provider refuses `context_paths` without a
+      // version pin, so sending the selection alone would turn every attached
+      // question into an error the reader cannot act on.
+      ...(target.contextPaths && target.contextPaths.length > 0 && target.wikiVersionId
+        ? {
+            context_paths: [...target.contextPaths],
+            context_wiki_version_id: target.wikiVersionId,
+          }
+        : {}),
       ...(input.capability === 'research'
         ? { research_type: 'general', enable_subagents: true }
         : {}),
@@ -74,6 +96,30 @@ export function buildInvokeRequest(target: WikiChatTarget, input: ChatInvokeInpu
       stream_id: input.streamId,
       message_id: input.messageId,
     },
+  };
+}
+
+/**
+ * The two headers that tell elitea-main which conversation a question belongs
+ * to, so it can file the turn it is about to record.
+ *
+ * HEADERS AND NOT BODY FIELDS, and the reason is on the other side of the
+ * hop: the body is an SPI envelope that travels to the provider almost
+ * verbatim, so a key put there for the platform's own bookkeeping would be
+ * forwarded to a service that has no idea what it means. The facade reads
+ * these two and DELETES them before forwarding (its `WrapInvoke`).
+ *
+ * The toolkit is sent because the body cannot supply it: `Wikis` names a code
+ * toolkit, `wikis_query` names a Wikis toolkit and `wiki_query` names nothing
+ * at all, so there is no one field that means "the wiki I am looking at".
+ */
+function wikiChatHeaders(
+  target: WikiChatTarget,
+  conversationKey: string,
+): Record<string, string> {
+  return {
+    'X-Elitea-Wiki-Chat': conversationKey,
+    'X-Elitea-Wiki-Toolkit': String(target.toolkitId),
   };
 }
 
@@ -88,12 +134,14 @@ export function buildInvokeRequest(target: WikiChatTarget, input: ChatInvokeInpu
 export async function startWikiChat(
   target: WikiChatTarget,
   input: ChatInvokeInput,
+  conversationKey?: string,
 ): Promise<string> {
   const response = await invokeDeepWikiTool(
     target.projectId,
     target.toolkitName,
     input.toolName,
     buildInvokeRequest(target, input),
+    conversationKey ? { headers: wikiChatHeaders(target, conversationKey) } : undefined,
   );
   return invocationIdFrom(
     unwrapBody(response),

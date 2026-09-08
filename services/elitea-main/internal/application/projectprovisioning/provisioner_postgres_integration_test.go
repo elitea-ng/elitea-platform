@@ -113,6 +113,21 @@ RETURNING id`).Scan(&adminUserID); err != nil {
 		t.Fatalf("seed administrator account: %v", err)
 	}
 
+	// A DEPLOYMENT-DEFINED central role, of the kind
+	// `POST /admin/roles/administration/default` now creates (gap G9). It is
+	// seeded before provisioning so the RBAC assertion below can state the
+	// second half of that gap's fix: a role added after the platform shipped
+	// reaches projects created AFTERWARDS, because createProjectPermissions
+	// copies whatever `auth_core__role` holds in the `default` mode rather than
+	// a hardcoded list. The first half — reaching projects that already exist —
+	// is "Apply to Projects", asserted in
+	// internal/api/v2/admin/roles_crud_postgres_integration_test.go.
+	if _, err := pool.Exec(ctx, `
+INSERT INTO public.auth_core__role (name, mode) VALUES ('security_reviewer', 'default')
+ON CONFLICT (name, mode) DO NOTHING`); err != nil {
+		t.Fatalf("seed a deployment-defined central role: %v", err)
+	}
+
 	provisioner := newTestProvisioner(t, pool, migrate.New(pool, platformmigrations.Files))
 	result, err := provisioner.Provision(ctx, projectprovisioning.Request{
 		Name:        "Acceptance Project",
@@ -217,6 +232,13 @@ RETURNING id`).Scan(&adminUserID); err != nil {
 		if !contains(roles, want) {
 			t.Errorf("project role %q was not created (have %v)", want, roles)
 		}
+	}
+	// The deployment-defined role seeded above. Gap G9's second half: a role an
+	// operator adds through the admin surface has to reach the projects created
+	// after it, or every new project silently lacks a role the platform lists.
+	if !contains(roles, "security_reviewer") {
+		t.Errorf("the deployment-defined central default-mode role was not copied into the new project (have %v).\n"+
+			"  createProjectPermissions must copy whatever auth_core__role holds in the `default` mode, not a fixed list.", roles)
 	}
 	var perProjectGrants int
 	if err := pool.QueryRow(ctx,

@@ -15,6 +15,7 @@
  */
 import type { ReactNode } from 'react';
 
+import { ThemeProvider } from '@mui/material/styles';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RouterProvider, createMemoryHistory, createRootRoute, createRouter } from '@tanstack/react-router';
 import { render, screen, waitFor } from '@testing-library/react';
@@ -22,22 +23,31 @@ import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
+import { DEFAULT_BRAND_PACK, DEFAULT_COLOR_SCHEME, buildEliteaTheme } from '@/shared/brand';
 import { server } from '@/test/setup';
 
 import { SupportAssistantWidget } from './SupportAssistantWidget';
 
 const BASE = '/api/v2';
+const theme = buildEliteaTheme(DEFAULT_BRAND_PACK);
 
 /**
  * A real memory router and a real query client — NOTHING IS SUBSTITUTED but the
  * network (R-M1). That includes the vendored assistant itself: it mounts for
  * real when the config says it should, which is the only way these tests can
  * tell "the gate opened" from "the gate opened and the widget threw on mount".
+ *
+ * `ThemeProvider` is here because the assistant's messages render through
+ * `shared/ui/Markdown`, which reads `theme.vars.palette.*` (R-T7).
  */
 function wrapper({ children }: { readonly children: ReactNode }): ReactNode {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   const rootRoute = createRootRoute({
-    component: () => <QueryClientProvider client={client}>{children}</QueryClientProvider>,
+    component: () => (
+      <ThemeProvider theme={theme} defaultMode={DEFAULT_COLOR_SCHEME}>
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      </ThemeProvider>
+    ),
   });
   const router = createRouter({
     routeTree: rootRoute,
@@ -82,6 +92,24 @@ describe('SupportAssistantWidget', () => {
     await waitFor(() => {
       expect(toggles.at(-1)).toBeTypeOf('function');
     });
+  });
+
+  it('opens the panel through the returned onToggleAssistant, not only the launcher button', async () => {
+    server.use(
+      http.get(`${BASE}/support_assistant/config/`, () => HttpResponse.json({ enabled: true })),
+      http.get(`${BASE}/support_assistant/conversations/`, () => HttpResponse.json({ items: [], total: 0 })),
+    );
+    Element.prototype.scrollIntoView = (): void => undefined;
+
+    const { toggles } = renderWidget();
+    await screen.findByRole('button', { name: 'Support Assistant' });
+    await waitFor(() => {
+      expect(toggles.at(-1)).toBeTypeOf('function');
+    });
+
+    (toggles.at(-1) as () => void)();
+
+    expect(await screen.findByRole('button', { name: 'Close chat' })).toBeInTheDocument();
   });
 
   it('mounts NOTHING when the server reports it disabled', async () => {

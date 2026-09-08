@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { configure, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { delay, http, HttpResponse } from 'msw';
 
@@ -17,6 +17,16 @@ import { usePipelineYamlStore } from '@/features/pipelines/model/pipelineYamlSto
 
 import { EditPipeline } from './EditPipeline';
 import { renderPipelinesRoute, renderPipelinesRouteWithoutSocket } from './__tests__/testRouter';
+
+// The pipeline editor mounts the real route, store and configuration panel,
+// so its first render and MUI exit transitions run past Testing Library's 1 s
+// default under CI coverage instrumentation (unit shard 2 on 26ad27cc,
+// 76adc4e5 and 793cf88e). Every waitFor/findBy in this file gets 5 s.
+configure({ asyncUtilTimeout: 5_000 });
+// And vitest's own per-test limit is raised to match: a test that legitimately
+// waits twice (not-found, then the post-navigation re-render) can exceed the
+// 5 s default on the same instrumented runner (shard 2 on 51ea184d).
+vi.setConfig({ testTimeout: 30_000 });
 
 // `ConfigurationTab`'s real `EditorPanel`/`FlowEditor` needs both jsdom
 // polyfills this provides (CodeMirror's YAML mode, `ResizeObserver` for
@@ -114,7 +124,7 @@ const CATALOGUE = {
  * in the panel it belongs to, not merely somewhere on the page.
  */
 function configPanel() {
-  return within(screen.getByTestId('edit-pipeline-configuration-form-gap'));
+  return within(screen.getByTestId('edit-pipeline-configuration-panel'));
 }
 
 /** Opens the CONFIGURATION panel's model menu and picks a row by its catalogue display name. */
@@ -148,6 +158,12 @@ beforeEach(() => {
     // The editor's chat pane mounts the real `ChatBox`, whose read-aloud hook
     // asks the project for its TTS voices as soon as a model is selected.
     http.get('*/configurations/tts_voices/*', () => HttpResponse.json({ items: [] })),
+    // The configuration panel now carries the "Triggers & schedules" section
+    // (issues 192, 193), which reads both rows on every open. msw runs with
+    // `onUnhandledRequest: 'error'`, so these two are not decoration: without
+    // them every test in this file fails on a request the page really makes.
+    http.get('*/pipeline_triggers/prompt_lib/*', () => HttpResponse.json({ configured: false })),
+    http.get('*/pipeline_schedules/prompt_lib/*', () => HttpResponse.json({ configured: false, active: false })),
   );
 });
 
@@ -187,6 +203,27 @@ describe('EditPipeline', () => {
     expect(usePipelineYamlStore.getState().layoutVersion).toBe('1.0');
   });
 
+  /*
+   * THE COMPOSITION ROOT, not the component.
+   *
+   * `EditPipelineTriggersPanel` has its own suite, and it would keep passing
+   * with the panel mounted nowhere. This is the assertion that only the real
+   * route can make: the section reaches the screen a person opens. The unit
+   * suite here was blind to exactly this class twice — a correct component and
+   * a correct page with no wiring between them (#597).
+   */
+  it('mounts the Triggers & schedules section in the real pipeline edit route', async () => {
+    server.use(getGetApplicationMockHandler(detail()));
+    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', { projectId: '9' });
+
+    const panel = within(await screen.findByTestId('edit-pipeline-configuration-panel'));
+    expect(await panel.findByTestId('edit-pipeline-triggers-panel')).toBeInTheDocument();
+    // And it is really wired to the version this page loaded, not rendered
+    // empty: the trigger read resolved and the card rendered its answer.
+    expect(await panel.findByTestId('pipeline-trigger-absent')).toBeInTheDocument();
+    expect(await panel.findByTestId('pipeline-schedule-card')).toBeInTheDocument();
+  });
+
   it('renders the pipeline name once it loads', async () => {
     server.use(getGetApplicationMockHandler(detail()));
     renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', {
@@ -210,9 +247,9 @@ describe('EditPipeline', () => {
     // real flow editor (not the old unconditional empty
     // `<Box data-testid="edit-pipeline-configuration-tab-panel" />`) is live.
     expect(await screen.findByRole('button', { name: 'Add node' })).toBeInTheDocument();
-    // The ONE remaining cross-slice gap (no promoted `features/agents` configuration
-    // panels) still shows its disclosed placeholder, not a silently blank area.
-    expect(screen.getByTestId('edit-pipeline-configuration-form-gap')).toBeInTheDocument();
+    // The configuration form itself: the real `features/agents` panels, not
+    // the "not available yet" notice that used to stand here.
+    expect(screen.getByTestId('edit-pipeline-configuration-panel')).toBeInTheDocument();
     // The chat slot is no longer a gap: it renders the real `widgets/chat-box`
     // `ChatBox` (`./ui/PipelineTestChat.tsx`). `chat-message-input` is that
     // composer's own testid — a placeholder cannot produce it.
@@ -364,12 +401,12 @@ describe('EditPipeline', () => {
       projectId: '9',
     });
 
-    await screen.findByTestId('edit-pipeline-configuration-form-gap');
+    await screen.findByTestId('edit-pipeline-configuration-panel');
     const picker = await configPanel().findByText('GPT-4o');
     expect(picker).toBeVisible();
     // Inside the configuration-form slot, not floating somewhere above the
     // editor — the gap notice for the panels that are still missing stays.
-    expect(screen.getByTestId('edit-pipeline-configuration-form-gap')).toContainElement(picker);
+    expect(screen.getByTestId('edit-pipeline-configuration-panel')).toContainElement(picker);
   });
 
   it('exposes the pipeline through MCP by saving the existing exact tag contract', async () => {
@@ -386,7 +423,7 @@ describe('EditPipeline', () => {
     });
     const user = userEvent.setup();
 
-    await screen.findByTestId('edit-pipeline-configuration-form-gap');
+    await screen.findByTestId('edit-pipeline-configuration-panel');
     const toggle = await configPanel().findByRole('switch', {
       name: 'Enable MCP access',
     });
@@ -419,7 +456,7 @@ describe('EditPipeline', () => {
       projectId: '9',
     });
 
-    await screen.findByTestId('edit-pipeline-configuration-form-gap');
+    await screen.findByTestId('edit-pipeline-configuration-panel');
     expect(await configPanel().findByText('Qwen 3.5')).toBeVisible();
   });
 
@@ -437,7 +474,7 @@ describe('EditPipeline', () => {
     });
     const user = userEvent.setup();
 
-    await screen.findByTestId('edit-pipeline-configuration-form-gap');
+    await screen.findByTestId('edit-pipeline-configuration-panel');
     await configPanel().findByText('GPT-4o');
     await chooseModel(user, 'Qwen 3.5');
     await user.click(await screen.findByTestId('pipeline-save-button'));
@@ -463,7 +500,7 @@ describe('EditPipeline', () => {
     });
     const user = userEvent.setup();
 
-    await screen.findByTestId('edit-pipeline-configuration-form-gap');
+    await screen.findByTestId('edit-pipeline-configuration-panel');
     await configPanel().findByText('GPT-4o');
     await user.click(await screen.findByTestId('pipeline-save-button'));
 
@@ -480,7 +517,7 @@ describe('EditPipeline', () => {
     });
     const user = userEvent.setup();
 
-    await screen.findByTestId('edit-pipeline-configuration-form-gap');
+    await screen.findByTestId('edit-pipeline-configuration-panel');
     await configPanel().findByText('GPT-4o');
     expect(useNavBlockerStore.getState().isBlockNav).toBe(false);
 
@@ -677,7 +714,7 @@ describe('talking to the pipeline', () => {
       { projectId: '9' },
     );
 
-    await screen.findByTestId('edit-pipeline-configuration-form-gap');
+    await screen.findByTestId('edit-pipeline-configuration-panel');
     await configPanel().findByText('GPT-4o');
     await chooseModel(user, 'Qwen 3.5');
     await waitFor(() => expect(useNavBlockerStore.getState().isBlockNav).toBe(true));
@@ -1025,4 +1062,268 @@ describe('pipeline versioning', () => {
     expect(await screen.findByTestId('version-selector-trigger')).toBeVisible();
     expect(screen.queryByRole('button', { name: 'Save As Version' })).toBeNull();
   }, 20_000);
+  /*
+   * J16b's cause. LAST in this file on purpose: it is the only test here that
+   * drives a save AND the refetch that follows it, and it therefore leaves the
+   * editor in the state a real author is in after saving — which the earlier
+   * tests, sharing this file's module-scoped editor stores, are not written
+   * for. `useRefetchPipelineAfterSave` refetches the detail after
+   * every save, and the header row used to be gated on the raw `isFetching`,
+   * so the version bar — "Save As Version" included — left the document for
+   * the length of that request. The journey clicked the button the moment the
+   * save landed and waited 30s for an element that was not there.
+   *
+   * The refetch is held open deliberately: the assertion is about the window
+   * WHILE it is in flight, which is the only window in which the defect
+   * existed.
+   */
+  it('keeps the version bar mounted while the post-save refetch is in flight', async () => {
+    server.use(getGetApplicationMockHandler(detail()));
+    let refetches = 0;
+    server.use(
+      http.put('*/elitea_core/version/prompt_lib/:projectId/:applicationId/:versionId', async () => {
+        // Slow enough that the page renders once with the save in flight:
+        // `useRefetchPipelineAfterSave` watches for the true->false edge of
+        // `isSaving`, and an instantly-answered PUT never produces one.
+        await delay(60);
+        return HttpResponse.json({ id: '1', application_id: '42', name: 'base', status: 'draft' }, { status: 201 });
+      }),
+      http.get('*/elitea_core/application/prompt_lib/:projectId/:applicationId', async () => {
+        refetches += 1;
+        // Held open only for the FIRST refetch — the window the defect lived
+        // in — so nothing is left in flight for the next test.
+        if (refetches === 1) await delay(400);
+        return HttpResponse.json(detail());
+      }),
+    );
+    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', { projectId: '9' });
+    const user = userEvent.setup();
+
+    await screen.findByTestId('edit-pipeline-configuration-panel');
+    await configPanel().findByText('GPT-4o');
+    expect(await screen.findByRole('button', { name: 'Save As Version' })).toBeInTheDocument();
+
+    refetches = 0;
+    await user.click(await screen.findByTestId('pipeline-save-button'));
+
+    await waitFor(() => expect(refetches).toBe(1), { timeout: 10_000 });
+    expect(screen.getByRole('button', { name: 'Save As Version' })).toBeInTheDocument();
+    expect(screen.getByTestId('pipeline-save-button')).toBeInTheDocument();
+
+    // Let the held refetch land while the tree is still mounted. A response
+    // that arrives after the test has finished writes the module-scoped
+    // editor stores from an unmounted tree, and the NEXT test then starts
+    // dirty — the same leak the `beforeEach` reset above exists for.
+    await waitFor(() => expect(usePipelineYamlStore.getState().yamlCode).toContain('Printer_1'), {
+      timeout: 10_000,
+    });
+  }, 20_000);
+});
+
+/**
+ * The composition root, exercised end to end: mount the REAL edit route, type
+ * into the REAL configuration form, click the REAL Save button and assert what
+ * reaches the wire.
+ *
+ * These are the tests the unit suite could not have had before, and the
+ * reason they matter is that every half was already correct on its own. The
+ * form panels were built and tested inside `features/agents`; the mappers
+ * were built and tested in `lib/`; the save hook was built and tested in
+ * `entities/application-form`. What was wrong was the WIRING: the page passed
+ * a "Configuration form is not available yet" notice into the slot, and its
+ * save called the version PUT alone, so an application-level rename went
+ * nowhere. Nothing below would fail if only one panel regressed in isolation
+ * — they fail when the page stops composing them.
+ */
+describe('the pipeline configuration form', () => {
+  /** Captures both calls a pipeline Save issues: the version PUT and the application PUT. */
+  function captureSaveBodies(): { version: Record<string, unknown>[]; application: Record<string, unknown>[] } {
+    const version: Record<string, unknown>[] = [];
+    const application: Record<string, unknown>[] = [];
+    server.use(
+      http.put('*/elitea_core/version/prompt_lib/:projectId/:applicationId/:versionId', async ({ request }) => {
+        version.push((await request.json()) as Record<string, unknown>);
+        return HttpResponse.json({ id: '1', application_id: '42', name: 'base', status: 'draft' }, { status: 201 });
+      }),
+      http.put('*/elitea_core/application/prompt_lib/:projectId/:applicationId', async ({ request }) => {
+        application.push((await request.json()) as Record<string, unknown>);
+        return HttpResponse.json({
+          id: '42',
+          name: 'My Pipeline',
+          description: 'A helpful pipeline',
+          icon: '',
+          owner_id: 'user-1',
+          created_at: '2026-01-01T00:00:00Z',
+        });
+      }),
+    );
+    return { version, application };
+  }
+
+  it('renders the reference form sections — General, Welcome message, Tags, Information', async () => {
+    server.use(getGetApplicationMockHandler(detail()));
+    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', { projectId: '9' });
+
+    const panel = within(await screen.findByTestId('edit-pipeline-configuration-panel'));
+    expect(await panel.findByTestId('agent-name-input')).toHaveValue('My Pipeline');
+    expect(panel.getByTestId('agent-description-input')).toHaveValue('A helpful pipeline');
+    expect(panel.getByLabelText('Tags')).toBeInTheDocument();
+    expect(panel.getByTestId('agent-welcome-message-input')).toBeInTheDocument();
+    expect(await panel.findByTestId('agent-information-section')).toBeInTheDocument();
+
+    /*
+     * A pipeline's `instructions` column IS its flow-graph YAML, authored on
+     * the canvas beside this pane. `CreateAgentForm` is therefore mounted
+     * with `showInstructions={false}`, exactly as the reference does
+     * (`PipelineConfigurationForm.jsx` passes no instructions panel): a
+     * second, textual editor for the same column would let the two disagree
+     * and the last writer would silently win.
+     */
+    expect(panel.queryByTestId('agent-instructions-input')).not.toBeInTheDocument();
+  }, 30_000);
+
+  /**
+   * The defect this whole unit exists for. `name`/`description` are
+   * APPLICATION-level columns, written only by `PUT /elitea_core/application/
+   * prompt_lib/{projectId}/{applicationId}` — and the page's save used to
+   * issue the VERSION PUT alone, so a rename was validated, marked dirty,
+   * submitted, answered 200 and discarded.
+   */
+  it('sends a renamed pipeline to the APPLICATION endpoint, not only the version one', async () => {
+    server.use(getGetApplicationMockHandler(detail()));
+    const bodies = captureSaveBodies();
+    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', { projectId: '9' });
+    const user = userEvent.setup();
+
+    const panel = within(await screen.findByTestId('edit-pipeline-configuration-panel'));
+    await configPanel().findByText('GPT-4o');
+    await user.clear(await panel.findByTestId('agent-name-input'));
+    await user.type(panel.getByTestId('agent-name-input'), 'Renamed Pipeline');
+    await user.click(await screen.findByTestId('pipeline-save-button'));
+
+    await waitFor(() => expect(bodies.application).toHaveLength(1), { timeout: 15_000 });
+    expect(bodies.application[0]?.['name']).toBe('Renamed Pipeline');
+    expect(bodies.application[0]?.['description']).toBe('A helpful pipeline');
+    // The version PUT still fires, and still pins the executor.
+    expect(bodies.version).toHaveLength(1);
+    expect(bodies.version[0]?.['agent_type']).toBe('pipeline');
+  }, 30_000);
+
+  /**
+   * `welcome_message` reached this page's save body nowhere before: the old
+   * draft mapper never read it, so the field was rendered from the server
+   * response and dropped on every save.
+   */
+  it('sends a typed welcome message in the version PUT body', async () => {
+    server.use(getGetApplicationMockHandler(detail()));
+    const bodies = captureSaveBodies();
+    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', { projectId: '9' });
+    const user = userEvent.setup();
+
+    const panel = within(await screen.findByTestId('edit-pipeline-configuration-panel'));
+    await configPanel().findByText('GPT-4o');
+    await user.type(await panel.findByTestId('agent-welcome-message-input'), 'Welcome aboard');
+    await user.click(await screen.findByTestId('pipeline-save-button'));
+
+    await waitFor(() => expect(bodies.version).toHaveLength(1), { timeout: 15_000 });
+    expect(bodies.version[0]?.['welcome_message']).toBe('Welcome aboard');
+  }, 30_000);
+
+  /**
+   * `tags` has no key at all on `entities/application-form`'s
+   * `toVersionWriteRequest`, which is what the page used to save through.
+   * `UpdateVersion` writes the `application_version_tag_association` rows off
+   * this key, and the placeholder id `AgentTagEditor` gives a just-typed tag
+   * must not reach the wire — the server matches by name.
+   */
+  it('saves MCP exposure from the new configuration panel and preserves other tags', async () => {
+    const pipeline = detail();
+    (pipeline.version_details as Record<string, unknown>)['tags'] = [{ name: 'operations' }];
+    server.use(getGetApplicationMockHandler(pipeline));
+    const bodies = captureSaveBodies();
+    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', { projectId: '9' });
+    const user = userEvent.setup();
+
+    const panel = within(await screen.findByTestId('edit-pipeline-configuration-panel'));
+    await configPanel().findByText('GPT-4o');
+    await user.click(panel.getByRole('switch', { name: /Enable MCP access/iu }));
+    await user.click(await screen.findByTestId('pipeline-save-button'));
+    await waitFor(() => expect(bodies.version).toHaveLength(1), { timeout: 15_000 });
+    expect(bodies.version[0]?.['tags']).toEqual([{ name: 'operations' }, { name: 'mcp' }]);
+  }, 30_000);
+
+  it('sends a newly typed tag by name, with no placeholder id', async () => {
+    server.use(getGetApplicationMockHandler(detail()));
+    const bodies = captureSaveBodies();
+    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', { projectId: '9' });
+    const user = userEvent.setup();
+
+    const panel = within(await screen.findByTestId('edit-pipeline-configuration-panel'));
+    await configPanel().findByText('GPT-4o');
+    await user.type(panel.getByLabelText('Tags'), 'operations');
+    await user.tab();
+    await user.click(await screen.findByTestId('pipeline-save-button'));
+
+    await waitFor(() => expect(bodies.version).toHaveLength(1), { timeout: 15_000 });
+    expect(bodies.version[0]?.['tags']).toEqual([{ name: 'operations' }]);
+  }, 30_000);
+
+  /**
+   * `internal_tools` rides inside the `meta` blob `UpdateVersion` assigns
+   * wholesale, so a save that rebuilt `meta` from only the keys this page
+   * knows about would drop every other key the version carried — `icon_meta`
+   * being the measurable one.
+   */
+  it('sends meta merged over the version stored blob, so icon_meta survives a save', async () => {
+    const withMeta = detail();
+    const versionDetails = withMeta.version_details as Record<string, unknown>;
+    versionDetails['meta'] = { step_limit: 40, internal_tools: ['attachments'], icon_meta: { id: 9 } };
+    server.use(getGetApplicationMockHandler(withMeta));
+    const bodies = captureSaveBodies();
+    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', { projectId: '9' });
+    const user = userEvent.setup();
+
+    await screen.findByTestId('edit-pipeline-configuration-panel');
+    await configPanel().findByText('GPT-4o');
+    await user.click(await screen.findByTestId('pipeline-save-button'));
+
+    await waitFor(() => expect(bodies.version).toHaveLength(1), { timeout: 15_000 });
+    expect(bodies.version[0]?.['meta']).toEqual({ step_limit: 40, internal_tools: ['attachments'], icon_meta: { id: 9 } });
+  }, 30_000);
+
+  /**
+   * `tools` is accepted by the version PUT's schema
+   * (`additionalProperties: true`) and read by NO branch of `UpdateVersion` —
+   * attach/detach goes through the `entity_tool_mapping` relation endpoints
+   * instead. `notes` has no column, no schema property and no handler branch
+   * at all. Sending either would be a field the backend drops in silence.
+   */
+  it('never sends tools or notes, the two keys the version PUT does not persist', async () => {
+    server.use(getGetApplicationMockHandler(detail()));
+    const bodies = captureSaveBodies();
+    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', { projectId: '9' });
+    const user = userEvent.setup();
+
+    await screen.findByTestId('edit-pipeline-configuration-panel');
+    await configPanel().findByText('GPT-4o');
+    await user.click(await screen.findByTestId('pipeline-save-button'));
+
+    await waitFor(() => expect(bodies.version).toHaveLength(1), { timeout: 15_000 });
+    expect(bodies.version[0]).not.toHaveProperty('tools');
+    expect(bodies.version[0]).not.toHaveProperty('notes');
+  }, 30_000);
+
+  /*
+   * "typing a version-level field arms the app-wide unsaved-changes guard"
+   * is NOT asserted here, deliberately. The page's guard input is
+   * `isDirty || isYamlDirty`, and `isYamlDirty` is computed from two
+   * module-scoped stores that no `beforeEach` in this file fully resets — so
+   * a test placed at the end of this file reads a guard that earlier tests
+   * have already armed through the canvas, and passes or fails on file
+   * ordering rather than on this form. The RHF half is covered above
+   * ("arms the unsaved-changes guard when only the model is changed"), and
+   * the version-fields half is covered directly, without the shared stores,
+   * in `lib/useEditPipelineVersionFields.test.ts`.
+   */
+
 });

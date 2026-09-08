@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { MESSAGE_TYPES } from '../constants';
 import { useApi } from './api.hook';
 import { useSupportAssistantContext } from './supportContext.hook';
 import { useSupportStream } from './stream.hook';
 import type { TConversationListItem, TMessage, TRawConversation, TSocketMessage } from '../types';
-import { generateUUID, parseConversationMessages } from '../utils';
+import type { TSupportAttachmentRef } from '../../api';
+import { applyPredictFrame, generateUUID, parseConversationMessages } from '../utils';
 
 type TUseChatProps = {
   welcomeMessage: string;
@@ -87,126 +87,16 @@ export const useChat = (props: TUseChatProps) => {
     );
   }, []);
 
+  /*
+   * ONE STREAM FRAME, APPLIED TO THE TRANSCRIPT.
+   *
+   * The decision lives in `utils/predictFrame.utils.ts` because it is pure and
+   * because it is the half of this widget that a wrong assumption can silence
+   * completely — see that module for the frame vocabulary this platform really
+   * sends, and for the defect that reading the reference's vocabulary caused.
+   */
   const handlePredict = useCallback((message: TSocketMessage) => {
-    const { message_id, type, content, response_metadata } = message;
-
-    const mapStepToStatusMessage = (stepType: string): string => {
-      if (stepType === MESSAGE_TYPES.START_TASK || stepType === MESSAGE_TYPES.AGENT_START)
-        return 'Starting up...';
-      if (stepType === MESSAGE_TYPES.AGENT_LLM_START) return 'Looking things up...';
-      if (stepType === MESSAGE_TYPES.AGENT_TOOL_START) return 'Consulting knowledge base...';
-      if (stepType === MESSAGE_TYPES.AGENT_LLM_CHUNK) return 'Writing response...';
-      return '';
-    };
-
-    switch (type) {
-      case MESSAGE_TYPES.START_TASK:
-        setMessages(prev => [
-          ...prev,
-          {
-            id: message_id,
-            role: 'assistant',
-            content: '',
-            timestamp: Date.now(),
-            isStreaming: true,
-            statusMessage: mapStepToStatusMessage(type),
-          },
-        ]);
-        break;
-
-      case MESSAGE_TYPES.AGENT_START:
-        setMessages(prev =>
-          prev.map(m => (m.id === message_id ? { ...m, statusMessage: mapStepToStatusMessage(type) } : m)),
-        );
-        break;
-
-      case MESSAGE_TYPES.AGENT_LLM_START:
-      case MESSAGE_TYPES.AGENT_TOOL_START:
-        setMessages(prev =>
-          prev.map(m => (m.id === message_id ? { ...m, statusMessage: mapStepToStatusMessage(type) } : m)),
-        );
-        break;
-
-      case MESSAGE_TYPES.AGENT_TOOL_END:
-      case MESSAGE_TYPES.AGENT_LLM_END:
-      case MESSAGE_TYPES.AGENT_ON_TRANSITIONAL_EDGE:
-      case MESSAGE_TYPES.AGENT_ON_FUNCTION_TOOL_NODE:
-        break;
-
-      case MESSAGE_TYPES.CHUNK:
-      case MESSAGE_TYPES.AI_MESSAGE_CHUNK: {
-        const chunk = typeof content === 'string' ? content : JSON.stringify(content);
-        const finished = !!response_metadata?.finish_reason;
-
-        setMessages(prev =>
-          prev.map(m =>
-            m.id === message_id
-              ? {
-                  ...m,
-                  content: m.content + chunk,
-                  statusMessage: undefined,
-                  ...(finished && { isStreaming: false }),
-                }
-              : m,
-          ),
-        );
-        break;
-      }
-
-      case MESSAGE_TYPES.AGENT_LLM_CHUNK:
-        setMessages(prev =>
-          prev.map(m =>
-            m.id === message_id && m.statusMessage !== mapStepToStatusMessage(type)
-              ? { ...m, statusMessage: mapStepToStatusMessage(type) }
-              : m,
-          ),
-        );
-        break;
-
-      case MESSAGE_TYPES.AGENT_RESPONSE: {
-        const responseContent = typeof content === 'string' ? content : JSON.stringify(content);
-        setMessages(prev =>
-          prev.map(m => {
-            if (m.id !== message_id) return m;
-
-            return {
-              ...m,
-              content: responseContent,
-              isStreaming: false,
-              isAnimating: true,
-              statusMessage: undefined,
-            };
-          }),
-        );
-        break;
-      }
-
-      case MESSAGE_TYPES.PIPELINE_FINISH:
-        setMessages(prev =>
-          prev.map(m =>
-            m.id === message_id && m.isStreaming ? { ...m, isStreaming: false, statusMessage: undefined } : m,
-          ),
-        );
-        break;
-
-      case MESSAGE_TYPES.ERROR:
-      case MESSAGE_TYPES.AGENT_EXCEPTION:
-        setMessages(prev =>
-          prev.map(m =>
-            m.id === message_id
-              ? {
-                  ...m,
-                  content: typeof content === 'string' ? content : 'An error occurred',
-                  isStreaming: false,
-                  isAnimating: false,
-                  isError: true,
-                  statusMessage: undefined,
-                }
-              : m,
-          ),
-        );
-        break;
-    }
+    setMessages(prev => applyPredictFrame(prev, message));
   }, []);
 
   const handleError = useCallback((data: { error: string; code: string }) => {
@@ -267,7 +157,7 @@ export const useChat = (props: TUseChatProps) => {
   });
 
   const handleSend = useCallback(
-    async (text: string) => {
+    async (text: string, file?: File) => {
       let activeConversationId = currentConversationId;
 
       // Create conversation if needed
@@ -300,17 +190,31 @@ export const useChat = (props: TUseChatProps) => {
       if (!activeConversationId) return;
 
       /*
+       * ATTACHMENTS (issue #625 item 2): uploaded BEFORE the turn starts,
+       * over the SAME artifact path the main chat composer uses server-side
+       * (internal/api/v2/supportassistant/attachments.go). A failed upload
+       * reports failure and STOPS here — it must not start a turn the user
+       * believes carried their file. See `../../components/chat/
+       * MessageInput.tsx` for why a ported paperclip is safe here now.
+       */
+      let attachments: TSupportAttachmentRef[] | undefined;
+      if (file) {
+        try {
+          const uploaded = await api.uploadAttachment(activeConversationId, file);
+          attachments = [{ filepath: uploaded.filepath, name: file.name }];
+        } catch {
+          handleError({ error: 'Failed to attach the file. Please try again.', code: 'ATTACHMENT_UPLOAD_FAILED' });
+          return;
+        }
+      }
+
+      /*
        * START THE TURN, then subscribe.
        *
        * `question_id` is generated HERE, once, and is the turn's idempotency
        * key: the server derives the turn's message identifiers from it, so a
        * retried POST resumes the same run rather than billing a second one. It
        * is why the endpoint requires it instead of minting one itself.
-       *
-       * NO ATTACHMENTS TRAVEL WITH A TURN. The start contract has no field for
-       * them and the route refuses a non-empty `attachments_info`, so the whole
-       * attachment surface is unported rather than half-wired — see
-       * `../../components/chat/MessageInput.tsx`.
        */
       try {
         const started = await api.startTurn(activeConversationId, {
@@ -319,6 +223,7 @@ export const useChat = (props: TUseChatProps) => {
           support_assistant_context: supportAssistantContext
             ? (supportAssistantContext as unknown as Record<string, unknown>)
             : undefined,
+          attachments,
         });
         if (started.events_url) {
           stream.open(started.events_url);

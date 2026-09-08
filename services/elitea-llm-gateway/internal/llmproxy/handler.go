@@ -19,6 +19,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/hopmarker"
 	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/overhead"
 	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/policy"
+	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/requestlog"
 	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/pkg/ssewriter"
 )
 
@@ -500,7 +501,14 @@ func (h *Handler) newStreamContext(w http.ResponseWriter, r *http.Request) (*sch
 // requestContext picks the streaming or unary context for a handler that serves
 // both from one body (Chat, Responses, Messages). The caller owns the returned
 // cancel until it hands it to a stream loop.
+//
+// It is also the one place that knows whether a request streams, for all three
+// dialects, so it stamps the request log here. Before this, `SetStreaming` had
+// no call site at all: every row said `streaming = false`, and the health view
+// groups by that column, so a streamed 40-second call and a buffered 200 ms
+// call shared one mean that described neither.
 func (h *Handler) requestContext(w http.ResponseWriter, r *http.Request, streaming bool) (*schemas.BifrostContext, *streamCancel, bool) {
+	requestlog.FromContext(r.Context()).SetStreaming(streaming)
 	if streaming {
 		return h.newStreamContext(w, r)
 	}

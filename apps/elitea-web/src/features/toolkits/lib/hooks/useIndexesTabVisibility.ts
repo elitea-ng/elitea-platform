@@ -41,6 +41,9 @@ export function useIndexesTabVisibility(params: UseIndexesTabVisibilityParams): 
       selectedTools,
     });
     const isResolving = !isMCP && (isFetching || toolkitSchemas === undefined || toolkitType === undefined);
+    // `unavailableReason` passes through untouched: it is a property of the
+    // TYPE, not of this screen, and the tab is deliberately still offered so
+    // the reason has somewhere to be read (see the helper's own doc comment).
     return { ...resolved, hidden: resolved.hidden || isResolving, isResolving };
   }, [isMCP, toolkitType, toolkitSchemas, isFetching, selectedTools]);
 }

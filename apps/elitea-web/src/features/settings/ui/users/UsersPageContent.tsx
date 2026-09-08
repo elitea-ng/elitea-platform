@@ -17,6 +17,7 @@ import type { UserRecord } from '@/shared/api/generated/model';
 import type { EditUsersButtonProps } from '@/shared/ui/settings/EditUsersButton';
 import { BannerMessage } from '@/shared/ui/BannerMessage';
 import { InviteUserDialog } from '@/shared/ui/settings/InviteUserDialog';
+import type { InviteAddressResult } from '@/shared/ui/settings/inviteResults';
 import { UsersTable } from './UsersTable';
 import { UsersPageHeader } from './UsersPageHeader';
 import { UsersPagePagination } from './UsersPagePagination';
@@ -94,6 +95,8 @@ interface DialogActions {
   rolesOptions: Array<{ label: string; value: string }>;
   onInviteConfirm: (roles: Set<string>) => void;
   onSetInviteOpen: (open: boolean) => void;
+  /** The server's per-address answer to the last submit; empty before the first. */
+  inviteResults?: readonly InviteAddressResult[];
 }
 
 export interface UsersPageContentProps {
@@ -195,6 +198,7 @@ function UsersPageBody({
         onSetInviteOpen={dialogs.onSetInviteOpen}
         onInviteConfirm={dialogs.onInviteConfirm}
         inviteOpen={dialogs.inviteOpen}
+        inviteResults={dialogs.inviteResults}
       />
     </Box>
   );
@@ -340,12 +344,13 @@ function UsersPageTable({
 }
 
 function UsersPageDialogs({
-  rolesOptions, onSetInviteOpen, onInviteConfirm, inviteOpen,
+  rolesOptions, onSetInviteOpen, onInviteConfirm, inviteOpen, inviteResults,
 }: {
   rolesOptions: Array<{ label: string; value: string }>;
   onSetInviteOpen: (open: boolean) => void;
   onInviteConfirm: (roles: Set<string>) => void;
   inviteOpen: boolean;
+  inviteResults?: readonly InviteAddressResult[];
 }) {
   // NOTE(#130): a third `EditUserRolesDialog` used to live here, mounted with
   // `open={Boolean(singleAction?.edit || batchAction?.edit)}` and
@@ -370,6 +375,7 @@ function UsersPageDialogs({
         onClose={() => onSetInviteOpen(false)}
         rolesOptions={rolesOptions}
         onConfirm={onInviteConfirm}
+        results={inviteResults}
       />
     </>
   );

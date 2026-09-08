@@ -56,7 +56,7 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 
 import { BASE_URL } from '../../playwright.config';
-import { AUTOTEST_PREFIX, expectStoredAssistantAnswer } from '../fixtures/api';
+import { AUTOTEST_PREFIX, expectStoredAssistantAnswer, fillComposer } from '../fixtures/api';
 import {
   COMPILER_LEGAL_NODE_ID,
   parseStoredGraph,
@@ -388,12 +388,16 @@ test('a pipeline authored on the canvas runs its graph and answers in the editor
   const conversationId = String(((await conversationResponse.json()) as { id?: string | number }).id ?? '');
   expect(conversationId, 'the pane must create a conversation before it can send').not.toBe('');
 
+  // The pane has just created its conversation, and the re-render that lands
+  // with it DISCARDS a fill that arrives mid-flight — leaving no Send control
+  // to enable. The `toBeEnabled` gate below used to be the whole guard, and it
+  // cannot recover text that is already gone: it failed here in run
+  // 33814567670. `fillComposer` retries the fill itself.
+  const sendButton = await fillComposer(pane, `autotest canvas pipeline ${Date.now()}`);
   const started = page.waitForResponse((r) => START_RE.test(r.url()) && r.request().method() === 'POST', {
     timeout: 60_000,
   });
-  await input.fill(`autotest canvas pipeline ${Date.now()}`);
-  await expect(pane.getByTestId('chat-send-button')).toBeEnabled({ timeout: 20_000 });
-  await pane.getByTestId('chat-send-button').click();
+  await sendButton.click();
 
   const startResponse = await started;
   // 422 is the status EVERY admission refusal produces, and its body is the

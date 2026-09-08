@@ -124,6 +124,90 @@ describe('EditToolkit', () => {
     expect(within(panel).getByText('Still no indexes created')).toBeInTheDocument();
   });
 
+  /**
+   * COMPOSITION ROOT — the worker-capability verdict reaches the screen.
+   *
+   * `services/elitea-main/internal/api/v2/toolkits/type_catalogue.go:232-240`
+   * stamps `metadata.unavailable` + `unavailable_reason` on a type the worker
+   * cannot import. Only the type CHOOSER read that
+   * (`entities/toolkit/model/toolMenu.ts:113`, on the sibling `hidden`), which
+   * stops such a type being created NEW and does nothing for the toolkits that
+   * already exist — imported, seeded, or created before the capability changed.
+   *
+   * The fixture is deliberately the SAME index-capable `artifact` toolkit the
+   * test above drives, with the verdict added and nothing else changed. So the
+   * only difference between the two screens is the metadata block, and this
+   * test fails the moment the verdict stops being read — which is the state
+   * the whole app was in.
+   */
+  it('renders the server’s unavailable_reason instead of the indexes UI when the worker cannot run the type', async () => {
+    server.use(
+      http.get('/api/v2/elitea_core/tools/prompt_lib/:projectId', () =>
+        HttpResponse.json({ rows: [mockToolkitRow({ type: 'artifact', name: 'My Artifacts', settings: { selected_tools: ['index_data'] } })], total: 1 }),
+      ),
+      http.get('/api/v2/elitea_core/toolkits/prompt_lib/:projectId', () =>
+        HttpResponse.json({
+          artifact: {
+            properties: { selected_tools: { args_schemas: { index_data: { type: 'object' }, read_artifact: { type: 'object' } } } },
+            metadata: { hidden: true, unavailable: true, unavailable_reason: 'the worker does not declare the toolkit class alita_sdk.tools.artifact' },
+          },
+        }),
+      ),
+      http.get('/api/v2/elitea_core/index_meta/prompt_lib/:projectId/:toolkitId', () => HttpResponse.json([])),
+    );
+    const user = userEvent.setup();
+
+    renderToolkitsRoute(<EditToolkit deps={{ saveToolkit: vi.fn() }} />, '/toolkits/latest/tk-1', { projectId: 'proj-1' });
+
+    await screen.findByText('My Artifacts');
+    await user.click(await screen.findByRole('tab', { name: 'Indexes' }));
+
+    const panel = await screen.findByTestId('edit-toolkit-indexes-tab-panel');
+    expect(await within(panel).findByTestId('indexes-unavailable')).toBeInTheDocument();
+    expect(within(panel).getByText('the worker does not declare the toolkit class alita_sdk.tools.artifact')).toBeInTheDocument();
+    // The two controls the previous test asserts. Their ABSENCE is the point:
+    // an Index button that dispatches a run the worker has already refused is
+    // the defect, not the fix.
+    expect(within(panel).queryByRole('button', { name: 'Add index' })).not.toBeInTheDocument();
+    expect(within(panel).queryByText('Still no indexes created')).not.toBeInTheDocument();
+  });
+
+  /**
+   * COMPOSITION ROOT — a failed index_meta read is not reported as an empty
+   * project.
+   *
+   * The response below is the one the 2026-09-06 production-parity walk
+   * actually recorded (validation matrix row F4): the single HTTP failure of
+   * the whole session, on a plain READ, naming the missing prerequisite in a
+   * sentence written for a human. The screen it produced said "Still no
+   * indexes created".
+   */
+  it('surfaces the index_meta failure and its prerequisite instead of the empty-list placeholder', async () => {
+    server.use(
+      http.get('/api/v2/elitea_core/tools/prompt_lib/:projectId', () =>
+        HttpResponse.json({ rows: [mockToolkitRow({ type: 'artifact', name: 'My Artifacts', settings: { selected_tools: ['index_data'] } })], total: 1 }),
+      ),
+      http.get('/api/v2/elitea_core/toolkits/prompt_lib/:projectId', () =>
+        HttpResponse.json({ artifact: { properties: { selected_tools: { args_schemas: { index_data: { type: 'object' } } } } } }),
+      ),
+      http.get('/api/v2/elitea_core/index_meta/prompt_lib/:projectId/:toolkitId', () =>
+        HttpResponse.json({ error: 'PGVector configuration is missing for toolkit 1' }, { status: 400 }),
+      ),
+    );
+    const user = userEvent.setup();
+
+    renderToolkitsRoute(<EditToolkit deps={{ saveToolkit: vi.fn() }} />, '/toolkits/latest/tk-1', { projectId: 'proj-1' });
+
+    await screen.findByText('My Artifacts');
+    await user.click(await screen.findByRole('tab', { name: 'Indexes' }));
+
+    const panel = await screen.findByTestId('edit-toolkit-indexes-tab-panel');
+    expect(await within(panel).findByTestId('indexes-list-error', undefined, { timeout: 15_000 })).toBeInTheDocument();
+    expect(within(panel).getByText('PGVector configuration is missing for toolkit 1')).toBeInTheDocument();
+    expect(within(panel).getByText(/Create a PgVector configuration in Settings/)).toBeInTheDocument();
+    expect(within(panel).queryByText('Still no indexes created')).not.toBeInTheDocument();
+  });
+
   it('renders the export/delete action buttons once a toolkit id is known', async () => {
     server.use(
       http.get('/api/v2/elitea_core/tools/prompt_lib/:projectId', () => HttpResponse.json({ rows: [mockToolkitRow()], total: 1 })),

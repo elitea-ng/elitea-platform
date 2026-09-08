@@ -30,14 +30,13 @@ import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
-import { isPublicProject as isPublicProjectSelector } from '@/entities/project';
 import type { AvailableConfigurationType, ConfigurationItem, ConfigurationsListResponse } from '@/shared/api/configurationsApi';
 import { useCreateConfigurationMutation, useGetAvailableConfigurationsTypeQuery, useGetConfigurationsListQuery, useUpdateConfigurationMutation } from '@/shared/api/configurationsApi';
 import { EliteaApiError } from '@/shared/api/generated/mutator';
-import { getConfig } from '@/shared/config';
 import type { EnvironmentFieldDefinition } from '@/features/settings';
 import { environmentFeature } from '@/features/settings';
 import { PERMISSIONS } from '@/shared/lib/permissions';
+import { useIsPublicProject } from '@/shared/lib/hooks/usePublicProjectId';
 import { t } from '@/shared/i18n';
 import { useSelectedProjectStore } from '@/widgets/app-shell';
 import { usePermissionSet } from '@/widgets/sidebar';
@@ -45,20 +44,6 @@ import { usePermissionSet } from '@/widgets/sidebar';
 const { ENVIRONMENT_FIELD_DEFAULTS, ENVIRONMENT_FIELD_ORDER, ENVIRONMENT_SECTION, buildFieldDefinition, parseFieldValue, validateFieldValue, EnvironmentFieldRow } = environmentFeature;
 
 /* ── helpers ──────────────────────────────────────────────────────────── */
-
-/**
- * Check whether `projectId` is the tenant's public project. Reads the
- * per-deployment `VITE_PUBLIC_PROJECT_ID` runtime value (via `shared/config`)
- * instead of a hardcoded literal — same pattern as `pages/agents/lib/
- * isPublicAgentsProject.ts` (`entities/project`'s `isPublicProject` selector
- * + `shared/config`'s `getConfig()`), reproduced locally here because
- * `pages/` may not import `src/routes/-guards/publicProject.ts`.
- */
-function isPublicProject(projectId: string): boolean {
-  const config = getConfig();
-  if (config.status !== 'ok') return false;
-  return isPublicProjectSelector(projectId, config.config.vite_public_project_id);
-}
 
 /*
  * [#71] The local duplicate of `parseFieldValue` that used to live here is
@@ -158,7 +143,15 @@ function buildFields(
  */
 export const Environment = memo(function Environment() {
   const projectId = useSelectedProjectStore((s) => s.project?.id ?? '');
-  const isPublic = isPublicProject(projectId);
+  /*
+   * The local `isPublicProject` that stood here read the image's
+   * `VITE_PUBLIC_PROJECT_ID` through `shared/config`. That is one of the three
+   * places the same project id was configured, and the only one the server
+   * could not check. `useIsPublicProject` prefers the id elitea-main publishes
+   * on `platform_settings` and keeps the image's copy as the fallback, so this
+   * page and the server cannot disagree about which project is public.
+   */
+  const isPublic = useIsPublicProject(projectId);
 
   const permissions = usePermissionSet(isPublic ? projectId : undefined);
   const canEdit = permissions.has(PERMISSIONS.configuration.update);

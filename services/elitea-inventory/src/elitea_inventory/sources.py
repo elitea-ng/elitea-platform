@@ -134,6 +134,56 @@ def parse_source(raw: Any, allowed_types: tuple[str, ...]) -> Source:
     )
 
 
+#: The branch a source is read from when neither the request nor the stored
+#: settings name one. It is the SDK's own default for ado_repos
+#: (``base_branch=tool['settings'].get('base_branch', "main")``); github has no
+#: default and raises instead, so this supplies the same answer for both.
+DEFAULT_BRANCH = "main"
+
+#: The credential block each source type reads, inside ``settings``. The SDK
+#: subscripts these directly, so an absent one is a KeyError from deep inside
+#: the toolkit rather than a statement about what the caller failed to send.
+CREDENTIAL_KEYS = {"github": "github_configuration", "ado_repos": "ado_configuration"}
+
+
+def _toolkit_settings(source: Source) -> dict[str, Any]:
+    """The stored settings, plus the branch keys the SDK requires.
+
+    Nothing is fabricated here except the branch names, and those only when
+    absent. In particular the credential block is NOT invented: it is checked
+    for and named, because a toolkit built without one fails later, further
+    away, and in the middle of an ingestion run.
+
+    ``source.branch`` wins for ``active_branch`` because that is the branch the
+    caller asked to ingest, and it is what the pipeline reads files from.
+    ``base_branch`` is the repository's own base — a different thing — so a
+    stored value is left alone and only defaulted when there is none.
+    """
+    settings = dict(source.settings)
+
+    # PRESENCE, not truthiness: the SDK subscripts this key and does not
+    # inspect what is in it, so an empty block is the caller's business (a
+    # public repository needs no token) while an ABSENT one is always fatal.
+    # This raises exactly where the SDK would, saying whose job it is.
+    credential_key = CREDENTIAL_KEYS.get(source.type)
+    if credential_key is not None and credential_key not in settings:
+        raise ValueError(
+            f"the {source.type} toolkit for source {source.name!r} has no "
+            f"{credential_key!r} in its settings, so it cannot authenticate; "
+            f"the facade must forward the toolkit's stored credentials"
+        )
+
+    branch = (
+        source.branch
+        or settings.get("active_branch")
+        or settings.get("base_branch")
+        or DEFAULT_BRANCH
+    )
+    settings["active_branch"] = branch
+    settings.setdefault("base_branch", branch)
+    return settings
+
+
 def build_toolkit(source: Source) -> Any:
     """Instantiate the SDK toolkit for ``source`` and return its api wrapper.
 
@@ -150,8 +200,14 @@ def build_toolkit(source: Source) -> Any:
     toolkit_data = {
         "id": source.toolkit_id,
         "name": source.name,
+        # The SDK reads the toolkit's name from `toolkit_name`, NOT `name`, and
+        # reads it unguarded: github does `str(tool['toolkit_name'])` and
+        # ado_repos does `collection_name=tool['toolkit_name']`. Without it both
+        # raise KeyError before any credential is looked at. It becomes the
+        # pgvector collection name, so the source's own name is the right value.
+        "toolkit_name": source.name,
         "type": source.type,
-        "settings": dict(source.settings),
+        "settings": _toolkit_settings(source),
     }
     instance = instantiate_toolkit(toolkit_data)
 

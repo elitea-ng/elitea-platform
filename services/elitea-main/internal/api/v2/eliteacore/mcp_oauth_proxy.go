@@ -242,7 +242,7 @@ func (h *Handler) mcpDCRProxy(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = response.Body.Close() }()
 
-	providerBody, err := decodeJSONObject(response.Body)
+	providerBody, err := decodeOAuthJSONObject(response.Body)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "invalid_dcr_response"})
 		return
@@ -622,7 +622,7 @@ func decodeOAuthProviderResponse(body io.Reader) (map[string]any, error) {
 	return object, nil
 }
 
-func decodeJSONObject(body io.Reader) (map[string]any, error) {
+func decodeOAuthJSONObject(body io.Reader) (map[string]any, error) {
 	raw, err := readBoundedMCPProxyResponse(body)
 	if err != nil {
 		return nil, err

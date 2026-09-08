@@ -1,0 +1,189 @@
+{{- if .Values.inventory.enabled }}
+{{- $env := .Values.inventory.env | default dict }}
+{{- /*
+  Sensitive values, resolved in the shape every other component in this chart
+  uses. Inventory has NO database of its own — no storage package, no
+  migrations, no migrate Job — so there is no database URL here and no
+  postgresql fallback to complete: the graph's home is the platform artifact
+  bucket, reached through the callback bearer the facade mints.
+
+  `urlKey` is passed as an empty string, so the shared define adds nothing and
+  what stays is the component's own secrets map.
+*/ -}}
+{{- $secrets := .Values.inventory.secrets | default dict }}
+{{- include "elitea-inventory.validateGuards" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "elitea-inventory.fullname" . }}
+  labels:
+    {{- include "elitea-inventory.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.inventory.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "elitea-inventory.selectorLabels" . | nindent 6 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        {{- include "elitea-inventory.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.inventory.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "elitea-inventory.serviceAccountName" . }}
+      # Long enough for an in-flight invocation to be recorded as terminal
+      # before the process goes. It does not have to outlast an INGESTION:
+      # a lost run is redone, and draining forever would be the wrong trade.
+      terminationGracePeriodSeconds: {{ .Values.inventory.terminationGracePeriodSeconds }}
+      {{- include "elitea.imagePullSecrets" (dict "local" .Values.inventory.imagePullSecrets "global" .Values.image.pullSecrets) | nindent 6 }}
+      containers:
+        - name: elitea-inventory
+          image: "{{ .Values.inventory.image.repository }}:{{ .Values.inventory.image.tag | default .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.inventory.image.pullPolicy }}
+          {{- with .Values.inventory.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            {{- range $key, $value := $env }}
+            {{- if not (hasKey $secrets $key) }}
+            # Skipped when the same name is secret-backed below: emitting both
+            # puts one name twice in this list, and only ordering decides which
+            # wins.
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.inventory.mtls.enabled }}
+            # The mTLS terminus. Without these the service serves plain HTTP,
+            # and its own refusal of non-mTLS traffic has nothing to enforce.
+            - name: ELITEA_INVENTORY_TLS_CERTFILE
+              value: {{ .Values.inventory.mtls.mountPath }}/tls.crt
+            - name: ELITEA_INVENTORY_TLS_KEYFILE
+              value: {{ .Values.inventory.mtls.mountPath }}/tls.key
+            - name: ELITEA_INVENTORY_TLS_CA_FILE
+              value: {{ .Values.inventory.mtls.mountPath }}/ca.crt
+            {{- end }}
+            {{- with (include "elitea.provider.secretEnv" (dict "secrets" $secrets) | trim) }}{{- . | nindent 12 }}{{- end }}
+          # tcpSocket, not httpGet, for the reason DeepWiki's deployment spells
+          # out: with mTLS on, this listener requires and verifies a client
+          # certificate, and the kubelet presents none. An httpGet probe fails
+          # every time, readiness never passes, and the liveness probe restarts
+          # a process that is working correctly.
+          {{- if .Values.inventory.mtls.enabled }}
+          livenessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: {{ .Values.inventory.probes.liveness.periodSeconds }}
+            failureThreshold: {{ .Values.inventory.probes.liveness.failureThreshold }}
+          readinessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: {{ .Values.inventory.probes.readiness.periodSeconds }}
+            failureThreshold: {{ .Values.inventory.probes.readiness.failureThreshold }}
+          {{- else }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.inventory.probes.liveness.path }}
+              port: http
+            periodSeconds: {{ .Values.inventory.probes.liveness.periodSeconds }}
+            failureThreshold: {{ .Values.inventory.probes.liveness.failureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.inventory.probes.readiness.path }}
+              port: http
+            periodSeconds: {{ .Values.inventory.probes.readiness.periodSeconds }}
+            failureThreshold: {{ .Values.inventory.probes.readiness.failureThreshold }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.inventory.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: engine-socket
+              mountPath: {{ .Values.inventory.engine.socketDir }}
+            {{- with (include "elitea.provider.mtlsVolumeMount" (dict "ctx" . "provider" "inventory") | trim) }}{{- . | nindent 12 }}{{- end }}
+        {{- if eq (get $env "ELITEA_INVENTORY_RUNNER" | toString) "legacy" }}
+        # The engine sidecar (ADR-0023 H2): the Python tool layer and its
+        # dependency closure, reached by the host over the shared socket. No
+        # port, no TLS, no identity — the socket directory is the only way in.
+        - name: engine
+          image: "{{ .Values.inventory.engine.image.repository }}:{{ include "elitea-inventory.engineTag" . }}"
+          imagePullPolicy: {{ .Values.inventory.engine.image.pullPolicy }}
+          {{- with .Values.inventory.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          # The image's ENTRYPOINT already IS the sidecar (`python -m
+          # elitea_inventory`), unlike DeepWiki's, whose entrypoint is its SPI
+          # shell. Stated anyway so a change to that entrypoint cannot silently
+          # start something else in this pod.
+          command: ["python", "-m", "elitea_inventory"]
+          env:
+            {{- $engineEnv := merge (dict "ELITEA_INVENTORY_RUNNER" .Values.inventory.engine.runner) $env }}
+            {{- range $key, $value := $engineEnv }}
+            {{- if not (hasKey $secrets $key) }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+            {{- end }}
+            {{- with (include "elitea.provider.secretEnv" (dict "secrets" $secrets) | trim) }}{{- . | nindent 12 }}{{- end }}
+          livenessProbe:
+            exec:
+              command: ["python3", "-c", "import socket; s=socket.socket(socket.AF_UNIX); s.settimeout(2); s.connect('{{ .Values.inventory.engine.socketDir }}/engine.sock'); s.close()"]
+            periodSeconds: {{ .Values.inventory.probes.liveness.periodSeconds }}
+            failureThreshold: {{ .Values.inventory.probes.liveness.failureThreshold }}
+          readinessProbe:
+            exec:
+              command: ["python3", "-c", "import socket; s=socket.socket(socket.AF_UNIX); s.settimeout(2); s.connect('{{ .Values.inventory.engine.socketDir }}/engine.sock'); s.close()"]
+            periodSeconds: {{ .Values.inventory.probes.readiness.periodSeconds }}
+            failureThreshold: {{ .Values.inventory.probes.readiness.failureThreshold }}
+          resources:
+            {{- toYaml .Values.inventory.engine.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            # The engine reads a source repository and builds a graph before
+            # uploading it. That is ephemeral pod storage by design: nothing
+            # durable lives here, and a replica that dies mid-ingestion loses
+            # only work that is being redone anyway.
+            - name: scratch
+              mountPath: {{ .Values.inventory.scratch.mountPath }}
+            - name: engine-socket
+              mountPath: {{ .Values.inventory.engine.socketDir }}
+        {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: scratch
+          emptyDir:
+            sizeLimit: {{ .Values.inventory.scratch.sizeLimit | quote }}
+        - name: engine-socket
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+        {{- with (include "elitea.provider.mtlsVolume" (dict "ctx" . "provider" "inventory") | trim) }}{{- . | nindent 8 }}{{- end }}
+      {{- with .Values.inventory.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.inventory.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.inventory.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

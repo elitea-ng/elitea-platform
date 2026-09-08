@@ -193,13 +193,13 @@ func TestAViewerIsRefusedTheConfigurationWriteGates(t *testing.T) {
 // migration cannot change what their members may do.
 func TestACallerWithoutTheGrantsIsRefusedAtAllSixGates(t *testing.T) {
 	pool := newMigratedPool(t)
-	seedRoleMembership(t, pool, 3593, "editor", 1)
+	roleID := seedRoleMembership(t, pool, 3593, "editor", 1)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	if _, err := pool.Exec(ctx, `
 INSERT INTO public.auth_core__project_role_permission (project_id, role_id, permission)
-VALUES (1, 3593, 'models.something.else')`); err != nil {
+VALUES (1, $1, 'models.something.else')`, roleID); err != nil {
 		t.Fatalf("seed the per-project grant: %v", err)
 	}
 
@@ -270,19 +270,34 @@ func resolveDefaultModeFor(t *testing.T, pool *pgxpool.Pool, userID, projectID s
 // auth_core__project_role_permission row. It leaves the row out deliberately, so
 // that the central fallback stays reachable and the corpus grants apply. So a
 // member of a Go-provisioned project resolves exactly what this test measures.
-func seedRoleMembership(t *testing.T, pool *pgxpool.Pool, roleID int, roleName string, userID int) {
+// `roleID` is the id to mint the row WITH, and it is used only when project 1
+// does not already carry that role. shared/0111 gives project 1 the same four
+// roles every provisioned project has, so on a corpus-built database the row is
+// already there and a second one violates the (project_id, name) uniqueness.
+// The membership is then assigned against the id that EXISTS, which is what a
+// member of a Go-provisioned project has.
+func seedRoleMembership(t *testing.T, pool *pgxpool.Pool, roleID int, roleName string, userID int) int {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	if _, err := pool.Exec(ctx,
-		`INSERT INTO public.auth_core__project_role (id, project_id, name) VALUES ($1, 1, $2)`,
-		roleID, roleName); err != nil {
+	if _, err := pool.Exec(ctx, `
+INSERT INTO public.auth_core__project_role (id, project_id, name)
+VALUES ($1, 1, $2)
+ON CONFLICT (project_id, name) DO NOTHING`, roleID, roleName); err != nil {
 		t.Fatalf("seed the %q project role: %v", roleName, err)
 	}
-	if _, err := pool.Exec(ctx,
-		`INSERT INTO public.auth_core__project_user_role (project_id, user_id, role_id) VALUES (1, $1, $2)`,
-		userID, roleID); err != nil {
+	var assignedRoleID int
+	if err := pool.QueryRow(ctx,
+		`SELECT id FROM public.auth_core__project_role WHERE project_id = 1 AND name = $1`,
+		roleName).Scan(&assignedRoleID); err != nil {
+		t.Fatalf("resolve the %q project role: %v", roleName, err)
+	}
+	if _, err := pool.Exec(ctx, `
+INSERT INTO public.auth_core__project_user_role (project_id, user_id, role_id)
+VALUES (1, $1, $2)
+ON CONFLICT DO NOTHING`, userID, assignedRoleID); err != nil {
 		t.Fatalf("assign the %q project role: %v", roleName, err)
 	}
+	return assignedRoleID
 }

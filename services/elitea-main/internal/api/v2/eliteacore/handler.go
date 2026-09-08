@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -26,9 +27,11 @@ import (
 	appmailer "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/mailer"
 	toolkitexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/ownership"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpregistry"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/publicproject"
 )
 
 func generateID() string {
@@ -56,11 +59,44 @@ type Handler struct {
 	// Outbound e-mail for project invitations (users_write.go); nil means
 	// the invite result reports no delivery.
 	mailer InviteMailer
+	// costBudgets says whether LLM cost tracking exists on this deployment, so
+	// PlatformSettings can publish `cost_budgets_enabled`. See
+	// WithCostBudgets for what it is derived from.
+	costBudgets bool
+}
+
+// WithCostBudgets declares that this deployment tracks LLM cost, which is what
+// `cost_budgets_enabled` means to a client.
+//
+// The reference answered the same question with an RPC into the LiteLLM plugin
+// (`litellm_budgets_mode`, true for "observe" and "enforce") and the Usage tab
+// was hidden when it was false. This platform's equivalent is whether the LLM
+// gateway is composed: the gateway is what bills a call, publishes the budget
+// delta and populates gateway.llm_budget_accumulators, so with no gateway
+// address configured every spend figure the Usage tab renders is structurally
+// zero and every budget row is authored against nothing.
+//
+// It is deliberately NOT the stronger claim "enforcement is on". Enforcement
+// additionally needs GATEWAY_NATS_URL, and the gateway reports that itself
+// through `GET /governance/status`, proxied at
+// `GET /api/v2/admin/gateway/status`. Folding that into this flag would make an
+// unreachable gateway hide a Usage tab whose accumulator history is still
+// perfectly readable from PostgreSQL — a network fault silently removing a
+// screenful of real data. The admin Budgets page reads the status route
+// directly and warns there instead.
+func WithCostBudgets(enabled bool) Option {
+	return func(handler *Handler) {
+		handler.costBudgets = enabled
+	}
 }
 
 // InviteMailer is the seam to internal/application/mailer.
+//
+// Configured takes a context because outbound e-mail is configured at runtime
+// (gap G7): the answer comes from `centry.platform_config` laid over the
+// environment, so it is a read rather than a boot-time fact.
 type InviteMailer interface {
-	Configured() bool
+	Configured(ctx context.Context) bool
 	SendInvitation(ctx context.Context, invitation appmailer.Invitation) error
 }
 
@@ -272,6 +308,49 @@ func (h *Handler) PlatformSettings(w http.ResponseWriter, r *http.Request) {
 	// client that ignores this key still meets a 403 rather than an open
 	// endpoint behind a hidden button.
 	defaults["analytics_enabled"] = h.analyticsFlags(r.Context()).enabled
+
+	// The id of the PUBLIC project, published so a client stops guessing it.
+	//
+	// The same project was configured in three places that could not check each
+	// other: `ELITEA_AI_PROJECT_ID` here, the identically named variable in the
+	// LLM gateway, and `VITE_PUBLIC_PROJECT_ID` baked into the SPA image by
+	// apps/elitea-web/docker-entrypoint.sh. Nothing compared the SPA's copy with
+	// the server's, and one page did not even read the SPA's copy —
+	// `pages/settings/ServicePrompts.tsx` compared the selected project against
+	// the literal '1' and gated its query on the result, so on a deployment
+	// whose public project is not id 1 the Service Prompts cards rendered empty
+	// with no request made and no error shown.
+	//
+	// This endpoint is the right carrier: it is already ungated, already polled
+	// by the app shell, and per-project, so the answer costs no extra request.
+	// The SPA now prefers this value and keeps its build-time copy only as the
+	// fallback for a deployment too old to send this key.
+	//
+	// Added rather than overlaid, like every pair above and under the same
+	// contract permission (`additionalProperties: true`): a project's own
+	// `environment_settings` row must not be able to tell a client that some
+	// OTHER project is the public one.
+	//
+	// A NUMBER, not a string. `p_{id}` schema names, `model_project_id` in
+	// llm_settings and the `project_id` in every entity_meta are numeric, and
+	// the one client-side comparison that matters is against a project id the
+	// SPA already holds as a string — one conversion at the edge is safer than
+	// two representations on the wire.
+	defaults["public_project_id"] = publicproject.ID()
+	// The cost-budget switch, which gates Settings → Usage exactly as the
+	// reference's own platform_settings endpoint gated it
+	// (legacy/plugins/elitea_core/api/v2/platform_settings.py
+	// `_is_cost_budgets_enabled`, true for LiteLLM budget modes "observe" and
+	// "enforce"). Without it the tab had no way to know the platform keeps no
+	// cost data, and rendered a page of structural zeroes as if they were
+	// measurements.
+	//
+	// Added rather than overlaid, under the same `additionalProperties: true`
+	// permission as the pairs above: a project's own `environment_settings` row
+	// must not be able to claim cost tracking this deployment does not do.
+	//
+	// This is NOT a claim that enforcement is on. See WithCostBudgets.
+	defaults["cost_budgets_enabled"] = h.costBudgets
 
 	writeJSON(w, http.StatusOK, defaults)
 }
@@ -769,10 +848,15 @@ func (h *Handler) Author(w http.ResponseWriter, r *http.Request) {
 			s := catalogueSchema(name)
 			var cnt int
 			// Each Scan failure leaves cnt=0, which is safe for counting
-			_ = h.pool.QueryRow(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM %s.applications a WHERE a.owner_id = $1 AND NOT EXISTS (SELECT 1 FROM %s.application_versions v WHERE v.application_id = a.id AND v.agent_type = 'pipeline')`, s, s), authorID).Scan(&cnt)
+			// The author of an agent is the author of its VERSIONS.
+			// `applications.owner_id` is the owning PROJECT (#533), so
+			// `a.owner_id = $1` counted the agents of the project whose id
+			// happens to equal this user id — a different set, and usually an
+			// empty one.
+			_ = h.pool.QueryRow(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM %s.applications a WHERE EXISTS (SELECT 1 FROM %s.application_versions av WHERE av.application_id = a.id AND av.author_id = $1) AND NOT EXISTS (SELECT 1 FROM %s.application_versions v WHERE v.application_id = a.id AND v.agent_type = 'pipeline')`, s, s, s), authorID).Scan(&cnt)
 			totalApps += cnt
 			cnt = 0
-			_ = h.pool.QueryRow(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM %s.applications a WHERE a.owner_id = $1 AND EXISTS (SELECT 1 FROM %s.application_versions v WHERE v.application_id = a.id AND v.agent_type = 'pipeline')`, s, s), authorID).Scan(&cnt)
+			_ = h.pool.QueryRow(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM %s.applications a WHERE EXISTS (SELECT 1 FROM %s.application_versions av WHERE av.application_id = a.id AND av.author_id = $1) AND EXISTS (SELECT 1 FROM %s.application_versions v WHERE v.application_id = a.id AND v.agent_type = 'pipeline')`, s, s, s), authorID).Scan(&cnt)
 			totalPipelines += cnt
 			cnt = 0
 			_ = h.pool.QueryRow(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM %s.elitea_tools WHERE author_id = $1`, s), authorID).Scan(&cnt)
@@ -915,15 +999,16 @@ func (h *Handler) Publish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Hard-check: model must be from public/shared project (runs before validation)
-	publicProjID := os.Getenv("PUBLIC_PROJECT_ID")
-	if publicProjID == "" {
-		publicProjID = "1"
-	}
-	sharedProjID := os.Getenv("SHARED_PROJECT_ID")
-	if sharedProjID == "" {
-		sharedProjID = "4"
-	}
+	// Hard-check: the model must come from the public project (runs before
+	// validation).
+	//
+	// ONE project, resolved once. This used to accept `PUBLIC_PROJECT_ID`
+	// (default 1) OR `SHARED_PROJECT_ID` (default 4), which made the guard
+	// admit a second project no other surface knew about and that the
+	// reference does not have: legacy `_check_shared_llm` compares against a
+	// single `public_project_id`. Both names still resolve, as deprecated
+	// aliases of ELITEA_AI_PROJECT_ID — see internal/publicproject.
+	publicProjID := publicproject.IDString()
 	var llmSettingsStr *string
 	_ = h.pool.QueryRow(ctx, fmt.Sprintf(
 		`SELECT llm_settings::text FROM %s.application_versions WHERE id = $1`, s), versionID).Scan(&llmSettingsStr) // failure leaves nil, safe
@@ -932,7 +1017,7 @@ func (h *Handler) Publish(w http.ResponseWriter, r *http.Request) {
 		_ = json.Unmarshal([]byte(*llmSettingsStr), &llmSettings) // DB jsonb column; malformed means empty map
 		if modelProjID, ok := llmSettings["model_project_id"]; ok && modelProjID != nil {
 			mpid := fmt.Sprintf("%v", modelProjID)
-			if mpid != publicProjID && mpid != sharedProjID {
+			if mpid != publicProjID {
 				writeJSON(w, http.StatusBadRequest, map[string]any{"error": "llm_not_shared"})
 				return
 			}
@@ -1057,6 +1142,31 @@ func (h *Handler) Publish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The catalogue twin, in the SAME transaction as the clone.
+	//
+	// Without it a publish from any project other than the public one wrote a
+	// `published` row into a schema ELITEA Catalog never reads: the Published
+	// tab listed the agent and the catalogue stayed empty, with no error on
+	// either side. See catalog_mirror.go for why the twin carries no tool or
+	// skill attachments.
+	twin, mirrorErr := mirrorPublishedVersion(ctx, tx, s, projectID, appID, cloneID, body.VersionName, body.Category)
+	if mirrorErr != nil {
+		if errors.Is(mirrorErr, errCatalogVersionNameTaken) {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
+				"error": "validation_failed",
+				"validation_result": map[string]any{
+					"issues": []map[string]any{
+						{"rule": "version_name_exists_in_catalog", "field": "version_name", "issue": "version name already published to the catalog", "source": "deterministic"},
+					},
+				},
+			})
+			return
+		}
+		slog.ErrorContext(ctx, "publish: catalog mirror failed", "schema", s, "version_id", cloneID, "error", mirrorErr)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to publish agent to the catalog"})
+		return
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to publish agent"})
 		return
@@ -1065,12 +1175,27 @@ func (h *Handler) Publish(w http.ResponseWriter, r *http.Request) {
 	// Embed sub-agents: clone application_tools of type 'application' recursively
 	h.embedSubAgents(ctx, s, projectID, versionID, cloneID)
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	// `public_agent_id` and `public_version_id` name the rows in the AUTHOR's
+	// schema, which is what they have always named and what
+	// publish_tool_copy_postgres_integration_test.go and
+	// publish_skill_copy_postgres_integration_test.go read them for. The
+	// catalogue rows are a different pair, so they get their own two keys
+	// rather than a changed meaning of these.
+	//
+	// The catalogue keys are OMITTED when there is no twin — that is, when the
+	// author already stands in the public project and the clone above IS the
+	// catalogue row. A zero would read as "the catalogue has row 0".
+	response := map[string]any{
 		"public_agent_id":   strconv.Itoa(appID),
 		"public_version_id": strconv.Itoa(cloneID),
 		"version_name":      body.VersionName,
 		"source_version_id": strconv.Itoa(cloneID),
-	})
+	}
+	if twin.VersionID != 0 {
+		response["catalog_agent_id"] = strconv.Itoa(twin.ApplicationID)
+		response["catalog_version_id"] = strconv.Itoa(twin.VersionID)
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 // deleteEmbeddedSubAgents removes embedded sub-agent applications referenced by application_tools on versionID.
@@ -1292,6 +1417,13 @@ func (h *Handler) Unpublish(w http.ResponseWriter, r *http.Request) {
 	var meta map[string]any
 	_ = json.Unmarshal([]byte(metaStr), &meta) // DB jsonb column; malformed means nil meta
 
+	// The catalogue rows this unpublish must also take down. Collected per
+	// branch below and removed once, after the source revert, so that a
+	// failure to reach the catalogue is reported rather than swallowed: an
+	// agent that stays in ELITEA Catalog after its author unpublished it is
+	// the one outcome this route may not answer 200 for.
+	var revertedVersionIDs []int
+
 	switch status {
 	case "published", "embedded":
 		h.deleteEmbeddedSubAgents(ctx, s, versionID)
@@ -1299,6 +1431,9 @@ func (h *Handler) Unpublish(w http.ResponseWriter, r *http.Request) {
 		// Revert to draft
 		_, _ = h.pool.Exec(ctx, fmt.Sprintf(
 			`UPDATE %s.application_versions SET status = 'draft' WHERE id = $1`, s), versionID) // best-effort revert
+		if numericVersionID, convErr := strconv.Atoi(versionID); convErr == nil {
+			revertedVersionIDs = append(revertedVersionIDs, numericVersionID)
+		}
 	case "draft":
 		// Unpublish via the source draft version: find all published clones and delete them
 		var appID int
@@ -1325,12 +1460,21 @@ func (h *Handler) Unpublish(w http.ResponseWriter, r *http.Request) {
 			pubRows.Close()
 			for _, pvid := range pubVerIDs {
 				h.deleteEmbeddedSubAgents(ctx, s, pvid)
+				if numericVersionID, convErr := strconv.Atoi(pvid); convErr == nil {
+					revertedVersionIDs = append(revertedVersionIDs, numericVersionID)
+				}
 			}
 		}
 		_, _ = h.pool.Exec(ctx, fmt.Sprintf(
 			`UPDATE %s.application_versions SET status = 'draft' WHERE application_id = $1 AND status IN ('published', 'embedded')`, s), appID) // best-effort revert
 	default:
 		writeJSON(w, http.StatusConflict, map[string]any{"error": "version is not published"})
+		return
+	}
+
+	if err := removeCatalogTwins(ctx, h.pool, projectID, revertedVersionIDs); err != nil {
+		slog.ErrorContext(ctx, "unpublish: catalog twin removal failed", "project_id", projectID, "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to remove the agent from the catalog"})
 		return
 	}
 
@@ -1570,15 +1714,8 @@ func (h *Handler) runPublishValidation(ctx context.Context, s, versionID, versio
 		_ = json.Unmarshal([]byte(*llmStr), &llm) // DB jsonb column; malformed means empty map
 		if mpid, ok := llm["model_project_id"]; ok && mpid != nil {
 			mpidStr := fmt.Sprintf("%v", mpid)
-			pubPID := os.Getenv("PUBLIC_PROJECT_ID")
-			if pubPID == "" {
-				pubPID = "1"
-			}
-			shrPID := os.Getenv("SHARED_PROJECT_ID")
-			if shrPID == "" {
-				shrPID = "4"
-			}
-			if mpidStr != pubPID && mpidStr != shrPID {
+			// One project, for the reason Publish's hard-check above states.
+			if mpidStr != publicproject.IDString() {
 				criticalIssues = append(criticalIssues, map[string]any{
 					"field":  "llm_settings",
 					"issue":  "model is not shared and cannot be used in published agents",
@@ -1688,71 +1825,6 @@ func (h *Handler) VersionValidator(w http.ResponseWriter, r *http.Request) {
 	var valid bool
 	_ = h.pool.QueryRow(ctx, q, versionID, applicationID).Scan(&valid) // failure leaves valid=false, which is correct (not found)
 	writeJSON(w, http.StatusOK, map[string]any{"valid": valid})
-}
-
-func (h *Handler) PublicApplications(w http.ResponseWriter, r *http.Request) {
-	if h.pool == nil {
-		writeJSON(w, http.StatusOK, map[string]any{"rows": []any{}, "total": 0})
-		return
-	}
-	ctx := r.Context()
-
-	applicationID := chi.URLParam(r, "applicationID")
-	if applicationID != "" {
-		h.publicApplicationDetail(w, r, ctx, applicationID)
-		return
-	}
-
-	publicProjectID := publicProjectIDOrDefault()
-	schema := publicTenantSchema()
-
-	categoryFilter := r.URL.Query().Get("category")
-	var queryArgs []any
-	categoryClause := ""
-	if categoryFilter != "" {
-		if categoryFilter == "Other" {
-			categoryClause = ` AND (av.meta->>'category' IS NULL OR av.meta->>'category' = '' OR av.meta->>'category' = 'Other')`
-		} else {
-			categoryClause = ` AND av.meta->>'category' = $1`
-			queryArgs = append(queryArgs, categoryFilter)
-		}
-	}
-
-	rows, err := h.pool.Query(ctx, fmt.Sprintf(`
-		SELECT a.id, a.name, COALESCE(a.description, ''),
-			av.id as version_id, av.name as version_name, av.agent_type,
-			COALESCE(av.meta::text, '{}')
-		FROM %s.applications a
-		JOIN %s.application_versions av ON av.application_id = a.id
-		WHERE av.status = 'published'
-		AND COALESCE(av.meta->>'status', '') != 'embedded'`+categoryClause+`
-		ORDER BY a.id DESC
-		LIMIT 50`, schema, schema), queryArgs...)
-
-	items := make([]map[string]any, 0)
-	if err == nil {
-		defer rows.Close()
-		for rows.Next() {
-			var aID, vID int
-			var name, desc, vName, agentType string
-			var metaJSON []byte
-			if rows.Scan(&aID, &name, &desc, &vID, &vName, &agentType, &metaJSON) == nil {
-				var meta map[string]any
-				_ = json.Unmarshal(metaJSON, &meta) // DB jsonb column; malformed means nil meta
-				items = append(items, map[string]any{
-					"project_id":   publicProjectID,
-					"id":           strconv.Itoa(aID),
-					"name":         name,
-					"description":  desc,
-					"version_id":   strconv.Itoa(vID),
-					"version_name": vName,
-					"agent_type":   agentType,
-					"meta":         meta,
-				})
-			}
-		}
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"rows": items, "total": len(items)})
 }
 
 func (h *Handler) publicApplicationDetail(w http.ResponseWriter, r *http.Request, ctx context.Context, applicationID string) {
@@ -2611,11 +2683,21 @@ func (h *Handler) ExportImportPost(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		if destinationOwnerErr != nil {
+			errorAgents = append(errorAgents, map[string]any{"index": ae.entityIdx, "name": name, "msg": "Import function has been failed: " + destinationOwnerErr.Error()})
+			importedAgents = append(importedAgents, importedAgentInfo{appID: -1})
+			continue
+		}
+		// `applications.owner_id` is the DESTINATION PROJECT (#533), the same
+		// value the skill and the toolkit imports above write. This statement
+		// put the caller user id there, which made the agent invisible to every
+		// legacy read: the legacy runtime filters `Application.owner_id ==
+		// project_id`. The caller is the version author, one statement below.
 		var appID int
 		err := h.pool.QueryRow(ctx, fmt.Sprintf(`
 			INSERT INTO %s.applications (name, description, owner_id)
 			VALUES ($1, $2, $3) RETURNING id`, s),
-			name, desc, userID).Scan(&appID)
+			name, desc, destinationOwnerID.Int64()).Scan(&appID)
 		if err != nil {
 			errorAgents = append(errorAgents, map[string]any{"index": ae.entityIdx, "name": name, "msg": "Import function has been failed: " + err.Error()})
 			importedAgents = append(importedAgents, importedAgentInfo{appID: -1})
@@ -2674,7 +2756,7 @@ func (h *Handler) ExportImportPost(w http.ResponseWriter, r *http.Request) {
 			err = h.pool.QueryRow(ctx, fmt.Sprintf(`
 				INSERT INTO %s.application_versions (application_id, name, status, agent_type, instructions, welcome_message, llm_settings, conversation_starters, author_id, meta, pipeline_settings)
 				VALUES ($1, $2, 'draft', $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9::jsonb, '{}'::jsonb) RETURNING id`, s),
-				appID, vName, agentType, instructions, welcomeMsg, llmJSON, startersJSON, userID, metaJSON).Scan(&vID)
+				appID, vName, agentType, instructions, welcomeMsg, llmJSON, startersJSON, userID.Int64(), metaJSON).Scan(&vID)
 			if err != nil {
 				// Sibling of the tool-link defect below (#420). The bare
 				// `continue` dropped the version and told nobody. The insert
@@ -2914,7 +2996,7 @@ func (h *Handler) ExportImportPost(w http.ResponseWriter, r *http.Request) {
 		}
 		var toolID int
 		err := h.pool.QueryRow(ctx, importToolkitInsertSQL(s),
-			tkName, tkType, settingsJSON, toolkitOwnerID, userID, tkDesc).Scan(&toolID)
+			tkName, tkType, settingsJSON, toolkitOwnerID.Int64(), userID.Int64(), tkDesc).Scan(&toolID)
 		if err == nil {
 			if tk.importUUID != "" {
 				importUUIDToToolID[tk.importUUID] = toolID
@@ -3211,7 +3293,10 @@ func (h *Handler) Fork(w http.ResponseWriter, r *http.Request) {
 	// "you sent no skills" from "the skill you sent could not be linked".
 	importedSkills := map[string]importedSkill{}
 	_, bodyNamesSkills := body["skills"]
-	skillOwnerID, skillOwnerErr := tenantOwnerID(projectID)
+	// The destination project, resolved ONCE for the skills and for the agents.
+	// `owner_id` on `skills` and on `applications` is the OWNING PROJECT (#533),
+	// and both come from the same immutable path segment.
+	destinationOwnerID, destinationOwnerErr := tenantOwnerID(projectID)
 	for skillPosition, raw := range toAnySlice(body["skills"]) {
 		// The position in the concatenation the wizard resolves against: the
 		// applications it sent, followed by the skills it sent.
@@ -3229,14 +3314,14 @@ func (h *Handler) Fork(w http.ResponseWriter, r *http.Request) {
 		if skillName == "" {
 			skillName = fmt.Sprintf("skills entry %d", skillPosition)
 		}
-		if skillOwnerErr != nil {
+		if destinationOwnerErr != nil {
 			errorSkills = append(errorSkills, map[string]any{
 				"index": skillErrorIndex, "name": skillName,
-				"msg": "Fork function has been failed: " + skillOwnerErr.Error(),
+				"msg": "Fork function has been failed: " + destinationOwnerErr.Error(),
 			})
 			continue
 		}
-		created, err := h.importSkill(ctx, s, skillOwnerID, userID, skill)
+		created, err := h.importSkill(ctx, s, destinationOwnerID, userID, skill)
 		// A skill can be written and still fail, because the row is inserted
 		// before its versions are. It is then reported and registered rather
 		// than dropped, for the reason the import states at phase 0.
@@ -3275,11 +3360,22 @@ func (h *Handler) Fork(w http.ResponseWriter, r *http.Request) {
 		name, _ := app["name"].(string)
 		desc, _ := app["description"].(string)
 
+		if destinationOwnerErr != nil {
+			errorAgents = append(errorAgents, map[string]any{
+				"index": entityIdx, "name": name,
+				"msg": "Fork function has been failed: " + destinationOwnerErr.Error(),
+			})
+			continue
+		}
+		// `applications.owner_id` is the DESTINATION PROJECT (#533). This
+		// statement wrote the caller user id, and the same route reads the
+		// SOURCE row's owner_id back as `parent_project_id` below. One column
+		// held both kinds of number in one request.
 		var appID int
 		err := h.pool.QueryRow(ctx, fmt.Sprintf(`
 			INSERT INTO %s.applications (name, description, owner_id)
 			VALUES ($1, $2, $3) RETURNING id`, s),
-			name, desc, userID).Scan(&appID)
+			name, desc, destinationOwnerID.Int64()).Scan(&appID)
 		if err != nil {
 			slog.ErrorContext(ctx, "fork: application insert failed", "schema", s, "name", name, "error", err)
 			errorAgents = append(errorAgents, map[string]any{
@@ -3390,7 +3486,7 @@ func (h *Handler) Fork(w http.ResponseWriter, r *http.Request) {
 			if err := h.pool.QueryRow(ctx, fmt.Sprintf(`
 				INSERT INTO %s.application_versions (application_id, name, status, agent_type, instructions, welcome_message, llm_settings, conversation_starters, author_id, meta, pipeline_settings)
 				VALUES ($1, $2, 'draft', $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9::jsonb, '{}'::jsonb) RETURNING id`, s),
-				appID, vName, agentType, instructions, welcomeMsg, llmJSON, startersJSON, userID, metaJSON).Scan(&vID); err != nil {
+				appID, vName, agentType, instructions, welcomeMsg, llmJSON, startersJSON, userID.Int64(), metaJSON).Scan(&vID); err != nil {
 				slog.ErrorContext(ctx, "fork: application version insert failed",
 					"schema", s, "application_id", appID, "version_name", vName, "error", err)
 				errorAgents = append(errorAgents, map[string]any{
@@ -3843,14 +3939,36 @@ func (h *Handler) ListProjectIcons(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows := make([]map[string]any, 0, len(page.Objects))
+	names := make([]string, 0, len(page.Objects))
 	for _, object := range page.Objects {
+		names = append(names, object.Key)
+	}
+	// social/rpc/icons.py:get_icons_list sorts by name BEFORE it slices, so the
+	// page a caller asks for is stable between two calls. An unsorted listing
+	// makes `skip` meaningless: the second page may repeat or drop a row
+	// depending on the order the backend happened to answer in.
+	sort.Strings(names)
+
+	rows := make([]map[string]any, 0, len(names))
+	for _, name := range names {
 		rows = append(rows, map[string]any{
-			"name": object.Key,
-			"url":  fmt.Sprintf("/icons/%s/%s", projectID, object.Key),
+			"name": name,
+			"url":  fmt.Sprintf("/icons/%s/%s", projectID, name),
 		})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"rows": rows, "total": len(rows)})
+	// `skip` and `limit` were accepted and DISCARDED. The picker sends both
+	// (apps/elitea-web fetchProjectIcons sends limit=200&skip=0) and pylon
+	// honours both, so a project with more icons than one page could never
+	// reach the rest of them: every request answered page one and called it the
+	// whole set. `total` stays the count of every icon, not of the page —
+	// get_icons_list computes it before the slice, and a client paging on it
+	// needs the full figure.
+	skip := safeIntOr(r.URL.Query().Get("skip"), 0)
+	limit := safeIntOr(r.URL.Query().Get("limit"), defaultProjectIconPageSize)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"rows":  pageOfIconRows(rows, skip, limit),
+		"total": len(rows),
+	})
 }
 
 // CreateProjectIcon stores the uploaded file.
@@ -3885,6 +4003,19 @@ func (h *Handler) CreateProjectIcon(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// project_icon.py measures the upload and refuses it over MAX_FILE_SIZE_KB.
+	// This route had NO cap: ParseMultipartForm's argument is a memory budget,
+	// not a limit, and its error was discarded, so an arbitrarily large file was
+	// streamed straight into the store under a permission a project editor
+	// holds.
+	if header.Size > maxProjectIconBytes {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": fmt.Sprintf("File size exceeds %d KB", maxProjectIconBytes/1024),
+			"code":  "icon_too_large",
+		})
+		return
+	}
+
 	name := projectIconKeyPrefix + generateID() + safeIconExtension(header.Filename)
 	ref, err := storage.NewObjectRef(projectID, iconBucket, name)
 	if err != nil {
@@ -3893,10 +4024,16 @@ func (h *Handler) CreateProjectIcon(w http.ResponseWriter, r *http.Request) {
 	}
 
 	contentType := mime.TypeByExtension(safeIconExtension(header.Filename))
-	if _, err := h.store.Put(r.Context(), ref, file, storage.PutOptions{
+	// LimitReader, not the declared header.Size: that number is what the
+	// multipart part CLAIMS, and the cap has to hold against a part that lies.
+	// The extra byte is what makes an over-cap body detectable instead of
+	// silently truncated into storage.
+	limited := io.LimitReader(file, maxProjectIconBytes+1)
+	info, err := h.store.Put(r.Context(), ref, limited, storage.PutOptions{
 		ContentType:   contentType,
 		ContentLength: -1,
-	}); err != nil {
+	})
+	if err != nil {
 		slog.ErrorContext(r.Context(), "create project icon", "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]any{
 			"error": "failed to save project icon",
@@ -3904,11 +4041,58 @@ func (h *Handler) CreateProjectIcon(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	if info.Size > maxProjectIconBytes {
+		if deleteErr := h.store.Delete(r.Context(), ref); deleteErr != nil {
+			slog.ErrorContext(r.Context(), "remove oversized project icon", "error", deleteErr)
+		}
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": fmt.Sprintf("File size exceeds %d KB", maxProjectIconBytes/1024),
+			"code":  "icon_too_large",
+		})
+		return
+	}
 
+	// The full icon_meta object, not the two keys this route used to answer.
+	// social_save_image returns five, the project-info PUT stores whatever the
+	// picker hands back, and the settings dialog shows the two sizes — so a
+	// two-key response made the dialog render blanks and stored an icon_meta
+	// that no longer described the file.
+	width := clampProjectIconDimension(safeIntOr(r.FormValue("width"), defaultIconDimension))
+	height := clampProjectIconDimension(safeIntOr(r.FormValue("height"), defaultIconDimension))
 	writeJSON(w, http.StatusOK, map[string]any{
-		"name": name,
-		"url":  fmt.Sprintf("/icons/%s/%s", projectID, name),
+		"name":                name,
+		"url":                 fmt.Sprintf("/icons/%s/%s", projectID, name),
+		"size":                fmt.Sprintf("%dx%d", width, height),
+		"initial_file_size":   sizeofFmt(header.Size),
+		"resulting_file_size": sizeofFmt(info.Size),
 	})
+}
+
+// maxProjectIconBytes is project_icon.py's MAX_FILE_SIZE_KB (512), in bytes.
+const maxProjectIconBytes = 512 * 1024
+
+// maxProjectIconDimension is project_icon.py's MAX_DIMENSION. It is 512, NOT
+// the 64 the skill and agent icons use — a project icon is rendered larger.
+const maxProjectIconDimension = 512
+
+// defaultIconDimension is the box every icon route falls back to when the form
+// names none, in pylon and here.
+const defaultIconDimension = 64
+
+// defaultProjectIconPageSize is project_icon.py's `limit` default.
+const defaultProjectIconPageSize = 200
+
+// clampProjectIconDimension is project_icon.py's min(int(...), MAX_DIMENSION)
+// with the lower bound the skill route already applies: a zero or negative box
+// is not a box.
+func clampProjectIconDimension(value int) int {
+	if value < 1 {
+		return 1
+	}
+	if value > maxProjectIconDimension {
+		return maxProjectIconDimension
+	}
+	return value
 }
 
 // DeleteProjectIcon removes the stored object.
@@ -4378,6 +4562,23 @@ func (h *Handler) CreateCollection(w http.ResponseWriter, r *http.Request) {
 		userID, _ = strconv.Atoi(user.ID)
 	}
 
+	// `prompt_collections.owner_id` is the PROJECT and `author_id` is the USER
+	// (#533). The legacy runtime set both in one statement:
+	// `data["owner_id"], data["author_id"] = project_id, author_id`
+	// (elitea_core/api/v2/collections.py:105). This statement bound both
+	// columns to the SAME placeholder — `VALUES ($1, $2, $3, $3, ...)` — so
+	// every collection claimed that a user was its owning project.
+	ownerID, ownerErr := tenantOwnerID(projectID)
+	if ownerErr != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid project id"})
+		return
+	}
+	authorID, authorErr := ownership.NewUserID(int64(userID))
+	if authorErr != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "an authenticated principal is required"})
+		return
+	}
+
 	var body map[string]any
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request body"})
@@ -4387,10 +4588,8 @@ func (h *Handler) CreateCollection(w http.ResponseWriter, r *http.Request) {
 	desc, _ := body["description"].(string)
 
 	var id int
-	err := h.pool.QueryRow(ctx, fmt.Sprintf(`
-		INSERT INTO %s.prompt_collections (name, description, owner_id, author_id, status, meta)
-		VALUES ($1, $2, $3, $3, 'active', '{}')
-		RETURNING id`, s), name, desc, userID).Scan(&id)
+	err := h.pool.QueryRow(ctx, createCollectionInsertSQL(s),
+		name, desc, ownerID.Int64(), authorID.Int64()).Scan(&id)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return

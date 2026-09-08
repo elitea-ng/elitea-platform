@@ -1,0 +1,3979 @@
+{
+  "ado_boards": {
+    "metadata": {
+      "categories": [
+        "project management"
+      ],
+      "check_connection_supported": true,
+      "configuration_group": {
+        "name": "ado"
+      },
+      "extra_categories": [
+        "work item management",
+        "issue tracking",
+        "agile boards"
+      ],
+      "has_function_validators": false,
+      "icon_url": "ado-boards-icon.svg",
+      "label": "ADO boards",
+      "sections": {
+        "auth": {
+          "required": true,
+          "subsections": [
+            {
+              "fields": [
+                "token"
+              ],
+              "name": "Token"
+            }
+          ]
+        }
+      }
+    },
+    "name_required": true,
+    "properties": {
+      "ado_configuration": {
+        "$ref": "#/$defs/ado",
+        "configuration_types": [
+          "ado"
+        ]
+      },
+      "embedding_model": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "configuration_model": "embedding",
+        "title": "Embedding Model"
+      },
+      "limit": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Limit"
+      },
+      "pgvector_configuration": {
+        "$ref": "#/$defs/pgvector",
+        "configuration_types": [
+          "pgvector"
+        ]
+      },
+      "project": {
+        "title": "Project",
+        "type": "string"
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "attach_file_to_work_item": {
+            "type": "object"
+          },
+          "create_work_item": {
+            "type": "object"
+          },
+          "delete_work_item": {
+            "type": "object"
+          },
+          "get_comments": {
+            "type": "object"
+          },
+          "get_image_by_url": {
+            "type": "object"
+          },
+          "index_data": {
+            "type": "object"
+          }
+        },
+        "items": {
+          "enum": [
+            "index_data",
+            "list_indexes",
+            "search_index",
+            "stepback_search_index",
+            "stepback_summary_index",
+            "remove_index"
+          ],
+          "type": "string"
+        },
+        "title": "Selected Tools",
+        "type": "array"
+      }
+    },
+    "required": [
+      "ado_configuration",
+      "project"
+    ],
+    "title": "ado_boards",
+    "type": "object"
+  },
+  "ado_plans": {
+    "metadata": {
+      "categories": [
+        "test management"
+      ],
+      "check_connection_supported": true,
+      "configuration_group": {
+        "icon_url": "azure-icon.svg",
+        "label": "Azure DevOps",
+        "name": "ado"
+      },
+      "extra_categories": [
+        "test case management",
+        "qa"
+      ],
+      "has_function_validators": false,
+      "icon_url": "ado-plans.svg",
+      "label": "ADO plans",
+      "sections": {
+        "auth": {
+          "required": true,
+          "subsections": [
+            {
+              "fields": [
+                "token"
+              ],
+              "name": "Token"
+            }
+          ]
+        }
+      }
+    },
+    "name_required": true,
+    "properties": {
+      "ado_configuration": {
+        "$ref": "#/$defs/ado",
+        "configuration_types": [
+          "ado"
+        ]
+      },
+      "embedding_model": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "configuration_model": "embedding",
+        "title": "Embedding Model"
+      },
+      "limit": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Limit"
+      },
+      "pgvector_configuration": {
+        "$ref": "#/$defs/pgvector",
+        "configuration_types": [
+          "pgvector"
+        ]
+      },
+      "project": {
+        "title": "Project",
+        "type": "string"
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "add_test_case": {
+            "type": "object"
+          },
+          "create_test_case": {
+            "type": "object"
+          },
+          "create_test_cases": {
+            "type": "object"
+          },
+          "create_test_plan": {
+            "type": "object"
+          },
+          "create_test_suite": {
+            "type": "object"
+          },
+          "index_data": {
+            "type": "object"
+          }
+        },
+        "items": {
+          "enum": [
+            "index_data",
+            "list_indexes",
+            "search_index",
+            "stepback_search_index",
+            "stepback_summary_index",
+            "remove_index"
+          ],
+          "type": "string"
+        },
+        "title": "Selected Tools",
+        "type": "array"
+      }
+    },
+    "required": [
+      "ado_configuration",
+      "project"
+    ],
+    "title": "ado_plans",
+    "type": "object"
+  },
+  "ado_repos": {
+    "metadata": {
+      "categories": [
+        "code repositories"
+      ],
+      "check_connection_supported": true,
+      "configuration_group": {
+        "name": "ado"
+      },
+      "extra_categories": [
+        "code",
+        "repository",
+        "version control"
+      ],
+      "has_function_validators": false,
+      "icon_url": "ado-repos-icon.svg",
+      "label": "ADO repos",
+      "sections": {
+        "auth": {
+          "required": true,
+          "subsections": [
+            {
+              "fields": [
+                "token"
+              ],
+              "name": "Token"
+            }
+          ]
+        }
+      }
+    },
+    "name_required": true,
+    "properties": {
+      "active_branch": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Active branch"
+      },
+      "ado_configuration": {
+        "$ref": "#/$defs/ado",
+        "configuration_types": [
+          "ado"
+        ]
+      },
+      "base_branch": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Base branch"
+      },
+      "embedding_model": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "configuration_model": "embedding",
+        "title": "Embedding Model"
+      },
+      "pgvector_configuration": {
+        "$ref": "#/$defs/pgvector",
+        "configuration_types": [
+          "pgvector"
+        ]
+      },
+      "project": {
+        "title": "Project",
+        "type": "string"
+      },
+      "repository_id": {
+        "title": "Repository Id",
+        "type": "string"
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "comment_on_pull_request": {
+            "type": "object"
+          },
+          "create_branch": {
+            "type": "object"
+          },
+          "create_file": {
+            "type": "object"
+          },
+          "create_pull_request": {
+            "type": "object"
+          },
+          "delete_file": {
+            "type": "object"
+          },
+          "index_data": {
+            "type": "object"
+          }
+        },
+        "items": {
+          "enum": [
+            "index_data",
+            "list_indexes",
+            "search_index",
+            "stepback_search_index",
+            "stepback_summary_index",
+            "remove_index"
+          ],
+          "type": "string"
+        },
+        "title": "Selected Tools",
+        "type": "array"
+      }
+    },
+    "required": [
+      "project",
+      "repository_id"
+    ],
+    "title": "ado_repos",
+    "type": "object"
+  },
+  "ado_wiki": {
+    "metadata": {
+      "categories": [
+        "documentation"
+      ],
+      "check_connection_supported": true,
+      "configuration_group": {
+        "name": "ado"
+      },
+      "extra_categories": [
+        "knowledge base",
+        "documentation management",
+        "wiki"
+      ],
+      "has_function_validators": false,
+      "icon_url": "ado-wiki-icon.svg",
+      "label": "ADO wiki",
+      "sections": {
+        "auth": {
+          "required": true,
+          "subsections": [
+            {
+              "fields": [
+                "token"
+              ],
+              "name": "Token"
+            }
+          ]
+        }
+      }
+    },
+    "name_required": true,
+    "properties": {
+      "ado_configuration": {
+        "$ref": "#/$defs/ado",
+        "configuration_types": [
+          "ado"
+        ]
+      },
+      "default_wiki_identifier": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Default Wiki Identifier"
+      },
+      "embedding_model": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "configuration_model": "embedding",
+        "title": "Embedding Model"
+      },
+      "pgvector_configuration": {
+        "$ref": "#/$defs/pgvector",
+        "configuration_types": [
+          "pgvector"
+        ]
+      },
+      "project": {
+        "title": "Project",
+        "type": "string"
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "delete_page_by_id": {
+            "type": "object"
+          },
+          "delete_page_by_path": {
+            "type": "object"
+          },
+          "get_wiki": {
+            "type": "object"
+          },
+          "get_wiki_page": {
+            "type": "object"
+          },
+          "get_wiki_page_by_id": {
+            "type": "object"
+          },
+          "index_data": {
+            "type": "object"
+          }
+        },
+        "items": {
+          "enum": [
+            "index_data",
+            "list_indexes",
+            "search_index",
+            "stepback_search_index",
+            "stepback_summary_index",
+            "remove_index"
+          ],
+          "type": "string"
+        },
+        "title": "Selected Tools",
+        "type": "array"
+      }
+    },
+    "required": [
+      "ado_configuration",
+      "project"
+    ],
+    "title": "ado_wiki",
+    "type": "object"
+  },
+  "aha": {
+    "metadata": {
+      "categories": [
+        "project management"
+      ],
+      "check_connection_supported": false,
+      "extra_categories": [
+        "aha",
+        "roadmap",
+        "requirements management",
+        "ideas",
+        "product management"
+      ],
+      "has_function_validators": false,
+      "icon_url": "aha.svg",
+      "label": "Aha!"
+    },
+    "name_required": true,
+    "properties": {
+      "aha_configuration": {
+        "$ref": "#/$defs/aha",
+        "configuration_types": [
+          "aha"
+        ]
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "add_comment": {
+            "type": "object"
+          },
+          "attach_file": {
+            "type": "object"
+          },
+          "copy_record": {
+            "type": "object"
+          },
+          "create_record": {
+            "type": "object"
+          },
+          "create_record_link": {
+            "type": "object"
+          },
+          "delete_record": {
+            "type": "object"
+          }
+        },
+        "items": {
+          "enum": [
+            "get_feature",
+            "get_requirement",
+            "get_release",
+            "get_initiative",
+            "get_epic",
+            "get_idea"
+          ],
+          "type": "string"
+        },
+        "title": "Selected Tools",
+        "type": "array"
+      }
+    },
+    "required": [
+      "aha_configuration"
+    ],
+    "title": "aha",
+    "type": "object"
+  },
+  "application": {
+    "metadata": {
+      "label": "Agent"
+    },
+    "properties": {
+      "application_id": {
+        "type": "integer"
+      },
+      "application_version_id": {
+        "type": "integer"
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "ask_agent": {
+            "type": "object"
+          }
+        },
+        "type": "array"
+      }
+    },
+    "title": "application",
+    "type": "object"
+  },
+  "artifact": {
+    "metadata": {
+      "categories": [
+        "storage"
+      ],
+      "check_connection_supported": false,
+      "extra_categories": [
+        "artifact",
+        "file storage",
+        "bucket",
+        "files"
+      ],
+      "has_function_validators": false,
+      "icon_url": null,
+      "label": "Artifact",
+      "max_length": 50
+    },
+    "properties": {
+      "bucket": {
+        "type": "string"
+      },
+      "embedding_model": {
+        "type": "string"
+      },
+      "pgvector_configuration": {
+        "$ref": "#/$defs/pgvector",
+        "configuration_types": [
+          "pgvector"
+        ]
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "append_data": {
+            "type": "object"
+          },
+          "create_file": {
+            "type": "object"
+          },
+          "create_new_bucket": {
+            "type": "object"
+          },
+          "delete_file": {
+            "type": "object"
+          },
+          "edit_file": {
+            "type": "object"
+          },
+          "index_data": {
+            "type": "object"
+          }
+        },
+        "type": "array"
+      }
+    },
+    "title": "artifact",
+    "type": "object"
+  },
+  "aws": {
+    "metadata": {
+      "categories": [
+        "cloud"
+      ],
+      "check_connection_supported": false,
+      "extra_categories": [
+        "aws",
+        "amazon web services",
+        "cloud computing",
+        "infrastructure as a service"
+      ],
+      "has_function_validators": false,
+      "hidden": true,
+      "icon_url": null,
+      "label": "Cloud AWS",
+      "unavailable": true,
+      "unavailable_reason": "the admitted Python worker image does not carry the dependencies of the aws toolkit"
+    },
+    "name_required": true,
+    "properties": {
+      "access_key_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Access Key ID"
+      },
+      "region": {
+        "title": "Region",
+        "type": "string"
+      },
+      "secret_access_key": {
+        "anyOf": [
+          {
+            "format": "password",
+            "type": "string",
+            "writeOnly": true
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "secret": true,
+        "title": "Secret Access Key"
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "execute_aws": {
+            "type": "object"
+          }
+        },
+        "title": "Selected Tools",
+        "type": "array"
+      }
+    },
+    "title": "aws",
+    "type": "object"
+  },
+  "azure": {
+    "metadata": {
+      "check_connection_supported": false,
+      "has_function_validators": false,
+      "hidden": true,
+      "icon_url": "azure-icon.svg",
+      "label": "Cloud Azure",
+      "unavailable": true,
+      "unavailable_reason": "the admitted Python worker image does not carry the dependencies of the azure toolkit"
+    },
+    "name_required": true,
+    "properties": {
+      "client_id": {
+        "title": "Client ID",
+        "type": "string"
+      },
+      "client_secret": {
+        "format": "password",
+        "secret": true,
+        "title": "Client secret",
+        "type": "string",
+        "writeOnly": true
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "azure_integration_healthcheck": {
+            "type": "object"
+          },
+          "execute": {
+            "type": "object"
+          }
+        },
+        "items": {
+          "enum": [
+            "execute",
+            "azure_integration_healthcheck"
+          ],
+          "type": "string"
+        },
+        "title": "Selected Tools",
+        "type": "array"
+      },
+      "subscription_id": {
+        "title": "Subscription ID",
+        "type": "string"
+      },
+      "tenant_id": {
+        "title": "Tenant ID",
+        "type": "string"
+      }
+    },
+    "title": "azure",
+    "type": "object"
+  },
+  "azure_search": {
+    "metadata": {
+      "categories": [
+        "other"
+      ],
+      "check_connection_supported": true,
+      "extra_categories": [
+        "azure cognitive search",
+        "vector database",
+        "knowledge base"
+      ],
+      "has_function_validators": false,
+      "hidden": true,
+      "icon_url": null,
+      "label": "Azure Search",
+      "unavailable": true,
+      "unavailable_reason": "the admitted Python worker image does not carry the dependencies of the azure_search toolkit"
+    },
+    "name_required": true,
+    "properties": {
+      "api_version": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Api Version"
+      },
+      "azure_search_configuration": {
+        "$ref": "#/$defs/azure_search",
+        "configuration_types": [
+          "azure_search"
+        ]
+      },
+      "index_name": {
+        "title": "Index Name",
+        "type": "string"
+      },
+      "model_name": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Model Name"
+      },
+      "openai_api_key": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "secret": true,
+        "title": "Openai Api Key"
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "get_document": {
+            "type": "object"
+          },
+          "text_search": {
+            "type": "object"
+          }
+        },
+        "items": {
+          "enum": [
+            "text_search",
+            "get_document"
+          ],
+          "type": "string"
+        },
+        "title": "Selected Tools",
+        "type": "array"
+      }
+    },
+    "required": [
+      "index_name",
+      "azure_search_configuration"
+    ],
+    "title": "azure_search",
+    "type": "object"
+  },
+  "bigquery": {
+    "metadata": {
+      "check_connection_supported": false,
+      "has_function_validators": true,
+      "hidden": true,
+      "icon_url": "google.svg",
+      "label": "Cloud GCP",
+      "sections": {
+        "auth": {
+          "required": false,
+          "subsections": [
+            {
+              "fields": [
+                "api_key"
+              ],
+              "name": "API Key"
+            }
+          ]
+        }
+      },
+      "unavailable": true,
+      "unavailable_reason": "the admitted Python worker image does not carry the dependencies of the bigquery toolkit"
+    },
+    "name_required": true,
+    "properties": {
+      "bigquery_configuration": {
+        "$ref": "#/$defs/bigquery",
+        "configuration_types": [
+          "bigquery"
+        ]
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "batch_search": {
+            "type": "object"
+          },
+          "create_delta_lake_table": {
+            "type": "object"
+          },
+          "create_vector_index": {
+            "type": "object"
+          },
+          "execute": {
+            "type": "object"
+          },
+          "get_documents": {
+            "type": "object"
+          },
+          "job_stats": {
+            "type": "object"
+          }
+        },
+        "title": "Selected Tools",
+        "type": "array"
+      }
+    },
+    "required": [
+      "bigquery_configuration"
+    ],
+    "title": "bigquery",
+    "type": "object"
+  },
+  "bitbucket": {
+    "metadata": {
+      "categories": [
+        "code repositories"
+      ],
+      "check_connection_supported": true,
+      "extra_categories": [
+        "bitbucket",
+        "git",
+        "repository",
+        "code",
+        "version control"
+      ],
+      "has_function_validators": false,
+      "icon_url": "bitbucket-icon.svg",
+      "label": "Bitbucket"
+    },
+    "name_required": true,
+    "properties": {
+      "bitbucket_configuration": {
+        "$ref": "#/$defs/bitbucket",
+        "configuration_types": [
+          "bitbucket"
+        ]
+      },
+      "branch": {
+        "title": "Branch",
+        "type": "string"
+      },
+      "cloud": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Cloud"
+      },
+      "embedding_model": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "configuration_model": "embedding",
+        "title": "Embedding Model"
+      },
+      "pgvector_configuration": {
+        "$ref": "#/$defs/pgvector",
+        "configuration_types": [
+          "pgvector"
+        ]
+      },
+      "project": {
+        "title": "Project",
+        "type": "string"
+      },
+      "repository": {
+        "title": "Repository",
+        "type": "string"
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "add_pull_request_comment": {
+            "type": "object"
+          },
+          "close_pull_request": {
+            "type": "object"
+          },
+          "create_branch": {
+            "type": "object"
+          },
+          "create_file": {
+            "type": "object"
+          },
+          "create_pull_request": {
+            "type": "object"
+          },
+          "index_data": {
+            "type": "object"
+          }
+        },
+        "items": {
+          "enum": [
+            "index_data",
+            "list_indexes",
+            "search_index",
+            "stepback_search_index",
+            "stepback_summary_index",
+            "remove_index"
+          ],
+          "type": "string"
+        },
+        "title": "Selected Tools",
+        "type": "array"
+      }
+    },
+    "required": [
+      "project",
+      "repository",
+      "bitbucket_configuration"
+    ],
+    "title": "bitbucket",
+    "type": "object"
+  },
+  "carrier": {
+    "metadata": {
+      "categories": [
+        "testing"
+      ],
+      "check_connection_supported": false,
+      "extra_categories": [
+        "carrier",
+        "ticket management",
+        "log management"
+      ],
+      "has_function_validators": false,
+      "icon_url": "carrier.svg",
+      "label": "Carrier",
+      "version": "2.0.1"
+    },
+    "name_required": true,
+    "properties": {
+      "carrier_configuration": {
+        "$ref": "#/$defs/carrier",
+        "configuration_types": [
+          "carrier"
+        ]
+      },
+      "project_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Project Id"
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "add_tag_to_report": {
+            "type": "object"
+          },
+          "cancel_ui_test": {
+            "type": "object"
+          },
+          "create_backend_test": {
+            "type": "object"
+          },
+          "create_excel_report": {
+            "type": "object"
+          },
+          "create_ticket": {
+            "type": "object"
+          },
+          "create_ui_excel_report": {
+            "type": "object"
+          }
+        },
+        "items": {
+          "enum": [
+            "get_ticket_list",
+            "create_ticket",
+            "get_reports",
+            "get_report_by_id",
+            "add_tag_to_report",
+            "create_excel_report"
+          ],
+          "type": "string"
+        },
+        "title": "Selected Tools",
+        "type": "array"
+      }
+    },
+    "required": [
+      "carrier_configuration"
+    ],
+    "title": "carrier",
+    "type": "object"
+  },
+  "confluence": {
+    "metadata": {
+      "categories": [
+        "documentation"
+      ],
+      "check_connection_supported": true,
+      "extra_categories": [
+        "confluence",
+        "wiki",
+        "knowledge base",
+        "documentation",
+        "atlassian"
+      ],
+      "has_function_validators": false,
+      "icon_url": null,
+      "label": "Confluence"
+    },
+    "name_required": true,
+    "properties": {
+      "api_version": {
+        "enum": [
+          "Auto",
+          "1",
+          "2"
+        ],
+        "title": "Api Version",
+        "type": "string"
+      },
+      "confluence_configuration": {
+        "$ref": "#/$defs/confluence",
+        "configuration_types": [
+          "confluence"
+        ]
+      },
+      "custom_headers": {
+        "anyOf": [
+          {
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Custom Headers"
+      },
+      "embedding_model": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "configuration_model": "embedding",
+        "title": "Embedding Model"
+      },
+      "labels": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Labels"
+      },
+      "limit": {
+        "title": "Limit",
+        "type": "integer"
+      },
+      "max_pages": {
+        "title": "Max Pages",
+        "type": "integer"
+      },
+      "max_retry_seconds": {
+        "title": "Max Retry Seconds",
+        "type": "integer"
+      },
+      "min_retry_seconds": {
+        "title": "Min Retry Seconds",
+        "type": "integer"
+      },
+      "number_of_retries": {
+        "title": "Number Of Retries",
+        "type": "integer"
+      },
+      "pgvector_configuration": {
+        "$ref": "#/$defs/pgvector",
+        "configuration_types": [
+          "pgvector"
+        ]
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "add_file_to_page": {
+            "type": "object"
+          },
+          "create_page": {
+            "type": "object"
+          },
+          "create_pages": {
+            "type": "object"
+          },
+          "delete_page": {
+            "type": "object"
+          },
+          "execute_generic_confluence": {
+            "type": "object"
+          },
+          "index_data": {
+            "type": "object"
+          }
+        },
+        "items": {
+          "enum": [
+            "index_data",
+            "list_indexes",
+            "search_index",
+            "stepback_search_index",
+            "stepback_summary_index",
+            "remove_index"
+          ],
+          "type": "string"
+        },
+        "title": "Selected Tools",
+        "type": "array"
+      },
+      "space": {
+        "title": "Space",
+        "type": "string"
+      }
+    },
+    "required": [
+      "space",
+      "confluence_configuration"
+    ],
+    "title": "confluence",
+    "type": "object"
+  },
+  "custom": {
+    "metadata": {
+      "label": "Custom"
+    },
+    "properties": {
+      "selected_tools": {
+        "args_schemas": {},
+        "type": "array"
+      }
+    },
+    "title": "custom",
+    "type": "object"
+  },
+  "data_analysis": {
+    "metadata": {
+      "categories": [
+        "internal_tool"
+      ],
+      "check_connection_supported": false,
+      "extra_categories": [
+        "data analysis",
+        "pandas",
+        "dataframes",
+        "data science"
+      ],
+      "has_function_validators": false,
+      "hidden": true,
+      "icon_url": "data-analysis.svg",
+      "label": "Data Analysis"
+    },
+    "name_required": true,
+    "properties": {
+      "bucket_name": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Bucket name"
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "pandas_analyze_data": {
+            "type": "object"
+          }
+        },
+        "title": "Selected Tools",
+        "type": "array"
+      }
+    },
+    "title": "data_analysis",
+    "type": "object"
+  },
+  "database": {
+    "metadata": {
+      "label": "Database"
+    },
+    "properties": {
+      "connection_string": {
+        "type": "string"
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "describe_table": {
+            "type": "object"
+          },
+          "list_tables": {
+            "type": "object"
+          },
+          "query": {
+            "type": "object"
+          }
+        },
+        "type": "array"
+      }
+    },
+    "title": "database",
+    "type": "object"
+  },
+  "datasource": {
+    "metadata": {
+      "label": "Datasource"
+    },
+    "properties": {
+      "selected_tools": {
+        "args_schemas": {
+          "index_data": {
+            "type": "object"
+          },
+          "search_data": {
+            "type": "object"
+          }
+        },
+        "type": "array"
+      }
+    },
+    "title": "datasource",
+    "type": "object"
+  },
+  "delta_lake": {
+    "metadata": {
+      "check_connection_supported": false,
+      "has_function_validators": true,
+      "hidden": true,
+      "icon_url": "delta-lake.svg",
+      "label": "AWS Delta Lake",
+      "sections": {
+        "auth": {
+          "required": false,
+          "subsections": [
+            {
+              "fields": [
+                "aws_access_key_id"
+              ],
+              "name": "AWS Access Key ID"
+            },
+            {
+              "fields": [
+                "aws_secret_access_key"
+              ],
+              "name": "AWS Secret Access Key"
+            },
+            {
+              "fields": [
+                "aws_session_token"
+              ],
+              "name": "AWS Session Token"
+            },
+            {
+              "fields": [
+                "aws_region"
+              ],
+              "name": "AWS Region"
+            }
+          ]
+        },
+        "connection": {
+          "required": false,
+          "subsections": [
+            {
+              "fields": [
+                "s3_path"
+              ],
+              "name": "Delta Lake S3 Path"
+            },
+            {
+              "fields": [
+                "table_path"
+              ],
+              "name": "Delta Lake Table Path"
+            }
+          ]
+        }
+      },
+      "unavailable": true,
+      "unavailable_reason": "the admitted Python worker image does not carry the dependencies of the delta_lake toolkit"
+    },
+    "name_required": true,
+    "properties": {
+      "delta_lake_configuration": {
+        "$ref": "#/$defs/delta_lake",
+        "configuration_types": [
+          "delta_lake"
+        ]
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "get_table_schema": {
+            "type": "object"
+          },
+          "query_table": {
+            "type": "object"
+          },
+          "vector_search": {
+            "type": "object"
+          }
+        },
+        "title": "Selected Tools",
+        "type": "array"
+      }
+    },
+    "required": [
+      "delta_lake_configuration"
+    ],
+    "title": "delta_lake",
+    "type": "object"
+  },
+  "elastic": {
+    "metadata": {
+      "check_connection_supported": false,
+      "has_function_validators": false,
+      "hidden": true,
+      "icon_url": null,
+      "label": "Elasticsearch"
+    },
+    "name_required": false,
+    "properties": {
+      "api_key": {
+        "anyOf": [
+          {
+            "format": "password",
+            "type": "string",
+            "writeOnly": true
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "secret": true,
+        "title": "Cluster URL"
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "search_elastic_index": {
+            "type": "object"
+          }
+        },
+        "title": "Selected Tools",
+        "type": "array"
+      },
+      "url": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Elasticsearch URL",
+        "toolkit_name": true
+      }
+    },
+    "title": "elastic",
+    "type": "object"
+  },
+  "figma": {
+    "metadata": {
+      "categories": [
+        "other"
+      ],
+      "check_connection_supported": false,
+      "extra_categories": [
+        "figma",
+        "design",
+        "ui/ux",
+        "prototyping",
+        "collaboration"
+      ],
+      "has_function_validators": false,
+      "icon_url": "figma-icon.svg",
+      "label": "Figma"
+    },
+    "name_required": true,
+    "properties": {
+      "embedding_model": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "configuration_model": "embedding",
+        "title": "Embedding Model"
+      },
+      "figma_configuration": {
+        "$ref": "#/$defs/figma",
+        "configuration_types": [
+          "figma"
+        ]
+      },
+      "global_limit": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Global Limit"
+      },
+      "global_regexp": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Global Regexp"
+      },
+      "number_of_threads": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Number Of Threads"
+      },
+      "pgvector_configuration": {
+        "$ref": "#/$defs/pgvector",
+        "configuration_types": [
+          "pgvector"
+        ]
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "analyze_file": {
+            "type": "object"
+          },
+          "extract_design_tokens": {
+            "type": "object"
+          },
+          "extract_design_tokens_batch": {
+            "type": "object"
+          },
+          "get_file": {
+            "type": "object"
+          },
+          "get_file_comments": {
+            "type": "object"
+          },
+          "index_data": {
+            "type": "object"
+          }
+        },
+        "items": {
+          "enum": [
+            "index_data",
+            "list_indexes",
+            "search_index",
+            "stepback_search_index",
+            "stepback_summary_index",
+            "remove_index"
+          ],
+          "type": "string"
+        },
+        "title": "Selected Tools",
+        "type": "array"
+      }
+    },
+    "required": [
+      "figma_configuration",
+      "pgvector_configuration"
+    ],
+    "title": "figma",
+    "type": "object"
+  },
+  "gcp": {
+    "metadata": {
+      "check_connection_supported": false,
+      "has_function_validators": false,
+      "hidden": true,
+      "icon_url": "google.svg",
+      "label": "Cloud GCP",
+      "unavailable": true,
+      "unavailable_reason": "the admitted Python worker image does not carry the dependencies of the gcp toolkit"
+    },
+    "name_required": true,
+    "properties": {
+      "api_key": {
+        "format": "password",
+        "secret": true,
+        "title": "API key",
+        "type": "string",
+        "writeOnly": true
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "execute_request": {
+            "type": "object"
+          }
+        },
+        "title": "Selected Tools",
+        "type": "array"
+      }
+    },
+    "title": "gcp",
+    "type": "object"
+  },
+  "github": {
+    "metadata": {
+      "categories": [
+        "code repositories"
+      ],
+      "check_connection_supported": false,
+      "extra_categories": [
+        "github",
+        "git",
+        "repository",
+        "code",
+        "version control"
+      ],
+      "has_function_validators": false,
+      "icon_url": null,
+      "label": "GitHub"
+    },
+    "properties": {
+      "access_token": {
+        "type": "string"
+      },
+      "github_configuration": {
+        "$ref": "#/$defs/github",
+        "configuration_types": [
+          "github"
+        ]
+      },
+      "pgvector_configuration": {
+        "$ref": "#/$defs/pgvector",
+        "configuration_types": [
+          "pgvector"
+        ]
+      },
+      "repository": {
+        "type": "string"
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "apply_git_patch": {
+            "type": "object"
+          },
+          "apply_git_patch_from_file": {
+            "type": "object"
+          },
+          "comment_on_issue": {
+            "type": "object"
+          },
+          "create_branch": {
+            "type": "object"
+          },
+          "create_file": {
+            "type": "object"
+          },
+          "index_data": {
+            "type": "object"
+          }
+        },
+        "type": "array"
+      }
+    },
+    "title": "github",
+    "type": "object"
+  },
+  "gitlab": {
+    "metadata": {
+      "categories": [
+        "code repositories"
+      ],
+      "check_connection_supported": false,
+      "extra_categories": [
+        "gitlab",
+        "git",
+        "repository",
+        "code",
+        "version control"
+      ],
+      "has_function_validators": false,
+      "icon_url": null,
+      "label": "GitLab"
+    },
+    "name_required": true,
+    "properties": {
+      "branch": {
+        "title": "Branch",
+        "type": "string"
+      },
+      "embedding_model": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "configuration_model": "embedding",
+        "title": "Embedding Model"
+      },
+      "gitlab_configuration": {
+        "$ref": "#/$defs/gitlab",
+        "configuration_types": [
+          "gitlab"
+        ]
+      },
+      "pgvector_configuration": {
+        "$ref": "#/$defs/pgvector",
+        "configuration_types": [
+          "pgvector"
+        ]
+      },
+      "repository": {
+        "title": "Repository",
+        "type": "string"
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "append_file": {
+            "type": "object"
+          },
+          "comment_on_issue": {
+            "type": "object"
+          },
+          "comment_on_pr": {
+            "type": "object"
+          },
+          "create_branch": {
+            "type": "object"
+          },
+          "create_file": {
+            "type": "object"
+          },
+          "index_data": {
+            "type": "object"
+          }
+        },
+        "items": {
+          "enum": [
+            "index_data",
+            "list_indexes",
+            "search_index",
+            "stepback_search_index",
+            "stepback_summary_index",
+            "remove_index"
+          ],
+          "type": "string"
+        },
+        "title": "Selected Tools",
+        "type": "array"
+      }
+    },
+    "required": [
+      "repository",
+      "gitlab_configuration"
+    ],
+    "title": "gitlab",
+    "type": "object"
+  },
+  "gitlab_org": {
+    "metadata": {
+      "categories": [
+        "code repositories"
+      ],
+      "check_connection_supported": false,
+      "extra_categories": [
+        "gitlab",
+        "git",
+        "repository",
+        "code",
+        "version control"
+      ],
+      "has_function_validators": false,
+      "icon_url": null,
+      "label": "GitLab Org"
+    },
+    "name_required": true,
+    "properties": {
+      "branch": {
+        "title": "Branch",
+        "type": "string"
+      },
+      "gitlab_configuration": {
+        "$ref": "#/$defs/gitlab",
+        "configuration_types": [
+          "gitlab"
+        ]
+      },
+      "repositories": {
+        "title": "Repositories",
+        "type": "string"
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "append_file": {
+            "type": "object"
+          },
+          "comment_on_issue": {
+            "type": "object"
+          },
+          "create_branch": {
+            "type": "object"
+          },
+          "create_file": {
+            "type": "object"
+          },
+          "create_pr_change_comment": {
+            "type": "object"
+          },
+          "create_pull_request": {
+            "type": "object"
+          }
+        },
+        "items": {
+          "enum": [
+            "create_branch",
+            "set_active_branch",
+            "list_branches_in_repo",
+            "get_issues",
+            "get_issue",
+            "create_pull_request"
+          ],
+          "type": "string"
+        },
+        "title": "Selected Tools",
+        "type": "array"
+      }
+    },
+    "required": [
+      "gitlab_configuration"
+    ],
+    "title": "gitlab_org",
+    "type": "object"
+  },
+  "google_places": {
+    "metadata": {
+      "categories": [
+        "other"
+      ],
+      "check_connection_supported": false,
+      "extra_categories": [
+        "google",
+        "places",
+        "maps",
+        "location",
+        "geolocation"
+      ],
+      "has_function_validators": false,
+      "hidden": true,
+      "icon_url": "gplaces-icon.svg",
+      "label": "Google Places",
+      "unavailable": true,
+      "unavailable_reason": "the admitted Python worker image does not carry the dependencies of the google_places toolkit"
+    },
+    "name_required": true,
+    "properties": {
+      "google_places_configuration": {
+        "$ref": "#/$defs/google_places",
+        "configuration_types": [
+          "google_places"
+        ]
+      },
+      "results_count": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Results Count"
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "find_near": {
+            "type": "object"
+          },
+          "places": {
+            "type": "object"
+          }
+        },
+        "items": {
+          "enum": [
+            "places",
+            "find_near"
+          ],
+          "type": "string"
+        },
+        "title": "Selected Tools",
+        "type": "array"
+      }
+    },
+    "required": [
+      "google_places_configuration"
+    ],
+    "title": "google_places",
+    "type": "object"
+  },
+  "jira": {
+    "metadata": {
+      "categories": [
+        "project management"
+      ],
+      "check_connection_supported": true,
+      "extra_categories": [
+        "jira",
+        "atlassian",
+        "issue tracking",
+        "project management",
+        "task management"
+      ],
+      "has_function_validators": false,
+      "icon_url": "jira-icon.svg",
+      "label": "Jira"
+    },
+    "properties": {
+      "jira_configuration": {
+        "$ref": "#/$defs/jira",
+        "configuration_types": [
+          "jira"
+        ]
+      },
+      "password": {
+        "type": "string"
+      },
+      "pgvector_configuration": {
+        "$ref": "#/$defs/pgvector",
+        "configuration_types": [
+          "pgvector"
+        ]
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "add_comments": {
+            "type": "object"
+          },
+          "add_file_to_issue_description": {
+            "type": "object"
+          },
+          "create_issue": {
+            "type": "object"
+          },
+          "execute_generic_rq": {
+            "type": "object"
+          },
+          "get_attachments_content": {
+            "type": "object"
+          },
+          "index_data": {
+            "type": "object"
+          }
+        },
+        "type": "array"
+      },
+      "url": {
+        "type": "string"
+      },
+      "username": {
+        "type": "string"
+      }
+    },
+    "title": "jira",
+    "type": "object"
+  },
+  "keycloak": {
+    "metadata": {
+      "categories": [
+        "authentication",
+        "identity management"
+      ],
+      "check_connection_supported": false,
+      "has_function_validators": false,
+      "hidden": true,
+      "icon_url": null,
+      "label": "Keycloak"
+    },
+    "name_required": false,
+    "properties": {
+      "base_url": {
+        "title": "Server URL",
+        "toolkit_name": true,
+        "type": "string"
+      },
+      "client_id": {
+        "title": "Client ID",
+        "type": "string"
+      },
+      "client_secret": {
+        "format": "password",
+        "secret": true,
+        "title": "Client sercet",
+        "type": "string",
+        "writeOnly": true
+      },
+      "realm": {
+        "title": "Realm",
+        "type": "string"
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "execute": {
+            "type": "object"
+          }
+        },
+        "title": "Selected Tools",
+        "type": "array"
+      }
+    },
+    "title": "keycloak",
+    "type": "object"
+  },
+  "kubernetes": {
+    "metadata": {
+      "check_connection_supported": false,
+      "has_function_validators": false,
+      "hidden": true,
+      "icon_url": null,
+      "label": "Cloud Kubernetes",
+      "unavailable": true,
+      "unavailable_reason": "the admitted Python worker image does not carry the dependencies of the k8s toolkit"
+    },
+    "name_required": true,
+    "properties": {
+      "selected_tools": {
+        "args_schemas": {
+          "execute_kubernetes": {
+            "type": "object"
+          },
+          "kubernetes_integration_healthcheck": {
+            "type": "object"
+          }
+        },
+        "items": {
+          "enum": [
+            "execute_kubernetes",
+            "kubernetes_integration_healthcheck"
+          ],
+          "type": "string"
+        },
+        "title": "Selected Tools",
+        "type": "array"
+      },
+      "token": {
+        "anyOf": [
+          {
+            "format": "password",
+            "type": "string",
+            "writeOnly": true
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "secret": true,
+        "title": "Token"
+      },
+      "url": {
+        "title": "Cluster URL",
+        "type": "string"
+      }
+    },
+    "title": "kubernetes",
+    "type": "object"
+  },
+  "localgit": {
+    "metadata": {
+      "check_connection_supported": false,
+      "has_function_validators": false,
+      "hidden": true,
+      "icon_url": null,
+      "label": "Local GIT",
+      "unavailable": true,
+      "unavailable_reason": "the admitted Python worker image does not carry the dependencies of the localgit toolkit"
+    },
+    "name_required": true,
+    "properties": {
+      "base_path": {
+        "title": "Base path",
+        "type": "string"
+      },
+      "commit_sha": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Commit SHA"
+      },
+      "repo_path": {
+        "title": "Repository path",
+        "type": "string"
+      },
+      "repo_url": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Repository URL"
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "checkout_branch": {
+            "type": "object"
+          },
+          "checkout_commit": {
+            "type": "object"
+          },
+          "commit_changes": {
+            "type": "object"
+          },
+          "create_file": {
+            "type": "object"
+          },
+          "delete_file": {
+            "type": "object"
+          },
+          "get_diff": {
+            "type": "object"
+          }
+        },
+        "items": {
+          "enum": [
+            "create_file",
+            "read_file",
+            "update_file",
+            "delete_file",
+            "checkout_branch",
+            "checkout_commit"
+          ],
+          "type": "string"
+        },
+        "title": "Selected Tools",
+        "type": "array"
+      }
+    },
+    "title": "localgit",
+    "type": "object"
+  },
+  "mcp": {
+    "metadata": {
+      "categories": [
+        "other"
+      ],
+      "check_connection_supported": false,
+      "description": "Connect to a remote Model Context Protocol (MCP) server via HTTP to access tools",
+      "extra_categories": [
+        "remote tools",
+        "sse",
+        "http"
+      ],
+      "has_function_validators": false,
+      "icon_url": null,
+      "label": "Remote MCP"
+    },
+    "name_required": true,
+    "properties": {
+      "cache_ttl": {
+        "title": "Cache TTL",
+        "type": "integer"
+      },
+      "client_id": {
+        "title": "Client ID",
+        "type": "string"
+      },
+      "client_secret": {
+        "format": "password",
+        "title": "Client Secret",
+        "type": "string",
+        "writeOnly": true
+      },
+      "enable_caching": {
+        "title": "Enable Caching",
+        "type": "boolean"
+      },
+      "headers": {
+        "title": "Headers",
+        "type": "object"
+      },
+      "scopes": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Scopes",
+        "type": "array"
+      },
+      "selected_tools": {
+        "args_schemas": {},
+        "title": "Selected Tools",
+        "type": "array"
+      },
+      "ssl_verify": {
+        "title": "Verify TLS Certificates",
+        "type": "boolean"
+      },
+      "timeout": {
+        "title": "Timeout",
+        "type": "integer"
+      },
+      "url": {
+        "title": "URL",
+        "type": "string"
+      }
+    },
+    "required": [
+      "url"
+    ],
+    "title": "mcp",
+    "type": "object"
+  },
+  "mcp_config": {
+    "metadata": {
+      "check_connection_supported": false,
+      "has_function_validators": false,
+      "hidden": true,
+      "unavailable": true,
+      "unavailable_reason": "the toolkit declares no label and is not created directly"
+    },
+    "name_required": true,
+    "properties": {
+      "excluded_tools": {
+        "anyOf": [
+          {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Excluded Tools"
+      },
+      "selected_tools": {
+        "args_schemas": {},
+        "title": "Selected Tools",
+        "type": "array"
+      },
+      "server_name": {
+        "title": "Server Name",
+        "type": "string"
+      }
+    },
+    "required": [
+      "server_name"
+    ],
+    "title": "mcp_config",
+    "type": "object"
+  },
+  "memory": {
+    "metadata": {
+      "categories": [
+        "other"
+      ],
+      "check_connection_supported": false,
+      "extra_categories": [
+        "long-term memory",
+        "langgraph store"
+      ],
+      "has_function_validators": false,
+      "hidden": false,
+      "icon_url": "memory.svg",
+      "label": "Memory"
+    },
+    "name_required": true,
+    "properties": {
+      "namespace": {
+        "title": "Namespace",
+        "type": "string"
+      },
+      "pgvector_configuration": {
+        "$ref": "#/$defs/pgvector",
+        "configuration_types": [
+          "pgvector"
+        ]
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "delete_memory": {
+            "type": "object"
+          },
+          "get_memory": {
+            "type": "object"
+          },
+          "manage_memory": {
+            "type": "object"
+          },
+          "search_memory": {
+            "type": "object"
+          }
+        },
+        "items": {
+          "enum": [
+            "manage_memory",
+            "search_memory",
+            "get_memory",
+            "delete_memory"
+          ],
+          "type": "string"
+        },
+        "title": "Selected Tools",
+        "type": "array"
+      }
+    },
+    "required": [
+      "namespace",
+      "pgvector_configuration"
+    ],
+    "title": "memory",
+    "type": "object"
+  },
+  "openapi": {
+    "metadata": {
+      "categories": [
+        "integrations"
+      ],
+      "check_connection_supported": false,
+      "extra_categories": [
+        "api",
+        "openapi",
+        "swagger"
+      ],
+      "has_function_validators": false,
+      "icon_url": "openapi.svg",
+      "label": "OpenAPI"
+    },
+    "name_required": true,
+    "properties": {
+      "base_url": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Base Url"
+      },
+      "openapi_configuration": {
+        "$ref": "#/$defs/openapi",
+        "configuration_types": [
+          "openapi"
+        ]
+      },
+      "selected_tools": {
+        "args_schemas": {},
+        "title": "Selected Tools",
+        "type": "array"
+      },
+      "spec": {
+        "title": "Spec",
+        "type": "string",
+        "ui_component": "openapi_spec"
+      }
+    },
+    "required": [
+      "openapi_configuration",
+      "spec"
+    ],
+    "title": "openapi",
+    "type": "object"
+  },
+  "postman": {
+    "metadata": {
+      "check_connection_supported": true,
+      "has_function_validators": false,
+      "icon_url": "postman.svg",
+      "label": "Postman"
+    },
+    "name_required": true,
+    "properties": {
+      "collection_id": {
+        "title": "Collection Id",
+        "type": "string"
+      },
+      "environment_config": {
+        "title": "Environment Config",
+        "type": "object"
+      },
+      "postman_configuration": {
+        "$ref": "#/$defs/postman",
+        "configuration_types": [
+          "postman"
+        ]
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "analyze": {
+            "type": "object"
+          },
+          "create_folder": {
+            "type": "object"
+          },
+          "create_request": {
+            "type": "object"
+          },
+          "delete_collection": {
+            "type": "object"
+          },
+          "delete_folder": {
+            "type": "object"
+          },
+          "delete_request": {
+            "type": "object"
+          }
+        },
+        "items": {
+          "enum": [
+            "get_collections",
+            "get_collection",
+            "get_folder",
+            "get_request_by_path",
+            "get_request_by_id",
+            "get_request_script"
+          ],
+          "type": "string"
+        },
+        "title": "Selected Tools",
+        "type": "array"
+      }
+    },
+    "required": [
+      "postman_configuration",
+      "collection_id"
+    ],
+    "title": "postman",
+    "type": "object"
+  },
+  "pptx": {
+    "metadata": {
+      "categories": [
+        "office"
+      ],
+      "check_connection_supported": false,
+      "extra_categories": [
+        "presentation",
+        "office automation",
+        "document"
+      ],
+      "has_function_validators": false,
+      "icon_url": "pptx.svg",
+      "label": "PPTX"
+    },
+    "name_required": true,
+    "properties": {
+      "bucket_name": {
+        "title": "Bucket Name",
+        "type": "string"
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "fill_template": {
+            "type": "object"
+          },
+          "translate_presentation": {
+            "type": "object"
+          }
+        },
+        "items": {
+          "enum": [
+            "fill_template",
+            "translate_presentation"
+          ],
+          "type": "string"
+        },
+        "title": "Selected Tools",
+        "type": "array"
+      }
+    },
+    "required": [
+      "bucket_name"
+    ],
+    "title": "pptx",
+    "type": "object"
+  },
+  "qtest": {
+    "metadata": {
+      "categories": [
+        "test management"
+      ],
+      "check_connection_supported": true,
+      "extra_categories": [
+        "quality assurance",
+        "test case management",
+        "test planning"
+      ],
+      "has_function_validators": false,
+      "icon_url": "qtest.svg",
+      "label": "QTest"
+    },
+    "name_required": true,
+    "properties": {
+      "embedding_model": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "configuration_model": "embedding",
+        "title": "Embedding Model"
+      },
+      "no_of_tests_shown_in_dql_search": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "No Of Tests Shown In Dql Search"
+      },
+      "pgvector_configuration": {
+        "$ref": "#/$defs/pgvector",
+        "configuration_types": [
+          "pgvector"
+        ]
+      },
+      "qtest_configuration": {
+        "$ref": "#/$defs/qtest",
+        "configuration_types": [
+          "qtest"
+        ]
+      },
+      "qtest_project_id": {
+        "title": "Qtest Project Id",
+        "type": "integer"
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "add_file_to_test_case": {
+            "type": "object"
+          },
+          "create_test_cases": {
+            "type": "object"
+          },
+          "delete_test_case": {
+            "type": "object"
+          },
+          "find_defects_by_test_run_id": {
+            "type": "object"
+          },
+          "find_entity_by_id": {
+            "type": "object"
+          },
+          "index_data": {
+            "type": "object"
+          }
+        },
+        "items": {
+          "enum": [
+            "index_data",
+            "list_indexes",
+            "search_index",
+            "stepback_search_index",
+            "stepback_summary_index",
+            "remove_index"
+          ],
+          "type": "string"
+        },
+        "title": "Selected Tools",
+        "type": "array"
+      }
+    },
+    "required": [
+      "qtest_configuration",
+      "qtest_project_id"
+    ],
+    "title": "qtest",
+    "type": "object"
+  },
+  "rally": {
+    "metadata": {
+      "categories": [
+        "project management"
+      ],
+      "check_connection_supported": false,
+      "extra_categories": [
+        "agile management",
+        "test management",
+        "scrum",
+        "kanban"
+      ],
+      "has_function_validators": false,
+      "hidden": true,
+      "icon_url": "rally.svg",
+      "label": "Rally",
+      "unavailable": true,
+      "unavailable_reason": "the admitted Python worker image does not carry the dependencies of the rally toolkit"
+    },
+    "name_required": true,
+    "properties": {
+      "project": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Project"
+      },
+      "rally_configuration": {
+        "$ref": "#/$defs/rally",
+        "configuration_types": [
+          "rally"
+        ]
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "create_artifact": {
+            "type": "object"
+          },
+          "get_context": {
+            "type": "object"
+          },
+          "get_entities": {
+            "type": "object"
+          },
+          "get_project": {
+            "type": "object"
+          },
+          "get_types": {
+            "type": "object"
+          },
+          "get_user": {
+            "type": "object"
+          }
+        },
+        "items": {
+          "enum": [
+            "get_types",
+            "get_entities",
+            "get_project",
+            "get_workspace",
+            "get_user",
+            "get_context"
+          ],
+          "type": "string"
+        },
+        "title": "Selected Tools",
+        "type": "array"
+      },
+      "workspace": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Workspace"
+      }
+    },
+    "required": [
+      "rally_configuration"
+    ],
+    "title": "rally",
+    "type": "object"
+  },
+  "report_portal": {
+    "metadata": {
+      "categories": [
+        "testing"
+      ],
+      "check_connection_supported": false,
+      "extra_categories": [
+        "test reporting",
+        "test automation"
+      ],
+      "has_function_validators": false,
+      "icon_url": "reportportal-icon.svg",
+      "label": "Report Portal"
+    },
+    "name_required": true,
+    "properties": {
+      "report_portal_configuration": {
+        "$ref": "#/$defs/report_portal",
+        "configuration_types": [
+          "report_portal"
+        ]
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "find_test_item_by_id": {
+            "type": "object"
+          },
+          "get_all_launches": {
+            "type": "object"
+          },
+          "get_dashboard_data": {
+            "type": "object"
+          },
+          "get_extended_launch_data": {
+            "type": "object"
+          },
+          "get_extended_launch_data_as_raw": {
+            "type": "object"
+          },
+          "get_launch_details": {
+            "type": "object"
+          }
+        },
+        "items": {
+          "enum": [
+            "get_extended_launch_data_as_raw",
+            "get_extended_launch_data",
+            "get_launch_details",
+            "get_all_launches",
+            "find_test_item_by_id",
+            "get_test_items_for_launch"
+          ],
+          "type": "string"
+        },
+        "title": "Selected Tools",
+        "type": "array"
+      }
+    },
+    "required": [
+      "report_portal_configuration"
+    ],
+    "title": "report_portal",
+    "type": "object"
+  },
+  "salesforce": {
+    "metadata": {
+      "categories": [
+        "other"
+      ],
+      "check_connection_supported": false,
+      "extra_categories": [
+        "customer relationship management",
+        "cloud computing",
+        "marketing automation",
+        "salesforce"
+      ],
+      "has_function_validators": false,
+      "icon_url": "salesforce-icon.svg",
+      "label": "Salesforce"
+    },
+    "name_required": true,
+    "properties": {
+      "api_version": {
+        "title": "Api Version",
+        "type": "string"
+      },
+      "salesforce_configuration": {
+        "$ref": "#/$defs/salesforce",
+        "configuration_types": [
+          "salesforce"
+        ]
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "create_case": {
+            "type": "object"
+          },
+          "create_lead": {
+            "type": "object"
+          },
+          "execute_generic_rq": {
+            "type": "object"
+          },
+          "search_salesforce": {
+            "type": "object"
+          },
+          "update_case": {
+            "type": "object"
+          },
+          "update_lead": {
+            "type": "object"
+          }
+        },
+        "items": {
+          "enum": [
+            "create_case",
+            "create_lead",
+            "search_salesforce",
+            "update_case",
+            "update_lead",
+            "execute_generic_rq"
+          ],
+          "type": "string"
+        },
+        "title": "Selected Tools",
+        "type": "array"
+      }
+    },
+    "required": [
+      "salesforce_configuration"
+    ],
+    "title": "salesforce",
+    "type": "object"
+  },
+  "sandbox": {
+    "metadata": {
+      "categories": [
+        "code",
+        "execution",
+        "internal_tool"
+      ],
+      "check_connection_supported": false,
+      "extra_categories": [
+        "python",
+        "pyodide",
+        "sandbox",
+        "code execution"
+      ],
+      "has_function_validators": false,
+      "hidden": false,
+      "icon_url": "sandbox.svg",
+      "label": "Python Sandbox"
+    },
+    "name_required": true,
+    "properties": {
+      "allow_net": {
+        "title": "Allow Net",
+        "type": "boolean"
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "pyodide_sandbox": {
+            "type": "object"
+          },
+          "stateful_pyodide_sandbox": {
+            "type": "object"
+          }
+        },
+        "items": {
+          "enum": [
+            "pyodide_sandbox",
+            "stateful_pyodide_sandbox"
+          ],
+          "type": "string"
+        },
+        "title": "Selected Tools",
+        "type": "array"
+      },
+      "stateful": {
+        "title": "Stateful",
+        "type": "boolean"
+      }
+    },
+    "title": "sandbox",
+    "type": "object"
+  },
+  "service_now": {
+    "metadata": {
+      "categories": [
+        "other"
+      ],
+      "check_connection_supported": false,
+      "extra_categories": [
+        "incident management",
+        "problem management",
+        "change management",
+        "service catalog"
+      ],
+      "has_function_validators": false,
+      "hidden": true,
+      "icon_url": "service-now.svg",
+      "label": "ServiceNow",
+      "sections": {
+        "auth": {
+          "required": true,
+          "subsections": [
+            {
+              "fields": [
+                "username",
+                "password"
+              ],
+              "name": "Basic"
+            }
+          ]
+        }
+      },
+      "unavailable": true,
+      "unavailable_reason": "the admitted Python worker image does not carry the dependencies of the service_now toolkit"
+    },
+    "name_required": true,
+    "properties": {
+      "response_fields": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Response Fields"
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "create_incident": {
+            "type": "object"
+          },
+          "get_incidents": {
+            "type": "object"
+          },
+          "update_incident": {
+            "type": "object"
+          }
+        },
+        "items": {
+          "enum": [
+            "get_incidents",
+            "create_incident",
+            "update_incident"
+          ],
+          "type": "string"
+        },
+        "title": "Selected Tools",
+        "type": "array"
+      },
+      "servicenow_configuration": {
+        "$ref": "#/$defs/service_now",
+        "configuration_types": [
+          "service_now"
+        ]
+      }
+    },
+    "required": [
+      "servicenow_configuration"
+    ],
+    "title": "service_now",
+    "type": "object"
+  },
+  "sharepoint": {
+    "metadata": {
+      "categories": [
+        "office"
+      ],
+      "check_connection_supported": false,
+      "extra_categories": [
+        "microsoft",
+        "cloud storage",
+        "team collaboration",
+        "content management"
+      ],
+      "has_function_validators": false,
+      "icon_url": "sharepoint.svg",
+      "label": "Sharepoint"
+    },
+    "name_required": true,
+    "properties": {
+      "embedding_model": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "configuration_model": "embedding",
+        "title": "Embedding Model"
+      },
+      "pgvector_configuration": {
+        "$ref": "#/$defs/pgvector",
+        "configuration_types": [
+          "pgvector"
+        ]
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "create_list_item": {
+            "type": "object"
+          },
+          "get_files_list": {
+            "type": "object"
+          },
+          "get_list_columns": {
+            "type": "object"
+          },
+          "get_lists": {
+            "type": "object"
+          },
+          "index_data": {
+            "type": "object"
+          },
+          "list_indexes": {
+            "type": "object"
+          }
+        },
+        "items": {
+          "enum": [
+            "index_data",
+            "list_indexes",
+            "search_index",
+            "stepback_search_index",
+            "stepback_summary_index",
+            "remove_index"
+          ],
+          "type": "string"
+        },
+        "title": "Selected Tools",
+        "type": "array"
+      },
+      "sharepoint_configuration": {
+        "$ref": "#/$defs/sharepoint",
+        "configuration_types": [
+          "sharepoint"
+        ]
+      },
+      "site_path": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Site Path"
+      }
+    },
+    "required": [
+      "sharepoint_configuration"
+    ],
+    "title": "sharepoint",
+    "type": "object"
+  },
+  "slack": {
+    "metadata": {
+      "categories": [
+        "communication"
+      ],
+      "check_connection_supported": true,
+      "extra_categories": [
+        "slack",
+        "chat",
+        "messaging",
+        "collaboration"
+      ],
+      "has_function_validators": false,
+      "hidden": true,
+      "icon_url": "slack-icon.svg",
+      "label": "Slack",
+      "unavailable": true,
+      "unavailable_reason": "the admitted Python worker image does not carry the dependencies of the slack toolkit"
+    },
+    "name_required": true,
+    "properties": {
+      "selected_tools": {
+        "args_schemas": {
+          "create_slack_channel": {
+            "type": "object"
+          },
+          "invite_to_conversation": {
+            "type": "object"
+          },
+          "list_channel_users": {
+            "type": "object"
+          },
+          "list_workspace_conversations": {
+            "type": "object"
+          },
+          "list_workspace_users": {
+            "type": "object"
+          },
+          "read_messages": {
+            "type": "object"
+          }
+        },
+        "items": {
+          "enum": [
+            "send_message",
+            "read_messages",
+            "create_slack_channel",
+            "list_channel_users",
+            "list_workspace_users",
+            "invite_to_conversation"
+          ],
+          "type": "string"
+        },
+        "title": "Selected Tools",
+        "type": "array"
+      },
+      "slack_configuration": {
+        "$ref": "#/$defs/slack",
+        "configuration_types": [
+          "slack"
+        ]
+      }
+    },
+    "title": "slack",
+    "type": "object"
+  },
+  "sonar": {
+    "metadata": {
+      "categories": [
+        "development"
+      ],
+      "check_connection_supported": false,
+      "extra_categories": [
+        "code quality",
+        "code security",
+        "code coverage",
+        "quality",
+        "sonarqube"
+      ],
+      "has_function_validators": false,
+      "icon_url": "sonar-icon.svg",
+      "label": "Sonar"
+    },
+    "name_required": true,
+    "properties": {
+      "selected_tools": {
+        "args_schemas": {
+          "get_sonar_data": {
+            "type": "object"
+          }
+        },
+        "title": "Selected Tools",
+        "type": "array"
+      },
+      "sonar_configuration": {
+        "$ref": "#/$defs/sonar",
+        "configuration_types": [
+          "sonar"
+        ]
+      },
+      "sonar_project_name": {
+        "title": "Sonar Project Name",
+        "type": "string"
+      }
+    },
+    "required": [
+      "sonar_project_name",
+      "sonar_configuration"
+    ],
+    "title": "sonar",
+    "type": "object"
+  },
+  "sql": {
+    "metadata": {
+      "categories": [
+        "development"
+      ],
+      "check_connection_supported": false,
+      "extra_categories": [
+        "sql",
+        "data management",
+        "data analysis"
+      ],
+      "has_function_validators": false,
+      "icon_url": "sql-icon.svg",
+      "label": "SQL"
+    },
+    "name_required": true,
+    "properties": {
+      "database_name": {
+        "title": "Database Name",
+        "type": "string"
+      },
+      "dialect": {
+        "enum": [
+          "mysql",
+          "postgres"
+        ],
+        "title": "Dialect",
+        "type": "string"
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "execute_sql": {
+            "type": "object"
+          },
+          "list_tables_and_columns": {
+            "type": "object"
+          }
+        },
+        "items": {
+          "enum": [
+            "execute_sql",
+            "list_tables_and_columns"
+          ],
+          "type": "string"
+        },
+        "title": "Selected Tools",
+        "type": "array"
+      },
+      "sql_configuration": {
+        "$ref": "#/$defs/sql",
+        "configuration_types": [
+          "sql"
+        ]
+      }
+    },
+    "required": [
+      "database_name",
+      "sql_configuration"
+    ],
+    "title": "sql",
+    "type": "object"
+  },
+  "testio": {
+    "metadata": {
+      "categories": [
+        "testing"
+      ],
+      "check_connection_supported": false,
+      "extra_categories": [
+        "test automation",
+        "test case management",
+        "test planning"
+      ],
+      "has_function_validators": false,
+      "icon_url": "testio-icon.svg",
+      "label": "TestIO"
+    },
+    "name_required": true,
+    "properties": {
+      "selected_tools": {
+        "args_schemas": {
+          "confirm_bug_fix": {
+            "type": "object"
+          },
+          "create_exploratory_test": {
+            "type": "object"
+          },
+          "get_exploratory_test": {
+            "type": "object"
+          },
+          "get_feature": {
+            "type": "object"
+          },
+          "get_product": {
+            "type": "object"
+          },
+          "get_test_case": {
+            "type": "object"
+          }
+        },
+        "items": {
+          "enum": [
+            "list_products",
+            "get_product",
+            "list_features",
+            "get_feature",
+            "list_user_stories",
+            "get_user_story"
+          ],
+          "type": "string"
+        },
+        "title": "Selected Tools",
+        "type": "array"
+      },
+      "testio_configuration": {
+        "$ref": "#/$defs/testio",
+        "configuration_types": [
+          "testio"
+        ]
+      }
+    },
+    "required": [
+      "testio_configuration"
+    ],
+    "title": "testio",
+    "type": "object"
+  },
+  "testrail": {
+    "metadata": {
+      "categories": [
+        "test management"
+      ],
+      "check_connection_supported": true,
+      "extra_categories": [
+        "quality assurance",
+        "test case management",
+        "test planning"
+      ],
+      "has_function_validators": false,
+      "icon_url": "testrail-icon.svg",
+      "label": "Testrail"
+    },
+    "name_required": true,
+    "properties": {
+      "embedding_model": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "configuration_model": "embedding",
+        "title": "Embedding Model"
+      },
+      "pgvector_configuration": {
+        "$ref": "#/$defs/pgvector",
+        "configuration_types": [
+          "pgvector"
+        ]
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "add_case": {
+            "type": "object"
+          },
+          "add_cases": {
+            "type": "object"
+          },
+          "add_file_to_case": {
+            "type": "object"
+          },
+          "add_section": {
+            "type": "object"
+          },
+          "delete_case": {
+            "type": "object"
+          },
+          "index_data": {
+            "type": "object"
+          }
+        },
+        "items": {
+          "enum": [
+            "index_data",
+            "list_indexes",
+            "search_index",
+            "stepback_search_index",
+            "stepback_summary_index",
+            "remove_index"
+          ],
+          "type": "string"
+        },
+        "title": "Selected Tools",
+        "type": "array"
+      },
+      "testrail_configuration": {
+        "$ref": "#/$defs/testrail",
+        "configuration_types": [
+          "testrail"
+        ]
+      }
+    },
+    "required": [
+      "testrail_configuration"
+    ],
+    "title": "testrail",
+    "type": "object"
+  },
+  "vectorstore": {
+    "metadata": {
+      "check_connection_supported": false,
+      "has_function_validators": false,
+      "hidden": true,
+      "icon_url": null,
+      "label": "VectorStore"
+    },
+    "name_required": true,
+    "properties": {
+      "embedding_model": {
+        "title": "Embedding Model",
+        "type": "string"
+      },
+      "embedding_model_params": {
+        "title": "Embedding Model Params",
+        "type": "object"
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "indexDocuments": {
+            "type": "object"
+          },
+          "searchDocuments": {
+            "type": "object"
+          },
+          "stepbackSearch": {
+            "type": "object"
+          },
+          "stepbackSummary": {
+            "type": "object"
+          }
+        },
+        "items": {
+          "enum": [
+            "indexDocuments",
+            "searchDocuments",
+            "stepbackSearch",
+            "stepbackSummary"
+          ],
+          "type": "string"
+        },
+        "title": "Selected Tools",
+        "type": "array"
+      },
+      "vectorstore_params": {
+        "title": "Vectorstore Params",
+        "type": "object"
+      },
+      "vectorstore_type": {
+        "title": "Vectorstore Type",
+        "type": "string"
+      }
+    },
+    "required": [
+      "embedding_model",
+      "embedding_model_params",
+      "vectorstore_type",
+      "vectorstore_params"
+    ],
+    "title": "vectorstore",
+    "type": "object"
+  },
+  "xray_cloud": {
+    "metadata": {
+      "categories": [
+        "test management"
+      ],
+      "check_connection_supported": false,
+      "extra_categories": [
+        "test automation",
+        "test case management",
+        "test planning"
+      ],
+      "has_function_validators": false,
+      "icon_url": "xray.svg",
+      "label": "XRAY cloud"
+    },
+    "name_required": true,
+    "properties": {
+      "embedding_model": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "configuration_model": "embedding",
+        "title": "Embedding Model"
+      },
+      "limit": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Limit"
+      },
+      "pgvector_configuration": {
+        "$ref": "#/$defs/pgvector",
+        "configuration_types": [
+          "pgvector"
+        ]
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "add_attachment_to_test_step": {
+            "type": "object"
+          },
+          "create_test": {
+            "type": "object"
+          },
+          "create_tests": {
+            "type": "object"
+          },
+          "execute_graphql": {
+            "type": "object"
+          },
+          "get_test_step_attachments": {
+            "type": "object"
+          },
+          "index_data": {
+            "type": "object"
+          }
+        },
+        "items": {
+          "enum": [
+            "index_data",
+            "list_indexes",
+            "search_index",
+            "stepback_search_index",
+            "stepback_summary_index",
+            "remove_index"
+          ],
+          "type": "string"
+        },
+        "title": "Selected Tools",
+        "type": "array"
+      },
+      "xray_configuration": {
+        "$ref": "#/$defs/xray",
+        "configuration_types": [
+          "xray"
+        ]
+      }
+    },
+    "required": [
+      "xray_configuration"
+    ],
+    "title": "xray_cloud",
+    "type": "object"
+  },
+  "yagmail": {
+    "metadata": {
+      "check_connection_supported": false,
+      "has_function_validators": false,
+      "hidden": true,
+      "icon_url": null,
+      "label": "Yet Another Gmail",
+      "unavailable": true,
+      "unavailable_reason": "the admitted Python worker image does not carry the dependencies of the yagmail toolkit"
+    },
+    "name_required": true,
+    "properties": {
+      "host": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Host"
+      },
+      "password": {
+        "format": "password",
+        "secret": true,
+        "title": "Password",
+        "type": "string",
+        "writeOnly": true
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "send_gmail_message": {
+            "type": "object"
+          }
+        },
+        "title": "Selected Tools",
+        "type": "array"
+      },
+      "username": {
+        "title": "Username",
+        "type": "string"
+      }
+    },
+    "required": [
+      "username",
+      "password"
+    ],
+    "title": "yagmail",
+    "type": "object"
+  },
+  "zephyr": {
+    "metadata": {
+      "categories": [
+        "test management"
+      ],
+      "check_connection_supported": false,
+      "extra_categories": [
+        "test automation",
+        "test case management",
+        "test planning"
+      ],
+      "has_function_validators": false,
+      "hidden": true,
+      "icon_url": "zephyr.svg",
+      "label": "Zephyr"
+    },
+    "name_required": true,
+    "properties": {
+      "base_url": {
+        "title": "Base Url",
+        "type": "string"
+      },
+      "password": {
+        "format": "password",
+        "secret": true,
+        "title": "Password",
+        "type": "string",
+        "writeOnly": true
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "add_new_test_case_step": {
+            "type": "object"
+          },
+          "add_test_case": {
+            "type": "object"
+          },
+          "add_test_cases": {
+            "type": "object"
+          },
+          "get_test_case_steps": {
+            "type": "object"
+          }
+        },
+        "items": {
+          "enum": [
+            "get_test_case_steps",
+            "add_new_test_case_step",
+            "add_test_case",
+            "add_test_cases"
+          ],
+          "type": "string"
+        },
+        "title": "Selected Tools",
+        "type": "array"
+      },
+      "username": {
+        "title": "Username",
+        "type": "string"
+      }
+    },
+    "required": [
+      "base_url",
+      "username",
+      "password"
+    ],
+    "title": "zephyr",
+    "type": "object"
+  },
+  "zephyr_enterprise": {
+    "metadata": {
+      "categories": [
+        "test management"
+      ],
+      "check_connection_supported": false,
+      "extra_categories": [
+        "test automation",
+        "test case management",
+        "test planning"
+      ],
+      "has_function_validators": false,
+      "icon_url": "zephyr.svg",
+      "label": "Zephyr Enterprise"
+    },
+    "name_required": true,
+    "properties": {
+      "embedding_model": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "configuration_model": "embedding",
+        "title": "Embedding Model"
+      },
+      "pgvector_configuration": {
+        "$ref": "#/$defs/pgvector",
+        "configuration_types": [
+          "pgvector"
+        ]
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "add_steps": {
+            "type": "object"
+          },
+          "create_testcase": {
+            "type": "object"
+          },
+          "get_test_case": {
+            "type": "object"
+          },
+          "get_testcases_by_zql": {
+            "type": "object"
+          },
+          "index_data": {
+            "type": "object"
+          },
+          "list_indexes": {
+            "type": "object"
+          }
+        },
+        "items": {
+          "enum": [
+            "index_data",
+            "list_indexes",
+            "search_index",
+            "stepback_search_index",
+            "stepback_summary_index",
+            "remove_index"
+          ],
+          "type": "string"
+        },
+        "title": "Selected Tools",
+        "type": "array"
+      },
+      "zephyr_configuration": {
+        "$ref": "#/$defs/zephyr_enterprise",
+        "configuration_types": [
+          "zephyr_enterprise"
+        ]
+      }
+    },
+    "required": [
+      "zephyr_configuration"
+    ],
+    "title": "zephyr_enterprise",
+    "type": "object"
+  },
+  "zephyr_essential": {
+    "metadata": {
+      "categories": [
+        "test management"
+      ],
+      "check_connection_supported": false,
+      "extra_categories": [
+        "test automation",
+        "test case management",
+        "test planning"
+      ],
+      "has_function_validators": false,
+      "icon_url": "zephyr.svg",
+      "label": "Zephyr Essential"
+    },
+    "name_required": true,
+    "properties": {
+      "embedding_model": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "configuration_model": "embedding",
+        "title": "Embedding Model"
+      },
+      "pgvector_configuration": {
+        "$ref": "#/$defs/pgvector",
+        "configuration_types": [
+          "pgvector"
+        ]
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "create_cucumber_executions": {
+            "type": "object"
+          },
+          "create_custom_executions": {
+            "type": "object"
+          },
+          "create_folder": {
+            "type": "object"
+          },
+          "create_junit_executions": {
+            "type": "object"
+          },
+          "create_test_case": {
+            "type": "object"
+          },
+          "index_data": {
+            "type": "object"
+          }
+        },
+        "items": {
+          "enum": [
+            "index_data",
+            "list_indexes",
+            "search_index",
+            "stepback_search_index",
+            "stepback_summary_index",
+            "remove_index"
+          ],
+          "type": "string"
+        },
+        "title": "Selected Tools",
+        "type": "array"
+      },
+      "zephyr_essential_configuration": {
+        "$ref": "#/$defs/zephyr_essential",
+        "configuration_types": [
+          "zephyr_essential"
+        ]
+      }
+    },
+    "required": [
+      "zephyr_essential_configuration"
+    ],
+    "title": "zephyr_essential",
+    "type": "object"
+  },
+  "zephyr_scale": {
+    "metadata": {
+      "categories": [
+        "test management"
+      ],
+      "check_connection_supported": false,
+      "extra_categories": [
+        "test automation",
+        "test case management",
+        "test planning"
+      ],
+      "has_function_validators": false,
+      "icon_url": "zephyr.svg",
+      "label": "Zephyr Scale"
+    },
+    "name_required": true,
+    "properties": {
+      "embedding_model": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "configuration_model": "embedding",
+        "title": "Embedding Model"
+      },
+      "max_results": {
+        "title": "Max Results",
+        "type": "integer"
+      },
+      "pgvector_configuration": {
+        "$ref": "#/$defs/pgvector",
+        "configuration_types": [
+          "pgvector"
+        ]
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "add_test_steps": {
+            "type": "object"
+          },
+          "create_issue_links": {
+            "type": "object"
+          },
+          "create_test_case": {
+            "type": "object"
+          },
+          "create_test_cases": {
+            "type": "object"
+          },
+          "create_test_script": {
+            "type": "object"
+          },
+          "index_data": {
+            "type": "object"
+          }
+        },
+        "items": {
+          "enum": [
+            "index_data",
+            "list_indexes",
+            "search_index",
+            "stepback_search_index",
+            "stepback_summary_index",
+            "remove_index"
+          ],
+          "type": "string"
+        },
+        "title": "Selected Tools",
+        "type": "array"
+      },
+      "zephyr_configuration": {
+        "$ref": "#/$defs/zephyr",
+        "configuration_types": [
+          "zephyr"
+        ]
+      }
+    },
+    "required": [
+      "zephyr_configuration"
+    ],
+    "title": "zephyr_scale",
+    "type": "object"
+  },
+  "zephyr_squad": {
+    "metadata": {
+      "categories": [
+        "test management"
+      ],
+      "check_connection_supported": false,
+      "extra_categories": [
+        "test automation",
+        "test case management",
+        "test planning"
+      ],
+      "has_function_validators": false,
+      "icon_url": "zephyr.svg",
+      "label": "Zephyr Squad"
+    },
+    "name_required": true,
+    "properties": {
+      "access_key": {
+        "format": "password",
+        "secret": true,
+        "title": "Access Key",
+        "type": "string",
+        "writeOnly": true
+      },
+      "account_id": {
+        "title": "Account Id",
+        "type": "string"
+      },
+      "secret_key": {
+        "format": "password",
+        "secret": true,
+        "title": "Secret Key",
+        "type": "string",
+        "writeOnly": true
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "add_test_to_cycle": {
+            "type": "object"
+          },
+          "add_test_to_folder": {
+            "type": "object"
+          },
+          "create_execution": {
+            "type": "object"
+          },
+          "create_folder": {
+            "type": "object"
+          },
+          "create_new_cycle": {
+            "type": "object"
+          },
+          "create_new_test_step": {
+            "type": "object"
+          }
+        },
+        "items": {
+          "enum": [
+            "get_test_step",
+            "update_test_step",
+            "delete_test_step",
+            "create_new_test_step",
+            "get_all_test_steps",
+            "get_all_test_step_statuses"
+          ],
+          "type": "string"
+        },
+        "title": "Selected Tools",
+        "type": "array"
+      }
+    },
+    "required": [
+      "account_id",
+      "access_key",
+      "secret_key"
+    ],
+    "title": "zephyr_squad",
+    "type": "object"
+  }
+}

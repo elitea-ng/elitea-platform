@@ -120,11 +120,11 @@ func splitTokens(s string) []string {
 func TestSubjectFor(t *testing.T) {
 	cases := map[string]string{
 		"project:123:events": "gateway.events.project.123.events",
-		"elitea:*":            "gateway.events.elitea.>",
-		"*":                   "gateway.events.>",
-		"":                    "gateway.events",
-		"simple":              "gateway.events.simple",
-		"a:b:c":               "gateway.events.a.b.c",
+		"elitea:*":           "gateway.events.elitea.>",
+		"*":                  "gateway.events.>",
+		"":                   "gateway.events",
+		"simple":             "gateway.events.simple",
+		"a:b:c":              "gateway.events.a.b.c",
 	}
 	for in, want := range cases {
 		if got := subjectFor(in); got != want {

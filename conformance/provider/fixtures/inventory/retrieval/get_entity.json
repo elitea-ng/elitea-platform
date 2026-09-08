@@ -1,0 +1,12 @@
+{
+  "tool": "get_entity",
+  "params": { "entity_id": "code:checkout-service", "output_format": "json" },
+  "expected": {
+    "id": "code:checkout-service",
+    "name": "CheckoutService",
+    "type": "class",
+    "layer": "application",
+    "source_toolkit": "code",
+    "file_path": "src/checkout/service.py"
+  }
+}

@@ -6,7 +6,10 @@
  *
  * Deviations:
  *  - No tour IDs.
- *  - No CopyLinkToEntityButton / AuthorContainer — simplified.
+ *  - No AuthorContainer — simplified. The copy-link button IS ported
+ *    (#80): `AgentModal.jsx:68-76,206` builds `?agentId=<id>` and the
+ *    catalogue route already reads that key back, so the app could open a
+ *    share link it had no way to produce.
  *  - "Start conversation" / conversation-starter clicks: no direct Redux
  *    dispatch / `processes/chat` import (`pages/` may not import
  *    `processes/` — `.dependency-cruiser.cjs`'s
@@ -44,14 +47,18 @@ import type { SxProps, Theme } from '@mui/material/styles';
 
 import CloseIcon from '@mui/icons-material/Close';
 
-import { useNavigate } from '@tanstack/react-router';
+import { useNavigate, useRouter } from '@tanstack/react-router';
 
 import { t } from '@/shared/i18n';
+import { handleCopy } from '@/shared/lib/clipboard';
+import { CopyLinkIcon } from '@/shared/ui/icons/copy-link-icon';
 import { StyledShowContextModal } from '@/features/agents';
 
 const IconButtonAny = IconButton as React.ComponentType<
   React.ComponentProps<typeof IconButton> & { variant?: string }
 >;
+
+import { buildAgentShareLink } from '../helpers';
 
 import { AgentConversationStarters } from './AgentConversationStarters';
 import AgentHubLike from './AgentHubLike';
@@ -73,6 +80,30 @@ interface AgentContextDialogProps {
 function AgentContextDialog({ open, onClose, instructions, isLoading }: AgentContextDialogProps): ReactNode {
   if (!open) return null;
   return <StyledShowContextModal context={instructions} open onClose={onClose} isLoading={isLoading} />;
+}
+
+/**
+ * The copy-link button (#80). A plain render function, not a component: it
+ * exists to keep `AgentModal` under the §3.5 cyclomatic-complexity budget
+ * (≤12) — the guard alone put it at 13 — without adding a capitalised
+ * component the 12-prop budget would then apply to.
+ *
+ * No link, no button. An agent row with no id cannot be deep-linked, and a
+ * button that copies an empty string is worse than an absent one.
+ */
+function renderCopyLinkButton(shareLink: string, onCopy: () => void): ReactNode {
+  if (shareLink === '') return null;
+  return (
+    <IconButtonAny
+      variant="elitea"
+      color="secondary"
+      aria-label={t('agentsHub.agentModal.copyLinkAriaLabel', 'Copy link to this agent')}
+      data-testid="agent-modal-copy-link"
+      onClick={onCopy}
+    >
+      <CopyLinkIcon width="16" height="16" />
+    </IconButtonAny>
+  );
 }
 
 /** Small-height layout threshold (baseline: `AgentModal.jsx`'s `window.innerHeight <= 390`). */
@@ -99,6 +130,7 @@ export interface AgentModalProps {
 
 const AgentModal = memo(({ open, onClose, agent, onStartConversation }: AgentModalProps) => {
   const navigate = useNavigate();
+  const router = useRouter();
   /**
    * The "Show context" dialog (baseline: `AgentModal.jsx:56,263-269`).
    *
@@ -143,6 +175,31 @@ const AgentModal = memo(({ open, onClose, agent, onStartConversation }: AgentMod
     return !authors?.length ? (author?.id ? [author] : []) : authors;
   }, [agent]);
 
+  /*
+   * The share link (#80). Built through the router so it carries the app's
+   * basepath, and copied through `shared/lib/clipboard`'s `handleCopy`, which
+   * owns the async-Clipboard-with-fallback behaviour every other copy site
+   * here uses.
+   *
+   * `buildAgentShareLink` puts the query together from `AGENT_ID`, the key
+   * `routes/_shell/elitea-catalog.tsx` validates and `AgentHub` reads back, so
+   * a typo would produce a link that opens the catalogue with no modal — which
+   * is what the missing WRITE half looked like from the outside.
+   */
+  const shareLink = useMemo(
+    () =>
+      buildAgentShareLink({
+        origin: window.location.origin,
+        catalogHref: router.buildLocation({ to: '/elitea-catalog' }).href,
+        agentId: agent?.id,
+      }),
+    [router, agent?.id],
+  );
+
+  const handleCopyLink = useCallback(() => {
+    void handleCopy(shareLink);
+  }, [shareLink]);
+
   const launchConversation = useCallback(
     (starter?: string) => {
       if (onStartConversation) {
@@ -184,6 +241,7 @@ const AgentModal = memo(({ open, onClose, agent, onStartConversation }: AgentMod
           </Box>
           <Box sx={styles.authorRow}>
             <AgentHubLike data={agent} />
+            {renderCopyLinkButton(shareLink, handleCopyLink)}
             <IconButtonAny
               variant="elitea"
               color="secondary"

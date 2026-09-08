@@ -1,0 +1,23 @@
+# stale-disclosure-scope.txt — the files check-stale-disclosure.mjs holds to
+# the falsifier rule (issue 621).
+#
+# Every disclosure claim in a file named here must carry a DISCLOSURE-CHECK
+# probe above it. See scripts/lib/stale-disclosure-core.mjs for the grammar and
+# for the four ways such a gate can lie.
+#
+# RULES
+# - The list may only GROW. Add a file, annotate its claims, keep it here.
+# - Do not remove a line to silence a failure. A stale claim is corrected, not
+#   un-scoped.
+#
+# WHY NOT THE WHOLE REPOSITORY. 146 lines across 40 files carry one of these
+# markers today, most of them in tests. Demanding a falsifier for all of them
+# in one change would produce 146 probes nobody had thought about, and a probe
+# nobody thought about is the same defect in a new place. These three files are
+# the ones issue 621 measured: the spec that generated the false claim, the
+# package that disproved it, and the handler the spec mirrors.
+#
+# One path per line, relative to the repository root. `#` starts a comment.
+services/elitea-main/api/openapi/v2.yaml
+services/elitea-main/internal/audit/event.go
+services/elitea-main/internal/api/v2/analytics/handler.go

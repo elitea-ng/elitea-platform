@@ -19,14 +19,14 @@
         "AND the location, parameters and history behave exactly as in the baseline application"
       ],
       "verify": {
-        "type": "command",
-        "command": "go run ./tools/uictl parity-routes --baseline apps/elitea-ui",
-        "testId": "ROUTE-062"
+        "type": "playwright",
+        "command": "npx playwright test e2e/journeys/settings/settings.notifications.spec.ts",
+        "testId": "J31a"
       },
       "unit": "R1",
-      "status": "todo",
+      "status": "verified",
       "coverage": {
-        "file": "src/app/router.tsx",
+        "file": "src/routes/_shell/settings/notifications.tsx",
         "min": 90
       },
       "waiver": null
@@ -175,7 +175,7 @@
       "id": "SOCK-017",
       "domain": "notifications",
       "kind": "integration",
-      "priority": "must",
+      "priority": "waived",
       "title": "Socket event `notifications_notify` (catalogued)",
       "source": [
         "apps/elitea-ui/src/common/constants.js:925",
@@ -189,16 +189,21 @@
       ],
       "verify": {
         "type": "vitest",
-        "command": "npm run test:unit -- src/shared/api/socket",
-        "testId": "socket > event > notifications_notify"
+        "command": "npm run test:unit -- src/features/notifications",
+        "testId": "useNotificationsSSE"
       },
       "unit": "S5",
-      "status": "todo",
+      "status": "waived",
       "coverage": {
-        "file": "src/shared/api/socket/client.ts",
-        "min": 95
+        "file": "src/features/notifications/lib/useNotificationsSSE.ts",
+        "min": 90
       },
-      "waiver": null
+      "waiver": {
+        "reason": "This deployment delivers notifications over Server-Sent Events and opens no socket. The event exists, the transport does not: src/features/notifications/lib/useNotificationsSSE.ts subscribes to the same payload and updates the bell and the list without a refetch, and src/widgets/sidebar/ui/NotificationButton.tsx consumes it.",
+        "decidedBy": "platform parity wave, issue 841",
+        "date": "2026-09-07",
+        "replacesBehaviour": "The socket event notifications_notify is replaced by the SSE stream in src/features/notifications/lib/useNotificationsSSE.ts, which carries the same payload and the same malformed-payload rule."
+      }
     },
     {
       "id": "ACT-053",
@@ -275,14 +280,14 @@
         "AND no string is dropped, truncated or reworded"
       ],
       "verify": {
-        "type": "playwright",
-        "command": "npx playwright test --grep @visual",
-        "testId": "visual > notifications > NotificationTable.jsx"
+        "type": "vitest",
+        "command": "npm run test:unit -- src/routes/_shell/settings/notifications.test.tsx",
+        "testId": "notifications copy"
       },
       "unit": "V2",
-      "status": "todo",
+      "status": "in-progress",
       "coverage": {
-        "file": "e2e/visual/visual.spec.ts",
+        "file": "src/routes/_shell/settings/notifications.test.tsx",
         "min": 0
       },
       "waiver": null
@@ -304,14 +309,14 @@
         "AND no string is dropped, truncated or reworded"
       ],
       "verify": {
-        "type": "playwright",
-        "command": "npx playwright test --grep @visual",
-        "testId": "visual > notifications > NotificationTableToolbar.jsx"
+        "type": "vitest",
+        "command": "npm run test:unit -- src/routes/_shell/settings/notifications.test.tsx",
+        "testId": "notifications copy"
       },
       "unit": "V2",
-      "status": "todo",
+      "status": "implemented",
       "coverage": {
-        "file": "e2e/visual/visual.spec.ts",
+        "file": "src/routes/_shell/settings/notifications.test.tsx",
         "min": 0
       },
       "waiver": null

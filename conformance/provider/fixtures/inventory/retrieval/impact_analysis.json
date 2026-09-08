@@ -1,0 +1,10 @@
+{
+  "_comment": "impact_analysis for code:payment-client — the transitive closure of everything that reaches it: code:place-order (calls it) <- code:checkout-service (defines place-order) <- docs:checkout-guide (documents checkout-service), plus docs:payments-guide (documents payment-client directly). Sorted lexicographically.",
+  "tool": "impact_analysis",
+  "params": { "entity_id": "code:payment-client", "output_format": "json" },
+  "expected": {
+    "entity_id": "code:payment-client",
+    "impacted": ["code:checkout-service", "code:place-order", "docs:checkout-guide", "docs:payments-guide"],
+    "total": 4
+  }
+}

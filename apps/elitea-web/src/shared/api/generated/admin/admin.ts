@@ -53,10 +53,12 @@ import type {
 } from "@tanstack/react-query";
 
 import type {
+  BackgroundJobListResponse,
   BrandingAsset,
   BrandingPackageReport,
   BrandingSettings,
   BrandingSettingsSave,
+  CancelBackgroundJobParams,
   ErrorResponse,
   GetUserProjectPermissionsParams,
   GlobalUserInviteRequest,
@@ -64,6 +66,7 @@ import type {
   ImportBrandingPackageBody,
   ImportBrandingPackageParams,
   ListAdminPublishedAgentsParams,
+  ListBackgroundJobsParams,
   ListBrandingPackageVersions200,
   MessageResponse,
   ModeRoleAssignRequest,
@@ -79,6 +82,7 @@ import type {
   N403Response,
   N404Response,
   N500Response,
+  OkResponse,
   PlatformSettings,
   PublishedAgentsListing,
   RemoveUserModeRoleParams,
@@ -1922,6 +1926,501 @@ export function useInviteUserGlobally<
 } {
   const queryOptions = getInviteUserGloballyQueryOptions(
     globalUserInviteRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listBackgroundJobsResponse200 = {
+  data: BackgroundJobListResponse;
+  status: 200;
+};
+
+export type listBackgroundJobsResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type listBackgroundJobsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listBackgroundJobsResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listBackgroundJobsResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type listBackgroundJobsResponseSuccess =
+  listBackgroundJobsResponse200 & {
+    headers: Headers;
+  };
+export type listBackgroundJobsResponseError = (
+  | listBackgroundJobsResponse400
+  | listBackgroundJobsResponse401
+  | listBackgroundJobsResponse403
+  | listBackgroundJobsResponse503
+) & {
+  headers: Headers;
+};
+
+export type listBackgroundJobsResponse =
+  listBackgroundJobsResponseSuccess | listBackgroundJobsResponseError;
+
+export const getListBackgroundJobsUrl = (params?: ListBackgroundJobsParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/admin/background_jobs/administration?${stringifiedParams}`
+    : `/admin/background_jobs/administration`;
+};
+
+/**
+ * The admin Tasks page. It unions the runtime plane (elitea_runtime.execution_jobs, whose capability_id gives the kind), the scheduler's due work (elitea_runtime.scheduled_occurrences) and every project's evaluation runs. It is NOT the pylon Arbiter task node that /admin/tasks/{mode} answers 501 for. The rows keep the legacy listing's task_id, status, started_at and user keys. `truncated` reports that the per-source scan window was full, so older rows exist that this page cannot reach.
+ * @summary List the platform's background jobs
+ */
+export const listBackgroundJobs = async (
+  params?: ListBackgroundJobsParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listBackgroundJobsResponse> => {
+  return eliteaFetch<listBackgroundJobsResponse>(
+    getListBackgroundJobsUrl(params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListBackgroundJobsQueryKey = (
+  params?: ListBackgroundJobsParams,
+) => {
+  return [
+    `/admin/background_jobs/administration`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getListBackgroundJobsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listBackgroundJobs>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params?: ListBackgroundJobsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listBackgroundJobs>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListBackgroundJobsQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listBackgroundJobs>>
+  > = ({ signal }) => listBackgroundJobs(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listBackgroundJobs>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListBackgroundJobsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listBackgroundJobs>>
+>;
+export type ListBackgroundJobsQueryError =
+  ErrorResponse | N401Response | N403Response;
+
+export function useListBackgroundJobs<
+  TData = Awaited<ReturnType<typeof listBackgroundJobs>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params: undefined | ListBackgroundJobsParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listBackgroundJobs>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listBackgroundJobs>>,
+          TError,
+          Awaited<ReturnType<typeof listBackgroundJobs>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListBackgroundJobs<
+  TData = Awaited<ReturnType<typeof listBackgroundJobs>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params?: ListBackgroundJobsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listBackgroundJobs>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listBackgroundJobs>>,
+          TError,
+          Awaited<ReturnType<typeof listBackgroundJobs>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListBackgroundJobs<
+  TData = Awaited<ReturnType<typeof listBackgroundJobs>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params?: ListBackgroundJobsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listBackgroundJobs>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List the platform's background jobs
+ */
+
+export function useListBackgroundJobs<
+  TData = Awaited<ReturnType<typeof listBackgroundJobs>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params?: ListBackgroundJobsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listBackgroundJobs>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListBackgroundJobsQueryOptions(params, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type cancelBackgroundJobResponse200 = {
+  data: OkResponse;
+  status: 200;
+};
+
+export type cancelBackgroundJobResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type cancelBackgroundJobResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type cancelBackgroundJobResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type cancelBackgroundJobResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type cancelBackgroundJobResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type cancelBackgroundJobResponseSuccess =
+  cancelBackgroundJobResponse200 & {
+    headers: Headers;
+  };
+export type cancelBackgroundJobResponseError = (
+  | cancelBackgroundJobResponse400
+  | cancelBackgroundJobResponse401
+  | cancelBackgroundJobResponse403
+  | cancelBackgroundJobResponse409
+  | cancelBackgroundJobResponse503
+) & {
+  headers: Headers;
+};
+
+export type cancelBackgroundJobResponse =
+  cancelBackgroundJobResponseSuccess | cancelBackgroundJobResponseError;
+
+export const getCancelBackgroundJobUrl = (
+  kind: "index" | "agent" | "toolkit" | "execution" | "schedule" | "eval",
+  jobID: string,
+  params?: CancelBackgroundJobParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/admin/background_jobs/administration/${kind}/${jobID}:cancel?${stringifiedParams}`
+    : `/admin/background_jobs/administration/${kind}/${jobID}:cancel`;
+};
+
+/**
+ * Delegates per kind. A runtime job stops by its durable desired state, the same primitive the per-kind cancels use; an evaluation run stops through the evaluation repository's own CancelRun; a scheduled occurrence cannot be stopped, because the next occurrence is already computed from the same schedule row - disable the schedule instead.
+ * @summary Stop one background job
+ */
+export const cancelBackgroundJob = async (
+  kind: "index" | "agent" | "toolkit" | "execution" | "schedule" | "eval",
+  jobID: string,
+  params?: CancelBackgroundJobParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<cancelBackgroundJobResponse> => {
+  return eliteaFetch<cancelBackgroundJobResponse>(
+    getCancelBackgroundJobUrl(kind, jobID, params),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getCancelBackgroundJobQueryKey = (
+  kind: "index" | "agent" | "toolkit" | "execution" | "schedule" | "eval",
+  jobID: string,
+  params?: CancelBackgroundJobParams,
+) => {
+  return [
+    "POST",
+    `/admin/background_jobs/administration/${kind}/${jobID}:cancel`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getCancelBackgroundJobQueryOptions = <
+  TData = Awaited<ReturnType<typeof cancelBackgroundJob>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  kind: "index" | "agent" | "toolkit" | "execution" | "schedule" | "eval",
+  jobID: string,
+  params?: CancelBackgroundJobParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof cancelBackgroundJob>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getCancelBackgroundJobQueryKey(kind, jobID, params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof cancelBackgroundJob>>
+  > = ({ signal }) =>
+    cancelBackgroundJob(kind, jobID, params, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      kind !== null &&
+      kind !== undefined &&
+      jobID !== null &&
+      jobID !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof cancelBackgroundJob>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type CancelBackgroundJobQueryResult = NonNullable<
+  Awaited<ReturnType<typeof cancelBackgroundJob>>
+>;
+export type CancelBackgroundJobQueryError =
+  ErrorResponse | N401Response | N403Response;
+
+export function useCancelBackgroundJob<
+  TData = Awaited<ReturnType<typeof cancelBackgroundJob>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  kind: "index" | "agent" | "toolkit" | "execution" | "schedule" | "eval",
+  jobID: string,
+  params: undefined | CancelBackgroundJobParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof cancelBackgroundJob>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof cancelBackgroundJob>>,
+          TError,
+          Awaited<ReturnType<typeof cancelBackgroundJob>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCancelBackgroundJob<
+  TData = Awaited<ReturnType<typeof cancelBackgroundJob>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  kind: "index" | "agent" | "toolkit" | "execution" | "schedule" | "eval",
+  jobID: string,
+  params?: CancelBackgroundJobParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof cancelBackgroundJob>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof cancelBackgroundJob>>,
+          TError,
+          Awaited<ReturnType<typeof cancelBackgroundJob>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCancelBackgroundJob<
+  TData = Awaited<ReturnType<typeof cancelBackgroundJob>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  kind: "index" | "agent" | "toolkit" | "execution" | "schedule" | "eval",
+  jobID: string,
+  params?: CancelBackgroundJobParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof cancelBackgroundJob>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Stop one background job
+ */
+
+export function useCancelBackgroundJob<
+  TData = Awaited<ReturnType<typeof cancelBackgroundJob>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  kind: "index" | "agent" | "toolkit" | "execution" | "schedule" | "eval",
+  jobID: string,
+  params?: CancelBackgroundJobParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof cancelBackgroundJob>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getCancelBackgroundJobQueryOptions(
+    kind,
+    jobID,
+    params,
     options,
   );
 
@@ -5702,6 +6201,168 @@ export function useListAdminPublishedAgents<
   queryKey: DataTag<QueryKey, TData, TError>;
 } {
   const queryOptions = getListAdminPublishedAgentsQueryOptions(params, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getSystemInfoResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getSystemInfoResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type getSystemInfoResponse501 = {
+  data: ErrorResponse;
+  status: 501;
+};
+
+export type getSystemInfoResponseError = (
+  getSystemInfoResponse401 | getSystemInfoResponse403 | getSystemInfoResponse501
+) & {
+  headers: Headers;
+};
+
+export type getSystemInfoResponse = getSystemInfoResponseError;
+
+export const getGetSystemInfoUrl = () => {
+  return `/admin/system_info/prompt_lib`;
+};
+
+/**
+ * NOTE(W2): internal/api/v2/admin/handler.go:170 (SystemInfo). It answers
+ * 501 and nothing else. There is no 200 to describe: this service reports
+ * no per-plugin versions because it loads no plugins.
+ * @summary Report the platform's component versions (not available here)
+ */
+export const getSystemInfo = async (
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getSystemInfoResponse> => {
+  return eliteaFetch<getSystemInfoResponse>(getGetSystemInfoUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetSystemInfoQueryKey = () => {
+  return [`/admin/system_info/prompt_lib`] as const;
+};
+
+export const getGetSystemInfoQueryOptions = <
+  TData = Awaited<ReturnType<typeof getSystemInfo>>,
+  TError = N401Response | N403Response | ErrorResponse,
+>(options?: {
+  query?: Partial<
+    UseQueryOptions<Awaited<ReturnType<typeof getSystemInfo>>, TError, TData>
+  >;
+  request?: SecondParameter<typeof eliteaFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetSystemInfoQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getSystemInfo>>> = ({
+    signal,
+  }) => getSystemInfo({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getSystemInfo>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetSystemInfoQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getSystemInfo>>
+>;
+export type GetSystemInfoQueryError =
+  N401Response | N403Response | ErrorResponse;
+
+export function useGetSystemInfo<
+  TData = Awaited<ReturnType<typeof getSystemInfo>>,
+  TError = N401Response | N403Response | ErrorResponse,
+>(
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getSystemInfo>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getSystemInfo>>,
+          TError,
+          Awaited<ReturnType<typeof getSystemInfo>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetSystemInfo<
+  TData = Awaited<ReturnType<typeof getSystemInfo>>,
+  TError = N401Response | N403Response | ErrorResponse,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getSystemInfo>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getSystemInfo>>,
+          TError,
+          Awaited<ReturnType<typeof getSystemInfo>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetSystemInfo<
+  TData = Awaited<ReturnType<typeof getSystemInfo>>,
+  TError = N401Response | N403Response | ErrorResponse,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getSystemInfo>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Report the platform's component versions (not available here)
+ */
+
+export function useGetSystemInfo<
+  TData = Awaited<ReturnType<typeof getSystemInfo>>,
+  TError = N401Response | N403Response | ErrorResponse,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getSystemInfo>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetSystemInfoQueryOptions(options);
 
   const query = useQuery(queryOptions, queryClient) as UseQueryResult<
     TData,

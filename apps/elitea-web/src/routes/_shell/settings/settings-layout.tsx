@@ -1,14 +1,24 @@
-import { Outlet, useNavigate } from '@tanstack/react-router';
+import { useEffect } from 'react';
+
+import { Outlet, useLocation, useNavigate, useRouteContext } from '@tanstack/react-router';
 
 import Box from '@mui/material/Box';
 import type { SxProps, Theme } from '@mui/material/styles';
 
-import { performLogout } from '@/shared/api/auth';
+import { useIsPersonalProject } from '@/routes/-guards/personalProject';
+import { isPublicProject } from '@/routes/-guards/publicProject';
 import { t } from '@/shared/i18n';
 import { useIsAnalyticsVisible } from '@/shared/lib/hooks/useIsAnalyticsVisible';
+import { useIsUsageVisible } from '@/shared/lib/hooks/useIsUsageVisible';
+import { useSelectedProjectStore } from '@/widgets/app-shell';
 import { SETTINGS_LAYOUT } from '@/shared/ui/settings/settings.constants';
 import { type SettingsSection, SettingsDrawer } from '@/shared/ui/settings/SettingsDrawer';
-import { SettingsRedirect } from '@/shared/ui/settings/SettingsRedirect';
+import {
+  type SettingsSectionGates,
+  buildSettingsSections,
+  isTabHidden,
+} from './settingsSections';
+import { DEFAULT_SETTINGS_TAB, SettingsRedirect } from '@/shared/ui/settings/SettingsRedirect';
 
 /**
  * Top-level Settings page layout. Replaces the placeholder `SettingsLayout`
@@ -20,8 +30,24 @@ import { SettingsRedirect } from '@/shared/ui/settings/SettingsRedirect';
  *
  * Ported from `apps/elitea-ui/src/[fsd]/pages/settings/index.jsx`.
  */
-/** The PERSONAL section's action item that is not a route (see `handleItemClick`). */
-const LOGOUT_TAB_ID = 'logout';
+/**
+ * `personal_project_id` off the router context's `auth.getUser()`
+ * (`app/router-context.ts`'s `AuthUser`), read STRUCTURALLY rather than
+ * imported — `routes/` may not reach into `app/`. The same seam
+ * `shared/ui/EntityRail/useRailContext.ts` and
+ * `routes/-pages/Notifications.tsx` each already carry for the same field.
+ */
+interface PersonalProjectIdContext {
+  readonly auth?: {
+    readonly getUser?: () => { readonly personal_project_id?: string } | undefined;
+  };
+}
+
+function usePersonalProjectId(): string | undefined {
+  const context: unknown = useRouteContext({ strict: false });
+  if (typeof context !== 'object' || context === null) return undefined;
+  return (context as PersonalProjectIdContext).auth?.getUser?.()?.personal_project_id;
+}
 
 export function SettingsLayout() {
   const navigate = useNavigate();
@@ -31,99 +57,81 @@ export function SettingsLayout() {
   // 403 `internal/api/router.go`'s `requireAnalyticsEnabled` puts on every
   // `/analytics*` route.
   const analyticsVisible = useIsAnalyticsVisible();
-  const sections: SettingsSection[] = [
-    {
-      section: 'PROJECT',
-      tabs: [
-        {
-          id: 'model-configuration',
-          label: 'AI Configuration',
-        },
-        {
-          id: 'prompts',
-          label: 'Service Prompts',
-        },
-        {
-          id: 'environment',
-          label: 'Environment',
-        },
-        {
-          id: 'project-params',
-          label: 'Project Params',
-        },
-        {
-          id: 'secrets',
-          label: 'Secrets',
-        },
-        {
-          id: 'users',
-          label: 'Users',
-        },
-        ...(analyticsVisible
-          ? [
-              {
-                id: 'analytics',
-                label: 'Analytics',
-              },
-            ]
-          : []),
-      ],
-    },
-    {
-      section: 'PERSONAL',
-      tabs: [
-        {
-          id: 'personalization',
-          label: 'Personalization',
-        },
-        // Baseline order (`[fsd]/pages/settings/index.jsx:112-141`):
-        // Profile, Preferences, AI Personality, Memory, Personal Tokens,
-        // Notifications. Preferences/AI Personality/Memory had no counterpart
-        // here at all — the pages existed in production and simply were not
-        // ported. `Profile` is still absent; its identity rows (full name,
-        // email, user id, last login) and the Log out button that lived with
-        // them have no home yet, which is why Log out is a nav item below
-        // rather than a control on a page.
-        {
-          id: 'preferences',
-          label: 'Preferences',
-        },
-        {
-          id: 'ai-personality',
-          label: 'AI Personality',
-        },
-        {
-          id: 'memory',
-          label: 'Memory',
-        },
-        {
-          id: 'tokens',
-          label: 'Personal Tokens',
-        },
-        {
-          id: 'notifications',
-          label: 'Notifications',
-        },
-        {
-          id: LOGOUT_TAB_ID,
-          label: 'Log out',
-        },
-      ],
-    },
-  ];
+  // `cost_budgets_enabled` — the reference gated the same tab on the same key.
+  // It defaults CLOSED rather than open, unlike every other flag hook here; see
+  // `useIsUsageVisible` for why a tab of structural zeroes is worse than a
+  // missing tab.
+  const usageVisible = useIsUsageVisible();
+  // TWO PROJECT-SHAPE GATES THE REFERENCE APPLIES AND THIS PORT DID NOT.
+  //
+  // `pages/settings/index.jsx:150-166` filters the PROJECT list on more than
+  // the two platform flags above:
+  //
+  //  - `publicOnly` rows (Service Prompts, Environment) appear ONLY in the
+  //    tenant's public project. They edit platform-wide service prompts and
+  //    the platform environment; in any other project they were dead rows.
+  //    Measured against a live deployment in a personal project, production
+  //    shows neither.
+  //  - `users` disappears in the caller's PERSONAL project
+  //    (`isPrivateProject = projectId == user.personal_project_id`). A
+  //    one-person project has no membership to manage.
+  //  - `project-context` is the mirror image: it is hidden in the PUBLIC
+  //    project only.
+  //
+  // Without these three, a personal project drew three rows production does
+  // not have, which is also why "General" (the reference's first row and its
+  // default tab) had no room in this drawer.
+  //
+  // `useIsPersonalProject` is the id comparison the reference makes PLUS the
+  // reserved-name check this backend needs — see `routes/-guards/
+  // personalProject.ts`. Written here as `selectedProjectId ===
+  // personalProjectId` alone, it answered yes for every member of a single
+  // shared project (whose `personal_project_id` resolves to that shared
+  // project, because provisioning never runs for them), hid Users and
+  // redirected `/settings/users` back to General.
+  const selectedProjectId = useSelectedProjectStore((state) => state.project?.id ?? '');
+  const personalProjectId = usePersonalProjectId();
+  const isPersonalProject = useIsPersonalProject(selectedProjectId, personalProjectId);
+  const gates: SettingsSectionGates = {
+    isPublicProject: isPublicProject(selectedProjectId),
+    isPersonalProject,
+    analyticsVisible,
+    usageVisible,
+  };
+  const sections: SettingsSection[] = buildSettingsSections(gates);
+
+  /*
+   * A HIDDEN TAB MUST ALSO BE UNREACHABLE BY URL.
+   *
+   * Dropping a row from the drawer stops it being CLICKABLE; it does not stop
+   * `/settings/prompts` being typed, bookmarked or linked. Both of those pages
+   * gate every one of their own queries on `useIsPublicProject`, so in any
+   * other project they render a body with nothing in it — no rows, no error,
+   * no request. Measured on a fresh install: the server publishes
+   * `public_project_id: 1`, the image ships `VITE_PUBLIC_PROJECT_ID=99`, the
+   * user sits in personal project 2, and both screens draw an empty page that
+   * looks like a broken deployment rather than a screen that does not apply.
+   *
+   * The reference guards exactly this, and with a redirect rather than an
+   * error (`pages/settings/index.jsx:196-201`: "Guard: hide Service Prompts
+   * and Environment for non-Public projects" -> `handleSettingsItemClick(
+   * DEFAULT_TAB)`). `users` is guarded the same way for the same reason: a
+   * personal project has one member and no membership to manage.
+   */
+  const location = useLocation();
+  const isHiddenTab = isTabHidden(location.pathname.split('/').at(-1), gates);
+
+  useEffect(() => {
+    if (!isHiddenTab) return;
+    void navigate({
+      to: '/settings/$tab',
+      params: { tab: DEFAULT_SETTINGS_TAB },
+      replace: true,
+      search: (previous) => previous,
+    });
+  }, [isHiddenTab, navigate]);
 
   const handleItemClick = (tabId: string) => {
-    // "Log out" is not a tab: there is no `routes/_shell/settings/logout.tsx`,
-    // so treating it like one only pushed a URL with no route behind it and
-    // `SettingsRedirect` bounced the user straight back into the app with
-    // every `el.*` key intact (issue #136 A). `performLogout()` is the real
-    // implementation — the `el.` namespace sweep in both storage areas plus
-    // the `/forward-auth/logout` handoff that clears the server session
-    // cookie — and this is its call site.
-    if (tabId === LOGOUT_TAB_ID) {
-      performLogout();
-      return;
-    }
     // NAVIGATE THROUGH THE ROUTER, NOT window.history.
     //
     // This used to be `window.history.replaceState(null, '', `/settings/${tabId}`)`,

@@ -1,0 +1,178 @@
+{
+  "_note": "Reader-selected wiki pages as question context (`context_paths`). NEW product, not a port: there is no legacy producer to record, so this fixture is a SPECIFICATION rather than a recording, and it says so. It exists because the rule set is implemented TWICE — in the Go sub-application host (services/elitea-subapp-host/internal/apps/deepwiki/run/contextpaths.go), which resolves in front of every tool table on that host, and in the Python service (services/elitea-deepwiki/src/elitea_deepwiki/wiki_context.py), which covers a sidecar called directly. Two implementations of a rule about what a client may make the server read is exactly the pair that must not drift, so both read this file.",
+  "producer": "specification (ADR-0022/0023 follow-on; no legacy equivalent)",
+  "budget": {
+    "total_chars": 32000,
+    "per_document_chars": 8000
+  },
+  "shape": {
+    "context_lead_in": "Given this selected wiki context:",
+    "question_lead_in": "Current question: ",
+    "section_header": "--- source: {page_id} ---",
+    "truncation_marker": "[… truncated to {limit} characters of context budget]",
+    "omission_marker": "[… {count} further selected page(s) omitted for the 32000 character context budget: {page_ids}]"
+  },
+  "wiki": {
+    "wiki_id": "acme--notes-service--main",
+    "repo_config": {
+      "provider_type": "github",
+      "provider_config": {},
+      "repository": "acme/notes-service",
+      "branch": "main"
+    },
+    "wiki_version_id": "20260101T000000Z-0000000a",
+    "newer_version_id": "20260202T000000Z-0000000b",
+    "manifest_key": "acme--notes-service--main/wiki_manifest_20260101T000000Z-0000000a.json",
+    "_manifest_pages_are_full_keys": "The recorded legacy manifest lists pages as FULL object keys; the two fixture runners list them RELATIVE. Both forms must resolve, which is why this fixture's manifest uses the full-key form while most cases below select with the relative one.",
+    "manifest": {
+      "schema_version": 2,
+      "wiki_id": "acme--notes-service--main",
+      "wiki_version_id": "20260101T000000Z-0000000a",
+      "pages": [
+        "acme--notes-service--main/wiki_pages/overview/getting-started.md",
+        "acme--notes-service--main/wiki_pages/components/storage.md",
+        "acme--notes-service--main/wiki_pages/bulk/p1.md",
+        "acme--notes-service--main/wiki_pages/bulk/p2.md",
+        "acme--notes-service--main/wiki_pages/bulk/p3.md",
+        "acme--notes-service--main/wiki_pages/bulk/p4.md",
+        "acme--notes-service--main/wiki_pages/bulk/p5.md"
+      ]
+    },
+    "pages": {
+      "wiki_pages/overview/getting-started.md": "# Getting started\n\nRun the service with `make run`.\n",
+      "wiki_pages/components/storage.md": "# Storage\n\nNotes live in Postgres.\n"
+    },
+    "_generated_pages_note": "Bodies too large to embed. Each is `fill` repeated to `chars`.",
+    "generated_pages": {
+      "wiki_pages/bulk/p1.md": { "fill": "a", "chars": 9000 },
+      "wiki_pages/bulk/p2.md": { "fill": "b", "chars": 8000 },
+      "wiki_pages/bulk/p3.md": { "fill": "c", "chars": 8000 },
+      "wiki_pages/bulk/p4.md": { "fill": "d", "chars": 8000 },
+      "wiki_pages/bulk/p5.md": { "fill": "e", "chars": 8000 }
+    }
+  },
+  "cases": {
+    "two_pages_are_prepended_in_selection_order": {
+      "context_paths": [
+        "wiki_pages/components/storage.md",
+        "wiki_pages/overview/getting-started.md"
+      ],
+      "context_wiki_version_id": "20260101T000000Z-0000000a",
+      "question": "Where do notes live?",
+      "enhanced_question": "Given this selected wiki context:\n--- source: wiki_pages/components/storage.md ---\n# Storage\n\nNotes live in Postgres.\n\n\n--- source: wiki_pages/overview/getting-started.md ---\n# Getting started\n\nRun the service with `make run`.\n\n\nCurrent question: Where do notes live?"
+    },
+    "full_key_ids_resolve_to_the_same_block": {
+      "context_paths": [
+        "acme--notes-service--main/wiki_pages/components/storage.md"
+      ],
+      "context_wiki_version_id": "20260101T000000Z-0000000a",
+      "question": "Where do notes live?",
+      "enhanced_question": "Given this selected wiki context:\n--- source: wiki_pages/components/storage.md ---\n# Storage\n\nNotes live in Postgres.\n\n\nCurrent question: Where do notes live?"
+    },
+    "duplicates_collapse_and_order_is_kept": {
+      "context_paths": [
+        "wiki_pages/components/storage.md",
+        "acme--notes-service--main/wiki_pages/components/storage.md",
+        "wiki_pages/components/storage.md"
+      ],
+      "context_wiki_version_id": "20260101T000000Z-0000000a",
+      "question": "Where do notes live?",
+      "expect": { "sections": 1 }
+    },
+    "no_selection_leaves_the_question_alone": {
+      "context_paths": [],
+      "context_wiki_version_id": "20260101T000000Z-0000000a",
+      "question": "Where do notes live?",
+      "enhanced_question": "Where do notes live?"
+    },
+    "a_page_over_the_per_document_budget_is_truncated_with_a_marker": {
+      "context_paths": ["wiki_pages/bulk/p1.md"],
+      "context_wiki_version_id": "20260101T000000Z-0000000a",
+      "question": "Summarise p1",
+      "expect": {
+        "sections": 1,
+        "contains": ["[… truncated to 8000 characters of context budget]"],
+        "body_chars_before_marker": 8000
+      }
+    },
+    "the_total_budget_truncates_and_names_what_it_omitted": {
+      "context_paths": [
+        "wiki_pages/bulk/p2.md",
+        "wiki_pages/bulk/p3.md",
+        "wiki_pages/bulk/p4.md",
+        "wiki_pages/bulk/p5.md",
+        "wiki_pages/bulk/p1.md"
+      ],
+      "context_wiki_version_id": "20260101T000000Z-0000000a",
+      "question": "Summarise everything",
+      "expect": {
+        "sections": 4,
+        "contains": [
+          "[… 1 further selected page(s) omitted for the 32000 character context budget: wiki_pages/bulk/p1.md]"
+        ]
+      }
+    },
+    "an_id_outside_the_pinned_version_is_refused": {
+      "_why": "Not dropped. A silently dropped attachment is an answer that looks grounded in a page it never saw.",
+      "context_paths": ["wiki_pages/overview/not-published.md"],
+      "context_wiki_version_id": "20260101T000000Z-0000000a",
+      "question": "Where do notes live?",
+      "refusal_contains": [
+        "are not part of wiki",
+        "wiki_pages/overview/not-published.md"
+      ]
+    },
+    "an_id_naming_another_wiki_is_refused": {
+      "_why": "The wiki id is DERIVED from repo_config, so a client cannot address another project's wiki. A qualified id that does not belong to this wiki fails the shape gate before any read is attempted.",
+      "context_paths": ["other--wiki--main/wiki_pages/overview/getting-started.md"],
+      "context_wiki_version_id": "20260101T000000Z-0000000a",
+      "question": "Where do notes live?",
+      "refusal_contains": ["may only name wiki pages of this wiki"],
+      "reads_expected": 0
+    },
+    "a_traversal_id_is_refused_before_any_read": {
+      "context_paths": ["wiki_pages/../../../etc/passwd"],
+      "context_wiki_version_id": "20260101T000000Z-0000000a",
+      "question": "Where do notes live?",
+      "refusal_contains": ["may only name wiki pages of this wiki"],
+      "reads_expected": 0
+    },
+    "a_url_is_refused_before_any_read": {
+      "_why": "The whole reason the client sends identifiers: a URL would let it choose what the server fetches.",
+      "context_paths": ["https://169.254.169.254/latest/meta-data/"],
+      "context_wiki_version_id": "20260101T000000Z-0000000a",
+      "question": "Where do notes live?",
+      "refusal_contains": ["may only name wiki pages of this wiki"],
+      "reads_expected": 0
+    },
+    "a_repository_path_is_refused": {
+      "_why": "v1 selects wiki pages only. The index deliberately excludes files, so letting a reader name a repo path would leak what indexing chose to skip.",
+      "context_paths": ["src/notes/storage.py"],
+      "context_wiki_version_id": "20260101T000000Z-0000000a",
+      "question": "Where do notes live?",
+      "refusal_contains": ["may only name wiki pages of this wiki"],
+      "reads_expected": 0
+    },
+    "a_selection_without_a_version_is_refused": {
+      "_why": "A question asked against the version on screen must not silently resolve against a newer one.",
+      "context_paths": ["wiki_pages/components/storage.md"],
+      "context_wiki_version_id": "",
+      "question": "Where do notes live?",
+      "refusal_contains": ["is required when context_paths is given"],
+      "reads_expected": 0
+    },
+    "a_selection_pinned_to_a_missing_version_is_refused": {
+      "context_paths": ["wiki_pages/components/storage.md"],
+      "context_wiki_version_id": "20260202T000000Z-0000000b",
+      "question": "Where do notes live?",
+      "refusal_contains": ["is not available"]
+    },
+    "a_non_list_selection_is_refused": {
+      "context_paths_raw": "wiki_pages/components/storage.md",
+      "context_wiki_version_id": "20260101T000000Z-0000000a",
+      "question": "Where do notes live?",
+      "refusal_contains": ["must be a list of wiki page ids"],
+      "reads_expected": 0
+    }
+  }
+}

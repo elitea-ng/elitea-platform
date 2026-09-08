@@ -143,6 +143,12 @@ func main() {
 	// pool) leaves the endpoint refusing every request — fail closed, not
 	// silently unchecked.
 	var egressPolicy llmproxy.EgressPolicy
+	// eliteaAccount is the same value as acct, kept in its concrete type and in
+	// this scope so the governance plane can be bound to its egress gate once
+	// the policy store exists (gap G6). The two lifecycles are independent: the
+	// account is a hard dependency of bifrost.Init, the policy store is
+	// optional and is built later.
+	var eliteaAccount *account.EliteaAccount
 	if pool != nil {
 		vault, verr := account.NewFernetVault(account.NewPoolQuerier(pool))
 		if verr != nil {
@@ -168,20 +174,24 @@ func main() {
 		}
 		acct = eliteaAcct
 		egressPolicy = eliteaAcct
+		eliteaAccount = eliteaAcct
 		if len(cfg.SelfLLMOrigins) == 0 {
 			logger.Warn("GATEWAY_SELF_LLM_ORIGINS is empty — the request-time SELF_REFERENTIAL_CREDENTIAL guard (spec §2.6 guard #1) is inert")
 		}
-		// Issue #13: the two egress policy modes differ in whether a tenant can
-		// steer the gateway at a private address at all. Say which one is armed
-		// at startup — an operator must not have to read the code to find out.
+		// Issue #13 / gap G6: the egress policy has two independent switches and
+		// an operator must not have to read the code to learn which is armed.
+		// GATEWAY_EGRESS_ALLOWLIST is only the BOOTSTRAP FLOOR now; authored
+		// `egress_allowlist` governance rows are unioned with it at runtime, and
+		// the log line after the policy store starts reports the merged state.
 		if eliteaAcct.EgressAllowlistConfigured() {
-			logger.Info("EGRESS ALLOWLIST ARMED: tenant-authored api_base hosts are restricted to GATEWAY_EGRESS_ALLOWLIST; "+
-				"private-network destinations are permitted for the self-hosted provider classes (vLLM, Ollama)",
+			logger.Info("EGRESS ALLOWLIST FLOOR ARMED: tenant-authored api_base hosts are restricted to "+
+				"GATEWAY_EGRESS_ALLOWLIST plus any authored egress_allowlist row",
 				"entries", len(cfg.EgressAllowlist))
 		} else {
-			logger.Warn("GATEWAY_EGRESS_ALLOWLIST is empty — tenant-authored api_base hosts are UNRESTRICTED (public only). " +
-				"bifrost's SSRF-safe dialer stays on for every provider, so self-hosted vLLM/Ollama on a private " +
-				"network will NOT work until the allowlist names those hosts (issue #13)")
+			logger.Warn("GATEWAY_EGRESS_ALLOWLIST is empty — tenant-authored api_base hosts are UNRESTRICTED until " +
+				"an admin authors an egress_allowlist row. bifrost's SSRF-safe dialer stays on for every provider, " +
+				"so self-hosted vLLM/Ollama on a private network does NOT work until an entry names that private " +
+				"host or CIDR (issue #13, gap G6)")
 		}
 		// Issue #316: say whether platform-shared models are reachable. With the
 		// scope off, a project sees only its own credentials, so a deployment
@@ -235,6 +245,19 @@ func main() {
 	} else {
 		logger.Warn("BUDGET ENFORCEMENT DISABLED: " + budgetDisabledReason(cfg, nc, pool))
 		recordBudgetEnforcementEnabled(false)
+	}
+
+	// Issue #304: the startup gate. It runs HERE — after the wiring block above
+	// decided whether the gate exists, and long before the listener opens near
+	// the end of main — so a refused process answers no request at all.
+	//
+	// It reads plane.current() and not the local govStore because those two can
+	// already differ: install() is a compare-and-swap and the plane is what
+	// every later reader uses. See budget_startup_gate.go for the three states
+	// and which of them each mode refuses.
+	if err := budgetStartupGate(ctx, cfg, logger, plane.current() != nil, pool); err != nil {
+		logger.Error("FATAL: refusing to start", "err", err)
+		os.Exit(1)
 	}
 
 	// The NATS circuit-breaker state is invisible to Kubernetes readiness
@@ -308,6 +331,21 @@ func main() {
 		// enforcing what an operator authored before it serves a request.
 		policyStore.Start(ctx)
 
+		// GAP G6: hand the account the runtime half of its egress allowlist.
+		// The bind happens AFTER the first load, so the merged list is complete
+		// before the listener opens, and BEFORE any request, so no credential is
+		// ever judged against the environment floor alone.
+		//
+		// Without this line the `egress_allowlist` rows load, appear on
+		// /governance/status and govern nothing — the same shape of gap the
+		// whole governance-definition plane was written to remove.
+		startEgressAllowlistPlane(ctx, egressPlane{
+			account: eliteaAccount,
+			source:  policyStore,
+			core:    srv.Core(),
+			logger:  logger,
+		})
+
 		if rc, ok := nc.(policy.RateCounter); ok && nc != nil {
 			policyLimiter = policy.NewLimiter(policy.LimiterConfig{
 				Counter: rc,
@@ -340,7 +378,7 @@ func main() {
 
 	// The operator's answer to "is the rule I saved actually in force?".
 	mux.HandleFunc("/governance/status",
-		makeGovernanceStatusHandler(policyStore, policyLimiter, cfg.PublicProjectIDString()))
+		makeGovernanceStatusHandler(policyStore, policyLimiter, cfg.PublicProjectIDString(), eliteaAccount))
 
 	// The soft-alert event publisher (gateway.events.*, spec §8.3) rides the
 	// same NATS connection as the budget counters; without NATS the alert

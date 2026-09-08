@@ -134,14 +134,59 @@ test('the chat loop works end to end: send, stream, persist, reload', async ({ p
   // those promises resolve routinely opens after the last chunk has landed —
   // reporting "nothing was painted incrementally" about a turn it never
   // watched. This runs concurrently and is awaited at the end.
+  //
+  // THE RECORDING LIVES IN THE PAGE, and that is the whole point. The first
+  // version polled `locator.textContent()`, which AUTO-WAITS for the element:
+  // its opening call blocked until the answer node attached, so the loop made
+  // exactly ONE read for the whole turn and read the finished answer. Measured
+  // in the trace of run 33810201650, where that first call started with the
+  // click and returned 894 ms later — against a reply that spans 4 words x
+  // MOCK_LLM_CHUNK_DELAY_MS=120, i.e. 480 ms. The assertion then reported
+  // "the reply arrived in one frame" about a stream it never saw, and it did
+  // so three times in a row while the app was streaming correctly. The comment
+  // above was right about the hazard and the mechanism reintroduced it.
+  //
+  // A MutationObserver installed BEFORE the click cannot miss a paint,
+  // whatever the round-trip latency: every distinct text the node holds is
+  // recorded in page memory and drained below. `page.evaluate` does not
+  // auto-wait for anything, so a drain that arrives late costs nothing.
   const answer = page.getByTestId('chat-message-list').getByTestId('application-answer').first();
+  await page.evaluate(() => {
+    const store = window as unknown as { __eliteaAnswerStates?: string[] };
+    store.__eliteaAnswerStates = [];
+    const read = (): string =>
+      document
+        .querySelector('[data-testid="chat-message-list"] [data-testid="application-answer"]')
+        ?.textContent?.trim() ?? '';
+    let last = '';
+    const record = (): void => {
+      const text = read();
+      if (text !== last) {
+        last = text;
+        store.__eliteaAnswerStates?.push(text);
+      }
+    };
+    new MutationObserver(record).observe(document.body, {
+      subtree: true,
+      childList: true,
+      characterData: true,
+    });
+    record();
+  });
   const partials: string[] = [];
   const sampler = (async () => {
     const deadline = Date.now() + 25_000;
     while (Date.now() < deadline) {
-      const text = ((await answer.textContent().catch(() => '')) ?? '').trim();
-      if (text && !text.includes(prompt)) partials.push(text);
-      if (text.includes(prompt)) return;
+      const states = await page.evaluate(() => {
+        const store = window as unknown as { __eliteaAnswerStates?: string[] };
+        const seen = store.__eliteaAnswerStates ?? [];
+        store.__eliteaAnswerStates = [];
+        return seen;
+      });
+      for (const text of states) {
+        if (text && !text.includes(prompt)) partials.push(text);
+        if (text.includes(prompt)) return;
+      }
       await page.waitForTimeout(50);
     }
   })();

@@ -60,6 +60,15 @@ func (r *Runner) Invoke(ctx context.Context, call spi.Invoke, tc *spi.Context) (
 	}
 	params := MergeParameters(request)
 
+	// Reader-selected wiki pages, resolved into the question BEFORE the
+	// argument set is derived — see contextpaths.go for why it happens here
+	// rather than inside a tool. The keys are spent here too, so nothing
+	// downstream can prepend the same context twice.
+	params, err := ApplyContextPaths(ctx, call.Tool, params, r.Artifacts)
+	if err != nil {
+		return nil, err
+	}
+
 	if host, err := CheckEgress(r.Egress, params); err != nil {
 		return nil, err
 	} else if host != "" {

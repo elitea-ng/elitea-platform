@@ -11,17 +11,21 @@ from elitea_worker.constants import (
     CONFORMANCE_OCCURRED_AT_UNIX_MILLIS,
     INDEX_INGEST_CAPABILITY_ID,
     INDEX_INGEST_CAPABILITY_VERSION,
+    TOOLKIT_CALL_TOOL_CAPABILITY_ID,
+    TOOLKIT_CALL_TOOL_CAPABILITY_VERSION,
 )
 from elitea_worker.execution.delivery import (
     AgentExecutionDeliveryProcessor,
     ConfigurationValidationDeliveryProcessor,
     IndexIngestDeliveryProcessor,
+    ToolkitCallToolDeliveryProcessor,
 )
 from elitea_worker.execution.errors import WorkerError
 from elitea_worker.execution.registry import CapabilityRegistration, CapabilityRegistry
 from elitea_worker.fixtures.bundle import FixtureBundle
 from elitea_worker.handlers.indexing import IndexIngestHandler
 from elitea_worker.handlers.toolkit_available_tools import ToolkitAvailableToolsHandler
+from elitea_worker.handlers.toolkit_call_tool import ToolkitCallToolHandler
 from elitea_worker.handlers.validation import ConfigurationValidationHandler
 from elitea_worker.protocol.codec import (
     VerifiedWorkerCommand,
@@ -38,6 +42,7 @@ def build_static_handler_registry(
     validation: ConfigurationValidationHandler,
     toolkit_available_tools: ToolkitAvailableToolsHandler,
     index_ingest: IndexIngestHandler,
+    toolkit_call_tool: ToolkitCallToolHandler,
 ) -> CapabilityRegistry:
     """Return the compile-time handler set; runtime kwargs cannot add code."""
 
@@ -53,6 +58,11 @@ def build_static_handler_registry(
                 INDEX_INGEST_CAPABILITY_ID,
                 int(INDEX_INGEST_CAPABILITY_VERSION),
                 index_ingest.execute,
+            ),
+            CapabilityRegistration(
+                TOOLKIT_CALL_TOOL_CAPABILITY_ID,
+                int(TOOLKIT_CALL_TOOL_CAPABILITY_VERSION),
+                toolkit_call_tool.execute,
             ),
         )
     )
@@ -129,5 +139,6 @@ __all__ = [
     "ConfigurationValidationDeliveryProcessor",
     "IndexIngestDeliveryProcessor",
     "OfflineValidationWorker",
+    "ToolkitCallToolDeliveryProcessor",
     "build_static_handler_registry",
 ]

@@ -1,8 +1,7 @@
 /**
- * ChatBox — composition root for the chat experience.
- * Composes entities/conversation lifecycle + streaming,
- * features/chat-messages ChatMessageList, features/chat-input NewChatInput,
- * Phase-2 button primitives, Phase-4 recommendation list, and TTS.
+ * ChatBox — composition root for the chat experience. Composes entities/conversation
+ * lifecycle + streaming, features/chat-messages ChatMessageList, features/chat-input
+ * NewChatInput, Phase-2 button primitives, Phase-4 recommendation list, and TTS.
  * Port of the old 2300-line ChatBox.jsx — split across sibling hooks
  * (data/state/handlers/participant/model-selection/internal-tools/
  * versioning/mentions/actions — see ./hooks/) plus a pure-helpers module
@@ -43,7 +42,7 @@ import type { ChatBoxEditorCallbacks } from './ChatBox.helpers';
 import type { ChatBoxAgentEventSink, ChatBoxConversationProp } from './ChatBox.props';
 import { unwrapChatBoxConversation } from './ChatBox.props';
 import type { ChatBoxHandle } from './ChatBox.types';
-import { buildChatBoxInputSlots } from './ChatBoxInputSlots';
+import { buildChatBoxAttachmentProps, buildChatBoxInputSlots } from './ChatBoxInputSlots';
 import { buildChatBoxPopupsProps, ChatBoxPopups } from './ChatBoxPopups';
 import { ChatBoxDeleteModal } from './ChatBoxDeleteModal';
 import { ChatEmptyGreeting } from './ChatEmptyGreeting';
@@ -131,7 +130,8 @@ const ChatBoxInner = memo(function ChatBox({
   const data = useChatBoxData(buildChatBoxDataParams({ activeConversation, activeParticipant, projectId, userId, userName, userAvatar, isAgentsPage }));
   const messages = data.messageList.messages;
 
-  const { participantForEditor, normalisedParticipants, agentEditorParticipantDetails, isFetchingParticipantDetails } = useChatBoxParticipant({
+  // Participant normalisation + details fetch
+  const { participantForEditor, normalisedParticipants, agentEditorParticipantDetails, isFetchingParticipantDetails, assistantName } = useChatBoxParticipant({
     activeParticipant,
     conversationParticipants,
   });
@@ -326,7 +326,7 @@ const ChatBoxInner = memo(function ChatBox({
     <Box sx={chatShellSx(isEmptyConversation)}>
       <Box sx={chatColumnSx(isEmptyConversation)}>
         <ChatMessageList
-          emptyState={<ChatEmptyGreeting userName={userName} />}
+          assistantName={assistantName} emptyState={<ChatEmptyGreeting userName={userName} />}
           chatHistory={messages} isStreaming={isStreaming} userId={userId ?? ''} projectId={projectIdString}
           messageActions={{
             onCopyToClipboard: handleCopy,
@@ -364,7 +364,7 @@ const ChatBoxInner = memo(function ChatBox({
           ref={chatInputRef}
           conversationId={conversationId !== undefined ? String(conversationId) : undefined}
           state={{ isLoading: isInputLoading, isStreaming, disabledSend, isCreatingConversation: data.lifecycle.isCreating }}
-          content={{ placeholder: t('widgets.chatBox.inputPlaceholder', 'Type a message...'), clearInputAfterSubmit: true, slashHighlights: state.combinedHighlightRanges }}
+          content={{ placeholder: t('widgets.chatBox.inputPlaceholder', 'Type your message...'), clearInputAfterSubmit: true, slashHighlights: state.combinedHighlightRanges }}
           callbacks={{ onSend: handleSend, onStopGeneration: stopGeneration, onNormalKeyDown: state.onNormalKeyDown, onInputChange: state.onInputChange }}
           agentEditor={buildAgentEditorProps({
             participantForEditor,
@@ -375,6 +375,7 @@ const ChatBoxInner = memo(function ChatBox({
             onSelectVersion: (version) => { void handleSelectVersion(version); },
             editorCallbacks,
           })}
+          attachments={buildChatBoxAttachmentProps(data.attachments)}
           mentions={{ users: state.users, onMentionChange: handleMentionChange }}
           voice={{ isSpeakingMode: state.isSpeakingMode, onSpeakingModeToggle: () => state.setIsSpeakingMode(!state.isSpeakingMode), isTTSPlaying: readAloud.isPlaying }}
           slots={buildChatBoxInputSlots({

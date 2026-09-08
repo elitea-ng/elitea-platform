@@ -108,11 +108,19 @@ func TestNilGatedRouterFieldsAreWiredOrDeclared(t *testing.T) {
 		// and "the EventSource fallback" — each justified by the other, so both
 		// being nil satisfied the allowlist while the route they gate was
 		// entirely absent (#152). That is the hole the check below closes.
-		"EventSource":    "#152 — the NATS arm; no elitea-main deployment runs NATS, and the Redis arm of this pair IS wired",
-		"Shadow":         "cutover machinery, enabled per-deployment",
-		"ShadowMetrics":  "cutover machinery, enabled per-deployment",
-		"CutoverRouter":  "cutover machinery, enabled per-deployment",
-		"CutoverTracker": "cutover machinery, enabled per-deployment",
+		// Shadow, ShadowMetrics, CutoverRouter and CutoverTracker are gone
+		// from RouterConfig entirely (#383). Their entries here read "cutover
+		// machinery, enabled per-deployment" — a reason that was never true:
+		// no deployment enabled them, no composition root ever assigned them,
+		// and the routes behind them answered 404 everywhere. That is the
+		// exact shape this map is meant to make visible, and the entries hid
+		// it instead, because the map cannot tell a deliberate absence from a
+		// forgotten one when the reason is written by the same hand that
+		// forgot. The fields, the pylon reverse proxy and the shadow
+		// comparator behind them, and the internal-admin token that gated
+		// their routes, are all deleted. TestNoPylonBridgeWiringReturns fails
+		// if any of it comes back.
+		"EventSource": "#152 — the NATS arm; no elitea-main deployment runs NATS, and the Redis arm of this pair IS wired",
 	}
 
 	root := repoRootFrom(t)
@@ -283,13 +291,13 @@ func TestNilGatedRouterFieldsAreWiredOrDeclared(t *testing.T) {
 		// internal/api/v2/indextypes/testdata/current_index_types_ui_response.json.
 		// Deleting either file turns that gate red.
 		//
-		// A DEFAULT install still leaves the flag off, because the capability
-		// needs production authentication that install does not build. The
-		// toolkits handler answers the path there, and it now REFUSES — 501
-		// with `code: index_types_not_available`. It used to answer 200 with a
-		// prototype six-loader list whose names and `supported_extensions`
-		// nothing produced, which is a claim rather than a blank; the refusal
-		// is the honest OFF state, and it does not change the flag's default.
+		// The chart DERIVES the flag now (deploy/helm/elitea/values.yaml ships
+		// it empty, elitea-main.indexTypesEnabled fills it): on where the
+		// install authenticates, off where it does not. The prototype handler
+		// that used to answer the path with a 501 refusal is deleted with the
+		// route, so an install that turns the capability off has no handler
+		// for the path at all — which is a deliberate 404, stated in the
+		// chart, and not a silent second answer.
 		// ELITEA_APPLICATION_SKILLS_ENABLED was listed here, with the same
 		// conflict: the route it composes answered {skills, max_skills} and
 		// elitea-web reads the SkillsList envelope. #395 removed the conflict

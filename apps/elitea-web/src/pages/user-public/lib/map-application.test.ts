@@ -14,6 +14,7 @@ function makeApplication(overrides: Partial<Application> = {}): Application {
     is_forked: false,
     meta: null,
     has_interrupt: false,
+    tags: [],
     ...overrides,
   };
 }

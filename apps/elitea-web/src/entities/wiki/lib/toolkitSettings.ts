@@ -7,6 +7,7 @@
  * logic looks arbitrary it is preserved and the reason is written down.
  */
 import type { RepositoryIdentity, Toolkit, ToolkitSettings } from '../model/types';
+import { artifactDisplayRepository, getArtifactSource } from './artifactSource';
 import { parseRepositoryIdentity, extractAdoOrganization } from './repoUrl';
 import { mergePlainObjects } from './wikiId';
 
@@ -189,6 +190,22 @@ export function getConfiguredRepoIdentity(
   // The three sources in precedence order: the merge first, then the raw
   // settings, then the toolkit's own config. Preserved from the legacy chain.
   const sources = [merged, set, cfg];
+
+  // A FOLDER SOURCE IS READ FIRST, and it wins over every repository alias.
+  // Two reasons, and the second is the one that bites: the facade settles a
+  // body naming a folder on the folder (`folderInto` derives the repository
+  // from it and overwrites whatever the body said), so the folder is the
+  // source a generation would actually use; and the repository it derives is
+  // `artifact://bucket/prefix`, which `parseRepositoryIdentity` reads as the
+  // repository `artifact` on the branch `//bucket/prefix` — an identity that
+  // matches no wiki this project owns.
+  const folder = getArtifactSource(merged);
+  if (folder) {
+    return {
+      repository: artifactDisplayRepository(folder),
+      branch: firstFrom(sources, getBranchFromSettings),
+    };
+  }
 
   const repository = firstFrom(sources, getRepositoryFromSettings);
   const parsed = parseRepositoryIdentity(repository);

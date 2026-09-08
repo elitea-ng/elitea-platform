@@ -18,6 +18,23 @@ import { usePipelineEditorStore } from '@/features/pipelines/model/pipelineEdito
 import { usePipelineYamlStore } from '@/features/pipelines/model/pipelineYamlStore';
 
 import { useEditPipelineForm } from './useEditPipelineForm';
+import { useEditPipelineVersionFields } from './useEditPipelineVersionFields';
+
+/**
+ * The page's own composition: the version-level form state and the save hook
+ * that reads it. Rendered together rather than passing a hand-built fields
+ * object, because the pair IS the unit under test — the save body is built
+ * from what `useEditPipelineVersionFields` seeded off the same version.
+ */
+function useEditPipelineFormUnderTest(
+  detail: ApplicationDetail | undefined,
+  activeVersion: ApplicationVersionDetail | undefined,
+  projectId: string | undefined,
+  applicationId: number | undefined,
+) {
+  const versionFields = useEditPipelineVersionFields(activeVersion);
+  return { ...useEditPipelineForm(detail, activeVersion, projectId, applicationId, versionFields), versionFields };
+}
 
 const DETAIL: ApplicationDetail = {
   id: '42',
@@ -61,7 +78,7 @@ afterEach(() => {
 
 describe('useEditPipelineForm', () => {
   it('seeds the form from detail/activeVersion', () => {
-    const { result } = renderHook(() => useEditPipelineForm(DETAIL, VERSION, '9', 42), { wrapper });
+    const { result } = renderHook(() => useEditPipelineFormUnderTest(DETAIL, VERSION, '9', 42), { wrapper });
     expect(result.current.form.getValues()).toEqual({
       name: 'My Pipeline',
       description: 'A helpful pipeline',
@@ -73,7 +90,7 @@ describe('useEditPipelineForm', () => {
   });
 
   it('seeds empty defaults while detail has not loaded yet', () => {
-    const { result } = renderHook(() => useEditPipelineForm(undefined, undefined, '9', 42), { wrapper });
+    const { result } = renderHook(() => useEditPipelineFormUnderTest(undefined, undefined, '9', 42), { wrapper });
     expect(result.current.form.getValues()).toEqual({
       name: '',
       description: '',
@@ -89,7 +106,7 @@ describe('useEditPipelineForm', () => {
       status: 'draft',
     }));
     server.use(getUpdateApplicationVersionMockHandler(saveSpy));
-    const { result } = renderHook(() => useEditPipelineForm(DETAIL, undefined, '9', 42), { wrapper });
+    const { result } = renderHook(() => useEditPipelineFormUnderTest(DETAIL, undefined, '9', 42), { wrapper });
 
     act(() => {
       result.current.handleSave();
@@ -107,7 +124,7 @@ describe('useEditPipelineForm', () => {
         return { id: '1', application_id: '42', name: 'base', status: 'draft' };
       }),
     );
-    const { result } = renderHook(() => useEditPipelineForm(DETAIL, VERSION, '9', 42), { wrapper });
+    const { result } = renderHook(() => useEditPipelineFormUnderTest(DETAIL, VERSION, '9', 42), { wrapper });
 
     act(() => {
       result.current.handleSave();
@@ -125,10 +142,15 @@ describe('useEditPipelineForm', () => {
         return { id: '1', application_id: '42', name: 'base', status: 'draft' };
       }),
     );
-    const { result } = renderHook(() => useEditPipelineForm(DETAIL, VERSION, '9', 42), { wrapper });
+    const { result } = renderHook(() => useEditPipelineFormUnderTest(DETAIL, VERSION, '9', 42), { wrapper });
 
     act(() => {
-      result.current.form.setValue('version_details.tags', ['stored', 'mcp']);
+      result.current.versionFields.setTags([
+        { id: 0, name: 'stored', data: null },
+        { id: -1, name: 'mcp', data: null },
+      ]);
+    });
+    act(() => {
       result.current.handleSave();
     });
 
@@ -157,7 +179,7 @@ describe('useEditPipelineForm', () => {
         return { id: '1', application_id: '42', name: 'base', status: 'draft' };
       }),
     );
-    const { result } = renderHook(() => useEditPipelineForm(DETAIL, VERSION, '9', 42), { wrapper });
+    const { result } = renderHook(() => useEditPipelineFormUnderTest(DETAIL, VERSION, '9', 42), { wrapper });
 
     act(() => {
       result.current.handleSave();
@@ -180,7 +202,7 @@ describe('useEditPipelineForm', () => {
         return { id: '1', application_id: '42', name: 'base', status: 'draft' };
       }),
     );
-    const { result } = renderHook(() => useEditPipelineForm(DETAIL, VERSION, '9', 42), { wrapper });
+    const { result } = renderHook(() => useEditPipelineFormUnderTest(DETAIL, VERSION, '9', 42), { wrapper });
 
     act(() => {
       result.current.handleSave();
@@ -198,13 +220,13 @@ describe('useEditPipelineForm', () => {
       status: 'draft',
     }));
     server.use(getUpdateApplicationVersionMockHandler(saveSpy));
-    const { result } = renderHook(() => useEditPipelineForm(DETAIL, VERSION, '9', 42), { wrapper });
+    const { result } = renderHook(() => useEditPipelineFormUnderTest(DETAIL, VERSION, '9', 42), { wrapper });
 
     expect(result.current.isSaving).toBe(false);
   });
 
   it('saveError is undefined before any save attempt', () => {
-    const { result } = renderHook(() => useEditPipelineForm(DETAIL, VERSION, '9', 42), { wrapper });
+    const { result } = renderHook(() => useEditPipelineFormUnderTest(DETAIL, VERSION, '9', 42), { wrapper });
     expect(result.current.saveError).toBeUndefined();
   });
 
@@ -214,7 +236,7 @@ describe('useEditPipelineForm', () => {
         HttpResponse.json({ error: 'boom' }, { status: 500 }),
       ),
     );
-    const { result } = renderHook(() => useEditPipelineForm(DETAIL, VERSION, '9', 42), { wrapper });
+    const { result } = renderHook(() => useEditPipelineFormUnderTest(DETAIL, VERSION, '9', 42), { wrapper });
 
     act(() => {
       result.current.handleSave();
@@ -253,7 +275,7 @@ describe('useEditPipelineForm', () => {
       status: 'draft',
     }));
     server.use(getUpdateApplicationVersionMockHandler(saveSpy));
-    const { result } = renderHook(() => useEditPipelineForm(DETAIL, VERSION, '9', 42), { wrapper });
+    const { result } = renderHook(() => useEditPipelineFormUnderTest(DETAIL, VERSION, '9', 42), { wrapper });
 
     act(() => {
       result.current.handleSave();
@@ -275,7 +297,7 @@ describe('useEditPipelineForm', () => {
         status: 'draft',
       }),
     );
-    const { result } = renderHook(() => useEditPipelineForm(DETAIL, VERSION, '9', 42), { wrapper });
+    const { result } = renderHook(() => useEditPipelineFormUnderTest(DETAIL, VERSION, '9', 42), { wrapper });
 
     act(() => {
       result.current.handleSave();
@@ -300,7 +322,7 @@ describe('useEditPipelineForm', () => {
     );
     const { result, rerender } = renderHook(
       ({ detail, version }: { detail: ApplicationDetail; version: ApplicationVersionDetail }) =>
-        useEditPipelineForm(detail, version, '9', 42),
+        useEditPipelineFormUnderTest(detail, version, '9', 42),
       { wrapper, initialProps: { detail: DETAIL, version: VERSION } },
     );
 

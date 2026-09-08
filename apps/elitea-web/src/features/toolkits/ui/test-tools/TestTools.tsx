@@ -154,11 +154,8 @@ export function TestTools(props: TestToolsProps): ReactNode {
   const [selectedTool, setSelectedTool] = useState<string | null>(null);
   const [toolInputVariables, setToolInputVariables] = useState<Record<string, unknown>>({});
 
-  const toolSchema = useGetSelectedToolSchema({
-    toolkitType: values.type,
-    toolOptionType: selectedTool,
-    availableMcpTools: values.settings?.['available_mcp_tools'] as readonly McpToolOption[] | undefined,
-  });
+  // #440: `isError`/`refetch` come with the schema now. The static tier is a server read, so a lost read used to draw an argument form with no fields — the screen a tool that takes no arguments draws.
+  const { toolSchema, isError: toolSchemaReadFailed, refetch: retryToolSchemaRead } = useGetSelectedToolSchema({ toolkitType: values.type, toolOptionType: selectedTool, availableMcpTools: values.settings?.['available_mcp_tools'] as readonly McpToolOption[] | undefined });
 
   const selectedToolSchema = useMemo(() => {
     if (selectedTool === IndexesToolsEnum.indexData) {
@@ -310,6 +307,7 @@ export function TestTools(props: TestToolsProps): ReactNode {
           llm={{ selectedModel, onSelectModel: onSelectModelForSelector, models: modelList, llmSettings, onSetLLMSettings }}
           LLMModelSelector={LLMModelSelector}
           indexNameValidation={{ clearIndexNameError, updateIndexNameError, isIndexNameValid, indexNameError }}
+          toolSchemaRead={{ isError: toolSchemaReadFailed, onRetry: retryToolSchemaRead }}
         />
       </Grid>
 

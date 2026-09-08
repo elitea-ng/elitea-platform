@@ -70,10 +70,33 @@ export interface DeleteWikiResult {
   readonly failed: readonly string[];
 }
 
-interface BatchDeleteEnvelope {
-  data?: { deleted?: string[]; errors?: { key?: string }[] };
+/**
+ * What `:batchDelete` answers: `{deleted: string[], failed: [{key, code,
+ * message}]}` — see BatchDeleteObjects in elitea-main
+ * internal/api/v2/artifacts/objects.go. The field is `failed`. An earlier
+ * reading of this envelope looked for `errors`, which the server never
+ * writes, so a half-deleted wiki reported as a clean delete and the
+ * "these remain" warning could not render; its test served the same wrong
+ * shape, which is how it survived. `errors` is still accepted in case an
+ * older envelope form ever answers.
+ */
+interface BatchDeleteFailure {
+  key?: string;
+}
+interface BatchDeleteBody {
   deleted?: string[];
-  errors?: { key?: string }[];
+  failed?: BatchDeleteFailure[];
+  errors?: BatchDeleteFailure[];
+}
+interface BatchDeleteEnvelope extends BatchDeleteBody {
+  data?: BatchDeleteBody;
+}
+
+/** The keys the server reports it could NOT delete, whichever field names them. */
+function failedKeysFrom(body: BatchDeleteBody): string[] {
+  return [...(body.failed ?? []), ...(body.errors ?? [])]
+    .map((e) => e.key)
+    .filter((key): key is string => typeof key === 'string');
 }
 
 /** Delete a wiki's objects in ONE request. */
@@ -96,10 +119,7 @@ export function useDeleteWiki(): UseMutationResult<DeleteWikiResult, Error, Dele
         body: JSON.stringify({ keys: input.keys }),
       });
       const body = response.data ?? response;
-      const failed = (body.errors ?? [])
-        .map((e) => e.key)
-        .filter((key): key is string => typeof key === 'string');
-      return { deleted: (body.deleted ?? []).length, failed };
+      return { deleted: (body.deleted ?? []).length, failed: failedKeysFrom(body) };
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['deepwiki'] });

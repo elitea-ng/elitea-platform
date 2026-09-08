@@ -16,11 +16,14 @@ import { ToolkitForm } from './ToolkitForm';
 const TOOLKIT_TYPES_URL = '/api/v2/elitea_core/toolkits/prompt_lib/:projectId';
 const CONFIGURATIONS_LIST_URL = '/api/v2/configurations/configurations/:projectId';
 const CONFIGURATIONS_AVAILABLE_URL = '/api/v2/configurations/available/';
+const DISCOVER_TOOLS_URL = '/api/v2/elitea_core/toolkit_discover_tools/prompt_lib/:projectId/:toolkitType';
 
 /**
- * `ToolkitForm.tsx` fires all three of these on mount (`useGetCurrentToolkitSchemas`,
- * `useConfigurationsList`, `useConfigurationsAsSchema` — see that file's own
- * module doc comment, redesign 4). `src/test/setup.ts` runs MSW with
+ * `ToolkitForm.tsx` fires all four of these on mount
+ * (`useGetCurrentToolkitSchemas`, `useConfigurationsList`,
+ * `useConfigurationsAsSchema` — see that file's own module doc comment,
+ * redesign 4 — plus the #440 tool catalogue for a type that declares no
+ * tools of its own). `src/test/setup.ts` runs MSW with
  * `onUnhandledRequest: 'error'`, so every one needs a handler or the test
  * fails outright, not just produces a wrong result.
  */
@@ -29,6 +32,7 @@ function mockToolkitFormEndpoints(toolkitTypeSchemas: Record<string, unknown> = 
     http.get(TOOLKIT_TYPES_URL, () => HttpResponse.json(toolkitTypeSchemas)),
     http.get(CONFIGURATIONS_LIST_URL, () => HttpResponse.json({ items: [], total: 0, limit: 20, offset: 0 })),
     http.get(CONFIGURATIONS_AVAILABLE_URL, () => HttpResponse.json([])),
+    http.post(DISCOVER_TOOLS_URL, () => HttpResponse.json({ tools: [], total: 0 })),
   );
 }
 
@@ -295,5 +299,87 @@ describe('ToolkitForm', () => {
      * saved toolkit fail that existence check.
      */
     expect(next['settings']).toEqual(expect.objectContaining({ embedding_model: 'text-embedding-3-small' }));
+  });
+
+  /**
+   * #440. The "Tools" section read nothing from the backend, so a toolkit
+   * type that publishes its tools at run time offered none, and a lost read
+   * looked exactly the same. The cases below discriminate the outcomes.
+   */
+  describe('dynamic tool catalogue (#440)', () => {
+    /** A type whose settings schema declares a `selected_tools` array with no tools of its own, so the catalogue tier is the one in use. */
+    const RUNTIME_TYPE_SCHEMAS = { openapi_tool: { properties: { selected_tools: { type: 'array' } } } };
+    const editToolDetail: ToolkitFormEditDetail = { type: 'openapi_tool', name: 'My API', settings: {} };
+
+    function renderRuntimeToolkit() {
+      return renderWithRouterSocketAndProject(
+        <ToolkitForm {...baseProps({ editToolDetail, formValues: editToolDetail, formInitialValues: editToolDetail })} />,
+        'proj-1',
+      );
+    }
+
+    /** The enum the "Tools" section reads is asserted in `ToolkitForm.core.hooks.test.tsx`; this file owns what the screen shows. */
+    it('shows no error when the backend publishes tools for the toolkit type', async () => {
+      mockToolkitFormEndpoints(RUNTIME_TYPE_SCHEMAS);
+      let requestCount = 0;
+      server.use(
+        http.post(DISCOVER_TOOLS_URL, () => {
+          requestCount += 1;
+          return HttpResponse.json({ tools: [{ id: '1', name: 'alpha_op', type: 'openapi_tool' }], total: 1 });
+        }),
+      );
+
+      const { queryByTestId } = renderRuntimeToolkit();
+
+      await waitFor(() => expect(requestCount).toBe(1));
+      await waitFor(() => expect(queryByTestId('toolkit-form-tool-list-error')).not.toBeInTheDocument());
+    });
+
+    it('shows an error with a retry, not an empty Tools section, when the catalogue read fails', async () => {
+      mockToolkitFormEndpoints(RUNTIME_TYPE_SCHEMAS);
+      server.use(http.post(DISCOVER_TOOLS_URL, () => HttpResponse.json({ error: 'discover tools failed' }, { status: 500 })));
+
+      const { findByTestId, getByRole } = renderRuntimeToolkit();
+
+      expect(await findByTestId('toolkit-form-tool-list-error')).toBeInTheDocument();
+      expect(getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    });
+
+    it('shows no error when the read succeeds and the toolkit type offers no tools', async () => {
+      mockToolkitFormEndpoints(RUNTIME_TYPE_SCHEMAS);
+      let requestCount = 0;
+      server.use(
+        http.post(DISCOVER_TOOLS_URL, () => {
+          requestCount += 1;
+          return HttpResponse.json({ tools: [], total: 0 });
+        }),
+      );
+
+      const { queryByTestId } = renderRuntimeToolkit();
+
+      await waitFor(() => expect(requestCount).toBe(1));
+      await waitFor(() => expect(queryByTestId('toolkit-form-tool-list-error')).not.toBeInTheDocument());
+    });
+
+    it('does not read the catalogue for a type that declares its own tools', async () => {
+      let requestCount = 0;
+      mockToolkitFormEndpoints({ github: { properties: { selected_tools: { items: { enum: ['create_issue'] } } } } });
+      server.use(
+        http.post(DISCOVER_TOOLS_URL, () => {
+          requestCount += 1;
+          return HttpResponse.json({ tools: [], total: 0 });
+        }),
+      );
+
+      const staticDetail: ToolkitFormEditDetail = { type: 'github', name: 'My GitHub', settings: {} };
+      const { findByText, queryByTestId } = renderWithRouterSocketAndProject(
+        <ToolkitForm {...baseProps({ editToolDetail: staticDetail, formValues: staticDetail, formInitialValues: staticDetail })} />,
+        'proj-1',
+      );
+
+      await findByText('JSON');
+      expect(requestCount).toBe(0);
+      expect(queryByTestId('toolkit-form-tool-list-error')).not.toBeInTheDocument();
+    });
   });
 });

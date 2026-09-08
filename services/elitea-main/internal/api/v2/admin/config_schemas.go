@@ -150,6 +150,29 @@ const (
 		"platform vault instead of stored in a settings row. Form users stay in the deployment's mounted user file " +
 		"and are not editable here."
 
+	// emailElsewhereUnavailable — the E-mail section is a pointer to a real
+	// surface, in the same way `auth` and `mcp_servers` are (gap G7).
+	//
+	// Outbound mail used to have no section at all: the transport was read from
+	// the environment at boot (SMTP_HOST and seven siblings), so an operator
+	// with no access to the deployment's environment could not turn e-mail on,
+	// and every invitation answered `invitation_delivered: false`. The values
+	// now live in `centry.platform_config`'s `email` section and the resolver
+	// reads them per send.
+	//
+	// The plugin-config VALUE endpoints still cannot serve them, and that will
+	// not change: the SMTP password is a credential, and
+	// `rejectCredentialField` refuses a credential into a plaintext row every
+	// holder of `runtime.plugins` can read. The document also has invariants a
+	// flat value list cannot express — a user name without a password is a
+	// session the relay refuses at AUTH. So the section says where the real
+	// editor is, and declares no fields of its own.
+	emailElsewhereUnavailable = "outbound e-mail is configured on the E-mail editor, which stores the relay " +
+		"settings and seals the SMTP password in the platform vault. The plugin-config value endpoints cannot " +
+		"serve this section: the password is a credential, and it is sealed rather than stored in a settings row. " +
+		"The environment variables (SMTP_HOST and its siblings) remain the bootstrap defaults, and the editor " +
+		"shows which layer decides each field."
+
 	// publishValidationRulesUnavailable is a FIELD-level reason, not a section
 	// one. The rest of `agent_publishing` is enforced for real; this one field
 	// alone has nothing behind it. `runPublishValidation` in
@@ -255,6 +278,7 @@ func configSections() []map[string]any {
 		serviceDescriptorsSection(),
 		maintenanceSection(),
 		analyticsSection(),
+		emailSection(),
 	}
 }
 
@@ -803,7 +827,7 @@ func governanceSection() map[string]any {
 		"id":                  "governance",
 		"unavailable_reason":  governanceElsewhereUnavailable,
 		"title":               "LLM Governance",
-		"description":         "Author LLM-gateway governance: budgets, rate limits, credential billing policy, per-model/provider scopes, MCP allowlists, and CEL routing rules. Definitions are enforced by the LLM gateway on every request.",
+		"description":         "Author LLM-gateway governance: budgets, rate limits, credential billing policy, per-model/provider scopes, MCP allowlists, egress allowlists, and CEL routing rules. Definitions are enforced by the LLM gateway on every request.",
 		"order":               5,
 		"icon":                "policy",
 		"required_permission": "configuration.governance",
@@ -939,6 +963,26 @@ func governanceSection() map[string]any {
 				"section":     "governance",
 				"default":     []any{},
 			},
+			// --- Egress allowlist (gap G6) ---
+			//
+			// This is the operator's runtime egress policy. Until shared
+			// migration 0112 it had exactly one authoring surface, the
+			// GATEWAY_EGRESS_ALLOWLIST environment variable in the chart, so an
+			// on-premise model endpoint needed a chart edit and a pod restart.
+			//
+			// The environment variable is now the BOOTSTRAP FLOOR. The gateway
+			// enforces the UNION of the two, and nothing authored here can
+			// withdraw a host the chart named.
+			{
+				"key":         "egress_allowlist",
+				"type":        "array",
+				"items":       map[string]any{"type": "string"},
+				"title":       "Egress Allowlist",
+				"description": "Hosts a provider credential's api_base may name: `host`, `host:port`, `*.domain` or a CIDR block such as 192.168.29.0/24. The gateway unions this with the GATEWAY_EGRESS_ALLOWLIST floor. The FIRST entry turns the restriction on for every credential. A private destination (RFC 1918 or loopback) is only reachable when an entry names that address or its block; a hostname alone does not unlock it, because the gateway never resolves a name to decide.",
+				"path":        "egress.allowlist",
+				"section":     "governance",
+				"default":     []any{},
+			},
 			// --- CEL routing rules (routed to RoutingRuleEditor by SchemaField) ---
 			{
 				"key":         "routing_rules",
@@ -1006,6 +1050,33 @@ func authSection() map[string]any {
 		// equivalents, and it collects more of them than these five could
 		// express.
 		"fields": []map[string]any{},
+	}
+}
+
+// emailSection is outbound e-mail (gap G7). It POINTS at its editor.
+//
+// `managed_surface` names the dedicated surface that really holds this
+// section's data, so the client renders the right editor WITHOUT a hardcoded
+// list of section ids — see mcpServersSection() for why that distinction is
+// the server's to make.
+//
+// No fields, for the reason authSection() declares none. The eight values this
+// section is about include a `format: password`, and a schema that declared it
+// would describe a control the plugin-config write path is required to refuse
+// (rejectCredentialField). Declaring the other seven and hiding the eighth
+// would be worse: the form would save a host and a user name, report success,
+// and send nothing, because the relay would refuse the session at AUTH.
+func emailSection() map[string]any {
+	return map[string]any{
+		"id":                  "email",
+		"managed_surface":     "email",
+		"unavailable_reason":  emailElsewhereUnavailable,
+		"title":               "E-mail",
+		"description":         "Configure the SMTP relay this deployment sends invitations and notices through.",
+		"order":               9,
+		"icon":                "mail_outline",
+		"required_permission": "runtime.plugins",
+		"fields":              []map[string]any{},
 	}
 }
 
@@ -1464,14 +1535,24 @@ func voiceFeaturesSection() map[string]any {
 //
 // The port is deliberately NOT a byte-for-byte one, in two places:
 //
-//   - The splash is JSON and a client-side page, not `splash_template` HTML. The
-//     pylon hook returned a WSGI app serving a stored HTML document because it
-//     sat in front of everything, including the SPA's own assets. This
+//   - The splash is JSON and a client-side page, not a served
+//     `splash_template` document. The pylon hook returned a WSGI app serving a
+//     stored HTML document VERBATIM, with 503 and no sanitisation, because it
+//     sat in front of everything including the SPA's own assets. This
 //     middleware sits on the JSON API only — the SPA still loads — so the
-//     product can render its own splash in its own theme, and an operator
-//     authors words rather than markup. A stored HTML template editable from an
-//     admin form is also an XSS surface aimed at every user of the platform, and
-//     declining to build one is not a gap.
+//     product renders its own splash in its own theme.
+//
+//     `maintenance_html` below is the port of that tunable, and it is NOT the
+//     pylon mechanism: the field carries a BODY that the product's splash
+//     renders inside its own page, the server refuses executable markup on the
+//     way in (validateSplashHTML), and every renderer sanitises on the way out.
+//     The earlier decision here was to have no such field at all, on the
+//     grounds that an operator-authored HTML document is a stored-XSS surface
+//     aimed at every user. That risk is real and is why the two checks exist;
+//     what it did not justify was dropping the capability, because operators
+//     use it to say things — a status-page link, a contact address, a table of
+//     windows — that a plain sentence cannot carry.
+//
 //   - There is no bypass cookie. `splash_bypass_cookie`/`splash_bypass_token`
 //     were a shared static secret in plugin config that granted full access to
 //     anyone who had ever seen it. The admin permission is the bypass.
@@ -1519,6 +1600,18 @@ func maintenanceSection() map[string]any {
 				"title":  "Splash Message",
 				"description": "Body text shown on the splash screen — say what is happening and when it " +
 					"ends. Supports Markdown formatting. Left empty, a default is used.",
+				"section": "maintenance",
+				"default": "",
+			},
+			{
+				"key":    "maintenance_html",
+				"type":   "string",
+				"format": "html",
+				"title":  "Splash HTML",
+				"description": "Optional HTML body for the splash screen, for a link or a table the " +
+					"message above cannot carry. It REPLACES the message when it is not empty. " +
+					"Script, style and frame markup is refused when you save, and what does save is " +
+					"sanitised again before it is shown. Left empty, the message above is used.",
 				"section": "maintenance",
 				"default": "",
 			},

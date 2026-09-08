@@ -21,13 +21,23 @@
  *     to ask for `?limit=100&offset=0` and search the answer, and the queue
  *     sorts oldest-first — so its own newest row fell off the end once the
  *     table passed 100 rows, and the failure read as a lost request.
+ *  3. No journey ENDS A SESSION it does not own. `auth.setup.ts` mints one
+ *     server-side session per persona and all four workers replay its cookie;
+ *     since shared migration 0117 a logout REVOKES that row, so one journey
+ *     signing out on the shared state signs out the whole suite. Measured on
+ *     the 1.60.0 smoke run: 21 chromium journeys failed downstream of J4,
+ *     none for a reason of its own, and the refusal a revoked session
+ *     produced — `401 missing authorization header` — read exactly like a
+ *     route that was never wired. That reading is closed: the refusal now
+ *     says `code: session_revoked` (#538), which `e2e/fixtures/api.ts`'s
+ *     `describeRefusal` turns into this rule's name in the report.
  *
  * Each rule is checked twice: against the real file, and against the shape the
  * file had before the correction. A rule with no failing case is a rule that
  * can be satisfied by returning "clean" for everything — the whole reason
  * `check-gates-selftest.mjs` exists.
  */
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -37,6 +47,8 @@ const APP = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const read = (relative) => readFileSync(join(APP, relative), 'utf8');
 
+const JOURNEYS = 'e2e/journeys';
+const REDIRECT_SPEC = 'e2e/journeys/shell/shell.redirect.spec.ts';
 const FEATURES_SPEC = 'e2e/journeys/admin/admin.features.spec.ts';
 const APP_REQUESTS_SPEC = 'e2e/journeys/admin/admin.app-requests.spec.ts';
 const SEED_SCRIPT = 'scripts/e2e-stack.sh';
@@ -98,6 +110,77 @@ export function unfilteredPagedReads(source) {
     .filter((line) => line.includes('?limit=') && !line.includes('entity_id'));
 }
 
+/**
+ * The body of the file-level `afterAll` hook, or `''` when there is none.
+ *
+ * Read as text, and only as far as the first line that closes at column zero:
+ * a rule that searched the WHOLE file would be satisfied by a delete made
+ * anywhere in it, including by the one J34g makes inside a test.
+ */
+export function teardownBody(source) {
+  const start = source.indexOf('adminTest.afterAll(');
+  if (start < 0) return '';
+  const rest = source.slice(start);
+  const end = rest.indexOf('\n});');
+  return end < 0 ? rest : rest.slice(0, end);
+}
+
+/* ── rule 3 ─────────────────────────────────────────────────────────────── */
+
+/**
+ * The `test(...)` blocks that end a session while running on the SHARED
+ * persona state.
+ *
+ * A test ends a session when its body reaches `/forward-auth/logout` or clicks
+ * the "Log out" control. It OWNS the session when it takes the `browser`
+ * fixture and makes its own context, which is what `e2e/fixtures/session.ts`
+ * exists for. A test that takes `page` is running on the file the setup
+ * project wrote, and every other worker holds the same cookie.
+ *
+ * Read as source rather than run as a journey for the same reason rules 1 and
+ * 2 are: this is a property of the SUITE. The failure it prevents does not
+ * appear in the offending test at all — that one passes — it appears in
+ * whatever ran after it, as an authentication error with no cause nearby.
+ */
+export function sessionEndingTestsOnSharedState(source) {
+  const offenders = [];
+  // Split on the start of each `test(` / `adminTest(` block at column zero.
+  const blocks = source.split(/\n(?=\w*[Tt]est\()/);
+  for (const block of blocks) {
+    const opening = /^\w*[Tt]est\(\s*(['"`])(.*?)\1\s*,\s*async\s*\(\{([^}]*)\}/s.exec(block);
+    if (opening === null) continue;
+    const [, , title, fixtures] = opening;
+    const body = block
+      .split('\n')
+      .map((line) => line.trim())
+      // A comment that QUOTES the endpoint is how the correction explains
+      // itself; a rule that read comments as code could only be satisfied by
+      // deleting the account of what went wrong.
+      .filter((line) => !line.startsWith('*') && !line.startsWith('//') && !line.startsWith('/*'))
+      .join('\n');
+    const endsASession =
+      body.includes('/forward-auth/logout') || /name:\s*'Log out'/.test(body);
+    if (!endsASession) continue;
+    const ownsItsSession = fixtures.includes('browser') && body.includes('browser.newContext(');
+    if (!ownsItsSession) offenders.push(title);
+  }
+  return offenders;
+}
+
+/** Every journey spec under `e2e/journeys`, as `[relative path, source]`. */
+function journeySpecs() {
+  const found = [];
+  const walk = (relative) => {
+    for (const entry of readdirSync(join(APP, relative), { withFileTypes: true })) {
+      const child = `${relative}/${entry.name}`;
+      if (entry.isDirectory()) walk(child);
+      else if (entry.name.endsWith('.spec.ts')) found.push([child, read(child)]);
+    }
+  };
+  walk(JOURNEYS);
+  return found;
+}
+
 /* ── the rules, on the real files and on the shape they replaced ────────── */
 
 describe('#539 — one failure must not hide eight journeys', () => {
@@ -154,7 +237,38 @@ describe('#544 — the app-requests journey must not read only the first page', 
   it('files every request through the helper that records it for the teardown', () => {
     const source = read(APP_REQUESTS_SPEC);
     expect(source).toContain('adminTest.afterAll(');
-    expect(source).toContain('filedEntities.push(entity)');
+    // The record carries the AUTHOR as well as the name: the withdraw is scoped
+    // to the session that filed the row, so a bare list of names cannot remove
+    // the one the member persona filed.
+    expect(source).toContain('filedEntities.push({ entity, author:');
+  });
+
+  /*
+   * The teardown must DELETE, and prove it.
+   *
+   * The hook used to approve the rows it found still pending, because no delete
+   * route existed. It does now, and a teardown that only decides leaves every
+   * row behind — which is the half of #544 that stayed open after #610.
+   */
+  it('the teardown withdraws each row and re-reads it', () => {
+    const source = read(APP_REQUESTS_SPEC);
+    const hook = teardownBody(source);
+    expect(hook).not.toEqual('');
+    expect(hook).toContain('.delete(withdrawURL(');
+    // The proof is the read-back through the operator's queue, not the delete's
+    // own status code: a delete that reached the wrong row answers 200 too.
+    expect(hook).toContain('queueByEntity(');
+  });
+
+  it('rejects a teardown that only decides the rows it filed', () => {
+    const before = [
+      'adminTest.afterAll(async () => {',
+      "  const decided = await api.put(DECISION_URL, { data: { id: row.id, status: 'approved' } });",
+      '});',
+    ].join('\n');
+    const hook = teardownBody(before);
+    expect(hook).not.toEqual('');
+    expect(hook).not.toContain('.delete(withdrawURL(');
   });
 
   it('the seed removes the probe rows earlier runs left behind', () => {
@@ -162,5 +276,154 @@ describe('#544 — the app-requests journey must not read only the first page', 
     expect(seed).toContain('DELETE FROM centry.moderation_state');
     // …and keeps the two rows journeys 34 and 34c assert against.
     expect(seed).toContain("NOT IN ('e2e_app_request_probe_chromium', 'e2e_app_request_probe_webkit')");
+  });
+});
+
+describe('#830 — a logout must not sign out every other worker', () => {
+  it('no journey ends a session it did not create', () => {
+    const offenders = journeySpecs().flatMap(([path, source]) =>
+      sessionEndingTestsOnSharedState(source).map((title) => `${path} › ${title}`),
+    );
+    expect(offenders).toEqual([]);
+  });
+
+  it('J4 signs in through the provider before it signs out', () => {
+    const source = read(REDIRECT_SPEC);
+    expect(source).toContain("signInThroughOidc(page, 'e2e-member@autotest.local')");
+    expect(source).toContain("browser.newContext({ storageState: undefined })");
+  });
+
+  it('rejects the shape J4 had, which took the shared page fixture', () => {
+    const before = [
+      "test('J4: logout clears user state and el.* storage', async ({ page }) => {",
+      "  await page.goto(BASE_URL + '/app/settings/profile');",
+      "  const logoutItem = page.getByRole('button', { name: 'Log out', exact: true });",
+      '  await logoutItem.click();',
+      '});',
+    ].join('\n');
+    expect(sessionEndingTestsOnSharedState(before)).toEqual([
+      'J4: logout clears user state and el.* storage',
+    ]);
+  });
+
+  it('accepts a test that makes its own context', () => {
+    const after = [
+      "test('J4: logout clears user state and el.* storage', async ({ browser }) => {",
+      '  const context = await browser.newContext({ storageState: undefined });',
+      '  const page = await context.newPage();',
+      "  const logoutItem = page.getByRole('button', { name: 'Log out', exact: true });",
+      '  await logoutItem.click();',
+      '});',
+    ].join('\n');
+    expect(sessionEndingTestsOnSharedState(after)).toEqual([]);
+  });
+});
+
+/* ── rule 4 ─────────────────────────────────────────────────────────────── */
+
+/**
+ * Does this `playwright.config.ts` let the persona sign-ins run together?
+ *
+ * Reads the `setup` project's OWN block — from its `name: 'setup'` line to the
+ * line that closes it at the same indent — because `fullyParallel` appears on
+ * three other projects in the same file and a whole-file search would be
+ * satisfied by any of them.
+ */
+export function setupProjectRunsInParallel(source) {
+  const lines = source.split('\n');
+  const start = lines.findIndex((line) => /name:\s*'setup'/.test(line));
+  if (start === -1) return true;
+  const indent = (lines[start].match(/^\s*/) ?? [''])[0].length;
+  const body = [];
+  for (let index = start; index < lines.length; index += 1) {
+    body.push(lines[index]);
+    if (index > start && /^\s*\},?\s*$/.test(lines[index]) && (lines[index].match(/^\s*/) ?? [''])[0].length < indent) {
+      break;
+    }
+  }
+  return !/fullyParallel:\s*false/.test(body.join('\n'));
+}
+
+/**
+ * Answers `readPersonalProjectId` accepts as "this persona owns a personal
+ * project", ignoring prose.
+ *
+ * The rule is about ONE of them: the seeded project id. `resolvePersonalProjectID`
+ * answers it for any caller that holds a role on project 1 and owns nothing of
+ * its own, so a poll that stops at the first non-empty answer stops instantly
+ * and proves nothing.
+ */
+export function personalProjectPollAcceptsSeededId(source) {
+  const body = source.slice(source.indexOf('async function readPersonalProjectId'));
+  if (body === '') return true;
+  const code = body
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => !line.startsWith('*') && !line.startsWith('//') && !line.startsWith('/*'))
+    .join('\n');
+  return !code.includes('DEFAULT_PROJECT_ID');
+}
+
+describe('#839 — every persona must leave the setup owning a personal project', () => {
+  /*
+   * Sign-in only ASKS for the personal project. The provisioner runs one
+   * attempt at a time and DROPS the rest, and `GET /social/author` hides the
+   * absence behind the seeded project 1, which also stops it re-arming the
+   * provisioner. So the persona that lost the race owns nothing for the whole
+   * run — and the suite still passes, in the other of two self-consistent
+   * worlds. Six visual baselines flipped between those worlds from run to run
+   * with identical pixel counts each time.
+   */
+  it('the three sign-ins do not compete for the single provisioning slot', () => {
+    expect(setupProjectRunsInParallel(read('playwright.config.ts'))).toBe(false);
+  });
+
+  it('rejects the setup project shape that let them run together', () => {
+    const before = [
+      '  projects: [',
+      '    {',
+      "      name: 'setup',",
+      '      testMatch: /auth\\.setup\\.ts/,',
+      '      use: { ...devices },',
+      '    },',
+      '    {',
+      "      name: 'chromium',",
+      '      fullyParallel: false,',
+      '    },',
+      '  ],',
+    ].join('\n');
+    expect(setupProjectRunsInParallel(before)).toBe(true);
+  });
+
+  it('the personal-project wait rejects the seeded project as an answer', () => {
+    expect(personalProjectPollAcceptsSeededId(read('e2e/auth.setup.ts'))).toBe(false);
+  });
+
+  it('rejects the poll that stopped at the first non-empty answer', () => {
+    const before = [
+      'async function readPersonalProjectId(page) {',
+      '  let id;',
+      '  await expect',
+      '    .poll(async () => {',
+      "      const author = await page.request.get(BASE_URL + '/api/v2/social/author/');",
+      "      if (!author.ok()) return '';",
+      "      id = (await author.json()).personal_project_id;",
+      "      return id ?? '';",
+      '    })',
+      "    .not.toBe('');",
+      '  return id;',
+      '}',
+    ].join('\n');
+    expect(personalProjectPollAcceptsSeededId(before)).toBe(true);
+  });
+
+  it('reads a comment naming the seeded id as prose, not as a check', () => {
+    const commentOnly = [
+      'async function readPersonalProjectId(page) {',
+      '  // DEFAULT_PROJECT_ID is what the fallback answers.',
+      "  return '';",
+      '}',
+    ].join('\n');
+    expect(personalProjectPollAcceptsSeededId(commentOnly)).toBe(true);
   });
 });

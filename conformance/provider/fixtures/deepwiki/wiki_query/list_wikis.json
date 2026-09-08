@@ -1,0 +1,91 @@
+{
+  "_source": {
+    "source_repository": "deepwiki_plugin",
+    "source_revision": "ce679f11dc31c209cc67f13565b286d5bb28ce58",
+    "files": [
+      {
+        "path": "methods/invoke.py",
+        "bytes": 82868,
+        "sha256": "959f745102c8500df69ae657d99565f7da16348cba2d913b9bad2ff5b896f253"
+      },
+      {
+        "path": "plugin_implementation/registry_manager.py",
+        "bytes": 15798,
+        "sha256": "7b0bea20cd1fabf2ebf8a744d22e9cdc9b1b86542e13fec24977dfba838721cf"
+      }
+    ]
+  },
+  "producer": "methods/invoke.py::Method._list_wikis",
+  "how_recorded": "MiniArtifactClient replaced by an in-memory client over the registry below; every line that builds the text is legacy code",
+  "registry": {
+    "schema_version": 1,
+    "updated_at": "2026-01-01T00:00:00Z",
+    "wikis": [
+      {
+        "id": "acme--notes-service--main",
+        "repo": "acme/notes-service",
+        "branch": "main",
+        "provider": "github",
+        "host": "github.com",
+        "display_name": "notes-service (main)",
+        "description": "The notes service: storage, retrieval and the sync worker.",
+        "topics": [
+          "python",
+          "storage"
+        ],
+        "folder_path": "acme--notes-service--main/",
+        "commit_hash": "0000000deadbeef0000000deadbeef0000000000",
+        "canonical_repo_identifier": "acme/notes-service:main:0000000",
+        "analysis_key": "acme--notes-service--main/analysis/repository_analysis.json",
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-01T00:00:00Z"
+      },
+      {
+        "id": "acme--billing--release-2",
+        "repo": "acme/billing:release-2:abc1234",
+        "provider": "gitlab",
+        "display_name": "billing (release-2)",
+        "description": "",
+        "folder_path": "acme--billing--release-2/",
+        "created_at": "2026-01-02T00:00:00Z"
+      }
+    ]
+  },
+  "cases": {
+    "compact": {
+      "parameters": {},
+      "result_objects": [
+        {
+          "object_type": "wiki_list",
+          "result_target": "response",
+          "result_encoding": "plain",
+          "data": "Available wikis:\n- acme--notes-service--main: notes-service (main) - The notes service: storage, retrieval and the sync worker....\n- acme--billing--release-2: billing (release-2)"
+        }
+      ]
+    },
+    "include_metadata": {
+      "parameters": {
+        "include_metadata": true
+      },
+      "result_objects": [
+        {
+          "object_type": "wiki_list",
+          "result_target": "response",
+          "result_encoding": "plain",
+          "data": "# Available Wikis\n\n## acme--notes-service--main\n- **Repository**: acme/notes-service\n- **Branch**: main\n- **Title**: notes-service (main)\n- **Description**: The notes service: storage, retrieval and the sync worker.\n- **Created**: 2026-01-01T00:00:00Z\n\n## acme--billing--release-2\n- **Repository**: acme/billing:release-2:abc1234\n- **Branch**: N/A\n- **Title**: billing (release-2)\n- **Description**: \n- **Created**: 2026-01-02T00:00:00Z\n"
+        }
+      ]
+    },
+    "empty_registry": {
+      "parameters": {},
+      "result_objects": [
+        {
+          "object_type": "wiki_list",
+          "result_target": "response",
+          "result_encoding": "plain",
+          "data": "No wikis have been generated yet. Use the Deepwiki toolkit to generate wikis first."
+        }
+      ]
+    }
+  }
+}

@@ -26,12 +26,13 @@
  *  5. `useLanguageLinter` → replaced with `extensions` and `onChangeLanguage`
  *     injected from the feature layer (the linter integration depends on the
  *     editor's view instance, which the feature layer owns).
- *  6. Editor presence (`chat_canvas_editors_change` → read-only lock) is NOT
- *     wired — see the block below where it stays commented out. Nothing here
- *     takes a lock or reserves the canvas, so two people editing the same one
- *     is last-write-wins. That is no longer a disclosure to code readers
- *     alone: the editor renders a notice saying so, for the person who could
- *     actually lose the work (`concurrentEditNotice`).
+ *  6. Editor presence is WIRED as of #622, over the project SSE plane rather
+ *     than over `chat_canvas_editors_change` — see `presence` below and
+ *     `../../model/useCanvasPresence.ts`. What is still true, and still
+ *     disclosed by `concurrentEditNotice`: presence is not a LOCK. The server
+ *     refuses no write on the roster, so two people who both hold the canvas
+ *     are still last-write-wins; the roster is what stops the second person
+ *     from silently typing over the first.
  *  7. The baseline's five mermaid quick-fix toasts are GONE. Three of them
  *     fire on every click in a default install, where
  *     `ELITEA_CONFIGURATIONS_ENABLED` is false and neither the model nor the
@@ -55,16 +56,19 @@
  */
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 
-import { Box, Typography } from '@mui/material';
+import { Avatar, Box, Tooltip, Typography } from '@mui/material';
 
 import { useCanvasDetailSocket, useCanvasEditSocket, useCanvasErrorSocket, useCanvasSyncSocket } from '@/entities/canvas/api/canvasSocket';
+import { useCanvasRoom } from '@/shared/api/socket/rooms';
 import { t } from '@/shared/i18n';
+import { getInitials, stringToColor } from '@/shared/lib/string';
 import type { CodeMirrorEditorHandle } from '@/shared/ui/CodeMirrorEditor';
 import { CodeMirrorEditor } from '@/shared/ui/CodeMirrorEditor';
 import { MermaidDiagram } from '@/shared/ui/MermaidDiagram';
 
 import type { MarkdownTableData } from '../../lib/markdownTable';
 import { parseMarkdownTable } from '../../lib/markdownTable';
+import { useCanvasPresence } from '../../model/useCanvasPresence';
 import type { UseMermaidQuickFixResult } from '../../model/useMermaidQuickFix';
 
 import { getCanvasCodeExtensions } from './canvasCodeExtensions';
@@ -74,6 +78,15 @@ import { CanvasEditHeader } from './CanvasEditHeader';
 import { MermaidQuickFixButton } from './MermaidQuickFixButton';
 import type { MarkdownTableEditorHandle } from './table/MarkdownTableEditor';
 import { MarkdownTableEditor } from './table/MarkdownTableEditor';
+
+/**
+ * How long the editor coalesces keystrokes before broadcasting the document to
+ * the other editors. See `notifyChange` for why it is not the reference's 30 ms.
+ */
+const REMOTE_EDIT_DEBOUNCE_MS = 400;
+
+/** The reference's MAX_NUMBER_AVATARS_SHOWN (AuthorContainer.jsx). */
+const MAX_PRESENCE_AVATARS = 3;
 
 export interface CanvasEditorProps {
   /** Info about the selected code block this editor is editing. */
@@ -143,7 +156,7 @@ export const CanvasEditor = forwardRef<CanvasEditorHandle, CanvasEditorProps>(
       interaction_uuid,
       conversation_uuid,
       viewOnly = false,
-      userName: _userName,
+      userName,
       quickFix,
       onError,
       editCanvas,
@@ -240,20 +253,51 @@ export const CanvasEditor = forwardRef<CanvasEditorHandle, CanvasEditorProps>(
 
     const { sendChangeToRemote } = useCanvasEditSocket();
 
+    /*
+     * THE CANVAS ROOM. `useCanvasRoom` had ZERO consumers, so this editor was
+     * emitting `chat_canvas_edit` into a room it had never joined (#622). The
+     * hook is reference-counted and leaves on unmount, which is also the
+     * "leaveTheCanvasRoom" TODO that used to sit further down this file.
+     *
+     * It is the SOCKET half and stays dormant wherever `VITE_SOCKET_SERVER` is
+     * empty — the no-op client makes every emit a no-op. Presence does NOT ride
+     * on it; that is the SSE half below.
+     */
+    useCanvasRoom(selectedCodeBlockInfo?.canvasId, {
+      ...(projectId === undefined ? {} : { projectId: String(projectId) }),
+      enabled: !!selectedCodeBlockInfo?.canvasId,
+    });
+
     /**
      * The baseline's `notifyChange`: keep local state, then broadcast.
      *
-     * This lived commented out with a "currently unused" TODO because there
-     * was no CodeMirror host to call it. There is one now, so it is live —
-     * every keystroke updates `code` (what Save and Copy read) and, when the
-     * block is backed by a canvas, is pushed to the other editors.
+     * LOCAL STATE IS UPDATED ON EVERY KEYSTROKE and the BROADCAST IS DEBOUNCED.
+     * The two halves are separated deliberately: `code` is what Save and Copy
+     * read, so delaying it would hand the caller the previous revision, while
+     * the broadcast carries the WHOLE document every time and is what a
+     * per-keystroke cadence actually costs.
+     *
+     * The reference debounces at 30 ms
+     * (apps/elitea-ui/.../useCodeMirror.hooks.js), which at sustained typing is
+     * one full-document emit every 30 ms per editor, with no server-side
+     * throttle and no rate limit. That number is recorded rather than copied:
+     * it was a socket emit into a room, and this is a coalescing window for a
+     * shared document. 400 ms is one emit per typing pause instead of ~13 per
+     * second, and is below the threshold at which a collaborator perceives the
+     * other cursor as stalled.
      */
+    const remoteEmitTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
     const notifyChange = useCallback(
       (newCode: string) => {
         setCode((current) => {
           if (current === newCode) return current;
-          if (selectedCodeBlockInfo?.canvasId) {
-            sendChangeToRemote(selectedCodeBlockInfo.canvasId, newCode);
+          const canvasId = selectedCodeBlockInfo?.canvasId;
+          if (canvasId) {
+            if (remoteEmitTimerRef.current !== undefined) clearTimeout(remoteEmitTimerRef.current);
+            remoteEmitTimerRef.current = setTimeout(() => {
+              remoteEmitTimerRef.current = undefined;
+              sendChangeToRemote(canvasId, newCode);
+            }, REMOTE_EDIT_DEBOUNCE_MS);
           }
           return newCode;
         });
@@ -292,47 +336,38 @@ export const CanvasEditor = forwardRef<CanvasEditorHandle, CanvasEditorProps>(
     });
 
     /*
-     * TODO (deliberately LEFT, not half-wired): editor presence.
+     * EDITOR PRESENCE — live as of #622.
      *
-     * `onCanvasEditorsChange` is the only thing that would ever set
-     * `readOnly` to true for a second concurrent editor. It is left dead
-     * because it CANNOT work here: there is no socket server at all —
-     * `internal/api/socketio` was deleted with #126 and was never mounted —
-     * so no presence event is ever delivered. Wiring the listener would
-     * produce a control that looks live and never fires.
+     * The transport is the project SSE plane, not a socket: the heartbeat is
+     * POST .../{canvasId}/presence and the fan-out is the project event stream
+     * this app already opens. `useCanvasPresence` owns the beat schedule and
+     * the roster; this component owns what the roster MEANS on screen.
      *
-     * Consequence, stated plainly rather than implied: two people editing
-     * the same canvas is last-write-wins.
+     * `isReadOnly` is the reference's rule, unchanged: an empty roster is
+     * editable by anyone, and once somebody real holds the canvas everyone
+     * else is read-only. With no second editor, nothing here changes — which
+     * is the acceptance criterion this must not break.
+     *
+     * Deliberately NOT a lock. The server refuses no write on this roster (see
+     * internal/api/v2/canvaspresence's package doc), so the notice below still
+     * tells the truth about last-write-wins for the person holding it.
      */
-    /*
-    const _onCanvasEditorsChange = useCallback(
-      (message: unknown) => {
-        // Message shape: { editors: CanvasEditorPresence[], canvas_uuid?: string, message_group_uuid?: string }
-        const msg = message as Record<string, unknown>;
-        const msgEditors = msg.editors as Record<string, unknown>[];
-        const msgCanvasId = msg.canvas_uuid as string | undefined;
-        const msgMessageGroupId = msg.message_group_uuid as string | undefined;
+    const presence = useCanvasPresence({
+      projectId,
+      canvasId: selectedCodeBlockInfo?.canvasId,
+      userName,
+      state: 'editing',
+      enabled: !!selectedCodeBlockInfo?.canvasId && !viewOnly && !selectedCodeBlockInfo?.viewOnly,
+    });
 
-        const currentCanvasId = selectedCodeBlockInfo?.canvasId;
-        const currentMessageId = selectedCodeBlockInfo?.messageItemId;
-
-        if ((currentCanvasId === msgCanvasId && currentMessageId === msgMessageGroupId) || (!msgCanvasId && !msgMessageGroupId)) {
-          const realEditors = msgEditors?.filter(
-            (editor) => editor?.user_name !== '__admin__' && editor?.user_name !== '__system__',
-          ) as Array<{ user_name: string }>;
-
-          if (!realEditors?.length) {
-            setReadOnly(false);
-          } else if (!realEditors.find((e) => e.user_name === userName)) {
-            setReadOnly(true);
-          } else {
-            setReadOnly(false);
-          }
-        }
-      },
-      [selectedCodeBlockInfo?.canvasId, selectedCodeBlockInfo?.messageItemId, userName],
-    );
-    */
+    /**
+     * The read-only state the panes actually get. Two independent reasons, ORed
+     * rather than merged into the `readOnly` state: the state is the CALLER's
+     * intent (`viewOnly`, reset by its own effect) and presence is a live fact
+     * from other people. Writing presence into that state would make the two
+     * race, and the effect would clear it on the next prop change.
+     */
+    const effectiveReadOnly = readOnly || presence.isReadOnly;
 
     /*
      * Mermaid quick-fix. The runner and the four-condition capability gate live
@@ -420,12 +455,16 @@ export const CanvasEditor = forwardRef<CanvasEditorHandle, CanvasEditorProps>(
       };
     }, [selectedCodeBlockInfo?.canvasId, listenCanvasDetailEvent, listenCanvasSyncEvent, listenCanvasErrorEvent, stopListenCanvasSyncEvent, stopListenCanvasDetailEvent, stopListenCanvasErrorEvent]);
 
-    // Leave the canvas room on unmount
+    // The canvas room is joined and LEFT by `useCanvasRoom` above (#622); the
+    // pending remote edit is what this editor still owns. Dropping it on the way
+    // out is deliberate: a debounced broadcast that fires after unmount would
+    // push a document nobody is editing any more.
     useEffect(() => {
       return () => {
-        // TODO: leaveTheCanvasRoom — `entities/canvas/api/canvasSocket` exposes
-        // no leave hook yet, so the room is never left. Blocked on that hook,
-        // not on this editor.
+        if (remoteEmitTimerRef.current !== undefined) {
+          clearTimeout(remoteEmitTimerRef.current);
+          remoteEmitTimerRef.current = undefined;
+        }
       };
     }, []);
 
@@ -454,8 +493,56 @@ export const CanvasEditor = forwardRef<CanvasEditorHandle, CanvasEditorProps>(
      * It must not imply a lock, a merge or a live document, because there is
      * none of the three.
      */
+    /*
+     * WHO ELSE IS HERE. The reference renders the same thing — an avatar stack
+     * and "is editing…" (apps/elitea-ui/src/components/Canvas.jsx:69-84) — with
+     * up to three overlapping 20px avatars and a `+N` counter, initials on a
+     * name-derived colour where there is no picture. `user_avatar` is absent
+     * from this server's roster today, so every avatar is initials.
+     *
+     * Nothing renders when nobody else is on the canvas, which is why the
+     * "unchanged with no second editor" acceptance criterion holds.
+     */
+    const presenceRow =
+      presence.otherEditors.length > 0 ? (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '0 4px' }} data-testid="canvas-presence">
+          <Tooltip title={presence.otherEditors.map((editor) => editor.userName).join(', ')} placement="top">
+            <Box sx={{ display: 'flex', alignItems: 'center' }}>
+              {presence.otherEditors.slice(0, MAX_PRESENCE_AVATARS).map((editor, index) => (
+                <Avatar
+                  key={editor.userName}
+                  alt={editor.userName}
+                  data-testid="canvas-presence-avatar"
+                  sx={{
+                    width: '1.25rem',
+                    height: '1.25rem',
+                    fontSize: '0.625rem',
+                    transform: `translateX(-${String(index * 5)}px)`,
+                    zIndex: presence.otherEditors.length - index,
+                    backgroundColor: stringToColor(editor.userName),
+                  }}
+                >
+                  {getInitials(editor.userName)}
+                </Avatar>
+              ))}
+              {presence.otherEditors.length > MAX_PRESENCE_AVATARS && (
+                <Typography variant="bodySmall">{`+${String(presence.otherEditors.length - MAX_PRESENCE_AVATARS)}`}</Typography>
+              )}
+            </Box>
+          </Tooltip>
+          <Typography variant="bodySmall" color="text.primary">
+            {presence.otherEditors.length === 1
+              ? t('canvas.presence.oneEditing', '{{name}} is editing…', { name: presence.otherEditors[0]?.userName ?? '' })
+              : // NOT `count`: i18next treats that option name as a plural selector and
+                // looks for `_one`/`_other` sibling keys. `people` is a plain
+                // interpolation variable, which is what this string actually needs.
+                t('canvas.presence.manyEditing', '{{people}} people are editing…', { people: presence.otherEditors.length })}
+          </Typography>
+        </Box>
+      ) : null;
+
     const concurrentEditNotice =
-      selectedCodeBlockInfo?.canvasId && !readOnly ? (
+      selectedCodeBlockInfo?.canvasId && !effectiveReadOnly ? (
         <Typography variant="labelSmall" color="text.secondary" sx={{ padding: '0 4px' }}>
           {t(
             'canvas.editor.concurrentEdits',
@@ -601,8 +688,9 @@ export const CanvasEditor = forwardRef<CanvasEditorHandle, CanvasEditorProps>(
             onImportTableData,
             onImportError: onError,
           }}
-          disabledAll={readOnly || selectedCodeBlockInfo?.isCreatingCanvas || !!selectedCodeBlockInfo?.createCanvasError}
+          disabledAll={effectiveReadOnly || selectedCodeBlockInfo?.isCreatingCanvas || !!selectedCodeBlockInfo?.createCanvasError}
         />
+        {presenceRow}
         {concurrentEditNotice}
         {codeLanguage === 'mermaid' ? (
           /* Mermaid split-view (baseline uses react-split; simplified to flex here) */
@@ -634,7 +722,7 @@ export const CanvasEditor = forwardRef<CanvasEditorHandle, CanvasEditorProps>(
                 value={code}
                 onChange={notifyChange}
                 history={historyCallbacks}
-                readOnly={readOnly}
+                readOnly={effectiveReadOnly}
                 extensions={codeExtensions}
                 height="100%"
                 minHeight="240px"
@@ -693,7 +781,7 @@ export const CanvasEditor = forwardRef<CanvasEditorHandle, CanvasEditorProps>(
               content={{ initialMarkdown: code, onChange: notifyChange }}
               history={tableHistoryCallbacks}
               onRowsColumnsSelected={setHasSelectedRowsColumns}
-              readOnly={readOnly}
+              readOnly={effectiveReadOnly}
               tracking={{ interaction_uuid, conversation_uuid }}
             />
           </Box>
@@ -717,7 +805,7 @@ export const CanvasEditor = forwardRef<CanvasEditorHandle, CanvasEditorProps>(
               value={code}
               onChange={notifyChange}
               history={historyCallbacks}
-              readOnly={readOnly}
+              readOnly={effectiveReadOnly}
               extensions={codeExtensions}
               height="100%"
               minHeight="240px"

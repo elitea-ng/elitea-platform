@@ -128,12 +128,34 @@ export interface GatewayStatusBody {
     readonly mcp_allowlists?: number;
     readonly credential_policies?: number;
     readonly routing_rules?: number;
+    readonly egress_allowlists?: number;
     readonly rejected?: readonly GatewayDiagnosticRow[];
     readonly inert?: readonly GatewayDiagnosticRow[];
   };
   readonly rate_limiter?: {
     readonly refused?: number;
     readonly degraded?: number;
+  };
+  /**
+   * The MERGED egress allowlist the gateway is enforcing, tagged by source.
+   *
+   * `env` is the GATEWAY_EGRESS_ALLOWLIST floor the chart sets, `db` is what the
+   * Governance page authored, and `effective` is the union actually applied.
+   * They are reported apart because "the host I added is not working" has two
+   * different answers depending on whether the entry reached the gateway at all.
+   *
+   * `private_network` is the one an operator most often needs: a private
+   * destination is reachable only when an entry names that address or its
+   * block. A host name alone does not unlock it, because the gateway never
+   * resolves a name to decide.
+   */
+  readonly egress?: {
+    readonly configured?: boolean;
+    readonly env?: readonly string[];
+    readonly db?: readonly string[];
+    readonly effective?: readonly string[];
+    readonly dropped?: readonly string[];
+    readonly private_network?: boolean;
   };
 }
 

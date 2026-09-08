@@ -15,8 +15,8 @@
  * cannot see a missing navigation — that is issue #225's actual finding, and it
  * is a property of the tests, not of the product.
  *
- * So this file uses `goto` exactly ONCE, for the landing page, and reaches all
- * twelve pages by CLICKING. If the nav is removed, unwired, or pointed at a route
+ * So this file uses `goto` exactly ONCE, for the landing page, and reaches every
+ * page by CLICKING. If the nav is removed, unwired, or pointed at a route
  * that does not exist, these tests fail; nothing else in the repo would notice.
  *
  * ## What each assertion is protecting against
@@ -65,6 +65,7 @@ const ITEMS = [
     path: '/admin/app/configuration',
   },
   { id: 'branding', label: 'Branding', heading: 'Branding', path: '/admin/app/branding' },
+  { id: 'email', label: 'E-mail', heading: 'E-mail', path: '/admin/app/email' },
   { id: 'features', label: 'Features', heading: 'Features', path: '/admin/app/features' },
   {
     id: 'service-descriptors',
@@ -72,7 +73,24 @@ const ITEMS = [
     heading: 'Service Descriptors',
     path: '/admin/app/service-descriptors',
   },
+  // Toolkits renders for this persona because shared migration 0114 grants
+  // `toolkit_catalogue.type.manage` to the administration `admin` role, which
+  // `apps/elitea-web/scripts/e2e-stack.sh` gives e2e-admin. The nav gate reads
+  // the same name.
+  {
+    id: 'toolkit-types',
+    label: 'Toolkits',
+    heading: 'Toolkits',
+    path: '/admin/app/toolkits',
+  },
   { id: 'audit', label: 'Audit Trail', heading: 'Audit Trail', path: '/admin/app/audit' },
+  // Tasks is the platform's OWN background jobs (`pages/admin/Tasks.tsx`), not
+  // the `/schedules` page's "Tasks" tab, which still reports the pylon Arbiter
+  // node as unavailable. The nav gate is `runtime.plugins` in administration
+  // mode, granted by shared migration 0060, so this item renders for every
+  // persona that reaches this nav at all. Listed in NAV ORDER so the page the
+  // loop leaves behind for `checkA11y` stays the one it always was.
+  { id: 'tasks', label: 'Tasks', heading: 'Tasks', path: '/admin/app/tasks' },
   {
     id: 'schedules',
     label: 'Schedules & Tasks',
@@ -85,6 +103,12 @@ const ITEMS = [
     heading: 'LLM Governance',
     path: '/admin/app/governance',
   },
+  // Budgets renders for this persona because shared migration 0062 grants
+  // `models.admin.project_budgets.view` to the administration `admin` role,
+  // and `apps/elitea-web/scripts/e2e-stack.sh` gives e2e-admin that role. The
+  // nav gate reads the same name. An item left out of this list does not make
+  // the suite ignore it — the count assertion below fails on it.
+  { id: 'budgets', label: 'Budgets', heading: 'Budgets', path: '/admin/app/budgets' },
 ] as const;
 
 /** The ONE `goto` in this file: the landing page an operator actually opens. */
@@ -110,7 +134,7 @@ adminTest('J37: the landing page offers a nav, and marks the page it is showing'
   await checkA11y(page);
 });
 
-adminTest('J37b: every one of the twelve pages is reachable by CLICKING the nav', async ({ page }) => {
+adminTest('J37b: every one of the admin pages is reachable by CLICKING the nav', async ({ page }) => {
   await openAdminLanding(page);
   const nav = page.getByRole('navigation', { name: 'Admin navigation' });
 
@@ -121,7 +145,7 @@ adminTest('J37b: every one of the twelve pages is reachable by CLICKING the nav'
     await page.waitForURL((url) => url.pathname === item.path, { timeout: 20_000 });
     // …the destination PAGE rendered — a link to a deleted route would satisfy
     // the URL assertion and render nothing at all…
-    await expect(page.getByRole('heading', { name: item.heading })).toBeVisible({
+    await expect(page.getByRole('heading', { name: item.heading, exact: true })).toBeVisible({
       timeout: 20_000,
     });
     // …and the nav says where you are.
@@ -131,7 +155,7 @@ adminTest('J37b: every one of the twelve pages is reachable by CLICKING the nav'
     );
   }
 
-  // Exactly the twelve. A thirteenth would mean an item nothing in this list covers.
+  // Exactly the items above. One more would mean an item nothing in this list covers.
   await expect(nav.getByRole('link')).toHaveCount(ITEMS.length);
   await checkA11y(page);
 });

@@ -9,12 +9,13 @@ import { server } from '@/test/setup';
 import { PrivateAgentsList } from './PrivateAgentsList';
 import { renderAgentsRoute } from './__tests__/testRouter';
 
-function applications(rows: { id: string; name: string; status: string }[]) {
+function applications(rows: { id: string; name: string; status: string; tags?: string[] }[]) {
   return {
     rows: rows.map((row) => ({
       id: row.id,
       name: row.name,
       status: row.status,
+      tags: row.tags ?? [],
       created_at: '2026-01-01T00:00:00Z',
       updated_at: '2026-01-01T00:00:00Z',
       owner_id: 'user-1',
@@ -93,7 +94,7 @@ describe('PrivateAgentsList', () => {
       { projectId: 'proj-1' },
     );
 
-    expect(await screen.findByText('You have no agents.')).toBeInTheDocument();
+    expect(await screen.findByText('No agents yet')).toBeInTheDocument();
   });
 
   it('filters client-side by the search box', async () => {
@@ -162,5 +163,73 @@ describe('PrivateAgentsList', () => {
     await user.click(await screen.findByText('My App'));
 
     await waitFor(() => expect(router.state.location.pathname).toBe('/agents/all/7'));
+  });
+
+  /**
+   * The rail's tag selection is a REAL server-side filter now (issue 841).
+   *
+   * The applications repository ignored the `tags` request param and left
+   * every row's `tags` empty, so the rail chips narrowed nothing and this
+   * page disclosed them as decorative. Both halves are real, so this asserts
+   * the param actually leaves the browser: a client-side filter over the
+   * capped first page would narrow one page instead of the project.
+   */
+  it('sends the rail tag selection as the server-side `tags` param', async () => {
+    const seenTagValues: (string | null)[] = [];
+    server.use(
+      getListApplicationsMockHandler((info) => {
+        seenTagValues.push(new URL(info.request.url).searchParams.get('tags'));
+        return applications([{ id: '1', name: 'Tagged App', status: 'draft' }]);
+      }),
+    );
+    renderAgentsRoute(
+      <PrivateAgentsList
+        statuses={undefined}
+        cardContentType="all"
+      />,
+      '/agents/all?tags%5B%5D=finance&tags%5B%5D=legal',
+      { projectId: 'proj-1' },
+    );
+
+    await screen.findByText('Tagged App');
+    await waitFor(() => expect(seenTagValues).toContain('finance,legal'));
+  });
+
+  it('omits the `tags` param when no rail chip is selected', async () => {
+    const seenTagValues: (string | null)[] = [];
+    server.use(
+      getListApplicationsMockHandler((info) => {
+        seenTagValues.push(new URL(info.request.url).searchParams.get('tags'));
+        return applications([{ id: '1', name: 'Plain App', status: 'draft' }]);
+      }),
+    );
+    renderAgentsRoute(
+      <PrivateAgentsList
+        statuses={undefined}
+        cardContentType="all"
+      />,
+      '/agents/all',
+      { projectId: 'proj-1' },
+    );
+
+    await screen.findByText('Plain App');
+    expect(seenTagValues).toEqual([null]);
+  });
+
+  it('renders the tags the server puts on a list row', async () => {
+    server.use(
+      getListApplicationsMockHandler(applications([{ id: '1', name: 'Tagged App', status: 'draft', tags: ['finance', 'legal'] }])),
+    );
+    renderAgentsRoute(
+      <PrivateAgentsList
+        statuses={undefined}
+        cardContentType="all"
+      />,
+      '/agents/all',
+      { projectId: 'proj-1' },
+    );
+
+    expect(await screen.findByText('finance')).toBeInTheDocument();
+    expect(screen.getByText('legal')).toBeInTheDocument();
   });
 });

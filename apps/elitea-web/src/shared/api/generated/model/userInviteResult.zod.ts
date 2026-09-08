@@ -58,9 +58,15 @@ export const UserInviteResult = zod
       .describe(
         "True when an invitation e-mail went out for this address (ADR-0024 WP7); false without SMTP, on a relay refusal, or on an error row.\n",
       ),
+    outcome: zod
+      .enum(["invited", "already_member", "invalid_email", "failed"])
+      .optional()
+      .describe(
+        "The machine-readable half of `msg`. pylon carried these four cases only in free English prose, so the reference SPA could not tell them apart and showed one toast for a whole batch. `status` keeps its two pylon values, so this field is additive: an old client reads the response exactly as before.\n",
+      ),
   })
   .describe(
-    "One element of the per-address array pylon's invite returns. The response carries one of these per requested address, and the whole response is 400 when any of them failed.\n",
+    "One element of the per-address array pylon's invite returns. The response carries one of these per requested address, and the whole response is 400 when any of them failed. A 400 therefore still means that the `ok` rows landed — each address is written in its own transaction, and one bad address does not roll back the others.\n",
   );
 
 export type UserInviteResult = zod.input<typeof UserInviteResult>;

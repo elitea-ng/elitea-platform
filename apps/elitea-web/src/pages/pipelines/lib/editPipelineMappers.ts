@@ -1,7 +1,7 @@
-import type { ApplicationCreationInput, ApplicationVersionDraft } from '@/entities/application-form';
+import type { ApplicationCreationInput } from '@/entities/application-form';
 import type { VersionSummary } from '@/entities/version';
 import type { ConfigurationTabProps, PipelineGraphDraft } from '@/features/pipelines';
-import { toAgentLlmSettings, toLlmSettingsBody, type AgentLlmSettings } from '@/shared/api/agentLlmSettings';
+import { toLlmSettingsBody, type AgentLlmSettings } from '@/shared/api/agentLlmSettings';
 import type {
   ApplicationDetail,
   ApplicationVersionDetail,
@@ -9,12 +9,14 @@ import type {
   VersionWriteRequest,
 } from '@/shared/api/generated/model';
 
+import type { EditPipelineVersionFields } from './useEditPipelineVersionFields';
+
 /**
- * Pure mapping helpers for `EditPipeline.tsx` (this unit, A2m), split into
- * their own file purely to keep that page file under the §3.5 400-line
- * budget — same rationale (and, aside from `toVersionDraft`'s
- * `agentType`/`pipelineSettings` handling, near-identical body) as
- * `pages/agents/lib/editApplicationMappers.ts` (Wave-2 unit A1g).
+ * Pure mapping helpers for `EditPipeline.tsx`, split into their own file
+ * purely to keep that page file under the §3.5 400-line budget — same
+ * rationale (and, aside from the pinned `agent_type` and the
+ * `pipeline_settings` handling, near-identical body) as
+ * `pages/agents/lib/editApplicationMappers.ts`.
  */
 
 export const EMPTY_FORM_VALUES: ApplicationCreationInput = {
@@ -25,11 +27,6 @@ export const EMPTY_FORM_VALUES: ApplicationCreationInput = {
 
 function storedVersionTagNames(version: ApplicationVersionDetail | undefined): string[] {
   return (version?.tags ?? []).map((tag) => tag.name).filter((name): name is string => typeof name === 'string');
-}
-
-function draftTagNames(version: ApplicationVersionDetail, tags: readonly string[] | undefined): readonly string[] {
-  if (tags !== undefined) return tags;
-  return storedVersionTagNames(version);
 }
 
 /** Generated `ApplicationVersionSummary[]` (snake_case) -> `entities/version`'s `VersionSummary[]` (camelCase) — needed only to satisfy `useIsVersionNotFound`'s parameter type. */
@@ -66,87 +63,135 @@ export function toFormValues(detail: ApplicationDetail, version: ApplicationVers
 }
 
 /**
- * The generated `ApplicationVersionDetail` (snake_case GET-response shape)
- * -> `ApplicationVersionDraft` (`entities/application-form`, the camelCase
- * shape `useSaveApplicationVersion` sends on write). `agentType` is always
- * `'pipeline'` here — unlike `pages/agents/lib/editApplicationMappers.ts`'s
- * conditional (`version.agent_type === 'pipeline' ? 'pipeline' :
- * undefined`), this file's only caller (`EditPipeline.tsx`) is by
- * definition already on the pipelines domain's own edit route.
+ * The `meta` blob a pipeline write sends, MERGED over the version's stored
+ * one rather than replacing it.
  *
- * **`graph` — the live flow-editor state, both halves of #135's fix.** Both
- * gaps this parameter closes were real and are now closed at the source
- * rather than papered over here: the live node/edge state is reachable
- * (`features/pipelines`' `usePipelineGraphDraft`, exported from that slice's
- * barrel), and the endpoint can carry it (`pipeline_settings` on
- * `VersionWriteRequest`, `services/elitea-main/api/openapi/v2.yaml`). When
- * `graph` is `undefined` — no flow editor mounted, or its stores not seeded
- * yet — the version's already-loaded `instructions` are re-sent unchanged and
- * no `pipeline_settings` key is written, so a save can never blank a stored
- * graph it was not showing.
+ * `versionFromBody` (`applications/handler.go:504`) takes `vBody["meta"]` as
+ * the whole map and `insertVersion`/`UpdateVersion` persist it verbatim, so
+ * sending only the keys this mapper knows about drops every other key the
+ * version carried. `icon_meta` is the one that was measurably lost —
+ * `toChatPipelineVersionDetails`, in this same file, reads it off a pipeline
+ * version's `meta` and forwards it to the chat — and
+ * `category`/`attachment_storage` went the same way.
+ *
+ * `variables` is DROPPED from the stored blob, and that is deliberate: it is
+ * the one key both handlers rebuild from the body's TOP-LEVEL `variables`
+ * list, so a copy carried inside `meta` can only contradict the authoritative
+ * one — and on the create path it WINS, because `versionFromBody` folds the
+ * list only when it is non-empty. The agents twin
+ * (`pages/agents/lib/editApplicationMappers.ts`'s `toVersionMetaBody`) makes
+ * exactly this cut, for a measured reason: forwarding it resurrected deleted
+ * variables, secrets included.
  */
-export function toVersionDraft(
+function toPipelineMetaBody(
   version: ApplicationVersionDetail,
-  conversationStarters: readonly string[],
-  graph?: PipelineGraphDraft,
-  llmSettings?: AgentLlmSettings,
-  tags?: readonly string[],
-): ApplicationVersionDraft {
+  edits?: EditPipelineVersionFields,
+): Pick<VersionWriteRequest, 'meta'> {
   const metaRecord: Record<string, unknown> = version.meta ?? {};
-  const stepLimit = typeof metaRecord['step_limit'] === 'number' ? metaRecord['step_limit'] : 25;
+  const storedStepLimit = typeof metaRecord['step_limit'] === 'number' ? metaRecord['step_limit'] : 25;
   const internalToolsRaw = metaRecord['internal_tools'];
-  const internalTools = Array.isArray(internalToolsRaw)
+  const storedInternalTools = Array.isArray(internalToolsRaw)
     ? internalToolsRaw.filter((entry): entry is string => typeof entry === 'string')
     : [];
-  /*
-   * `meta` is MERGED over the version's stored blob, not replaced with the
-   * two keys this mapper knows about. `versionFromBody`
-   * (`applications/handler.go:504`) takes `vBody["meta"]` as the whole map
-   * and `insertVersion` persists it verbatim, so every other key the source
-   * version carried is dropped on the clone. `icon_meta` is the one that was
-   * measurably lost — `toChatPipelineVersionDetails`, in this same file,
-   * reads it off a pipeline version's `meta` and forwards it to the chat, and
-   * rows carrying it are real — and `category`/`attachment_storage` went the
-   * same way. Nothing writes them back, so a Save-As-Version was permanent.
-   *
-   * `variables` is DROPPED from the stored blob, and that is deliberate: it
-   * is the one key both handlers rebuild from the body's TOP-LEVEL
-   * `variables` list, so a copy carried inside `meta` can only contradict the
-   * authoritative one — and on the create path it WINS, because
-   * `versionFromBody` folds the list only when it is non-empty. The agents
-   * twin (`pages/agents/lib/editApplicationMappers.ts`'s `toVersionMetaBody`)
-   * makes exactly this cut, for a measured reason: forwarding it resurrected
-   * deleted variables, secrets included. The two halves of this pair now
-   * agree; they did not before, and this mapper was the half that replaced.
-   */
   const { variables: _storedVariables, ...storedMeta } = metaRecord;
   return {
+    meta: {
+      ...storedMeta,
+      step_limit: edits?.stepLimit ?? storedStepLimit,
+      // Always sent, never gated on being non-empty: turning the LAST module
+      // off has to reach the wire, and an `undefined`-when-empty guard would
+      // make exactly that one edit silently unsaveable.
+      internal_tools: [...(edits?.internalTools ?? storedInternalTools)],
+    },
+  };
+}
+
+/**
+ * The `llm_settings` key, or nothing at all. The live pick wins; with no pick
+ * the stored blob is forwarded VERBATIM rather than re-read through
+ * `toAgentLlmSettings`, because a stored `{model_name}` with no
+ * `model_project_id` is a real, working shape that the strict read would
+ * reject — silently moving the version onto a different model.
+ */
+function selectLlmSettings(
+  version: ApplicationVersionDetail,
+  edited: AgentLlmSettings | undefined,
+): Pick<VersionWriteRequest, 'llm_settings'> {
+  if (edited !== undefined) return { llm_settings: toLlmSettingsBody(edited) };
+  return version.llm_settings === undefined ? {} : { llm_settings: version.llm_settings };
+}
+
+/**
+ * The body a pipeline Save PUTs to `PUT /elitea_core/version/prompt_lib/
+ * {projectId}/{applicationId}/{versionId}`.
+ *
+ * Every key below was read against `UpdateVersion`
+ * (`services/elitea-main/internal/api/v2/applications/handler.go:891-1026`)
+ * and `ApplicationsRepo.UpdateVersion`
+ * (`internal/infra/db/repos/applications.go:590-640`) rather than against the
+ * schema, because that schema is `additionalProperties: true` and would have
+ * accepted anything: `name`, `agent_type`, `instructions`, `welcome_message`,
+ * `llm_settings`, `conversation_starters`, `meta`, `variables`, `tags` and
+ * `pipeline_settings` are the ten the handler actually writes.
+ *
+ * **What is NOT here, and why.** `tools` is accepted by the schema and read
+ * by no branch of that handler — attach/detach goes through the
+ * `entity_tool_mapping` relation endpoints, which is what
+ * `../ui/EditPipelineToolsPanel.tsx` drives, independently of this Save. And
+ * `notes` (the reference's EDITOR NOTES field) has no column, no schema
+ * property and no handler branch at all.
+ *
+ * This function REPLACES `toVersionDraft`, which produced
+ * `entities/application-form`'s camelCase `ApplicationVersionDraft` for
+ * `useSaveApplicationVersion`. That path could not carry `tags` (its
+ * `toVersionWriteRequest` writes no such key) and the page fed it no
+ * `welcome_message`, so both fields were rendered from the server response
+ * and dropped on save. The raw `VersionWriteRequest` goes to
+ * `features/agents`' `useSaveVersion`, which is also the only hook that
+ * issues the SECOND call the pipeline name/description need.
+ *
+ * `agent_type` is pinned to `'pipeline'`, never cloned:
+ * `insertVersion`(`repos/applications.go:493-496`) substitutes the literal
+ * `"openai"` for an empty `agent_type`, so an omitted key mints an OpenAI
+ * agent out of a pipeline — the same rows, run by the wrong executor.
+ *
+ * `graph` is the live flow-editor state. When it is `undefined` — no flow
+ * editor mounted, or its stores not seeded yet — the version's already-loaded
+ * `instructions` are re-sent unchanged and no `pipeline_settings` key is
+ * written, so a save can never blank a stored graph it was not showing.
+ */
+export function toPipelineVersionSaveBody(
+  version: ApplicationVersionDetail,
+  conversationStarters: readonly string[],
+  edits: EditPipelineVersionFields,
+  graph?: PipelineGraphDraft,
+): VersionWriteRequest {
+  return {
     name: version.name,
-    agentType: 'pipeline',
+    agent_type: 'pipeline',
     // Baseline `useSaveVersion.js:96`: `instructions: !isFromPipeline ?
     // version_details.instructions : yamlCode` — the pipeline graph IS the
     // YAML, so a pipeline save writes the editor's live document.
     instructions: graph?.instructions ?? version.instructions ?? '',
-    conversationStarters,
-    variables: (version.variables ?? []).map((variable) => ({
-      name: variable.name ?? '',
-      value: variable.value ?? '',
+    welcome_message: edits.welcomeMessage,
+    ...selectLlmSettings(version, edits.llmSettings),
+    conversation_starters: [...conversationStarters],
+    variables: edits.variables.map((variable) => ({ name: variable.name, value: variable.value })),
+    ...toPipelineMetaBody(version, edits),
+    /*
+     * ALWAYS sent, never gated on being non-empty: `UpdateVersion` reads the
+     * key's PRESENCE (an absent key leaves the stored set alone, an empty
+     * array clears it), so removing the last tag has to reach the wire. The
+     * placeholder id `AgentTagEditor` gives a tag the user just typed is
+     * stripped — the server matches by name and a negative id would be
+     * fiction on the wire.
+     */
+    tags: edits.tags.map((tag) => ({
+      ...(tag.id > 0 ? { id: tag.id } : {}),
+      name: tag.name,
+      ...(tag.data === null || tag.data === undefined ? {} : { data: tag.data }),
     })),
-    meta: {
-      ...storedMeta,
-      step_limit: stepLimit,
-      internal_tools: internalTools,
-    },
-    // Same edit-wins-over-stored rule the agents twin applies in
-    // `toVersionWriteBody`: this page's model picker holds the live choice, and
-    // a save that re-read the stored blob would drop it. Falls back to the
-    // stored settings, and to `undefined` when the version names no model at
-    // all — `toVersionWriteRequest` then omits the key, so a pipeline that
-    // runs on the project's catalogue default keeps running on it.
-    llmSettings: llmSettings ?? toAgentLlmSettings(version.llm_settings),
-    tags: draftTagNames(version, tags),
-    tools: version.tools ?? [],
-    pipelineSettings: graph?.pipelineSettings,
+    ...(graph?.pipelineSettings === undefined ? {} : { pipeline_settings: { ...graph.pipelineSettings } }),
   };
 }
 
@@ -275,24 +320,6 @@ export function toVersionOptions(versions: readonly ApplicationVersionSummary[])
 }
 
 /**
- * The `llm_settings` key of a save-as-version body, or nothing at all —
- * split out for the same two reasons `pages/agents/lib/
- * editApplicationMappers.ts`'s `selectLlmSettings` is: the oxlint complexity
- * gate, and the fact that the choice needs explaining. The live pick wins;
- * with no pick the stored blob is forwarded VERBATIM rather than re-read
- * through `toAgentLlmSettings`, because a stored `{model_name}` with no
- * `model_project_id` is a real, working shape that the strict read would
- * reject — silently moving the cloned version onto a different model.
- */
-function selectNewVersionLlmSettings(
-  version: ApplicationVersionDetail,
-  edited: AgentLlmSettings | undefined,
-): Pick<VersionWriteRequest, 'llm_settings'> {
-  if (edited !== undefined) return { llm_settings: toLlmSettingsBody(edited) };
-  return version.llm_settings === undefined ? {} : { llm_settings: version.llm_settings };
-}
-
-/**
  * The body a pipeline "Save As Version" POST clones onto the new version
  * (`name` excluded — `SaveNewVersionButton`'s own dialog supplies it, and it
  * is the one field `CreateVersion` hard-requires).
@@ -330,50 +357,23 @@ function selectNewVersionLlmSettings(
 export function toNewPipelineVersionBody(
   version: ApplicationVersionDetail,
   conversationStarters: readonly string[],
-  llmSettings: AgentLlmSettings | undefined,
+  edits: EditPipelineVersionFields,
 ): Omit<VersionWriteRequest, 'name'> {
-  const metaRecord: Record<string, unknown> = version.meta ?? {};
-  const stepLimit = typeof metaRecord['step_limit'] === 'number' ? metaRecord['step_limit'] : 25;
-  const internalToolsRaw = metaRecord['internal_tools'];
-  const internalTools = Array.isArray(internalToolsRaw)
-    ? internalToolsRaw.filter((entry): entry is string => typeof entry === 'string')
-    : [];
-  /*
-   * `meta` is MERGED over the version's stored blob, not replaced with the
-   * two keys this mapper knows about. `versionFromBody`
-   * (`applications/handler.go:504`) takes `vBody["meta"]` as the whole map
-   * and `insertVersion` persists it verbatim, so every other key the source
-   * version carried is dropped on the clone. `icon_meta` is the one that was
-   * measurably lost — `toChatPipelineVersionDetails`, in this same file,
-   * reads it off a pipeline version's `meta` and forwards it to the chat, and
-   * rows carrying it are real — and `category`/`attachment_storage` went the
-   * same way. Nothing writes them back, so a Save-As-Version was permanent.
-   *
-   * `variables` is DROPPED from the stored blob, and that is deliberate: it
-   * is the one key both handlers rebuild from the body's TOP-LEVEL
-   * `variables` list, so a copy carried inside `meta` can only contradict the
-   * authoritative one — and on the create path it WINS, because
-   * `versionFromBody` folds the list only when it is non-empty. The agents
-   * twin (`pages/agents/lib/editApplicationMappers.ts`'s `toVersionMetaBody`)
-   * makes exactly this cut, for a measured reason: forwarding it resurrected
-   * deleted variables, secrets included. The two halves of this pair now
-   * agree; they did not before, and this mapper was the half that replaced.
-   */
-  const { variables: _storedVariables, ...storedMeta } = metaRecord;
   return {
     agent_type: 'pipeline',
     instructions: version.instructions ?? '',
-    welcome_message: version.welcome_message ?? '',
-    ...selectNewVersionLlmSettings(version, llmSettings),
+    /*
+     * The LIVE welcome message, model, modules, step limit and variables —
+     * not the stored ones. Taking a version used to clone the server's copy
+     * of every one of them, so an author who edited the form and then reached
+     * for "Save As Version" got a version without the edit they had just
+     * made. `tags` stays out: `versionFromBody` reads no `tags` key, so only
+     * the PUT writes them (`handler.go:532-534`).
+     */
+    welcome_message: edits.welcomeMessage,
+    ...selectLlmSettings(version, edits.llmSettings),
     conversation_starters: [...conversationStarters],
-    variables: (version.variables ?? []).map((variable) => ({
-      name: variable.name ?? '',
-      value: variable.value ?? '',
-    })),
-    meta: {
-      ...storedMeta,
-      step_limit: stepLimit,
-      internal_tools: internalTools,
-    },
+    variables: edits.variables.map((variable) => ({ name: variable.name, value: variable.value })),
+    ...toPipelineMetaBody(version, edits),
   };
 }

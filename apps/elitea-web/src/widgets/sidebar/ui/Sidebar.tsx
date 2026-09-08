@@ -27,6 +27,8 @@ export interface SidebarProps {
   projects: readonly Project[];
   selectedProjectId: string | undefined;
   onSelectProject: (projectId: string, projectName: string) => void;
+  /** Threaded straight through to `SidebarBody`'s footer bar — see `SidebarFooter.tsx`. */
+  onToggleAssistant?: (() => void) | undefined;
 }
 
 /**
@@ -38,7 +40,7 @@ export interface SidebarProps {
  * `usePermissionSet`/`useProjectOptions` used by callers that pass a
  * `projectId`; see `../index.ts`).
  */
-export function Sidebar({ permissions, projects, selectedProjectId, onSelectProject }: SidebarProps): ReactNode {
+export function Sidebar({ permissions, projects, selectedProjectId, onSelectProject, onToggleAssistant }: SidebarProps): ReactNode {
   const collapsed = useSidebarCollapsedStore((state) => state.collapsed);
   const setCollapsed = useSidebarCollapsedStore((state) => state.setCollapsed);
 
@@ -84,6 +86,7 @@ export function Sidebar({ permissions, projects, selectedProjectId, onSelectProj
           projects={projects}
           selectedProjectId={selectedProjectId}
           onSelectProject={onSelectProject}
+          onToggleAssistant={onToggleAssistant}
         />
         <Box
           component="button"
@@ -98,7 +101,11 @@ export function Sidebar({ permissions, projects, selectedProjectId, onSelectProj
           sx={(theme: Theme) => ({
             position: 'fixed',
             top: '3rem',
-            left: collapsed ? '3.25rem' : `${SIDE_BAR_WIDTH_PX - 24}px`,
+            // `Sidebar.jsx`'s `collapseButton.left` is `12.75rem` = 204px
+            // against a 216px rail, i.e. the 24px circle STRADDLES the rail's
+            // right edge (204 + 24/2 === 216). The port's `- 24` tucked the
+            // whole button inside the rail, 12px adrift.
+            left: collapsed ? '3.25rem' : `${SIDE_BAR_WIDTH_PX - 12}px`,
             width: '1.5rem',
             height: '1.5rem',
             borderRadius: theme.vars.shape.radiusPill,

@@ -73,7 +73,7 @@
 import { test, expect, type Page } from '@playwright/test';
 
 import { BASE_URL } from '../../playwright.config';
-import { SNAPSHOT_TOLERANCE, settle, shellSettled, volatileRegions } from './lib/settle';
+import { SNAPSHOT_TOLERANCE, selectProject, settle, shellSettled, volatileRegions } from './lib/settle';
 
 /*
  * `shellSettled()` now lives in `./lib/settle.ts`, imported above.
@@ -118,54 +118,10 @@ interface VisualRoute {
   readonly prepare?: (page: Page) => Promise<void>;
 }
 
-/**
- * Select `route.project` THROUGH THE SWITCHER, the way a user does.
- *
- * The first version wrote `el.project.id` with `addInitScript` before the first
- * navigation. It works in a journey and it did NOT work here: the run came back
- * with the switcher still on Default Project and the landmark missing, so the
- * seeded wiki's project was never selected and the shot would have photographed
- * a project with no wiki. Whatever the interaction with the restored
- * `storageState` is, writing another test's storage internals is a mechanism
- * this suite has no way to notice breaking.
- *
- * Clicking is slower and it is the product's own path: the switcher is the only
- * supported way to change project, J7 covers it end to end, and the selection
- * persists to both storage areas by the app's own code rather than by ours.
- *
- * Returns the name the shell should then settle on, so the caller cannot wait
- * for one project while having selected another.
+/*
+ * `selectProject` lives in `lib/settle.ts` (ADR-0024 WP6 moved it: the
+ * second-pack shots in `brand.visual.spec.ts` photograph the same seeded wiki).
  */
-async function selectProject(page: Page, route: VisualRoute): Promise<string> {
-  const project = route.project;
-  // The early return is for the routes that want the persona's own project,
-  // which is nearly all of them. It is also how this helper silently did
-  // nothing for a whole run: the route entry lost its `project` field to a
-  // careless `git checkout`, every call took this branch, and the shot was
-  // photographed against the wrong project with no assertion able to say so.
-  // `shellSettled` is given the name this returns, so the two can no longer
-  // disagree — a route that fails to switch now fails on the switcher's own
-  // name rather than twenty seconds later on its landmark.
-  if (!project) return 'Default Project';
-
-  await page.goto(BASE_URL + '/app/', { waitUntil: 'domcontentloaded' });
-  await shellSettled(page);
-
-  const trigger = page.getByRole('button', { name: /Project:/ });
-  await expect(trigger).toBeVisible({ timeout: 20_000 });
-  await trigger.click();
-
-  const listbox = page.getByRole('listbox');
-  await expect(listbox).toBeVisible({ timeout: 10_000 });
-  await listbox.getByRole('option', { name: project.name }).click();
-
-  // The switch really landed before the route is opened. Without this the
-  // navigation below can race the selection and fetch for the old project.
-  await expect(trigger).toHaveAccessibleName(new RegExp(`Project:\\s*${project.name}`), {
-    timeout: 20_000,
-  });
-  return project.name;
-}
 
 /*
  * Each entry carries an `@covers <route>` annotation naming the
@@ -291,7 +247,37 @@ const ROUTES: readonly VisualRoute[] = [
     // loading branch returns the spinner, the error branch returns a banner,
     // and the no-view-permission branch returns a different banner still.
     // Re-measured under the corrected method: loaded YES, stalled no.
-    landmark: (page) => page.getByTestId('project-context-body'),
+    //
+    // TWO LANDMARKS, because the tab now has two resolved screens. Production
+    // shows a centred "Still no Project Context" invitation for a project with
+    // nothing saved and the editor for one that has content; this app grew the
+    // first of those in the settings-parity pass. On THIS stack the seed
+    // creates no project context, so the empty state is what renders and a
+    // `project-context-body`-only landmark would wait for an element that is
+    // never coming — the loud half of the failure class the note above
+    // describes, but a wait we can simply spell correctly instead. Both ids
+    // exist only on a settled query, so neither can photograph the spinner.
+    //
+    // THE BASELINE PNG MUST BE REGENERATED with this change: the screen goes
+    // from the toggle card + editor to the centred empty state.
+    landmark: (page) =>
+      page.getByTestId('project-context-body').or(page.getByTestId('project-context-empty-state')),
+  },
+  {
+    // @covers /settings/project-general
+    name: 'settings-project-general',
+    path: '/app/settings/project-general',
+    // NEW SCREEN — the PROJECT section's first tab and the one `/settings`
+    // itself opens on. It had no route here at all before the settings-parity
+    // pass, so it has no baseline yet; the first run records one.
+    //
+    // `project-general-body` is the page's own root and is rendered
+    // unconditionally, so on its own it would be satisfied while the three
+    // accordions are still empty. The landmark is therefore the AVATAR ROW's
+    // teammate count inside the General accordion, which `ProjectParamsHeader`
+    // draws only once `useProjectInfoQuery` has answered — the one part of
+    // this page that is genuinely asynchronous.
+    landmark: (page) => page.getByTestId('project-general-body').getByText('Teammates:'),
   },
 
   // ── Routes re-classified to `wired` in this change ────────────────────────
@@ -313,7 +299,7 @@ const ROUTES: readonly VisualRoute[] = [
     // strip renders during load (loaded YES, stalled YES) — it is chrome. The
     // empty-state copy renders only from a resolved, empty list: loaded YES,
     // stalled no.
-    landmark: (page) => page.getByText('You have no agents.'),
+    landmark: (page) => page.getByText('No agents yet'),
     light: true,
   },
   {
@@ -336,7 +322,7 @@ const ROUTES: readonly VisualRoute[] = [
     name: 'pipelines-list-empty',
     path: '/app/pipelines/latest',
     // Loaded YES, stalled no.
-    landmark: (page) => page.getByText('You have no pipelines.'),
+    landmark: (page) => page.getByText('No pipelines yet'),
   },
   {
     // @covers /pipelines/create
@@ -384,7 +370,7 @@ const ROUTES: readonly VisualRoute[] = [
     name: 'credentials-list-empty',
     path: '/app/credentials/latest',
     // Loaded YES, stalled no.
-    landmark: (page) => page.getByText('You have no credentials.'),
+    landmark: (page) => page.getByText('No credentials yet'),
   },
   {
     // @covers /settings/secrets
@@ -408,13 +394,47 @@ const ROUTES: readonly VisualRoute[] = [
     // @covers /settings/model-configuration
     name: 'settings-model-configuration',
     path: '/app/settings/model-configuration',
-    // The `Configurations` HEADING, not the tab of the same name and not the
-    // `OpenAI-BaseURL`/`Server URL`/`Project ID` header block — that block is
-    // static and renders during load (loaded YES, stalled YES). Under a stall
-    // the content area renders a literal "Loading…"; measured, the heading is
-    // loaded YES / stalled no and "Loading…" is loaded no / stalled YES, which
-    // is the same fact from both directions.
-    landmark: (page) => page.getByRole('heading', { name: 'Configurations' }),
+    // MOVED, because the element it named no longer exists. The landmark was
+    // the `Configurations` HEADING that `ConfigurationsPanel` drew above its
+    // own toolbar. The settings parity work (fedca78b) deleted it: production
+    // shows one title bar per settings tab, and this page had two — the
+    // page's `DrawerPageHeader` ("AI Providers") and the panel's own heading
+    // and rule under it. The panel row is now a right-aligned toolbar with no
+    // heading at all, so this locator matched nothing and the shot was never
+    // taken (`element(s) not found`, run 34016199152). A landmark that names
+    // deleted chrome fails LOUDLY, which is the good half of this class — the
+    // dangerous half is a landmark that survives a restructure by matching
+    // something a loading state also renders.
+    //
+    // The LLMs section accordion replaces it, and it is a strictly stronger
+    // landmark than the heading was:
+    //   - `useConfigurationsBySection` returns `data: null` while ANY of its
+    //     seven section queries is in flight, and `AIConfiguration` renders a
+    //     literal "Loading…" in place of the panel for a null `data`. So no
+    //     part of the panel exists during load.
+    //   - `ConfigurationSection` returns its own "Loading…" line while
+    //     `isLoading`, and `null` for an empty list. The accordion — and this
+    //     testid with it — is reachable only from a RESOLVED, NON-EMPTY LLM
+    //     list. The seed guarantees one (`scripts/e2e-stack.sh`'s
+    //     `e2e-mock-model-llm` row, `section = 'llm'` in `p_1.configuration`).
+    //
+    // Re-measured under this file's own method rather than admitted on that
+    // reading: `**\/api\/v2\/configurations\/**` stalled for five minutes with
+    // the shell's four endpoints let through, sampled at 3/8/15/22/30/45/60s.
+    // The testid was absent at every sample and "Loading…" present at every
+    // sample; loaded, the testid is there and "Loading…" is gone. Loaded YES,
+    // stalled no — the same fact from both directions, as before.
+    //
+    // NOT the section TITLE text ("LLMs"), even though it measures the same
+    // today. `ConfigurationSection` prints that title from TWO branches — the
+    // resolved accordion and its own "LLMs / Loading…" line — and only the
+    // hook's current shape (`data` is null whenever anything is in flight)
+    // keeps the second one unreachable from this page. The testid is on the
+    // resolved branch alone, so it does not depend on that coincidence.
+    //
+    // THE BASELINE PNG MUST BE REGENERATED with this change: the page is the
+    // rebuilt one (page header, pill-wrapped labelled selects, accordions).
+    landmark: (page) => page.getByTestId('ai-providers-section-llms'),
   },
   {
     // @covers /toolkits/create
@@ -459,8 +479,8 @@ const ROUTES: readonly VisualRoute[] = [
     // The wiki's own project, not the persona's. The seeded wiki cannot live in
     // the shared project 1 — a permanent toolkit there makes J17.1's empty-list
     // premise unreachable — so this shot switches to the project the fixture is
-    // in. Without it the baseline photographs a project with no wiki toolkit,
-    // and `selectProject` below returns early with the default name.
+    // in. Without it the baseline photographs the persona's own project, which
+    // has no wiki toolkit.
     project: { id: '90200', name: 'e2e-deepwiki' },
     // THE SEEDED WIKI'S TITLE, which lives only in a manifest object in the
     // artifact store. Every other candidate on this screen fails the rule:
@@ -506,11 +526,68 @@ const ROUTES: readonly VisualRoute[] = [
     },
     landmark: (page) => page.getByTestId('wiki-chat-drawer'),
   },
+  {
+    // @covers /inventory
+    // @covers /inventory/$toolkitId
+    // The Sources tab, which is where the workspace opens: the configured
+    // source, its ingestion status, and the control that ingests it.
+    name: 'inventory-sources',
+    // The toolkit page itself: project 90300 seeds TWO Inventory toolkits (the
+    // read-only one and the one the ingestion journey mutates), so
+    // /app/inventory renders the chooser, not a workspace.
+    path: '/app/inventory/9101',
+    // The inventory's own project, not the persona's — the same reasoning the
+    // wiki shots record. Without it the baseline photographs a project with no
+    // Inventory toolkit, and its empty state is what a stalled listing shows
+    // as well.
+    project: { id: '90300', name: 'e2e-inventory' },
+    // THE SOURCE TOOLKIT'S NAME, which is joined from two reads: the project's
+    // toolkit listing (for the label) and `get_sources_status` (for the state
+    // beside it). Neither resolves under a stall, and the panel does not
+    // render at all until the status invocation has completed — the pending
+    // branch shows "Reading the source status…" instead.
+    // Measured: loaded YES, stalled no.
+    landmark: (page) => page.getByTestId('inventory-source-row'),
+    light: true,
+  },
+  {
+    // @covers /inventory/$toolkitId
+    // The Graph tab: the filters, the entity list and the detail pane.
+    name: 'inventory-graph',
+    path: '/app/inventory/9101',
+    project: { id: '90300', name: 'e2e-inventory' },
+    prepare: async (page) => {
+      await page.getByTestId('inventory-tab-graph').click();
+    },
+    // AN ENTITY NAME OUT OF THE INGESTED GRAPH. Every other candidate on this
+    // screen fails the rule: the tab labels, the filter captions and the
+    // "Select an entity" invitation are all present while the read is still in
+    // flight, and the empty state ("No entities") is what a stalled read shows
+    // as well as an empty graph.
+    // Measured: loaded YES, stalled no.
+    landmark: (page) => page.getByText('CheckoutService'),
+  },
+  {
+    // @covers /inventory/$toolkitId
+    // The Statistics tab: the counts, the breakdowns and the maintenance
+    // controls.
+    name: 'inventory-stats',
+    path: '/app/inventory/9101',
+    project: { id: '90300', name: 'e2e-inventory' },
+    prepare: async (page) => {
+      await page.getByTestId('inventory-tab-stats').click();
+    },
+    // A BREAKDOWN CHIP, which only a completed `get_stats` can produce: the
+    // panel renders "Reading the statistics…" until then, and an empty
+    // breakdown renders "Nothing to break down yet." instead of a chip.
+    // Measured: loaded YES, stalled no.
+    landmark: (page) => page.getByTestId('inventory-stats-by-type').getByText(/class/),
+  },
 ];
 
 for (const route of ROUTES) {
   test(`@visual ${route.name}`, async ({ page }) => {
-    const projectName = await selectProject(page, route);
+    const projectName = await selectProject(page, route.project);
     await page.goto(BASE_URL + route.path, { waitUntil: 'domcontentloaded' });
     await shellSettled(page, projectName);
     if (route.prepare) await route.prepare(page);
@@ -572,7 +649,7 @@ async function useLightScheme(page: Page): Promise<void> {
 for (const route of ROUTES.filter((r) => r.light)) {
   test(`@visual ${route.name}-light`, async ({ page }) => {
     await useLightScheme(page);
-    const projectName = await selectProject(page, route);
+    const projectName = await selectProject(page, route.project);
 
     await page.goto(BASE_URL + route.path, { waitUntil: 'domcontentloaded' });
     await shellSettled(page, projectName);

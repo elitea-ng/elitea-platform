@@ -7,6 +7,51 @@
 */ -}}
 {{- $env := .Values.main.env | default dict }}
 {{- if not (get $env "REDIS_URL") }}{{- $env = merge (deepCopy $env) (dict "REDIS_URL" (include "elitea.serviceAddr" (dict "svc" $.Values.redis "ctx" $))) }}{{- end }}
+{{- /*
+  The public project, from the ONE place an operator sets it. Filled only when
+  something names a project: with the Configurations plane off, elitea-main
+  refuses to start when this variable is PRESENT at all, so a chart that always
+  wrote a value here would stop a default install. See elitea.aiProjectId.
+*/ -}}
+{{- $aiProjectId := include "elitea.aiProjectId" . }}
+{{- if and $aiProjectId (not (get $env "ELITEA_AI_PROJECT_ID")) }}{{- $env = merge (deepCopy $env) (dict "ELITEA_AI_PROJECT_ID" $aiProjectId) }}{{- end }}
+{{- /*
+  ELITEA_CONFIGURATIONS_ENABLED is DERIVED when the operator states nothing.
+  values.yaml ships it empty, which means "follow this deployment": the plane
+  comes on for an install that has authentication and a public project id, and
+  stays off otherwise. A stated "true" or "false" always wins.
+
+  The whole map is rendered verbatim below, so the derived value is merged in
+  HERE rather than computed at the point of use. Every capability guard in
+  _helpers.tpl reads the same helper, so the manifest and the guards cannot
+  disagree about whether the plane is on.
+*/ -}}
+{{- $env = set (deepCopy $env) "ELITEA_CONFIGURATIONS_ENABLED" (include "elitea-main.configurationsEnabled" $) }}
+{{- /*
+  Which worker image this release runs, from the ONE place an operator states
+  it. elitea-main serves a toolkit type as creatable only when the running
+  worker can build it, and the two workers can build different sets: the Python
+  image imports 39 of the 52 SDK toolkits and the native worker materializes 22
+  families. Nothing else tells this process which one is deployed, and its own
+  default is python while this chart's default is rust — so an unstated value
+  would offer tiles a native-worker release cannot run.
+
+  An explicit env entry still wins, for the release that pins
+  worker.image.repository directly and so does not follow worker.implementation.
+*/ -}}
+{{- if not (get $env "ELITEA_WORKER_IMPLEMENTATION") }}
+{{- $env = merge (deepCopy $env) (dict "ELITEA_WORKER_IMPLEMENTATION" $.Values.worker.implementation) }}
+{{- end }}
+{{- /*
+  ELITEA_INDEX_TYPES_ENABLED and ELITEA_APPLICATION_SKILLS_ENABLED are DERIVED
+  the same way (issues #394 and #395). Each route is now the ONLY handler for
+  its path — the prototype fallbacks in internal/api/router.go are deleted — so
+  a shipped "false" is a 404 on a path the published contract declares, and a
+  shipped "true" stops an install that has no authentication. Empty means
+  "follow this deployment": on where the install authenticates, off otherwise.
+*/ -}}
+{{- $env = set (deepCopy $env) "ELITEA_INDEX_TYPES_ENABLED" (include "elitea-main.indexTypesEnabled" $) }}
+{{- $env = set (deepCopy $env) "ELITEA_APPLICATION_SKILLS_ENABLED" (include "elitea-main.applicationSkillsEnabled" $) }}
 apiVersion: v1
 kind: ConfigMap
 metadata:

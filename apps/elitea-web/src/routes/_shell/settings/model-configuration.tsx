@@ -26,12 +26,18 @@
  */
 import { createFileRoute } from '@tanstack/react-router';
 
+import { pickParams } from '@/routes/-search/params';
 import { RouteError, RoutePending } from '@/routes/-ui/RouteStatus';
 
 import { AIConfiguration } from '@/pages/settings/AIConfiguration';
 import { useSelectedProjectStore } from '@/widgets/app-shell';
 
 export const Route = createFileRoute('/_shell/settings/model-configuration')({
+  // `reveal` (PARAM group "settings"): the just-saved/edited configuration's
+  // id, so `AIConfiguration`/`ConfigurationsPanel` can open the section it
+  // actually lives in on return from `/settings/create-configuration` or
+  // `/settings/edit-configuration/$credential_uid` — see those routes' `leave`.
+  validateSearch: pickParams('reveal'),
   pendingComponent: RoutePending,
   errorComponent: RouteError,
   component: ModelConfigurationShell,
@@ -39,6 +45,12 @@ export const Route = createFileRoute('/_shell/settings/model-configuration')({
 
 function ModelConfigurationShell() {
   const projectId = useSelectedProjectStore((s) => s.project?.id ?? '');
+  const { reveal } = Route.useSearch();
 
-  return <AIConfiguration projectId={projectId} />;
+  return (
+    <AIConfiguration
+      projectId={projectId}
+      {...(reveal !== '' ? { revealConfigurationId: reveal } : {})}
+    />
+  );
 }

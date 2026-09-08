@@ -20,15 +20,27 @@
  *  - Reaches pagination past page 0, a non-default page size, sorting, and
  *    search — all five already accepted by `ListNotificationsParams`
  *    (`features/notifications/api/notifications.ts`) but never supplied by
- *    this route. Ported control-for-control from `NotificationCenter.jsx`
- *    (search + pagination) and `NotificationTable.jsx` (sortable columns),
- *    minus the bespoke `entities/grid-table` widget itself — unported in
- *    this app (`*grid-table*` matches nothing under `src/**`) and too large
- *    a unit for this single-file cluster to build (FSD: a new shared
- *    entity, not a local adapter). Whoever picks that up should swap the
- *    `Select`-based sort control and `TablePagination` footer for the real
- *    grid; the `page`/`pageSize`/`sortBy`/`sortOrder`/`search` wiring into
- *    `useNotificationsList` does not need to change.
+ *    this route.
+ *
+ * THE SCREEN IS A TABLE NOW. The note that used to sit here said the
+ * `entities/grid-table` widget was unported, left a `Select`-based sort
+ * control and a `TablePagination` footer as a stand-in, and asked whoever
+ * picked it up to "swap [them] for the real grid". This is that swap.
+ * `features/notifications/ui/NotificationsTable.tsx` carries the four-column
+ * grid production draws — select-all checkbox, sortable Type, Notification,
+ * sortable right-aligned Date & Time — over the reference's own pagination
+ * footer. The `page`/`pageSize`/`sortBy`/`sortOrder`/`search` wiring into
+ * `useNotificationsList` did not have to change, exactly as that note
+ * predicted.
+ *
+ * Three controls went WITH the stand-in, because production's toolbar does
+ * not have them: the "Newest first" sort dropdown (the column headers sort
+ * now), the "New only" filter (the reference exposes no such toggle, even
+ * though the `only_new` query param exists), and the round "+" button that
+ * was doing select-all duty (the header checkbox does that). What is left is
+ * what `NotificationTableToolbar.jsx` renders: a title, a search box, a
+ * mark-read/unread button and a delete button, the last two disabled until
+ * something is selected.
  *  - The bulk mark-toggle button flips between "Mark read"/"Mark unread"
  *    (sending the matching `isSeen`) based on whether the selection
  *    contains an unread row — `entities/notification`'s
@@ -46,20 +58,27 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
-import MenuItem from '@mui/material/MenuItem';
 import Paper from '@mui/material/Paper';
-import Select from '@mui/material/Select';
-import type { SelectChangeEvent } from '@mui/material/Select';
-import TablePagination from '@mui/material/TablePagination';
 import type { SxProps, Theme } from '@mui/material/styles';
 
 import { useRouteContext } from '@tanstack/react-router';
 
+import { DeleteEntityModal } from '@/shared/ui/DeleteEntityModal';
 import { DrawerPageHeader } from '@/shared/ui/settings/DrawerPageHeader';
 import { t } from '@/shared/i18n';
 import { RoutePending } from '@/routes/-ui/RouteStatus';
 import { hasUnreadAmongSelected } from '@/entities/notification';
 import { NotificationsListBody } from '@/features/notifications/ui/NotificationsListBody';
+import { NotificationsTable } from '@/features/notifications/ui/NotificationsTable';
+import { NotificationsToast, type NotificationToastKind } from '@/features/notifications/ui/NotificationsToast';
+import {
+  NOTIFICATION_DEFAULT_PAGE_SIZE,
+  NOTIFICATION_DEFAULT_SORT,
+  type NotificationSort,
+  type NotificationSortField,
+  apiSearchTerm,
+  nextSort,
+} from '@/features/notifications/lib/table';
 import {
   useBulkDeleteNotifications,
   useBulkMarkSeenNotifications,
@@ -107,54 +126,15 @@ function useDebouncedValue<T>(value: T, delayMs: number): T {
 }
 
 /**
- * `apps/elitea-ui/…/NotificationTable.jsx:30-34`'s two sortable columns
- * (`event_type`, `created_at`), collapsed into one control (see module doc
- * comment on why there is no per-column-header sort UI here). Values are
- * the literal `sort_by`/`sort_order` query params
- * (`features/notifications/api/notifications.ts`'s `buildNotificationsListUrl`).
+ * The reference debounces search by 600ms (`NotificationCenter.jsx:34`) and
+ * ignores anything shorter than two characters (`apiSearchTerm`).
  */
-type NotificationSortBy = 'created_at' | 'event_type';
-type NotificationSortOrder = 'asc' | 'desc';
-
-interface SortOption {
-  readonly value: string;
-  readonly sortBy: NotificationSortBy;
-  readonly sortOrder: NotificationSortOrder;
-  readonly key: string;
-  readonly fallback: string;
-}
-
-const SORT_OPTIONS: readonly SortOption[] = [
-  { value: 'created_at:desc', sortBy: 'created_at', sortOrder: 'desc', key: 'routes.settings.notifications.sort.newest', fallback: 'Newest first' },
-  { value: 'created_at:asc', sortBy: 'created_at', sortOrder: 'asc', key: 'routes.settings.notifications.sort.oldest', fallback: 'Oldest first' },
-  { value: 'event_type:asc', sortBy: 'event_type', sortOrder: 'asc', key: 'routes.settings.notifications.sort.typeAsc', fallback: 'Type (A–Z)' },
-  { value: 'event_type:desc', sortBy: 'event_type', sortOrder: 'desc', key: 'routes.settings.notifications.sort.typeDesc', fallback: 'Type (Z–A)' },
-];
-
-const PAGE_SIZE_OPTIONS = [10, 20, 50, 100] as const;
-const DEFAULT_PAGE_SIZE = 20;
-const SEARCH_DEBOUNCE_MS = 500;
-
-/* ── small pure label helpers, split out to keep `NotificationsPage`'s own
-   cyclomatic complexity under §3.5's budget (each ternary below would
-   otherwise count against the component function itself) ────────────── */
-
-function selectAllTooltip(selectedCount: number, rowCount: number): string {
-  return selectedCount === rowCount
-    ? t('routes.settings.notifications.deselectAll', 'Deselect all')
-    : t('routes.settings.notifications.selectAll', 'Select all');
-}
+const SEARCH_DEBOUNCE_MS = 600;
 
 function markToggleLabel(shouldMarkAsRead: boolean): string {
   return shouldMarkAsRead
-    ? t('routes.settings.notifications.markRead', 'Mark read')
-    : t('routes.settings.notifications.markUnread', 'Mark unread');
-}
-
-function filterToggleLabel(filterNew: boolean): string {
-  return filterNew
-    ? t('routes.settings.notifications.showAll', 'Show all')
-    : t('routes.settings.notifications.showNew', 'New only');
+    ? t('routes.settings.notifications.markRead', 'Mark selected as read')
+    : t('routes.settings.notifications.markUnread', 'Mark selected as unread');
 }
 
 /** Exported (not just used via `Route`'s `component:`) so tests can mount it directly — same pattern as `src/routes/_shell/settings/tokens.tsx`'s `PersonalTokensPage`. */
@@ -163,27 +143,22 @@ export function NotificationsPage() {
   const personalProjectId = selectPersonalProjectId(routeContext);
 
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(new Set());
-  const [filterNew, setFilterNew] = useState(false);
   const [page, setPage] = useState(0);
-  const [pageSize, setPageSize] = useState<number>(DEFAULT_PAGE_SIZE);
-  const [sortValue, setSortValue] = useState<string>(SORT_OPTIONS[0]!.value);
+  const [pageSize, setPageSize] = useState<number>(NOTIFICATION_DEFAULT_PAGE_SIZE);
+  const [sort, setSort] = useState<NotificationSort>(NOTIFICATION_DEFAULT_SORT);
   const [search, setSearch] = useState('');
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [toast, setToast] = useState<NotificationToastKind>();
   const debouncedSearch = useDebouncedValue(search, SEARCH_DEBOUNCE_MS);
-
-  const activeSort = useMemo(
-    () => SORT_OPTIONS.find((option) => option.value === sortValue) ?? SORT_OPTIONS[0]!,
-    [sortValue],
-  );
 
   const { data, isFetching, isError, error } = useNotificationsList(
     {
       projectId: personalProjectId ?? '',
       page,
       pageSize,
-      sortBy: activeSort.sortBy,
-      sortOrder: activeSort.sortOrder,
-      search: debouncedSearch,
-      params: { only_new: filterNew },
+      sortBy: sort.field,
+      sortOrder: sort.direction,
+      search: apiSearchTerm(debouncedSearch),
     },
     { enabled: !!personalProjectId },
   );
@@ -203,46 +178,80 @@ export function NotificationsPage() {
     setSelectedIds((prev) => (prev.size === rows.length ? new Set() : new Set(rows.map((r) => r.id))));
   }, [rows]);
 
-  const handleDeleteSelected = useCallback(() => {
+  /*
+   * A bulk delete asks first, and BOTH bulk actions report their result.
+   *
+   * The reference confirms the delete through `DeleteEntityButton`
+   * (`NotificationTableToolbar.jsx:63-73`, `shouldRequestInputName={false}`)
+   * and toasts every outcome of both actions
+   * (`NotificationTable.jsx:145-185`). This page deleted on the first click
+   * and dropped every result: a refused mutation looked exactly like a
+   * successful one, because the selection was cleared before the request
+   * even resolved (issue 841).
+   *
+   * The selection is cleared in `onSuccess` for the same reason. A failed
+   * delete that clears the selection tells the reader the rows are gone.
+   */
+  const handleConfirmDelete = useCallback(() => {
     if (selectedIds.size === 0 || !personalProjectId) return;
-    bulkDelete.mutate({
-      projectId: personalProjectId,
-      ids: Array.from(selectedIds),
-    });
-    setSelectedIds(new Set());
+    setDeleteOpen(false);
+    bulkDelete.mutate(
+      { projectId: personalProjectId, ids: Array.from(selectedIds) },
+      {
+        onSuccess: () => {
+          setSelectedIds(new Set());
+          setToast('deleted');
+        },
+        onError: () => setToast('error'),
+      },
+    );
   }, [selectedIds, personalProjectId, bulkDelete]);
 
   const handleMarkToggle = useCallback(() => {
     if (selectedIds.size === 0 || !personalProjectId) return;
-    bulkMarkSeen.mutate({
-      projectId: personalProjectId,
-      ids: Array.from(selectedIds),
-      isSeen: shouldMarkSelectionAsRead,
-    });
-    setSelectedIds(new Set());
+    const markAsRead = shouldMarkSelectionAsRead;
+    bulkMarkSeen.mutate(
+      { projectId: personalProjectId, ids: Array.from(selectedIds), isSeen: markAsRead },
+      {
+        onSuccess: () => {
+          setSelectedIds(new Set());
+          setToast(markAsRead ? 'read' : 'unread');
+        },
+        onError: () => setToast('error'),
+      },
+    );
   }, [selectedIds, personalProjectId, bulkMarkSeen, shouldMarkSelectionAsRead]);
-
-  const handleToggleFilterNew = useCallback(() => {
-    setFilterNew((p) => !p);
-    setPage(0);
-  }, []);
 
   const handleSearchChange = useCallback((value: string) => {
     setSearch(value);
     setPage(0);
   }, []);
 
-  const handleSortChange = useCallback((event: SelectChangeEvent) => {
-    setSortValue(event.target.value);
+  /*
+   * A sort change goes back to page 0. Staying on page 4 of a re-sorted list
+   * shows a window into rows the reader never asked about, and if the new
+   * ordering has fewer pages it shows nothing at all.
+   */
+  const handleSort = useCallback((field: NotificationSortField) => {
+    setSort((previous) => nextSort(previous, field));
     setPage(0);
   }, []);
 
-  const handlePageChange = useCallback((_event: unknown, nextPage: number) => {
+  const handleSelectRow = useCallback((id: string) => {
+    setSelectedIds((previous) => {
+      const next = new Set(previous);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const handlePageChange = useCallback((nextPage: number) => {
     setPage(nextPage);
   }, []);
 
-  const handlePageSizeChange = useCallback((event: { target: { value: string } }) => {
-    setPageSize(Number(event.target.value));
+  const handlePageSizeChange = useCallback((size: number) => {
+    setPageSize(size);
     setPage(0);
   }, []);
 
@@ -253,77 +262,87 @@ export function NotificationsPage() {
   return (
     <Paper elevation={0} sx={styles.root}>
       <DrawerPageHeader
-        title={t('routes.settings.notifications.title', 'Notifications')}
+        /* "Notifications Center", not "Notifications" — the drawer item is
+           already called Notifications, and the page's own title in
+           production names the screen. */
+        title={t('routes.settings.notifications.title', 'Notifications Center')}
         showSearchInput
-        showAddButton
         showBorder
         slotProps={{
           searchInput: {
             search,
             onChangeSearch: handleSearchChange,
-            placeholder: t('routes.settings.notifications.searchPlaceholder', 'Search notifications…'),
-          },
-          addButton: {
-            onAdd: handleSelectAll,
-            tooltip: selectAllTooltip(selectedIds.size, rows.length),
+            placeholder: t('routes.settings.notifications.searchPlaceholder', 'Search'),
           },
         }}
         extraContent={
           <Box sx={styles.actions}>
-            <Select
-              size="small"
-              value={sortValue}
-              onChange={handleSortChange}
-              aria-label={t('routes.settings.notifications.sort.label', 'Sort by')}
-              sx={styles.sortSelect}
-            >
-              {SORT_OPTIONS.map((option) => (
-                <MenuItem key={option.value} value={option.value}>
-                  {t(option.key, option.fallback)}
-                </MenuItem>
-              ))}
-            </Select>
             <Button
+              variant="secondary"
+              data-testid="notification-mark-toggle-button"
               disabled={selectedIds.size === 0}
               onClick={handleMarkToggle}
             >
               {markToggleLabel(shouldMarkSelectionAsRead)}
             </Button>
             <Button
-              color="error"
+              variant="secondary"
+              color="alarm"
+              data-testid="notification-delete-button"
               disabled={selectedIds.size === 0}
-              onClick={handleDeleteSelected}
+              onClick={() => setDeleteOpen(true)}
             >
               {t('routes.settings.notifications.deleteSelected', 'Delete')}
-            </Button>
-            <Button onClick={handleToggleFilterNew}>
-              {filterToggleLabel(filterNew)}
             </Button>
           </Box>
         }
       />
       <Box sx={styles.content}>
-        <NotificationsListBody
-          rows={rows}
-          isFetching={isFetching}
-          isError={isError}
-          error={error}
-          total={total}
-          personalProjectId={personalProjectId}
-        />
+        {/* The list body is still the authority on the three NON-row states
+          * — failed read, first load, empty list — and it must stay ahead of
+          * the table: a failed read leaves `rows` empty and `isFetching`
+          * false, so rendering the grid unconditionally would draw an empty
+          * inbox over a 404 (issue 413). Only a resolved, non-empty read
+          * reaches the table. */}
+        {isError || rows.length === 0 ? (
+          <NotificationsListBody
+            rows={rows}
+            isFetching={isFetching}
+            isError={isError}
+            error={error}
+            total={total}
+            personalProjectId={personalProjectId}
+          />
+        ) : (
+          <NotificationsTable
+            rows={rows}
+            total={total}
+            page={page}
+            pageSize={pageSize}
+            sort={sort}
+            selectedIds={selectedIds}
+            personalProjectId={personalProjectId}
+            onSort={handleSort}
+            onSelectAll={handleSelectAll}
+            onSelectRow={handleSelectRow}
+            onPageChange={handlePageChange}
+            onPageSizeChange={handlePageSizeChange}
+          />
+        )}
       </Box>
-      {total > 0 && (
-        <TablePagination
-          component="div"
-          count={total}
-          page={page}
-          rowsPerPage={pageSize}
-          rowsPerPageOptions={[...PAGE_SIZE_OPTIONS]}
-          onPageChange={handlePageChange}
-          onRowsPerPageChange={handlePageSizeChange}
-          labelRowsPerPage={t('routes.settings.notifications.pageSize', 'Rows per page')}
-        />
-      )}
+      <DeleteEntityModal
+        open={deleteOpen}
+        onClose={() => setDeleteOpen(false)}
+        onConfirm={handleConfirmDelete}
+        confirming={bulkDelete.isPending}
+        shouldRequestInputName={false}
+        name={t('routes.settings.notifications.deleteEntityName', 'selected notifications')}
+        copy={{ title: t('routes.settings.notifications.deleteTitle', 'Delete selected notifications') }}
+      />
+      <NotificationsToast
+        kind={toast}
+        onClose={() => setToast(undefined)}
+      />
     </Paper>
   );
 }
@@ -332,7 +351,6 @@ const getStyles = (): {
   root: SxProps<Theme>;
   content: SxProps<Theme>;
   actions: SxProps<Theme>;
-  sortSelect: SxProps<Theme>;
 } => ({
   root: {
     display: 'flex',
@@ -344,15 +362,16 @@ const getStyles = (): {
   content: {
     flex: 1,
     minHeight: 0,
+    display: 'flex',
+    flexDirection: 'column',
     overflow: 'auto',
     padding: '1rem 1.5rem',
   },
+  /* `NotificationTableToolbar.jsx`'s `rightSection`: `0.6rem` between the
+   * two action buttons. */
   actions: {
     display: 'flex',
-    gap: '0.5rem',
+    gap: '0.6rem',
     alignItems: 'center',
-  },
-  sortSelect: {
-    minWidth: '9rem',
   },
 });

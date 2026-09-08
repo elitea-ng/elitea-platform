@@ -44,6 +44,7 @@ import {
   AUTOTEST_PREFIX,
   createAgentThroughForm,
   expectStoredAssistantAnswer,
+  fillComposer,
 } from '../fixtures/api';
 
 const START_RE = /\/elitea_core\/messages\/prompt_lib\/(\d+)\/[0-9a-f-]+/;
@@ -175,14 +176,14 @@ test('internal tools all on, agent-as-tool attached — and the agent still answ
   const agentParticipant = (conversationBody.participants ?? []).find((p) => p.entity_name === 'application');
   expect(String(agentParticipant?.entity_settings?.version_id ?? '')).toBe(String(versionId));
 
+  // Composer first, budget second — the same shape `chat.pipeline.spec.ts`
+  // failed on in run 33812152063. See `fillComposer`.
+  const sendButton = await fillComposer(page, `autotest tools ${Date.now()}`);
   const started = page.waitForResponse(
     (r) => START_RE.test(r.url()) && r.request().method() === 'POST',
     { timeout: 45_000 },
   );
-  const input = page.getByTestId('chat-message-input');
-  await expect(input).toBeEditable({ timeout: 20_000 });
-  await input.fill(`autotest tools ${Date.now()}`);
-  await page.getByTestId('chat-send-button').click();
+  await sendButton.click();
 
   const startResponse = await started;
   expect(

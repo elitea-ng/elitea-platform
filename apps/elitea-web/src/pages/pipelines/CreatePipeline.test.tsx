@@ -2,15 +2,27 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
+import { load } from 'js-yaml';
 import { http, HttpResponse } from 'msw';
 
+import { PIPELINE_STARTER_TEMPLATE } from '@/shared/lib/pipelineStarterTemplate';
 import { getCreateApplicationMockHandler } from '@/shared/api/generated/applications/applications.msw';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { server } from '@/test/setup';
+import { installCodeMirrorTestPolyfills } from '@/shared/ui/lib/field/codeMirrorTestPolyfills';
 import { useNavBlockerStore } from '@/widgets/app-shell';
 
 import { CreatePipeline } from './CreatePipeline';
 import { renderPipelinesRoute } from './__tests__/testRouter';
+
+/**
+ * The Instructions accordion on this page mounts a CodeMirror editor, and CM6
+ * measures text layout on every animation frame. jsdom implements neither
+ * `Range.prototype.getClientRects` nor `ResizeObserver`, so without these the
+ * measurement throws asynchronously out of a `requestAnimationFrame` callback
+ * and vitest reports the whole FILE as errored, whatever the assertions did.
+ */
+installCodeMirrorTestPolyfills();
 
 /**
  * The model catalogue the Advanced-settings picker reads. Served for every
@@ -32,6 +44,24 @@ async function fillAndSave(user: ReturnType<typeof userEvent.setup>): Promise<vo
   const save = screen.getByTestId('pipeline-save-button');
   await waitFor(() => expect(save).not.toBeDisabled());
   await user.click(save);
+}
+
+/** The shape of the starter graph the assertions below read. */
+interface StarterDocument {
+  readonly entry_point?: string;
+  readonly nodes?: readonly {
+    readonly id?: string;
+    readonly type?: string;
+    readonly transition?: string;
+    readonly input_mapping?: Record<string, unknown>;
+  }[];
+}
+
+/** The `instructions` string the create POST carried — the pipeline's own graph. */
+function firstVersionInstructions(bodies: readonly Record<string, unknown>[]): string {
+  const versions = bodies[0]?.['versions'] as Record<string, unknown>[] | undefined;
+  const instructions = versions?.[0]?.['instructions'];
+  return typeof instructions === 'string' ? instructions : '';
 }
 
 /** Opens the model menu and picks a row by its catalogue display name. */
@@ -234,5 +264,108 @@ describe('CreatePipeline', () => {
     await chooseModel(user, 'Qwen 3.5');
 
     await waitFor(() => expect(useNavBlockerStore.getState().isBlockNav).toBe(true));
+  });
+
+  /*
+   * DEFECT this pins. `instructions` IS the pipeline's graph — the editor
+   * parses the saved string and builds both the YAML pane and the canvas from
+   * it — and this page stored `''`. So Create pipeline -> Save opened the
+   * editor on a blank document with `End` alone on the canvas, and the
+   * pipeline could not run at all: the compiler refuses an empty document, so
+   * the first chat turn failed in another process with nothing on screen to
+   * explain it.
+   *
+   * `usePipelineEditorCreate` already carried the starter template, and had a
+   * test of its own. That hook serves the CHAT surface. This page is the route
+   * a person takes, and it never called it — which is why a green test sat
+   * beside a broken screen.
+   */
+  it('creates a new pipeline with the runnable starter graph, not an empty document', { timeout: 20_000 }, async () => {
+    const user = userEvent.setup({ delay: null });
+    const bodies: Record<string, unknown>[] = [];
+    server.use(
+      http.post('*/elitea_core/applications/prompt_lib/:projectId', async ({ request }) => {
+        bodies.push((await request.json()) as Record<string, unknown>);
+        return HttpResponse.json({ id: '7', version_details: { id: '1' } }, { status: 201 });
+      }),
+    );
+    renderPipelinesRoute(<CreatePipeline />, '/pipelines/create', { projectId: '1' });
+
+    await screen.findByTestId('agent-name-input');
+    // Nothing is typed into Instructions: this is the create flow exactly as a
+    // person performs it — name, description, Save.
+    await fillAndSave(user);
+
+    await waitFor(() => expect(bodies).toHaveLength(1));
+    const instructions = firstVersionInstructions(bodies);
+    expect(instructions).toBe(PIPELINE_STARTER_TEMPLATE);
+
+    // Asserted on the PARSED document as well as on the constant, so this test
+    // still says what the stored graph must contain if the template is ever
+    // re-authored: one LLM node, wired to the entry point and to END, with the
+    // user's turn mapped in through `task` (the empty `messages` channel is
+    // what the SDK refuses on a first turn).
+    const document = load(instructions) as StarterDocument;
+    const [node] = document.nodes ?? [];
+    expect(document.nodes).toHaveLength(1);
+    expect(node).toMatchObject({ id: document.entry_point, type: 'llm', transition: 'END' });
+    expect(node?.input_mapping?.['task']).toEqual({ type: 'variable', value: 'input' });
+  });
+
+  /*
+   * DEFECT this pins. The starter graph reached the stored row but never the
+   * screen: it was substituted inside Save, so "+ Pipeline" opened on an empty
+   * YAML pane and an empty canvas. The person creating the pipeline was shown
+   * "you have no graph" while Save was about to write one.
+   */
+  it('opens with the starter graph already in the instructions editor', { timeout: 20_000 }, async () => {
+    const { container } = renderPipelinesRoute(<CreatePipeline />, '/pipelines/create', { projectId: '1' });
+
+    await screen.findByTestId('agent-name-input');
+    const editor = container.querySelector('.cm-content');
+    if (!(editor instanceof HTMLElement)) throw new Error('the instructions editor did not render');
+
+    // The editor renders the document line by line, so the text is compared
+    // line by line rather than against the raw constant's newlines.
+    for (const line of PIPELINE_STARTER_TEMPLATE.trim().split('\n')) {
+      expect(editor.textContent).toContain(line.trim());
+    }
+    // A fresh page is not "unsaved work": the seed is the opening value, so
+    // the #133 guard must still read it as clean.
+    expect(useNavBlockerStore.getState().isBlockNav).toBe(false);
+  });
+
+  /*
+   * The other half of the same rule: the starter graph is a STARTING POINT,
+   * never a replacement for the author's own document. What the editor holds
+   * at Save is what gets stored.
+   */
+  it('stores the author\'s own graph when one is typed, instead of the starter template', { timeout: 20_000 }, async () => {
+    const user = userEvent.setup({ delay: null });
+    const bodies: Record<string, unknown>[] = [];
+    server.use(
+      http.post('*/elitea_core/applications/prompt_lib/:projectId', async ({ request }) => {
+        bodies.push((await request.json()) as Record<string, unknown>);
+        return HttpResponse.json({ id: '7', version_details: { id: '1' } }, { status: 201 });
+      }),
+    );
+    const { container } = renderPipelinesRoute(<CreatePipeline />, '/pipelines/create', { projectId: '1' });
+
+    await screen.findByTestId('agent-name-input');
+    const editor = container.querySelector('.cm-content');
+    if (!(editor instanceof HTMLElement)) throw new Error('the instructions editor did not render');
+    await user.click(editor);
+    await user.type(editor, 'entry_point: MINE');
+
+    await fillAndSave(user);
+
+    await waitFor(() => expect(bodies).toHaveLength(1));
+    const versions = bodies[0]?.['versions'] as Record<string, unknown>[] | undefined;
+    const stored = versions?.[0]?.['instructions'];
+    // Not an equality check on the typed text: the editor now OPENS on the
+    // starter graph, so the author's keystrokes land inside that document.
+    // What the rule needs is that the stored graph is the edited one.
+    expect(stored).toContain('entry_point: MINE');
+    expect(stored).not.toBe(PIPELINE_STARTER_TEMPLATE);
   });
 });

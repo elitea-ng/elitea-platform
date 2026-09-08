@@ -25,6 +25,7 @@ package material
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 )
 
@@ -131,4 +132,37 @@ func stripPort(host string) string {
 		return host[:strings.Index(host, ":")]
 	}
 	return host
+}
+
+// HostFrom reads the host a clone would reach out of an UNEXPANDED
+// configuration value, or refuses.
+//
+// It is what makes "the allowlist is checked before any decrypt" true: the
+// value is read with its secrets still sealed, and a URL assembled FROM a
+// secret is refused outright rather than checked against a string with
+// braces in it — such a configuration has no safe order at all. `field`
+// names the key in the refusal so an operator can find it.
+//
+// It was DeepWiki's `providerHost` and Inventory's `hostOf`; the two
+// differed only in whether an unusable host was an error or an empty string
+// that every allowlist then refused. This is the erroring one, and
+// Inventory's caller keeps its own behaviour by ignoring the error.
+func HostFrom(raw, fallback, field string) (string, error) {
+	if strings.TrimSpace(raw) == "" {
+		raw = fallback
+	}
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", fmt.Errorf("%w: no %s to check against the allowlist", ErrEgressRefused, field)
+	}
+	if strings.Contains(raw, "{{secret.") {
+		return "", fmt.Errorf(
+			"%w: %s is built from a secret, so it cannot be checked before decrypting it",
+			ErrEgressRefused, field)
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Hostname() == "" {
+		return "", fmt.Errorf("%w: %s %q is not a URL", ErrEgressRefused, field, raw)
+	}
+	return strings.ToLower(parsed.Hostname()), nil
 }

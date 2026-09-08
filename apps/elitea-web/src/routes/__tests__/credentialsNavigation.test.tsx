@@ -130,7 +130,10 @@ function installHandlers(): SaveSpies {
     ),
     http.post(`*/configurations/configurations/${PROJECT_ID}`, () => {
       created = true;
-      return HttpResponse.json({ uid: 'cred-new' });
+      // `id` (not just `uid`) is what `performSave` reads to build the
+      // `?reveal=` search param `leave` navigates with — see
+      // `useCredentialFormController.ts`'s `onSaved` doc comment.
+      return HttpResponse.json({ id: 'cfg-new-1', uid: 'cred-new' });
     }),
     http.post(`*/configurations/check_connections/${PROJECT_ID}`, () => HttpResponse.json([])),
     http.get(`*/configurations/configuration/${PROJECT_ID}/${CREDENTIAL_UID}`, () =>
@@ -138,7 +141,7 @@ function installHandlers(): SaveSpies {
     ),
     http.put(`*/configurations/configuration/${PROJECT_ID}/${CREDENTIAL_UID}`, () => {
       updated = true;
-      return HttpResponse.json({ uid: CREDENTIAL_UID });
+      return HttpResponse.json({ id: CREDENTIAL_UID, uid: CREDENTIAL_UID });
     }),
     // Shell chrome, not the screens under test: neither endpoint is in the
     // generated MSW registry, and `onUnhandledRequest: 'error'` would log a
@@ -498,6 +501,38 @@ describe('ROUTE-063 /settings/create-configuration navigation callbacks', () => 
     expect(await scope.findByText('Configuration')).toBeInTheDocument();
     expect(scope.queryByText('Credential')).not.toBeInTheDocument();
   });
+
+  /**
+   * DEFECT this pins (J19b). `leave` used to drop the saved row's id
+   * entirely, so `ConfigurationsPanel` had no way to know which section (if
+   * not LLMs) to open on return — see `ConfigurationsPanel.test.tsx`'s own
+   * `reveal` coverage for the panel-level half of this fix.
+   */
+  it('onCreated carries the new row\'s id into ?reveal= on the way back', async () => {
+    const spies = installHandlers();
+    const router = mountAt('/settings/create-configuration');
+
+    await chooseTypeAndName('new config');
+    fireEvent.click(await (await main()).findByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(spies.created()).toBe(true));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/settings/model-configuration'));
+    expect((router.state.location.search as { reveal?: string }).reveal).toBe('cfg-new-1');
+  });
+
+  it('onCancelled carries no ?reveal= — nothing was saved to reveal', async () => {
+    installHandlers();
+    const router = mountAt('/settings/create-configuration');
+
+    await chooseTypeAndName('new config');
+    await discardVia('Cancel');
+
+    await waitFor(() => expect(router.state.location.pathname).toBe('/settings/model-configuration'));
+    // No explicit `search` was passed to `navigate()` here (unlike the
+    // `onCreated`/`onSaved` case above) — the destination's `reveal` schema
+    // default is never applied, so the key is simply absent.
+    expect((router.state.location.search as { reveal?: string }).reveal).toBeUndefined();
+  });
 });
 
 describe('ROUTE-065 /settings/edit-configuration/:credential_uid navigation callbacks', () => {
@@ -533,6 +568,29 @@ describe('ROUTE-065 /settings/edit-configuration/:credential_uid navigation call
     const scope = await main();
     expect(await scope.findByText('Configuration')).toBeInTheDocument();
     expect(scope.queryByText('Credential')).not.toBeInTheDocument();
+  });
+
+  /** DEFECT this pins (J19b) — the edit path's half of the fix. */
+  it('onSaved carries the edited row\'s id into ?reveal= on the way back', async () => {
+    const spies = installHandlers();
+    const router = mountAt(`/settings/edit-configuration/${CREDENTIAL_UID}`);
+
+    fireEvent.click(await (await main()).findByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(spies.updated()).toBe(true));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/settings/model-configuration'));
+    expect((router.state.location.search as { reveal?: string }).reveal).toBe(CREDENTIAL_UID);
+  });
+
+  it('onDiscarded carries no ?reveal= — the row was deleted, not saved', async () => {
+    installHandlers();
+    const router = mountAt(`/settings/edit-configuration/${CREDENTIAL_UID}`);
+
+    await discardVia('Discard');
+
+    await waitFor(() => expect(router.state.location.pathname).toBe('/settings/model-configuration'));
+    // No explicit `search` was passed to `navigate()` for the discard path.
+    expect((router.state.location.search as { reveal?: string }).reveal).toBeUndefined();
   });
 });
 

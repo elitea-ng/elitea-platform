@@ -15,7 +15,7 @@ import { BaseBtn } from '@/shared/ui/BaseBtn';
 
 import { REQUEST_STATUS } from '../../lib/constants';
 import type { RequestStatus } from '../../lib/constants';
-import { cardGradientSx } from '../../lib/cardGradient';
+import { cardGradientSx } from '@/shared/lib/cardGradient';
 import type { CatalogApplication } from '../../model/types';
 
 function lineClamp(lines: number) {

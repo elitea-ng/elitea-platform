@@ -79,3 +79,98 @@ message ToolkitExecuteReadResultV1 {
   string tool_name = 9;
   reserved 10 to 15;
 }
+
+// ToolkitCallToolCommandV1 is the bounded control-plane command for
+// toolkit.call_tool.v1: run exactly ONE tool of ONE configured toolkit.
+//
+// It keeps ToolkitAvailableToolsCommandV1's discipline. The toolkit settings
+// and the caller-supplied tool arguments are entries in
+// WorkerCommandV1.input_bundle_ref; neither is embedded here. Settings carry
+// redeemed credentials, and arguments are caller content of unbounded size, so
+// Redis is not where either goes. The caller principal and the project are
+// already on the enclosing WorkerCommandV1: repeating them here would make a
+// second, independently forgeable copy of the authorization subject.
+message ToolkitCallToolCommandV1 {
+  string toolkit_type = 1;
+  string settings_entry_id = 2;
+  // tool_name is the SDK tool name, not a display label. It is bounded and
+  // holds no caller content, so it rides on the command itself: the worker must
+  // be able to refuse an unknown tool before it fetches the input bundle.
+  string tool_name = 3;
+  string arguments_entry_id = 4;
+  // toolkit_id identifies the stored toolkit row the settings were redeemed
+  // from, and toolkit_version the immutable version of that row where the
+  // deployment records one. They are identity, not content: they let the worker
+  // and the settlement reader agree on WHICH toolkit ran.
+  string toolkit_id = 5;
+  string toolkit_version = 6;
+  reserved 7 to 15;
+}
+
+// ToolkitCallToolArtifactReferenceV1 identifies an immutable canonical JSON
+// tool result on the data plane. It contains no URI, bearer token, credential,
+// or inline result body. The caller must fetch it through an independently
+// authorized data-plane endpoint scoped by the execution identity on the
+// enclosing output frame.
+message ToolkitCallToolArtifactReferenceV1 {
+  string artifact_id = 1;
+  string immutable_version = 2;
+  string media_type = 3;
+  uint64 byte_length = 4;
+  DigestV1 digest = 5;
+  string classification = 6;
+  reserved 7 to 15;
+}
+
+// ToolkitCallToolStatusV1 is the closed outcome set of one tool run. A tool
+// that raised is a completed run with a TOOL_ERROR status, not a runtime
+// failure: the caller asked whether the tool works, and "it raised" is the
+// answer. UNSUPPORTED_TOOLKIT and UNKNOWN_TOOL are refusals the worker makes
+// before any provider work happens.
+enum ToolkitCallToolStatusV1 {
+  TOOLKIT_CALL_TOOL_STATUS_V1_UNSPECIFIED = 0;
+  TOOLKIT_CALL_TOOL_STATUS_V1_OK = 1;
+  TOOLKIT_CALL_TOOL_STATUS_V1_TOOL_ERROR = 2;
+  TOOLKIT_CALL_TOOL_STATUS_V1_UNSUPPORTED_TOOLKIT = 3;
+  TOOLKIT_CALL_TOOL_STATUS_V1_UNKNOWN_TOOL = 4;
+}
+
+// ToolkitCallToolSummaryV1 is the bounded typed inline form of one tool result,
+// and it mirrors IndexIngestSummaryV1 exactly. It is carried only on the
+// authenticated output gRPC data plane and is forbidden on Redis and on the
+// control plane.
+//
+// A bounded inline summary exists because this platform has no artifact writer
+// yet. Until one exists, a result larger than the worker's cap is reported with
+// truncated=true rather than silently shortened, and result_artifact stays
+// unset. A caller that needs the whole body must wait for the artifact path.
+message ToolkitCallToolSummaryV1 {
+  ToolkitCallToolStatusV1 status = 1;
+  // result_json is the canonical JSON encoding of the SDK return value. It is
+  // a string and not google.protobuf.Value because the SDK returns arbitrary
+  // provider content and this protocol must not model it.
+  string result_json = 2;
+  bool truncated = 3;
+  // error_message is one sentence. It is never a stack trace, a provider
+  // response body, or any value redeemed from the settings entry.
+  string error_message = 4;
+  reserved 5 to 15;
+}
+
+// ToolkitCallToolResultV1 binds one terminal tool result to the exact immutable
+// inputs the SDK call consumed. Exactly one of result_artifact or
+// result_summary is required.
+message ToolkitCallToolResultV1 {
+  string toolkit_type = 1;
+  string tool_name = 2;
+  string input_bundle_id = 3;
+  DigestV1 input_bundle_digest = 4;
+  string settings_entry_id = 5;
+  string settings_entry_version = 6;
+  DigestV1 settings_content_digest = 7;
+  string arguments_entry_id = 8;
+  DigestV1 arguments_content_digest = 9;
+  ToolkitCallToolArtifactReferenceV1 result_artifact = 10;
+  ToolkitCallToolSummaryV1 result_summary = 11;
+  reserved 12 to 15;
+}

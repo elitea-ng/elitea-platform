@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -14,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	toolkitrun "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkitrun"
 	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
@@ -97,11 +97,37 @@ type Handler struct {
 	settingsDefinitions ToolkitSettingsDefinitionSource
 	dynamicTypeSchemas  ToolkitTypeSchemaSource
 	guardrails          GuardrailPolicySource
+	// catalogue serves the settings schema and metadata of every built-in SDK
+	// toolkit type. Nil restores the eight hand-written types below.
+	catalogue ToolkitCatalogueSource
+	// workerCapability decides whether a catalogued type is offered as
+	// creatable. Nil offers every catalogued type.
+	workerCapability ToolkitCapabilitySource
 	// settingsValidator resolves a credential reference before it is persisted.
 	// Nil restores the pre-#613 behaviour: every save accepted unresolved. See
 	// settings_validation.go.
 	settingsValidator ToolkitSettingsValidator
 	secretSealer      ToolkitSecretSealer
+	// typePolicy is the operator's per-project toolkit TYPE policy (shared
+	// migration 0114). Nil serves every type, which is what every deployment
+	// did before the policy existed. See type_policy.go for the composition
+	// contract this handler's catalogue path must keep.
+	typePolicy ToolkitTypePolicySource
+	// projections contribute catalogue entries no snapshot can hold: the
+	// pre-built MCP servers an operator registered, and the toolkits an
+	// admitted provider publishes. See projection.go for the merge contract.
+	projections []ToolkitTypeProjection
+	// toolRuns runs one toolkit tool synchronously (#340). Nil restores the
+	// `503 indexer service not available` both test routes answered before a
+	// producer existed, which is the honest answer where no runtime is
+	// composed.
+	toolRuns toolkitrun.UseCase
+}
+
+// WithToolRuns supplies the synchronous tool-run use case. Without it the two
+// test routes keep their 503.
+func WithToolRuns(runs toolkitrun.UseCase) Option {
+	return func(h *Handler) { h.toolRuns = runs }
 }
 
 // Option configures a Handler at construction, matching the pattern
@@ -127,16 +153,46 @@ func WithDynamicTypeSchemas(source ToolkitTypeSchemaSource) Option {
 	return func(h *Handler) { h.dynamicTypeSchemas = source }
 }
 
+// NewHandler builds the toolkit handler.
+//
+// The catalogue projections are installed here, from the pool this constructor
+// already receives, rather than threaded through RouterConfig. That is the same
+// decision the guardrails source records in internal/api/router.go: a dependency
+// that needs nothing but the pool does not earn a router field. It also keeps
+// the whole projection change inside this package.
+//
+// Order is fixed and is the collision rule: the generic Remote MCP type is
+// contributed first, so neither a catalogue row keyed `mcp` nor a provider that
+// published a toolkit named `mcp` can replace it.
 func NewHandler(pool *pgxpool.Pool, opts ...Option) *Handler {
 	h := &Handler{repo: &pgRepo{pool: pool}, pool: pool}
+	h.projections = []ToolkitTypeProjection{
+		remoteMCPProjection{},
+		newPrebuiltMCPProjection(pool),
+		newProviderHubProjection(pool),
+	}
 	for _, opt := range opts {
 		opt(h)
 	}
 	return h
 }
 
+// NewHandlerWithRepo builds the handler over a supplied repository, with no
+// pool.
+//
+// It installs the SAME projection sources as NewHandler, over a nil pool. The
+// two constructors must not disagree about what the catalogue contains: a unit
+// suite that saw a smaller catalogue than the running binary would report a
+// green result for a shape no deployment serves. Over a nil pool the two
+// database-backed halves contribute nothing, and the Remote MCP type — which
+// needs no database — is served, exactly as it is in production.
 func NewHandlerWithRepo(repo Repository, opts ...Option) *Handler {
 	h := &Handler{repo: repo}
+	h.projections = []ToolkitTypeProjection{
+		remoteMCPProjection{},
+		newPrebuiltMCPProjection(nil),
+		newProviderHubProjection(nil),
+	}
 	for _, opt := range opts {
 		opt(h)
 	}
@@ -192,8 +248,12 @@ func (h *Handler) ListTypes(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Guardrails last, over the merged list, so a blocked type cannot re-enter
-	// through the tenant read after being filtered out of the static one.
+	// The operator's type policy, then guardrails. Both run over the MERGED
+	// list, and in this order: see type_policy.go's contract. Guardrails stay
+	// last so a blocked type cannot re-enter through the tenant read or through
+	// a policy row.
+	merged = filterTypesByPolicy(
+		h.typePolicyFilter(r.Context(), "toolkit_types", projectID), merged)
 	merged = filterBlockedToolkitTypes(h.guardrailPolicy(r.Context(), "toolkit_types"), merged)
 
 	writeJSON(w, http.StatusOK, map[string]any{"rows": merged, "total": len(merged)})
@@ -211,11 +271,19 @@ func (h *Handler) ListTypes(w http.ResponseWriter, r *http.Request) {
 // revision the Python workers are admitted to run). That snapshot is the only
 // source in this repository that reflects the tools and arguments the workers
 // actually accept; the names below were hand-written and several of them — every
-// artifact tool except index_data, for instance — name no SDK tool at all. They
-// survive only as the fallback for the four types the SDK does not define:
-// database, custom, datasource and application (measured against revision
-// b5113a1, which has 52 types; sql is the SDK's database toolkit, and the other
-// three are elitea_core-native, not SDK toolkits).
+// artifact tool except index_data, for instance — name no SDK tool at all.
+//
+// The map is now an OVERRIDE, not the catalogue. Four of its keys — database,
+// custom, datasource and application — are the elitea_core-native types the SDK
+// does not define at all, and they exist nowhere else. The other four —
+// artifact, github, jira and openapi — also exist in the SDK catalogue, and the
+// entries here still win, because they carry client contract the SDK model does
+// not: openapi's ui_component and its "a URL is not fetched" description,
+// github's inline access_token. Replacing those four is a change to four
+// working create forms and belongs in its own change.
+//
+// Every OTHER type is served from the pinned SDK catalogue snapshot. See
+// type_catalogue.go.
 //
 // Note that the snapshot's own "properties" are NOT a replacement for the
 // settings schemas here: they are an annotation projection (configuration_model,
@@ -491,8 +559,13 @@ func writeToolkitInternalError(w http.ResponseWriter, r *http.Request, operation
 // to its settings JSON Schema, with each type's per-tool argument schemas at
 // properties.selected_tools.args_schemas — the exact path the web client indexes
 // into (apps/elitea-web/src/features/toolkits/ui/test-tools/
-// useGetSelectedToolSchema.ts and ui/form/ToolBase/). Settings come from
-// toolkitTypeSchemas; argument schemas come from the pinned SDK snapshot.
+// useGetSelectedToolSchema.ts and ui/form/ToolBase/).
+//
+// The catalogue is assembled by toolkitTypeCatalogue in type_catalogue.go from
+// four pinned sources: the SDK settings schemas and metadata, the per-tool
+// argument schemas, the configuration definitions, and the worker capability
+// projection. toolkitTypeSchemas below is the fifth, and it is an OVERRIDE for
+// the eight keys it names rather than the catalogue itself.
 //
 // Each type also carries a "$defs" block beside its properties, holding the
 // configuration definitions its settings reference. The web client keys its
@@ -508,52 +581,22 @@ func (h *Handler) ListTypeSchemas(w http.ResponseWriter, r *http.Request) {
 			"failed to build the toolkit type catalogue", err)
 		return
 	}
+	// The projected half — pre-built MCP servers, the generic Remote MCP type
+	// and the admitted providers' toolkits — composes here, between the
+	// built-in catalogue and the guardrails. See projection.go for the contract
+	// this single call holds with toolkitTypeCatalogue.
+	catalogue = mergeProjectedTypes(catalogue, h.projectedToolkitTypes(r.Context())...)
+	// The catalogue's RETURN SITE. `toolkitTypeCatalogue` decides which types
+	// exist; these two steps decide who may see them, in this order and no
+	// other — type_policy.go states the contract and why each rule is there.
+	catalogue = applyTypePolicyToCatalogue(
+		h.typePolicyFilter(r.Context(), "list_type_schemas", chi.URLParam(r, "projectID")),
+		catalogue,
+	)
 	catalogue = applyGuardrailsToCatalogue(
 		h.guardrailPolicy(r.Context(), "list_type_schemas"), catalogue,
 	)
 	writeJSON(w, http.StatusOK, catalogue)
-}
-
-// toolkitTypeCatalogue merges the settings schemas with the snapshot's argument
-// schemas. It rebuilds every node it replaces rather than editing
-// toolkitTypeSchemas in place: that map is package-level state shared by every
-// request.
-func (h *Handler) toolkitTypeCatalogue(ctx context.Context) (map[string]map[string]any, error) {
-	catalogue := make(map[string]map[string]any, len(toolkitTypeSchemas))
-	for toolkitType, settingsSchema := range toolkitTypeSchemas {
-		typeSchema := settingsSchema
-
-		argsSchemas, found, err := h.toolkitArgumentSchemas(toolkitType)
-		if err != nil {
-			return nil, fmt.Errorf("toolkit type %q argument schemas: %w", toolkitType, err)
-		}
-		if found {
-			typeSchema = withArgumentSchemas(typeSchema, argsSchemas)
-		}
-
-		definitions, configurationProperties, found, err := h.toolkitSettingsDefinitions(toolkitType)
-		if err != nil {
-			return nil, fmt.Errorf("toolkit type %q settings definitions: %w", toolkitType, err)
-		}
-		if found && len(definitions) > 0 {
-			typeSchema = withSettingsDefinitions(typeSchema, definitions, configurationProperties)
-		}
-
-		catalogue[toolkitType] = typeSchema
-	}
-	if h.dynamicTypeSchemas != nil {
-		dynamic, err := h.dynamicTypeSchemas.ListToolkitTypeSchemas(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("dynamic toolkit type schemas: %w", err)
-		}
-		for toolkitType, schema := range dynamic {
-			if _, collision := catalogue[toolkitType]; collision {
-				return nil, fmt.Errorf("dynamic toolkit type %q collides with a built-in type", toolkitType)
-			}
-			catalogue[toolkitType] = schema
-		}
-	}
-	return catalogue, nil
 }
 
 func (h *Handler) toolkitArgumentSchemas(toolkitType string) (map[string]map[string]any, bool, error) {
@@ -728,30 +771,78 @@ func (h *Handler) ForkToolkit(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, tool)
 }
 
-// TestTool reports that running a single tool has no backend in this stack.
-// See the NOTE(#126) above the Handler declaration; the 503 body is unchanged
-// from what every deployment already returned.
+// TestTool runs ONE tool of ONE saved toolkit and answers with what it
+// returned (#340).
+//
+// It answered `503 indexer service not available` until the producer in
+// internal/application/toolkitcalltool existed. It still does where no runtime
+// is composed, because a deployment with no worker genuinely cannot run a tool
+// — see toolkitrun.WriteUnavailable for why that sentence is unchanged.
+//
+// This route, `POST /test_tool/prompt_lib/{projectID}/{toolID}`, is shadowed by
+// nothing and is reachable in EVERY deployment. Its sibling below shares a path
+// with the index-start route and is reachable only where the runtime is absent;
+// the route decision is recorded in internal/application/toolkitcalltool/doc.go.
 func (h *Handler) TestTool(w http.ResponseWriter, r *http.Request) {
-	var body map[string]any
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && err != io.EOF {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request body"})
-		return
-	}
-
-	writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "error": "indexer service not available"})
+	h.runToolkitTool(w, r, chi.URLParam(r, "toolID"))
 }
 
-// TestToolkitTool reports that running a toolkit's tool has no backend in this
-// stack. See the NOTE(#126) above the Handler declaration; the 503 body is
-// unchanged from what every deployment already returned.
+// TestToolkitTool is the same run reached through pylon's own path,
+// `POST /test_toolkit_tool/prompt_lib/{projectID}`, which names the toolkit in
+// the body rather than the route.
+//
+// NOTE(#340): where the runtime IS composed this handler is unreachable —
+// indexingapi.CurrentIndexStartPath is the same string and chi resolves the
+// explicit registration before the subrouter's wildcard. It is not deleted,
+// because it is the only handler on that path in a runtime-less deployment, and
+// no test asserts it is dead. See the package doc named above.
 func (h *Handler) TestToolkitTool(w http.ResponseWriter, r *http.Request) {
-	var body map[string]any
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && err != io.EOF {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request body"})
+	h.runToolkitTool(w, r, "")
+}
+
+// runToolkitTool is the body both routes share, so the two cannot drift apart
+// on what a tool error looks like.
+func (h *Handler) runToolkitTool(w http.ResponseWriter, r *http.Request, routeToolkitID string) {
+	if h == nil || h.toolRuns == nil {
+		// Drain nothing and decide nothing: with no use case there is no run to
+		// describe, and the answer is the same absence it always was.
+		toolkitrun.WriteUnavailable(w)
 		return
 	}
-
-	writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "error": "indexer service not available"})
+	projectID, err := strconv.ParseInt(chi.URLParam(r, "projectID"), 10, 64)
+	if err != nil || projectID <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "invalid project id"})
+		return
+	}
+	user, found := auth.UserFromContext(r.Context())
+	if !found {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"ok": false, "error": "authentication required"})
+		return
+	}
+	actorUserID, ok := user.OwningUserID()
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"ok": false, "error": "authentication required"})
+		return
+	}
+	toolkitID := int64(0)
+	if routeToolkitID != "" {
+		if toolkitID, err = strconv.ParseInt(routeToolkitID, 10, 64); err != nil || toolkitID <= 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "invalid toolkit id"})
+			return
+		}
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, toolkitrun.MaxRequestBodyBytes)
+	request, err := toolkitrun.DecodeRequest(r, projectID, actorUserID, toolkitID)
+	if err != nil {
+		toolkitrun.WriteInvalidRequest(w)
+		return
+	}
+	outcome, err := h.toolRuns.RunTool(r.Context(), request)
+	if err != nil {
+		toolkitrun.WriteError(w, err)
+		return
+	}
+	toolkitrun.WriteOutcome(w, outcome)
 }
 
 func (h *Handler) ExportToolkit(w http.ResponseWriter, r *http.Request) {
@@ -876,51 +967,23 @@ func (h *Handler) IndexMetaGet(w http.ResponseWriter, r *http.Request) {
 // They used to be three one-line stubs here that answered `{"ok":true}`/204
 // without touching the database (#180).
 
-// IndexTypes REFUSES. It is reachable only when ELITEA_INDEX_TYPES_ENABLED is
-// off, which is the default.
+// NOTE(#394): `func (h *Handler) IndexTypes` stood here, mounted at
+// GET /index_types/prompt_lib/{projectID} in internal/api/router.go.
 //
-// # WHY THERE IS NOTHING TO SERVE HERE
-//
-// This used to be a six-element slice written by hand — file_loader,
-// web_loader, confluence_loader, github_loader, jira_loader, s3_loader — each
-// with an invented display name, an invented description and an invented
+// It was the PROTOTYPE catalogue. It began as a six-element slice written by
+// hand — file_loader, web_loader, confluence_loader, github_loader,
+// jira_loader, s3_loader — each with an invented display name, description and
 // `supported_extensions` list. Nothing produced those values: no SDK, no
-// snapshot, no database, no configuration. They were a guess at what the real
-// catalogue might contain, served with a 200 and no marker of any kind.
+// snapshot, no database, no configuration. #367 replaced the wrong 200 with a
+// 501 refusal, and #394 deletes the refusal with the route.
 //
-// The real catalogue is internal/api/v2/indextypes, which answers from the
-// snapshot pinned out of the SDK
-// (elitea_sdk/runtime/langchain/document_loaders/constants.py, materialized as
+// internal/api/v2/indextypes answers this path now, from the snapshot pinned
+// out of the SDK (elitea_sdk/runtime/langchain/document_loaders/constants.py,
+// materialized as
 // internal/runtimecomposition/current_index_types_snapshot.json). It is a
-// strict superset in content AND a different shape — document/image/code
+// strict superset in content and a different shape — document/image/code
 // extension maps rather than a loader list — so the guess was not even a
 // subset a client could safely narrow to.
-//
-// A wrong 200 costs more than a refusal here: the caller uses
-// `supported_extensions` to decide which files may be indexed, so an invented
-// list both hides files this deployment could have handled and offers ones it
-// cannot, with nothing on the screen saying the list came from nowhere.
-//
-// When ELITEA_INDEX_TYPES_ENABLED is on, cmd/elitea-main composes
-// indextypes.CurrentIndexTypesRoute and internal/api/production_router.go
-// registers it at this exact path. chi resolves that explicitly registered
-// path ahead of the nested r.Route registration this handler sits behind, so
-// the real route wins and this function is never reached there.
-//
-// 501 with a machine-readable `code`, not 500, for the reason
-// internal/api/v2/analytics/handler.go:64-78 sets out at length: an absent
-// producer is the server's final answer and will be the final answer to the
-// next identical request too, so a client that treats 5xx as transient doubles
-// every request for nothing. apps/elitea-web/src/app/providers/queryClient.ts
-// classifies 501 as final (`isFinalClientAnswer`) and does not retry it.
-func (h *Handler) IndexTypes(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusNotImplemented, map[string]any{
-		"error": "index types are not available on this deployment",
-		"code":  "index_types_not_available",
-		"detail": "the index-type catalogue is served by the reviewed index-types " +
-			"route, which this deployment has not enabled (ELITEA_INDEX_TYPES_ENABLED)",
-	})
-}
 
 // List returns all toolkit instances for a project.
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
@@ -1391,9 +1454,29 @@ func (r *pgRepo) ForkToolkit(ctx context.Context, projectID string, body map[str
 		return Tool{}, err
 	}
 	sourceID, _ := body["source_id"].(string)
+	// author_id is copied from the source row, and it has to be.
+	//
+	// The column is INTEGER NOT NULL in the tenant table this stack creates
+	// (internal/infra/db/migrations/001_initial.sql), and this INSERT did not
+	// name it. Every fork therefore died with
+	//
+	//	null value in column "author_id" of relation "elitea_tools"
+	//	violates not-null constraint (SQLSTATE 23502)
+	//
+	// which the handler turned into a 500 with a fixed message, so the route
+	// had never worked and said nothing about why. Found by the repository
+	// lifecycle test in repository_integration_test.go.
+	//
+	// The SOURCE's author is copied rather than the caller's, because this
+	// method is given no principal: Handler.ForkToolkit passes the request
+	// body through unchanged, and the body carries no `_author_id` the way
+	// CreateToolkit's does. Copying the source author is the value that is
+	// certainly correct for the row; attributing a fork to the person who
+	// forked it needs the principal to reach this seam, which is a change to
+	// the handler's contract rather than to this statement.
 	q := fmt.Sprintf(`
-		INSERT INTO %s.elitea_tools (name, type, description, owner_id, settings, env_vars, meta)
-		SELECT name || ' (copy)', type, description, owner_id, settings, env_vars, meta
+		INSERT INTO %s.elitea_tools (name, type, description, owner_id, author_id, settings, env_vars, meta)
+		SELECT name || ' (copy)', type, description, owner_id, author_id, settings, env_vars, meta
 		FROM %s.elitea_tools WHERE id = $1
 		RETURNING id, name, type, COALESCE(description, '')`, s, s)
 	var t Tool
@@ -1480,11 +1563,12 @@ func redactSettings(value any) any {
 	}
 }
 
+// isSensitiveSettingKey delegates to the word-based classifier in
+// secret_settings_key.go. It used to match by SUBSTRING, which removed
+// `max_tokens` and `toolkit_configuration_max_tokens` from every toolkit read
+// (#705). Read that file before changing this rule.
 func isSensitiveSettingKey(key string) bool {
-	key = strings.ToLower(key)
-	return strings.Contains(key, "secret") || strings.Contains(key, "token") ||
-		strings.Contains(key, "password") || strings.Contains(key, "credential") ||
-		strings.Contains(key, "api_key") || strings.Contains(key, "apikey")
+	return IsSecretSettingKey(key)
 }
 
 // tenantOwnerID converts a tenant project id into the integer written to the

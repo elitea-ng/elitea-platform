@@ -26,6 +26,14 @@ export const PERMISSIONS = {
   },
   applications: {
     list: 'models.applications.public_applications.list',
+    /**
+     * The PROJECT-scoped agent list, as opposed to `list`'s public feed.
+     *
+     * Both strings exist in the legacy RBAC catalogue (`testdata/legacy/
+     * legacy-rbac-static-catalog.json`), but only this one is granted by the
+     * RBAC seed a fresh Go deployment ships with. See `PERMISSION_GROUPS`.
+     */
+    projectList: 'models.applications.applications.list',
     create: 'models.applications.applications.create',
     publish: 'models.applications.publish.post',
     export: 'models.applications.export_import.export',
@@ -104,16 +112,22 @@ export const PERMISSIONS = {
     schedule: 'models.applications.index_meta.edit',
   },
   /**
-   * Agent Evaluation — the DIMENSION LIBRARY only.
+   * Agent Evaluation — the dimension library, the datasets and the runs.
    *
    * The baseline's `EVAL_PERMISSIONS` block carries seventeen strings across
-   * dimensions, suites, datasets, runs and human scores. The other thirteen are
-   * not declared here: no route in this deployment gates on them, nothing
-   * grants them, and a constant with no reader is what the dead-code gate
-   * exists to catch.
+   * dimensions, suites, datasets, runs and human scores. TEN are declared here,
+   * and the other seven are not: no route in this deployment gates on
+   * `suite.*`, `human_score.*` or `run.delete`, nothing grants them, and a
+   * constant with no reader is what the dead-code gate exists to catch. They
+   * arrive with the routes.
+   *
+   * There is deliberately no `runCancel`. The reference declares none, and the
+   * cancel route is gated on `run.create` — the right that started a run is the
+   * right that stops it.
    *
    * Gated in `internal/api/router.go`, granted by
-   * `migrations/shared/0100_evaluation_dimension_permissions.sql` — reads to
+   * `migrations/shared/0104_evaluation_dimension_permissions.sql` and
+   * `migrations/shared/0116_evaluation_dataset_run_permissions.sql` — reads to
    * admin/editor/viewer, writes to admin/editor.
    */
   evaluation: {
@@ -121,14 +135,33 @@ export const PERMISSIONS = {
     dimensionCreate: 'models.applications.evaluation.dimension.create',
     dimensionUpdate: 'models.applications.evaluation.dimension.update',
     dimensionDelete: 'models.applications.evaluation.dimension.delete',
+    datasetRead: 'models.applications.evaluation.dataset.read',
+    datasetCreate: 'models.applications.evaluation.dataset.create',
+    datasetUpdate: 'models.applications.evaluation.dataset.update',
+    datasetDelete: 'models.applications.evaluation.dataset.delete',
+    runRead: 'models.applications.evaluation.run.read',
+    runCreate: 'models.applications.evaluation.run.create',
   },
 } as const;
 
-/** `constants.js:609-616` — the permission a nav entity needs at minimum to render. */
+/**
+ * `constants.js:609-616` — the permission a nav entity needs at minimum to
+ * render.
+ *
+ * `agents`/`pipelines` accept EITHER the public-feed list permission the
+ * baseline names or the project-scoped one (`applications.projectList`).
+ * The baseline's single string is `models.applications.public_applications.
+ * list`, which the Go RBAC seed does not grant to any role — so on a real
+ * install both rows vanished from the rail while Chats, Skills, Toolkits,
+ * MCPs, Credentials, Applications and Artifacts all rendered, and the
+ * production reference shows all three of Chats/Agents/Pipelines. A caller
+ * who can list the project's own agents can use both screens; gating them on
+ * a permission nothing issues only ever hid working pages.
+ */
 export const PERMISSION_GROUPS = {
   chat: [PERMISSIONS.chat.folders.get],
-  agents: [PERMISSIONS.applications.list],
-  pipelines: [PERMISSIONS.pipelines.list],
+  agents: [PERMISSIONS.applications.list, PERMISSIONS.applications.projectList],
+  pipelines: [PERMISSIONS.pipelines.list, PERMISSIONS.applications.projectList],
   credentials: [PERMISSIONS.toolkits.list],
   artifacts: [PERMISSIONS.artifacts.view],
   toolkits: [PERMISSIONS.toolkits.list],

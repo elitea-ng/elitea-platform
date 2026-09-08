@@ -141,10 +141,10 @@ const ToolkitExecutionUnavailableReason = "this MCP server can list this project
 	"them on this deployment because the durable direct-tool runtime is disabled. Agent tools in this project " +
 	"may still be available. Nothing was executed and nothing was changed."
 
-// runToolkitTool admits one exact catalog-selected operation and waits for its
+// runReadToolkitTool admits one exact catalog-selected operation and waits for its
 // fenced terminal result. Unlike an agent tool it creates no conversation: a
 // direct operation already has a durable execution record and one typed result.
-func (h *Handler) runToolkitTool(
+func (h *Handler) runReadToolkitTool(
 	ctx context.Context,
 	projectID int64,
 	actorUserID int64,
@@ -152,7 +152,7 @@ func (h *Handler) runToolkitTool(
 	arguments map[string]any,
 ) map[string]any {
 	if projectID <= 0 || projectID > math.MaxInt32 || actorUserID <= 0 || actorUserID > math.MaxInt32 ||
-		tool.toolkitID <= 0 || tool.toolkitID > math.MaxInt32 || !tool.runnableToolkit() {
+		tool.toolkitID <= 0 || tool.toolkitID > math.MaxInt32 || !tool.runnableToolkitTool() {
 		return errorResult("the toolkit invocation identity is invalid, so nothing was executed")
 	}
 

@@ -21,6 +21,7 @@ services/elitea-deepwiki/
 │   ├── toolrunner.py    the seam between the sidecar and the engine
 │   ├── legacy_runner.py the engine's host hooks, run_engine_tool, and the index publish
 │   ├── repo_config.py   repository-config extraction, copied from the handler
+│   ├── wiki_context.py  reader-selected wiki pages as question context (`context_paths`)
 │   ├── publishing.py    publish a completed generation into PostgreSQL
 │   ├── jobs.py          the Kubernetes-Job manifest, repointed at this layout
 │   ├── security/        the git-host egress allowlist (mTLS and identity are the Go host's)
@@ -37,6 +38,7 @@ services/elitea-deepwiki/
 │       └── migrate.py   versioned, checksummed migrations
 ├── src/elitea_deepwiki/migrations/  service-owned SQL, applied against the deepwiki DB
 ├── tools/               refresh_engine_copy.py — re-copy and re-digest
+│                        build_descriptor_v1.py — derive descriptor revision `legacy-v1`
 ├── e2e/                 the end-to-end harness + a deterministic LLM stub
 ├── tests/
 │   ├── conformance/     replays the P0 SPI fixtures against the real app
@@ -106,6 +108,60 @@ above it is the SPI, everything below is the engine.
 providers, each with its own precedence chain over a dozen differently-prefixed
 keys. Only the GitHub path has a fixture; the other three are carried on trust,
 which is an argument for copying it rather than against.
+
+### The closure moves as a set, and Dependabot is silent on it
+
+The `engine` extra in `pyproject.toml` is not a list of dependencies. It is the
+**resolved closure of this particular copy** — ~92 exactly-pinned, mutually
+bounding distributions. Three rules follow, and all three are enforced:
+
+1. **The pins move together, never one at a time.** Eight Dependabot bumps
+   (#677–#679, #757–#761) each moved one pin inside this closure, and each made
+   `pip install '.[engine,storage-postgres]'` a `ResolutionImpossible`. The
+   `-engine` image could not be built at all for days. #740 and #741 did the
+   same to `services/elitea-inventory`, and that one was still broken on `main`
+   until it was found by the gate below.
+2. **The pins move together with the copy.** They are the resolution *of* the
+   engine under `src/elitea_deepwiki/engine/`, so re-copying the engine and
+   leaving the closure alone leaves a frozen engine running against versions
+   nobody resolved it against. `pyproject.toml` therefore carries a
+   `# closure-stamp: COPY_MANIFEST.json sha256 …` line, and the gate refuses a
+   tree where the copy moved and the stamp did not.
+3. **Dependabot is deliberately silent here.** `.github/dependabot.yml` gives
+   this package and `services/elitea-inventory` their own pip entry with
+   `ignore: "*"` and `open-pull-requests-limit: 0`. Security alerts still
+   appear in the repository's Dependabot tab; what is switched off is the
+   automatic one-pin-at-a-time pull request, because that is the thing that
+   broke the closure ten times.
+
+Validate the closure — resolution only, no install, no image build, seconds
+rather than the tens of minutes and >35 GB the `-engine` image needs:
+
+```bash
+bash scripts/ci/check-engine-closures.sh
+```
+
+It runs on every pull request and daily (the `engine-closures` job in
+`.github/workflows/dependency-scanning.yml`), and it resolves each package with
+the resolver its own `Containerfile` uses — pip here, uv for Inventory.
+
+Move the closure — the route a security fix takes, since rule 3 means no
+scanner will propose one:
+
+```bash
+python3 scripts/ci/refresh-engine-closure.py --check   # report drift, exit 3 if any
+python3 scripts/ci/refresh-engine-closure.py           # re-resolve and rewrite
+```
+
+It re-resolves the whole set at once to the newest versions still mutually
+compatible, and re-writes the stamp.
+`.github/workflows/engine-closure-refresh.yml` runs it weekly and opens a
+**draft** pull request when the answer moves. That pull request is a proposal:
+resolution proves nothing about whether the frozen copy's own imports survive
+(#677 moved `anthropic` across a major and resolved perfectly well). The
+acceptance gates are in its checklist and neither is a CI check — the
+`-engine` image building, and `deepwiki-real-engine.yml` green on the branch
+(`gh workflow run deepwiki-real-engine.yml --ref <branch>`).
 
 ### Two ADR violations that were live in the copy
 
@@ -364,6 +420,35 @@ read-modify-write under a lock on the hottest path; as rows it is one
 `DELETE … RETURNING`, so two concurrent pollers can neither both receive an
 event nor lose one. Read-once remains the contract — the P0 fixtures pin it —
 and making events durable does not make them re-readable.
+
+### Two channels down one event list (issue #701)
+
+The sidecar's NDJSON stream carries `{"thinking": …}` for progress and
+`{"token": …}` for one fragment of the ANSWER. The Go host turns each into
+one read-once event: progress keeps its text, a fragment is wrapped as
+`{"event":"llm_chunk","data":{"text":…}}` — the structured envelope the
+event text already carries for `todo_update` and `tool_start` — so the frozen
+poll envelope does not change and no facade, OpenAPI document or generated
+client moves. The browser separates them again and shows the answer as it is
+written.
+
+They are two KEYS on the socket rather than a convention about what a
+progress message may contain, because otherwise a progress line whose text
+happened to look like a token envelope would be shown as an answer. Order is
+preserved: both go on one queue, so an answer that arrives around a tool call
+still reads in the order it was produced.
+
+For the real engine this is the agentic `ask` path — `ask_engine.py` emits one
+fragment per chunk, the ask worker prints `[LLM_CHUNK] …` and the tool layer
+puts it on the token channel, all three declared in
+`tools/refresh_engine_copy.py`. Model streaming is on by default and a
+deployment turns it off with `llm_settings.streaming: false`. `deep_research`
+does NOT stream its report: it is written by sub-agents whose own final
+messages reach the same stream, so joining them would join several reports
+into one; it streams its PLAN through `todo_update` instead. Both fixture
+runners stream the answer they return, which is what the browser journeys run
+against. The contract is
+`conformance/provider/fixtures/deepwiki/stream/token_events.json`.
 
 ## What is not wired yet
 

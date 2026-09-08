@@ -15,6 +15,130 @@ a SAN-bearing workload certificate, an Ed25519 signing keyring, production auth
 and a workload-session row. [`runtime/README.md`](runtime/README.md) documents
 that contract and the permission rules its material must satisfy.
 
+## Compose — the standalone stack
+
+`deploy/docker-compose.standalone-full.yml`, driven by
+`deploy/scripts/standalone-stack.sh`, is the one-host path: the whole topology,
+including the runtime plane, on one machine.
+
+### Operator quick start (no seeders)
+
+The `standalone-stack.sh seed*` subcommands (`seed`, `seed-runtime`, `seed-llm`,
+`seed-index`) are E2E and local-development conveniences, not required steps.
+A fresh install reaches a working, logged-in stack with:
+
+```bash
+deploy/scripts/standalone-stack.sh certs
+deploy/scripts/standalone-stack.sh build
+deploy/scripts/standalone-stack.sh up
+# log in through the browser, then configure from the UI
+```
+
+Everything a hand-written `INSERT` used to cover is now automatic on `up`:
+schema bootstrap (`db-init`, `elitea-migrate`), the `agentstate` database and
+the `vector` extension (`db-init`), the artifact bucket (`rustfs-bucket-init`),
+RBAC roles and a per-user PAT and personal project (first-login provisioning
+in `cmd/elitea-main`), and — since this fix — the worker's
+`elitea_runtime.workload_sessions` authorization (`runtime-session-init`,
+below). `standalone-stack.sh`'s own header comment carries the equivalent
+E2E/dev run, with every seeder, for local development and CI.
+
+The one bootstrap floor an operator still sets by hand is
+`GATEWAY_EGRESS_ALLOWLIST` on the `elitea-llm-gateway` service: it is the
+comma-separated `host:port` allowlist the gateway checks a saved credential's
+`api_base` against before it will proxy to it
+(`internal/config/config.go`, `internal/account/egress.go`), and it defaults
+to the compose network's own mock/real LLM services. Add a private model
+host (a self-hosted vLLM instance, for example) to it before saving a
+credential that points there, or the gateway refuses the connection with what
+reads as the model being down.
+
+### `ELITEA_INITIAL_GLOBAL_ADMINS` — the first administrator
+
+Every standalone/production-shaped compose file passes this variable through
+to `elitea-main` (`v2auth.InitialGlobalAdminsFromEnv`,
+`cmd/elitea-main/main.go`). It is read only as a fallback, when the
+deployment's authentication configuration document has an empty
+`identity.initial_global_admins` list — which is the case for
+`deploy/runtime/auth.form.yml`, the standalone stack's document, on purpose:
+Form is a structural requirement there, not the login path, and the document
+is not where this stack names its administrator.
+
+Set it to a comma-separated list of entries. Two forms are accepted today,
+matching the federated login planes' stored (prefixed) provider references —
+see `matchesInitialGlobalAdmin` in
+`services/elitea-main/internal/api/v2/auth/first_login.go` for the exact rule:
+
+- `oidc:<sub>` — the OIDC subject claim
+- `saml:<nameid>` — the SAML NameID
+
+`email:<verified address>` — matching the login's verified e-mail claim
+instead of a provider-specific subject — is landing in a parallel branch.
+
+The variable is empty by default in every compose file, so a fresh clone
+stays unprivileged until an operator opts in.
+
+### `runtime-session-init` — authorizing the worker automatically
+
+The agent worker cannot start serving chat until a row exists in
+`elitea_runtime.workload_sessions` naming its certificate identity;
+`WorkloadSessionsRepository` has no process-local registration or fallback
+allowlist by design, so nothing mints that row on its own. Helm automates
+this with a pre-install/pre-upgrade hook Job
+(`deploy/helm/elitea/templates/worker/runtime-session-job.yaml`, plus a
+recurring renewal CronJob — nothing else re-stamps `expires_at`, so a
+deployment left un-upgraded goes dark on a timer otherwise).
+
+`docker-compose.standalone-full.yml` now runs the equivalent as a one-shot
+`runtime-session-init` service, ordered before the worker with
+`depends_on: condition: service_completed_successfully`. It runs
+`deploy/runtime/provision-runtime-session.sh` — the same upsert-and-verify
+shell script the Helm Job runs (extracting the worker's SPIFFE identity from
+its certificate's SAN, waiting for the schema, upserting the row, then
+re-checking it with the exact conjunction `VerifyActiveSession` applies) —
+kept as a byte-for-byte mirror rather than a shared file, because charts here
+stay self-contained artifacts independent of the monorepo layout they ship
+from. Its session id, producer id, TTL and wait behavior are configurable
+through `RUNTIME_WORKER_SESSION_ID`, `RUNTIME_WORKER_PRODUCER_ID`,
+`RUNTIME_WORKER_SESSION_TTL`, `RUNTIME_WORKER_SESSION_WAIT_ATTEMPTS` and
+`RUNTIME_WORKER_SESSION_WAIT_INTERVAL`, defaulting to the same values
+`deploy/helm/elitea/values.yaml`'s `worker.runtime` and
+`worker.runtimeSession` blocks default to.
+
+`standalone-stack.sh seed-runtime` still exists as a manual fallback — a
+database restored from a backup that predates this row, or a worker brought
+up with `--no-deps` — but a normal `up` no longer needs it.
+
+### DeepWiki and Inventory — canned data with no engine closure
+
+Both sub-applications run their Go host (`elitea-subapp-host`) with
+`RUNNER=legacy`, reaching an engine SIDECAR (`elitea-deepwiki`,
+`elitea-inventory`) over a shared Unix socket — the socket hop this stack
+exists to exercise, not just the Go half. Neither sidecar carries the real
+analysis engine's dependency closure here; both serve their `fixture`
+runner instead, so `up` shows a populated wiki and a populated Inventory
+graph with no repository, no model and no ~1 GB+ engine image.
+
+Inventory's fixture graph (six entities, two source toolkits, five
+relations) is the SAME one the Go sub-application host's own fixture runner
+serves on the E2E stack
+(`conformance/provider/fixtures/inventory/spi/graph.json` — see
+`services/elitea-inventory/README.md`'s "Fixture mode" section for how the
+two are kept from drifting). `INVENTORY_FIXTURES=/fixtures/inventory`
+points the `elitea-inventory-engine` service at the bind-mounted copy of
+that directory instead of the image's packaged one, for iterating on the
+fixture data without a rebuild:
+
+```bash
+INVENTORY_FIXTURES=/fixtures/inventory deploy/scripts/standalone-stack.sh up
+```
+
+`INVENTORY_RUNNER=fixture` is a separate switch on the Go host itself
+(`elitea-inventory`, not the engine sidecar): it bypasses the sidecar
+entirely and serves the Go runner's own copy of the same graph. Useful for
+isolating which half of the hop you are looking at; not needed for a normal
+demo now that the sidecar's fixture is populated by default.
+
 ## Composition decision (issue #240)
 
 `deploy/helm/elitea-platform/` used to be an empty `.gitkeep` — an umbrella
@@ -61,10 +185,11 @@ Three charts, and that is all of them: `helm lint`, the template matrix and
 `publish.yml` each read `deploy/helm/*/Chart.yaml`, so a fourth chart fails CI
 until somebody templates and publishes it.
 
-Two images have no chart. `ghcr.io/elitea-ng/elitea-ui` is the old UI: it runs
-in compose, and the Kubernetes path is the `web` component. `pylon-indexer` is
-not deployed at all — the Go runtime plane serves index ingest through the
-agent worker, on the same command stream.
+One image has no chart. `ghcr.io/elitea-ng/elitea-ui` is the old UI: it runs
+in compose, and the Kubernetes path is the `web` component. `pylon-indexer`
+used to be the second one, deployed nowhere; issue #339 deleted the service, so
+it is no longer built or published either. The Go runtime plane serves index
+ingest through the agent worker, on the same command stream.
 
 One component is off by default and needs TWO settings, not one. `deepwiki`
 is the DeepWiki provider service (ADR-0022). Turning it on is the `deepwiki`
@@ -148,6 +273,112 @@ the parameters out of the Application, renders the chart from them, and reads
 DATABASE_URL back out of the manifest, so an Application that stops supplying
 its values fails there.
 
+### The first global administrator (`identity.initial_global_admins`)
+
+A fresh database holds one administrator, `dev@elitea.ai`. That account has no
+password on a single-sign-on deployment, so it cannot sign in. Name your own
+account instead.
+
+Supply the list in ONE of two places. The authentication configuration document
+wins when the deployment has one:
+
+- `main.authConfig...identity.initial_global_admins` — a YAML list.
+- `main.env.ELITEA_INITIAL_GLOBAL_ADMINS` — a comma-separated string. Use this
+  on a single-sign-on-only deployment, which carries no document.
+
+**An entry takes one of three shapes.** Since v1.39.0 the list applies to OIDC
+and to SAML logins alike.
+
+| Shape | Matches |
+|---|---|
+| `oidc:<sub>` | the OIDC subject, as the database stores it |
+| `saml:<nameid>` | the SAML NameID, as the database stores it |
+| `email:<address>` | a VERIFIED e-mail address, case-insensitive |
+
+A reference may also be written bare, with no `oidc:` / `saml:` namespace. The
+namespaced spelling is what the database holds, so prefer it.
+
+**Read your own reference without a database session.** Sign in once, then call
+the endpoint the application already serves:
+
+```bash
+curl -s -H "Cookie: elitea_session=<your session>" \
+  https://elitea.example.com/api/v2/social/author | jq .provider_refs
+```
+
+`provider_refs` holds the exact values this list accepts. Before this endpoint
+carried the field, an operator on Azure AD or Okta had no other way to learn it:
+their OIDC `sub` is an opaque identifier that nobody can know before the first
+sign-in, so the procedure was a `SELECT provider_ref FROM
+auth_core__user_provider` against the production database.
+
+**`email:` needs a stated verification.** It matches an OIDC login whose
+id_token carries `"email_verified": true`, and nothing else. A provider that
+OMITS the claim cannot be matched by an address — use `oidc:<sub>` there.
+`OIDC_REQUIRE_EMAIL_VERIFIED` does not change this: that variable gates account
+ADOPTION by address, not account creation, so it states nothing about a first
+login. SAML carries no verified-address statement at all, so a SAML deployment
+names its administrator by `saml:<nameid>`, which is often the address already.
+An identity provider that merely asserts an address can never assert its way
+into the administration role.
+
+**The grant is one-shot per account.** Somebody who already holds ANY
+administration-mode role is left exactly as you left them, so a demotion is
+never undone by the next sign-in. An account that holds none still receives the
+grant, so the normal recovery works: add the entry, restart the pod, sign in
+again. Only `dev@elitea.ai` is seeded with an administration-mode role, and only
+in a fresh database.
+
+**A malformed entry warns and is ignored.** The pod logs how many entries are
+reference-shaped and how many are address-shaped, and warns about the rest, so a
+misspelling is visible at boot rather than at somebody's first sign-in.
+
+## Outbound e-mail — the SMTP variables are bootstrap defaults (gap G7)
+
+`SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_TLS`,
+`EMAIL_FROM`, `EMAIL_REPLY_TO` and `PUBLIC_BASE_URL` are the DEFAULT layer.
+They are not the whole configuration any more.
+
+The relay is administered at **Admin → E-mail** (`/admin/app/email`, also the
+Configuration page's "E-mail" section). That page writes the `email` section of
+`centry.platform_config` and seals the SMTP password in the platform vault's
+hidden bucket. `internal/emailsettings` merges the two layers FIELD BY FIELD on
+every send, with the database winning.
+
+Three consequences for an operator:
+
+1. **A change in the console needs no restart.** The merge runs per message, so
+   a corrected relay host reaches the next invitation. Nothing in this chart has
+   to be re-synced.
+2. **A chart may ship some of these and leave the rest to the console.** A
+   deployment that sets `EMAIL_FROM` and `PUBLIC_BASE_URL` and lets an
+   administrator name the relay is a normal install. The pod no longer refuses
+   to start on a partial set — completeness is decided on the merged document at
+   send time, and an incomplete merge reports `invitation_delivered: false` with
+   the field to fix. A value that is WRONG still refuses to start.
+3. **The password belongs in the vault or in the Secret, never in a chart
+   parameter.** A Helm parameter renders into a ConfigMap. `SMTP_PASSWORD` is in
+   the `secrets:` block for that reason, and the console's own password goes to
+   the vault, not to a `platform_config` row.
+
+`ELITEA_EMAIL_SUPPRESS: "true"` still renders every message and sends none — the
+setting for a shadow or staging deployment. It outranks the console: a
+suppressed deployment reports nothing as delivered however the relay is
+configured.
+
+Check what a running deployment resolved. The route is gated on
+`runtime.plugins` in administration mode, so send an administrator session
+cookie or a personal access token with it:
+
+```bash
+curl -s -H "Authorization: Bearer $ADMIN_PAT" \
+  https://elitea.example.com/api/v2/admin/email/administration | jq
+# .settings  — what the console stored
+# .effective — the merged document the next message uses
+# .sources   — per field: "database" | "environment" | "unset"
+# .configured / .reason — whether a message can be sent, and if not, which field to set
+```
+
 ## Distribution — the charts are published to GHCR as OCI artifacts
 
 Every chart in the table above is packaged and pushed on each release by the
@@ -208,9 +439,9 @@ file whose capability set matches `docker-compose.standalone-full.yml`.
 | Flag | Default install | `values-standalone.yaml` | Prerequisite |
 |---|---|---|---|
 | `ELITEA_ARTIFACTS_ENABLED` | on | on | object storage configured |
-| `ELITEA_CONFIGURATIONS_ENABLED` | off | **on** | production authentication |
+| `ELITEA_CONFIGURATIONS_ENABLED` | **derived** | **on** | any authentication **and** `ELITEA_AI_PROJECT_ID` |
 | `ELITEA_PROJECT_INFO_ENABLED` | off | **on** | production authentication |
-| `ELITEA_AI_PROJECT_ID` | empty | **set** | must name a project that exists |
+| `ELITEA_AI_PROJECT_ID` | empty | **set** | must name a project that exists — set `platform.aiProjectId`, not this key |
 | `ELITEA_CONFIGURATIONS_MUTATION_ENABLED` | off | off | `ELITEA_CONFIGURATIONS_ENABLED` **and** `runtime.enabled` — read below |
 | `ELITEA_INDEX_TYPES_ENABLED` | off | **on** | production authentication |
 | `ELITEA_APPLICATION_SKILLS_ENABLED` | off | **on** | production authentication |
@@ -219,6 +450,34 @@ file whose capability set matches `docker-compose.standalone-full.yml`.
 | `ELITEA_RUNTIME_ENABLED` and its block | off | **on** | production authentication **and** runtime material — read below |
 
 No flag stays off in **both** files any more.
+
+### `ELITEA_CONFIGURATIONS_ENABLED` follows the deployment
+
+This flag no longer ships a literal value. `values.yaml` leaves it **empty**,
+and `templates/main/_helpers.tpl` renders `"true"` for an install that has both
+prerequisites the chart can see:
+
+1. **Any authentication.** `fileConfig.authConfig` (the Form document) **or**
+   `env.OIDC_ISSUER_URL` (the single-sign-on plane, which a SAML or typed
+   identity provider composes through).
+2. **`env.ELITEA_AI_PROJECT_ID`.** The binary refuses to start without it once
+   the plane is on, so the chart refuses the manifest instead.
+
+State `"true"` or `"false"` under `main.env` to decide it yourself. A stated
+value always wins.
+
+**An OIDC-only install gets the configuration plane.** It could not before.
+`cmd/elitea-main` tested the FormGraph, and only `ELITEA_AUTH_CONFIG_FILE`
+builds one, so an install with real corporate single sign-on was refused every
+credential route, the whole model catalogue and the project vector store —
+however real its SSO. Each LLM setup step then fell back to
+`deploy/scripts/seed-llm-api.py` or hand-written SQL. The composition root now
+asks `productionAuthenticationComposed`: a reader of the caller's credential
+plus a `PrincipalValidator`. The OIDC session plane carries both.
+
+A deployment with **no** authentication is still refused, in the chart and in
+the binary. That is the shape a default `values.yaml` describes, which is why
+the default install still renders the flag `"false"`.
 
 ### `values-auth-minimal.yaml` — the cheapest install that can seed itself
 
@@ -234,7 +493,8 @@ configuration write path, and that path decides `status_ok` in the request
 
 `deploy/helm/elitea/values-auth-minimal.yaml` is that shape:
 `fileConfig.authConfig` + `runtimeRedis`, **no runtime plane**, and
-`ELITEA_CONFIGURATIONS_ENABLED` + `ELITEA_AI_PROJECT_ID` on top.
+`ELITEA_CONFIGURATIONS_ENABLED` + the public project (`platform.aiProjectId`)
+on top.
 `templates/guards.yaml` ties the worker to the runtime plane and to
 `runtimeRedis`; it does not tie `runtimeRedis` to the runtime plane, so this
 combination renders. The TLS Redis is not optional even so — production Form
@@ -243,10 +503,16 @@ authentication keeps its session store there and
 
 Two things it does **not** change:
 
-- No default. `values.yaml` still ships every capability flag `"false"`; an
-  install that does not pass this file is exactly what it was.
+- No default for the flags it does not name. `values.yaml` still ships
+  `ELITEA_PROJECT_INFO_ENABLED`, `ELITEA_INDEX_TYPES_ENABLED` and
+  `ELITEA_APPLICATION_SKILLS_ENABLED` as `"false"`.
 - Not the mutation flag. It is deliberately absent, which leaves `"false"` in
   force — read the section below for why that flag is a separate cutover.
+
+It is also no longer the **only** way to reach the configuration write path.
+An OIDC-only install reaches it by naming `env.ELITEA_AI_PROJECT_ID`, with no
+Form document and no TLS Redis at all. This file stays the recipe for an
+install that wants the Form plane itself.
 
 `deploy/scripts/standalone-stack.sh seed-llm` writes its rows through that
 route now (`deploy/scripts/seed-llm-api.py`), not with `INSERT`. Two database
@@ -270,7 +536,10 @@ same rows, so the halves cannot disagree:
 
 Both are off in a default install only because the capability needs production
 authentication, which a default install does not build — the same reason
-`ELITEA_CONFIGURATIONS_ENABLED` and `ELITEA_PROJECT_INFO_ENABLED` are off there.
+`ELITEA_PROJECT_INFO_ENABLED` is off there. Both still test the FormGraph in
+`cmd/elitea-main`; only `ELITEA_CONFIGURATIONS_ENABLED` was moved to the
+credential-plane predicate, because it is the one that blocks a fresh install
+from seeding its own LLM configuration.
 
 Turning the skills flag off again is a safe rollback: `internal/api/router.go`
 serves the same path from the skills handler, with the same rows in the same
@@ -452,16 +721,133 @@ exactly like their `runtime.material` counterparts, and
 `fileConfig.authConfig.material.volume` is the same alternative for a CSI secret
 driver.
 
-### `ELITEA_AI_PROJECT_ID` is set in two places
+### The public project: set `platform.aiProjectId`, once
 
-`deploy/helm/elitea/values.yaml` carries this key under `main.env` and under
-`llmGateway.env`, and **both must name the same project**. elitea-main merges
-that project's configurations into every other project's option lookups; the
-gateway reads it to serve the shared models an operator publishes (issue
-#316). Empty on the gateway side leaves shared models unreachable: the model
-picker offers them, and the request then finds no credential. Both ship empty, because an id naming a schema that
-does not exist makes every credential read fail, so the operator must choose
-one project and set it in both places.
+```yaml
+platform:
+  aiProjectId: "1"   # the project whose `shared = true` configurations everyone uses
+```
+
+Three components need this id, and each one used to take its own copy:
+`main.env.ELITEA_AI_PROJECT_ID`, `llmGateway.env.ELITEA_AI_PROJECT_ID` and the
+SPA's `web.env.VITE_PUBLIC_PROJECT_ID`. `platform.aiProjectId` fills all three.
+
+**Two copies that disagree produce no error.** elitea-main merges that project's
+configurations into every other project's option lookups and the admin provider
+surface WRITES a shared credential into `p_<id>`; the gateway RESOLVES shared
+credentials out of `p_<id>` (issue #316); the SPA decides which project is
+public with a third copy. When they differ, the credential is stored, listed and
+reported healthy, and resolves for nobody — with every pod Ready and nothing
+logged.
+
+`helm template` now refuses a values file whose copies disagree, and elitea-main
+refuses to start when the environment names two different projects. A values
+file that still sets the component keys keeps working while the values agree.
+
+It must name a project that EXISTS: the id becomes the PostgreSQL schema name
+`p_<id>`, so an id with no schema fails every credential read. It ships **empty**
+for that reason. Empty also matters for a default install: with
+`ELITEA_CONFIGURATIONS_ENABLED` off, elitea-main refuses to start when
+`ELITEA_AI_PROJECT_ID` is present at all. The SPA still gets `"1"` when nothing
+names a project, which is what every reference deployment here uses.
+
+The SPA no longer depends on its own copy for correctness. elitea-main publishes
+the resolved id on `GET /api/v2/elitea_core/platform_settings/prompt_lib`
+(`public_project_id`), and the browser prefers that; `VITE_PUBLIC_PROJECT_ID`
+is the fallback for a deployment too old to send the key.
+
+### `GATEWAY_EGRESS_ALLOWLIST` is the bootstrap floor, not the whole policy
+
+`llmGateway.env.GATEWAY_EGRESS_ALLOWLIST` names the hosts a provider credential's
+`api_base` may point at. It is the FLOOR. The gateway also reads
+`egress_allowlist` rows from `gateway.governance_config`, and it enforces the
+UNION of the two. Edit the rows at runtime in **Admin → LLM Proxy →
+Governance**; no chart edit and no pod restart are necessary.
+
+An authored row can only ADD a destination. Nothing an admin authors withdraws a
+host the chart named, because the chart and the admin console are different
+authorities: a mistaken admin session must not cut the platform off from its own
+provider, when the recovery would then need a database edit rather than a chart
+rollback.
+
+Set the environment variable for the hosts that must be reachable before anybody
+can log in — the platform's own provider — and author the rest.
+
+**One grammar serves both.** An entry is a host, a `host:port`, a `*.domain`
+wildcard, or a CIDR block:
+
+```
+api.openai.com
+*.openai.azure.com
+vllm.ml.svc.cluster.local:8000
+192.168.29.60:8000
+192.168.29.0/24
+```
+
+**The first entry turns the restriction on.** With no entry in either source, a
+credential may name any public host. Add one entry anywhere and every credential
+must then match the list.
+
+**A private endpoint needs its address named, not only its hostname.** bifrost's
+SSRF-safe dialer refuses RFC 1918 and loopback destinations unless an entry
+EXPLICITLY names a private address or block. A hostname alone does not unlock it:
+the gateway never resolves a name to make this decision, because resolving a name
+here and dialing it later is the DNS-rebinding race a name allowlist avoids. To
+reach a self-hosted vLLM at `http://192.168.29.60:8000/v1`, name the address; to
+reach one behind a name, name both:
+
+```
+vllm.ml.svc.cluster.local:8000
+10.0.0.0/8
+```
+
+Link-local addresses (`169.254.0.0/16`, `fe80::/10`) stay refused whatever the
+allowlist says. They carry the cloud instance-metadata endpoints.
+
+**This changed in the G6 release.** The private-network exemption used to follow
+from "is any allowlist configured", so an allowlist of public SaaS hosts relaxed
+the dialer for the whole private network. It now follows from an entry naming a
+private destination. An existing install that reaches a private endpoint through
+a HOSTNAME must add that host's block or address.
+
+`GET /governance/status` on the gateway reports the merged list, tagged by
+source, and the admin **LLM Proxy → Status** tab shows the same report: what the
+chart contributed, what governance contributed, what is in force, and whether a
+private destination is reachable at all.
+
+### `GATEWAY_NATS_URL` — budgets are stored without it and enforced only with it
+
+Admin → Budgets writes `gateway.project_budget` and `gateway.user_budget`.
+The LLM gateway is what enforces those rows, and it enforces them through a
+NATS JetStream counter. `GATEWAY_NATS_URL` names that cluster.
+
+Leave it empty and the gateway starts, logs a warning, and serves `/llm` with
+**no budget enforcement**. Nothing else changes shape:
+
+- every budget write still answers 200;
+- every limit still reads back exactly as it was authored;
+- Settings → Usage still reports the period's accrued spend;
+- and no call is ever refused.
+
+That is the failure this key produces. An operator sets a ceiling, sees it on
+the screen, and it stops nothing. Two surfaces report the real state:
+
+- the gateway's `GET /governance/status`, proxied at
+  `GET /api/v2/admin/gateway/status`. Its `rate_limits_enforceable` is false
+  exactly when the gateway holds no counter, and that counter is the one the
+  budget path admits against too;
+- Admin → Budgets, which raises a warning banner from that field once any
+  budget row exists.
+
+`deploy/docker-compose.standalone-full.yml` runs **no NATS service** and leaves
+`GATEWAY_NATS_URL` unset deliberately — see the comment above its
+`elitea-llm-gateway` service. Budget authoring and the usage read are fully
+exercisable there; budget enforcement is not, and the banner says so. Add a
+JetStream service and set the key to exercise enforcement.
+
+Spend accounting needs the gateway but not the counter: the accumulators the
+Usage page reads are written by elitea-scheduler's write-back consumer from the
+gateway's billing deltas.
 
 ## What a Kubernetes install does NOT give you
 
@@ -521,19 +907,17 @@ Stated plainly, because the gap between compose and Helm is where deploys break:
 - **No secrets.** Every chart sources sensitive values from Kubernetes Secrets
   that must be provisioned out-of-band. `elitea-main`'s and the gateway's
   `GATEWAY_IDENTITY_SECRET` are `optional: false` — pods do not start without
-  them, and the two sides must carry the **same** value. `pylon-indexer`'s
-  `SECRETS_MASTER_KEY` is `optional: false` for the same reason, described
-  next.
-- **No model-cache pre-seed for `pylon-indexer`.** compose's `model-cache-init`
-  has no Kubernetes equivalent here.
+  them, and the two sides must carry the **same** value. `SECRETS_MASTER_KEY`
+  is `optional: false` for the same reason, described next.
 
 ## `SECRETS_MASTER_KEY` — one key for the whole stack
 
-`elitea-main`, `pylon-indexer` and `elitea-llm-gateway` all read
-`centry.secrets_key`. Each one wraps a project key with `SECRETS_MASTER_KEY`
+`elitea-main` and `elitea-llm-gateway` both read `centry.secrets_key`. Each one wraps a project key with `SECRETS_MASTER_KEY`
 when it holds that value, and stores the project key in the clear when it does
 not. Two services with two answers put two row formats in one table, and
-neither can read what the other wrote.
+neither can read what the other wrote. `pylon-indexer` was the third reader
+until issue #339 deleted it, which is one fewer place for those two answers to
+disagree.
 
 So the rule is: **one stack, one value, given to every service that reads that
 table.** Give it in the environment, never in a file. A committed default is a
@@ -559,9 +943,7 @@ The variable has three states. They are not equivalent:
 
 A malformed key stops the service on purpose (#412). Before that change the
 service ignored the bad value and stored the keys unwrapped. An operator who
-set the variable got plaintext storage, and no report of it. The
-`pylon-indexer` image refuses to start on a missing or malformed value in the
-same way (`services/pylon-indexer/entrypoint.sh`).
+set the variable got plaintext storage, and no report of it.
 
 A trailing newline is **not** malformed. Go and Python both ignore `\r` and
 `\n` when they decode base64, so a key mounted from a file keeps working. A

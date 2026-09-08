@@ -1,9 +1,22 @@
 // Package deepwiki is the DeepWiki sub-application as the host sees it: its
 // descriptor, its toolkit admission table, and whichever runner a
-// deployment wires. The descriptor is the frozen legacy-v0 document — a
-// copy of conformance/provider/fixtures/deepwiki/descriptor/legacy-v0/
+// deployment wires. The descriptor is the legacy-v1 document — a copy of
+// conformance/provider/fixtures/deepwiki/descriptor/legacy-v1/
 // provider_descriptor.json, pinned byte for byte by a test — with the
 // service location the host is configured with written into it.
+//
+// REVISION legacy-v1 adds three arguments to `ask` and `deep_research` and
+// changes nothing else (a test asserts the "nothing else"):
+//
+//	context_paths             wiki pages a reader attached to the question
+//	context_wiki_version_id   the version that selection was made in
+//	chat_history              sent on every wiki-chat turn since the port,
+//	                          and never declared by the legacy plugin
+//
+// It is generated, not hand-edited: services/elitea-deepwiki/tools/
+// build_descriptor_v1.py derives it from legacy-v0 and writes both this
+// copy and the fixture, so the two cannot disagree. legacy-v0 stays in the
+// fixtures as the record of what the legacy plugin actually declared.
 //
 // The engine stays where it is (services/elitea-deepwiki, Python); reaching
 // it from this host is ADR-0023 stage H2. Until then a host serving this

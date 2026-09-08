@@ -27,6 +27,7 @@ import MenuItem from '@mui/material/MenuItem';
 import Typography from '@mui/material/Typography';
 
 import type { Attachment } from '@/entities/attachment';
+import { t } from '@/shared/i18n';
 
 /**
  * Fixed threshold instead of the baseline's `useGetComponentWidth`
@@ -91,6 +92,11 @@ export function FileList({ attachments, onDeleteAttachment, disabled = false }: 
             sx={{ p: 0, width: 'auto' }}
           >
             <Chip
+              // Baseline `FileList.jsx`'s own hook for the chips
+              // (`chat-attachment-chip-{index}`) — the composer's staged files
+              // have no other stable selector, and the E2E journey that guards
+              // this wiring has to find them by one.
+              data-testid={`chat-attachment-chip-${index}`}
               label={attachmentLabel(attachment, index)}
               size="small"
               variant="outlined"
@@ -103,7 +109,15 @@ export function FileList({ attachments, onDeleteAttachment, disabled = false }: 
                 },
               }}
               deleteIcon={
-                <CloseIcon fontSize="small" />
+                // The testid is OURS, not MUI's. `@mui/icons-material` stamps
+                // `data-testid="CloseIcon"` only outside production builds, so
+                // a selector on it passes in vitest and finds nothing in the
+                // E2E stack's real bundle.
+                <CloseIcon
+                  fontSize="small"
+                  data-testid={`chat-attachment-remove-${index}`}
+                  aria-label={t('chatMessages.fileList.removeAttachment', 'Remove attachment')}
+                />
               }
               onDelete={
                 onDeleteAttachment && !disabled
@@ -119,6 +133,7 @@ export function FileList({ attachments, onDeleteAttachment, disabled = false }: 
             sx={{ p: 0, width: 'auto' }}
           >
             <Chip
+              data-testid="chat-attachment-overflow-button"
               label={`+${hiddenAttachments.length}`}
               size="small"
               variant="outlined"
@@ -144,6 +159,7 @@ export function FileList({ attachments, onDeleteAttachment, disabled = false }: 
             return (
               <MenuItem
                 key={attachmentKey(attachment, actualIndex)}
+                data-testid={`chat-attachment-overflow-item-${actualIndex}`}
                 sx={{ gap: 1 }}
               >
                 <ListItemIcon sx={{ minWidth: 'auto' }}>

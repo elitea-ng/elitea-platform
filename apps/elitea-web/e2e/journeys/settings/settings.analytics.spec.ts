@@ -158,7 +158,11 @@ test('J24: settings: analytics renders the live backend\'s own usage figures', a
   await expect(page.getByText('From:', { exact: true })).toBeVisible();
   await expect(page.getByText('To:', { exact: true })).toBeVisible();
   await expect(page.getByRole('spinbutton')).toHaveCount(10);
-  for (const tab of ['Overview', 'Agents', 'Tools', 'Users', 'Health', 'Guide']) {
+  // The tab list, in the reference deployment's order. Costs and Tokens sit
+  // second and third there, so they were inserted rather than appended, and
+  // this list is the assertion that catches an insertion that renumbered the
+  // switch without renumbering the labels.
+  for (const tab of ['Overview', 'Costs', 'Tokens', 'Agents', 'Tools', 'Users', 'Health', 'Guide']) {
     await expect(page.getByRole('tab', { name: tab, exact: true })).toBeVisible();
   }
 
@@ -212,30 +216,30 @@ test('J24: settings: analytics renders the live backend\'s own usage figures', a
 });
 
 /* ────────────────────────────────────────────────────────────────────────
- * J24a — the tab that still has NO data source must say so, and must say it in
- * a way a client can act on.
+ * J24a — the two dimensions that arrived LATE must state which windows they can
+ * speak for, and must state it in a way a client can act on.
  *
- * ONLY `analytics_tools` now. `analytics_agents` gained its producer: shared
- * migration 0100 put an execution_id on gateway.llm_request_logs, signed into
- * the identity header, and the agent is resolved at read time. It answers 200.
+ * NEITHER tab refuses outright any more, and this assertion moved deliberately
+ * rather than being lowered.
  *
- * Its 200 is NOT the fallback-body failure this suite exists to catch, and the
- * difference is the shape: when the window predates the migration the response
- * carries `agent_dimension_available: false` and NO `items` key at all, so a
- * client cannot map over a fabricated empty list and read "no agent ran" for a
- * month in which agents ran constantly. That is asserted below.
+ *  - `analytics_agents` gained its producer first: shared migration 0100 put an
+ *    execution_id on gateway.llm_request_logs, signed into the identity header,
+ *    and the agent is resolved at read time.
+ *  - `analytics_tools` gained one in issue 618: shared migration 0119 created
+ *    elitea_runtime.tool_call_records, written by BOTH producers — the explicit
+ *    tool run (the test button, MCP tools/call) and the agent turn's tool-call
+ *    trace step. Before it, the explicit run's execution_jobs row carried no
+ *    toolkit id and no tool name, and the trace step was per-tenant and covered
+ *    chat turns only, so a table built from either alone under-reported by an
+ *    unknown factor — worse than the honest refusal it replaced.
  *
- * `analytics_tools` still has no producer: nothing records a tool call made
- * outside a chat turn, so a table built from p_<id>.chat_message_trace_step
- * would under-report by an unknown factor — worse than the refusal. See
- * services/elitea-main/internal/infra/db/repos/analytics.go's header.
- *
- * The STATUS is the point. Answered 500, a permanent refusal is
- * indistinguishable from a blip to every client that retries 5xx — and this
- * app's TanStack Query default does, so each tab asked twice for an answer the
- * server had already finished giving. 501 is final.
+ * The 200 is NOT the fallback-body failure this suite exists to catch, and the
+ * difference is the SHAPE: when the window predates the producer the response
+ * carries `<dimension>_available: false` and NO `items` key at all, so a client
+ * cannot map over a fabricated empty list and read "nothing ran" for a period in
+ * which things ran constantly. That is what is asserted below, for both.
  * ──────────────────────────────────────────────────────────────────────── */
-test('J24a: the tabs with no data source refuse finally, and the UI says which', async ({ page }) => {
+test('J24a: the late dimensions publish a window flag, and omit items when they cannot speak', async ({ page }) => {
   await page.goto(BASE_URL + '/app/settings/analytics');
   await expect(page.getByRole('tab', { name: 'Overview', exact: true })).toBeVisible();
 
@@ -261,28 +265,31 @@ test('J24a: the tabs with no data source refuse finally, and the UI says which',
     expect(agents).not.toHaveProperty('items');
   }
 
-  for (const tab of ['Tools'] as const) {
-    const path = `${API_BASE}/elitea_core/analytics_${tab.toLowerCase()}/prompt_lib/${DEFAULT_PROJECT_ID}`;
-    const resp = await page.request.get(path);
-    expect(resp.status(), `${path} must refuse with a FINAL status`).toBe(501);
-    const failure = (await resp.json()) as { code?: string; detail?: string };
-    // Machine-readable, so the client is not parsing prose to decide what to
-    // render or whether to retry.
-    expect(failure.code, `${path} must carry a machine-readable code`).toBe('no_data_source');
-    expect(failure.detail ?? '', `${path} must name the absent producer`).toContain(
-      'analytics: no data source',
-    );
-
-    await page.getByRole('tab', { name: tab, exact: true }).click();
-
-    // The UI must distinguish the two failures too. "Failed to load analytics
-    // data." on a tab whose figures nothing produces sends the reader to file a
-    // bug or reload forever; this says what is actually true.
-    await expect(page.getByText('Not available on this deployment', { exact: true })).toBeVisible();
-    await expect(page.getByText('Failed to load analytics data.', { exact: true })).toHaveCount(0);
-    // The server's own reason, rendered rather than discarded.
-    await expect(page.getByText(/analytics: no data source/)).toBeVisible();
+  // The Tools tab now HAS a producer too (issue 618). Same contract as the
+  // Agents tab above, asserted the same way.
+  const toolsPath = `${API_BASE}/elitea_core/analytics_tools/prompt_lib/${DEFAULT_PROJECT_ID}`;
+  const toolsResp = await page.request.get(toolsPath);
+  expect(toolsResp.status(), `${toolsPath} answers now that it has a producer`).toBe(200);
+  const tools = (await toolsResp.json()) as Record<string, unknown>;
+  expect(
+    tools,
+    `${toolsPath} must state whether the dimension is available`,
+  ).toHaveProperty('tool_dimension_available');
+  if (tools['tool_dimension_available'] === false) {
+    expect(tools).not.toHaveProperty('items');
+  } else {
+    // Present and possibly empty is the OTHER real state: the deployment was
+    // recording and no tool ran. It must be a list, never a missing key, or the
+    // three states collapse into two.
+    expect(Array.isArray(tools['items'])).toBe(true);
   }
+
+  await page.getByRole('tab', { name: 'Tools', exact: true }).click();
+
+  // Whatever the window says, the tab must never show the GENERIC failure: that
+  // string on a dimension this deployment simply has no data for sends the
+  // reader to file a bug or reload forever.
+  await expect(page.getByText('Failed to load analytics data.', { exact: true })).toHaveCount(0);
 
   await checkA11y(page);
 });
@@ -502,7 +509,7 @@ test('J24d: the Users tab renders the rows the backend returned, not a stub tabl
   // over queries naming tables no migration creates (#303). The second was
   // accurate until the gateway request log gave the Users read a real producer.
   //
-  // Agents and Tools still have none, and J24a above pins their refusal. What
+  // Agents and Tools each publish a window flag, and J24a above pins it. What
   // is left here is the tab that now ANSWERS, and the claim is the same shape
   // as J24's: the count the UI reports is the count the endpoint returned.
   // THE ORACLE MUST ASK THE SAME QUESTION THE SCREEN DID. Sent bare, this

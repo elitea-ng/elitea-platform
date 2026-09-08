@@ -69,7 +69,6 @@ export interface ToolkitSaveHandlers {
  * grouping).
  */
 export interface ConfigurationTabSlots {
-  readonly toolActionsExtra?: ToolBaseSlots['toolActionsExtra'];
   /** The RIGHT panel's live test-chat content — see the module doc comment for why this is a slot, not a direct import. */
   readonly renderTestPane: (props: ToolkitTestPaneRenderProps) => ReactNode;
   readonly renderRunHistory?: (props: ToolkitRunHistoryRenderProps) => ReactNode;
@@ -98,6 +97,18 @@ export interface ConfigurationTabSlots {
    * depend on this slot: `useCredentialLikeFieldSlot` renders those itself.
    */
   readonly renderCredentialPicker?: ToolBaseSlots['renderCredentialPicker'];
+  /**
+   * The "Load Tools" action of an MCP toolkit's tool section.
+   *
+   * Same seam and same reason as the two above: `ToolActionsSelector` renders
+   * the action from caller-injected props because the baseline's MCP fetch hook
+   * lives in `features/mcps`. The `pages/`-layer caller supplies it — see
+   * `pages/toolkits/lib/useMcpLoadTools.tsx`.
+   *
+   * Omitted, the action still renders and is permanently disabled, which is the
+   * state every MCP toolkit's form was in before this slot was forwarded.
+   */
+  readonly toolActionsExtra?: ToolBaseSlots['toolActionsExtra'];
 }
 
 /** @public */
@@ -182,7 +193,7 @@ export function ConfigurationTab({
     return {
       ...(sharepointAuth === undefined ? {} : { sharepointAuthModals: sharepointAuth }),
       ...(renderCredentialPicker === undefined ? {} : { renderCredentialPicker }),
-      toolActionsExtra,
+      ...(toolActionsExtra === undefined ? {} : { toolActionsExtra }),
     };
   }, [sharepointAuth, renderCredentialPicker, toolActionsExtra]);
 

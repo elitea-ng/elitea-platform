@@ -8,3 +8,4 @@
 682 apps/elitea-web/package.json  # #765 reverted the @babel/plugin-transform-runtime 8.0.1 bump on purpose: it requires Babel 8 and npm ci stopped resolving
 682 apps/elitea-web/package-lock.json  # same revert (#765): the lock entries the bump added go with it
 667 libs/proto/pyproject.toml  # #778 reverted the protobuf 7.36.0 pin on purpose: the Python worker requires protobuf <7 and pip could not resolve the two together
+679 services/elitea-deepwiki/pyproject.toml  # #799 restored the frozen engine closure on purpose: eight bumps inside it (#677-#679, #757-#761) left pip unable to resolve the engine extra; the pins move with a re-copy of the engine, and Dependabot now ignores both frozen packages

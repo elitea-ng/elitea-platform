@@ -47,6 +47,20 @@ func (f projectSystemTokenIssuerFunc) IssueProjectToken(
 	return f(ctx, projectID)
 }
 
+type projectSecretsHeaderReaderFunc func(context.Context, int64) (string, error)
+
+func (f projectSecretsHeaderReaderFunc) ResolveProjectSecretsHeaderValue(
+	ctx context.Context,
+	projectID int64,
+) (string, error) {
+	return f(ctx, projectID)
+}
+
+// stubProjectSecretsHeader answers every project with one value (#408).
+func stubProjectSecretsHeader(value string) projectSecretsHeaderReaderFunc {
+	return func(context.Context, int64) (string, error) { return value, nil }
+}
+
 func TestIndexRuntimeContextReturnsOnlyClaimActorToken(t *testing.T) {
 	t.Parallel()
 
@@ -81,6 +95,7 @@ func TestIndexRuntimeContextReturnsOnlyClaimActorToken(t *testing.T) {
 				Email: "actor@example.test", AuthType: "token",
 			}, nil
 		}),
+		stubProjectSecretsHeader("project-header-value"),
 	)
 	require.NoError(t, err)
 	server := newIndexRuntimeContextTestServer(t, service)
@@ -140,6 +155,7 @@ func TestIndexRuntimeContextUsesProjectSystemPATForScheduledExecution(t *testing
 				Email: "system_user_42@centry.user", AuthType: "token",
 			}, nil
 		}),
+		stubProjectSecretsHeader("project-header-value"),
 	)
 	require.NoError(t, err)
 
@@ -269,6 +285,7 @@ func TestIndexRuntimeContextScheduledExecutionFailsClosed(t *testing.T) {
 				projectTokenValidatorFunc(func(context.Context, string) (auth.User, error) {
 					return principal, test.validate
 				}),
+				stubProjectSecretsHeader("project-header-value"),
 			)
 			require.NoError(t, err)
 
@@ -357,6 +374,7 @@ func TestIndexRuntimeContextFailsClosedWithoutPrincipalFallback(t *testing.T) {
 				projectTokenValidatorFunc(func(context.Context, string) (auth.User, error) {
 					return test.principal, test.validate
 				}),
+				stubProjectSecretsHeader("project-header-value"),
 			)
 			require.NoError(t, err)
 
@@ -405,6 +423,7 @@ func TestIndexRuntimeContextDistinguishesClaimDenialFromDependencyFailure(t *tes
 					t.Fatal("validator must not be called")
 					return auth.User{}, nil
 				}),
+				stubProjectSecretsHeader("project-header-value"),
 			)
 			require.NoError(t, err)
 			_, err = service.Resolve(context.Background(), ContentClaim{})
@@ -432,6 +451,7 @@ func TestIndexRuntimeContextRouteRejectsUntrustedOrNonEmptyRequests(t *testing.T
 			t.Fatal("validator must not be called")
 			return auth.User{}, nil
 		}),
+		stubProjectSecretsHeader("project-header-value"),
 	)
 	require.NoError(t, err)
 	server := newIndexRuntimeContextTestServer(t, service)
@@ -489,6 +509,7 @@ func TestIndexRuntimeContextRouteSharesContentCapacityAndIsNotMountedByDefault(t
 			t.Fatal("saturated request must not validate")
 			return auth.User{}, nil
 		}),
+		stubProjectSecretsHeader("project-header-value"),
 	)
 	require.NoError(t, err)
 	server := newIndexRuntimeContextTestServer(t, service)
@@ -528,6 +549,7 @@ func TestIndexRuntimeContextFailureLogContainsOnlyOneBoundedStage(t *testing.T) 
 			t.Fatal("validator must not be called")
 			return auth.User{}, nil
 		}),
+		stubProjectSecretsHeader("project-header-value"),
 	)
 	require.NoError(t, err)
 	server := newIndexRuntimeContextTestServer(t, service)

@@ -49,6 +49,7 @@ import type {
   McpRegisteredServer,
   ToolkitInstance,
   ToolkitInstanceListResponse,
+  ToolkitToolRunResult,
   ToolkitToolsPayload,
   ToolkitTypeSchemas,
 } from "../model";
@@ -154,6 +155,35 @@ export const getDiscoverToolkitToolsResponseMock = (
     ]),
   })),
   total: faker.number.int(),
+  ...overrideResponse,
+});
+
+export const getTestToolkitToolResponseMock = (
+  overrideResponse: Partial<Extract<ToolkitToolRunResult, object>> = {},
+): ToolkitToolRunResult => ({
+  ok: faker.datatype.boolean(),
+  task_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  tool_name: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  toolkit_type: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  result: faker.helpers.arrayElement([{}, undefined]),
+  truncated: faker.helpers.arrayElement([faker.datatype.boolean(), undefined]),
+  error: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  reason: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   ...overrideResponse,
 });
 
@@ -372,6 +402,32 @@ export const getDiscoverToolkitToolsMockHandler = (
   );
 };
 
+export const getTestToolkitToolMockHandler = (
+  overrideResponse?:
+    | ToolkitToolRunResult
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<ToolkitToolRunResult> | ToolkitToolRunResult),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/test_tool/prompt_lib/:projectId/:toolId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getTestToolkitToolResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getListRegisteredMcpServersMockHandler = (
   overrideResponse?:
     | McpRegisteredServer[]
@@ -453,6 +509,7 @@ export const getToolkitsMock = () => [
   getCreateToolkitMockHandler(),
   getListToolkitAvailableToolsMockHandler(),
   getDiscoverToolkitToolsMockHandler(),
+  getTestToolkitToolMockHandler(),
   getListRegisteredMcpServersMockHandler(),
   getCallRegisteredMcpServerToolMockHandler(),
   getGetInternalMcpPatStatusMockHandler(),

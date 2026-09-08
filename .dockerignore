@@ -37,6 +37,20 @@
 /services/elitea-main/elitea-main
 /services/elitea-main/cutover-ctl
 /services/elitea-scheduler/elitea-scheduler
+/services/elitea-llm-gateway/elitea-llm-gateway
+
+# ── elitea-llm-gateway local artefacts ───────────────────────────────────────
+# The gateway image built from `./services/elitea-llm-gateway`, so
+# services/elitea-llm-gateway/.dockerignore applied to it. That context is the
+# repository ROOT now (the module replaces libs/go/egresslib), and a nested
+# .dockerignore is IGNORED by BuildKit — only the one beside the context is
+# read. The module-local rules that were not already covered above move here,
+# so they keep working instead of silently doing nothing.
+/services/elitea-llm-gateway/.env
+/services/elitea-llm-gateway/.env.*
+/services/elitea-llm-gateway/*.local
+/services/elitea-llm-gateway/tmp
+/services/elitea-llm-gateway/vendor
 
 # ── Go test / coverage output ─────────────────────────────────────────────────
 coverage.out

@@ -422,13 +422,22 @@ func (s *Service) Parse(data []byte) (*Imported, []Problem) {
 	var warnings []string
 	for _, entry := range reader.File {
 		name := entry.Name
+		// A directory entry (`assets/`) is what Finder, Explorer, JSZip and
+		// most archivers write before the files under it. It carries nothing
+		// and is skipped — but its shape is still checked first, because
+		// `../x/` is a zip-slip attempt whatever its type. The trailing slash
+		// is the directory marker, not part of the path being judged; before
+		// this was split out, `path.Clean("assets/") != "assets/"` refused
+		// every package a customer had re-zipped with ordinary tools.
+		isDir := entry.FileInfo().IsDir() || strings.HasSuffix(name, "/")
+		shape := strings.TrimSuffix(name, "/")
 		// Zip-slip and shape: forward slashes only, no absolute path, no
 		// parent segment, and only the names the format defines.
-		if strings.Contains(name, "\\") || strings.HasPrefix(name, "/") || strings.Contains(name, "..") || path.Clean(name) != name {
+		if shape == "" || strings.Contains(shape, "\\") || strings.HasPrefix(shape, "/") || strings.Contains(shape, "..") || path.Clean(shape) != shape {
 			fail(name, "entry name is not a plain relative path")
 			continue
 		}
-		if entry.FileInfo().IsDir() {
+		if isDir {
 			continue
 		}
 		if !allowedEntry.MatchString(name) {
@@ -490,6 +499,19 @@ func (s *Service) Parse(data []byte) (*Imported, []Problem) {
 		return imported, problems
 	}
 	imported.Pack = pack
+	// The package is NAMED by the pack it carries, not by the manifest an
+	// export wrote. A customer restyles brand-pack.json offline and never
+	// touches manifest.json, so the manifest still says the product it was
+	// exported from; the import dialog and the versions list would then
+	// label an "Acme Corp" package "Elitea". The manifest's other fields
+	// (export time, deployment, digest) remain the record of where it came
+	// from, which is what they are for.
+	if imported.Manifest == nil {
+		imported.Manifest = &Manifest{Format: Format}
+	}
+	if name := strings.TrimSpace(pack.Product.Name); name != "" {
+		imported.Manifest.Product = name
+	}
 
 	// Assets: a reference into the package must exist and pass the kind's
 	// rules; a deployment path is kept; anything else is refused.

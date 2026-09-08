@@ -297,3 +297,109 @@ func replaceLengthDelimitedField(t *testing.T, raw []byte, target protowire.Numb
 	}
 	return result
 }
+
+// A tool run is provider work: it writes tickets and pushes commits. The
+// verifier is the last place that can refuse one before a worker is authorized
+// to hold the toolkit's credentials, so these are the facts it must check.
+func TestConformanceVerifierAcceptsStrictReferenceOnlyToolkitCallToolCommand(t *testing.T) {
+	verifier := newTestVerifier(t)
+	raw := validRawToolkitCallToolWorkerCommand(t)
+
+	command, err := verifier.Verify(context.Background(), signedEnvelope(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if command.GetCapabilityId() != executiondomain.ToolkitCallToolCapability ||
+		command.GetToolkitCallTool().GetToolName() != "get_issue" {
+		t.Fatalf("unexpected verified tool-run command: %v", command)
+	}
+}
+
+func TestConformanceVerifierRejectsOneEntryServingAsSettingsAndArguments(t *testing.T) {
+	// Settings are redeemed by this service and carry credentials. Arguments
+	// come from the caller. One entry standing for both would let caller
+	// content be claimed where the platform's own settings belong.
+	verifier := newTestVerifier(t)
+	command := &runtimev1.WorkerCommandV1{}
+	if err := proto.Unmarshal(validRawToolkitCallToolWorkerCommand(t), command); err != nil {
+		t.Fatal(err)
+	}
+	command.GetToolkitCallTool().ArgumentsEntryId = command.GetToolkitCallTool().SettingsEntryId
+	raw, err := proto.MarshalOptions{Deterministic: true}.Marshal(command)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := verifier.Verify(context.Background(), signedEnvelope(raw)); !errors.Is(err, ErrMalformedWorkerCommand) {
+		t.Fatalf("expected duplicate tool-run binding rejection, got %v", err)
+	}
+}
+
+func TestConformanceVerifierRejectsToolkitCallToolWithTheWrongCommandType(t *testing.T) {
+	// The capability id and the command type are two independent statements.
+	// A command that disagrees with itself is not a command this kernel runs.
+	verifier := newTestVerifier(t)
+	command := &runtimev1.WorkerCommandV1{}
+	if err := proto.Unmarshal(validRawToolkitCallToolWorkerCommand(t), command); err != nil {
+		t.Fatal(err)
+	}
+	command.CommandType = runtimev1.WorkerCommandTypeV1_WORKER_COMMAND_TYPE_V1_INDEX_INGEST
+	raw, err := proto.MarshalOptions{Deterministic: true}.Marshal(command)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := verifier.Verify(context.Background(), signedEnvelope(raw)); !errors.Is(err, ErrCommandIncompatible) {
+		t.Fatalf("expected incompatible command-type rejection, got %v", err)
+	}
+}
+
+func TestConformanceVerifierRejectsToolkitCallToolMissingAName(t *testing.T) {
+	verifier := newTestVerifier(t)
+	for _, mutate := range []func(*runtimev1.ToolkitCallToolCommandV1){
+		func(c *runtimev1.ToolkitCallToolCommandV1) { c.ToolName = "" },
+		func(c *runtimev1.ToolkitCallToolCommandV1) { c.ToolkitType = "" },
+		func(c *runtimev1.ToolkitCallToolCommandV1) { c.ToolkitId = "" },
+		func(c *runtimev1.ToolkitCallToolCommandV1) { c.SettingsEntryId = "" },
+		func(c *runtimev1.ToolkitCallToolCommandV1) { c.ArgumentsEntryId = "" },
+		func(c *runtimev1.ToolkitCallToolCommandV1) { c.ToolName = "get\nissue" },
+	} {
+		command := &runtimev1.WorkerCommandV1{}
+		if err := proto.Unmarshal(validRawToolkitCallToolWorkerCommand(t), command); err != nil {
+			t.Fatal(err)
+		}
+		mutate(command.GetToolkitCallTool())
+		raw, err := proto.MarshalOptions{Deterministic: true}.Marshal(command)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := verifier.Verify(context.Background(), signedEnvelope(raw)); !errors.Is(err, ErrMalformedWorkerCommand) {
+			t.Fatalf("expected malformed tool-run rejection, got %v", err)
+		}
+	}
+}
+
+func validRawToolkitCallToolWorkerCommand(t *testing.T) []byte {
+	t.Helper()
+	command := &runtimev1.WorkerCommandV1{}
+	if err := proto.Unmarshal(validRawWorkerCommand(t), command); err != nil {
+		t.Fatal(err)
+	}
+	command.CommandType = runtimev1.WorkerCommandTypeV1_WORKER_COMMAND_TYPE_V1_TOOLKIT_CALL_TOOL
+	command.CapabilityId = executiondomain.ToolkitCallToolCapability
+	command.CapabilityCommand = &runtimev1.WorkerCommandV1_ToolkitCallTool{
+		ToolkitCallTool: &runtimev1.ToolkitCallToolCommandV1{
+			ToolkitType:      "github",
+			SettingsEntryId:  "toolkit-settings",
+			ToolName:         "get_issue",
+			ArgumentsEntryId: "tool-arguments",
+			ToolkitId:        "17",
+			ToolkitVersion:   "3",
+		},
+	}
+	raw, err := proto.MarshalOptions{Deterministic: true}.Marshal(command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}

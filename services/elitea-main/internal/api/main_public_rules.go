@@ -56,6 +56,16 @@ func CurrentMainRoutePublicRules() []forwardapp.PublicRule {
 		// fetches carry no credential. The path is content-addressed
 		// (kind/<sha256>.<ext>) and the handler admits nothing else.
 		uriRule("go.branding.assets", `^/api/v2/branding/assets/[a-z-]+/[0-9a-f]{64}\.[a-z0-9]{1,8}$`),
+		// The liveness endpoint (#569). router.go mounts health.RoutesWithDeps
+		// at `/`, outside every auth group, and every browser edge forwards
+		// `/healthz` to elitea-main. The cluster edge consults this policy
+		// before it forwards, so without this row a probe on the public
+		// hostname got a 302 to the login form. The body is the minimal
+		// {"status":"ok"} and names no dependency. /readyz and /startupz stay
+		// absent on purpose: no edge forwards them, and their bodies do name
+		// each dependency's state. The query alternative covers a monitor's
+		// cache-busting parameter.
+		uriRule("go.health.healthz", `^/healthz(\?.*)?$`),
 		// API documentation predates any session.
 		uriRule("go.openapidocs.spec_yaml", `^/api/openapi\.yaml$`),
 		uriRule("go.openapidocs.spec_json", `^/api/openapi\.json$`),

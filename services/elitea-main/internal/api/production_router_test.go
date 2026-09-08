@@ -17,7 +17,6 @@ import (
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/oapiserver"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/shadow"
 	agentexecutionapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/agentexecution"
 	applicationskillsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/applicationskills"
 	v2auth "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/auth"
@@ -32,22 +31,10 @@ import (
 	v2social "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/social"
 	socialapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/social"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/cutover"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
 	dbrepos "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
 )
-
-// newUnreachableRedisClient returns a redis client pointed at a loopback
-// address nothing listens on. cutover.Tracker calls its methods with no nil
-// check, so any test that composes CutoverRouter/CutoverTracker and expects
-// requests to reach them needs a non-nil client to avoid a nil-pointer
-// panic; pointing it at an unreachable address instead of a real redis
-// instance gives a fast, deterministic connection error, which the
-// production code already treats as "fall through" (see cutover/router.go).
-func newUnreachableRedisClient() *goredis.Client {
-	return goredis.NewClient(&goredis.Options{Addr: "127.0.0.1:1", DialTimeout: 50 * time.Millisecond})
-}
 
 // reviewedRoutesRouter exercises mountReviewedProductionRoutes in isolation,
 // the same way newProductionRouter's single call site does (#243 removed the
@@ -120,6 +107,62 @@ func TestProductionRouterMountsCurrentAgentCancelOnlyWhenComposed(t *testing.T) 
 		{name: "delete", router: reviewedRoutesRouter(RouterConfig{CurrentAgentCancel: handler}), method: http.MethodDelete, want: http.StatusNoContent},
 		{name: "wrong method", router: reviewedRoutesRouter(RouterConfig{CurrentAgentCancel: handler}), method: http.MethodGet, want: http.StatusMethodNotAllowed},
 		{name: "uncomposed", router: reviewedRoutesRouter(RouterConfig{}), method: http.MethodDelete, want: http.StatusNotFound},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			test.router.ServeHTTP(response, httptest.NewRequest(test.method, path, nil))
+			if response.Code != test.want {
+				t.Fatalf("status=%d want=%d body=%q", response.Code, test.want, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestProductionRouterMountsCurrentApplicationTaskOnlyWhenComposed(t *testing.T) {
+	// Both verbs ride ONE handler, so a mount that registered only the DELETE —
+	// the shape the legacy SPA's dead mutation would still have exercised —
+	// would leave the poll answering 405 while the stop worked, and nothing
+	// else in this suite would notice.
+	handler := http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusTeapot)
+	})
+	path := "/api/v2/elitea_core/application_task/prompt_lib/2/10000000-0000-4000-8000-000000000051"
+	for _, test := range []struct {
+		name   string
+		router http.Handler
+		method string
+		want   int
+	}{
+		{
+			name:   "status",
+			router: reviewedRoutesRouter(RouterConfig{CurrentApplicationTask: handler}),
+			method: http.MethodGet,
+			want:   http.StatusTeapot,
+		},
+		{
+			name:   "cancel",
+			router: reviewedRoutesRouter(RouterConfig{CurrentApplicationTask: handler}),
+			method: http.MethodDelete,
+			want:   http.StatusTeapot,
+		},
+		{
+			name:   "wrong method",
+			router: reviewedRoutesRouter(RouterConfig{CurrentApplicationTask: handler}),
+			method: http.MethodPost,
+			want:   http.StatusMethodNotAllowed,
+		},
+		{
+			name:   "uncomposed status",
+			router: reviewedRoutesRouter(RouterConfig{}),
+			method: http.MethodGet,
+			want:   http.StatusNotFound,
+		},
+		{
+			name:   "uncomposed cancel",
+			router: reviewedRoutesRouter(RouterConfig{}),
+			method: http.MethodDelete,
+			want:   http.StatusNotFound,
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			response := httptest.NewRecorder()
@@ -359,6 +402,14 @@ func (productionProjectPermissionResolver) ResolvePermissions(
 	context.Context,
 	auth.User,
 	string,
+	string,
+) (auth.PermissionResolution, error) {
+	return auth.PermissionResolution{}, nil
+}
+
+func (productionProjectPermissionResolver) ResolveMembershipPermissions(
+	context.Context,
+	auth.User,
 	string,
 ) (auth.PermissionResolution, error) {
 	return auth.PermissionResolution{}, nil
@@ -1656,9 +1707,13 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"DELETE /api/v2/admin/gateway/providers/{configID}",
 		"DELETE /api/v2/admin/identity_providers/administration/{key}",
 		"DELETE /api/v2/admin/mcp_prebuilt_servers/administration/{key}",
+		"DELETE /api/v2/admin/moderation_status/{mode}/{projectID}/{entityID}",
 		"DELETE /api/v2/admin/modes/administration",
+		"DELETE /api/v2/admin/roles/{scope}/{mode}",
 		"DELETE /api/v2/admin/scim_group_bindings/administration/{id}",
+		"DELETE /api/v2/admin/toolkit_types/administration/{type}/projects/{projectID}",
 		"DELETE /api/v2/admin/users/{mode}/{projectID}",
+		"DELETE /api/v2/artifacts/bucket_permissions/{projectID}",
 		"DELETE /api/v2/artifacts/buckets/{projectID}/{bucket}",
 		"DELETE /api/v2/artifacts/objects/{projectID}/{bucket}/*",
 		"DELETE /api/v2/auth/token/{tokenUUID}",
@@ -1675,6 +1730,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"DELETE /api/v2/elitea_core/messages/prompt_lib/{projectID}/{conversationID}",
 		"DELETE /api/v2/elitea_core/participant/prompt_lib/{projectID}/{conversationID}/{participantID}",
 		"DELETE /api/v2/elitea_core/pin/prompt_lib/{projectID}/{entityType}/{entityID}",
+		"DELETE /api/v2/elitea_core/project_budget/administration/{projectID}/budget",
 		"DELETE /api/v2/elitea_core/project_context/prompt_lib/{projectID}/project-context",
 		"DELETE /api/v2/elitea_core/project_icon/prompt_lib/{projectID}/{name}",
 		"DELETE /api/v2/elitea_core/register_descriptor/{projectID}",
@@ -1685,6 +1741,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"DELETE /api/v2/elitea_core/tool/prompt_lib/{projectID}/{toolkitID}",
 		"DELETE /api/v2/elitea_core/upload_icon/prompt_lib/{projectID}/{name}",
 		"DELETE /api/v2/elitea_core/upload_skill_icon/prompt_lib/{projectID}/{name}",
+		"DELETE /api/v2/elitea_core/user_budget/administration/{projectID}/user_budget/{userID}",
 		"DELETE /api/v2/elitea_core/version/prompt_lib/{projectID}/{applicationID}/{versionID}",
 		"DELETE /api/v2/notifications/notification/prompt_lib/{projectID}/{notificationID}",
 		"DELETE /api/v2/notifications/notifications/prompt_lib/{projectID}",
@@ -1702,9 +1759,11 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"GET /api/openapi.yaml",
 		"GET /api/v2/admin/active_tasks/{mode}",
 		"GET /api/v2/admin/auth_users/{mode}",
+		"GET /api/v2/admin/background_jobs/administration",
 		"GET /api/v2/admin/branding/administration",
 		"GET /api/v2/admin/branding/package/administration",
 		"GET /api/v2/admin/branding/package/administration/versions",
+		"GET /api/v2/admin/email/administration",
 		"GET /api/v2/admin/gateway/*/budget-alerts",
 		"GET /api/v2/admin/gateway/governance",
 		"GET /api/v2/admin/gateway/logs",
@@ -1736,9 +1795,11 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"GET /api/v2/admin/system_info/{mode}",
 		"GET /api/v2/admin/tasks/{mode}",
 		"GET /api/v2/admin/tasks/{mode}/",
+		"GET /api/v2/admin/toolkit_types/administration",
 		"GET /api/v2/admin/user_project_permissions/administration",
 		"GET /api/v2/admin/users/administration/{projectID}",
 		"GET /api/v2/admin/users/{mode}/{projectID}",
+		"GET /api/v2/artifacts/bucket_permissions/{projectID}",
 		"GET /api/v2/artifacts/buckets/{projectID}",
 		"GET /api/v2/artifacts/buckets/{projectID}/{bucket}",
 		"GET /api/v2/artifacts/objects/{projectID}/{bucket}",
@@ -1775,7 +1836,6 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"GET /api/v2/elitea_core/analytics_users/prompt_lib/{projectID}",
 		"GET /api/v2/elitea_core/application/prompt_lib/{projectID}/{applicationID}",
 		"GET /api/v2/elitea_core/application_relation/prompt_lib/{projectID}/{appID}/{versionID}",
-		"GET /api/v2/elitea_core/application_skills/{mode}/{projectID}/{appVersionID}",
 		"GET /api/v2/elitea_core/applications/prompt_lib/{projectID}",
 		"GET /api/v2/elitea_core/audit/{mode}",
 		"GET /api/v2/elitea_core/audit_heatmap/{mode}",
@@ -1797,7 +1857,6 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"GET /api/v2/elitea_core/folder/prompt_lib/{projectID}/{folderID}",
 		"GET /api/v2/elitea_core/index_meta/prompt_lib/{projectID}/{toolkitID}",
 		"GET /api/v2/elitea_core/index_meta/prompt_lib/{projectID}/{toolkitID}/{indexMetaID}",
-		"GET /api/v2/elitea_core/index_types/prompt_lib/{projectID}",
 		"GET /api/v2/elitea_core/internal_mcp_pat_status/prompt_lib/{projectID}/{toolkitType}",
 		"GET /api/v2/elitea_core/message/prompt_lib/{projectID}/{messageID}",
 		"GET /api/v2/elitea_core/message_trace/prompt_lib/{projectID}/{stepID}",
@@ -1877,6 +1936,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"GET /api/v2/social/authors/{projectID}",
 		"GET /api/v2/social/feedbacks/default/{projectID}",
 		"GET /api/v2/social/trending_authors/prompt_lib/{projectID}",
+		"GET /api/v2/support_assistant/attachments/{bucket}/*",
 		"GET /api/v2/support_assistant/config",
 		"GET /api/v2/support_assistant/config/",
 		"GET /api/v2/support_assistant/conversation/{conversationUUID}",
@@ -1914,10 +1974,12 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"PATCH /api/v2/scim/v2/Groups/{id}",
 		"PATCH /api/v2/scim/v2/Users/{id}",
 		"POST /api/v2/admin/auth_users/{mode}",
+		"POST /api/v2/admin/background_jobs/administration/{kind}/{jobID}:cancel",
 		"POST /api/v2/admin/branding/assets/{kind}",
 		"POST /api/v2/admin/branding/package/administration",
 		"POST /api/v2/admin/branding/package/administration/versions/{digest}/restore",
 		"POST /api/v2/admin/branding/test_email/administration",
+		"POST /api/v2/admin/email/test/administration",
 		"POST /api/v2/admin/gateway/governance",
 		"POST /api/v2/admin/gateway/governance/validate-cel",
 		"POST /api/v2/admin/gateway/platform_models/",
@@ -1933,9 +1995,11 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"POST /api/v2/admin/modes/administration",
 		"POST /api/v2/admin/permissions/{scope}/{mode}",
 		"POST /api/v2/admin/plugin_config_restart/{mode}/{pylonID}",
+		"POST /api/v2/admin/roles/{scope}/{mode}",
 		"POST /api/v2/admin/runtime_pylons/{mode}",
 		"POST /api/v2/admin/runtime_remote_config/{mode}/{pluginID}",
 		"POST /api/v2/admin/scim_group_bindings/administration",
+		"POST /api/v2/admin/toolkit_types/administration/bulk",
 		"POST /api/v2/admin/user_invite/administration",
 		"POST /api/v2/admin/users/administration/{projectID}",
 		"POST /api/v2/admin/users/{mode}/{projectID}",
@@ -1968,6 +2032,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"POST /api/v2/elitea_core/attach_public_skill/prompt_lib/{projectID}",
 		"POST /api/v2/elitea_core/attachments/prompt_lib/{projectID}/{conversationID}",
 		"POST /api/v2/elitea_core/batch_replace_version/prompt_lib/{projectID}/{oldVersionID}/{newVersionID}",
+		"POST /api/v2/elitea_core/canvas/prompt_lib/{projectID}/{canvasID}/presence",
 		"POST /api/v2/elitea_core/canvases/prompt_lib/{projectID}",
 		"POST /api/v2/elitea_core/conversations/prompt_lib/{projectID}",
 		"POST /api/v2/elitea_core/export_converter/prompt_lib",
@@ -1975,6 +2040,9 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"POST /api/v2/elitea_core/folder/prompt_lib/{projectID}",
 		"POST /api/v2/elitea_core/fork/prompt_lib/{projectID}",
 		"POST /api/v2/elitea_core/fork_toolkit/prompt_lib/{projectID}",
+		"POST /api/v2/elitea_core/generate_application_draft/prompt_lib/{projectID}",
+		"POST /api/v2/elitea_core/generate_project_context_draft/prompt_lib/{projectID}",
+		"POST /api/v2/elitea_core/generate_skill_draft/prompt_lib/{projectID}",
 		"POST /api/v2/elitea_core/import_wizard/prompt_lib/{projectID}",
 		"POST /api/v2/elitea_core/mcp_dcr_proxy/{projectID}",
 		"POST /api/v2/elitea_core/mcp_oauth_proxy/{projectID}",
@@ -2027,6 +2095,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"POST /api/v2/social/like/prompt_lib/{projectID}/application/{applicationID}",
 		"POST /api/v2/social/like/prompt_lib/{projectID}/{entityType}/{entityID}",
 		"POST /api/v2/social/pin/prompt_lib/{projectID}/{entityType}/{entityID}",
+		"POST /api/v2/support_assistant/attachments/{conversationID}",
 		"POST /api/v2/support_assistant/conversations",
 		"POST /api/v2/support_assistant/conversations/",
 		"POST /api/v2/support_assistant/predict/{conversationUUID}",
@@ -2038,6 +2107,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"POST /app/{projectID}/mcp",
 		"POST /app/{projectID}/mcp/*",
 		"PUT /api/v2/admin/branding/administration",
+		"PUT /api/v2/admin/email/administration",
 		"PUT /api/v2/admin/gateway/*/budget-alerts",
 		"PUT /api/v2/admin/gateway/governance/{id}",
 		"PUT /api/v2/admin/gateway/models",
@@ -2050,12 +2120,16 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"PUT /api/v2/admin/permissions/{scope}/{mode}",
 		"PUT /api/v2/admin/plugin_config_values/administration/{plugin}",
 		"PUT /api/v2/admin/project_suspend/{mode}/{projectID}",
+		"PUT /api/v2/admin/roles/{scope}/{mode}",
 		"PUT /api/v2/admin/runtime_plugin/{mode}/{pluginName}",
 		"PUT /api/v2/admin/scim_group_bindings/administration/{id}",
+		"PUT /api/v2/admin/toolkit_types/administration/{type}",
+		"PUT /api/v2/admin/toolkit_types/administration/{type}/projects/{projectID}",
 		"PUT /api/v2/admin/user_project_permissions/administration",
 		"PUT /api/v2/admin/user_suspend/{mode}/{userID}",
 		"PUT /api/v2/admin/users/administration/{projectID}",
 		"PUT /api/v2/admin/users/{mode}/{projectID}",
+		"PUT /api/v2/artifacts/bucket_permissions/{projectID}",
 		"PUT /api/v2/configurations/configuration/{mode}/{projectID}/{configID}",
 		"PUT /api/v2/configurations/configuration/{projectID}/{configID}",
 		"PUT /api/v2/context_manager/summary/{projectID}/{conversationID}/{summaryID}",
@@ -2292,14 +2366,20 @@ func TestProductionBrowserAuthSurfaceNeverSucceedsWithoutCredentials(t *testing.
 	}
 }
 
+// newUnreachableRedisClient returns a redis client pointed at a loopback
+// address nothing listens on. A test that composes a redis-backed route group
+// and expects requests to reach it needs a non-nil client to avoid a
+// nil-pointer panic; pointing it at an unreachable address instead of a real
+// redis instance gives a fast, deterministic connection error, which the
+// production code already treats as "this source has nothing to give".
+func newUnreachableRedisClient() *goredis.Client {
+	return goredis.NewClient(&goredis.Options{Addr: "127.0.0.1:1", DialTimeout: 50 * time.Millisecond})
+}
+
 func newCompleteProductionRouter(sessionSecret string) chi.Router {
 	runtimeHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		panic(fmt.Errorf("route coverage test must not execute runtime handler"))
 	})
-	// NewRouter's dead "reviewed production router" branch never wired
-	// CutoverRouter/CutoverTracker, so nothing exercised them before #243;
-	// see newUnreachableRedisClient for why a nil client isn't safe here.
-	unreachableRedis := newUnreachableRedisClient()
 	return NewRouter(RouterConfig{
 		AuthValidator:      testTokenValidator{user: authenticatedTestUser()},
 		PrincipalValidator: testPrincipalValidator{},
@@ -2310,16 +2390,8 @@ func newCompleteProductionRouter(sessionSecret string) chi.Router {
 		// the browser-auth surface below PINS the SAML paths — a handler left
 		// out of this router would let all three routes be removed without a
 		// test noticing.
-		SAMLHandler:    &v2auth.SAMLHandler{},
-		SessionSecret:  sessionSecret,
-		Shadow:         shadow.NewComparator(shadow.Config{Timeout: time.Second}),
-		ShadowMetrics:  shadow.NewMetrics(10),
-		CutoverTracker: cutover.NewTracker(unreachableRedis),
-		CutoverRouter: cutover.NewRouter(cutover.RouterConfig{
-			Tracker:   cutover.NewTracker(unreachableRedis),
-			LegacyURL: "http://127.0.0.1:1",
-		}),
-		InternalAdminToken: strings.Repeat("i", middleware.MinimumInternalAdminTokenBytes),
+		SAMLHandler:   &v2auth.SAMLHandler{},
+		SessionSecret: sessionSecret,
 		RuntimeRoutes: RuntimeRoutes{
 			Validation:      runtimeHandler,
 			ExecutionEvents: runtimeHandler,

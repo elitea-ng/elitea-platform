@@ -29,11 +29,16 @@ import (
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api"
 	v2analytics "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/analytics"
+	v2applicationskills "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/applicationskills"
 	v2auth "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/auth"
 	v2convs "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
 	v2deepwiki "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
+	v2evaluation "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/evaluation"
 	v2events "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/events"
 	v2folders "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/folders"
+	v2indextypes "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indextypes"
+	v2inventory "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/inventory"
+	v2pipelinetriggers "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/pipelinetriggers"
 	v2skills "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/skills"
 	v2social "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/social"
 	v2tags "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/tags"
@@ -67,6 +72,13 @@ const (
 	// twelve routes gated on the retired prototype indexer transport.
 	// If either input collapses, the conformance loop would vacuously pass —
 	// so guard the inputs themselves.
+	//
+	// MEASURED 2026-09-06, after the three Inventory operations landed: 185
+	// spec operations and 457 collected routes. Both numbers above are the
+	// record of an earlier day and neither has been kept current; the floors
+	// are minima, so they held anyway. The measurement is written down here
+	// rather than folded into the prose, because a prose number nobody
+	// re-measures is how the 152 and the 277 stopped being true.
 	minSpecOperations = 145
 	minRouterRoutes   = 270
 	// minManifestEndpoints guards the reverse check's own input. The manifest
@@ -85,7 +97,17 @@ const (
 	// failing this gate outright, because the allowlist was already AT its cap
 	// and could not take them. Describing the endpoint was the only sanctioned
 	// way out, and it needed the route to exist first.
-	maxAllowlistEntries = 93
+	//
+	// 93 -> 78 (issue 621), when pathCoveredBySpec was repaired. It compared
+	// the manifest path against the BASED spec candidate ("/api/v2/..."), which
+	// no manifest entry carries, so the path arm of the reverse check never
+	// matched and this list could never shrink. Fifteen ids the document
+	// already described came off it in one step. See pathCoveredBySpec.
+	//
+	// 78 -> 76 (#254 P1), when the three AI-draft routes were served and
+	// described. Two ids came off: applications.generateAgentDraft and
+	// skills.generateDraft, the two manifest entries on those paths.
+	maxAllowlistEntries = 76
 )
 
 // buildFullSurfaceConfig returns a RouterConfig for the real production
@@ -104,15 +126,26 @@ func buildFullSurfaceConfig() api.RouterConfig {
 			SessionHandler: &v2auth.SessionHandler{},
 			OIDCHandler:    &v2auth.OIDCHandler{},
 		},
-		AppsRepo:      struct{ applications.Repository }{},
-		SkillsRepo:    struct{ v2skills.Repository }{},
-		FoldersRepo:   struct{ v2folders.Repository }{},
-		TagsRepo:      struct{ v2tags.Repository }{},
-		AnalyticsRepo: struct{ v2analytics.Repository }{},
-		ConvsRepo:     struct{ v2convs.Repository }{},
-		WebhookRepo:   struct{ webhook.Repository }{},
-		EventSource:   struct{ v2events.EventSource }{},
-		LLMProxy:      http.NotFoundHandler(),
+		AppsRepo: struct{ applications.Repository }{},
+
+		// Agent Evaluation (#617). All three are MANDATORY here, not optional
+		// stubs, and the third is the one that is easy to forget: the run
+		// routes are gated on `EvalRunsRepo != nil && EvalDimensionsRepo != nil`
+		// together, because a run's snapshot is built from the dimension
+		// library. Leave EvalDimensionsRepo nil and the five run operations the
+		// spec declares resolve to no route at all, and the forward check fails
+		// with a message about the spec rather than about this config.
+		EvalDatasetsRepo:   struct{ v2evaluation.DatasetRepository }{},
+		EvalRunsRepo:       struct{ v2evaluation.RunRepository }{},
+		EvalDimensionsRepo: struct{ v2evaluation.Repository }{},
+		SkillsRepo:         struct{ v2skills.Repository }{},
+		FoldersRepo:        struct{ v2folders.Repository }{},
+		TagsRepo:           struct{ v2tags.Repository }{},
+		AnalyticsRepo:      struct{ v2analytics.Repository }{},
+		ConvsRepo:          struct{ v2convs.Repository }{},
+		WebhookRepo:        struct{ webhook.Repository }{},
+		EventSource:        struct{ v2events.EventSource }{},
+		LLMProxy:           http.NotFoundHandler(),
 
 		// CurrentAvatarRoute has no interface-typed dependency this stub
 		// scheme can zero-value: a bare &v2social.CurrentAvatarRoute{} still
@@ -126,6 +159,32 @@ func buildFullSurfaceConfig() api.RouterConfig {
 		// router. Its ServeHTTP answers 503 for a zero value rather than
 		// panicking, so even a served request would be harmless here.
 		DeepWiki: &v2deepwiki.Route{},
+
+		// The Inventory facade, the SECOND facade over the same provider SPI,
+		// mounted by the same four lines in production_router.go and stubbed
+		// the same way. It is MANDATORY here, not optional: v2.yaml now
+		// describes invokeInventoryTool, getInventoryInvocation and
+		// cancelInventoryInvocation, and those three operations resolve to no
+		// route at all unless this field is non-nil.
+		Inventory: &v2inventory.Route{},
+
+		// The index-types and attached-skills reads (#394, #395). Both are
+		// MANDATORY here, not optional stubs: each is the ONLY handler for a
+		// path the spec declares (getDocumentLoaders, listApplicationSkills).
+		// The prototype mounts in router.go used to cover those two operations
+		// for this walk, and deleting them left the spec describing two routes
+		// the full surface did not register. Same zero-value scheme as above —
+		// each ServeHTTP answers 404 for a zero value rather than panicking.
+		CurrentIndexTypes:        &v2indextypes.CurrentIndexTypesRoute{},
+		CurrentApplicationSkills: &v2applicationskills.CurrentApplicationSkillsRoute{},
+
+		// The unattended pipeline entry points (issues 192, 193). MANDATORY
+		// here, not an optional stub: this handler is the only one for the
+		// eight operations v2.yaml now describes, and all eight resolve to no
+		// route unless the field is non-nil. A handler with NO pool is the
+		// right stub — every route answers 503 for one rather than panicking,
+		// and this walk never serves a request.
+		PipelineTriggers: v2pipelinetriggers.NewHandler(nil),
 	}
 }
 

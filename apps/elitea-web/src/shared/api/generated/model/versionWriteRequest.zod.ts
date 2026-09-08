@@ -48,15 +48,30 @@ import { VersionTag } from "./versionTag.zod";
 import { VersionVariable } from "./versionVariable.zod";
 
 export const VersionWriteRequest = zod.object({
-  name: zod.string().optional(),
+  name: zod
+    .string()
+    .optional()
+    .describe(
+      "Omit the key to leave the stored name alone. An explicit empty string is REFUSED with a 400 on the PUT: the column is NOT NULL and unique per application, and the create paths substitute the default version name for an empty value, so a blank name is not a state the platform can read back (issue 824).\n",
+    ),
   agent_type: zod
     .string()
     .optional()
     .describe(
-      'Defaults to \"openai\" when empty (handler.go:398-400, 731-733).',
+      'Defaults to \"openai\" when empty on the CREATE paths (handler.go:398-400, 731-733). On the PUT, omit the key to leave the stored value alone; an explicit empty string is REFUSED with a 400, for the same reason as `name` (issue 824).\n',
     ),
-  instructions: zod.string().optional(),
-  welcome_message: zod.string().optional(),
+  instructions: zod
+    .string()
+    .optional()
+    .describe(
+      "Omit the key to leave the stored text alone. An explicit empty string CLEARS the column — it is the clearing value, since the property is not nullable and a client must be able to erase the text it wrote (issue 824).\n",
+    ),
+  welcome_message: zod
+    .string()
+    .optional()
+    .describe(
+      "Omit the key to leave the stored text alone. An explicit empty string CLEARS the column, exactly as for `instructions` (issue 824).\n",
+    ),
   llm_settings: LlmSettings.optional(),
   conversation_starters: ConversationStarters.optional(),
   variables: zod.array(VersionVariable).optional(),

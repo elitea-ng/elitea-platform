@@ -9,7 +9,6 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,6 +20,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/contextsettings"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/publicproject"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
@@ -185,6 +185,17 @@ type Repository interface {
 	CreateCanvas(ctx context.Context, projectID string, body map[string]any) (map[string]any, error)
 	GetCanvas(ctx context.Context, projectID, canvasID string) (map[string]any, error)
 	UpdateCanvas(ctx context.Context, projectID, canvasID string, body map[string]any) error
+	// ResolveCanvas proves a canvas id names a canvas INSIDE schema(projectID)
+	// and returns its uuid plus its message group's uuid. No handler in THIS
+	// package calls it: it is the cross-project control for the presence
+	// heartbeat (internal/api/v2/canvaspresence, #622), which is registered
+	// beside the canvas routes above and is handed this same repository.
+	//
+	// It is declared HERE rather than asserted from the concrete type at the
+	// call site so the compiler is what proves the wiring. A type assertion
+	// that quietly fails leaves a route that answers and does nothing, which is
+	// the #126/#128 class this repository keeps re-finding.
+	ResolveCanvas(ctx context.Context, projectID, canvasID string) (canvasUUID, messageGroupUUID string, err error)
 	UpdateAttachmentStorage(ctx context.Context, projectID, conversationID string, body map[string]any) error
 	AddAttachments(ctx context.Context, projectID, conversationID string, body map[string]any) error
 	DeleteAttachments(ctx context.Context, projectID, conversationID string) error
@@ -321,8 +332,56 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		argIdx++
 	}
 
-	// Exclude hidden conversations
-	baseWhere += " AND (c.meta->>'is_hidden' IS NULL OR c.meta->>'is_hidden' = 'false')"
+	// `?mine=true` narrows the listing to the CALLER'S OWN conversations.
+	//
+	// It is not decoration on the hidden filter, it is what makes it safe to
+	// use. `chat_conversations` rows carry `is_private`, and this listing has
+	// never read it — every conversation in a project is listed to every
+	// member who may list conversations at all. That is the behaviour for
+	// ordinary chats and it is left alone here; but a wiki chat drawer that
+	// asked for "the hidden deepwiki conversations of this toolkit" without
+	// this would show one member the questions another member asked, which is
+	// a new leak rather than an inherited one.
+	//
+	// An unauthenticated caller cannot narrow to itself, so it gets an empty
+	// listing rather than everybody's: refusing the FILTER by ignoring it is
+	// how a privacy control becomes a no-op.
+	if r.URL.Query().Get("mine") == "true" {
+		user, ok := auth.UserFromContext(ctx)
+		callerID, hasCaller := int64(0), false
+		if ok {
+			callerID, hasCaller = user.OwningUserID()
+		}
+		if !hasCaller {
+			writeJSON(w, http.StatusOK, map[string]any{"total": 0, "rows": []any{}})
+			return
+		}
+		baseWhere += fmt.Sprintf(" AND c.author_id = $%d", argIdx)
+		args = append(args, callerID)
+		argIdx++
+	}
+
+	// Hidden conversations.
+	//
+	// The default is UNCHANGED — they are excluded, which is what keeps a
+	// support transcript and a DeepWiki wiki chat out of a user's ordinary
+	// chat list. `?hidden=only` asks for exactly the opposite set, and it
+	// exists because a surface that OWNS hidden conversations has to be able
+	// to list its own: the wiki chat drawer files its conversations hidden
+	// precisely so they do not surface in the chat list, and then needs them
+	// back, filtered by `source` and `entity_name` the way this route already
+	// filters everything else.
+	//
+	// Two values and not a boolean: "only" is a different question from
+	// "including", and answering the second by accident would put every
+	// hidden conversation into the ordinary list. Anything else — including
+	// the absent parameter every existing caller sends — takes the default.
+	if r.URL.Query().Get("hidden") == "only" {
+		baseWhere += " AND c.meta->>'is_hidden' = 'true'"
+	} else {
+		// Exclude hidden conversations
+		baseWhere += " AND (c.meta->>'is_hidden' IS NULL OR c.meta->>'is_hidden' = 'false')"
+	}
 
 	// Count total
 	countQ := fmt.Sprintf(`SELECT COUNT(*) FROM %s.chat_conversations c %s`, s, baseWhere)
@@ -926,10 +985,10 @@ func (h *Handler) UpdateEntitySettings(w http.ResponseWriter, r *http.Request) {
 		if pool != nil {
 			entityName, agentProjectID := h.getParticipantEntityInfo(r.Context(), pool, projectID, conversationID, participantID)
 			if entityName == "application" {
-				publicProjectID := os.Getenv("PUBLIC_PROJECT_ID")
-				if publicProjectID == "" {
-					publicProjectID = "1"
-				}
+				// `PUBLIC_PROJECT_ID` was one of four names for one project.
+				// internal/publicproject resolves them all, and cmd refuses to
+				// start when two of them disagree.
+				publicProjectID := publicproject.IDString()
 				if agentProjectID != publicProjectID {
 					// Non-published agent: reject if llm_settings differs from version baseline
 					versionID := body["version_id"]

@@ -3404,7 +3404,22 @@ func TestHybridNestedApplicationReferenceRouterIsBounded(t *testing.T) {
 	requireNestedApplicationReferenceRouter(t, string(routeBytes))
 }
 
-func TestHybridCurrentArtifactWorkerRouterIsBounded(t *testing.T) {
+// TestHybridArtifactRouterIsBoundedToGoMain reads the artifact plane's ONE
+// router.
+//
+// It used to read `runtime-worker-current-artifacts`: a Host(`elitea-gateway`)
+// guarded router that sent the worker's S3 calls to pylon, while browser
+// artifact traffic fell through base.yml's catch-all to pylon as well. Issue
+// 337 replaced both doors with a single `go-artifacts` router at priority 90
+// pointing at elitea-main, and deploy/ARTIFACT_CUTOVER.md records the flip.
+//
+// The assertions move with it rather than go away. The bound this gate holds is
+// the same bound as before — the router names the artifact paths and no others,
+// and it names one service — and it gains the two facts the cutover created:
+// the Host guard is deliberately absent, because a browser must reach the same
+// door as the worker, and no OTHER router in this file claims an artifact path,
+// because "one owner" is the property the cutover bought.
+func TestHybridArtifactRouterIsBoundedToGoMain(t *testing.T) {
 	routePath := filepath.Join(
 		findRepositoryRoot(t),
 		"deploy",
@@ -3416,62 +3431,129 @@ func TestHybridCurrentArtifactWorkerRouterIsBounded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read hybrid gateway route %s: %v", routePath, err)
 	}
-	requireCurrentArtifactWorkerRouter(t, string(routeBytes))
+	requireArtifactRouter(t, string(routeBytes))
 }
 
-func requireCurrentArtifactWorkerRouter(t *testing.T, route string) {
+func requireArtifactRouter(t *testing.T, route string) {
 	t.Helper()
-	const marker = "    runtime-worker-current-artifacts:\n"
-	routerStart := strings.Index(route, marker)
-	if routerStart < 0 {
-		t.Fatal("gateway route lacks the current-artifact worker router")
+	if strings.Contains(route, "runtime-worker-current-artifacts:") {
+		t.Fatal("the retired current-artifact worker router is back beside the Go artifact router; two doors to one object store is the state issue 337 removed")
 	}
-	router := route[routerStart:]
+	router := hybridGatewayRouterBlock(route, "go-artifacts")
+	if router == "" {
+		t.Fatal("gateway route lacks the go-artifacts router")
+	}
 	for _, required := range []string{
-		"Host(`elitea-gateway`)",
-		"PathRegexp(`^/api/v2/artifacts/buckets/[1-9][0-9]*$`)",
+		"PathRegexp(`^/api/v2/artifacts/buckets/[1-9][0-9]*(/[^/]+)?$`)",
+		"PathRegexp(`^/api/v2/artifacts/objects/[1-9][0-9]*/[^/]+(/.*)?$`)",
+		"PathRegexp(`^/api/v2/artifacts/grants/[1-9][0-9]*/.*$`)",
+		// NOT under /api/v2, on purpose: the pinned SDK appends
+		// "/artifacts/s3" to a platform origin that carries no path, so the
+		// request arrives at the root.
 		"PathRegexp(`^/artifacts/s3/[^/]+(/.*)?$`)",
 		"Method(`GET`)",
 		"Method(`POST`)",
 		"Method(`PUT`)",
+		"Method(`PATCH`)",
 		"Method(`DELETE`)",
 		"Method(`HEAD`)",
-		"priority: 85",
+		// Priority 90 is the band of the other browser-reachable Go routers.
+		// 85 is the band for the worker-only routers that keep a Host guard,
+		// and this one has none to justify sitting there.
+		"priority: 90",
 		"entryPoints: [websecure]",
 		"tls: {}",
 		"middlewares:\n        - strip-caller-auth-context\n        - normalize-runtime-public-authority\n        - go-main-forward-auth",
-		"service: current-main",
+		"service: elitea-main",
 	} {
 		if !strings.Contains(router, required) {
-			t.Fatalf("current-artifact worker router has an unexpected semantic contract: %q", required)
+			t.Fatalf("artifact router has an unexpected semantic contract: %q", required)
 		}
 	}
 	for _, forbidden := range []string{
+		// A prefix match would swallow paths this router does not serve.
 		"PathPrefix(",
-		"service: elitea-main",
-		"Method(`PATCH`)",
+		// THE ABSENT HOST GUARD IS THE DESIGN. The worker-only routers carry
+		// Host(`elitea-gateway`); this router serves the browser as well, and
+		// restoring the guard would send browser artifact traffic back through
+		// base.yml's catch-all to a service that no longer owns the store.
+		"Host(`elitea-gateway`)",
+		"service: current-main",
 	} {
 		if strings.Contains(router, forbidden) {
-			t.Fatalf("current-artifact worker router is broader than required: %q", forbidden)
+			t.Fatalf("artifact router does not hold the cutover contract: %q must not appear", forbidden)
+		}
+	}
+	for _, name := range hybridGatewayRouterNames(route) {
+		if name == "go-artifacts" {
+			continue
+		}
+		if strings.Contains(hybridGatewayRouterBlock(route, name), "artifacts/") {
+			t.Fatalf("router %q also claims an artifact path; the artifact plane has ONE owner (issue 337)", name)
 		}
 	}
 }
 
+// hybridGatewayRouterNames lists the routers this file declares, in file order.
+// A router key sits at exactly four spaces of indentation; everything inside
+// its block is indented deeper.
+func hybridGatewayRouterNames(route string) []string {
+	var names []string
+	for _, line := range strings.Split(route, "\n") {
+		if !strings.HasPrefix(line, "    ") || strings.HasPrefix(line, "     ") {
+			continue
+		}
+		key := strings.TrimSuffix(strings.TrimSpace(line), ":")
+		if key == strings.TrimSpace(line) || strings.HasPrefix(key, "#") {
+			continue
+		}
+		names = append(names, key)
+	}
+	return names
+}
+
+// hybridGatewayRouterBlock returns one router's YAML block, or "" when the file
+// declares no router by that name.
+//
+// IT ENDS THE BLOCK BY INDENTATION, not by naming the router that follows. The
+// previous version sliced up to the literal "runtime-worker-current-artifacts",
+// so deleting that router in the artifact cutover silently extended the
+// nested-application block to the end of the file: the assertions then read a
+// neighbour's rule and reported a contract violation in a router nobody had
+// touched.
+func hybridGatewayRouterBlock(route, name string) string {
+	lines := strings.Split(route, "\n")
+	start := -1
+	for i, line := range lines {
+		if line == "    "+name+":" {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		return ""
+	}
+	end := len(lines)
+	for i := start + 1; i < len(lines); i++ {
+		if strings.TrimSpace(lines[i]) == "" {
+			continue
+		}
+		if !strings.HasPrefix(lines[i], "     ") {
+			end = i
+			break
+		}
+	}
+	return strings.Join(lines[start:end], "\n") + "\n"
+}
+
 func requireNestedApplicationReferenceRouter(t *testing.T, route string) {
 	t.Helper()
-	applicationRouterStart := strings.Index(
+	applicationRouter := hybridGatewayRouterBlock(
 		route,
-		"    runtime-worker-current-application-reference:\n",
+		"runtime-worker-current-application-reference",
 	)
-	if applicationRouterStart < 0 {
+	if applicationRouter == "" {
 		t.Fatal("gateway route lacks the nested-application reference router")
-	}
-	applicationRouter := route[applicationRouterStart:]
-	if routerEnd := strings.Index(
-		applicationRouter,
-		"\n    runtime-worker-current-artifacts:\n",
-	); routerEnd >= 0 {
-		applicationRouter = applicationRouter[:routerEnd]
 	}
 	for _, required := range []string{
 		"Host(`elitea-gateway`)",

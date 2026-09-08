@@ -24,12 +24,13 @@ import Typography from '@mui/material/Typography';
 import { EliteaApiError } from '@/shared/api/generated/mutator';
 import { getConfig } from '@/shared/config';
 import { t } from '@/shared/i18n';
+import { DrawerPageHeader } from '@/shared/ui/settings/DrawerPageHeader';
 
 import { aiConfigurationFeature } from '@/features/settings';
 
 const {
   ConfigurationsPanel,
-  ModelCapabilitiesSection,
+  ModelCapabilitiesPanel,
   OpenAITemplate,
   ProjectAIConfiguration,
   RequestModelConnection,
@@ -86,9 +87,16 @@ function ConfigurationsError({ error, onRetry, styles }: {
 export interface AIConfigurationProps {
   /** Currently-selected project id — threaded down from the route. */
   projectId: string;
+  /**
+   * The `?reveal=` search param — the just-saved/edited configuration's id.
+   * Threaded down to `ConfigurationsPanel` so the section holding that row
+   * opens on return from create/edit, instead of every non-LLM section
+   * defaulting collapsed regardless of what the user just saved.
+   */
+  revealConfigurationId?: string;
 }
 
-export const AIConfiguration = memo(function AIConfiguration({ projectId }: AIConfigurationProps) {
+export const AIConfiguration = memo(function AIConfiguration({ projectId, revealConfigurationId }: AIConfigurationProps) {
   const [activeTab, setActiveTab] = useState(0);
   const { data: configurationsBySection, isLoading, error, refetch } = useConfigurationsBySection(projectId);
   const theme = useTheme();
@@ -100,7 +108,7 @@ export const AIConfiguration = memo(function AIConfiguration({ projectId }: AICo
    * the two things this page composed nothing for: the capability chips of the
    * project's default model, and the copy-the-whole-card button.
    */
-  const { capabilities, copyConfiguration } = useModelConfigurationLayer({
+  const { capabilities, copyConfiguration, modelOptions, selectedModel, onSelectModel } = useModelConfigurationLayer({
     projectId,
     userApiUrl,
     configurationsBySection,
@@ -124,6 +132,34 @@ export const AIConfiguration = memo(function AIConfiguration({ projectId }: AICo
 
   return (
     <Box sx={styles.pageWrapper}>
+      {/*
+        THE PAGE'S TITLE ROW, which this page alone was missing. Every other
+        settings tab renders `DrawerPageHeader` from its route file, so the
+        content pane opened with a 60px bar carrying the tab's name; this one
+        opened with a full-width tab strip and no name at all. Production
+        calls this page "AI Providers" (`AIProvidersContent.jsx`'s
+        `DrawerPageHeader title="AI Providers"`), which is also what the
+        settings drawer's own item now reads.
+
+        It is rendered HERE rather than in `model-configuration.tsx` because
+        the two affordances on its right — "Request a model connection" and
+        "copy the whole configuration" — need this component's own state.
+      */}
+      <DrawerPageHeader
+        title={t('ai-configuration.title', 'AI Providers')}
+        showBorder
+        extraContent={
+          <>
+            <RequestModelConnection projectId={projectId} />
+            <Tooltip title={t('ai-configuration.copyConfigurationTooltip', 'Copy configuration')} placement="top">
+              <IconButton color="secondary" onClick={copyConfiguration}>
+                <ContentCopyIcon sx={styles.copyIcon} />
+              </IconButton>
+            </Tooltip>
+          </>
+        }
+      />
+
       {/* Sub-tabs — mirrors the old app's StickyTabs */}
       <Tabs
         value={activeTab}
@@ -140,48 +176,6 @@ export const AIConfiguration = memo(function AIConfiguration({ projectId }: AICo
         ))}
       </Tabs>
 
-      {/*
-        Baseline `ModelConfiguration.jsx:243` renders `<ProjectConfiguration>`
-        immediately above `<ConfigurationsPanel>`, inside the configurations
-        tab only (the OpenAI-Template tab has its own chrome). Same placement
-        here.
-      */}
-      {activeTab === 0 && (
-        <Box sx={styles.projectConfigRow}>
-          <ProjectAIConfiguration
-            userApiUrl={userApiUrl}
-            projectId={projectId}
-          />
-          {/*
-            The panel's affordance cluster, floated over the top-right of the
-            card exactly where baseline `ModelConfiguration.jsx:214-226` floats
-            the copy button on its own — directly above the Configurations
-            header and its "+" create-configuration button, which is the other
-            half of the same choice: a member who CAN add a configuration uses
-            the "+", and a member who cannot asks for one here.
-
-            `RequestModelConnection` is deliberately not permission-gated in
-            the UI. `admin.moderation.create` has no entry in
-            `shared/lib/permissions.ts`, and the App Catalogue's own "Request
-            Access" button is ungated the same way — the server refuses without
-            it and the dialog surfaces the refusal, which is a truthful answer;
-            a hidden button is not.
-
-            The copy button copies the whole configuration as JSON — server
-            URL, base URL, project id, the selected model, its capabilities,
-            and every configuration of every section.
-          */}
-          <Box sx={styles.panelActions}>
-            <RequestModelConnection projectId={projectId} />
-            <Tooltip title={t('ai-configuration.copyConfigurationTooltip', 'Copy configuration')} placement="top">
-              <IconButton color="secondary" onClick={copyConfiguration}>
-                <ContentCopyIcon sx={styles.copyIcon} />
-              </IconButton>
-            </Tooltip>
-          </Box>
-        </Box>
-      )}
-
       {/* Tab content */}
       <Box sx={styles.tabPanel}>
         {activeTab === 0 && error ? (
@@ -191,6 +185,7 @@ export const AIConfiguration = memo(function AIConfiguration({ projectId }: AICo
             configurationsBySection={configurationsBySection as unknown as Record<string, Record<string, unknown>[]>}
             projectId={projectId}
             isLoading={isLoading}
+            {...(revealConfigurationId !== undefined ? { revealConfigurationId } : {})}
           />
         ) : activeTab === 0 && !configurationsBySection && isLoading ? (
           <Box sx={styles.loadingCenter}>
@@ -198,16 +193,34 @@ export const AIConfiguration = memo(function AIConfiguration({ projectId }: AICo
           </Box>
         ) : null}
 
-        {activeTab === 1 && <OpenAITemplate projectId={projectId} />}
+        {/* The base URL / server URL / project id panel belongs WITH the
+            template that uses them, not above the model list. Production's
+            AI Providers page shows no such banner at all; keeping it on the
+            template tab preserves the information without putting a second
+            header-sized block above the first accordion. */}
+        {activeTab === 1 && (
+          <>
+            <ProjectAIConfiguration
+              userApiUrl={userApiUrl}
+              projectId={projectId}
+            />
+            <OpenAITemplate projectId={projectId} />
+          </>
+        )}
       </Box>
 
       {/* Baseline `ModelConfiguration.jsx:249` renders the chips under the
-          panel, inside the configurations tab, and guards on a non-empty list
-          so the row costs no space when the model declares no capability. */}
-      {activeTab === 0 && capabilities.length > 0 && (
-        <Box sx={styles.capabilitiesRow}>
-          <ModelCapabilitiesSection capabilities={capabilities} />
-        </Box>
+          panel, inside the configurations tab. `ModelCapabilitiesPanel` adds
+          the model picker the baseline never had (#80, item 4) and renders
+          nothing at all when there is neither a model to pick nor a
+          capability to show, so the row still costs no space then. */}
+      {activeTab === 0 && (
+        <ModelCapabilitiesPanel
+          capabilities={capabilities}
+          modelOptions={modelOptions}
+          selectedModel={selectedModel}
+          onSelectModel={onSelectModel}
+        />
       )}
     </Box>
   );
@@ -248,26 +261,9 @@ function getStyles(theme: ReturnType<typeof useTheme>) {
       flexDirection: 'column',
       minHeight: 0,
     },
-    projectConfigRow: {
-      position: 'relative',
-      flexShrink: 0,
-    },
-    panelActions: {
-      position: 'absolute',
-      top: '1rem',
-      right: '1rem',
-      display: 'flex',
-      alignItems: 'center',
-      gap: '0.5rem',
-    },
     copyIcon: {
       width: '1rem',
       height: '1rem',
-    },
-    capabilitiesRow: {
-      flexShrink: 0,
-      padding: '0 1.5rem 1rem',
-      backgroundColor: t.vars.palette.background.eliteaDefault,
     },
     loadingCenter: {
       flex: 1,

@@ -205,6 +205,10 @@ type Handler struct {
 	// route: a route-level gate would also refuse `tools/list` to a viewer,
 	// which is a read they are entitled to.
 	permissions auth.PermissionResolver
+	// toolRuns runs one TOOLKIT tool (#616). NIL on a deployment whose runtime
+	// plane is off, exactly like `start`, and guarded the same way — callTool
+	// then answers the untouched ToolkitExecutionUnavailableReason.
+	toolRuns ToolkitRunUseCase
 	// internalApplications executes the fixed internal application-builder
 	// category in process. It is nil only in protocol unit tests or when Main
 	// has no database composition.
@@ -374,6 +378,31 @@ func NewHandler(
 	}
 	for _, opt := range opts {
 		opt(handler)
+	}
+	return handler
+}
+
+// NewHandlerWithToolkitRuns adds the toolkit half of `tools/call` (#616).
+//
+// It is a second constructor rather than a sixth positional parameter because
+// the agent half and the toolkit half are composed from different halves of the
+// runtime and either may be absent: a deployment can serve agents and refuse
+// toolkits, and one that composes neither keeps both original sentences.
+//
+// `runs` is taken as an INTERFACE value and assigned only when non-nil, so a
+// caller that hands in a nil concrete pointer cannot box it into a non-nil
+// interface — the typed-nil trap this service has been bitten by before.
+func NewHandlerWithToolkitRuns(
+	pool *pgxpool.Pool,
+	personal PersonalProjectResolver,
+	start AgentStartUseCase,
+	runs ToolkitRunUseCase,
+	permissions auth.PermissionResolver,
+	opts ...Option,
+) *Handler {
+	handler := NewHandler(pool, personal, start, permissions, opts...)
+	if runs != nil {
+		handler.toolRuns = runs
 	}
 	return handler
 }

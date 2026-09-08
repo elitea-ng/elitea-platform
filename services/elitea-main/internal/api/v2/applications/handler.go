@@ -17,6 +17,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/secrets"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/ownership"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
@@ -135,9 +136,11 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 		"name":        app.Name,
 		"description": app.Description,
 		"icon":        app.Icon,
-		"owner_id":    app.CreatedBy,
-		"created_at":  app.CreatedAt,
-		"versions":    versions,
+		// The owning PROJECT (#533). `applications.owner_id` holds the project,
+		// which is what the legacy route answers here as well.
+		"owner_id":   app.OwnerID,
+		"created_at": app.CreatedAt,
+		"versions":   versions,
 		// `meta` carries the one key this service actually records on an
 		// application: which of its versions is the default
 		// (repos/applications.go's defaultVersionMetaKey, written by
@@ -452,7 +455,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		Description: strVal(body, "description"),
 		Type:        strVal(body, "type"),
 		Icon:        strVal(body, "icon"),
-		OwnerID:     ownerID,
+		AuthorID:    ownership.UserID(ownerID),
 	}
 
 	// Pylon creates the first version alongside the application, and so does
@@ -534,8 +537,11 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		"description": app.Description,
 		"type":        app.Type,
 		"icon":        app.Icon,
-		"owner_id":    userID,
-		"created_at":  app.CreatedAt,
+		// The owning PROJECT, as Get and Update answer it (#533). The create
+		// response used to echo the caller, so one route said "user" and the
+		// next said "project" for one field of one entity.
+		"owner_id":   projectID,
+		"created_at": app.CreatedAt,
 	}
 	if len(app.Versions) > 0 {
 		versionDetails := versionDetailsResponse(app.Versions[0], user, userID, storedInitialTags)
@@ -746,8 +752,12 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 			v := applications.Version{
 				Name: anyStr(versionData, "name"),
 			}
+			v.Present.Name = v.Name != ""
+			// Same presence rule as UpdateVersion's own decode (#824): the
+			// nested `version` stub can clear the instructions too.
 			if instr, ok := versionData["instructions"].(string); ok {
 				v.Instructions = instr
+				v.Present.Instructions = true
 			}
 			ver, vErr := h.repo.UpdateVersion(r.Context(), projectID, applicationID, versionID, v)
 			if vErr == nil {
@@ -955,18 +965,44 @@ func (h *Handler) UpdateVersion(w http.ResponseWriter, r *http.Request) {
 	// implementation opened its SET list with `updated_at = now()` —
 	// application_versions has no updated_at column (migrations/001_initial
 	// .sql), so every version update failed with 42P01 and returned a 500.
+	//
+	// #824 — presence is carried through to the repository, not folded into
+	// emptiness here. The decode below always knew the difference (the `, ok`
+	// on every type assertion IS the presence test), but it wrote the value
+	// into a plain string, and the repository then read "" as "the caller
+	// said nothing". So a client that cleared its welcome message got a 201
+	// and read the old text back. `Present` keeps the two apart all the way
+	// to the SET list.
 	v := applications.Version{}
 	if name, ok := body["name"].(string); ok {
+		// `name` and `agent_type` are NOT NULL columns whose empty value the
+		// platform cannot read back: the create path substitutes
+		// defaultVersionName / defaultAgentType for "", and
+		// _application_version_name_uc means a second blank-named version in
+		// the same application would collide. So an explicit "" is REFUSED
+		// here rather than written or — as before #824 — silently dropped.
+		if name == "" {
+			apierr.Write(w, apierr.BadRequest("name cannot be empty"))
+			return
+		}
 		v.Name = name
+		v.Present.Name = true
 	}
 	if instructions, ok := body["instructions"].(string); ok {
 		v.Instructions = instructions
+		v.Present.Instructions = true
 	}
 	if welcomeMessage, ok := body["welcome_message"].(string); ok {
 		v.WelcomeMessage = welcomeMessage
+		v.Present.WelcomeMessage = true
 	}
 	if agentType, ok := body["agent_type"].(string); ok {
+		if agentType == "" {
+			apierr.Write(w, apierr.BadRequest("agent_type cannot be empty"))
+			return
+		}
 		v.AgentType = agentType
+		v.Present.AgentType = true
 	}
 	if llm, ok := body["llm_settings"].(map[string]any); ok {
 		v.LLMSettings = llm
@@ -1311,52 +1347,87 @@ func (h *Handler) BatchReplaceVersion(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-// secretHeaderMatches reports whether the `X-SECRET` request header equals the
-// project vault's `secrets_header_value`, which is what pylon's
-// `check_secret_header` compares.
+// secretHeaderRefusal reports why the `X-SECRET` request header cannot pass the
+// check pylon's `check_secret_header` makes, or nil when it passes.
 //
-// An absent secret falls back to `currentSecretsHeaderDefault`, as pylon does.
-// A vault that exists and will not open is a different case: `ResolveSecretValue`
-// then returns a decryption error rather than a not-found, and this function
-// refuses the request instead of comparing against the fallback. Treating an
-// unreadable vault as "no secret set" would turn a broken vault into an open
-// door.
-func (h *Handler) secretHeaderMatches(
+// THE CHECK IS CLOSED. Pylon reads
+// `secrets.get("secrets_header_value", "secret")`
+// (legacy/plugins/elitea_core/utils/secrets.py:4-9), so a project whose vault
+// holds no value accepts the literal string "secret" — a value every reader of
+// that source knows. This handler refuses such a project instead (#408 step 3).
+//
+// The refusal is safe now because the value always exists and always travels:
+//   - provisioning seals a random value into every new project vault
+//     (internal/application/projectprovisioning/steps.go, #408 step 1);
+//   - the start-up backfill gives every older project one
+//     (internal/api/v2/secrets/secrets_header_value.go, #408 step 2);
+//   - the runtime hands the project's own value to the worker, which puts it on
+//     every SDK call (internal/infra/storage/index_runtime_context.go and
+//     services/elitea-worker-python/src/elitea_worker/agents/client_context.py).
+//
+// So a project with no value is a FAULT, not a state a caller may authenticate
+// in, and the three causes answer differently on purpose:
+//
+//	no value in a readable vault   403 — provisioning or the backfill did not
+//	                                     reach this project. Nothing can pass.
+//	the vault will not open        403 — the same for the caller, and it is
+//	                                     already the pre-#408 behaviour.
+//	a value that does not match    400 — pylon's exact status and body.
+//
+// A caller here is already authenticated and already holds the
+// `models.applications.version.details` project permission, so a message that
+// names the missing secret discloses nothing the caller may not read, and it is
+// the one message that names the repair.
+func (h *Handler) secretHeaderRefusal(
 	ctx context.Context,
-	secretsHandler *secrets.Handler,
+	secretsReader secretsHeaderReader,
 	projectID, received string,
-) bool {
-	expected, err := secretsHandler.ResolveSecretValue(ctx, projectID, currentSecretsHeaderName)
+) error {
+	expected, err := secretsReader.ResolveSecretValue(ctx, projectID, currentSecretsHeaderName)
 	switch {
-	case err == nil:
-	case errors.Is(err, secrets.ErrSecretNotFound), errors.Is(err, secrets.ErrVaultAbsent):
-		expected = currentSecretsHeaderDefault
+	case err == nil && expected != "":
+	case err == nil,
+		errors.Is(err, secrets.ErrSecretNotFound),
+		errors.Is(err, secrets.ErrVaultAbsent):
+		// `err == nil` with an empty value is the same fault: a vault that
+		// holds the key with no text would authenticate an empty header, and
+		// an empty header is what a caller that sets none sends.
+		slog.WarnContext(ctx,
+			"the project has no X-SECRET value, so the version details route refuses every caller",
+			"project_id", projectID,
+			"secret", currentSecretsHeaderName)
+		return apierr.Forbidden(
+			"This project has no " + currentSecretsHeaderName + " secret. " +
+				"The version details route cannot authenticate a caller until the project has one.")
 	default:
-		return false
+		// A vault that exists and will not open. To treat it as "no secret set"
+		// would make a broken vault an open door, so it refuses.
+		slog.WarnContext(ctx,
+			"the project vault will not open, so the version details route refuses every caller",
+			"project_id", projectID)
+		return apierr.Forbidden("This project vault cannot be read.")
 	}
 	// Constant-time comparison: the header is attacker-supplied and the vault
 	// value is a shared credential.
-	return subtle.ConstantTimeCompare([]byte(received), []byte(expected)) == 1
+	if subtle.ConstantTimeCompare([]byte(received), []byte(expected)) != 1 {
+		// The exact pylon status and body for this failure.
+		return apierr.BadRequest("Invalid secret header")
+	}
+	return nil
+}
+
+// secretsHeaderReader is the one vault operation the `X-SECRET` check makes.
+//
+// It is an interface because every branch above is decided by what this call
+// returns. A test that must start PostgreSQL to reach those branches proves the
+// wiring and not the rule, and the rule is the part that refuses.
+type secretsHeaderReader interface {
+	ResolveSecretValue(ctx context.Context, projectID, secretRef string) (string, error)
 }
 
 // currentSecretsHeaderName is the project-vault secret pylon compares the
 // `X-SECRET` request header against.
 const currentSecretsHeaderName = "secrets_header_value"
-
-// currentSecretsHeaderDefault is the value pylon expects when the project vault
-// holds no `secrets_header_value`. `check_secret_header`
-// (legacy/plugins/elitea_core/utils/secrets.py:4-9) reads
-// `secrets.get("secrets_header_value", "secret")`, so a project that never set
-// the secret accepts the literal string below.
-//
-// This fallback is replicated deliberately, and it is NOT the access control on
-// this route: the route also requires authentication and the
-// `models.applications.version.details` project permission, exactly as pylon's
-// handler does. Removing the fallback would refuse every SDK sub-agent call on
-// a project whose vault omits the key — calls pylon answers today — so the
-// change would be a silent outage, not a hardening. The pull request records
-// the follow-up recommendation.
-const currentSecretsHeaderDefault = "secret"
 
 // GetVersionExpanded returns version details with expanded and unsecreted
 // toolkit configurations.
@@ -1390,9 +1461,8 @@ func (h *Handler) GetVersionExpanded(w http.ResponseWriter, r *http.Request) {
 	}
 
 	secretsHandler := secrets.NewHandler(h.pool)
-	if !h.secretHeaderMatches(ctx, secretsHandler, projectID, r.Header.Get("X-SECRET")) {
-		// The exact pylon status and body for this failure.
-		apierr.Write(w, apierr.BadRequest("Invalid secret header"))
+	if refusal := h.secretHeaderRefusal(ctx, secretsHandler, projectID, r.Header.Get("X-SECRET")); refusal != nil {
+		apierr.Write(w, refusal)
 		return
 	}
 

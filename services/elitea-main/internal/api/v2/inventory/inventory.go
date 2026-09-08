@@ -69,10 +69,20 @@ var ErrInvalidRoute = errors.New("invalid Inventory route")
 // The facade's own paths. They carry {project_id} because the permission gate
 // resolves against it; the provider's own paths do not, because the project
 // travels in the signed identity headers.
+//
+// THE `/api/v2` PREFIX IS PART OF THE CONSTANT, exactly as it is in
+// internal/api/v2/deepwiki. production_router.go mounts these strings on the
+// router ROOT — `r.Method(http.MethodGet, SlotsPath, …)` — so a constant
+// without the prefix is a route served at `/inventory/slots/{id}`, which the
+// platform edge does not forward: it routes `/api/v2`. MEASURED on a running
+// stack: the facade answered 200 to a request made directly against
+// elitea-main's port and 404 to the same request through traefik, so every
+// test in this package passed while no browser and no API client could reach
+// the feature. See TestTheMountedPathsAreReachableThroughTheEdge.
 const (
-	SlotsPath      = "/inventory/slots/{project_id}"
-	InvokePath     = "/inventory/tools/{project_id}/{toolkit_name}/{tool_name}/invoke"
-	InvocationPath = "/inventory/invocations/{project_id}/{toolkit_name}/{tool_name}/{invocation_id}"
+	SlotsPath      = "/api/v2/inventory/slots/{project_id}"
+	InvokePath     = "/api/v2/inventory/tools/{project_id}/{toolkit_name}/{tool_name}/invoke"
+	InvocationPath = "/api/v2/inventory/invocations/{project_id}/{toolkit_name}/{tool_name}/{invocation_id}"
 )
 
 // Route serves the Inventory facade.

@@ -35,6 +35,36 @@ const DefaultRefreshInterval = 30 * time.Second
 // wedged pool cannot hold a refresh open across several intervals.
 const loadTimeout = 5 * time.Second
 
+// The initial-load retry schedule.
+//
+// On a FRESH install the gateway can win the race against the migration job:
+// `gateway.governance_config` does not exist yet, the first load fails with an
+// undefined-relation error, and the store then waits a whole
+// DefaultRefreshInterval before it tries again. For up to 30 seconds a gateway
+// that already serves requests enforces NO authored definition — no model
+// allowlist, no MCP allowlist, no rate policy, and no egress allowlist beyond
+// the environment floor.
+//
+// Compose can order the two services, and now does (see
+// deploy/docker-compose.standalone-full.yml). Kubernetes cannot be relied on to:
+// a Deployment has no ordering against a Helm hook Job that is still running,
+// and a CrashLoopBackOff on the migration extends the window arbitrarily.
+//
+// So the store retries the FIRST load quickly before it falls back to the poll.
+// Five delays of 500ms, 1s, 2s, 3s and 3s bound the extra boot wait at 9.5
+// seconds. That is short enough to keep a readiness probe happy and long enough
+// to cover a migration job that started at the same moment.
+//
+// This changes WHEN the gateway converges, never WHAT it enforces. A store that
+// exhausts every attempt still starts on the Empty snapshot and still logs the
+// error, and Load's fail-closed contract is untouched: a failed read never
+// replaces a good snapshot.
+const (
+	initialLoadAttempts = 6
+	initialLoadDelay    = 500 * time.Millisecond
+	initialLoadMaxDelay = 3 * time.Second
+)
+
 // ErrNoDatabase is returned by Load when the store was built without a pool.
 var ErrNoDatabase = errors.New("policy: no database handle")
 
@@ -79,6 +109,9 @@ type Store struct {
 	// interval is the poll period; 0 selects DefaultRefreshInterval.
 	interval time.Duration
 
+	// retryDelay is the FIRST delay of the initial-load retry schedule.
+	retryDelay time.Duration
+
 	// lastErr is the most recent refresh failure, served on the status surface.
 	// A store that cannot read its definitions must be able to SAY so: silently
 	// serving a stale snapshot is how a revoked allowlist stays in force.
@@ -103,6 +136,11 @@ type Config struct {
 	RefreshInterval time.Duration
 	// Now is injected for tests; nil uses time.Now.
 	Now func() time.Time
+	// InitialRetryDelay is the FIRST delay of the initial-load retry schedule;
+	// each later delay doubles, capped at initialLoadMaxDelay. 0 selects
+	// initialLoadDelay. Tests set it small so the schedule runs in
+	// microseconds. Production has no reason to change it.
+	InitialRetryDelay time.Duration
 }
 
 // NewStore builds a Store holding the Empty snapshot. Call Start to begin
@@ -117,13 +155,17 @@ func NewStore(cfg Config) *Store {
 		nowFn = time.Now
 	}
 	s := &Store{
-		db:       cfg.DB,
-		log:      log,
-		interval: cfg.RefreshInterval,
-		now:      nowFn,
+		db:         cfg.DB,
+		log:        log,
+		interval:   cfg.RefreshInterval,
+		retryDelay: cfg.InitialRetryDelay,
+		now:        nowFn,
 	}
 	if s.interval <= 0 {
 		s.interval = DefaultRefreshInterval
+	}
+	if s.retryDelay <= 0 {
+		s.retryDelay = initialLoadDelay
 	}
 	s.snap.Store(Empty)
 	return s
@@ -139,6 +181,19 @@ func (s *Store) Current() *Snapshot {
 		return snap
 	}
 	return Empty
+}
+
+// EgressAllowlist returns the authored egress entries of the CURRENT snapshot.
+//
+// It exists so the store itself satisfies account.EgressSource: the account
+// holds one long-lived reference and always reads the live snapshot through it,
+// rather than being handed a snapshot that goes stale on the next refresh. A
+// nil store reports nothing, which leaves the account on its environment floor.
+func (s *Store) EgressAllowlist() []string {
+	if s == nil {
+		return nil
+	}
+	return s.Current().EgressAllowlist()
 }
 
 // Load performs one read-and-compile, publishing the result on success.
@@ -215,6 +270,7 @@ func (s *Store) logSnapshot(snap *Snapshot) {
 		"mcp_allowlists", d.MCPAllowlists,
 		"credential_policies", d.CredentialPolicy,
 		"routing_rules", d.RoutingRules,
+		"egress_allowlists", d.EgressAllowlists,
 		"rejected", len(d.Rejected),
 		"inert", len(d.Inert),
 	)
@@ -228,15 +284,75 @@ func (s *Store) logSnapshot(snap *Snapshot) {
 	}
 }
 
-// Start runs the refresh loop until ctx is done. It performs one immediate load
-// so the gateway is enforcing authored definitions before it serves its first
-// request, then refreshes on the poll interval and on every Reload signal.
+// Start runs the refresh loop until ctx is done. It performs the first load
+// synchronously — with a short retry schedule — so the gateway is enforcing
+// authored definitions before it serves its first request, then refreshes on
+// the poll interval.
+//
+// The retries answer one measured failure: on a fresh install the gateway boots
+// before the migration creates gateway.governance_config, the first read fails,
+// and the store enforced nothing for a whole refresh interval. See the
+// initialLoad* constants.
 func (s *Store) Start(ctx context.Context) {
-	if err := s.Load(ctx); err != nil && !errors.Is(err, ErrNoDatabase) {
-		s.log.Error("policy: initial governance load failed; the gateway is enforcing NO authored definitions "+
-			"until a refresh succeeds", "err", err)
-	}
+	s.loadInitial(ctx)
 	go s.loop(ctx)
+}
+
+// loadInitial reads the definitions, and retries a bounded number of times on a
+// short backoff before it leaves convergence to the poll loop.
+//
+// ErrNoDatabase is not retried. It is a composition fact, not a transient
+// failure: the store was built without a pool, and no amount of waiting gives it
+// one. Retrying it would add ten seconds to the boot of every gateway that runs
+// without DATABASE_URL and change nothing.
+func (s *Store) loadInitial(ctx context.Context) {
+	delay := s.retryDelay
+	for attempt := 1; ; attempt++ {
+		err := s.Load(ctx)
+		if err == nil {
+			if attempt > 1 {
+				// Say that the race happened. Without this line the recovery is
+				// invisible, and the operator sees only the failures above it.
+				s.log.Info("policy: governance definitions loaded after a retry; "+
+					"the first read raced the database migration",
+					"attempts", attempt)
+			}
+			return
+		}
+		if errors.Is(err, ErrNoDatabase) {
+			return
+		}
+		if attempt >= initialLoadAttempts || ctx.Err() != nil {
+			s.log.Error("policy: initial governance load failed; the gateway is enforcing NO authored definitions "+
+				"until a refresh succeeds", "err", err, "attempts", attempt,
+				"next_attempt_within", s.interval.String())
+			return
+		}
+		s.log.Warn("policy: initial governance load failed; retrying shortly",
+			"err", err, "attempt", attempt, "retry_in", delay.String())
+		if !sleepContext(ctx, delay) {
+			s.log.Error("policy: initial governance load abandoned during shutdown; the gateway is "+
+				"enforcing NO authored definitions", "err", err, "attempts", attempt)
+			return
+		}
+		if delay *= 2; delay > initialLoadMaxDelay {
+			delay = initialLoadMaxDelay
+		}
+	}
+}
+
+// sleepContext waits for d and reports whether the wait completed. It answers
+// false as soon as ctx is done, so a shutdown during boot is not held up by the
+// retry schedule.
+func sleepContext(ctx context.Context, d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }
 
 func (s *Store) loop(ctx context.Context) {

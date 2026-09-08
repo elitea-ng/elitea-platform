@@ -172,13 +172,13 @@ func TestAProjectMemberPassesBothChatGatesOnACleanDatabase(t *testing.T) {
 // stack, so the migration cannot change what their members can do.
 func TestACallerWithoutTheGrantIsRefusedAtBothChatGates(t *testing.T) {
 	pool := newMigratedPool(t)
-	seedProjectMembership(t, pool)
+	roleID := seedProjectMembership(t, pool)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	if _, err := pool.Exec(ctx, `
 INSERT INTO public.auth_core__project_role_permission (project_id, role_id, permission)
-VALUES (1, 354, 'models.something.else')`); err != nil {
+VALUES (1, $1, 'models.something.else')`, roleID); err != nil {
 		t.Fatalf("seed the per-project grant: %v", err)
 	}
 
@@ -287,16 +287,30 @@ ORDER BY role.name`, permission)
 // auth_core__project_role_permission row, deliberately, so that the central
 // fallback stays reachable and the corpus grants apply. So a member of a
 // Go-provisioned project resolves exactly what this test measures.
-func seedProjectMembership(t *testing.T, pool *pgxpool.Pool) {
+// seedProjectMembership returns the id project 1's `editor` role actually has.
+//
+// The row is minted with id 354 only when it is absent: shared/0111 gives
+// project 1 the four roles every provisioned project has, so on a corpus-built
+// database `editor` is already there under an id this fixture did not choose.
+func seedProjectMembership(t *testing.T, pool *pgxpool.Pool) int {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	for _, statement := range []string{
-		`INSERT INTO public.auth_core__project_role (id, project_id, name) VALUES (354, 1, 'editor')`,
-		`INSERT INTO public.auth_core__project_user_role (project_id, user_id, role_id) VALUES (1, 1, 354)`,
-	} {
-		if _, err := pool.Exec(ctx, statement); err != nil {
-			t.Fatalf("seed %q: %v", statement, err)
-		}
+	if _, err := pool.Exec(ctx, `
+INSERT INTO public.auth_core__project_role (id, project_id, name) VALUES (354, 1, 'editor')
+ON CONFLICT (project_id, name) DO NOTHING`); err != nil {
+		t.Fatalf("seed the editor project role: %v", err)
 	}
+	var roleID int
+	if err := pool.QueryRow(ctx,
+		`SELECT id FROM public.auth_core__project_role WHERE project_id = 1 AND name = 'editor'`,
+	).Scan(&roleID); err != nil {
+		t.Fatalf("resolve the editor project role: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+INSERT INTO public.auth_core__project_user_role (project_id, user_id, role_id) VALUES (1, 1, $1)
+ON CONFLICT DO NOTHING`, roleID); err != nil {
+		t.Fatalf("assign the editor project role: %v", err)
+	}
+	return roleID
 }

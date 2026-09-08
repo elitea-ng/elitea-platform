@@ -44,6 +44,17 @@ type Table struct {
 	Permissions                            auth.PermissionResolver
 	// Forward is the hop every route ends in.
 	Forward Forwarder
+	// Poll, when set, serves GET InvocationPath instead of Forward, and is
+	// the ONLY route it replaces.
+	//
+	// It exists because the terminal poll is the one place a facade sees the
+	// answer a provider produced: the browser drains its result THROUGH this
+	// hop, so a facade that wants to record a conversation has to observe it
+	// here or not at all. DeepWiki's wiki chat does exactly that.
+	//
+	// Deliberately not applied to DELETE on the same path: a cancel returns
+	// no answer to record, and it is guarded by the other permission.
+	Poll Forwarder
 	// Invoke, when set, serves POST InvokePath instead of a plain forward —
 	// DeepWiki rewrites the body (credentials, the callback grant) first.
 	// It runs behind the same guard.
@@ -104,7 +115,13 @@ func Build(t Table) (http.Handler, error) {
 	router.Method(http.MethodGet, t.SlotsPath,
 		guard(t.ReadPermission)(forward(func(*http.Request) string { return spi.SlotsPath })))
 	router.Method(http.MethodPost, t.InvokePath, guard(t.InvokePermission)(invoke))
-	router.Method(http.MethodGet, t.InvocationPath, guard(t.ReadPermission)(forward(invocationPath)))
+	poll := forward(invocationPath)
+	if t.Poll != nil {
+		poll = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			t.Poll(w, r, invocationPath(r), chi.URLParam(r, "project_id"), userID(r))
+		})
+	}
+	router.Method(http.MethodGet, t.InvocationPath, guard(t.ReadPermission)(poll))
 	router.Method(http.MethodDelete, t.InvocationPath, guard(t.InvokePermission)(forward(invocationPath)))
 	return router, nil
 }

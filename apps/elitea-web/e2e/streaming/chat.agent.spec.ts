@@ -43,6 +43,7 @@ import {
   AUTOTEST_PREFIX,
   createAgentThroughForm,
   expectStoredAssistantAnswer,
+  fillComposer,
 } from '../fixtures/api';
 
 /** Matched WITHOUT a project id: the chat persona works inside its own personal project (#290). */
@@ -163,16 +164,17 @@ test('an agent authored in the UI answers in chat, and the participant carries i
   expect(agentParticipant, 'the agent must be one of the conversation participants').toBeDefined();
 
   // ── 3. Send, and require the turn to be ADMITTED ───────────────────────
+  // Composer first, budgets second. This spec was not the one that failed, but
+  // it carried the identical shape `chat.pipeline.spec.ts` failed on in run
+  // 33812152063: a blind click at a Send control the pane had not rendered,
+  // under response budgets already ticking. See `fillComposer`.
+  const sendButton = await fillComposer(page, prompt);
   const started = page.waitForResponse(
     (r) => START_RE.test(r.url()) && r.request().method() === 'POST',
     { timeout: 45_000 },
   );
   const streamed = page.waitForResponse((r) => EVENTS_RE.test(r.url()), { timeout: 45_000 });
-
-  const input = page.getByTestId('chat-message-input');
-  await expect(input).toBeEditable({ timeout: 20_000 });
-  await input.fill(prompt);
-  await page.getByTestId('chat-send-button').click();
+  await sendButton.click();
 
   const startResponse = await started;
   // Spelled out because 422 is the exact status all three defects produced, and

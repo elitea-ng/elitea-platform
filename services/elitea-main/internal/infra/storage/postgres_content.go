@@ -86,7 +86,8 @@ WHERE c.claim_id = $1
       'index.ingest.v1',
       'agent.execute.application.v1',
       'agent.execute.adhoc.v1',
-      'toolkit.execute.read.v1'
+      'toolkit.execute.read.v1',
+      'toolkit.call_tool.v1'
   )
   AND e.content_reference = $6
   AND e.entry_version = $7

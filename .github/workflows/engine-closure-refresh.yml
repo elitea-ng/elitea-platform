@@ -1,0 +1,201 @@
+name: Engine closure refresh
+
+# The route back IN for a security fix, now that dependabot is deliberately
+# silent on both frozen-engine packages.
+#
+# ── WHY DEPENDABOT IS SILENT, AND WHY THAT NEEDED A REPLACEMENT ─────────────
+#
+# services/elitea-deepwiki and services/elitea-inventory each pin the resolved
+# dependency closure of a byte-frozen analysis engine in an `engine` extra. Ten
+# grouped Dependabot bumps moved single pins inside those closures and made
+# them unsatisfiable (#677-#679, #757-#761 for DeepWiki; #740, #741 for
+# Inventory), so .github/dependabot.yml now gives both packages a pip entry
+# with `ignore: "*"` and `open-pull-requests-limit: 0`.
+#
+# That is correct and it is not free: the closures carry open advisories
+# (aiohttp among them) with no scanner able to propose a fix. Turning the
+# scanner back on is not the answer — moving one pin at a time is precisely
+# what broke them. Moving the WHOLE SET is, and that is what
+# scripts/ci/refresh-engine-closure.py does.
+#
+# ── WHAT THIS OPENS, AND WHAT IT IS NOT ─────────────────────────────────────
+#
+# A DRAFT pull request, never a merge. Everything the refresher can prove is
+# that the new set RESOLVES; nothing here runs the frozen copy's own imports
+# against it. #677 (anthropic 0.84 -> 1.2.0) resolved perfectly well. So the
+# pull request body carries the acceptance gates, and they are the two things
+# CI does not do:
+#
+#   * the `-engine` image builds (~2 GB, >35 GB of disk, tens of minutes — no
+#     CI job builds it, which is the whole reason this failure class exists);
+#   * `deepwiki-real-engine.yml` is green on the branch
+#     (`gh workflow run deepwiki-real-engine.yml --ref <branch>`).
+#
+# ── WHAT IS LEFT MANUAL, ON PURPOSE ─────────────────────────────────────────
+#
+# services/elitea-inventory's `engine` extra is NOT rewritten. It mixes exact
+# pins with ranges, and both kinds carry paragraphs of measured reasoning that a
+# mechanical rewrite would delete along with the version — langsmith's h11
+# bound, and the I8 ledger recording what each exact pin unlocked. Its drift is
+# REPORTED in the pull request body and in the job summary; the edit is a
+# person's.
+#
+# ── NO PUSH ARM ─────────────────────────────────────────────────────────────
+#
+# It writes a branch and opens a pull request; running it on every push to main
+# would mean a fresh proposal per merge. Weekly plus dispatch, the same shape
+# as deepwiki-real-engine.yml and ci-web-mutation.yml. That absence is a
+# recorded decision in scripts/ci/check_workflow_branch_coverage.py's
+# EXEMPT_WORKFLOWS table, not a silence.
+#
+# The per-change gate that keeps these closures resolvable at all is the
+# `engine-closures` job in dependency-scanning.yml. This workflow is the other
+# half: that one refuses a broken closure, this one proposes a better one.
+
+on:
+  schedule:
+    # Tuesdays, 07:19 UTC. Three days after the Saturday dependabot burst, so a
+    # week's other dependency work has already landed or been rejected, and
+    # clear of ci-image-scan.yml's daily 05:17 and dependency-scanning.yml's
+    # 06:41.
+    - cron: "19 7 * * 2"
+  workflow_dispatch:
+    inputs:
+      open_pull_request:
+        description: >-
+          Open the draft pull request. Leave off to only compute and print the
+          drift (and upload the patch as an artifact) without writing a branch.
+        type: boolean
+        required: false
+        default: true
+
+concurrency:
+  # One proposal at a time. Two runs would race for the same branch.
+  group: engine-closure-refresh
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  refresh:
+    name: Re-resolve the frozen engine closures
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      BRANCH: automation/engine-closure-refresh
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # 3.12: both packages declare requires-python ">=3.12,<3.13", and a
+      # resolution performed for another interpreter is a different answer.
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Is the closure already at its newest compatible set?
+        id: drift
+        run: |
+          # In the working tree rather than /tmp: actions/upload-artifact reads
+          # workspace-relative paths, and a path outside it uploads nothing
+          # while `if-no-files-found: error` is the only thing that would say
+          # so. The commit step adds named paths, so this directory cannot land
+          # in the proposal.
+          mkdir -p refresh-artifacts
+          set +e
+          python3 scripts/ci/refresh-engine-closure.py --check | tee refresh-artifacts/drift.txt
+          status=${PIPESTATUS[0]}
+          set -e
+          case "$status" in
+            0) echo "drifted=false" >> "$GITHUB_OUTPUT" ;;
+            3) echo "drifted=true"  >> "$GITHUB_OUTPUT" ;;
+            # Any other exit is the TOOL failing, and it must not be read as
+            # "no drift". That is the "absence reads as correctness" mistake
+            # this whole workflow exists to undo.
+            *) echo "::error::refresh-engine-closure.py --check exited $status"; exit "$status" ;;
+          esac
+          {
+            echo '## Closure drift'
+            echo '```'
+            cat refresh-artifacts/drift.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Re-resolve the closure as a set
+        if: steps.drift.outputs.drifted == 'true'
+        run: |
+          python3 scripts/ci/refresh-engine-closure.py --summary refresh-artifacts/pr-body.md
+          git diff > refresh-artifacts/engine-closure-refresh.patch
+          cat refresh-artifacts/pr-body.md >> "$GITHUB_STEP_SUMMARY"
+
+      # Uploaded ALWAYS when there is drift, and before the pull request is
+      # attempted. If this repository has "Allow GitHub Actions to create and
+      # approve pull requests" switched off, the step below fails and the
+      # proposal would otherwise be lost with it; the patch is the manual path
+      # (`git apply`), and the job is still red so the failure is visible.
+      - name: Upload the proposed patch
+        if: steps.drift.outputs.drifted == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: engine-closure-refresh-patch
+          path: |
+            refresh-artifacts/engine-closure-refresh.patch
+            refresh-artifacts/pr-body.md
+          if-no-files-found: error
+
+      - name: Open the draft pull request
+        if: >-
+          steps.drift.outputs.drifted == 'true'
+          && (github.event_name == 'schedule' || inputs.open_pull_request)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if git diff --quiet; then
+            echo "the refresher reported drift and wrote no change."
+            echo "Nothing is rewritable in this drift — services/elitea-inventory"
+            echo "is report-only by design. See the job summary."
+            exit 0
+          fi
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$BRANCH"
+          # Named paths, not `git add -A`: the refresher writes pyproject.toml
+          # and nothing else, and the run's own scratch directory
+          # (refresh-artifacts/) is in the working tree.
+          git add services/elitea-deepwiki/pyproject.toml \
+                  services/elitea-inventory/pyproject.toml
+          # printf rather than a heredoc: this is a YAML block scalar, so every
+          # line is indented, and an indented heredoc terminator does not
+          # terminate anything.
+          printf '%s\n' \
+            'chore(deps): re-resolve the frozen engine closures as a set' \
+            '' \
+            'Opened by .github/workflows/engine-closure-refresh.yml. The pins in an' \
+            '`engine` extra are the resolution of a frozen engine copy: they move' \
+            'together as a SET, never one at a time. See the pull request body for' \
+            'the acceptance gates - CI resolves this closure, it does not build the' \
+            '-engine image and it does not run the engine.' \
+            > refresh-artifacts/commit-message.txt
+          git commit -F refresh-artifacts/commit-message.txt
+
+          # Force, because this branch is a rolling proposal: last week's
+          # unmerged refresh is superseded, not appended to.
+          git push --force origin "$BRANCH"
+
+          if gh pr view "$BRANCH" --json state --jq .state 2>/dev/null | grep -q OPEN; then
+            gh pr edit "$BRANCH" --body-file refresh-artifacts/pr-body.md
+            echo "updated the existing pull request for $BRANCH"
+          else
+            gh pr create \
+              --draft \
+              --base main \
+              --head "$BRANCH" \
+              --title "chore(deps): re-resolve the frozen engine closures as a set" \
+              --body-file refresh-artifacts/pr-body.md
+          fi

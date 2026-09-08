@@ -6,8 +6,6 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
-import { useNavigate, useSearch } from '@tanstack/react-router';
-
 import { usePermissionList } from '@/shared/api/generated/auth/auth';
 import { useUserList, useRoleList } from '@/shared/api/generated/admin/admin';
 import type { UserRecord } from '@/shared/api/generated/model';
@@ -16,6 +14,8 @@ import { t } from '@/shared/i18n';
 import { PERMISSIONS } from '@/shared/lib/permissions';
 import { usePermissionSet } from '@/widgets/sidebar';
 import { usersFeature } from '@/features/settings';
+import { errorMessage, inviteSuccessMessage, invitePartialMessage } from './usersToast';
+import { useInviteDialog } from './useInviteDialog';
 
 const { useUsersActions, UsersPageContent } = usersFeature;
 
@@ -39,10 +39,6 @@ function useDebounce<T>(value: T, delayMs: number): { value: T; isDebounce: bool
   return { value: debounced, isDebounce };
 }
 
-/** `EliteaApiError` always carries a real `.message` (local-helper convention, matches `features/apps/lib/errorMessage.ts`). */
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 /* ── custom hook: useUsersPageData ────────────────────────────────────── */
 
@@ -235,20 +231,9 @@ export function Users({ projectId }: UsersProps) {
   } = pageData;
 
   // ── local state (toast + invite) ─────────────────────────────────────
-  const [inviteOpen, setInviteOpen] = useState(false);
+  const invite = useInviteDialog();
   const [toastMessage, setToastMessage] = useState('');
   const [toastType, setToastType] = useState<'success' | 'error'>('success');
-
-  // ── `?inviteUsers=1` deep link (old-app parity: `Users.jsx`'s `shouldInvite`
-  // effect) — open the invite dialog once, then strip the flag from the URL. ──
-  const navigate = useNavigate();
-  const routeSearch = useSearch({ strict: false }) as { inviteUsers?: string };
-  useEffect(() => {
-    if (routeSearch.inviteUsers === '1') {
-      setInviteOpen(true);
-      void navigate({ to: '/settings/users', search: {}, replace: true });
-    }
-  }, [routeSearch.inviteUsers, navigate]);
 
   // ── callbacks ────────────────────────────────────────────────────────
   const handleSearchChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -310,19 +295,30 @@ export function Users({ projectId }: UsersProps) {
       setToastMessage(errorMessage(error));
     },
     onInviteSuccess: (outcome) => {
-      setInviteOpen(false);
+      // Every address landed, so there is nothing on the per-address list an
+      // operator has to read: close, and say it in one line.
+      invite.close();
       setToastType('success');
       // "Invited" only when an invitation e-mail actually went out; a
       // deployment without outbound e-mail has ADDED the user (they sign in
       // on their own) and the toast must not claim otherwise (ADR-0024 WP7).
-      setToastMessage(
-        outcome.delivered
-          ? t('shared.ui.settings.users.userInvited', 'The user has been invited by e-mail')
-          : t('shared.ui.settings.users.userAdded', 'The user has been added. No invitation e-mail was sent.'),
-      );
+      setToastMessage(inviteSuccessMessage(outcome.summary));
       userListQuery.refetch?.();
     },
-    onInviteError: (error: unknown) => {
+    onInviteError: (error: unknown, outcome) => {
+      // A 400 with rows is a PARTIAL result, not a rejected request: the `ok`
+      // rows in that body have already been written, each in its own
+      // transaction. Keep the dialog open and hand it the rows, so the operator
+      // reads WHICH address failed and why — the single red toast this replaces
+      // could not tell "one already a member" from "all twelve refused".
+      if (outcome.rows.length > 0) {
+        invite.showResults(outcome.rows);
+        setToastType(outcome.summary.invited > 0 ? 'success' : 'error');
+        setToastMessage(invitePartialMessage(outcome.summary));
+        userListQuery.refetch?.();
+        return;
+      }
+      invite.clearResults();
       setToastType('error');
       setToastMessage(errorMessage(error));
     },
@@ -337,6 +333,16 @@ export function Users({ projectId }: UsersProps) {
   });
 
   const { handleInviteConfirm, singleAction, batchAction, actions } = actionsResult;
+
+  // A new submit must not render the previous one's rows underneath it.
+  const { clearResults } = invite;
+  const handleInviteSubmit = useCallback(
+    (data: { emails: string[]; roles: string[] }) => {
+      clearResults();
+      handleInviteConfirm(data);
+    },
+    [handleInviteConfirm, clearResults],
+  );
 
   const isLoading = userListQuery.isFetching || roleListQuery.isFetching;
   const isError = userListQuery.isError || roleListQuery.isError;
@@ -376,13 +382,14 @@ export function Users({ projectId }: UsersProps) {
       search={{ searchText }}
       toast={{ toastMessage, toastType }}
       dialogs={{
-        inviteOpen,
+        inviteOpen: invite.open,
         actions,
         singleAction,
         batchAction,
         rolesOptions,
-        onInviteConfirm: handleInviteConfirm,
-        onSetInviteOpen: setInviteOpen,
+        onInviteConfirm: handleInviteSubmit,
+        onSetInviteOpen: invite.setOpen,
+        inviteResults: invite.results,
       }}
       permissions={{ canView, canCreate, canEdit, canDelete }}
       status={{ isError, permissionsResolved, onRetry: handleRetry }}

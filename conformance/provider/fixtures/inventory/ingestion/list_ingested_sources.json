@@ -1,0 +1,12 @@
+{
+  "_comment": "list_ingested_sources, JSON output form (output_format=json), over the canned graph — one row per source toolkit, counted from spi/graph.json.",
+  "tool": "list_ingested_sources",
+  "params": { "output_format": "json" },
+  "expected": {
+    "sources": [
+      { "source_toolkit": "code", "entity_count": 4, "relation_count": 3 },
+      { "source_toolkit": "docs", "entity_count": 2, "relation_count": 2 }
+    ],
+    "total_sources": 2
+  }
+}

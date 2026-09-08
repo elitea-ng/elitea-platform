@@ -233,15 +233,17 @@ jobs:
           - name: elitea-web
             context: .
             dockerfile: ./apps/elitea-web/Containerfile
-          - name: pylon-indexer
-            context: ./services/pylon-indexer
-            dockerfile: ./services/pylon-indexer/Containerfile
           # Standalone module outside go.work. Its Containerfile builds from
           # golang:1.26-alpine and carries its own toolchain, so no runner-image
           # bump is required here. scripts/ci/check-gateway-toolchain.sh holds
           # that tag and the ci-gateway.yml pin together (#506).
+          #
+          # Repo ROOT context, like elitea-main: the module replaces
+          # libs/go/egresslib, so the service directory is not a valid context.
+          # go.work is still not copied into the image, and the build sets
+          # GOWORK=off, so the wider context changes no toolchain.
           - name: elitea-llm-gateway
-            context: ./services/elitea-llm-gateway
+            context: .
             dockerfile: ./services/elitea-llm-gateway/Containerfile
           # Repo ROOT context, like elitea-main and unlike the two services
           # above: the Containerfile COPYs libs/proto (:19) and
@@ -282,6 +284,24 @@ jobs:
             dockerfile: ./services/elitea-deepwiki/Containerfile
             build_args: |
               EXTRAS=[storage-postgres]
+          # The Inventory provider engine (ADR-0023 H4c). Repo ROOT context:
+          # the Containerfile COPYs services/elitea-inventory from there.
+          #
+          # No build-args, and that is the whole EXTRAS decision: the
+          # knowledge-graph engine's closure is 126 packages and a release
+          # must not wait on it for two architectures. The published image
+          # serves the sidecar protocol and REFUSES every engine tool — the
+          # runner defaults to the refusing one and GET /engine/health names
+          # the active one — while still carrying the FIXTURE runner, which is
+          # what every compose stack here runs.
+          #
+          # The engine image is `docker buildx bake elitea-inventory-engine`,
+          # deliberately not released. Releasing it needs a decision about
+          # scan thresholds against that closure which this entry does not
+          # make.
+          - name: elitea-inventory
+            context: .
+            dockerfile: ./services/elitea-inventory/Containerfile
         platform:
           - runner: ubuntu-latest
             arch: linux/amd64
@@ -442,9 +462,6 @@ jobs:
           - name: elitea-web
             expect_type: alpine
             blocking: true
-          - name: pylon-indexer
-            expect_type: python-pkg
-            blocking: false
           - name: elitea-llm-gateway
             expect_type: gobinary
             blocking: true
@@ -471,6 +488,18 @@ jobs:
           # ci-image-scan.yml for the same value and the register that holds
           # the two files in step.
           - name: elitea-deepwiki
+            expect_type: python-pkg
+            blocking: false
+          # The Inventory provider engine (ADR-0023 H4c), scanned as it is
+          # RELEASED: no build-args, so the engine closure is not in the image
+          # under test either.
+          #
+          # python-pkg and EXEMPT, on the same Debian base as elitea-deepwiki
+          # and therefore with the same base findings and the same absence of
+          # published fixes for them. Findings #635, retirement #636 — the
+          # entry it shares in .github/image-scan-exempt.txt, which the
+          # coverage job holds against this field.
+          - name: elitea-inventory
             expect_type: python-pkg
             blocking: false
 
@@ -585,9 +614,6 @@ jobs:
           - name: elitea-web
             expect_type: alpine
             blocking: true
-          - name: pylon-indexer
-            expect_type: python-pkg
-            blocking: false
           - name: elitea-llm-gateway
             expect_type: gobinary
             blocking: true
@@ -614,6 +640,18 @@ jobs:
           # ci-image-scan.yml for the same value and the register that holds
           # the two files in step.
           - name: elitea-deepwiki
+            expect_type: python-pkg
+            blocking: false
+          # The Inventory provider engine (ADR-0023 H4c), scanned as it is
+          # RELEASED: no build-args, so the engine closure is not in the image
+          # under test either.
+          #
+          # python-pkg and EXEMPT, on the same Debian base as elitea-deepwiki
+          # and therefore with the same base findings and the same absence of
+          # published fixes for them. Findings #635, retirement #636 — the
+          # entry it shares in .github/image-scan-exempt.txt, which the
+          # coverage job holds against this field.
+          - name: elitea-inventory
             expect_type: python-pkg
             blocking: false
 
@@ -970,7 +1008,7 @@ jobs:
           #
           # scripts/ci/image-matrix.sh --verify is the real gate, and it holds
           # all six copies of the image list against docker-bake.hcl.
-          IMAGES=("elitea-main" "elitea-scheduler" "elitea-subapp-host" "elitea-ui" "elitea-web" "pylon-indexer" "elitea-llm-gateway" "elitea-worker-python" "elitea-worker-rust" "elitea-deepwiki")
+          IMAGES=("elitea-main" "elitea-scheduler" "elitea-subapp-host" "elitea-ui" "elitea-web" "elitea-llm-gateway" "elitea-worker-python" "elitea-worker-rust" "elitea-deepwiki" "elitea-inventory")
           SUFFIXES=("linux-amd64" "linux-arm64")
           ORG="${{ github.repository_owner }}"
 

@@ -121,22 +121,45 @@ http:
         - go-main-forward-auth
       service: current-main
 
-    # The pinned SDK artifact toolkit still uses the current Centry artifact
-    # bucket and S3-compatible APIs. Keep those APIs authoritative in the
-    # mixed deployment, but admit only worker-originated requests through the
-    # existing workload-token forward-auth boundary. The unfinished Go object
-    # store remains disabled and browser traffic continues to use the ordinary
-    # current-platform fallback router.
-    runtime-worker-current-artifacts:
+    # ── Artifacts (#337) ──────────────────────────────────────────────────────
+    #
+    # ONE router, and no Host guard, because the artifact plane has ONE owner
+    # now. Before this change the S3 surface was routed to pylon behind a
+    # Host(`elitea-gateway`) guard for the worker, and browser artifact traffic
+    # fell through base.yml's PathPrefix(`/`) catch-all to pylon as well. Two
+    # doors to one store is the state that made a cutover a two-step change; a
+    # single router is the state that makes it one.
+    #
+    # elitea-main serves every path below (services/elitea-main/internal/api/
+    # router.go: the /api/v2/artifacts bucket, object and grant routes, and the
+    # root-mounted /artifacts/s3 surface the pinned SDK speaks). The Go object
+    # store is composed in this stack: pov-compose.yml sets
+    # ELITEA_ARTIFACTS_ENABLED and the S3_* variables that name it.
+    #
+    # THE FLAG AND THIS ROUTER ARE ONE DECISION. Setting
+    # ELITEA_ARTIFACTS_ENABLED back to "false" without reverting this router
+    # leaves every artifact path resolving to a service that composes no object
+    # store. The rollback is therefore both edits, and deploy/
+    # ARTIFACT_CUTOVER.md states it as one step.
+    #
+    # PRIORITY 90 matches the other browser-reachable Go routers in this file.
+    # 85 is the band for the worker-only routers that keep a Host guard, and
+    # this one no longer has a guard to justify sitting there.
+    #
+    # /artifacts/s3 is deliberately NOT under /api/v2. The SDK appends
+    # "/artifacts/s3" to a platform origin validated to carry no path, so the
+    # request arrives at the root and the edge forwards it verbatim.
+    go-artifacts:
       rule: >-
-        Host(`elitea-gateway`) &&
-        (((PathRegexp(`^/api/v2/artifacts/buckets/[1-9][0-9]*$`) && (Method(`GET`) || Method(`POST`))) ||
-        (PathRegexp(`^/artifacts/s3/[^/]+(/.*)?$`) && (Method(`GET`) || Method(`PUT`) || Method(`DELETE`) || Method(`HEAD`)))))
-      priority: 85
+        (PathRegexp(`^/api/v2/artifacts/buckets/[1-9][0-9]*(/[^/]+)?$`) && (Method(`GET`) || Method(`POST`) || Method(`PATCH`) || Method(`DELETE`))) ||
+        (PathRegexp(`^/api/v2/artifacts/objects/[1-9][0-9]*/[^/]+(/.*)?$`) && (Method(`GET`) || Method(`POST`) || Method(`DELETE`) || Method(`HEAD`))) ||
+        (PathRegexp(`^/api/v2/artifacts/grants/[1-9][0-9]*/.*$`) && Method(`POST`)) ||
+        (PathRegexp(`^/artifacts/s3/[^/]+(/.*)?$`) && (Method(`GET`) || Method(`PUT`) || Method(`DELETE`) || Method(`HEAD`)))
+      priority: 90
       entryPoints: [websecure]
       tls: {}
       middlewares:
         - strip-caller-auth-context
         - normalize-runtime-public-authority
         - go-main-forward-auth
-      service: current-main
+      service: elitea-main

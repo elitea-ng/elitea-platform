@@ -7,9 +7,11 @@ import type { SxProps, Theme } from '@mui/material/styles';
 
 import { useNavigate } from '@tanstack/react-router';
 
+import { EntityLifecycleControls } from '@/features/agent-lifecycle';
 import { DeleteApplicationButton, ExportApplicationButton } from '@/features/agents';
 
 import { ChatWithAgentButton } from './ChatWithAgentButton';
+import { useForkTargetProjects } from '../lib/useForkTargetProjects';
 import type { ApplicationDetail, ApplicationVersionDetail } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
 import { disarmUnsavedChangesNavBlocker } from '@/widgets/app-shell';
@@ -62,6 +64,7 @@ export function EditApplicationActions({
   const currentVersionId = activeVersion?.id;
   const listTab = tab ?? 'latest';
   const navigate = useNavigate();
+  const forkTargets = useForkTargetProjects(projectId);
   const [error, setError] = useState<string | undefined>(undefined);
 
   const handleDeleted = useCallback(() => {
@@ -116,6 +119,24 @@ export function EditApplicationActions({
         disabled={applicationId === undefined}
         onDeleted={handleDeleted}
         onError={handleDeleteError}
+      />
+      {/*
+       * #120 / validation-matrix gaps 10 and 12 — Publish, Unpublish, Share
+       * and Fork. Every one of those routes was generated months ago and had
+       * no caller at all (`endpoints.manifest.json` recorded `"usedBy": []`
+       * for publish, unpublish, publish_validate and fork), which is why the
+       * Published/Moderation tabs on the list page could never fill and ELITEA
+       * Catalog stayed permanently empty.
+       */}
+      <EntityLifecycleControls
+        entity="agents"
+        projectId={projectId}
+        projects={forkTargets}
+        entityId={applicationId}
+        entityName={name ?? ''}
+        tab={tab}
+        activeVersionId={activeVersion?.id}
+        activeVersionStatus={activeVersion?.status}
       />
     </Box>
   );

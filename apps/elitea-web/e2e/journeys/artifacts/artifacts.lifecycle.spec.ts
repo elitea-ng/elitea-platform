@@ -91,6 +91,31 @@ async function seedBucketWithFiles(request: APIRequestContext, projectId: string
   }
 }
 
+/**
+ * Enter the artifacts route a SECOND time, once the first document has
+ * stopped working.
+ *
+ * `page.goto` resolves on `load`, and this app keeps working after that: it
+ * pulls its lazy route chunks and issues its boot calls. A navigation started
+ * inside that traffic is cancelled by WebKit and reported as
+ * `page.goto: Frame load interrupted` — reproduced on the first webkit run of
+ * this set, at J20d's re-entry with the bucket in the query string, which is
+ * the flake recorded against J20d in #545.
+ *
+ * J20c already carries this wait, with the measurement behind it
+ * (reload-while-booting failed 9 of 24 webkit runs, a plain second `goto` 13,
+ * waiting first 0). This is that wait, named, so the two journeys share one
+ * copy of the reasoning instead of only one of them having it.
+ *
+ * No assertion is weakened. The wait ends BEFORE the navigation begins, so
+ * everything after it still judges a fresh document.
+ */
+async function reenterArtifacts(page: Page, url: string): Promise<void> {
+  await page.waitForLoadState('networkidle');
+  await page.goto(url);
+  await page.waitForURL('**/artifacts**', { timeout: 15_000 });
+}
+
 /** Drain a Playwright download into a Buffer. */
 async function readDownload(download: { createReadStream: () => Promise<NodeJS.ReadableStream> }): Promise<Buffer> {
   const stream = await download.createReadStream();
@@ -136,8 +161,18 @@ test.describe('J20 artifacts lifecycle', () => {
     await page.getByRole('button', { name: /^create bucket$/i }).first().click();
     await page.waitForURL('**/artifacts/create-bucket**', { timeout: 15_000 });
 
+    // The FIRST assertion after a navigation carries its own budget (#545).
+    // `expect` defaults to 5 s and nothing in playwright.config.ts raises it,
+    // while the SPA still has to fetch the lazy route chunk for
+    // /artifacts/create-bucket and render the form. Measured while answering
+    // #545: this line failed 1 run in 8 on a loaded machine, and the file is
+    // `mode: 'serial'`, so it took every later J20 test with it. The budget of
+    // the `waitForURL` above is the right size for the same wait.
+    //
+    // Nothing is softened. A form that never prefills still fails here, one
+    // line later than before.
     const name = page.getByRole('textbox', { name: /^name$/i });
-    await expect(name).toHaveValue('new-bucket');
+    await expect(name).toHaveValue('new-bucket', { timeout: 15_000 });
     await expect(name).toHaveAttribute('maxlength', '56');
 
     const submit = page.getByRole('button', { name: /^create bucket$/i });
@@ -239,6 +274,29 @@ test.describe('J20 artifacts lifecycle', () => {
      */
     await page.waitForLoadState('networkidle');
 
+    /*
+     * The backend's own bucket listing, asserted BEFORE the sidebar (#545).
+     *
+     * The two assertions below read the sidebar. A sidebar row is the END of a
+     * chain — the server answers, the client unwraps the envelope, the sidebar
+     * renders — and a bare `toBeVisible` on it says only that the chain did not
+     * finish inside the timeout. That is the whole ambiguity #545 records for
+     * this journey: "did the assertion read too early, or is the write not
+     * visible to the next read".
+     *
+     * Reading the listing here separates the two for good. A backend that lost
+     * the POSTed bucket fails HERE, on the list; a sidebar that failed to render
+     * a bucket the backend serves fails BELOW, on the row. Neither failure can
+     * be mistaken for the other, and nothing is weakened — the row assertions
+     * are unchanged.
+     */
+    const listed = await request.get(`/api/v2/artifacts/buckets/${projectId}`);
+    expect(listed.status(), await listed.text()).toBe(200);
+    expect(
+      ((await listed.json()) as { buckets: { name: string }[] }).buckets.map((b) => b.name),
+      'the backend must list the bucket this test created',
+    ).toContain(READ_BUCKET);
+
     await page.reload();
     await page.waitForURL('**/artifacts**', { timeout: 15_000 });
 
@@ -264,8 +322,7 @@ test.describe('J20 artifacts lifecycle', () => {
     const projectId = await selectedProjectId(page);
     await seedBucketWithFiles(request, projectId);
 
-    await page.goto(`${BASE_URL}/app/artifacts?bucket=${READ_BUCKET}`);
-    await page.waitForURL('**/artifacts**', { timeout: 15_000 });
+    await reenterArtifacts(page, `${BASE_URL}/app/artifacts?bucket=${READ_BUCKET}`);
 
     // The row itself, addressed by the file's own name.
     const row = page.getByRole('row').filter({ hasText: FILE_NAME });
@@ -283,7 +340,7 @@ test.describe('J20 artifacts lifecycle', () => {
     // Re-enter the bucket by URL rather than `page.goBack()`: the step needs
     // the file table, not the previous history entry, and waiting for the row
     // states that precondition instead of assuming the view has settled.
-    await page.goto(`${BASE_URL}/app/artifacts?bucket=${READ_BUCKET}`);
+    await reenterArtifacts(page, `${BASE_URL}/app/artifacts?bucket=${READ_BUCKET}`);
     await expect(row).toBeVisible({ timeout: 15_000 });
     const [download] = await Promise.all([
       page.waitForEvent('download', { timeout: 15_000 }),
@@ -357,8 +414,7 @@ test.describe('J20 artifacts lifecycle', () => {
     const projectId = await selectedProjectId(page);
     await seedBucketWithFiles(request, projectId);
 
-    await page.goto(`${BASE_URL}/app/artifacts?bucket=${READ_BUCKET}`);
-    await page.waitForURL('**/artifacts**', { timeout: 15_000 });
+    await reenterArtifacts(page, `${BASE_URL}/app/artifacts?bucket=${READ_BUCKET}`);
 
     await expect(page.getByRole('row').filter({ hasText: FILE_NAME })).toBeVisible({ timeout: 15_000 });
     await page.getByRole('checkbox', { name: 'Select all artifacts' }).check();
@@ -473,6 +529,77 @@ test.describe('J20 artifacts lifecycle', () => {
     const removed = await request.post(
       `/api/v2/artifacts/objects/${projectId}/${READ_BUCKET}:batchDelete`,
       { data: { keys: [acceptedName] } },
+    );
+    expect(removed.status(), await removed.text()).toBe(200);
+  });
+
+  /**
+   * Two defects at once, both of them only reachable once the bucket is NOT
+   * empty — which is why every earlier test in this file missed them.
+   *
+   *  1. THE ONLY UPLOAD AFFORDANCE. `ArtifactTableEmpty`'s button disappears
+   *     the moment the bucket holds a file, so from the second upload on the
+   *     toolbar's icon button is the whole of "upload". Every other test here
+   *     calls `setInputFiles` on the hidden input directly, so none of them
+   *     touches a button at all; a toolbar button that opened nothing would
+   *     leave a populated bucket permanently unable to take another file, and
+   *     the suite would stay green.
+   *
+   *  2. THE FOOTER TOTAL. The buckets panel sums `size_bytes` from the BUCKET
+   *     list. The page used to answer a finished upload with
+   *     `files.refetch()`, which refreshes the object list only, so the total
+   *     stayed at its pre-upload value until the next full page load. The
+   *     reload at the end is the anchor: what the user sees immediately has to
+   *     be what the server already said.
+   */
+  test('J20g: the toolbar button uploads into a NON-EMPTY bucket and the size total follows', async ({ page, request }) => {
+    await page.goto(BASE_URL + '/app/artifacts');
+    await page.waitForURL('**/artifacts**', { timeout: 15_000 });
+    const projectId = await selectedProjectId(page);
+    await seedBucketWithFiles(request, projectId);
+
+    await page.goto(`${BASE_URL}/app/artifacts?bucket=${READ_BUCKET}`);
+    await expect(page.getByRole('row').filter({ hasText: FILE_NAME })).toBeVisible({ timeout: 15_000 });
+    // The precondition the whole test rests on: the empty state, and with it
+    // its own upload button, is gone.
+    await expect(page.getByText('No files in this bucket')).toHaveCount(0);
+
+    const footerSize = page.getByText('Size:', { exact: true }).locator('xpath=following-sibling::*[1]');
+    const sizeBefore = (await footerSize.textContent())?.trim();
+    expect(sizeBefore, 'the footer must report a total before the upload').toBeTruthy();
+
+    // Clicking the button must OPEN the picker. `waitForFileChooser` fails the
+    // test if it does not, which `setInputFiles` on the hidden input never
+    // could.
+    const extraName = 'j20g-toolbar-art.bin';
+    const [chooser] = await Promise.all([
+      page.waitForEvent('filechooser', { timeout: 15_000 }),
+      page.getByRole('button', { name: 'Upload files' }).click(),
+    ]);
+    await chooser.setFiles({
+      name: extraName,
+      mimeType: 'application/octet-stream',
+      // 400 KiB: large enough that the project total's rendered string cannot
+      // stay the same, whatever the other buckets already hold.
+      buffer: Buffer.alloc(400 * 1024, 5),
+    });
+    await page.getByRole('button', { name: 'Continue', exact: true }).click();
+
+    await expect(page.getByRole('row').filter({ hasText: extraName })).toBeVisible({ timeout: 30_000 });
+
+    // No reload between here and the upload.
+    await expect.poll(async () => (await footerSize.textContent())?.trim(), { timeout: 20_000 }).not.toBe(sizeBefore);
+    const sizeAfter = (await footerSize.textContent())?.trim();
+
+    // …and the value shown was the RIGHT one, not merely a different one.
+    await page.reload();
+    await expect(page.getByRole('row').filter({ hasText: extraName })).toBeVisible({ timeout: 30_000 });
+    await expect(footerSize).toHaveText(sizeAfter as string);
+
+    // Housekeeping: J20e asserts the ZIP holds EXACTLY the two seeded objects.
+    const removed = await request.post(
+      `/api/v2/artifacts/objects/${projectId}/${READ_BUCKET}:batchDelete`,
+      { data: { keys: [extraName] } },
     );
     expect(removed.status(), await removed.text()).toBe(200);
   });

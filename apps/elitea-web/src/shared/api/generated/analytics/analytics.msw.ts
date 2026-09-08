@@ -265,11 +265,23 @@ export const getGetAnalyticsUserDetailResponseAnalyticsDetailEnvelopeMock = (
       ).map(() => ({})),
       undefined,
     ]),
+    tool_dimension_available: faker.helpers.arrayElement([
+      faker.datatype.boolean(),
+      undefined,
+    ]),
     tools: faker.helpers.arrayElement([
       Array.from(
         { length: faker.number.int({ min: 1, max: 10 }) },
         (_, i) => i + 1,
-      ).map(() => ({})),
+      ).map(() => ({
+        toolkit_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        toolkit_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        tool_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        run_count: faker.number.int(),
+        error_count: faker.number.int(),
+        avg_duration_ms: faker.number.float({ fractionDigits: 2 }),
+        error_rate: faker.number.float({ fractionDigits: 2 }),
+      })),
       undefined,
     ]),
     daily_usage: Array.from(
@@ -313,16 +325,23 @@ export const getGetAnalyticsUserDetailResponseMock = ():
 export const getListAnalyticsToolsResponseMock = (
   overrideResponse: Partial<Extract<AnalyticsToolsList, object>> = {},
 ): AnalyticsToolsList => ({
-  items: Array.from(
-    { length: faker.number.int({ min: 1, max: 10 }) },
-    (_, i) => i + 1,
-  ).map(() => ({
-    toolkit_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
-    tool_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
-    run_count: faker.number.int(),
-    avg_duration_ms: faker.number.float({ fractionDigits: 2 }),
-    error_rate: faker.number.float({ fractionDigits: 2 }),
-  })),
+  tool_dimension_available: faker.datatype.boolean(),
+  items: faker.helpers.arrayElement([
+    Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      toolkit_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      toolkit_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      tool_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      run_count: faker.number.int(),
+      error_count: faker.number.int(),
+      avg_duration_ms: faker.number.float({ fractionDigits: 2 }),
+      error_rate: faker.number.float({ fractionDigits: 2 }),
+    })),
+    undefined,
+  ]),
+  truncated: faker.helpers.arrayElement([faker.datatype.boolean(), undefined]),
   ...overrideResponse,
 });
 
@@ -394,11 +413,23 @@ export const getGetAnalyticsToolDetailResponseAnalyticsDetailEnvelopeMock = (
       ).map(() => ({})),
       undefined,
     ]),
+    tool_dimension_available: faker.helpers.arrayElement([
+      faker.datatype.boolean(),
+      undefined,
+    ]),
     tools: faker.helpers.arrayElement([
       Array.from(
         { length: faker.number.int({ min: 1, max: 10 }) },
         (_, i) => i + 1,
-      ).map(() => ({})),
+      ).map(() => ({
+        toolkit_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        toolkit_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        tool_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        run_count: faker.number.int(),
+        error_count: faker.number.int(),
+        avg_duration_ms: faker.number.float({ fractionDigits: 2 }),
+        error_rate: faker.number.float({ fractionDigits: 2 }),
+      })),
       undefined,
     ]),
     daily_usage: Array.from(
@@ -413,16 +444,26 @@ export const getGetAnalyticsToolDetailResponseAnalyticsToolsListMock = (
   overrideResponse: Partial<AnalyticsToolsList> = {},
 ): AnalyticsToolsList => ({
   ...{
-    items: Array.from(
-      { length: faker.number.int({ min: 1, max: 10 }) },
-      (_, i) => i + 1,
-    ).map(() => ({
-      toolkit_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
-      tool_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
-      run_count: faker.number.int(),
-      avg_duration_ms: faker.number.float({ fractionDigits: 2 }),
-      error_rate: faker.number.float({ fractionDigits: 2 }),
-    })),
+    tool_dimension_available: faker.datatype.boolean(),
+    items: faker.helpers.arrayElement([
+      Array.from(
+        { length: faker.number.int({ min: 1, max: 10 }) },
+        (_, i) => i + 1,
+      ).map(() => ({
+        toolkit_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        toolkit_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        tool_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        run_count: faker.number.int(),
+        error_count: faker.number.int(),
+        avg_duration_ms: faker.number.float({ fractionDigits: 2 }),
+        error_rate: faker.number.float({ fractionDigits: 2 }),
+      })),
+      undefined,
+    ]),
+    truncated: faker.helpers.arrayElement([
+      faker.datatype.boolean(),
+      undefined,
+    ]),
   },
   ...overrideResponse,
 });
@@ -519,11 +560,23 @@ export const getGetAnalyticsAgentDetailResponseAnalyticsDetailEnvelopeMock = (
       ).map(() => ({})),
       undefined,
     ]),
+    tool_dimension_available: faker.helpers.arrayElement([
+      faker.datatype.boolean(),
+      undefined,
+    ]),
     tools: faker.helpers.arrayElement([
       Array.from(
         { length: faker.number.int({ min: 1, max: 10 }) },
         (_, i) => i + 1,
-      ).map(() => ({})),
+      ).map(() => ({
+        toolkit_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        toolkit_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        tool_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        run_count: faker.number.int(),
+        error_count: faker.number.int(),
+        avg_duration_ms: faker.number.float({ fractionDigits: 2 }),
+        error_rate: faker.number.float({ fractionDigits: 2 }),
+      })),
       undefined,
     ]),
     daily_usage: Array.from(
@@ -593,6 +646,110 @@ export const getGetAnalyticsCostsResponseMock = (
   periods_truncated: faker.datatype.boolean(),
   date_from: faker.date.past().toISOString().slice(0, 19) + "Z",
   date_to: faker.date.past().toISOString().slice(0, 19) + "Z",
+  estimate: faker.helpers.arrayElement([
+    {
+      ...{
+        token_dimension_available: faker.datatype.boolean(),
+        cost_dimension_available: faker.datatype.boolean(),
+        cache_dimension_available: faker.datatype.boolean(),
+        currency: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        priced_calls: faker.number.int(),
+        unpriced_calls: faker.number.int(),
+        totals: {
+          calls: faker.number.int(),
+          prompt_tokens: faker.number.int(),
+          completion_tokens: faker.number.int(),
+          total_tokens: faker.number.int(),
+          input_cost: faker.helpers.arrayElement([
+            faker.number.float({ fractionDigits: 2 }),
+            undefined,
+          ]),
+          output_cost: faker.helpers.arrayElement([
+            faker.number.float({ fractionDigits: 2 }),
+            undefined,
+          ]),
+          total_cost: faker.helpers.arrayElement([
+            faker.number.float({ fractionDigits: 2 }),
+            undefined,
+          ]),
+        },
+        by_model: Array.from(
+          { length: faker.number.int({ min: 1, max: 10 }) },
+          (_, i) => i + 1,
+        ).map(() => ({
+          provider: faker.string.alpha({ length: { min: 10, max: 20 } }),
+          model: faker.string.alpha({ length: { min: 10, max: 20 } }),
+          calls: faker.number.int(),
+          prompt_tokens: faker.number.int(),
+          completion_tokens: faker.number.int(),
+          total_tokens: faker.number.int(),
+          priced: faker.datatype.boolean(),
+          input_cost: faker.helpers.arrayElement([
+            faker.number.float({ fractionDigits: 2 }),
+            undefined,
+          ]),
+          output_cost: faker.helpers.arrayElement([
+            faker.number.float({ fractionDigits: 2 }),
+            undefined,
+          ]),
+          total_cost: faker.helpers.arrayElement([
+            faker.number.float({ fractionDigits: 2 }),
+            undefined,
+          ]),
+        })),
+        by_user: Array.from(
+          { length: faker.number.int({ min: 1, max: 10 }) },
+          (_, i) => i + 1,
+        ).map(() => ({
+          user_id: faker.number.int(),
+          email: faker.string.alpha({ length: { min: 10, max: 20 } }),
+          name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+          calls: faker.number.int(),
+          prompt_tokens: faker.number.int(),
+          completion_tokens: faker.number.int(),
+          total_tokens: faker.number.int(),
+          priced: faker.datatype.boolean(),
+          input_cost: faker.helpers.arrayElement([
+            faker.number.float({ fractionDigits: 2 }),
+            undefined,
+          ]),
+          output_cost: faker.helpers.arrayElement([
+            faker.number.float({ fractionDigits: 2 }),
+            undefined,
+          ]),
+          total_cost: faker.helpers.arrayElement([
+            faker.number.float({ fractionDigits: 2 }),
+            undefined,
+          ]),
+        })),
+        daily: Array.from(
+          { length: faker.number.int({ min: 1, max: 10 }) },
+          (_, i) => i + 1,
+        ).map(() => ({
+          date: faker.string.alpha({ length: { min: 10, max: 20 } }),
+          calls: faker.number.int(),
+          prompt_tokens: faker.number.int(),
+          completion_tokens: faker.number.int(),
+          total_tokens: faker.number.int(),
+          input_cost: faker.helpers.arrayElement([
+            faker.number.float({ fractionDigits: 2 }),
+            undefined,
+          ]),
+          output_cost: faker.helpers.arrayElement([
+            faker.number.float({ fractionDigits: 2 }),
+            undefined,
+          ]),
+          total_cost: faker.helpers.arrayElement([
+            faker.number.float({ fractionDigits: 2 }),
+            undefined,
+          ]),
+        })),
+        by_model_truncated: faker.datatype.boolean(),
+        by_user_truncated: faker.datatype.boolean(),
+      },
+    },
+    undefined,
+  ]),
   ...overrideResponse,
 });
 

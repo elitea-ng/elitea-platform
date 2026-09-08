@@ -2,6 +2,71 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::ProtocolError;
 
+#[cfg(test)]
+mod merge_contract_tests {
+    use super::{Schema, scan_message};
+    use crate::protocol::elitea::runtime::v1::{
+        ExecutionOutputEventTypeV1, ExecutionOutputFrameV1, ToolkitCallToolResultV1,
+        ToolkitExecuteReadResultV1, WorkerCommandTypeV1, execution_output_frame_v1,
+    };
+    use prost::Message;
+
+    #[test]
+    fn toolkit_enum_and_output_numbers_preserve_main_contract() {
+        assert_eq!(WorkerCommandTypeV1::ToolkitCallTool as i32, 10);
+        assert_eq!(WorkerCommandTypeV1::ToolkitExecuteRead as i32, 11);
+        assert_eq!(ExecutionOutputEventTypeV1::ToolkitCallToolResult as i32, 7);
+        assert_eq!(
+            ExecutionOutputEventTypeV1::ToolkitExecuteReadResult as i32,
+            8
+        );
+        for (payload, expected) in [
+            (
+                execution_output_frame_v1::Payload::ToolkitCallTool(
+                    ToolkitCallToolResultV1::default(),
+                ),
+                vec![0xca, 0x01, 0x00],
+            ),
+            (
+                execution_output_frame_v1::Payload::ToolkitExecuteRead(
+                    ToolkitExecuteReadResultV1::default(),
+                ),
+                vec![0x8a, 0x02, 0x00],
+            ),
+        ] {
+            let frame = ExecutionOutputFrameV1 {
+                payload: Some(payload),
+                ..Default::default()
+            };
+            assert_eq!(frame.encode_to_vec(), expected);
+        }
+    }
+
+    #[test]
+    fn toolkit_command_fields_remain_distinct() {
+        // These are distinct capabilities in one language-neutral schema.
+        let call_tool = scan_message(&[0xa2, 0x02, 0x00], Schema::WorkerCommand).unwrap();
+        let read = scan_message(&[0x82, 0x04, 0x00], Schema::WorkerCommand).unwrap();
+        assert!(call_tool.contains(36));
+        assert!(!call_tool.contains(64));
+        assert!(read.contains(64));
+        assert!(!read.contains(36));
+    }
+
+    #[test]
+    fn mixed_toolkit_commands_are_rejected_before_decode() {
+        for raw in [
+            [0xa2, 0x02, 0x00, 0x82, 0x04, 0x00],
+            [0x82, 0x04, 0x00, 0xa2, 0x02, 0x00],
+        ] {
+            assert!(matches!(
+                scan_message(&raw, Schema::WorkerCommand),
+                Err(super::ProtocolError::InvalidInput(_))
+            ));
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(crate) enum Schema {
     SignedCommandEnvelope,
@@ -149,7 +214,14 @@ const fn field_rule(schema: Schema, field: u32) -> Option<FieldRule> {
         Schema::WorkerCommand => match field {
             1..=3 | 5 | 8..=14 | 16..=20 | 23..=25 => Some(length()),
             4 | 6..=7 | 21..=22 => Some(varint()),
-            32..=36 => Some(FieldRule {
+            // The capability_command oneof, every arm the protocol defines.
+            // Tag 36 (toolkit_call_tool) is not yet served by Rust, but this
+            // range must still admit it: a field the PROTOCOL declares is not a
+            // malformed wire tag, and reporting it as one would tell an
+            // operator the command is corrupt when the true answer is that this
+            // worker does not serve that capability. The capability refusal is
+            // made by select_agent_entrypoint, where it can say so.
+            32..=36 | 64 => Some(FieldRule {
                 wire_type: 2,
                 oneof: Some(1),
             }),

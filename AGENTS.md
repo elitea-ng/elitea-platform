@@ -23,7 +23,6 @@ prototype shortcuts into new code merely to preserve current behavior.
 | Path | Ownership |
 | --- | --- |
 | `services/elitea-main/` | Go API, auth, control plane, persistence, and browser streaming |
-| `services/pylon-indexer/` | Transitional Pylon runtime; target replacement is a standalone Python worker CLI |
 | `apps/elitea-ui/` | EliteaUI Git submodule; make UI changes in its owning repository |
 | `libs/go/` | Shared Go libraries; keep dependencies narrow and consumer-driven |
 | `libs/proto/` | Versioned cross-language contracts and generated-code inputs |
@@ -78,7 +77,10 @@ prototype shortcuts into new code merely to preserve current behavior.
 - Keep API errors typed and safe for callers. Log internal causes with trace and
   execution identifiers; never return raw `err.Error()` across a trust boundary.
 - Enforce authentication, project authorization, and tenant context before
-  mounting product, admin, storage, shadow, or cutover handlers.
+  mounting product, admin, or storage handlers. Do not add a pylon bridge back:
+  the shadow comparator, the cutover reverse proxy and endpoint tracker, and the
+  Redis remote-call auth client are deleted (issue #383), and
+  `internal/api/TestNoPylonBridgeWiringReturns` fails if one returns.
 - Use transaction-local tenant selection and repository-owned versioned
   migrations. Never return a pooled connection after releasing it or use
   session-scoped tenant state across requests.

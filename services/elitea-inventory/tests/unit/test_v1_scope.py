@@ -135,12 +135,29 @@ def test_no_platform_client_is_injected_into_the_toolkit_settings(monkeypatch):
     monkeypatch.setitem(__import__("sys").modules, "elitea_sdk.tools", module)
 
     source = sources.parse_source(
-        {"type": "github", "name": "r", "toolkit_id": 3, "settings": {"repository": "a/b"}},
+        {
+            "type": "github",
+            "name": "r",
+            "toolkit_id": 3,
+            # The credential block the SDK subscripts; build_toolkit refuses a
+            # source without one rather than letting the SDK raise KeyError.
+            "settings": {"repository": "a/b", "github_configuration": {}},
+        },
         ALLOWED,
     )
     sources.build_toolkit(source)
-    assert seen["settings"] == {"repository": "a/b"}
+    # What this test is about: the admin-authorised client is NOT injected.
     assert "elitea" not in seen["settings"]
+    # The stored settings reach the SDK unaltered. `build_toolkit` adds the two
+    # branch keys github requires and nothing else, so the assertion names what
+    # it allows instead of pinning the whole dict — an equality here would fail
+    # on any required key the SDK adds, which is not what this test measures.
+    assert seen["settings"]["repository"] == "a/b"
+    assert seen["settings"]["github_configuration"] == {}
+    assert set(seen["settings"]) - {"repository", "github_configuration"} == {
+        "active_branch",
+        "base_branch",
+    }
 
 
 # -- embeddings: the gateway, and the space the graph was built in -----------

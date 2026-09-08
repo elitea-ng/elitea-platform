@@ -5,16 +5,22 @@
  * (`getSkillIcons` / `uploadSkillIcon` / `replaceSkillIcon` / `deleteSkillIcon`)
  * — parity manifest API-070 … API-073.
  *
- * Hand-written rather than generated for the same reason
- * `entities/project/api/projectContextApi.ts` is: these four live under
- * `/elitea_core/upload_skill_icon/prompt_lib/{projectId}` and are not part of
- * the generated `applications.ts` surface.
+ * ## Generated transport, hand-written cache policy (issue 36, item 1)
  *
- * ONE SHAPE NOTE THAT IS LOAD-BEARING. The listing answers `{rows, total}` and
- * `eliteaFetch` resolves the `{data, status, headers}` envelope, so a call site
- * that types the fetch as the BODY gets `undefined` fields on a 200 — the #132
- * defect, which shows as an empty gallery with nothing in the console. The
- * unwrap goes through the one sanctioned helper (R-A6), never re-derived here.
+ * The five routes are described in `services/elitea-main/api/openapi/v2.yaml`,
+ * so the URL building, the multipart assembly and the response types come from
+ * `shared/api/generated/skills` and are no longer re-derived here. What stays
+ * hand-written is the part orval does not generate usefully: it shapes EVERY
+ * operation as a `useQuery` gated by `enabled`, including the three writes, so
+ * the mutations below wrap the generated FETCHERS in `useMutation` and own the
+ * invalidation. That is the same split `entities/application-form/model/
+ * mutations.ts` established for this codebase.
+ *
+ * ONE SHAPE NOTE THAT IS LOAD-BEARING. `eliteaFetch` resolves the
+ * `{data, status, headers}` envelope, and every generated fetcher returns it —
+ * so a call site that treats the result as the BODY gets `undefined` fields on
+ * a 200, the #132 defect, which shows as an empty gallery with nothing in the
+ * console. The list unwrap goes through the one sanctioned helper (R-A6).
  */
 import {
   useMutation,
@@ -24,7 +30,13 @@ import {
   type UseQueryResult,
 } from '@tanstack/react-query';
 
-import { eliteaFetch } from '@/shared/api/generated/mutator';
+import {
+  bindSkillIcon as bindSkillIconRequest,
+  deleteSkillIcon as deleteSkillIconRequest,
+  listSkillIcons as listSkillIconsRequest,
+  uploadSkillIcon as uploadSkillIconRequest,
+  uploadSkillIconForVersion as uploadSkillIconForVersionRequest,
+} from '@/shared/api/generated/skills/skills';
 import { unwrapListPage } from '@/shared/api/unwrap';
 
 /** One entry of the uploaded-icon gallery. */
@@ -53,25 +65,16 @@ export interface SkillIconsPage {
 
 const skillIconQueryKey = (projectId: string): readonly string[] => ['skills', projectId, 'icons'];
 
-function iconBase(projectId: string): string {
-  return `/elitea_core/upload_skill_icon/prompt_lib/${projectId}`;
-}
-
-async function fetchBody<T>(url: string, options?: RequestInit): Promise<T> {
-  const envelope = await eliteaFetch<{ data: T }>(url, options);
-  return envelope.data;
-}
-
 /* ── list — GET /upload_skill_icon/prompt_lib/{projectId} ───────────────── */
-/* manifest: API-070 (getSkillIcons) */
+/* manifest: skillIcons.list (listSkillIcons) — parity API-070 */
 
 export async function fetchSkillIcons(
   projectId: string,
   page = 0,
   pageSize = 200,
 ): Promise<SkillIconsPage> {
-  const url = `${iconBase(projectId)}?limit=${String(pageSize)}&skip=${String(page * pageSize)}`;
-  return unwrapListPage<SkillIcon>(await eliteaFetch<unknown>(url, { method: 'GET' }), 'skillIcons.list');
+  const response = await listSkillIconsRequest(projectId, { limit: pageSize, skip: page * pageSize });
+  return unwrapListPage<SkillIcon>(response, 'skillIcons.list');
 }
 
 export function useSkillIconsQuery(
@@ -87,7 +90,7 @@ export function useSkillIconsQuery(
 }
 
 /* ── upload — POST /upload_skill_icon/prompt_lib/{projectId}[/{versionId}] ─ */
-/* manifest: API-071 (uploadSkillIcon) */
+/* manifest: skillIcons.upload / skillIcons.uploadForVersion — parity API-071 */
 
 export interface UploadSkillIconParams {
   readonly file: File;
@@ -104,12 +107,18 @@ export async function uploadSkillIcon(
   projectId: string,
   params: UploadSkillIconParams,
 ): Promise<SkillIconMeta> {
-  const form = new FormData();
-  form.append('file', params.file);
-  if (params.width !== undefined) form.append('width', String(params.width));
-  if (params.height !== undefined) form.append('height', String(params.height));
-  const suffix = params.versionId ? `/${params.versionId}` : '';
-  return fetchBody<SkillIconMeta>(`${iconBase(projectId)}${suffix}`, { method: 'POST', body: form });
+  const form = {
+    file: params.file,
+    ...(params.width !== undefined ? { width: params.width } : {}),
+    ...(params.height !== undefined ? { height: params.height } : {}),
+  };
+  // Two DESCRIBED operations, not one path with an optional tail: the document
+  // gives the bound upload its own path because the trailing segment is a
+  // different operation with a 404 the two-segment form cannot answer.
+  const response = params.versionId
+    ? await uploadSkillIconForVersionRequest(projectId, Number(params.versionId), form)
+    : await uploadSkillIconRequest(projectId, form);
+  return (response as { data: SkillIconMeta }).data;
 }
 
 export function useUploadSkillIconMutation(
@@ -126,7 +135,7 @@ export function useUploadSkillIconMutation(
 }
 
 /* ── bind — PUT /upload_skill_icon/prompt_lib/{projectId}/{versionId} ────── */
-/* manifest: API-072 (replaceSkillIcon) */
+/* manifest: skillIcons.bind (bindSkillIcon) — parity API-072 */
 
 export interface BindSkillIconParams {
   readonly versionId: string;
@@ -142,11 +151,7 @@ export async function bindSkillIcon(
   // them empty rather than omitting them, which is exactly what pylon's
   // UpdateIcon model accepts.
   const body = params.iconMeta ?? { name: '', url: '' };
-  await fetchBody<unknown>(`${iconBase(projectId)}/${params.versionId}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
+  await bindSkillIconRequest(projectId, Number(params.versionId), { ...body });
 }
 
 export function useBindSkillIconMutation(
@@ -165,12 +170,13 @@ export function useBindSkillIconMutation(
 }
 
 /* ── delete — DELETE /upload_skill_icon/prompt_lib/{projectId}/{name} ────── */
-/* manifest: API-073 (deleteSkillIcon) */
+/* manifest: skillIcons.delete (deleteSkillIcon) — parity API-073 */
 
 export async function deleteSkillIcon(projectId: string, name: string): Promise<void> {
-  await eliteaFetch<unknown>(`${iconBase(projectId)}/${encodeURIComponent(name)}`, {
-    method: 'DELETE',
-  });
+  // ENCODED HERE, not by the generated URL builder. orval interpolates a path
+  // parameter verbatim, and an icon name is a stored file name that really can
+  // contain a space — an unencoded one would address a different path, or none.
+  await deleteSkillIconRequest(projectId, encodeURIComponent(name));
 }
 
 export function useDeleteSkillIconMutation(

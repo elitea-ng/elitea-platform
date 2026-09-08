@@ -313,10 +313,20 @@ const gridContainerSx: SxProps<Theme> = { flex: 1, minWidth: 0 };
 
 const centeredSx: SxProps<Theme> = { display: 'flex', justifyContent: 'center', padding: '2rem' };
 
+/**
+ * `DataCards.jsx`'s grid geometry, matched to `shared/ui/EntityCardList`'s
+ * own: `1.25rem 0 0 1.5rem` padding, a `1rem` gap and `MIN_CARD_WIDTH`
+ * (300px) tracks, so a toolkit grid lines up with an agent/pipeline/skill
+ * one column-for-column at the same viewport.
+ */
 const cardsGridSx: SxProps<Theme> = {
   display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fill, minmax(18rem, 1fr))',
+  gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
   gap: '1rem',
+  padding: '1.25rem 0 0 1.5rem',
+  marginRight: '-1rem',
+  boxSizing: 'border-box',
+  width: '100%',
 };
 
 const cardSlotSx: SxProps<Theme> = { minWidth: 0 };

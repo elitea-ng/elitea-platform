@@ -32,6 +32,7 @@ from elitea.runtime.v1 import (
     indexing_pb2,
     node_event_pb2,
     output_pb2,
+    toolkit_pb2,
 )
 
 from elitea_worker.agents.client_context import (
@@ -42,7 +43,9 @@ from elitea_worker.agents.checkpoint import CurrentAgentCheckpointFactory
 from elitea_worker.agents.sdk_adapter import (
     EliteaSdkAgentAdapter,
     EliteaSdkIndexingAdapter,
+    EliteaSdkToolkitToolAdapter,
     SdkBudgetExceeded,
+    unsupported_toolkit_type_reason,
 )
 from elitea_worker.constants import (
     AGENT_EXECUTE_ADHOC_CAPABILITY_ID,
@@ -57,6 +60,8 @@ from elitea_worker.constants import (
     MAX_SAFE_STRING_BYTES,
     MAX_SETTINGS_BYTES,
     OUTPUT_SCHEMA_REVISION,
+    TOOLKIT_CALL_TOOL_CAPABILITY_ID,
+    TOOLKIT_CALL_TOOL_CAPABILITY_VERSION,
 )
 from elitea_worker.execution.errors import (
     AmbiguousExecutionRecovery,
@@ -103,6 +108,11 @@ from elitea_worker.handlers.agent_events import (
     CurrentAgentNodeEventContext,
     nested_skill_registry_from_payload,
 )
+from elitea_worker.handlers.toolkit_call_tool import (
+    ResolvedToolkitCallToolInput,
+    ToolkitCallToolHandler,
+    ToolkitCallToolInputBinding,
+)
 from elitea_worker.handlers.validation import ConfigurationValidationHandler
 from elitea_worker.protocol.codec import (
     VerifiedWorkerCommand,
@@ -122,6 +132,11 @@ from elitea_worker.protocol.agent import (
     bind_result_artifact as bind_agent_result_artifact,
     parse_agent_execution_input,
     request_from as agent_request_from,
+)
+from elitea_worker.protocol.toolkit_call_tool import (
+    bind_result_summary as bind_tool_run_result_summary,
+    request_from as tool_run_request_from,
+    unsupported_toolkit_result,
 )
 from elitea_worker.protocol.node_event import (
     InvalidCurrentNodeEvent,
@@ -163,6 +178,13 @@ _INDEX_MCP_TOKENS_ROLE = "index.mcp_tokens"
 _INDEX_EMBEDDING_BINDING_ROLE = "index.embedding_binding"
 _INDEX_INPUT_AUDIENCE = "elitea.runtime.input.read.v1"
 _INDEX_INTERNAL_FAILURE_FRAME_LIMIT = 8
+
+# The two tool-run bundle entries. They are separate roles, not one blob,
+# because they have different trust: the settings are redeemed by the platform
+# from the saved toolkit row, the arguments come from the caller. Naming them
+# apart is what lets the claim check refuse a bundle that swapped them.
+_TOOL_RUN_SETTINGS_ROLE = "toolkit.call_tool.settings"
+_TOOL_RUN_ARGUMENTS_ROLE = "toolkit.call_tool.arguments"
 
 
 class ControlPlane(Protocol):
@@ -289,6 +311,19 @@ class _ResolvedAgentInputs:
 
 class _IndexProgressTransportFailure(RuntimeError):
     """Progress delivery lost its exact durable sequence authority."""
+
+
+class _AgentTerminalFailure(RuntimeError):
+    """The SDK returned a failed turn instead of raising for it.
+
+    The stage name is operator diagnostics for the worker log only. It never
+    crosses the output boundary: the runtime error message is canonicalized by
+    code in `protocol/codec.py`.
+    """
+
+    def __init__(self, stage: str) -> None:
+        super().__init__(stage)
+        self.stage = stage
 
 
 def _emit_index_internal_failure(
@@ -2079,6 +2114,257 @@ class IndexIngestDeliveryProcessor(ConfigurationValidationDeliveryProcessor):
         raise InvalidInput("The invocation authorization disposition is malformed.")
 
 
+@dataclass(frozen=True, slots=True)
+class _AcceptedToolRunClaim:
+    verified: VerifiedWorkerCommand
+    settings: FixtureEntry
+    arguments: FixtureEntry
+    claim_id: str
+    claim_handoff_watermark: int
+
+
+@dataclass(frozen=True, slots=True)
+class _ResolvedToolRunInputs:
+    settings: ResolvedToolkitCallToolInput
+    arguments: ResolvedToolkitCallToolInput
+    client_context: EliteaClientContext
+
+
+class ToolkitCallToolDeliveryProcessor(IndexIngestDeliveryProcessor):
+    """One toolkit tool run over the shared durable lifecycle.
+
+    It inherits the index processor's capacity reservation, BeginExecution and
+    AuthorizeInvocation, because a tool run has the same obligations: it holds
+    a bounded synchronous slot, it effects provider work, and it must be
+    authorized under a live claim before the SDK is touched.
+
+    It emits NO progress frames. A tool run is one call with one answer; the
+    index path streams NodeEvents because indexing takes minutes and the user
+    watches it. Inventing progress here would create a second projection with
+    no reader.
+    """
+
+    def _new_progress_output(
+        self,
+        accepted: _AcceptedClaim | _AcceptedIndexClaim,
+        output: OutputSession,
+    ) -> None:
+        return None
+
+    def _accept_claim(
+        self,
+        *,
+        signed: envelope_pb2.SignedWorkerCommandEnvelopeV1,
+        command: command_pb2.WorkerCommandV1,
+        receipt: control_pb2.ClaimReceiptV1,
+        workload_session_id: str,
+        producer_id: str,
+        now_unix_millis: int,
+    ) -> _AcceptedToolRunClaim:
+        return _accepted_tool_run_claim(
+            signed=signed,
+            command=command,
+            receipt=receipt,
+            workload_session_id=workload_session_id,
+            producer_id=producer_id,
+            now_unix_millis=now_unix_millis,
+        )
+
+    def _validate_capability_identity(
+        self,
+        command: command_pb2.WorkerCommandV1,
+    ) -> None:
+        if (
+            command.capability_id != TOOLKIT_CALL_TOOL_CAPABILITY_ID
+            or command.capability_version != TOOLKIT_CALL_TOOL_CAPABILITY_VERSION
+            or command.command_type
+            != command_pb2.WORKER_COMMAND_TYPE_V1_TOOLKIT_CALL_TOOL
+            or command.WhichOneof("capability_command") != "toolkit_call_tool"
+        ):
+            raise UnsupportedCapability()
+
+    async def _resolve_inputs(
+        self,
+        accepted: _AcceptedToolRunClaim,
+        *,
+        receipt: control_pb2.ClaimReceiptV1,
+    ) -> _ResolvedToolRunInputs:
+        if not isinstance(accepted, _AcceptedToolRunClaim):
+            raise InternalFailure()
+        resolved: dict[str, ResolvedToolkitCallToolInput] = {}
+        for entry in (accepted.settings, accepted.arguments):
+            grant = self._input_request_builder.build(
+                _claim_bound_reference(
+                    entry.content,
+                    receipt=receipt,
+                    claim_id=accepted.claim_id,
+                )
+            )
+            # Materialized, not raw. The content service redeems the settings
+            # credential placeholders only after the claim is authorized, so a
+            # raw fetch would hand the SDK an unusable configuration.
+            raw = await self._input_client.fetch_materialized(
+                grant,
+                source_immutable_version=entry.immutable_version,
+            )
+            resolved[entry.semantic_role] = ResolvedToolkitCallToolInput(
+                binding=ToolkitCallToolInputBinding(
+                    entry_id=entry.entry_id,
+                    immutable_version=entry.immutable_version,
+                    content_digest=entry.content.digest,
+                ),
+                value=parse_json_value(raw),
+            )
+        factory = self._client_context_factory
+        if factory is None:
+            raise DependencyUnavailable(
+                "The claim-scoped SDK client context is unavailable."
+            )
+        claim = RuntimeExecutionClaim(
+            execution_id=receipt.identity.execution_id,
+            generation=int(receipt.identity.generation),
+            claim_id=accepted.claim_id,
+            fence_token=bytes(receipt.fence.fence_token),
+            resource_project_id=receipt.identity.resource_project_id,
+        )
+        try:
+            context = await factory(claim)
+            if str(context.project_id) != receipt.identity.resource_project_id:
+                raise AuthorizationFailure(
+                    "The claim-scoped SDK project identity does not match the execution."
+                )
+        except WorkerError:
+            raise
+        except Exception as error:
+            _emit_index_internal_failure(
+                stage="input_context",
+                execution_id=receipt.identity.execution_id,
+                error=error,
+            )
+            raise InternalFailure() from None
+        return _ResolvedToolRunInputs(
+            settings=resolved[_TOOL_RUN_SETTINGS_ROLE],
+            arguments=resolved[_TOOL_RUN_ARGUMENTS_ROLE],
+            client_context=context,
+        )
+
+    async def _execute_resolved(
+        self,
+        accepted: _AcceptedToolRunClaim,
+        resolved_input: object,
+        *,
+        receipt: control_pb2.ClaimReceiptV1,
+        progress: object | None,
+    ) -> toolkit_pb2.ToolkitCallToolResultV1:
+        if not isinstance(resolved_input, _ResolvedToolRunInputs):
+            raise InternalFailure()
+        command = accepted.verified.command.toolkit_call_tool
+        input_bundle_id = receipt.input_bundle.input_bundle_id
+        input_bundle_digest = bytes(receipt.input_bundle_ref.digest.value)
+        request = tool_run_request_from(
+            command,
+            input_bundle_id=input_bundle_id,
+            input_bundle_digest=input_bundle_digest,
+            settings=resolved_input.settings,
+            arguments=resolved_input.arguments,
+            runtime_config={
+                "metadata": {
+                    "initiator": "user",
+                    "tool_name": command.tool_name,
+                }
+            },
+        )
+        # The capability check comes BEFORE the client, the authorization and
+        # the SDK call, because a toolkit this image cannot build will fail
+        # inside the SDK with a message about an import, in a place the person
+        # looking at their saved toolkit cannot read. REFUSE it here with a
+        # sentence that names the type, and settle that refusal: a skipped
+        # command settles nothing, so the caller's bounded wait would burn its
+        # whole timeout and report "slow" for a condition that never changes.
+        if reason := unsupported_toolkit_type_reason(command.toolkit_type):
+            return unsupported_toolkit_result(
+                command,
+                input_bundle_id=input_bundle_id,
+                input_bundle_digest=input_bundle_digest,
+                reason=reason,
+            )
+        try:
+            adapter = EliteaSdkToolkitToolAdapter.from_context(
+                resolved_input.client_context
+            )
+        except DependencyUnavailable as error:
+            return unsupported_toolkit_result(
+                command,
+                input_bundle_id=input_bundle_id,
+                input_bundle_digest=input_bundle_digest,
+                reason=error.safe_message,
+            )
+        handler = ToolkitCallToolHandler(adapter, self._supervisor)
+        await self._authorize_invocation(receipt)
+        try:
+            result = await handler.execute(request)
+        except WorkerError:
+            raise
+        except SdkBudgetExceeded:
+            # RuntimeErrorV1 has no budget-specific wire code yet. Preserve the
+            # policy failure as the canonical non-retryable RESOURCE_EXHAUSTED
+            # contract without exposing the SDK or proxy message.
+            raise ResourceExhausted() from None
+        except Exception as error:
+            _emit_index_internal_failure(
+                stage="execute",
+                execution_id=receipt.identity.execution_id,
+                error=error,
+            )
+            raise InternalFailure() from None
+        return bind_tool_run_result_summary(result)
+
+
+def _accepted_tool_run_claim(
+    *,
+    signed: envelope_pb2.SignedWorkerCommandEnvelopeV1,
+    command: command_pb2.WorkerCommandV1,
+    receipt: control_pb2.ClaimReceiptV1,
+    workload_session_id: str,
+    producer_id: str,
+    now_unix_millis: int,
+) -> _AcceptedToolRunClaim:
+    entries = _validated_claim_entries(
+        command=command,
+        receipt=receipt,
+        workload_session_id=workload_session_id,
+        producer_id=producer_id,
+        now_unix_millis=now_unix_millis,
+    )
+    selected = command.toolkit_call_tool
+    references = (
+        (selected.settings_entry_id, _TOOL_RUN_SETTINGS_ROLE),
+        (selected.arguments_entry_id, _TOOL_RUN_ARGUMENTS_ROLE),
+    )
+    by_id = {entry.entry_id: entry for entry in entries}
+    accepted_entries: list[FixtureEntry] = []
+    for entry_id, role in references:
+        entry = by_id.get(entry_id)
+        if (
+            entry is None
+            or entry.semantic_role != role
+            or entry.immutable_version != entry.content.immutable_version
+            or entry.content.required_grant_audience != _INDEX_INPUT_AUDIENCE
+            or entry.content.byte_length > MAX_SETTINGS_BYTES
+        ):
+            raise InvalidInput("A tool-run input binding is malformed.")
+        accepted_entries.append(entry)
+    if len(accepted_entries) != len(entries):
+        raise InvalidInput("The tool-run input manifest contains an unbound entry.")
+    return _AcceptedToolRunClaim(
+        verified=_verified_claim_command(signed, command, receipt),
+        settings=accepted_entries[0],
+        arguments=accepted_entries[1],
+        claim_id=receipt.claim_id,
+        claim_handoff_watermark=int(receipt.claim_handoff_watermark),
+    )
+
+
 class AgentExecutionDeliveryProcessor(IndexIngestDeliveryProcessor):
     """Initial current-compatible agent execution over the durable lifecycle."""
 
@@ -2275,6 +2561,17 @@ class AgentExecutionDeliveryProcessor(IndexIngestDeliveryProcessor):
                     sdk_result=paused,
                 )
             callback.raise_if_failed()
+            # A failed graph node does not always raise. The pinned SDK
+            # converts one into message content, and it also returns a
+            # flattened failure envelope. Both arrive here as an ordinary
+            # object, and `AgentExecutionResultV1` has no failed terminal
+            # state: every one of them settles SUCCEEDED. Classify the result
+            # BEFORE any response event is published, so a failed turn leaves
+            # this worker as a RuntimeErrorV1 frame and reaches the
+            # conversation as the same error turn a raised failure produces.
+            failure_stage = callback.terminal_failure_stage(result.sdk_result)
+            if failure_stage is not None:
+                raise _AgentTerminalFailure(failure_stage)
             completed_content = callback.completed_response_content(result.sdk_result)
             if completed_content is not None:
                 callback.emit_completed_response(result.sdk_result)
@@ -2331,6 +2628,17 @@ class AgentExecutionDeliveryProcessor(IndexIngestDeliveryProcessor):
             raise
         except WorkerError:
             raise
+        except _AgentTerminalFailure as error:
+            # The turn ran and reported a failure. It is terminal: a retry
+            # replays the same graph over the same immutable input and fails
+            # the same way. INTERNAL is the non-retryable arm, and it is the
+            # exact outcome a raised node failure already produces.
+            _emit_agent_internal_failure(
+                stage=f"terminal_{error.stage}",
+                execution_id=receipt.identity.execution_id,
+                error=error,
+            )
+            raise InternalFailure() from None
         except Exception as error:
             if isinstance(error, SdkBudgetExceeded):
                 # The same mapping the index path makes, for the same reason.

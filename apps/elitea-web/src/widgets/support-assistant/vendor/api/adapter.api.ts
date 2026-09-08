@@ -12,12 +12,17 @@
  * that here is how a widget acquires a second, subtly different notion of "am I
  * signed in" from the app it is mounted in.
  *
- * `uploadFile` IS GONE with the attachment surface it served — see
- * `../components/chat/MessageInput.tsx` for why this platform's start contract
- * cannot carry an attachment to the agent, and why an upload that works and is
- * never read is worse than no upload. Its removal also means this file needs no
- * `XMLHttpRequest`, so R-A4's "XHR lives only in shared/api/upload.ts" holds
- * without an exception being carved for this widget.
+ * `uploadAttachment` (issue #625 item 2): the platform's start contract now
+ * DOES carry an attachment to the agent (#606 added
+ * `CurrentApplicationStartRequest.Attachments`, and `Predict` — internal/api/
+ * v2/supportassistant/predict.go — parses `attachments` into it the same
+ * way the main chat composer's `payload.attachments` does), so the upload
+ * this file adds is not the dead end an earlier version of this comment
+ * described. It goes through `eliteaFetch` with a `FormData` body — the
+ * SAME established pattern `features/skills/api/skillIconApi.ts`'s
+ * `uploadSkillIcon` and `http.ts`'s own doc comment cite — needing no
+ * `XMLHttpRequest`: R-A4's "XHR lives only in shared/api/upload.ts" still
+ * holds without an exception being carved for this widget.
  */
 import { eliteaFetch } from '@/shared/api/generated/mutator';
 
@@ -60,16 +65,32 @@ export interface TSupportTurnStarted {
   readonly task_id?: string;
 }
 
+/** One file already uploaded via `uploadAttachment`, ready to ride a turn. */
+export interface TSupportAttachmentRef {
+  /** Exactly what `uploadAttachment` answered with — `/{bucket}/{conversationUuid}/{name}`. */
+  readonly filepath: string;
+  /** Display name only; the object key IS `filepath`, not this. */
+  readonly name: string;
+}
+
 /** One question, with the page context that was collected alongside it. */
 export interface TSupportTurnRequest {
   readonly content: string;
   readonly question_id: string;
   readonly support_assistant_context?: Record<string, unknown> | undefined;
+  readonly attachments?: readonly TSupportAttachmentRef[] | undefined;
 }
 
-/** The adapter, widened with the two calls the socket transport used to cover. */
+/** `uploadAttachment`'s answer — one array entry, matching the main chat composer's own upload response shape. */
+export interface TSupportAttachmentUploaded {
+  readonly filepath: string;
+  readonly file_size: number;
+}
+
+/** The adapter, widened with the three calls the socket transport used to cover. */
 export type TSupportApi = TChatAPI & {
   startTurn: (conversationUuid: string, request: TSupportTurnRequest) => Promise<TSupportTurnStarted>;
+  uploadAttachment: (conversationUuid: string, file: File) => Promise<TSupportAttachmentUploaded>;
 };
 
 export const createSupportApi = (): TSupportApi => ({
@@ -99,5 +120,28 @@ export const createSupportApi = (): TSupportApi => ({
       body: JSON.stringify(request),
       headers: { 'Content-Type': 'application/json' },
     }),
+
+  /**
+   * Stores one file for a support conversation, through the SAME artifact
+   * path the main chat composer's own upload uses server-side
+   * (internal/api/v2/supportassistant/attachments.go). No `Content-Type`
+   * header: `fetch` sets its own multipart boundary for a `FormData` body,
+   * and setting one here would be the wrong one.
+   *
+   * The route answers an ARRAY of one entry (`attachmentCreated[]`,
+   * matching the main chat route's own response shape) — `unwrap` returns
+   * it as-is, and the first (only) entry is what the caller needs.
+   */
+  uploadAttachment: async (conversationUuid: string, file: File): Promise<TSupportAttachmentUploaded> => {
+    const form = new FormData();
+    form.append('file', file);
+    const created = await unwrap<readonly TSupportAttachmentUploaded[]>(
+      `${BASE}/attachments/${encodeURIComponent(conversationUuid)}`,
+      { method: 'POST', body: form },
+    );
+    const [first] = created;
+    if (!first) throw new Error('the upload answered with no file');
+    return first;
+  },
 
 });

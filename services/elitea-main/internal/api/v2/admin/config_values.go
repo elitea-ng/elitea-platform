@@ -546,6 +546,55 @@ func rejectCredentialField(key string, field map[string]any) string {
 	return ""
 }
 
+// forbiddenSplashMarkup names what a `format: "html"` field may not contain.
+//
+// The list is the executable and document-level half of the client sanitiser's
+// forbid-list (apps/elitea-web shared/ui/lib/sanitizeMarkdownHtml.ts), plus the
+// two attribute forms that carry script without a tag: an `on…=` handler and a
+// `javascript:` URL. Everything here would either run code in the browser of
+// every user shown the splash, or reach outside the page the splash is rendered
+// into.
+//
+// WHY BOTH ENDS CHECK. This is not the sanitiser. A rejection here is an
+// operator's mistake reported at the moment they can fix it, and it keeps
+// executable markup out of a row that outlives every renderer that reads it. A
+// renderer still sanitises, because a row written before this check existed —
+// or by a future writer that forgets it — must not become a script tag on
+// screen. Neither check makes the other redundant.
+var forbiddenSplashMarkup = []string{
+	"<script", "</script",
+	"<style", "</style",
+	"<iframe", "<object", "<embed", "<link", "<meta", "<base", "<form",
+	"<svg", "<math", "<noscript",
+	"javascript:",
+	"onerror=", "onload=", "onclick=", "onmouseover=", "onfocus=", "onanimationstart=",
+}
+
+// validateSplashHTML refuses executable markup in a `format: "html"` value.
+//
+// The check is a case-insensitive substring scan and NOT an HTML parse, on
+// purpose. A parser here would have to agree exactly with the browser's about
+// what a malformed document means, and where they disagreed the browser would
+// win — which is the whole class of bypass this kind of check keeps falling to.
+// A substring scan over-refuses instead: it will reject the literal text
+// "<script" in prose. That is the safe direction for a field whose output is
+// injected into every user's page, and an operator who wants to WRITE about a
+// script tag has the markdown message field beside this one.
+func validateSplashHTML(key, text string) string {
+	lowered := strings.ToLower(text)
+	for _, forbidden := range forbiddenSplashMarkup {
+		if strings.Contains(lowered, forbidden) {
+			return fmt.Sprintf(
+				"%q must not contain %q: the splash body is rendered in the browser of every user "+
+					"the maintenance window refuses, so it carries no script, style, frame or "+
+					"document-level markup",
+				key, forbidden,
+			)
+		}
+	}
+	return ""
+}
+
 func validateFieldValue(key string, field map[string]any, value any) string {
 	declared, _ := field["type"].(string)
 
@@ -565,6 +614,11 @@ func validateFieldValue(key string, field map[string]any, value any) string {
 		}
 		if len(text) > maxConfigValueBytes {
 			return fmt.Sprintf("%q is too long", key)
+		}
+		if format, _ := field["format"].(string); format == "html" {
+			if reason := validateSplashHTML(key, text); reason != "" {
+				return reason
+			}
 		}
 		if allowed, ok := field["enum"].([]string); ok && len(allowed) > 0 {
 			for _, candidate := range allowed {

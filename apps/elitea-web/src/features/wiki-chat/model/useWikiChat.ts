@@ -16,7 +16,7 @@
  * generator and the storage. Not for purity: it is what makes "the request
  * failed before it started" a test instead of a network fixture.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 
 import { useInvocationPoll } from '@/entities/provider-run';
 import { framesFromChatPoll, type ChatInvocationPoll } from '../lib/framesFromChatPoll';
@@ -40,23 +40,42 @@ export interface WikiChatOptions {
   readonly invoke: (input: ChatInvokeInput) => Promise<string>;
   /** Fetch one poll of a running invocation. */
   readonly poll: (invocationId: string) => Promise<ChatInvocationPoll | undefined>;
-  /** Read and write the conversation and the last capability. */
+  /** Read and write the last capability. */
   readonly storage: ChatStorage;
+  /**
+   * The transcript to open with, before anything is loaded.
+   *
+   * It exists for the LEGACY local conversation: a browser that still holds
+   * one from before the server kept history shows it rather than an empty
+   * drawer, and `hydrate` replaces it the moment the server's own transcript
+   * arrives.
+   */
+  readonly initialMessages?: readonly ChatMessage[];
   /** A fresh identifier. Injected so a test can make ids predictable. */
   readonly newId: () => string;
   readonly intervalMs?: number;
 }
 
 /**
- * The two things that outlive a mount.
+ * The one thing that outlives a mount: which agent answered last.
+ *
+ * THE CONVERSATION IS NO LONGER HERE. It used to be — the transcript was kept
+ * in `localStorage` beside this, which is why it was gone on another device,
+ * in another browser and on a cleared profile. elitea-main now writes both
+ * turns of every wiki chat into the tenant chat tables, and the drawer reads
+ * them back through `hydrate`.
+ *
+ * The capability stays, and stays local, because it is a PREFERENCE and not a
+ * record: which way the toggle was left is a property of this browser, every
+ * stored answer already carries the capability it was produced with, and a
+ * server round trip to restore a two-position switch would be worse in every
+ * way.
  *
  * Deliberately an interface rather than a direct `localStorage` reach: the raw
  * global escapes the namespaced sweep that logout runs, which is how keys
  * survive a sign-out (issue #22). The widget passes a namespaced store.
  */
 export interface ChatStorage {
-  readonly loadMessages: () => readonly ChatMessage[];
-  readonly saveMessages: (messages: readonly ChatMessage[]) => void;
   readonly loadCapability: () => ChatCapability | null;
   readonly saveCapability: (capability: ChatCapability) => void;
 }
@@ -66,6 +85,16 @@ export interface WikiChatController {
   readonly send: (question: string) => void;
   readonly regenerate: () => void;
   readonly clear: () => void;
+  /**
+   * Replace the transcript with one that was LOADED rather than typed.
+   *
+   * REFUSED WHILE A TURN IS RUNNING. The server's copy of a conversation is
+   * behind the one on screen for as long as an answer is in flight — the
+   * answer is written when the terminal poll is drained — so hydrating
+   * mid-turn would replace a live answer with a transcript that does not
+   * have it yet.
+   */
+  readonly hydrate: (messages: readonly ChatMessage[]) => void;
   readonly setMode: (mode: ChatCapability) => void;
   /** Restore the capability the last answer was produced with. */
   readonly restoreCapability: () => void;
@@ -77,7 +106,7 @@ export function useWikiChat(options: WikiChatOptions): WikiChatController {
 
   const [state, setState] = useState<ChatState>(() => ({
     ...initialChatState,
-    messages: options.storage.loadMessages(),
+    messages: options.initialMessages ?? [],
     mode: options.storage.loadCapability() ?? 'ask',
   }));
 
@@ -89,12 +118,11 @@ export function useWikiChat(options: WikiChatOptions): WikiChatController {
 
   const [invocationId, setInvocationId] = useState<string | null>(null);
 
-  // Persist on every change, including the ones the stream makes. The legacy
-  // component did the same, and it is what lets a reload land back in the
-  // conversation rather than an empty drawer.
-  useEffect(() => {
-    optionsRef.current.storage.saveMessages(state.messages);
-  }, [state.messages]);
+  // NOTHING PERSISTS THE TRANSCRIPT HERE any more. A `useEffect` used to
+  // write every message change to `localStorage`; the server now writes both
+  // turns of a wiki chat as they happen (elitea-main's DeepWiki facade
+  // observes the invoke and tees the terminal poll), so a copy kept here
+  // would be a second record to disagree with the first.
 
   const start = useCallback((question: string, from: readonly ChatMessage[]) => {
     const trimmed = question.trim();
@@ -150,6 +178,10 @@ export function useWikiChat(options: WikiChatOptions): WikiChatController {
     setInvocationId(null);
   }, []);
 
+  const hydrate = useCallback((messages: readonly ChatMessage[]) => {
+    setState((previous) => (previous.isLoading ? previous : { ...previous, messages }));
+  }, []);
+
   const setMode = useCallback((mode: ChatCapability) => {
     setState((previous) => ({ ...previous, mode }));
   }, []);
@@ -181,5 +213,5 @@ export function useWikiChat(options: WikiChatOptions): WikiChatController {
     intervalMs: options.intervalMs,
   });
 
-  return { state, send, regenerate, clear, setMode, restoreCapability };
+  return { state, send, regenerate, clear, hydrate, setMode, restoreCapability };
 }

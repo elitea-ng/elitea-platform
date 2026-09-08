@@ -14,14 +14,58 @@ import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 
 import { MessageAttachmentList } from '../attachments/MessageAttachmentList';
+import { MessageAvatar } from './MessageAvatar';
+import { MessageHeaderRow } from './MessageHeaderRow';
 import { UserMessageActions } from './UserMessageActions';
 
 import type { Attachment } from '@/entities/attachment/model/types';
+import { t } from '@/shared/i18n';
 
 import type { ChatMessage } from '../../lib/convertMessagesToChatHistory';
+import { useParticipantName } from '../../lib/participantName';
+import type { ParticipantNameInput } from '../../lib/participantName';
 
 const TEXT_MESSAGE_ITEM_TYPE = 'text_message';
 const ATTACHMENT_ITEM_TYPE = 'attachment_message';
+
+/**
+ * The row shell, measured off the production transcript's own `<li>`
+ * (`padding: 12px 0; gap: 8px; flex-direction: column; border-radius: 4px`) —
+ * baseline `UserMessage.jsx`'s `styles.containerVertical` over
+ * `UserMessageContainerWithMargin`. It used to be a right-aligned
+ * `row-reverse` bubble, which is not a layout this product has anywhere.
+ */
+const userMessageContainerSx = {
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'flex-start',
+  alignSelf: 'stretch',
+  width: '100%',
+  gap: '0.5rem',
+  padding: '0.75rem 0',
+  borderRadius: '0.25rem',
+} as const;
+
+/** baseline `styles.messageVertical`: the full-width card the question sits in. */
+function userMessageBodySx(theme: import('@mui/material/styles').Theme) {
+  return {
+    width: '100%',
+    boxSizing: 'border-box',
+    background: theme.vars.palette.background.aiAnswerBkg,
+    color: theme.vars.palette.text.secondary,
+    boxShadow: theme.vars.palette.boxShadow.aiAnswer,
+    borderRadius: theme.vars.shape.radiusMd,
+    padding: '0.75rem 1rem',
+    position: 'relative',
+  } as const;
+}
+
+/** baseline `styles.textContent`. */
+const messageTextSx = {
+  whiteSpace: 'pre-wrap',
+  overflowWrap: 'break-word',
+  wordBreak: 'break-word',
+} as const;
 
 /** A single updated message item sent to `onSubmit` on save (baseline: `updatedItems`). */
 export interface UserMessageUpdatedItem {
@@ -161,6 +205,14 @@ export function UserMessage({
   projectId,
 }: UserMessageProps): ReactNode {
   const authorCaption = resolveAuthorCaption(message);
+  // Who the question was addressed to — the "to <name>" half of the caption
+  // line. `sentTo` is already on every normalised user message
+  // (`entities/message/lib/normalise.ts`'s `resolveSentTo`); nothing read it
+  // until now, and `lib/participantName.ts` — the ported resolver for exactly
+  // this — had no caller at all.
+  const sentToParticipant = message.sentTo as ParticipantNameInput | undefined;
+  const resolvedSentToName = useParticipantName(sentToParticipant);
+  const sentToName = sentToParticipant?.entity_name ? resolvedSentToName : undefined;
   const questionItem = useMemo(() => findQuestionItem(message.messageItems), [message.messageItems]);
   const attachmentItems = useMemo(() => findAttachmentItems(message.messageItems), [message.messageItems]);
   const resolvedContent = useMemo(
@@ -207,131 +259,96 @@ export function UserMessage({
   return (
     <Box
       data-testid="user-message"
-      sx={{
-        display: 'flex',
-        flexDirection: 'row-reverse',
-        gap: 1,
-        mb: 1,
-        '&:hover .actionButtons': { visibility: 'visible' },
-      }}
+      sx={userMessageContainerSx}
     >
-      <Box
-        sx={{
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'flex-end',
-          maxWidth: '80%',
-          width: isEditing ? '100%' : undefined,
-        }}
-      >
-        {authorCaption && (
-          <Typography
-            variant="caption"
-            sx={{ mb: 0.5, color: 'text.secondary' }}
-          >
-            {authorCaption}
-          </Typography>
-        )}
-        {isEditing ? (
-          <Box sx={{ width: '100%' }}>
-            <TextField
-              value={value}
-              onChange={handleChange}
-              multiline
-              maxRows={15}
-              fullWidth
-              size="small"
-              variant="standard"
-              slotProps={{ input: { disableUnderline: true } }}
-              sx={(theme) => ({
-                borderRadius: theme.vars.shape.radiusMd,
-                border: `1px solid ${theme.vars.palette.border.userMessageEditor}`,
-                background: theme.vars.palette.background.userInputBackground,
-                px: 1.5,
-                py: 1,
-              })}
-            />
-            {attachmentItems.length > 0 && (
-              <MessageAttachmentList
-                items={attachmentItems}
-                {...(onRemoveAttachment !== undefined ? { onRemoveAttachment } : {})}
-                {...(projectId !== undefined ? { projectId } : {})}
-                onError={handleAttachmentError}
-              />
-            )}
-            <Box sx={{ display: 'flex', flexDirection: 'row-reverse', gap: 1, mt: 1 }}>
-              <Button
-                size="small"
-                variant="contained"
-                disabled={value === resolvedContent || !value.trim()}
-                onClick={handleSubmit}
-              >
-                {/* eslint-disable-next-line i18next/no-literal-string — edit action label */}
-                Save and apply
-              </Button>
-              <Button
-                size="small"
-                variant="outlined"
-                onClick={handleCancel}
-              >
-                {/* eslint-disable-next-line i18next/no-literal-string — edit action label */}
-                Cancel
-              </Button>
-            </Box>
-          </Box>
-        ) : (
-          <>
-            <Box
-              data-testid="chat-message-item"
-              sx={{
-                backgroundColor: 'primary.main',
-                color: 'primary.contrastText',
-                borderRadius: '12px 12px 4px 12px',
-                px: 2,
-                py: 1,
-              }}
-            >
-              <Typography variant="body2">
-                {isLoading || isStreaming ? (
-                  <Box
-                    component="span"
-                    sx={{
-                      display: 'inline-block',
-                      animation: 'pulse 1.5s infinite',
-                    }}
-                  >
-                    Typing...
-                  </Box>
-                ) : (
-                  resolvedContent
-                )}
-              </Typography>
-            </Box>
+      <MessageHeaderRow
+        avatar={<MessageAvatar name={authorCaption} avatarUrl={message.avatar} />}
+        name={authorCaption}
+        sentToName={sentToName}
+        createdAt={message.createdAt}
+      />
+      {isEditing ? (
+        <Box sx={{ width: '100%' }}>
+          <TextField
+            value={value}
+            onChange={handleChange}
+            multiline
+            maxRows={15}
+            fullWidth
+            size="small"
+            variant="standard"
+            slotProps={{ input: { disableUnderline: true } }}
+            sx={(theme) => ({
+              borderRadius: theme.vars.shape.radiusMd,
+              border: `1px solid ${theme.vars.palette.border.userMessageEditor}`,
+              background: theme.vars.palette.background.userInputBackground,
+              px: 1.5,
+              py: 1,
+            })}
+          />
+          {attachmentItems.length > 0 && (
             <MessageAttachmentList
               items={attachmentItems}
               {...(onRemoveAttachment !== undefined ? { onRemoveAttachment } : {})}
               {...(projectId !== undefined ? { projectId } : {})}
               onError={handleAttachmentError}
             />
-            <UserMessageActions
-              onCopy={onCopy}
-              onEdit={onSubmit ? handleEditClick : undefined}
-              onDelete={onDelete}
-            />
-          </>
-        )}
-        {attachmentError !== null && (
+          )}
+          <Box sx={{ display: 'flex', flexDirection: 'row-reverse', gap: 1, mt: 1 }}>
+            <Button
+              size="small"
+              variant="contained"
+              disabled={value === resolvedContent || !value.trim()}
+              onClick={handleSubmit}
+            >
+              {t('features.chatMessages.saveAndApply', 'Save and apply')}
+            </Button>
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={handleCancel}
+            >
+              {t('features.chatMessages.cancel', 'Cancel')}
+            </Button>
+          </Box>
+        </Box>
+      ) : (
+        <Box
+          data-testid="chat-message-body"
+          sx={userMessageBodySx}
+        >
           <Typography
-            variant="caption"
-            color="error"
-            role="alert"
-            data-testid="attachment-error"
-            sx={{ mt: 0.5 }}
+            variant="bodyMedium"
+            sx={messageTextSx}
           >
-            {attachmentError}
+            {isLoading || isStreaming
+              ? t('features.chatMessages.typing', 'Typing...')
+              : resolvedContent}
           </Typography>
-        )}
-      </Box>
+          <MessageAttachmentList
+            items={attachmentItems}
+            {...(onRemoveAttachment !== undefined ? { onRemoveAttachment } : {})}
+            {...(projectId !== undefined ? { projectId } : {})}
+            onError={handleAttachmentError}
+          />
+          <UserMessageActions
+            onCopy={onCopy}
+            onEdit={onSubmit ? handleEditClick : undefined}
+            onDelete={onDelete}
+          />
+        </Box>
+      )}
+      {attachmentError !== null && (
+        <Typography
+          variant="caption"
+          color="error"
+          role="alert"
+          data-testid="attachment-error"
+          sx={{ mt: 0.5 }}
+        >
+          {attachmentError}
+        </Typography>
+      )}
     </Box>
   );
 }

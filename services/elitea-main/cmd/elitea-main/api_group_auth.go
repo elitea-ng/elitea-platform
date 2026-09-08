@@ -2,6 +2,7 @@ package main
 
 import (
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browsersession"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/authcomposition"
 )
 
@@ -27,7 +28,14 @@ import (
 // does not help, because a deactivated user's RBAC rows survive deactivation.
 // This is the defect #301 fixed on chat_config and #314 fixed on the project
 // list and the notification event stream, at the scope of the whole group
-// (#370). See chatConfigAuthConfig and oidcSessionAuthConfig.
+// (#370). See chatConfigAuthConfig.
+//
+// This is now the ONLY apimw.AuthConfig composition in cmd/elitea-main.
+// Every per-route AuthConfig literal in main.go is gone: sixteen of the
+// twenty-one left SessionSecret empty, so a browser holding a valid
+// session got `401 missing authorization header` on the routes only a
+// browser calls. TestNoPrivateAuthConfigLiteralsInMain fails the build if
+// a second composition appears.
 //
 // sessionPrincipals is a parameter rather than something this function builds,
 // and formGraph stays a concrete *authcomposition.FormGraph rather than the
@@ -62,6 +70,12 @@ import (
 // as a bearer token. TestAPIGroupOIDCOnlyAuthAcceptsAPersonalAccessToken holds
 // this behavior.
 //
+// SESSIONSTORE IS THE SERVER-SIDE SESSION (migrations/shared/0117), and it is
+// carried on BOTH branches for the same reason SessionSecret is: a browser
+// authenticates the same way whichever plane issued its cookie, and a branch
+// that dropped the store would read a server-side identifier with the legacy
+// HMAC reader and refuse every browser on it.
+//
 // A deployment with neither credential plane gets the zero AuthConfig, which
 // admits nothing.
 func apiGroupAuthConfig(
@@ -72,20 +86,36 @@ func apiGroupAuthConfig(
 	sessionTokens apimw.TokenValidator,
 	sessionSecret string,
 	oidcSessionEnabled bool,
+	browserSessions *browsersession.Manager,
 ) apimw.AuthConfig {
+	// The manager stays a CONCRETE pointer for the same reason formGraph does:
+	// a nil *Manager assigned to an interface field yields a non-nil interface
+	// holding a nil pointer, and `cfg.SessionStore != nil` downstream then
+	// reads as "configured" (#86). apimw.Auth would take the server-side
+	// branch for every cookie and refuse the whole deployment. The boxing
+	// happens once, here, under a nil test.
+	var sessionStore apimw.BrowserSessionValidator
+	if browserSessions != nil {
+		sessionStore = browserSessions
+	}
+	rejectLegacySessionCookies := browserSessions.Policy().RejectLegacyCookies
 	if formGraph != nil {
 		return apimw.AuthConfig{
-			Validator:                 formGraph,
-			PrincipalValidator:        principalValidator,
-			ForwardedIdentityVerifier: forwardedIdentityVerifier,
-			SessionSecret:             sessionSecret,
+			Validator:                  formGraph,
+			PrincipalValidator:         principalValidator,
+			ForwardedIdentityVerifier:  forwardedIdentityVerifier,
+			SessionSecret:              sessionSecret,
+			SessionStore:               sessionStore,
+			RejectLegacySessionCookies: rejectLegacySessionCookies,
 		}
 	}
 	if oidcSessionEnabled {
 		return apimw.AuthConfig{
-			Validator:          sessionTokens,
-			SessionSecret:      sessionSecret,
-			PrincipalValidator: sessionPrincipals,
+			Validator:                  sessionTokens,
+			SessionSecret:              sessionSecret,
+			PrincipalValidator:         sessionPrincipals,
+			SessionStore:               sessionStore,
+			RejectLegacySessionCookies: rejectLegacySessionCookies,
 		}
 	}
 	return apimw.AuthConfig{}

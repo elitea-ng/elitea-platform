@@ -42,6 +42,24 @@ describe('WikiList', () => {
     expect(screen.getByText(/check the repository and branch/i)).toBeInTheDocument();
   });
 
+  it('marks the selected wiki, and only it, as selected', () => {
+    // Asserted HERE because the visual suite cannot assert it. `.Mui-selected`
+    // on a `ListItemButton` paints `alpha(primary.main, selectedOpacity)` —
+    // 8% magenta in the light scheme, which scores 81.9 on pixelmatch's YIQ
+    // metric against the 88.0 ceiling that `SNAPSHOT_TOLERANCE`'s
+    // `threshold: 0.05` sets. Zero pixels count as different, so
+    // `deepwiki-browser-light` passes whether the highlight is drawn or not
+    // (see the `threshold` section of e2e/visual/lib/settle.ts). A class
+    // assertion is the only cheap thing that fails when the highlight goes.
+    const OTHER: WikiManifest = { ...WIKI, wiki_id: 'acme--other--main', wiki_title: 'other' };
+    renderWithProviders(
+      <WikiList wikis={[WIKI, OTHER]} allWikis={[WIKI, OTHER]} selectedWikiId={WIKI.wiki_id} onSelect={vi.fn()} />,
+    );
+    const items = screen.getAllByRole('button');
+    expect(items[0]).toHaveClass('Mui-selected');
+    expect(items[1]).not.toHaveClass('Mui-selected');
+  });
+
   it('reports the selected wiki to its caller', async () => {
     const onSelect = vi.fn();
     const { default: userEvent } = await import('@testing-library/user-event');

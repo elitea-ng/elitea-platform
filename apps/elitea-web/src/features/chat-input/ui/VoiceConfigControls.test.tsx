@@ -146,4 +146,73 @@ describe('VoiceConfigControls', () => {
     await user.click(getByTestId('voice-preview-button'));
     expect(speak).toHaveBeenCalledOnce();
   });
+
+  /**
+   * The picker had NO source (issue 323): `GET /configurations/tts_voices`
+   * answered 501 for every project, so `voices` was permanently empty in model
+   * mode and the branch below never rendered. These two cases pin the shape the
+   * listing now arrives in.
+   */
+  describe('the provider voice list (issue 323)', () => {
+    const PROVIDER_VOICES: TtsVoice[] = [
+      { id: 'alloy', name: 'Alloy' },
+      { id: 'shimmer', name: 'Shimmer' },
+      { id: 'verse', name: 'Verse' },
+    ];
+
+    it('offers every provider voice, in the order the provider listed them', async () => {
+      const user = userEvent.setup();
+      const { getByRole, findAllByRole } = renderWithTheme(
+        <VoiceConfigControls
+          config={DEFAULT_CONFIG}
+          onConfigChange={() => {}}
+          hasModelTTS
+          ttsModel={TTS_MODEL}
+          socket={null}
+          browserVoices={[]}
+          voices={PROVIDER_VOICES}
+        />,
+      );
+
+      await user.click(getByRole('combobox'));
+      const options = await findAllByRole('option');
+      // The FIRST entry is the provider's default, and nothing on this path
+      // re-sorts: a sort here would silently change which voice a user gets by
+      // leaving the picker untouched.
+      expect(options.map((option) => option.textContent)).toEqual(['Alloy', 'Shimmer', 'Verse']);
+    });
+
+    it('shows the Default placeholder until a voice is chosen', () => {
+      const { getByRole } = renderWithTheme(
+        <VoiceConfigControls
+          config={DEFAULT_CONFIG}
+          onConfigChange={() => {}}
+          hasModelTTS
+          ttsModel={TTS_MODEL}
+          socket={null}
+          browserVoices={[]}
+          voices={PROVIDER_VOICES}
+        />,
+      );
+      expect(getByRole('combobox')).toHaveTextContent('Default');
+    });
+
+    it('renders no picker when the provider publishes no catalogue, so the model keeps its own default', () => {
+      // The empty answer is a fact about the PROVIDER now, not about this
+      // platform, and the correct response to it is the same: no picker, and
+      // the model speaks with the voice it chooses.
+      const { queryByRole } = renderWithTheme(
+        <VoiceConfigControls
+          config={DEFAULT_CONFIG}
+          onConfigChange={() => {}}
+          hasModelTTS
+          ttsModel={TTS_MODEL}
+          socket={null}
+          browserVoices={[browserVoice('Samantha')]}
+          voices={[]}
+        />,
+      );
+      expect(queryByRole('combobox')).not.toBeInTheDocument();
+    });
+  });
 });

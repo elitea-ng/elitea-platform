@@ -124,7 +124,12 @@ export function DateGroup({ group, renderConversationItem, isExpanded, onToggleE
         <Typography
           component="span"
           variant="subtitle2"
-          sx={(theme: Theme) => ({ color: theme.vars.palette.text.secondary, textTransform: 'none' })}
+          // `text.default` (#A9B7C1 in dark), not `text.secondary` — this
+          // pack defines `text.secondary` as pure #FFFFFF, so the group
+          // heading rendered brighter than the conversation names under it.
+          // The production rail's own "Older"/"Today" heading measures
+          // `rgb(169, 183, 193)`.
+          sx={(theme: Theme) => ({ color: theme.vars.palette.text.default, textTransform: 'none' })}
         >
           {group.displayName ?? group.name}
         </Typography>

@@ -81,7 +81,7 @@ export const AnalyticsKpis = zod
       .number()
       .optional()
       .describe(
-        'NO PRODUCER. \"Active in the project by any means\" needs a source of non-LLM activity, and centry.audit_events — the table that had one — is READ-ONLY from this service. Never emitted today.\n',
+        'NO PRODUCER, and the reason changed. \"Active in the project by any means\" needs a source of non-LLM activity. centry.audit_events is no longer READ-ONLY from this service — issue 615 gave it a writer (internal\/audit\/postgres.go:23, driven by internal\/api\/middleware\/audit.go) — but that writer records ADMINISTRATIVE and security-relevant requests only. It skips content CRUD, it skips every successful GET and it skips the \/llm path, so a count over it measures administration, not project activity. Never emitted today.\n',
       ),
     tool_runs: zod
       .number()

@@ -207,17 +207,30 @@ model turn completes with no network and no billing. Three things are easy to
 get wrong:
 
 **The credential must be type `vllm`.** bifrost lifts its SSRF-safe dialer only
-for the self-hosted provider classes — `account.go:235` sets
-`AllowPrivateNetwork` for `schemas.VLLM` and `schemas.Ollama` alone, and only
-when `GATEWAY_EGRESS_ALLOWLIST` is non-empty. An `open_ai` credential pointing
-at a compose address is refused by the dialer no matter what the allowlist says.
+for the self-hosted provider classes — `GetConfigForProvider` sets
+`AllowPrivateNetwork` for `schemas.VLLM` and `schemas.Ollama` alone. An
+`open_ai` credential pointing at a compose address is refused by the dialer no
+matter what the allowlist says.
 
-**`GATEWAY_EGRESS_ALLOWLIST` must name the mock.** `llm-mock:8090` is a private
-address; without the entry the hop fails with `provider_connection_failed`,
-which reads like a broken service rather than a policy decision. The compose
-default is written `${GATEWAY_EGRESS_ALLOWLIST-llm-mock:8090}` with a single
-`-`: the `:-` form treats empty and unset alike, so an operator disarming the
-allowlist would silently get the mock allowlisted back.
+**The allowlist must name the mock AND a private block.** `llm-mock:8090` is a
+compose service name that resolves to a private address. The host entry permits
+the NAME; a private block entry is what relaxes the dialer, because the gateway
+never resolves a name to make that decision (gap G6 — resolving here and dialing
+later is the DNS-rebinding race a name allowlist avoids). Without both, the hop
+fails with `provider_connection_failed`, which reads like a broken service
+rather than a policy decision.
+
+The compose default therefore carries the two hosts and the three RFC 1918
+blocks, and it is written with a single `-`
+(`${GATEWAY_EGRESS_ALLOWLIST-…}`): the `:-` form treats empty and unset alike,
+so an operator disarming the allowlist would silently get the mock allowlisted
+back.
+
+**The environment variable is only the floor.** The gateway also reads
+`egress_allowlist` rows from `gateway.governance_config` and enforces the union,
+so a destination can be added at runtime in Admin > LLM Proxy > Governance
+without touching compose. `GET /governance/status` reports the merged list with
+its source, and says whether a private destination is reachable at all.
 
 **The wire model carries a provider prefix**, `vllm/E2E-MOCK-MODEL`. bifrost
 resolves the provider from the model string alone (`ParseModelString`) with an
@@ -256,11 +269,22 @@ over `ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL`. **No readable repository implements
 that path.** This monorepo does not. The pylon runtime and the plugin
 repositories do not.
 
-Both stacks make the call fail. The hybrid edge sends the path to legacy Centry,
-which registers no such rule. The standalone stack aims an `https` origin at a
-cleartext port. The turn is not affected. The policy is optional metadata, and
+Both stacks make the call fail, and now for the same reason: no server answers
+the path. The hybrid edge sends it to legacy Centry, which registers no such
+rule. The standalone stack calls elitea-main, which registers no such route, so
+the answer is 404. The turn is not affected. The policy is optional metadata, and
 the caller fails open by design. Each turn therefore carries
 `next_input_suggestion: null`.
+
+`ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL` is optional. Leave it unset and the call
+goes to this process's own listener, `http://127.0.0.1:<port of
+ELITEA_HTTP_ADDRESS>`. That is the standalone stack: the call is a self call, and
+elitea-main serves cleartext. The stack used to set `https://elitea-main:8080`,
+which aimed TLS at that same cleartext port, so every turn logged
+`http: server gave HTTP response to HTTPS client` — a deployment fault reported
+per turn, hiding the routing gap behind it. `internal/runtimecomposition/config.go`
+now refuses that value at boot. Set the variable only where another server
+answers the path, as centry-hybrid does with its edge.
 
 The cost is one bounded request of 3 s for each send, regeneration, continuation
 and ad-hoc turn. The failure is now visible. The client writes the cause to the

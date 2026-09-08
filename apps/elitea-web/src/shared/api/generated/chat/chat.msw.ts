@@ -45,6 +45,7 @@ import { HttpResponse, delay, http } from "msw";
 import type { RequestHandlerOptions } from "msw";
 
 import type {
+  CanvasPresence,
   MessageTraceListing,
   MessageTraceStepDetail,
   SupportAssistantConfig,
@@ -215,6 +216,31 @@ export const getStartSupportTurnResponseMock = (
   ]),
   events_url: faker.string.alpha({ length: { min: 10, max: 20 } }),
   created: faker.helpers.arrayElement([faker.datatype.boolean(), undefined]),
+  ...overrideResponse,
+});
+
+export const getHeartbeatCanvasPresenceResponseMock = (
+  overrideResponse: Partial<Extract<CanvasPresence, object>> = {},
+): CanvasPresence => ({
+  project_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  entity_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  entity_type: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  action: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  canvas_uuid: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  message_group_uuid: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  editors: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    user_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    user_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    user_avatar: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    state: faker.helpers.arrayElement(["editing", "viewing"] as const),
+  })),
+  ttl_seconds: faker.number.int(),
   ...overrideResponse,
 });
 
@@ -520,6 +546,32 @@ export const getStartSupportTurnMockHandler = (
   );
 };
 
+export const getHeartbeatCanvasPresenceMockHandler = (
+  overrideResponse?:
+    | CanvasPresence
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<CanvasPresence> | CanvasPresence),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/canvas/prompt_lib/:projectId/:canvasId/presence",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getHeartbeatCanvasPresenceResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getListMessageTracesMockHandler = (
   overrideResponse?:
     | MessageTraceListing
@@ -577,6 +629,7 @@ export const getChatMock = () => [
   getCreateSupportConversationMockHandler(),
   getGetSupportConversationMockHandler(),
   getStartSupportTurnMockHandler(),
+  getHeartbeatCanvasPresenceMockHandler(),
   getListMessageTracesMockHandler(),
   getGetMessageTraceMockHandler(),
 ];

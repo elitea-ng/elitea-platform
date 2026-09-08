@@ -61,6 +61,12 @@ export const SocialAuthorProfile = zod
       .describe("Arbitrary user-defined personalization payload."),
     default_context_management: MemoryContextManagement.optional(),
     default_summarization: MemorySummarization.optional(),
+    provider_refs: zod
+      .array(zod.string())
+      .optional()
+      .describe(
+        "The caller's own federated identity references, exactly as public.auth_core__user_provider.provider_ref stores them (`oidc:<sub>`, `saml:<nameid>`, or a pylon-era bare subject). An operator copies one of these into the deployment's `identity.initial_global_admins` to make a global administrator, which previously needed a SELECT against the production database. Absent when the account holds none: a Form password login creates no provider row. Never another user's — the read is keyed on the authenticated principal's own user id.\n",
+      ),
   })
   .describe(
     'NOTE(W2): AuthorResponse struct (internal\/api\/v2\/social\/handler.go:41-49), served by GetAuthor (:51-123). All string fields except personalization are present with a `\"\"` fallback on both the \"row found\" and \"no row \/ query error\" paths (:98-121) — the query error path is a swallowed fallback, always 200, never surfaced as an error.\n',

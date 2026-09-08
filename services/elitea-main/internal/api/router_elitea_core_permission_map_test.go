@@ -32,7 +32,36 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	agentexecutionapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/agentexecution"
+	applicationskillsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/applicationskills"
+	indextypesapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indextypes"
 )
+
+// reviewedRoutePermissions are the /elitea_core gates that do NOT live in
+// router.go.
+//
+// internal/api/production_router.go registers the reviewed routes at their
+// exact contract paths, and each of those routes builds its own
+// RequireResolvedPermissionsForProject middleware inside its package. The
+// regex below reads router.go only, so without this list a reviewed route
+// reads as "granted by 0068 and gating nothing".
+//
+// That is not hypothetical: #394 deleted the prototype index-types mount from
+// router.go, so `models.applications.index_types.details` moved entirely into
+// internal/api/v2/indextypes. #395 did the same for the attached-skills read.
+// The constants are read from the packages that declare them, so a rename
+// cannot make this list stale.
+var reviewedRoutePermissions = []string{
+	indextypesapi.CurrentIndexTypesPermission,
+	applicationskillsapi.CurrentApplicationSkillsPermission,
+	// #254 P2 restored `application_task`. Its READ permission is the one
+	// /elitea_core string 0068 left out — the route was deleted by #126 when
+	// 0068 was written, so the name gated nothing and was not seeded. It is
+	// listed here so both invariants above cover it: the catalogue check proves
+	// pylon declares it, and the grant check proves shared/0120 seeds it.
+	agentexecutionapi.CurrentApplicationTaskStatusPermission,
+}
 
 // projectPermissionCall matches the router's own gate helper, including the
 // toolkit block's `toolkitGate` alias, and captures the literal it is given.
@@ -65,6 +94,9 @@ func gatedPermissions(t *testing.T) []string {
 		if strings.Contains(src, "projectPermission("+expression+")") {
 			unique[permission] = struct{}{}
 		}
+	}
+	for _, permission := range reviewedRoutePermissions {
+		unique[permission] = struct{}{}
 	}
 
 	if len(unique) < 40 {
@@ -264,7 +296,15 @@ func stripSQLComments(sql string) string {
 // permission never carries the `public.` prefix and a table name never carries
 // a `models.`/`configuration.` one, so the discriminator is the leading segment
 // rather than the punctuation.
-var sqlStringLiteral = regexp.MustCompile(`'([a-z_]+(?:\.[a-z_]+)+)'`)
+//
+// DIGITS ARE PART OF A SEGMENT. The character class used to be `[a-z_]`, which
+// silently skipped every permission with a digit in it —
+// `configuration.artifacts.s3_credentials.view` and `.edit` are the first two
+// this corpus grants. A permission the pattern cannot see is a permission the
+// grant gate reports as ungranted while the migration beside it grants it, so
+// the failure was a false alarm that the only available fix (an allowlist
+// entry) would have made permanent.
+var sqlStringLiteral = regexp.MustCompile(`'([a-z0-9_]+(?:\.[a-z0-9_]+)+)'`)
 
 func permissionLiterals(sql string) []string {
 	var permissions []string

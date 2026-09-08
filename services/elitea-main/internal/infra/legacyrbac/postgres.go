@@ -27,7 +27,10 @@ type PostgresResolver struct {
 	store postgresStore
 }
 
-var _ auth.PermissionResolver = (*PostgresResolver)(nil)
+var (
+	_ auth.PermissionResolver           = (*PostgresResolver)(nil)
+	_ auth.MembershipPermissionResolver = (*PostgresResolver)(nil)
+)
 
 func NewPostgresResolver(pool *pgxpool.Pool) *PostgresResolver {
 	if pool == nil {
@@ -68,6 +71,46 @@ func (r *PostgresResolver) ResolvePermissions(
 		if err == nil {
 			permissions, err = r.projectPermissions(ctx, userID, id)
 		}
+	}
+	if err != nil {
+		return auth.PermissionResolution{}, err
+	}
+	if permissions == nil {
+		permissions = []string{}
+	}
+	return auth.PermissionResolution{UserID: userID, Permissions: permissions}, nil
+}
+
+// ResolveMembershipPermissions is the auth.MembershipPermissionResolver half of
+// this resolver: the caller's permissions in EVERY project they are a member
+// of, unioned, with no project taken from the request.
+//
+// The central modes are answered exactly as ResolvePermissions answers them,
+// because they never consult a project.
+func (r *PostgresResolver) ResolveMembershipPermissions(
+	ctx context.Context,
+	principal auth.User,
+	mode string,
+) (auth.PermissionResolution, error) {
+	if r == nil || r.store == nil {
+		return auth.PermissionResolution{}, ErrPermissionDenied
+	}
+
+	mode, err := normalizeMode(mode)
+	if err != nil {
+		return auth.PermissionResolution{}, err
+	}
+	userID, err := r.resolveUserID(ctx, principal)
+	if err != nil {
+		return auth.PermissionResolution{}, err
+	}
+
+	var permissions []string
+	switch mode {
+	case auth.PermissionModeAdministration, auth.PermissionModeDeveloper:
+		permissions, err = r.centralPermissions(ctx, userID, mode)
+	case auth.PermissionModeDefault:
+		permissions, err = r.membershipPermissions(ctx, userID)
 	}
 	if err != nil {
 		return auth.PermissionResolution{}, err
@@ -233,6 +276,58 @@ FROM effective_permissions
 ORDER BY permission`, projectID, userID)
 	if err != nil {
 		return nil, fmt.Errorf("resolve legacy project permissions: %w", err)
+	}
+	return scanPermissions(rows)
+}
+
+// membershipPermissions is projectPermissions run over every project the user
+// belongs to at once, and it keeps that query's two rules per project:
+//
+//   - a suspended project grants nothing, which is what requireActiveProject
+//     enforces on the single-project path;
+//   - the central default-mode fallback applies only to a project that carries
+//     no per-project grant row for the caller's roles there, so a project with
+//     its own grants still suppresses it — per project, not globally.
+func (r *PostgresResolver) membershipPermissions(ctx context.Context, userID int64) ([]string, error) {
+	rows, err := r.store.Query(ctx, `
+WITH assigned_roles AS (
+    SELECT assignment.project_id, project_role.id, project_role.name
+    FROM public.auth_core__project_user_role AS assignment
+    JOIN public.auth_core__project_role AS project_role
+      ON project_role.id = assignment.role_id
+     AND project_role.project_id = assignment.project_id
+    JOIN centry.project AS project
+      ON project.id = assignment.project_id
+     AND project.suspended = false
+    WHERE assignment.user_id = $1
+), project_permissions AS (
+    SELECT DISTINCT assigned_roles.project_id, project_grant.permission
+    FROM assigned_roles
+    JOIN public.auth_core__project_role_permission AS project_grant
+      ON project_grant.project_id = assigned_roles.project_id
+     AND project_grant.role_id = assigned_roles.id
+), effective_permissions AS (
+    SELECT permission
+    FROM project_permissions
+    UNION ALL
+    SELECT DISTINCT central_grant.permission
+    FROM assigned_roles
+    JOIN public.auth_core__role AS central_role
+      ON central_role.name = assigned_roles.name
+     AND central_role.mode = 'default'
+    JOIN public.auth_core__role_permission AS central_grant
+      ON central_grant.role_id = central_role.id
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM project_permissions
+        WHERE project_permissions.project_id = assigned_roles.project_id
+    )
+)
+SELECT DISTINCT permission
+FROM effective_permissions
+ORDER BY permission`, userID)
+	if err != nil {
+		return nil, fmt.Errorf("resolve legacy membership permissions: %w", err)
 	}
 	return scanPermissions(rows)
 }

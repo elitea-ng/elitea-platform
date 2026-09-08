@@ -19,7 +19,7 @@
  * capability this flag gates, and the generation panel reports it rather
  * than this page hiding.
  */
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import Box from '@mui/material/Box';
 import Stack from '@mui/material/Stack';
 import type { SxProps, Theme } from '@mui/material/styles';
@@ -33,6 +33,7 @@ import {
   WikiPageEditor,
   WikiPageReader,
   WikiSettingsPanel,
+  createWikiVersionStorage,
   type WikiChatTarget,
 } from '@/widgets/deepwiki';
 import { hasBackendCapability } from '@/shared/config/backendCapabilities';
@@ -45,6 +46,14 @@ import { BaseTabs } from '@/shared/ui/BaseTabs';
 
 /** The provider's toolkit name — the SPI addresses it lowercased. */
 const WIKI_TOOLKIT_NAME = 'wikis';
+
+/**
+ * The bucket a version choice is remembered under when this page is rendered
+ * for no toolkit at all. Every route reaches here through `DeepWikiToolkit`,
+ * which always has one; the sentinel exists so a toolkit-less render keeps its
+ * own entry rather than sharing whichever toolkit happens to be `undefined`.
+ */
+const NO_TOOLKIT = 'none';
 
 /**
  * The app's page recipe (pages/toolkits/Toolkits.tsx): the page owns its
@@ -81,7 +90,21 @@ export function DeepWiki({
   settings,
   toolkit,
 }: DeepWikiProps): React.JSX.Element | null {
-  const [selected, setSelected] = useState<WikiManifest | undefined>(undefined);
+  // The CHOICE is stored, not the manifest: a manifest is a snapshot of one
+  // listing, and holding it across a refetch would keep opening an object that
+  // may no longer be in the bucket. The id is re-resolved against every
+  // listing, which is also what makes a stale one fall back on its own.
+  const versionStorage = useMemo(
+    () => createWikiVersionStorage(projectId, toolkitId ?? NO_TOOLKIT),
+    [projectId, toolkitId],
+  );
+  // Read on every render rather than seeded into `useState` once: the initial
+  // value of a state hook is captured at MOUNT, so a route that swaps
+  // `toolkitId` under the same component would go on using the previous
+  // toolkit's choice. `null` here means "nothing chosen in this session", and
+  // the stored value answers for it.
+  const [chosenWikiId, setChosenWikiId] = useState<string | null>(null);
+  const selectedWikiId = chosenWikiId ?? versionStorage.load();
   const [chatOpen, setChatOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [editing, setEditing] = useState<{ pageKey: string; markdown: string } | null>(null);
@@ -107,10 +130,15 @@ export function DeepWiki({
     );
   }
 
-  // The first wiki is opened by default. A list that needs a click before it
-  // shows anything reads as an empty screen on a project with one wiki, which
-  // is the common case.
-  const open = selected ?? query.data.wikis[0];
+  // The wiki chosen last time is reopened when the listing STILL CONTAINS it,
+  // otherwise the first one is. A stored id that no longer resolves — the
+  // version was deleted, or the toolkit's repository moved — must land the
+  // reader on a wiki rather than on nothing.
+  //
+  // The first wiki is what a project with no stored choice opens. A list that
+  // needs a click before it shows anything reads as an empty screen on a
+  // project with one wiki, which is the common case.
+  const open = query.data.wikis.find((wiki) => wiki.wiki_id === selectedWikiId) ?? query.data.wikis[0];
   const chatTarget = chatTargetFor(projectId, toolkitId, settings, open);
 
   return (
@@ -134,15 +162,26 @@ export function DeepWiki({
         <WikiList
           wikis={query.data.wikis}
           allWikis={query.data.allWikis}
-          selectedWikiId={selected?.wiki_id}
-          onSelect={setSelected}
+          // The OPEN wiki is the highlighted one, not only an explicitly
+          // clicked one: a restored choice that reads back as unselected says
+          // the list and the reader are showing different wikis.
+          selectedWikiId={open?.wiki_id}
+          onSelect={(wiki) => {
+            setChosenWikiId(wiki.wiki_id ?? null);
+            if (wiki.wiki_id !== undefined) versionStorage.save(wiki.wiki_id);
+          }}
         />
         {open === undefined ? null : (
           <ReaderArea
             projectId={projectId}
             wiki={open}
             onDeleted={() => {
-              setSelected(undefined);
+              // The stored choice is FORGOTTEN, not just dropped from state:
+              // a deleted wiki left in storage would be looked up on every
+              // later visit, and re-selected the moment a wiki with the same
+              // id is generated again.
+              setChosenWikiId(null);
+              versionStorage.clear();
             }}
             onEdit={(pageKey, markdown) => {
               setEditing({ pageKey, markdown });
@@ -168,6 +207,7 @@ export function DeepWiki({
             setChatOpen(false);
           }}
           target={chatTarget}
+          contextPages={open?.pages ?? []}
         />
       )}
     </Box>
@@ -285,5 +325,10 @@ function chatTargetFor(
     toolkitType: WIKI_TOOLKIT_NAME,
     settings,
     ...chatPinsFor(open),
+    // The VERSION pin for an attachment. It is deliberately the open
+    // manifest's own id rather than "whatever is newest": a page attached to
+    // a question must resolve against the version the reader was reading,
+    // even if a regeneration lands while they are typing.
+    ...(open?.wiki_version_id ? { wikiVersionId: open.wiki_version_id } : {}),
   };
 }

@@ -8,6 +8,13 @@
 import { test, expect } from '@playwright/test';
 
 import { checkA11y } from '../../fixtures/axe';
+import {
+  DEFAULT_PROJECT_NAME,
+  ensureProjectSelected,
+  projectSwitcher,
+  shellChoseAProject,
+} from '../../fixtures/project';
+import { signInThroughOidc } from '../../fixtures/session';
 import { BASE_URL } from '../../../playwright.config';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -36,10 +43,20 @@ test('J1: cold load / redirects through to /chat', async ({ page }) => {
 
   // `features/chat-input/ui/UserInputEditableArea.tsx:96` wraps a real MUI
   // `TextField`; the inner textarea carries `chat-message-input` and the
-  // "Type a message..." placeholder.
+  // placeholder `widgets/chat-box/ui/ChatBox.tsx` passes down.
+  //
+  // The copy is "Type your message...", not "Type a message...". That string
+  // is not this journey's own decision: it is the value of the
+  // `widgets.chatBox.inputPlaceholder` key in `shared/i18n/en.json`, and it
+  // matches the parity baseline (`apps/elitea-ui`'s `NewChat.jsx:1336`,
+  // `NewConversationView.jsx:943`) and the production screen the composer was
+  // measured against. This test held the pre-parity copy and read a deliberate
+  // correction as a regression; the copy was only ever a proxy for "this is
+  // the product composer, not a stub", which the exact production string
+  // states more strictly.
   const textarea = composer.getByTestId('chat-message-input');
   await expect(textarea).toBeEditable();
-  await expect(textarea).toHaveAttribute('placeholder', 'Type a message...');
+  await expect(textarea).toHaveAttribute('placeholder', 'Type your message...');
 
   // Typing must actually land in the composer — proves the chat feature is
   // mounted and interactive, not merely painted.
@@ -109,9 +126,24 @@ test('J2: OIDC login honours target_to deep link', async ({ browser }) => {
   // the URL assertions above would also pass for an unauthenticated shell
   // that was simply served the bundle at that path (which is exactly what
   // this stack does — see the note above).
-  await expect(page.getByRole('button', { name: /Project:\s*Default Project/ })).toBeVisible({
-    timeout: 20_000,
-  });
+  //
+  // A FRESH CONTEXT LANDS WHEREVER THE APP PUTS IT. This journey creates its
+  // own context precisely so it drives the whole login, so it inherits none of
+  // `auth.setup.ts`'s pinning: nothing is in storage, and `AppShell` selects
+  // the caller's own personal project — which sign-in now provisions for every
+  // account (`ensurePersonalProject`, internal/api/v2/auth/signin.go). The
+  // assertion here used to read "Project: Default Project" and started failing
+  // on "Private", which is the app doing exactly what production should do for
+  // a first-time user rather than anything about `target_to`.
+  //
+  // So the project is CHOSEN, and then asserted. Both halves still prove the
+  // session: an unauthenticated shell has no project list to choose from.
+  await shellChoseAProject(page);
+  await ensureProjectSelected(page, DEFAULT_PROJECT_NAME);
+  await expect(projectSwitcher(page)).toHaveAccessibleName(
+    new RegExp(`Project:\\s*${DEFAULT_PROJECT_NAME}`),
+    { timeout: 20_000 },
+  );
 
   await checkA11y(page);
   await context.close();
@@ -120,7 +152,20 @@ test('J2: OIDC login honours target_to deep link', async ({ browser }) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // Journey 4: Logout → all el.* storage cleared
 // ─────────────────────────────────────────────────────────────────────────────
-test('J4: logout clears user state and el.* storage', async ({ page }) => {
+test('J4: logout clears user state and el.* storage', async ({ browser }) => {
+  // THIS JOURNEY OWNS THE SESSION IT DESTROYS — read this before replacing the
+  // context below with the shared `page` fixture it used to take.
+  //
+  // Since shared migration 0117 the `elitea_session` cookie names a ROW and
+  // `/forward-auth/logout` REVOKES it (`internal/api/v2/auth/session.go`).
+  // `auth.setup.ts` mints one session per persona and all four workers replay
+  // its cookie, so a logout driven on the shared state signs out the whole
+  // suite: every later API helper gets `401 missing authorization header` and
+  // every later page load is navigated to the identity provider by the shell's
+  // session probe. Measured on the 1.60.0 smoke run — 21 chromium journeys
+  // failed downstream of this one test, none of them for a reason of their
+  // own. See `e2e/fixtures/session.ts`.
+  //
   // JRNY-004's three acceptance lines, each asserted separately below:
   // the user state is cleared, the login screen is reached, and all
   // application storage keys are removed.
@@ -150,10 +195,24 @@ test('J4: logout clears user state and el.* storage', async ({ page }) => {
   // have matched a chain that got no further). Step 2 additionally asserts the
   // SERVER session is really gone, which the previous revision never checked
   // at all.
-  await page.goto(BASE_URL + '/app/settings/personalization', { waitUntil: 'domcontentloaded' });
+  // Settings › PROFILE, not Personalization. "Log out" used to be a NAV ITEM
+  // in the drawer's PERSONAL group, and this journey opened whichever settings
+  // screen was cheapest because the drawer carried the control on every one of
+  // them. It is now a BUTTON on the Profile page, under the identity rows
+  // (`features/settings/ui/profile/ProfileIdentity.tsx`), which is where the
+  // parity baseline and the production UI put it — an action stopped
+  // pretending to be a tab. `src/routes/__tests__/settingsLogout.test.tsx`
+  // covers the storage sweep in jsdom and names THIS journey as the half that
+  // proves the browser really leaves the app, so the page it opens has to be
+  // the page the control is on.
+  const context = await browser.newContext({ storageState: undefined });
+  const page = await context.newPage();
+  await signInThroughOidc(page, 'e2e-member@autotest.local');
 
-  // Wait for the settings drawer to be interactive before touching storage.
-  const logoutItem = page.getByText('Log out', { exact: true });
+  await page.goto(BASE_URL + '/app/settings/profile', { waitUntil: 'domcontentloaded' });
+
+  // Wait for the logout control to be interactive before touching storage.
+  const logoutItem = page.getByRole('button', { name: 'Log out', exact: true });
   await expect(logoutItem).toBeVisible({ timeout: 20_000 });
 
   // Precondition: the session this journey is about to destroy really exists.
@@ -292,4 +351,6 @@ test('J4: logout clears user state and el.* storage', async ({ page }) => {
   expect(probe.control).toHaveLength(2);
   // ...and no key of the namespace survived the logout.
   expect(probe.surviving).toEqual([]);
+
+  await context.close();
 });

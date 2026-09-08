@@ -699,6 +699,16 @@
     },
     {
       "file": null,
+      "route": "/admin/app/toolkits",
+      "targetComponent": "src/pages/admin/ToolkitTypes.tsx",
+      "theme": "dark",
+      "wiringStatus": "wired",
+      "notes": "Every served toolkit type at its DEFAULT availability, which is what a deployment with no rows in centry.toolkit_type_policy must show. A baseline that ever renders these as Disabled is the absence-reads-as-unavailability regression migration 0114 exists to prevent.",
+      "surface": "admin",
+      "baseline": "e2e/snapshots/visual/admin.visual.spec.ts-snapshots/admin-toolkit-types-visual-linux.png"
+    },
+    {
+      "file": null,
       "route": "/admin/app/audit",
       "targetComponent": "src/pages/admin/AuditTrail.tsx",
       "theme": "dark",
@@ -719,6 +729,16 @@
     },
     {
       "file": null,
+      "route": "/admin/app/budgets",
+      "targetComponent": "src/pages/admin/Budgets.tsx",
+      "theme": "dark",
+      "wiringStatus": "wired",
+      "notes": "Per-project LLM budgets (gap G4): the All/Team/Personal tabs, the search bar and the DataGrid of limit, spend and utilisation. Two states are worth a baseline and neither is the happy path — a project whose authored ceiling is NOT enforced carries a warning chip beside the number, and the G12 banner appears above the table when the seeded gateway reports it holds no NATS counter. The E2E stack runs the gateway without one, so that banner is the DEFAULT state here rather than an edge case.",
+      "surface": "admin",
+      "baseline": null
+    },
+    {
+      "file": null,
       "route": "/admin/app/branding",
       "targetComponent": "src/pages/admin/Branding.tsx",
       "theme": "dark",
@@ -726,6 +746,26 @@
       "notes": "The brand-pack editor (ADR-0024 WP4): the grouped form with every field at inherit, the two-scheme preview built from the product default, the derived swatch strips and the Layers panel. The E2E stack mounts no file pack and the branding journey restores the database layer after itself, so the reference is the all-inherit state on purpose.",
       "surface": "admin",
       "baseline": null
+    },
+    {
+      "file": null,
+      "route": "/admin/app/email",
+      "targetComponent": "src/pages/admin/Email.tsx",
+      "theme": "dark",
+      "wiringStatus": "wired",
+      "notes": "The outbound e-mail settings: the eight-control form, the per-field source tag (database / environment / unset), the write-only password with its \"no password stored\" placeholder, and the test-message box. This stack configures no relay, so the reference is the \"not configured\" state with the server's own reason — the honest finished screen, not scaffolding.",
+      "surface": "admin",
+      "baseline": "e2e/snapshots/visual/admin.visual.spec.ts-snapshots/admin-email-visual-linux.png"
+    },
+    {
+      "file": null,
+      "route": "/admin/app/tasks",
+      "targetComponent": "src/pages/admin/Tasks.tsx",
+      "theme": "dark",
+      "wiringStatus": "wired",
+      "notes": "The background-job union with its Kind and Status filters. The E2E stack runs no jobs, so the table renders its own empty state (`No background jobs match these filters.`) and the row count reads 0 — a stable screen that is the page's real answer, not scaffolding.",
+      "surface": "admin",
+      "baseline": "e2e/snapshots/visual/admin.visual.spec.ts-snapshots/admin-tasks-visual-linux.png"
     }
   ],
   "gaps": [],
@@ -750,7 +790,7 @@
     }
   },
   "coverage": {
-    "shots": 79,
+    "shots": 83,
     "routes": 39,
     "bothSchemes": true,
     "listAndGridModes": true,

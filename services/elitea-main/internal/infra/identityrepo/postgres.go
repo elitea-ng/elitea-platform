@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -90,9 +91,33 @@ func (r *PostgresRepository) Provision(
 	if err := applyInitialAdministrationRole(ctx, queries, user.ID, command); err != nil {
 		return identity.ProvisionResult{}, err
 	}
+	// The credential the agent runtime signs this person's calls with.
+	//
+	// It runs HERE, inside the same transaction, for the same reason the
+	// administration grant does: an interrupted login must leave neither a
+	// half-granted administrator nor an orphan credential. The OIDC and SAML
+	// plane does the identical pair in internal/api/v2/auth.applyFirstLoginGrants.
+	// Until this call existed, the two browser planes left DIFFERENT rows
+	// behind, and a Form-only install could sign a person in who then could not
+	// complete a chat turn: authsvc.LocalIssuer re-signs an existing PAT and
+	// never creates one, so the runtime failed at stage `actor_pat_issuance`,
+	// an error that names a database stage for what was really missing setup.
+	// The only cure was hand-written SQL in deploy/scripts/standalone-stack.sh.
+	//
+	// EnsureActorPAT owns the three decisions (name, no expiry, only when the
+	// account holds no active PAT) and is idempotent, so every later login
+	// spends one extra read here and writes nothing.
+	patCreated, err := EnsureActorPAT(ctx, queries, user.ID)
+	if err != nil {
+		return identity.ProvisionResult{}, err
+	}
 
 	if err := tx.Commit(ctx); err != nil {
 		return identity.ProvisionResult{}, fmt.Errorf("identityrepo: commit provisioning: %w", err)
+	}
+	if patCreated {
+		slog.Info("issued an actor personal access token at first sign-in",
+			"user_id", user.ID, "token_name", ActorPATName, "provider", command.Provider)
 	}
 	return identity.ProvisionResult{UserID: int64(user.ID)}, nil
 }

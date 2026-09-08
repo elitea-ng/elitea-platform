@@ -43,13 +43,33 @@ import * as zod from "zod";
 
 export const ToolAnalytics = zod
   .object({
-    toolkit_id: zod.string(),
+    toolkit_id: zod
+      .string()
+      .describe(
+        "EMPTY when the producer did not know one. The two producers know different halves of a toolkit's identity: an explicit tool run holds the saved toolkit's row id, and an agent turn holds only the toolkit NAME its tool metadata carried. A row with a name and no id is a real measurement, not a broken one — resolving the name to an id at write time would store a guess as a fact (issue 618).\n",
+      ),
+    toolkit_name: zod
+      .string()
+      .describe(
+        "The toolkit as the producer knew it. Empty when it knew only an id.",
+      ),
     tool_name: zod.string(),
-    run_count: zod.int(),
-    avg_duration_ms: zod.number(),
+    run_count: zod
+      .int()
+      .describe(
+        "Calls in the window, one per tool call. A call still running counts; a call re-projected by a streaming turn counts ONCE.\n",
+      ),
+    error_count: zod.int(),
+    avg_duration_ms: zod
+      .number()
+      .describe(
+        "Averaged over the calls that FINISHED. A call still running has no duration, and counting it as zero would pull the average toward zero exactly when a tool has started hanging.\n",
+      ),
     error_rate: zod.number(),
   })
-  .describe("NOTE(W2) internal\/domain\/analytics\/types.go:31-37.");
+  .describe(
+    "One row of the Tools tab, from elitea_runtime.tool_call_records (shared migration 0119) grouped by (toolkit_id, toolkit_name, tool_name). Source — internal\/domain\/analytics\/types.go.\n",
+  );
 
 export type ToolAnalytics = zod.input<typeof ToolAnalytics>;
 export type ToolAnalyticsOutput = zod.output<typeof ToolAnalytics>;

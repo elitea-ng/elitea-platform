@@ -30,6 +30,7 @@ import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/gen
 
 import { server } from '../../../../../test/setup';
 
+import { VOICE_SPEED_MARKS, VOICE_VOLUME_MARKS } from './voiceConfig.helpers';
 import { VoicePersonalizationSection } from './VoicePersonalizationSection';
 
 const BASE = '/api/v2';
@@ -136,5 +137,41 @@ describe('VoicePersonalizationSection', () => {
     const user = userEvent.setup();
     await user.click(await screen.findByRole('combobox'));
     expect(await screen.findByRole('option', { name: 'Daniel' })).toBeInTheDocument();
+  });
+
+  it('pulls the first and last mark label of each slider inside the rail', async () => {
+    // The rule is written on the `markLabel` SLOT and picked out by the
+    // slot's own `data-index`, because reaching down from the slider root
+    // names a MUI internal class (R-T6, theme-gate check 4). A slot that
+    // stops accepting `sx`, or an `sx` that lands at a losing specificity,
+    // leaves both end labels on MUI's default `translateX(-50%)` and they
+    // overhang the column — which no other assertion here would notice.
+    captureModelRequests();
+    serveVoices('nothing-matches', []);
+
+    renderPanel();
+
+    // `aria-hidden` narrows the `data-index` set to the mark LABELS: the
+    // tick marks and the thumb carry `data-index` too, and both sit on
+    // MUI's own `translate(-50%, -50%)`.
+    const labels = await waitFor(() => {
+      const found = Array.from(document.querySelectorAll<HTMLElement>('[data-index][aria-hidden="true"]'));
+      expect(found.length).toBe(VOICE_SPEED_MARKS.length + VOICE_VOLUME_MARKS.length);
+      return found;
+    });
+    const labelled = (text: string): HTMLElement => {
+      const found = labels.filter((node) => node.textContent === text);
+      expect(found).toHaveLength(1);
+      return found[0] as HTMLElement;
+    };
+
+    // Speed runs 0.5x..2x, volume 0%..100%. Each row's OWN ends move; the
+    // marks between them keep MUI's centring.
+    expect(window.getComputedStyle(labelled('0.5x')).transform).toBe('translateX(0)');
+    expect(window.getComputedStyle(labelled('2x')).transform).toBe('translateX(-100%)');
+    expect(window.getComputedStyle(labelled('0%')).transform).toBe('translateX(0)');
+    expect(window.getComputedStyle(labelled('100%')).transform).toBe('translateX(-100%)');
+    expect(window.getComputedStyle(labelled('1x')).transform).toBe('translateX(-50%)');
+    expect(window.getComputedStyle(labelled('50%')).transform).toBe('translateX(-50%)');
   });
 });

@@ -9,7 +9,7 @@ import { server } from '@/test/setup';
 import { PrivatePipelinesList } from './PrivatePipelinesList';
 import { renderPipelinesRoute } from './__tests__/testRouter';
 
-function applications(rows: { id: string; name: string; status: string }[]) {
+function applications(rows: { id: string; name: string; status: string; tags?: string[] }[]) {
   return {
     rows: rows.map((row) => ({
       id: row.id,
@@ -21,6 +21,7 @@ function applications(rows: { id: string; name: string; status: string }[]) {
       is_forked: false,
       meta: null,
       has_interrupt: false,
+      tags: row.tags ?? [],
     })),
     total: rows.length,
     page: 1,
@@ -65,7 +66,7 @@ describe('PrivatePipelinesList', () => {
       { projectId: 'proj-1' },
     );
 
-    expect(await screen.findByText('You have no pipelines.')).toBeInTheDocument();
+    expect(await screen.findByText('No pipelines yet')).toBeInTheDocument();
   });
 
   it('filters client-side by the search box', async () => {
@@ -102,5 +103,25 @@ describe('PrivatePipelinesList', () => {
     await user.click(await screen.findByText('My Pipeline'));
 
     await waitFor(() => expect(router.state.location.pathname).toBe('/pipelines/all/7'));
+  });
+
+  /** The same server-side tag filter `pages/agents` sends (issue 841). */
+  it('sends the rail tag selection as the server-side `tags` param', async () => {
+    const seenTagValues: (string | null)[] = [];
+    server.use(
+      getListApplicationsMockHandler((info) => {
+        seenTagValues.push(new URL(info.request.url).searchParams.get('tags'));
+        return applications([{ id: '1', name: 'Tagged Pipeline', status: 'draft', tags: ['finance'] }]);
+      }),
+    );
+    renderPipelinesRoute(
+      <PrivatePipelinesList cardContentType="all" />,
+      '/pipelines/all?tags%5B%5D=finance',
+      { projectId: 'proj-1' },
+    );
+
+    await screen.findByText('Tagged Pipeline');
+    await waitFor(() => expect(seenTagValues).toContain('finance'));
+    expect(screen.getByText('finance')).toBeInTheDocument();
   });
 });

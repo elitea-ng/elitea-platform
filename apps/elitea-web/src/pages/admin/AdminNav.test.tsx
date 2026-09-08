@@ -205,6 +205,11 @@ const PLATFORM_ISSUED_PERMISSIONS = new Set([
   'configuration.secrets.secret.delete',
   'configuration.secrets.secret.edit',
   'configuration.secrets.secret.view',
+  // migrations/shared/0114_toolkit_type_policy.sql, administration mode,
+  // super_admin, admin and system. It stands alone in its nav item: the legacy
+  // platform has no toolkit-catalogue surface, so there is no pylon section
+  // name to list beside it.
+  'toolkit_catalogue.type.manage',
 ]);
 
 /**
@@ -474,13 +479,18 @@ describe('collapsed state', () => {
 
   it('drops the theme toggle from the collapsed header, which has no room for it', async () => {
     // Mutation survivor: `{!collapsed && <ThemeModeToggle />}` flipped keeps a
-    // two-button control in a 3.75rem rail, overlapping the logo. Nothing else
-    // here looked at the header's contents.
+    // three-button control in a 3.75rem rail, overlapping the logo. Nothing
+    // else here looked at the header's contents.
+    //
+    // The group is named 'Theme'. It was 'View toggle' — `TabGroupButton`'s
+    // generic default — until `ThemeModeToggle` began passing its own
+    // `ariaLabel`. A theme selector named "View toggle" told a screen-reader
+    // user nothing, so the NAME is the fix and this assertion follows it.
     await mountAdmin();
-    expect(screen.getByRole('group', { name: 'View toggle' })).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Theme' })).toBeInTheDocument();
 
     await userEvent.click(screen.getByTestId('admin-nav-collapse-toggle'));
-    expect(screen.queryByRole('group', { name: 'View toggle' })).toBeNull();
+    expect(screen.queryByRole('group', { name: 'Theme' })).toBeNull();
   });
 
   it('persists through localStorage, under its own key', async () => {

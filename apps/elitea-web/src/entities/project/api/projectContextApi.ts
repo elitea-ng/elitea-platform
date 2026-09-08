@@ -2,20 +2,22 @@
  * Hand-written REST client for the project context & project info endpoints
  * (settings section).
  *
- * WHY HAND-WRITTEN, NOT GENERATED: these routes live under different URL
- * patterns than the generated `applications.ts` client:
+ * ## Generated transport, hand-written cache policy (issue 36, item 5)
+ *
+ * The project-info pair and all three project-icon routes are described in
+ * `services/elitea-main/api/openapi/v2.yaml`, so the URLs, the multipart
+ * assembly and the response types come from
+ * `shared/api/generated/applications` and are not re-derived here. This module
+ * keeps only what orval does not generate usefully: it shapes EVERY operation
+ * as a `useQuery` gated by `enabled`, including the three writes, so the
+ * mutations below wrap the generated FETCHERS and own the invalidation.
  *
  *   - `GET/PUT /elitea_core/project_info/prompt_lib/{projectId}/project-info`
- *     → project info (name, icon_meta, teammates_count)
+ *     → `getProjectInfo` / `updateProjectInfo`
  *   - `GET/POST/DELETE /elitea_core/project_icon/prompt_lib/{projectId}`
- *     → uploaded icons for the project
+ *     → `listProjectIcons` / `uploadProjectIcon` / `deleteProjectIcon`
  *   - `POST /elitea_core/generate_project_context_draft/prompt_lib/{projectId}`
- *     → AI-generated context draft
- *
- * The existing `project_context` endpoints (`getProjectContext` /
- * `updateProjectContext`) ARE generated in `applications.ts` because they
- * share the `/prompt_lib/{projectId}/project-context` path with other
- * application-level endpoints.
+ *     → still hand-written; it is item 3 of the same issue and undescribed.
  *
  * Source: `apps/elitea-ui/src/api/projectContext.js`,
  * `.../api/generateProjectContextDraftApi.js`,
@@ -25,6 +27,13 @@
  */
 import { useMutation, useQuery, useQueryClient, type UseMutationResult, type UseQueryResult } from '@tanstack/react-query';
 
+import {
+  deleteProjectIcon as deleteProjectIconRequest,
+  getProjectInfo as getProjectInfoRequest,
+  listProjectIcons as listProjectIconsRequest,
+  updateProjectInfo as updateProjectInfoRequest,
+  uploadProjectIcon as uploadProjectIconRequest,
+} from '@/shared/api/generated/applications/applications';
 import { eliteaFetch } from '@/shared/api/generated/mutator';
 import { unwrapListPage } from '@/shared/api/unwrap';
 
@@ -64,6 +73,14 @@ interface IconMetaRequest {
 interface IconUploadResponse {
   name?: string;
   url?: string;
+  /**
+   * The three presentational keys social_save_image has always returned and
+   * this route used to drop. They are optional here because a deployment on an
+   * older elitea-main still answers two keys.
+   */
+  size?: string;
+  initial_file_size?: string;
+  resulting_file_size?: string;
 }
 
 /* ── query/mutation keys ───────────────────────────────────────────────── */
@@ -84,7 +101,8 @@ function projectContextQueryKey(projectId: string): string[] {
 /* manifest: projectInfo.get */
 
 export async function fetchProjectInfo(projectId: string): Promise<ProjectInfoResponse> {
-  return fetchData<ProjectInfoResponse>(`/elitea_core/project_info/prompt_lib/${projectId}/project-info`, { method: 'GET' });
+  const response = await getProjectInfoRequest(projectId);
+  return (response as { data: ProjectInfoResponse }).data;
 }
 
 export function useProjectInfoQuery(
@@ -107,15 +125,11 @@ export async function updateProjectInfo(
   projectId: string,
   icon_meta: IconMetaRequest | null,
 ): Promise<ProjectInfoResponse> {
-  const resp = await fetchData<ProjectInfoResponse>(
-    `/elitea_core/project_info/prompt_lib/${projectId}/project-info`,
-    {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ icon_meta }),
-    },
-  );
-  return resp;
+  // `icon_meta` is sent EXPLICITLY, null included: an absent key leaves the
+  // icon alone and an explicit null clears it, which is the whole point of this
+  // call site. The generated request type spells both out.
+  const response = await updateProjectInfoRequest(projectId, { icon_meta });
+  return (response as { data: ProjectInfoResponse }).data;
 }
 
 export function useUpdateProjectInfoMutation(projectId: string): UseMutationResult<ProjectInfoResponse, Error, IconMetaRequest | null> {
@@ -145,11 +159,11 @@ export async function fetchProjectIcons(
   _page = 0,
   pageSize = 200,
 ): Promise<ProjectIconsResponse> {
-  const url = `/elitea_core/project_icon/prompt_lib/${projectId}?limit=${pageSize}&skip=${_page * pageSize}`;
   // The list body is unwrapped by the one helper (R-A6, #132) — this endpoint
   // answers `{rows,total}`, but that is no longer something this call site has
   // to know, assert, or copy correctly.
-  return unwrapListPage<UploadedIcon>(await eliteaFetch<unknown>(url, { method: 'GET' }), 'projectIcons.list');
+  const response = await listProjectIconsRequest(projectId, { limit: pageSize, skip: _page * pageSize });
+  return unwrapListPage<UploadedIcon>(response, 'projectIcons.list');
 }
 
 export function useProjectIconsQuery(
@@ -178,15 +192,12 @@ export async function uploadProjectIcon(
   projectId: string,
   params: UploadIconParams,
 ): Promise<IconUploadResponse> {
-  const form = new FormData();
-  form.append('file', params.file);
-  if (params.width) form.append('width', String(params.width));
-  if (params.height) form.append('height', String(params.height));
-
-  return fetchData<IconUploadResponse>(`/elitea_core/project_icon/prompt_lib/${projectId}`, {
-    method: 'POST',
-    body: form,
+  const response = await uploadProjectIconRequest(projectId, {
+    file: params.file,
+    ...(params.width ? { width: params.width } : {}),
+    ...(params.height ? { height: params.height } : {}),
   });
+  return (response as { data: IconUploadResponse }).data;
 }
 
 export function useUploadProjectIconMutation(
@@ -209,10 +220,9 @@ export async function deleteProjectIcon(
   projectId: string,
   name: string,
 ): Promise<void> {
-  await eliteaFetch<unknown>(
-    `/elitea_core/project_icon/prompt_lib/${projectId}/${encodeURIComponent(name)}`,
-    { method: 'DELETE' },
-  );
+  // ENCODED HERE, not by the generated URL builder: orval interpolates a path
+  // parameter verbatim, and a stored icon name really can contain a space.
+  await deleteProjectIconRequest(projectId, encodeURIComponent(name));
 }
 
 export function useDeleteProjectIconMutation(

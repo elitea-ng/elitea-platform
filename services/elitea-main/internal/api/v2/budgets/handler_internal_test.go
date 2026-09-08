@@ -149,7 +149,70 @@ func TestDecodeBudgetWriteValidatesThePayload(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "the two project policy fields", body: `{"budget_period": "monthly", "nats_fail_mode": "fail_closed"}`,
+			check: func(t *testing.T, parsed parsedBudgetWrite) {
+				if parsed.budgetPeriod == nil || *parsed.budgetPeriod != "monthly" {
+					t.Fatalf("budgetPeriod = %v, want monthly", parsed.budgetPeriod)
+				}
+				if !parsed.natsFailModeSet {
+					t.Fatal("natsFailModeSet = false for a present field")
+				}
+				if parsed.natsFailMode == nil || *parsed.natsFailMode != "fail_closed" {
+					t.Fatalf("natsFailMode = %v, want fail_closed", parsed.natsFailMode)
+				}
+				if !parsed.projectPolicyRequested() {
+					t.Fatal("projectPolicyRequested() = false; the member PUT would accept this")
+				}
+			},
+		},
+		{
+			// The distinction a *string cannot carry. An ABSENT field must
+			// leave the stored mode alone, so an edit that only moves the
+			// limit does not silently reset a policy chosen earlier.
+			name: "an absent fail mode is not a request to clear one", body: `{"monthly_limit": 5}`,
+			check: func(t *testing.T, parsed parsedBudgetWrite) {
+				if parsed.natsFailModeSet {
+					t.Fatal("natsFailModeSet = true for an absent field: the upsert would write NULL")
+				}
+				if parsed.projectPolicyRequested() {
+					t.Fatal("projectPolicyRequested() = true for a payload carrying neither field")
+				}
+			},
+		},
+		{
+			// …and the one it must carry: an EXPLICIT null clears the override
+			// back to the platform baseline.
+			name: "an explicit null fail mode clears the override", body: `{"nats_fail_mode": null}`,
+			check: func(t *testing.T, parsed parsedBudgetWrite) {
+				if !parsed.natsFailModeSet {
+					t.Fatal("natsFailModeSet = false for an explicit null: the clear would be dropped")
+				}
+				if parsed.natsFailMode != nil {
+					t.Fatalf("natsFailMode = %v, want nil", *parsed.natsFailMode)
+				}
+			},
+		},
+		{
+			name: "a fail mode is matched case-insensitively", body: `{"nats_fail_mode": "Fail_Open"}`,
+			check: func(t *testing.T, parsed parsedBudgetWrite) {
+				if parsed.natsFailMode == nil || *parsed.natsFailMode != "fail_open" {
+					t.Fatalf("natsFailMode = %v, want the normalised fail_open", parsed.natsFailMode)
+				}
+			},
+		},
 		{name: "a negative limit", body: `{"monthly_limit": -0.01}`, wantCode: http.StatusBadRequest},
+		// A period the gateway does not compute. It has no CHECK constraint
+		// behind it (0067 declares only a default), so this validator is the
+		// only thing between the API and a stored value nothing bills against.
+		{name: "an unenforceable period", body: `{"budget_period": "weekly"}`, wantCode: http.StatusBadRequest},
+		{name: "an empty period", body: `{"budget_period": ""}`, wantCode: http.StatusBadRequest},
+		// Outside 0067's CHECK. Refused here so it is a 400 naming the field
+		// rather than a 23514 surfaced as a 500 — and because
+		// failmode.ResolveFailMode would ignore it anyway, silently leaving the
+		// project on the platform baseline.
+		{name: "a fail mode outside the CHECK", body: `{"nats_fail_mode": "fail_sideways"}`, wantCode: http.StatusBadRequest},
+		{name: "a non-string fail mode", body: `{"nats_fail_mode": 3}`, wantCode: http.StatusBadRequest},
 		{name: "a non-numeric limit", body: `{"monthly_limit": "ten"}`, wantCode: http.StatusBadRequest},
 		{name: "a foreign currency", body: `{"currency": "EUR"}`, wantCode: http.StatusBadRequest},
 		{name: "a zero threshold", body: `{"soft_alert_pct": 0}`, wantCode: http.StatusBadRequest},

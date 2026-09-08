@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
@@ -139,6 +140,20 @@ func encodeJSONArray(v []any) (string, error) {
 	return string(b), nil
 }
 
+// splitTagFilter reads the `tags` query parameter, which is a comma-separated
+// list. It removes the empty and blank entries, so `tags=` and `tags=,,` mean
+// "no tag filter" and do not produce a condition that matches nothing.
+func splitTagFilter(raw string) []string {
+	out := []string{}
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
 func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListRequest) (applications.ListResponse, error) {
 	s, err := tenantSchema(req.ProjectID)
 	if err != nil {
@@ -159,11 +174,33 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 	join := fmt.Sprintf(` JOIN %s.application_versions av ON av.application_id = a.id AND av.agent_type %s 'pipeline'`,
 		s, map[bool]string{true: "=", false: "!="}[req.AgentsType == "pipeline"])
 
-	where := ""
 	args := []any{}
+	conditions := []string{}
 	if req.Search != "" {
-		where = ` WHERE (a.name ILIKE $1 OR a.description ILIKE $1)`
 		args = append(args, "%"+req.Search+"%")
+		conditions = append(conditions, fmt.Sprintf(`(a.name ILIKE $%d OR a.description ILIKE $%d)`, len(args), len(args)))
+	}
+	// One condition per requested tag, so the filter is AND and not OR: an
+	// application must carry EVERY tag the caller named. That is the rule
+	// legacy applies (`get_application_by_tags` counts the distinct matched
+	// tags and compares the count to the request, and the list filter appends
+	// one `versions.any(tags.any(...))` per tag).
+	//
+	// A token matches the tag NAME or the tag ID. Legacy accepts ids only
+	// (`[int(tag) for tag in tags.split(',')]`), but the web app's tag rail
+	// writes NAMES into its `tags[]` search param, and a name is what the row
+	// carries back. Both are accepted so neither caller needs a lookup.
+	for _, tag := range splitTagFilter(req.Tags) {
+		args = append(args, tag)
+		conditions = append(conditions, fmt.Sprintf(`EXISTS (
+			SELECT 1 FROM %[1]s.application_versions ftv
+			JOIN %[1]s.application_version_tag_association fta ON fta.version_id = ftv.id
+			JOIN %[1]s.tags ft ON ft.id = fta.tag_id
+			WHERE ftv.application_id = a.id AND (ft.name = $%[2]d OR ft.id::text = $%[2]d))`, s, len(args)))
+	}
+	where := ""
+	if len(conditions) > 0 {
+		where = " WHERE " + strings.Join(conditions, " AND ")
 	}
 
 	var total int
@@ -174,15 +211,64 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 
 	selectArgs := append([]any{}, args...)
 	limitIdx := len(selectArgs) + 1
+	// The agent's PUBLISH state, computed per application.
+	//
+	// `Application.Status` was never selected, so every listed agent carried
+	// the empty string and `omitempty` dropped the key entirely. The web app's
+	// Drafts/Published/Moderation/Approval/Rejected tabs filter this exact
+	// field client-side (`pages/agents/PrivateAgentsList.tsx`), so all five
+	// were permanently empty and no publish could ever fill one.
+	//
+	// It is an EXISTS over the versions, not `av.status`: the row `DISTINCT ON
+	// (a.id)` keeps is whichever version the plan happens to reach first, so
+	// reading its status would make the tab an agent appears under depend on
+	// row order. An agent is published when ANY of its versions is, which is
+	// the same rule the editor's own publish/unpublish pair enforces.
+	//
+	// `embedded` is deliberately not published: those clones exist only to
+	// carry a PARENT agent's sub-agents through a publish, and listing them
+	// as published would put an agent in the Published tab because something
+	// else was published.
+	statusExpr := fmt.Sprintf(`CASE WHEN EXISTS (
+			SELECT 1 FROM %s.application_versions pv
+			WHERE pv.application_id = a.id AND pv.status = 'published'
+		) THEN 'published' ELSE 'draft' END`, s)
+	// Every tag of every version of the application, by name, deduplicated
+	// and sorted.
+	//
+	// It is a correlated subquery and not a join, for two reasons. `DISTINCT
+	// ON (a.id)` keeps ONE version row per application, so a joined
+	// aggregate would only ever describe that one version; and legacy takes
+	// the UNION of the tags of all versions, keyed by name
+	// (`ApplicationListModel.parse_versions_data`).
+	//
+	// It answers `{}` and never NULL, so a row with no tags carries an empty
+	// array rather than a null (#841).
+	tagsExpr := fmt.Sprintf(`COALESCE((
+			SELECT array_agg(DISTINCT t.name ORDER BY t.name)
+			FROM %[1]s.application_versions tv
+			JOIN %[1]s.application_version_tag_association ta ON ta.version_id = tv.id
+			JOIN %[1]s.tags t ON t.id = ta.tag_id
+			WHERE tv.application_id = a.id), '{}')`, s)
 	query := fmt.Sprintf(`
 		SELECT DISTINCT ON (a.id) a.id, a.name, COALESCE(a.description, ''), COALESCE(a.icon, ''),
 			a.owner_id, a.created_at, COALESCE(a.shared_id, 0),
 			COALESCE(a.meta, '{}'::jsonb)::text,
 			COALESCE(av.agent_type, '`+defaultAgentType+`'),
-			COALESCE(u.id, 0), COALESCE(u.email, ''), COALESCE(u.name, '')
+			COALESCE(u.id, 0), COALESCE(u.email, ''), COALESCE(u.name, ''),
+			`+statusExpr+`,
+			`+tagsExpr+`
 		FROM %s.applications a`, s) + join +
-		` LEFT JOIN public.auth_core__user u ON u.id = a.owner_id` + where +
-		fmt.Sprintf(` ORDER BY a.id DESC LIMIT $%d OFFSET $%d`, limitIdx, limitIdx+1)
+		// The author join reads `av.author_id`, the USER that wrote the
+		// version, and not `a.owner_id`, which is the owning PROJECT (#533).
+		// The old join gave the list the account whose user id happened to
+		// equal the project id — user 1 in nearly every deployment.
+		` LEFT JOIN public.auth_core__user u ON u.id = av.author_id` + where +
+		// `av.id ASC` picks the FIRST version of each application, whose author
+		// is the account that created the agent. DISTINCT ON keeps one row per
+		// application, and without this key the row it keeps — and so the
+		// author the list shows — is whichever version the plan reaches first.
+		fmt.Sprintf(` ORDER BY a.id DESC, av.id ASC LIMIT $%d OFFSET $%d`, limitIdx, limitIdx+1)
 	selectArgs = append(selectArgs, pageSize, (page-1)*pageSize)
 
 	rows, err := r.pool.Query(ctx, query, selectArgs...)
@@ -206,8 +292,12 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 			&app.OwnerID, &app.CreatedAt, &sharedID,
 			&metaStr, &app.AgentType,
 			&authorID, &authorEmail, &authorName,
+			&app.Status, &app.Tags,
 		); err != nil {
 			return empty, fmt.Errorf("applications: list scan: %w", err)
+		}
+		if app.Tags == nil {
+			app.Tags = []string{}
 		}
 		app.ProjectID = req.ProjectID
 		app.IsForked = sharedID > 0
@@ -244,9 +334,11 @@ func scanApplication(row rowScanner, projectID string) (applications.Application
 	); err != nil {
 		return applications.Application{}, err
 	}
-	// CreatedBy mirrors OwnerID: applications has one owner_id column and no
-	// separate creator. Both are populated so neither response field lies.
-	app.CreatedBy = app.OwnerID
+	// CreatedBy stays empty. It used to mirror OwnerID, which was true only
+	// while every writer in this service put the caller user id into
+	// `owner_id`. That column holds the owning PROJECT (#533), so the mirror
+	// now says that a project created the agent. The author of a version is
+	// application_versions.author_id, which the version reads carry.
 	app.ProjectID = projectID
 	return app, nil
 }
@@ -275,8 +367,17 @@ func (r *ApplicationsRepo) Create(ctx context.Context, req applications.CreateRe
 	if err != nil {
 		return applications.Application{}, err
 	}
-	if req.OwnerID <= 0 {
+	if req.AuthorID <= 0 {
 		return applications.Application{}, apierr.Unauthorized("an authenticated owner is required to create an application")
+	}
+	// `applications.owner_id` is the owning PROJECT and not the caller (#533).
+	// This statement wrote the principal, which made the agent invisible to
+	// every legacy read: the legacy runtime filters
+	// `Application.owner_id == project_id`. The principal is the author of the
+	// first version, below.
+	ownerID, err := tenantschema.OwnerID(req.ProjectID)
+	if err != nil {
+		return applications.Application{}, err
 	}
 	if req.Config != nil {
 		if err := rejectDerivedConfig(*req.Config); err != nil {
@@ -300,7 +401,7 @@ func (r *ApplicationsRepo) Create(ctx context.Context, req applications.CreateRe
 		VALUES ($1, $2, $3, $4)
 		RETURNING `+applicationColumns, s)
 	app, err := scanApplication(
-		tx.QueryRow(ctx, query, req.Name, req.Description, req.Icon, req.OwnerID),
+		tx.QueryRow(ctx, query, req.Name, req.Description, req.Icon, ownerID.Int64()),
 		req.ProjectID,
 	)
 	if err != nil {
@@ -310,7 +411,7 @@ func (r *ApplicationsRepo) Create(ctx context.Context, req applications.CreateRe
 	if req.InitialVersion != nil {
 		version := *req.InitialVersion
 		if version.AuthorID <= 0 {
-			version.AuthorID = req.OwnerID
+			version.AuthorID = req.AuthorID.Int64()
 		}
 		created, err := insertVersion(ctx, tx, s, app.ID, version)
 		if err != nil {
@@ -556,16 +657,21 @@ func (r *ApplicationsRepo) UpdateVersion(ctx context.Context, projectID, applica
 		args = append(args, value)
 		setClauses = append(setClauses, fmt.Sprintf(clause, len(args)))
 	}
-	if v.Name != "" {
+	// Presence, not emptiness, decides whether a string column joins the SET
+	// list. The `|| value != ""` half keeps every caller that fills the value
+	// without setting the flag; the flag half is what lets an explicit ""
+	// CLEAR the column. Before #824 the test was emptiness alone, so clearing
+	// a welcome message answered 201 and read the old text back.
+	if v.Present.Name || v.Name != "" {
 		appendSet("name = $%d", v.Name)
 	}
-	if v.AgentType != "" {
+	if v.Present.AgentType || v.AgentType != "" {
 		appendSet("agent_type = $%d", v.AgentType)
 	}
-	if v.Instructions != "" {
+	if v.Present.Instructions || v.Instructions != "" {
 		appendSet("instructions = $%d", v.Instructions)
 	}
-	if v.WelcomeMessage != "" {
+	if v.Present.WelcomeMessage || v.WelcomeMessage != "" {
 		appendSet("welcome_message = $%d", v.WelcomeMessage)
 	}
 	if v.LLMSettings != nil {

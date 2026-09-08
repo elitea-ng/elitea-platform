@@ -163,7 +163,9 @@ func (h *Handler) CreateTransferGrant(w http.ResponseWriter, r *http.Request) {
 	}
 	projectIDStr := chi.URLParam(r, "projectID")
 	bucket := chi.URLParam(r, "bucket")
-	bucketRow, ok := h.requireBucket(w, r, projectID, bucket)
+	// accessWrite: every grant this route issues is a PUT (see methodPut), so
+	// issuing one is authorising a write to the bucket.
+	bucketRow, ok := h.requireBucket(w, r, projectID, bucket, accessWrite)
 	if !ok {
 		return
 	}

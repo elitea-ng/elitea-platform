@@ -23,6 +23,7 @@ const (
 	payloadTypeIndexIngestResult        = "INDEX_INGEST_RESULT"
 	payloadTypeAgentExecutionResult     = "AGENT_EXECUTION_RESULT"
 	payloadTypeToolkitExecuteReadResult = "TOOLKIT_EXECUTE_READ_RESULT"
+	payloadTypeToolkitCallToolResult    = "TOOLKIT_CALL_TOOL_RESULT"
 )
 
 type OutputInboxRepository struct {
@@ -143,6 +144,8 @@ SELECT j.tenant_id,
 	               THEN 'agent-execution:' || j.execution_id
 	           WHEN 'toolkit.execute.read.v1'
 	               THEN 'toolkit-execute-read:' || j.execution_id
+	           WHEN 'toolkit.call_tool.v1'
+	               THEN 'toolkit-call-tool:' || j.execution_id
        END AS logical_output_id
 FROM elitea_runtime.execution_jobs AS j
 WHERE j.execution_id = $1
@@ -204,6 +207,21 @@ WHERE j.execution_id = $1
 	                AND a.input_bundle_id = j.input_bundle_id
 	          )
 	      )
+	      OR
+	      (
+	          -- toolkit.call_tool.v1 owns no per-capability table, so the
+	          -- existence proof is the SETTINGS entry of its own bundle. The
+	          -- other three arms prove the same thing through their binding row.
+	          j.capability_id = 'toolkit.call_tool.v1'
+	          AND EXISTS (
+	              SELECT 1
+	              FROM elitea_runtime.input_bundles AS b
+	              JOIN elitea_runtime.input_bundle_entries AS e
+	                ON e.input_bundle_id = b.input_bundle_id
+	              WHERE b.input_bundle_id = j.input_bundle_id
+	                AND e.semantic_role = 'toolkit.call_tool.settings'
+	          )
+	      )
 	  )`, executionID, int64(generation)).Scan(
 		&expected.TenantID,
 		&expected.ResourceProjectID,
@@ -263,7 +281,7 @@ func (r outputRecord) validate() error {
 	if r.EventID == "" || r.LogicalOutputID == "" || r.ExecutionID == "" || r.Generation == 0 || r.TenantID == "" || r.ResourceProjectID <= 0 || r.ProjectionProjectID <= 0 || r.CommandID == "" || r.WorkloadIdentity == "" || r.WorkloadSessionID == "" || r.ProducerID == "" || r.ClaimAttempt == 0 || r.LeaseEpoch == 0 || r.FenceToken.IsZero() || r.StreamID == "" || r.Sequence == 0 || r.PayloadDigest.IsZero() || len(r.PayloadBytes) == 0 || r.SettlementProposalID == "" || r.SettlementOutcome == "" || len(r.SettlementBytes) == 0 || r.SettlementDigest.IsZero() || r.SettlementKey == "" || r.OccurredAt.IsZero() {
 		return outputapp.ErrInvalidValidationOutput
 	}
-	if r.PayloadType != payloadTypeConfigurationValidation && r.PayloadType != payloadTypeRuntimeFailure && r.PayloadType != payloadTypeIndexIngestResult && r.PayloadType != payloadTypeAgentExecutionResult && r.PayloadType != payloadTypeToolkitExecuteReadResult {
+	if r.PayloadType != payloadTypeConfigurationValidation && r.PayloadType != payloadTypeRuntimeFailure && r.PayloadType != payloadTypeIndexIngestResult && r.PayloadType != payloadTypeAgentExecutionResult && r.PayloadType != payloadTypeToolkitExecuteReadResult && r.PayloadType != payloadTypeToolkitCallToolResult {
 		return outputapp.ErrInvalidValidationOutput
 	}
 	// Keep the durable payload type and terminal disposition coupled even when
@@ -286,6 +304,14 @@ func (r outputRecord) validate() error {
 		}
 	case payloadTypeToolkitExecuteReadResult:
 		if r.SettlementOutcome != executionapp.SettlementSucceeded {
+			return outputapp.ErrInvalidValidationOutput
+		}
+	case payloadTypeToolkitCallToolResult:
+		// Both, because a tool result settles FAILED for the two refusals made
+		// before any provider work and SUCCEEDED for everything else,
+		// including a tool that raised.
+		if r.SettlementOutcome != executionapp.SettlementSucceeded &&
+			r.SettlementOutcome != executionapp.SettlementFailed {
 			return outputapp.ErrInvalidValidationOutput
 		}
 	case payloadTypeRuntimeFailure:

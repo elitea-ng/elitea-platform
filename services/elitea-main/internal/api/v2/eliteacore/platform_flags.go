@@ -342,7 +342,13 @@ func (h *Handler) maintenancePayload(
 		"enabled": state.Enabled,
 		"title":   state.Title,
 		"message": state.Message,
-		"bypass":  state.Enabled && h.holdsMaintenanceBypass(ctx),
+		// The operator's own splash body, empty unless one was authored. It is
+		// published on this endpoint rather than a new one because the app
+		// shell already polls it for the flag, and the standalone splash entry
+		// (apps/elitea-web src/entries/maintenance) reads the same document —
+		// so the two screens cannot show different words for one window.
+		"html":   state.HTML,
+		"bypass": state.Enabled && h.holdsMaintenanceBypass(ctx),
 	}
 }
 

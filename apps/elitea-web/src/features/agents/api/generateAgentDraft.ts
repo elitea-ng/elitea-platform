@@ -1,7 +1,7 @@
 import { useCallback, useState } from 'react';
 
 import { eliteaFetch } from '@/shared/api/generated/mutator';
-import type { PredictResponse } from '@/shared/api/generated/model';
+import type { ApplicationDraft } from '@/shared/api/generated/model';
 
 /**
  * Ported from
@@ -9,58 +9,42 @@ import type { PredictResponse } from '@/shared/api/generated/model';
  * hand-built RTK Query `injectEndpoints` mutation, `POST /elitea_core/
  * generate_application_draft/prompt_lib/{projectId}`).
  *
- * **Two real, disclosed backend-shape gaps, both traced by reading
- * `applications.ts`/the generated model directly (not assumed):**
+ * The two shape gaps this module used to disclose are CLOSED (#254 P1). The
+ * route is served by `internal/api/v2/drafts` and described in
+ * `api/openapi/v2.yaml` as `generateApplicationDraft`, so:
  *
- *  1. **Request body.** The baseline calls
- *     `useGenerateAgentDraftMutation()({projectId, user_description})`
- *     (`GenerateAgentModal.jsx:102`) — a bespoke `user_description` field.
- *     The endpoint's generated request type, `PredictRequest`
- *     (`predictRequest.zod.ts`), has no such field: `{input?, variables?,
- *     stream?, mode?}` (own doc comment: "NOTE(W2): internal/domain/predict/
- *     types.go:5-13, decoded in internal/api/v2/predict/handler.go:41-49" —
- *     the real Go route is the GENERIC predictor, not a bespoke draft
- *     endpoint; `generateAgentDraft`'s own generated doc comment confirms
- *     this: "request and response are the predict contract, not a bespoke
- *     draft shape"). Mapped `user_description -> input` here as the closest
- *     real semantic equivalent (the field the generic predictor actually
- *     reads as the user's prompt text) — a disclosed MAPPING, not an
- *     invented field.
- *  2. **Response body.** The baseline expects the draft fields directly
- *     (`name`/`description`/`welcome_message`/`conversation_starters` —
- *     see this slice's own `agentDraftValidation.helpers.ts`, which
- *     validates exactly that shape). The endpoint's generated response type
- *     is `PredictResponse` (`predictResponse.zod.ts`): `{message_group_uid,
- *     content?, is_streaming, usage?, tool_calls?, child_messages?}` — a raw
- *     chat-completion envelope, NOT a pre-parsed draft object. There is
- *     currently no generated endpoint that returns a structured agent
- *     draft; a caller must parse `content` (presumably the LLM's raw
- *     JSON-in-text reply) into an `AgentDraft` itself before this slice's
- *     `validateAgentDraft` can check it. Returning the raw
- *     `PredictResponse` here rather than pretending it is already an
- *     `AgentDraft` keeps that gap honest at the type level.
+ *  1. **Request body.** `{ user_description }` is the field the endpoint reads,
+ *     the same one the baseline sends. The previous `user_description -> input`
+ *     mapping existed only because the URL then reached the GENERIC predictor,
+ *     which has no such field. It is gone.
+ *  2. **Response body.** `ApplicationDraft` — `{name, description,
+ *     instructions, welcome_message, conversation_starters}` — is a structured
+ *     draft, not a chat-completion envelope. `mapApplicationDraft` in
+ *     `../lib/agentDraft` turns it into the `AgentDraft` the review form edits.
  *
- * NOTE(#126): this used to go through orval's
- * `getGenerateAgentDraftQueryOptions`. That operation was removed from
- * `api/openapi/v2.yaml` when #126 step 1 deleted the route behind it — it was
- * gated on a `RouterConfig.Predictor` nothing ever assigned, so
- * `POST /elitea_core/generate_application_draft/prompt_lib/{projectId}`
- * answered 404 in every deployment. The request issued below is identical to
- * the generated one; #194 tracks the missing backend.
+ * ONE GAP REMAINS, and it is a backend one rather than a client mapping: the
+ * contract carries no `suggested_toolkits` / `suggested_mcp` /
+ * `suggested_agents` / `suggested_pipelines` / `suggested_skills`. Legacy
+ * builds those from a project-resource inventory elitea-main composes no
+ * reader for; see the `ApplicationDraft` schema description. `AgentDraft`
+ * still declares all five and `mapApplicationDraft` leaves them empty, so
+ * `ResourceSuggestions` renders nothing for them — the same graceful
+ * degradation as before, now for a reason recorded in the contract.
  *
- * The hook is KEPT and its ONE affordance is hidden instead — see
- * the `aiGeneration` capability in `shared/config/backendCapabilities`, which
- * `GenerateAgentButton` reads. Nothing calls this hook while that capability
- * is off. Turn it on in the same change that mounts the route.
+ * The call still goes through `eliteaFetch` rather than the generated hook:
+ * orval shapes every write endpoint as a `useQuery` gated by `enabled`
+ * (see `entities/application-form/model/mutations.ts`), and this affordance is
+ * a "click to generate" button. The URL, method and body below are the
+ * generated operation's, and the manifest entry carries its `operationId` so
+ * the spec/router conformance gate matches it.
  */
 export interface UseGenerateAgentDraftMutationArgs {
   readonly projectId: string;
-  /** The baseline's `user_description` — mapped to the real `PredictRequest.input` field. See module doc comment, gap 1. */
   readonly user_description: string;
 }
 
 export interface UseGenerateAgentDraftMutationResult {
-  readonly generateDraft: (args: UseGenerateAgentDraftMutationArgs) => Promise<PredictResponse | undefined>;
+  readonly generateDraft: (args: UseGenerateAgentDraftMutationArgs) => Promise<ApplicationDraft | undefined>;
   readonly isLoading: boolean;
   readonly error: unknown;
   readonly reset: () => void;
@@ -81,19 +65,19 @@ export function useGenerateAgentDraftMutation(): UseGenerateAgentDraftMutationRe
   const [error, setError] = useState<unknown>(undefined);
 
   const generateDraft = useCallback(
-    async ({ projectId, user_description }: UseGenerateAgentDraftMutationArgs): Promise<PredictResponse | undefined> => {
+    async ({ projectId, user_description }: UseGenerateAgentDraftMutationArgs): Promise<ApplicationDraft | undefined> => {
       setIsLoading(true);
       setError(undefined);
       try {
         // Error-envelope response variants (400/401/403) are never actually reachable here —
         // `eliteaFetch` throws `EliteaApiError` instead of resolving with them (mutator.ts's
         // §3.6 unwrap contract; same cast convention as `entities/application-form`'s hooks).
-        const response = await eliteaFetch<{ data: PredictResponse }>(
+        const response = await eliteaFetch<{ data: ApplicationDraft }>(
           `/elitea_core/generate_application_draft/prompt_lib/${projectId}`,
           {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ input: user_description }),
+            body: JSON.stringify({ user_description }),
           },
         );
         return response.data;

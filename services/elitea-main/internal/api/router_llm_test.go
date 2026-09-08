@@ -7,13 +7,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/alicebob/miniredis/v2"
-	goredis "github.com/redis/go-redis/v9"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api"
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/authsvc"
 )
 
 // --- stubs -------------------------------------------------------------------
@@ -53,15 +50,6 @@ func (h *recordingHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// newTestAuthClient returns an authsvc.Client backed by an in-process miniredis
-// so auth middleware cache calls don't panic on a nil client.
-func newTestAuthClient(t *testing.T) *authsvc.Client {
-	t.Helper()
-	mr := miniredis.RunT(t)
-	rdb := goredis.NewClient(&goredis.Options{Addr: mr.Addr()})
-	return authsvc.New(rdb)
-}
-
 // buildMinimalRouterConfig returns a RouterConfig with the minimum deps needed
 // to exercise the /llm route (Auth + Project + LLMProxy). All other optional
 // fields are left nil so we don't need a live DB, Redis, etc.
@@ -69,10 +57,6 @@ func buildMinimalRouterConfig(t *testing.T, validator apimw.TokenValidator, reso
 	t.Helper()
 	return api.RouterConfig{
 		Auth: api.AuthDeps{
-			// Client is backed by miniredis so GetCached/SetCached don't panic.
-			// Validator is non-nil so token validation never falls back to the
-			// RPC path.
-			Client:    newTestAuthClient(t),
 			Validator: validator,
 			// validatePrincipal fails closed, so a router with a token
 			// validator and no principal validator refuses every request.
@@ -263,9 +247,8 @@ func TestForwardedHeadersAloneAreRefusedThroughTheRouter(t *testing.T) {
 
 	proxy := &recordingHandler{}
 	cfg := api.RouterConfig{
-		Auth: api.AuthDeps{
-			Client: newTestAuthClient(t),
-		},
+		// No credential reader at all: the forwarded headers below are the
+		// only thing the caller presents, and they must not authenticate it.
 		LLMProxy:           proxy,
 		LLMProjectResolver: &stubProjectResolver{id: 10},
 	}

@@ -6,3 +6,5 @@ export { WikiPageEditor } from './ui/WikiPageEditor';
 export { WikiSettingsPanel } from './ui/WikiSettingsPanel';
 export { DeleteWikiButton } from './ui/DeleteWikiButton';
 export { WikiGenerationPanel } from './ui/WikiGenerationPanel';
+export { createWikiVersionStorage } from './lib/wikiVersionStorage';
+export type { WikiVersionStorage } from './lib/wikiVersionStorage';

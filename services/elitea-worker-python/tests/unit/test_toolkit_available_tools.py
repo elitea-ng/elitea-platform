@@ -9,6 +9,7 @@ from elitea_worker.app import build_static_handler_registry
 from elitea_worker.constants import MAX_WORKER_COMMAND_BYTES
 from elitea_worker.execution.errors import UnsupportedCapability
 from elitea_worker.handlers.indexing import IndexIngestHandler
+from elitea_worker.handlers.toolkit_call_tool import ToolkitCallToolHandler
 from elitea_worker.handlers.toolkit_available_tools import (
     ToolkitAvailableToolsHandler,
     ToolkitAvailableToolsRequest,
@@ -108,17 +109,22 @@ def test_static_registry_contains_exact_versioned_handler() -> None:
     validation = object.__new__(ConfigurationValidationHandler)
     validation._sdk = object()
     index_ingest = object.__new__(IndexIngestHandler)
+    toolkit_call_tool = object.__new__(ToolkitCallToolHandler)
     registry = build_static_handler_registry(
         validation=validation,
         toolkit_available_tools=toolkit,
         index_ingest=index_ingest,
+        toolkit_call_tool=toolkit_call_tool,
     )
 
     assert registry.resolve("configuration.validate.v1", 1).__self__ is validation
     assert registry.resolve("toolkit.available_tools.v1", 1).__self__ is toolkit
     assert registry.resolve("index.ingest.v1", 2).__self__ is index_ingest
+    assert registry.resolve("toolkit.call_tool.v1", 1).__self__ is toolkit_call_tool
     with pytest.raises(UnsupportedCapability):
         registry.resolve("index.ingest.v1", 1)
+    with pytest.raises(UnsupportedCapability):
+        registry.resolve("toolkit.call_tool.v1", 2)
 
 
 def _request(settings: dict[str, Any]) -> ToolkitAvailableToolsRequest:

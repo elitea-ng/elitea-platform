@@ -8,6 +8,7 @@ import { useNavigate, useParams, useSearch } from '@tanstack/react-router';
 import { useListApplications } from '@/shared/api/generated/applications/applications';
 import type { Application, ApplicationList } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
+import { useRailTagSelection } from '@/shared/ui/EntityRail';
 import { SimpleSearchBar } from '@/shared/ui/SimpleSearchBar';
 
 import { sortPipelinesByField, type SortOrder } from './lib/sortPipelinesByField';
@@ -27,7 +28,14 @@ function applicationName(application: Application): string {
 }
 
 function toRow(application: Application): PipelineListRow {
-  return { id: application.id, name: applicationName(application), description: application.description ?? '' };
+  return {
+    id: application.id,
+    name: applicationName(application),
+    description: application.description ?? '',
+    authors: (application.authors ?? []).map((author) => ({ id: author.id, name: author.name })),
+    tags: application.tags ?? [],
+    createdAt: application.created_at,
+  };
 }
 
 function matchesQuery(application: Application, query: string): boolean {
@@ -108,10 +116,14 @@ export function PrivatePipelinesList({ cardContentType }: PrivatePipelinesListPr
 
   const [query, setQuery] = useState('');
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const { selectedTags } = useRailTagSelection();
 
+  // See `pages/agents/PrivateAgentsList.tsx` — the same server-side tag
+  // filter, over the same list endpoint with `agents_type: 'pipeline'`.
+  const tagFilter = selectedTags.join(',');
   const listQuery = useListApplications(
     projectId ?? '',
-    { agents_type: 'pipeline' },
+    { agents_type: 'pipeline', ...(tagFilter === '' ? {} : { tags: tagFilter }) },
     { query: { enabled: projectId !== undefined } },
   );
   // `.data.data`'s declared type includes the error-envelope variant — never
@@ -151,13 +163,19 @@ export function PrivatePipelinesList({ cardContentType }: PrivatePipelinesListPr
         emptyTitle={
           query
             ? t('pages.pipelines.privateList.emptyFound.title', 'Nothing found.')
-            : t('pages.pipelines.privateList.empty.title', 'You have no pipelines.')
+            : t('pages.pipelines.privateList.empty.title', 'No pipelines yet')
         }
         emptyDescription={
           query
             ? t('pages.pipelines.privateList.emptyFound.description', 'Create yours now!')
-            : t('pages.pipelines.privateList.empty.description', 'Create your first pipeline to get started.')
+            : t(
+                'pages.pipelines.privateList.empty.description',
+                'Create your first pipeline to get started. Pipelines chain agents, skills and toolkits into one repeatable flow.',
+              )
         }
+        onCreate={() => {
+          void navigate({ to: '/pipelines/create' });
+        }}
         onSelect={(id) => {
           void navigate({ to: '/pipelines/$tab/$agentId', params: { tab: params.tab ?? 'all', agentId: id } });
         }}

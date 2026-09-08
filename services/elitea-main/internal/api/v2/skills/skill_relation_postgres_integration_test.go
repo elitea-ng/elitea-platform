@@ -13,10 +13,14 @@ package skills_test
 // So every assertion below reads the STORED ROW, and each one also reads the
 // row back out through a real consumer:
 //
-//   - GET /application_skills/{mode}/{projectID}/{appVersionID}, which the web
-//     app's skill-mention dropdowns call today
+//   - the attached-skills read behind GET
+//     /elitea_core/application_skills/prompt_lib/{projectID}/{appVersionID},
+//     which the web app's skill-mention dropdowns call today
 //     (apps/elitea-web/src/features/agents/lib/hooks/useInstructionsSkillMention.hooks.ts
-//     and src/features/chat-input/lib/hooks/useChatSkillMention.ts);
+//     and src/features/chat-input/lib/hooks/useChatSkillMention.ts). #395
+//     deleted the prototype handler for that path, so this reads the
+//     repository internal/api/v2/applicationskills serves it from — the same
+//     rows, from the code that answers;
 //   - the body-less PATCH on /version/prompt_lib/..., whose `attached_skills`
 //     key is the registry the SDK binds `load_skill` against.
 //
@@ -39,6 +43,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	v2applications "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/applications"
+	applicationskills "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/applicationskills"
+	v2secrets "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/secrets"
 	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/skills"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/migrate"
@@ -49,10 +55,14 @@ import (
 const (
 	relationDatabaseURLVariable = "ELITEA_TEST_DATABASE_URL"
 	relationProjectID           = "1"
-	// relationSecretHeader is the value `check_secret_header` accepts when the
-	// project vault holds no secrets_header_value
-	// (internal/api/v2/applications/handler.go:1093-1098).
-	relationSecretHeader = "secret"
+	// relationSecretHeader is the value this fixture seals into the project
+	// vault under `secrets_header_value`.
+	//
+	// It used to be the literal "secret", which the version-details route
+	// accepted on any project whose vault held no value. That fallback is gone
+	// (#408): the route now refuses such a project with 403, so the fixture
+	// must give the project the value provisioning gives a real one.
+	relationSecretHeader = "relation-fixture-header-value"
 )
 
 // relationFixture is one project schema that holds two agent versions, one
@@ -133,12 +143,18 @@ func newRelationFixture(t *testing.T) *relationFixture {
 		fixture.seedSkill(t, name, name+" instructions")
 	}
 
+	// The X-SECRET value the version-details read below compares against.
+	if err := v2secrets.NewHandler(pool).StoreSecret(
+		ctx, nil, relationProjectID, "secrets_header_value", relationSecretHeader,
+	); err != nil {
+		t.Fatalf("store the project secrets_header_value: %v", err)
+	}
+
 	appHandler := v2applications.NewHandler(nil, pool)
 	skillHandler := handler.NewHandler(repos.NewSkillsRepo(pool))
 
 	router := chi.NewRouter()
 	router.Patch("/elitea_core/skill/{mode}/{projectID}/{skillID}", skillHandler.Update)
-	router.Get("/elitea_core/application_skills/{mode}/{projectID}/{appVersionID}", skillHandler.ListForApplication)
 	router.Patch("/elitea_core/version/prompt_lib/{projectID}/{applicationID}/{versionID}", appHandler.GetVersionExpanded)
 	fixture.router = router
 
@@ -241,24 +257,30 @@ func (f *relationFixture) countAllRows(t *testing.T, versionID int64) int {
 	return total
 }
 
-// listedSkills reads the attachment back through GET /application_skills, the
-// route the web app's skill-mention dropdowns call.
+// listedSkills reads the attachment back through the repository
+// internal/api/v2/applicationskills serves
+// GET /elitea_core/application_skills/prompt_lib/{projectID}/{appVersionID}
+// from — the route the web app's skill-mention dropdowns call.
+//
+// It calls the repository rather than the route so the fixture needs no
+// credential plane: the route wraps this exact read in apimw.Auth and an RBAC
+// gate, and internal/api/v2/applicationskills/postgres_integration_test.go
+// covers that wrapper. What this test needs is the ROWS the product reads.
 func (f *relationFixture) listedSkills(t *testing.T, versionID int64) []string {
 	t.Helper()
-	path := fmt.Sprintf("/elitea_core/application_skills/prompt_lib/%s/%d", relationProjectID, versionID)
-	request := httptest.NewRequest(http.MethodGet, path, nil)
-	recorder := httptest.NewRecorder()
-	f.router.ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("application_skills answered %d: %s", recorder.Code, recorder.Body.String())
-	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
-	var listed handler.ListResponse
-	if err := json.Unmarshal(recorder.Body.Bytes(), &listed); err != nil {
-		t.Fatalf("decode the application_skills body %q: %v", recorder.Body.String(), err)
+	repository, err := applicationskills.NewCurrentApplicationSkillsRepository(f.pool)
+	if err != nil {
+		t.Fatalf("compose the attached-skills repository: %v", err)
+	}
+	listed, err := repository.ListCurrentApplicationSkills(ctx, 1, int32(versionID))
+	if err != nil {
+		t.Fatalf("read the attached skills: %v", err)
 	}
 	names := []string{}
-	for _, item := range listed.Items {
+	for _, item := range listed {
 		names = append(names, item.Name)
 	}
 	sort.Strings(names)

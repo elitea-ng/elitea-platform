@@ -40,6 +40,7 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { PublicApplicationTag } from "./publicApplicationTag.zod";
 import { VersionMeta } from "./versionMeta.zod";
 
 export const PublicApplicationSummary = zod
@@ -52,8 +53,25 @@ export const PublicApplicationSummary = zod
     version_name: zod.string(),
     agent_type: zod.string(),
     meta: zod.union([VersionMeta, zod.null()]),
+    tags: zod
+      .array(PublicApplicationTag)
+      .describe(
+        "Tags of the published version. Empty when the version has none; never null.\n",
+      ),
+    likes: zod
+      .int()
+      .describe(
+        "How many people have liked this application, counted over the public project's social_likes rows for entity `application`.\n",
+      ),
+    is_liked: zod
+      .boolean()
+      .describe(
+        "Whether the CALLER has liked this application. Always false when the request carries no user identity.\n",
+      ),
   })
-  .describe("NOTE(W2): internal\/api\/v2\/eliteacore\/handler.go:1303-1312.\n");
+  .describe(
+    "NOTE(W2): internal\/api\/v2\/eliteacore\/public_applications.go — PublicApplications.\n",
+  );
 
 export type PublicApplicationSummary = zod.input<
   typeof PublicApplicationSummary

@@ -48,6 +48,24 @@ package repos
 //     "toolkit usage" table built from it would silently exclude every tool
 //     call an agent made outside a chat.
 //
+//     NOTE(#618): `toolkit.call_tool.v1` (#340/#616) did NOT close this, and it
+//     is worth saying why, because it looks as if it should have.
+//     `elitea_runtime.execution_jobs` now carries one row per explicit tool run
+//     with a project and an `admitted_at`, which is two of the five columns
+//     ToolAnalytics needs. It carries NEITHER `toolkit_id` NOR `tool_name`:
+//     that capability deliberately owns no binding table, because it dispatches
+//     inline and its command scalars never need to survive the request (see
+//     internal/db/queries/runtime_toolkit_call_tool.sql). And it covers only
+//     tool runs a person or an MCP client asked for — the toolkit test button
+//     and `tools/call` — not the tool calls an AGENT makes inside a turn, which
+//     is the bulk of tool usage and the exact exclusion this bullet is about.
+//
+//     Closing #618 therefore needs a durable per-tool-call record — project,
+//     toolkit id, tool name, started/finished, outcome — written by BOTH the
+//     agent turn and the explicit run. That is a table, not an event, and no
+//     amount of producer-side signalling from this capability substitutes for
+//     it.
+//
 // It is answered with ErrNoSource, which the API layer turns into a FINAL
 // status rather than a retryable one. It is a product gap, not a fault.
 //
@@ -134,6 +152,11 @@ const (
 	// is REPORTED (AgentBreakdown.Truncated) because the client normalises its
 	// share column by summing what it received.
 	agentRowsLimit = 100
+	// toolRowsLimit caps the Tools tab. Same order as agentRowsLimit and for
+	// the same reason: the rows are one per (toolkit, tool), not one per call.
+	// The cut is REPORTED (ToolBreakdown.Truncated) because the client
+	// normalises its share column by summing what it received.
+	toolRowsLimit = 100
 	// healthModelRowsLimit caps the health table. Higher than modelRowsLimit
 	// because its rows are keyed by (provider, model, STREAMING), so a
 	// deployment serving both response kinds produces two rows per model.
@@ -313,6 +336,14 @@ func (r *AnalyticsRepo) GetUserActivity(ctx context.Context, params analytics.Qu
 // runs no agent performed. agent_execution_jobs' own CHECK constraint (shared
 // 0055) is this same pair, which is what keeps the two lists from drifting into
 // disagreement without anything failing.
+// toolCallRecordsMigration is the shared migration that created
+// elitea_runtime.tool_call_records. It is the moment this deployment began
+// recording tool calls, and therefore the boundary of what the Tools tab can
+// speak for. The number is pinned here rather than derived so a later
+// renumbering at merge cannot silently move the boundary — the manifest head
+// test names the same file.
+const toolCallRecordsMigration = 119
+
 const agentCapabilities = `('agent.execute.application.v1', 'agent.execute.adhoc.v1')`
 
 // agentExecutionColumn probes for the column migration 0100 adds.
@@ -622,10 +653,167 @@ LIMIT $4`
 	return agents, false, nil
 }
 
-// GetToolAnalytics has no source. See the file header.
-func (r *AnalyticsRepo) GetToolAnalytics(context.Context, analytics.QueryParams) ([]analytics.ToolAnalytics, error) {
-	return nil, analytics.NoSourceError("tool analytics",
-		"p_<id>.chat_message_trace_step records tool_name but no toolkit_id, and covers chat turns only")
+/* ── tools ─────────────────────────────────────────────────────── */
+
+// GetToolAnalytics is the Tools tab. It used to answer ErrNoSource, and the
+// header of this file records the exact statement that stopped being true:
+// there was no durable per-tool-call record, only two half-producers that each
+// under-report by an unknown factor.
+//
+// Shared migration 0119 is that record, and BOTH halves write it — the explicit
+// tool run (toolkit.call_tool.v1: the test button and MCP tools/call) and the
+// agent turn's tool-call trace step, which is the bulk of tool usage and the
+// exact exclusion the old refusal named. So this read is one statement over one
+// table with one project column and one clock, and it needs neither a tenant
+// schema loop nor a join across two time types.
+//
+// AVAILABILITY IS A PROPERTY OF THE WINDOW, not of the table. Nothing written
+// before 0119 identifies a tool call, so a window that ENDS before the
+// migration was applied is a window this deployment cannot speak for, and it is
+// reported unavailable rather than as an empty list. Once the producer was
+// running, zero rows is a measurement: no tool ran.
+func (r *AnalyticsRepo) GetToolAnalytics(ctx context.Context, params analytics.QueryParams) (analytics.ToolBreakdown, error) {
+	id, err := projectID(params)
+	if err != nil {
+		return analytics.ToolBreakdown{}, err
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, analyticsReadTimeout)
+	defer cancel()
+
+	// One snapshot, for the reason GetAgentAnalytics opens one: the
+	// availability probe and the rows are two views of one table that both
+	// producers commit into continuously, and a breakdown read after a
+	// separately-read flag can disagree with it.
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return analytics.ToolBreakdown{}, fmt.Errorf("analytics: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	present, err := checkRelations(ctx, tx, "elitea_runtime.tool_call_records")
+	if err != nil {
+		return analytics.ToolBreakdown{}, err
+	}
+	if !present {
+		// A NAMED absence. The endpoint refuses rather than answering with an
+		// empty breakdown, because a 200 with no tools is indistinguishable
+		// from a project whose tools never ran.
+		return analytics.ToolBreakdown{}, analytics.NoSourceError("tool analytics",
+			"elitea_runtime.tool_call_records is absent — shared migration 0119 has not run on this database")
+	}
+
+	recording, err := toolRecordingSince(ctx, tx)
+	if err != nil {
+		return analytics.ToolBreakdown{}, err
+	}
+	breakdown := analytics.ToolBreakdown{}
+	if recording.IsZero() || !params.To.After(recording) {
+		// NOT AVAILABLE, and not "no tool ran".
+		//
+		// The ledger has no row for 0119 (recording is zero) or the whole
+		// window closed before the producer started. Both are "we have nothing
+		// to say about tools here". Tools stays nil and the handler omits the
+		// list entirely.
+		return breakdown, nil
+	}
+	breakdown.Available = true
+
+	tools, truncated, err := toolUsage(ctx, tx, id, params)
+	if err != nil {
+		return analytics.ToolBreakdown{}, err
+	}
+	// Present-and-possibly-empty once the producer was running for the window:
+	// at that point "no tool ran" is a measured fact.
+	if tools == nil {
+		tools = []analytics.ToolAnalytics{}
+	}
+	breakdown.Tools = tools
+	breakdown.Truncated = truncated
+	return breakdown, nil
+}
+
+// toolRecordingSince reports the moment this database began recording tool
+// calls: the applied_at of shared migration 0119.
+//
+// The LEDGER is the source, not the earliest row in the table. A project with
+// no tool calls yet has no earliest row, and reading "no rows" as "the producer
+// is not running" would make an idle project indistinguishable from an
+// un-migrated one — the availability flag would then be a statement about
+// traffic rather than about the deployment.
+func toolRecordingSince(ctx context.Context, q analyticsQuerier) (time.Time, error) {
+	var appliedAt *time.Time
+	if err := q.QueryRow(ctx, `
+SELECT min(applied_at)
+FROM elitea_runtime.schema_migrations
+WHERE target_kind = 'shared' AND version = $1`, toolCallRecordsMigration).Scan(&appliedAt); err != nil {
+		if missingRelation(err) {
+			return time.Time{}, nil
+		}
+		return time.Time{}, fmt.Errorf("analytics: tool producer probe: %w", err)
+	}
+	if appliedAt == nil {
+		return time.Time{}, nil
+	}
+	return *appliedAt, nil
+}
+
+// toolUsage folds the window into one row per tool.
+//
+// GROUPED BY (toolkit_id, toolkit_name, tool_name) rather than by tool_name
+// alone. Two toolkits can expose a tool of the same name, and collapsing them
+// would publish one row whose duration and error rate belong to two different
+// integrations. The toolkit id is NULL on an agent-turn row, so the grouping
+// keeps the name beside it: `coalesce` on the id would fold every unidentified
+// toolkit into one bucket, which is the invented fact this table exists to
+// avoid.
+//
+// duration is derived from the two timestamps and averaged over the calls that
+// FINISHED. A call still running has no duration, and counting it as zero would
+// pull the average toward zero exactly when a tool has started hanging.
+func toolUsage(ctx context.Context, q analyticsQuerier, id int64, params analytics.QueryParams) ([]analytics.ToolAnalytics, bool, error) {
+	rows, err := q.Query(ctx, `
+SELECT coalesce(r.toolkit_id::text, ''),
+       coalesce(r.toolkit_name, ''),
+       r.tool_name,
+       count(*)::bigint,
+       count(*) FILTER (WHERE r.is_error)::bigint,
+       coalesce(avg(EXTRACT(EPOCH FROM (r.finished_at - r.started_at)) * 1000)
+                FILTER (WHERE r.finished_at IS NOT NULL), 0)::double precision
+FROM elitea_runtime.tool_call_records AS r
+WHERE r.project_id = $1
+  AND r.started_at >= $2
+  AND r.started_at < $3
+GROUP BY r.toolkit_id, r.toolkit_name, r.tool_name
+ORDER BY count(*) DESC, r.tool_name ASC
+LIMIT $4`, id, params.From, params.To, toolRowsLimit+1)
+	if err != nil {
+		return nil, false, fmt.Errorf("analytics: tool usage: %w", err)
+	}
+	defer rows.Close()
+
+	tools := make([]analytics.ToolAnalytics, 0)
+	for rows.Next() {
+		var tool analytics.ToolAnalytics
+		if err := rows.Scan(&tool.ToolkitID, &tool.ToolkitName, &tool.ToolName,
+			&tool.RunCount, &tool.ErrorCount, &tool.AvgDuration); err != nil {
+			return nil, false, fmt.Errorf("analytics: tool usage scan: %w", err)
+		}
+		tool.AvgDuration = math.Round(tool.AvgDuration*10) / 10
+		// Guarded rather than assumed non-zero, for the reason agentUsage
+		// guards its own division.
+		if tool.RunCount > 0 {
+			tool.ErrorRate = math.Round(float64(tool.ErrorCount)/float64(tool.RunCount)*1000) / 10
+		}
+		tools = append(tools, tool)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	if len(tools) > toolRowsLimit {
+		return tools[:toolRowsLimit], true, nil
+	}
+	return tools, false, nil
 }
 
 // analyticsQuerier is the read seam every helper takes, so they run inside
@@ -884,18 +1072,60 @@ WHERE u.id = ANY($1)`
 // and one member can hold several roles in the same project — counting grants
 // would inflate the denominator and understate adoption.
 //
-// Guarded like userIdentities, and for the same reason: these tables belong to
-// a different corpus. When they are absent the caller omits total_project_users
+// # WHICH TABLE HOLDS MEMBERSHIP
+//
+// public.auth_core__project_user_role, and only that one. The earlier form of
+// this query joined public.auth_core__user_role to public.auth_core__project_role
+// on `pr.id = ur.role_id`, and those two ids name DIFFERENT things:
+// auth_core__user_role.role_id references auth_core__role, the CENTRAL role
+// table, which has no project column at all. The join therefore matched a user
+// whose central role id happened to equal a project role id of this project,
+// which is an accident of two SERIAL sequences.
+//
+// Measured on a fresh install: the owner of a personal project holds one
+// central grant, its id collides with a role of the FIRST project, and the
+// project's own member row is invisible to the query. The tile read
+// "AI ACTIVE 1 of 0 members" — one caller, no members, on a project whose
+// single member is the caller. The Users page has always read the right table
+// (eliteacore/handler.go's usersPageQuery); this figure did not.
+//
+// Project provisioning writes the owner's row into auth_core__project_user_role
+// (application/projectprovisioning/steps.go, createOwnerMembership), so a
+// personal project now measures 1 member, which is the truth.
+//
+// Guarded like userIdentities, and for the same reason: this table belongs to
+// a different corpus. When it is absent the caller omits total_project_users
 // and adoption_rate entirely rather than reporting a rate over a denominator it
 // invented.
 func projectAdoption(ctx context.Context, q analyticsQuerier, id int64, params analytics.QueryParams) (members, active int64, ok bool, err error) {
-	const query = `
+	// The two variants differ only in the SYSTEM-USER filter.
+	//
+	// Every project provisions a system account of its own and grants it a
+	// membership row (application/projectprovisioning/steps.go,
+	// createSystemUser). It is not a person, and the Users page hides it with
+	// exactly this predicate (eliteacore/handler.go, usersPageQuery). Counting
+	// it would put one member on this tile that the page beside it does not
+	// list — on a personal project, "1 of 2" where the truth is "1 of 1".
+	//
+	// The filter needs public.auth_core__user, and that table can be absent
+	// while the membership table is present. Losing the whole denominator over
+	// a display column would be the worse answer, so absence drops the FILTER
+	// and keeps the figure.
+	const filteredMembers = `
 WITH project_members AS (
-    SELECT DISTINCT ur.user_id
-    FROM public.auth_core__user_role AS ur
-    JOIN public.auth_core__project_role AS pr ON pr.id = ur.role_id
-    WHERE pr.project_id = $1
-)
+    SELECT DISTINCT pur.user_id
+    FROM public.auth_core__project_user_role AS pur
+    JOIN public.auth_core__user AS account ON account.id = pur.user_id
+    WHERE pur.project_id = $1
+      AND account.email NOT LIKE '%@centry.user'
+)`
+	const unfilteredMembers = `
+WITH project_members AS (
+    SELECT DISTINCT pur.user_id
+    FROM public.auth_core__project_user_role AS pur
+    WHERE pur.project_id = $1
+)`
+	const tail = `
 SELECT (SELECT count(*)::bigint FROM project_members),
        (SELECT count(DISTINCT l.user_id)::bigint
         FROM gateway.llm_request_logs AS l
@@ -905,17 +1135,25 @@ SELECT (SELECT count(*)::bigint FROM project_members),
           AND l.user_id IN (SELECT user_id FROM project_members))`
 
 	// Asked BEFORE the statement below, for the reason userIdentities gives at
-	// length: the query names both tables in its FROM clause, so a missing one
+	// length: the query names the table in its FROM clause, so a missing one
 	// raises 42P01 at parse time, no in-query predicate can prevent it, and the
 	// resulting error would abort the shared transaction rather than being
 	// contained. The missingRelation check after it is the belt to this braces
 	// — the two statements are not atomic.
-	present, err := checkRelations(ctx, q, "public.auth_core__user_role", "public.auth_core__project_role")
+	present, err := checkRelations(ctx, q, "public.auth_core__project_user_role")
 	if err != nil {
 		return 0, 0, false, err
 	}
 	if !present {
 		return 0, 0, false, nil
+	}
+	accounts, err := checkRelations(ctx, q, "public.auth_core__user")
+	if err != nil {
+		return 0, 0, false, err
+	}
+	query := unfilteredMembers + tail
+	if accounts {
+		query = filteredMembers + tail
 	}
 
 	if err := q.QueryRow(ctx, query, id, params.From, params.To).Scan(&members, &active); err != nil {

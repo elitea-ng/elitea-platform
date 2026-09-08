@@ -231,7 +231,18 @@ func (h *CostsHandler) Costs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	// The dimensional half, read from the request log rather than from the
+	// accumulator (estimate.go). It is nil when this database carries no
+	// request log, and the key is then absent — the answer a deployment
+	// without the gateway's own tables must give.
+	estimate, err := buildEstimate(ctx, tx, projectID, from, to)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError,
+			map[string]any{"error": "failed to query analytics costs"})
+		return
+	}
+
+	body := map[string]any{
 		"kpis":     kpis(totals, from, to),
 		"periods":  periods,
 		"by_scope": totals,
@@ -241,7 +252,11 @@ func (h *CostsHandler) Costs(w http.ResponseWriter, r *http.Request) {
 		"periods_truncated": truncated,
 		"date_from":         from,
 		"date_to":           to,
-	})
+	}
+	if estimate != nil {
+		body["estimate"] = estimate
+	}
+	writeJSON(w, http.StatusOK, body)
 }
 
 // dateWindow reproduces the reference's _parse_dates: an unparseable or missing

@@ -1,6 +1,39 @@
 # elitea-main Migration Status
 
-Last updated: 2026-07-10
+Last updated: 2026-09-07
+
+> **The pylon bridges this document describes are DELETED (issue #383).**
+>
+> Everything below is a HISTORICAL record of what each migration phase built.
+> Five of the things it names no longer exist in the tree, and no deployment
+> ever ran them:
+>
+> | Deleted | Was |
+> |---------|-----|
+> | `deploy/rpc-bridge/bridge.py` | the last writer of the pickle wire format `AGENTS.md` bans |
+> | `internal/api/shadow/` | the comparator that mirrored requests to pylon and diffed the answers, plus `/internal/shadow` |
+> | `internal/cutover/{router,tracker,inventory,gates,decommission}.go` | the reverse proxy to `LEGACY_URL`, the Redis endpoint-state machine and `/internal/cutover` |
+> | `internal/infra/authsvc/rpc.go` | the Redis remote-call client for `pylon_auth:rpc:request` |
+> | `internal/compat/rpcbridge/` | the adapter that wrapped that client |
+>
+> The environment variables in the sections below — `SHADOW_ENABLED`,
+> `SHADOW_LEGACY_URL`, `SHADOW_WEIGHT`, `LEGACY_URL`, `CANARY_WEIGHT` — are gone
+> from every deploy file with them. No Go code ever read them.
+>
+> `cmd/cutover-ctl` is KEPT, without its endpoint-promotion subcommands: the
+> seven verification gates it still carries (`cost-parity`, `models-parity`,
+> `budget-check`, `overhead-check`, `sse-flush-check`, `budget-status-audit`,
+> `cutover-verify`) drive real deployments and are the LiteLLM-to-Bifrost
+> acceptance harness. `status`, `summary`, `promote`, `promote-all`, `rollback`
+> and `decommission-check` were clients of the two deleted mounts.
+>
+> `internal/cutover/index_v2_preflight.go` STAYS. It is a different cutover —
+> the index capability v1-to-v2 move from issues #337/#339 — and it is live:
+> `cmd/index-v2-preflight`, `internal/infra/db/repos/index_v2_cutover.go` and
+> `internal/transport/redisdispatch/index_v2_cutover.go` all call it.
+>
+> `internal/api/TestNoPylonBridgeWiringReturns` fails if any of the deleted
+> wiring comes back.
 
 ## Phase Summary
 

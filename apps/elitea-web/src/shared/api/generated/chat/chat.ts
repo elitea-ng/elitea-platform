@@ -53,6 +53,8 @@ import type {
 } from "@tanstack/react-query";
 
 import type {
+  CanvasPresence,
+  CanvasPresenceRequest,
   CreateSupportConversationBody,
   ErrorResponse,
   GetMessageTraceParams,
@@ -1202,6 +1204,316 @@ export function useStartSupportTurn<
   const queryOptions = getStartSupportTurnQueryOptions(
     conversationUUID,
     supportPredictRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type heartbeatCanvasPresenceResponse200 = {
+  data: CanvasPresence;
+  status: 200;
+};
+
+export type heartbeatCanvasPresenceResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type heartbeatCanvasPresenceResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type heartbeatCanvasPresenceResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type heartbeatCanvasPresenceResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type heartbeatCanvasPresenceResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type heartbeatCanvasPresenceResponseSuccess =
+  heartbeatCanvasPresenceResponse200 & {
+    headers: Headers;
+  };
+export type heartbeatCanvasPresenceResponseError = (
+  | heartbeatCanvasPresenceResponse400
+  | heartbeatCanvasPresenceResponse401
+  | heartbeatCanvasPresenceResponse403
+  | heartbeatCanvasPresenceResponse404
+  | heartbeatCanvasPresenceResponse500
+) & {
+  headers: Headers;
+};
+
+export type heartbeatCanvasPresenceResponse =
+  heartbeatCanvasPresenceResponseSuccess | heartbeatCanvasPresenceResponseError;
+
+export const getHeartbeatCanvasPresenceUrl = (
+  projectId: string,
+  canvasId: string,
+) => {
+  return `/elitea_core/canvas/prompt_lib/${projectId}/${canvasId}/presence`;
+};
+
+/**
+ * Canvas editor presence WITHOUT a socket server (issue 622, decided in issue 615).
+ * Two people editing one canvas was last-write-wins and silent.
+ *
+ * This is a HEARTBEAT. The SPA calls it on mount, on a timer at a third of
+ * `ttl_seconds`, on `visibilitychange`, and once with `state: "left"` on
+ * unmount. The answer is the roster, and the same roster is published as a
+ * `canvas.editors` event on the project's existing SSE channel — the one
+ * GET /elitea_core/events/prompt_lib/{project_id} serves — so the other
+ * tabs learn about it without polling.
+ *
+ * THE CHANNEL NAME IS UNDERIVABLE FROM CLIENT INPUT. It is built from the
+ * `{project_id}` of this mount pattern, which
+ * `RequireResolvedPermissions` has already gated. The deleted socket
+ * prototype's room was `"canvas:" + canvas_id` with NO project component,
+ * and canvas ids are per-tenant-schema integers, so canvas 42 in project 1
+ * and canvas 42 in project 7 were the same room by construction.
+ *
+ * A PROJECT PREFIX ALONE IS NOT ENOUGH. `{canvas_id}` is resolved INSIDE
+ * `schema({project_id})` before anything is published; a canvas that does
+ * not live in this project is a 404 and publishes nothing.
+ *
+ * NOTE(issue 622): internal/api/v2/canvaspresence. Gated on
+ * `models.chat.canvas.details` — the string the canvas READ already takes,
+ * because announcing presence on a canvas is not a wider claim than
+ * opening it, and reusing it means this route needs no migration and 403s
+ * nobody who can already open the canvas.
+ *
+ * NOT A LOCK. The canvas WRITE route does not consult this roster. The SPA
+ * uses it to go read-only, which is what the reference user saw, but the
+ * server refuses no write on it — a lock enforced on one side only would
+ * be a control that looks live and never fires.
+ * @summary Announce that this caller has a canvas open, and read the roster
+ */
+export const heartbeatCanvasPresence = async (
+  projectId: string,
+  canvasId: string,
+  canvasPresenceRequest?: CanvasPresenceRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<heartbeatCanvasPresenceResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+  return eliteaFetch<heartbeatCanvasPresenceResponse>(
+    getHeartbeatCanvasPresenceUrl(projectId, canvasId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(canvasPresenceRequest),
+    },
+  );
+};
+
+export const getHeartbeatCanvasPresenceQueryKey = (
+  projectId: string,
+  canvasId: string,
+  canvasPresenceRequest?: CanvasPresenceRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/canvas/prompt_lib/${projectId}/${canvasId}/presence`,
+    canvasPresenceRequest,
+  ] as const;
+};
+
+export const getHeartbeatCanvasPresenceQueryOptions = <
+  TData = Awaited<ReturnType<typeof heartbeatCanvasPresence>>,
+  TError =
+    N400Response | N401Response | N403Response | ErrorResponse | N500Response,
+>(
+  projectId: string,
+  canvasId: string,
+  canvasPresenceRequest?: CanvasPresenceRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof heartbeatCanvasPresence>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getHeartbeatCanvasPresenceQueryKey(
+      projectId,
+      canvasId,
+      canvasPresenceRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof heartbeatCanvasPresence>>
+  > = ({ signal }) =>
+    heartbeatCanvasPresence(projectId, canvasId, canvasPresenceRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      canvasId !== null &&
+      canvasId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof heartbeatCanvasPresence>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type HeartbeatCanvasPresenceQueryResult = NonNullable<
+  Awaited<ReturnType<typeof heartbeatCanvasPresence>>
+>;
+export type HeartbeatCanvasPresenceQueryError =
+  N400Response | N401Response | N403Response | ErrorResponse | N500Response;
+
+export function useHeartbeatCanvasPresence<
+  TData = Awaited<ReturnType<typeof heartbeatCanvasPresence>>,
+  TError =
+    N400Response | N401Response | N403Response | ErrorResponse | N500Response,
+>(
+  projectId: string,
+  canvasId: string,
+  canvasPresenceRequest: undefined | CanvasPresenceRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof heartbeatCanvasPresence>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof heartbeatCanvasPresence>>,
+          TError,
+          Awaited<ReturnType<typeof heartbeatCanvasPresence>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useHeartbeatCanvasPresence<
+  TData = Awaited<ReturnType<typeof heartbeatCanvasPresence>>,
+  TError =
+    N400Response | N401Response | N403Response | ErrorResponse | N500Response,
+>(
+  projectId: string,
+  canvasId: string,
+  canvasPresenceRequest?: CanvasPresenceRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof heartbeatCanvasPresence>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof heartbeatCanvasPresence>>,
+          TError,
+          Awaited<ReturnType<typeof heartbeatCanvasPresence>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useHeartbeatCanvasPresence<
+  TData = Awaited<ReturnType<typeof heartbeatCanvasPresence>>,
+  TError =
+    N400Response | N401Response | N403Response | ErrorResponse | N500Response,
+>(
+  projectId: string,
+  canvasId: string,
+  canvasPresenceRequest?: CanvasPresenceRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof heartbeatCanvasPresence>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Announce that this caller has a canvas open, and read the roster
+ */
+
+export function useHeartbeatCanvasPresence<
+  TData = Awaited<ReturnType<typeof heartbeatCanvasPresence>>,
+  TError =
+    N400Response | N401Response | N403Response | ErrorResponse | N500Response,
+>(
+  projectId: string,
+  canvasId: string,
+  canvasPresenceRequest?: CanvasPresenceRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof heartbeatCanvasPresence>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getHeartbeatCanvasPresenceQueryOptions(
+    projectId,
+    canvasId,
+    canvasPresenceRequest,
     options,
   );
 

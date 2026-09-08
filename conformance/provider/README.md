@@ -32,6 +32,8 @@ conformance/provider/
         ├── descriptor/legacy-v0/ the golden provider descriptor + inventory + digests
         ├── spi/              recorded request/response shapes for every SPI operation
         ├── generation/       the composed generate_wiki artifact set
+        ├── wiki_query/       the four wiki_query tools' answers, and the
+        │                     legacy delete_wiki defect, recorded as such
         └── retrieval/sample-repo/ dense / BM25 / FTS / fused rankings, with scores
 ```
 

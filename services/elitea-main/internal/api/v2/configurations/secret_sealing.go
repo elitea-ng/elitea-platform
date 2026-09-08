@@ -72,10 +72,22 @@ func newConfigurationSecretID() (string, error) {
 // `data` with a {{secret.NAME}} reference. It returns the sanitized object and
 // the plaintext values the caller must seal in the vault.
 //
-// A type the pinned catalogue does not describe keeps its data verbatim. The
-// catalogue is the only authority on which field is a secret, and a dynamic
-// MCP or provider-hub type has no entry. Refusing those writes would break a
-// caller that works today.
+// A type the pinned catalogue does not describe is REFUSED. It used to keep
+// its data verbatim, and that default is the leak this route exists to close:
+// the catalogue is the only authority on which field is a secret, so "no
+// entry" meant "no field is a secret" and the api_key of every uncatalogued
+// provider type was written into p_{project}.configuration in clear text. The
+// same absence also makes `sectionFor` return "", so the row is invisible to
+// the gateway's `WHERE section = 'ai_credentials'` read — a stored credential
+// that leaks and does not work. `anthropic`, `open_ai_azure` and `vllm` were
+// exactly that, until they were added to the catalogue.
+//
+// Absence now fails closed, which is what the target mutation service already
+// does (application/configurations/mutation.go refuses an unknown type with
+// CurrentConfigurationMutationUnknownType). A deployment that grows a dynamic
+// MCP or provider-hub type must reconcile it into the catalogue first; that is
+// the documented boundary, and it is a smaller cost than storing a credential
+// this platform cannot describe.
 //
 // The reference IS the redaction. The read paths return the stored column, so
 // they now emit the reference rather than the credential, which is what the
@@ -90,7 +102,14 @@ func (h *Handler) sealConfigurationSecrets(
 	}
 	properties, ok := h.configurationDataProperties(configType)
 	if !ok {
-		return data, nil, nil
+		// The message does not echo the submitted type. It names the rule, so
+		// an operator reads "this deployment's catalogue does not describe it"
+		// rather than "unsupported", which sends them to the wrong place.
+		return nil, nil, &configurationWriteFailure{
+			status: http.StatusBadRequest,
+			message: "this platform does not describe this configuration type, " +
+				"so its data cannot be stored safely",
+		}
 	}
 	sanitized, mutations, err := configurationapp.SealCurrentConfigurationSecrets(
 		ctx, data, properties, configType, newConfigurationSecretID)
@@ -110,6 +129,9 @@ func (h *Handler) sealConfigurationSecrets(
 
 // configurationDataProperties returns the `data.properties` object of one
 // configuration type, and reports whether the catalogue describes it.
+//
+// A false second result is a refusal, not a fallback: see
+// sealConfigurationSecrets.
 func (h *Handler) configurationDataProperties(configType string) (map[string]any, bool) {
 	if configType == "" {
 		return nil, false

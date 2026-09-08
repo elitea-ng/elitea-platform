@@ -53,50 +53,14 @@
  * all that happens here. The server refuses the request either way, and a typed
  * URL still reaches the page (and still gets refused).
  */
-import type { ComponentType } from 'react';
-
-import AssignmentOutlinedIcon from '@mui/icons-material/AssignmentOutlined';
-import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
-import PaletteOutlinedIcon from '@mui/icons-material/PaletteOutlined';
-import HistoryOutlinedIcon from '@mui/icons-material/HistoryOutlined';
-import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
-// The reference imports `@mui/icons-material/PeopleOutline`, which MUI 9 no
-// longer ships under that name; `PeopleOutlineOutlined` is the same glyph.
-import PeopleOutlineIcon from '@mui/icons-material/PeopleOutlineOutlined';
-import PolicyOutlinedIcon from '@mui/icons-material/PolicyOutlined';
-import ScheduleOutlinedIcon from '@mui/icons-material/ScheduleOutlined';
-import SecurityOutlinedIcon from '@mui/icons-material/SecurityOutlined';
-import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
-import TuneOutlinedIcon from '@mui/icons-material/TuneOutlined';
-import VpnKeyOutlinedIcon from '@mui/icons-material/VpnKeyOutlined';
-import type { SvgIconProps } from '@mui/material/SvgIcon';
-
-import { t } from '@/shared/i18n';
-
 import { adminUiShowsControlFor } from './adminUiConfig';
+import { navGroups } from './adminNavGroups';
+import type { AdminNavGroup } from './adminNavGroups';
 
-export interface AdminNavItem {
-  /** Stable id — the test ids and the i18n keys are built from it. */
-  readonly id: string;
-  /**
-   * The route's `path` in `./router.tsx`, which for this flat tree is also its
-   * route ID. `AdminNav.test.tsx` asserts every one of these exists in the
-   * router's own table, so the nav and the routes cannot drift apart.
-   */
-  readonly path: string;
-  readonly label: string;
-  readonly icon: ComponentType<SvgIconProps>;
-  /**
-   * Any ONE of these makes the item visible. Empty means always visible.
-   * Presentation only — see this module's header.
-   */
-  readonly anyPermission: readonly string[];
-}
-
-export interface AdminNavGroup {
-  readonly id: 'primary' | 'platform';
-  readonly items: readonly AdminNavItem[];
-}
+// The item and group SHAPES live in `./adminNavGroups`, beside the table that
+// declares them, and are re-exported here so every existing importer keeps one
+// module to reach both the types and the functions that read them.
+export type { AdminNavItem, AdminNavGroup } from './adminNavGroups';
 
 /**
  * The route id the ADMIN INDEX resolves to. `router.tsx` renders `AdminUsers`
@@ -110,160 +74,6 @@ const ADMIN_INDEX_ROUTE_ID = '/';
 /** Which item the index route stands in for. Kept next to the alias it serves. */
 const INDEX_ALIAS_ITEM_ID = 'users';
 
-/**
- * The reference's `SIDEBAR_PERMISSIONS`, with three corrections.
- *
- * `app-requests` there requires `PERMISSIONS.users.section` (`admin.auth.users`)
- * — a copy-paste from the Users entry that predates the moderation permissions.
- * The ported page reads `admin.moderation.edit` for its decide controls and the
- * platform now issues the whole `admin.moderation.*` family, so the nav asks for
- * the permission that actually governs the page.
- *
- * `service-descriptors` has no reference entry at all (no nav item to gate).
- * `configuration.service_descriptors` is the permission the reference's
- * Configuration SECTION for the same subsystem uses
- * (`CONFIG_SECTION_PERMISSIONS`).
- *
- * ## Every item names a permission THIS platform issues, as well
- *
- * The reference gates four items on pylon SECTION names — `projects`,
- * `projects.projects`, `configuration`, `configuration.roles` — and one on
- * `configuration.service_descriptors`. Pylon registers those names, so they stay
- * here for a pylon-backed deployment. This platform's own administration mode
- * registers none of them: `001_initial.sql` and `migrations/shared/*` seed
- * fully-qualified names only.
- *
- * The nav read that as "the operator lacks the permission" and hid the item.
- * `projects` and `service-descriptors` disappeared from every Go-native admin
- * console, silently, with nothing on screen to explain it. Both now name the
- * permission `internal/api/router.go` resolves for the page they open, beside
- * the pylon name. `roles`, `configuration` and `features` already did.
- *
- * The defect stayed invisible while `adminui/handler.go` HARDCODED a 37-string
- * permission list that echoed the reference's section names back to the browser.
- * That handler resolves the operator's real grants now, so an unissuable name
- * hides an item for good. Add no gate whose permission no seed grants.
- */
-function navGroups(): readonly AdminNavGroup[] {
-  return [
-    {
-      id: 'primary',
-      items: [
-        {
-          id: 'users',
-          path: '/users',
-          label: t('pages.admin.nav.users', 'Users'),
-          icon: PeopleOutlineIcon,
-          anyPermission: ['admin.auth.users'],
-        },
-        {
-          id: 'roles',
-          path: '/roles',
-          label: t('pages.admin.nav.roles', 'Roles'),
-          icon: SecurityOutlinedIcon,
-          anyPermission: ['configuration.roles', 'configuration.roles.permissions.view'],
-        },
-        {
-          id: 'projects',
-          path: '/projects',
-          label: t('pages.admin.nav.projects', 'Projects'),
-          icon: FolderOutlinedIcon,
-          // `projects` and `projects.projects` are pylon SECTION names. This
-          // platform's administration mode issues neither. It issues
-          // `projects.projects.projects.view`, which is also the permission
-          // `router.go` resolves for the admin project listing this item opens.
-          anyPermission: ['projects', 'projects.projects', 'projects.projects.projects.view'],
-        },
-        {
-          id: 'secrets',
-          path: '/secrets',
-          label: t('pages.admin.nav.secrets', 'Secrets'),
-          icon: VpnKeyOutlinedIcon,
-          anyPermission: ['configuration.secrets.secret.list', 'configuration.secrets.secret.create'],
-        },
-        {
-          id: 'app-requests',
-          path: '/app-requests',
-          label: t('pages.admin.nav.appRequests', 'App Requests'),
-          icon: AssignmentOutlinedIcon,
-          anyPermission: ['admin.moderation', 'admin.moderation.view'],
-        },
-      ],
-    },
-    {
-      id: 'platform',
-      items: [
-        {
-          id: 'configuration',
-          path: '/configuration',
-          label: t('pages.admin.nav.configuration', 'Configuration'),
-          icon: SettingsOutlinedIcon,
-          anyPermission: ['configuration', 'runtime.plugins'],
-        },
-        {
-          id: 'branding',
-          path: '/branding',
-          label: t('pages.admin.nav.branding', 'Branding'),
-          icon: PaletteOutlinedIcon,
-          // `configuration.branding` is what every branding route is gated on
-          // server-side (`internal/api/router.go`), granted to the two
-          // administration-mode admin roles by migration 0109 (ADR-0024
-          // decision 5); `configuration` is the prefix `ExpandPermissions`
-          // expands into it, as for `governance` below.
-          anyPermission: ['configuration', 'configuration.branding'],
-        },
-        {
-          id: 'features',
-          path: '/features',
-          label: t('pages.admin.nav.features', 'Features'),
-          icon: TuneOutlinedIcon,
-          anyPermission: ['configuration', 'runtime.plugins'],
-        },
-        {
-          id: 'service-descriptors',
-          path: '/service-descriptors',
-          label: t('pages.admin.nav.serviceDescriptors', 'Service Descriptors'),
-          icon: HubOutlinedIcon,
-          // `configuration.service_descriptors` is a pylon CONFIGURATION-SECTION
-          // name, and this platform issues it to nobody.
-          // `runtime.airun.serviceproviders` is the permission `router.go`
-          // resolves for the listing, and 001_initial.sql grants it to both
-          // administration-mode admin roles. Keep both: the section name still
-          // reaches a pylon-backed deployment.
-          anyPermission: ['configuration.service_descriptors', 'runtime.airun.serviceproviders'],
-        },
-        {
-          id: 'governance',
-          path: '/governance',
-          label: t('pages.admin.nav.governance', 'LLM Governance'),
-          icon: PolicyOutlinedIcon,
-          // The permission every governance route is gated on server-side
-          // (`internal/api/router.go`, `central("configuration.governance")`),
-          // plus the `configuration` prefix that `ExpandPermissions` expands
-          // into it. Both are names this platform's administration mode issues
-          // — see this module's header on why an unissuable name is a nav item
-          // that disappears for good.
-          anyPermission: ['configuration', 'configuration.governance'],
-        },
-        {
-          id: 'audit',
-          path: '/audit',
-          label: t('pages.admin.nav.audit', 'Audit Trail'),
-          icon: HistoryOutlinedIcon,
-          anyPermission: ['models.admin.audit_trail.view'],
-        },
-        {
-          id: 'schedules',
-          path: '/schedules',
-          // Not the reference's "System" — see this module's header, point 3.
-          label: t('pages.admin.nav.schedules', 'Schedules & Tasks'),
-          icon: ScheduleOutlinedIcon,
-          anyPermission: ['configuration.scheduling.schedules.view', 'runtime.plugins'],
-        },
-      ],
-    },
-  ];
-}
 
 /**
  * Every item, ungated. Exists so the drift test can assert that EVERY nav
@@ -320,4 +130,29 @@ export function activeAdminNavItemId(matchedRouteIds: readonly string[]): string
     }
   }
   return undefined;
+}
+
+/**
+ * Whether the caller unlocks ANY sidebar section — the boot-time gate
+ * `AdminApp.tsx` uses to decide whether the admin router mounts at all.
+ *
+ * `visibleAdminNavGroups` already computes exactly this per item, by
+ * construction: an item survives its filter only when the (presentation-only)
+ * probe shows one of its `anyPermission` names. A caller for whom every group
+ * comes back empty has no reachable page in this bundle, which used to render
+ * as a full console shell around an empty sidebar — the router mounted
+ * regardless, so `/admin/app/` itself, and every page a URL could name, still
+ * rendered. This collapses the same computation to the boolean that lets the
+ * boot gate skip mounting the router at all, rather than leaving that shell
+ * on screen for a caller with nothing to do in it.
+ *
+ * Still presentation, not authorisation, for the reason `adminUiConfig.ts`'s
+ * header gives: the server refuses every write on its own account regardless
+ * of what renders here. What changes is WHERE that fact is acted on — one
+ * boot-time check instead of eleven pages each finding out from a 403.
+ */
+export function hasAnyAdminNavAccess(
+  shows: (permission: string) => boolean = adminUiShowsControlFor,
+): boolean {
+  return visibleAdminNavGroups(shows).length > 0;
 }

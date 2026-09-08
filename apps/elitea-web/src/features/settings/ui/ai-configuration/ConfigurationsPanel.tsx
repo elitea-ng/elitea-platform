@@ -4,30 +4,31 @@
  * AI Credentials).
  * Ported from `apps/elitea-ui/src/[fsd]/features/settings/ui/ai-configuration/Configuration/ConfigurationsPanel.jsx`.
  */
-import { memo, useCallback, useMemo } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useTheme, type Theme } from '@mui/material/styles';
 
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 
-import { isPublicProject } from '@/entities/project';
-import { getConfig } from '@/shared/config';
 import { t } from '@/shared/i18n';
 import { BaseBtn } from '@/shared/ui/BaseBtn';
+import { InfoLabelWithTooltip } from '@/shared/ui/InfoLabelWithTooltip';
 
 import { useDefaultModelSaving } from '../../lib/ai-configuration/useDefaultModelSaving';
+import { useModelOptions } from '../../lib/ai-configuration/useModelOptions';
 import {
   StoredConnectionHealthProvider,
   collectConfigurationIds,
   useStoredConnectionHealth,
 } from '../../lib/ai-configuration/useStoredConnectionHealth';
 
-import {
-  EMPTY_MODELS_RESPONSE,
-  useModelsQuery,
-  type ModelsApiResponse,
-} from '../../api/ai-configuration/api';
 import AddModelButton from './AddModelButton';
+import {
+  computeProjectGating,
+  defaultValueOf,
+  sectionHoldsRevealedRow,
+  tierDefaultValueOf,
+} from './configurationsPanel.helpers';
 import ConfigurationSection, {
   type AdditionalDefaultSetting,
 } from './ConfigurationSection';
@@ -42,64 +43,8 @@ interface ConfigurationsPanelProps {
    * each section's real default model. */
   projectId: string;
   isLoading: boolean;
-}
-
-/* ── hook helper: build select options from a flat config list ──────────── */
-
-function buildOptions(configs: readonly Record<string, unknown>[]): Array<{ value: string; label: string }> {
-  return (configs ?? []).map((cfg) => {
-    const name = (cfg.elitea_title as string) || (cfg.label as string) || (cfg.type as string) || '';
-    return {
-      value: `${String(name)}<<>>${String((cfg.project_id as string) ?? '')}`,
-      label: String(name),
-    };
-  });
-}
-
-/** `${default_model_name}<<>>${default_model_project_id}` — matches the
- * `<<>>`-joined value shape `buildOptions` produces, so the Select can
- * find the currently-selected option by value equality. */
-function defaultValueOf(data: ModelsApiResponse): string {
-  return `${data.default_model_name ?? ''}<<>>${data.default_model_project_id ?? ''}`;
-}
-
-/** Low/high-tier defaults are optional — old app guards both halves being
- * present before building the `<<>>` value (`ModelConfiguration.jsx:168-180`),
- * otherwise leaves the Select unset rather than showing `"<<>>"`. */
-function tierDefaultValueOf(name: string | undefined, tierProjectId: string | undefined): string {
-  if (!name || !tierProjectId) return '';
-  return `${name}<<>>${tierProjectId}`;
-}
-
-/** Tenant/public-project gating for the "Create configuration" button —
- * old app: `ALLOW_PROJECT_OWN_LLMS !== false || projectId == PUBLIC_PROJECT_ID`
- * (`ConfigurationsPanel.jsx:36-39`). Also drives `include_shared` for the
- * model-defaults fetch, matching `useListModelsQuery`'s
- * `include_shared: projectId != PUBLIC_PROJECT_ID`. Extracted to a
- * top-level function (rather than an inline `useMemo` callback) to keep
- * `ConfigurationsPanel` itself under the complexity budget. */
-function computeProjectGating(projectId: string): { includeShared: boolean; canCreateConfiguration: boolean } {
-  const result = getConfig();
-  if (result.status !== 'ok') {
-    // Defensive fallback only — `app/App.tsx` renders `MissingEnvPage`
-    // before this ever mounts in production (see `integrationGuard.ts`'s
-    // identical posture on this branch).
-    return { includeShared: true, canCreateConfiguration: true };
-  }
-  const isPublic = isPublicProject(projectId, result.config.vite_public_project_id);
-  return {
-    includeShared: !isPublic,
-    canCreateConfiguration: result.config.allow_project_own_llms !== false || isPublic,
-  };
-}
-
-/** `useModelsQuery` resolves to `undefined` before the fetch settles —
- * mirrors the old app's inline default arg on `useListModelsQuery`'s
- * destructure (`ModelConfiguration.jsx:32-45`). A plain top-level helper
- * (rather than a `??`/default-destructure at each of the 6 call sites)
- * keeps `ConfigurationsPanel` itself under the complexity budget. */
-function withDefaultModels(data: ModelsApiResponse | undefined): ModelsApiResponse {
-  return data ?? EMPTY_MODELS_RESPONSE;
+  /** Just-saved/edited configuration id (`?reveal=`) — opens the section holding it. */
+  revealConfigurationId?: string;
 }
 
 /* ── component ──────────────────────────────────────────────────────────── */
@@ -108,9 +53,11 @@ export default memo(function ConfigurationsPanel({
   configurationsBySection,
   projectId,
   isLoading,
+  revealConfigurationId,
 }: ConfigurationsPanelProps) {
   const theme = useTheme();
   const styles = getStyles(theme);
+  const panelRef = useRef<HTMLDivElement | null>(null);
 
   /* Extract sections safely (TS doesn't know the key types) */
   const llmConfigs = configurationsBySection['llm'] ?? [];
@@ -126,14 +73,27 @@ export default memo(function ConfigurationsPanel({
     [projectId],
   );
 
-  /* Real per-section default models — old app: 6× `useListModelsQuery`
-     (`ModelConfiguration.jsx:42-78`). */
-  const llmDefaults = withDefaultModels(useModelsQuery(projectId, 'llm', includeShared).data);
-  const embeddingDefaults = withDefaultModels(useModelsQuery(projectId, 'embedding', includeShared).data);
-  const vectorStorageDefaults = withDefaultModels(useModelsQuery(projectId, 'vectorstorage', includeShared).data);
-  const imageDefaults = withDefaultModels(useModelsQuery(projectId, 'image_generation', includeShared).data);
-  const asrDefaults = withDefaultModels(useModelsQuery(projectId, 'asr', includeShared).data);
-  const ttsDefaults = withDefaultModels(useModelsQuery(projectId, 'tts', includeShared).data);
+  /*
+   * THE OPTIONS AND THE DEFAULTS COME FROM ONE PLACE (#80). Both are the
+   * MODEL CATALOGUE — `GET /configurations/models/{projectId}` — which is what
+   * the baseline's `useModelOptions` reads and what the POST that saves a
+   * default expects.
+   *
+   * They used to disagree. The options were built from the CONFIGURATION rows
+   * and labelled with `elitea_title`, while every `defaultValueOf` below is
+   * `${default_model_name}<<>>${default_model_project_id}` — a model name. No
+   * option ever equalled the select's value, so the Default select could not
+   * show the model that was the default, and a section with no configuration
+   * rows (production project 1 has none for embedding or vector storage) had
+   * no options at all. See `useModelOptions` for the measurements.
+   */
+  const models = useModelOptions({ projectId, includeShared });
+  const llmDefaults = models.sectionData.llm;
+  const embeddingDefaults = models.sectionData.embedding;
+  const vectorStorageDefaults = models.sectionData.vectorstorage;
+  const imageDefaults = models.sectionData.image_generation;
+  const asrDefaults = models.sectionData.asr;
+  const ttsDefaults = models.sectionData.tts;
 
   const { saveErrors, handleDefaultChange } = useDefaultModelSaving(projectId);
 
@@ -149,68 +109,79 @@ export default memo(function ConfigurationsPanel({
     [health, revalidate, revalidatingId],
   );
 
-  /* Default-setting labels with optional info tooltips (porting old-app pattern) */
+  /* Default-setting labels — text plus the info icon that carries the
+     tooltip. The icon is what the production page shows next to every one of
+     these labels; it was dropped in this port, taking the only explanation of
+     what "High-tier" means with it. */
   const renderInfoLabel = useCallback(
-    (labelText: string) => {
-      return (
-        <Box sx={styles.inlineDefaultLabel}>
-          <Typography
-            variant="bodyMedium"
-            color="text.primary"
-            sx={styles.inlineDefaultLabelText}
-          >
-            {labelText}
-          </Typography>
-        </Box>
-      );
-    },
-    [styles],
+    (labelText: string, tooltipText: string) => (
+      <InfoLabelWithTooltip
+        label={labelText}
+        tooltip={tooltipText}
+        variant="bodyMedium"
+        iconSize={12}
+      />
+    ),
+    [],
   );
-
-  /* Compute select options directly — the config arrays come from a prop that
-     may change reference every render, so useMemo would be useless (dep always changes).
-     The child <ConfigurationSection> components are memoized, so unstable arrays here
-     do not cause unnecessary re-renders downstream. */
-  const modelOptions = buildOptions(llmConfigs);
-  const lowTierOptions = buildOptions(llmConfigs.filter((c) => (c.data as Record<string, unknown>)?.low_tier));
-  const highTierOptions = buildOptions(llmConfigs.filter((c) => (c.data as Record<string, unknown>)?.high_tier));
-  const embeddingOptions = buildOptions(embeddingConfigs);
-  const vectorStorageOptions = buildOptions(vectorStorageConfigs);
-  const imageOptions = buildOptions(imageConfigs);
-  const asrOptions = buildOptions(asrConfigs);
-  const ttsOptions = buildOptions(ttsConfigs);
 
   /* LLM section needs extra low-tier / high-tier selects */
   const llmAdditionalSettings: AdditionalDefaultSetting[] = useMemo(
     () => [
       {
         key: 'high-tier-model',
-        label: renderInfoLabel(t('ai-configuration.section.highTier', 'High-tier')),
+        label: renderInfoLabel(
+          t('ai-configuration.section.highTier', 'High-tier'),
+          t(
+            'ai-configuration.section.highTierTooltip',
+            'Model used for complex tasks that require stronger reasoning or higher-quality responses.',
+          ),
+        ),
         value: tierDefaultValueOf(llmDefaults.high_tier_default_model_name, llmDefaults.high_tier_default_model_project_id),
-        options: highTierOptions,
+        options: models.highTierModelOptions,
         onChange: handleDefaultChange('llm_high_tier'),
         ...(saveErrors['llm_high_tier'] !== undefined ? { error: saveErrors['llm_high_tier'] } : {}),
       },
       {
         key: 'low-tier-model',
-        label: renderInfoLabel(t('ai-configuration.section.lowTier', 'Low-tier')),
+        label: renderInfoLabel(
+          t('ai-configuration.section.lowTier', 'Low-tier'),
+          t(
+            'ai-configuration.section.lowTierTooltip',
+            'Model used for simpler tasks where faster responses and lower cost are preferred.',
+          ),
+        ),
         value: tierDefaultValueOf(llmDefaults.low_tier_default_model_name, llmDefaults.low_tier_default_model_project_id),
-        options: lowTierOptions,
+        options: models.lowTierModelOptions,
         onChange: handleDefaultChange('llm_low_tier'),
         ...(saveErrors['llm_low_tier'] !== undefined ? { error: saveErrors['llm_low_tier'] } : {}),
       },
     ],
-    [renderInfoLabel, highTierOptions, lowTierOptions, handleDefaultChange, llmDefaults, saveErrors],
+    [renderInfoLabel, models.highTierModelOptions, models.lowTierModelOptions, handleDefaultChange, llmDefaults, saveErrors],
   );
 
+  // Scrolls the revealed card into view (its section can open below the fold).
+  useEffect(() => {
+    if (revealConfigurationId === undefined || isLoading) return;
+    const card = panelRef.current?.querySelector(`[data-configuration-id="${revealConfigurationId}"]`);
+    if (card instanceof HTMLElement && typeof card.scrollIntoView === 'function') {
+      card.scrollIntoView({ block: 'center' });
+    }
+  }, [revealConfigurationId, isLoading, configurationsBySection]);
+
   return (
-    <Box sx={styles.panel}>
-      {/* Sticky header */}
+    <Box sx={styles.panel} ref={panelRef}>
+      {/*
+        A TOOLBAR, not a second title bar. This row used to carry a
+        `headingMedium` "Configurations" heading and a bottom rule of its own,
+        directly under the page's own header — two titles, two rules, 60px of
+        chrome for one screen. Production shows neither: its equivalent of the
+        "+" lives in the app rail. The controls stay (they do real work that
+        has no other home here); the heading and the rule are gone, and the
+        row is right-aligned so it reads as the accordions' toolbar.
+      */}
       <Box sx={styles.header}>
         <Box sx={styles.headerContent}>
-          <Typography variant="headingMedium" sx={styles.sectionTitle}>
-            {t('ai-configuration.configurations.title', 'Configurations')}
-          </Typography>
           <Box sx={styles.headerActions}>
             {checkError !== '' && (
               <Typography variant="bodySmall" sx={styles.checkError} role="alert">
@@ -240,15 +211,21 @@ export default memo(function ConfigurationsPanel({
       <StoredConnectionHealthProvider value={healthView}>
         {/* LLM Models */}
         <ConfigurationSection
-          title={t('ai-configuration.section.llmModels', 'LLM Models')}
+          title={t('ai-configuration.section.llms', 'LLMs')}
+          display={{ groupByProvider: true, defaultExpanded: true, testId: 'ai-providers-section-llms' }}
           configurations={llmConfigs}
           projectId={projectId}
           isLoading={isLoading}
-          groupTheModelsByProvider
           hasDefaultSetting
-          defaultSettingLabel={renderInfoLabel(t('ai-configuration.section.default', 'Default'))}
+          defaultSettingLabel={renderInfoLabel(
+            t('ai-configuration.section.default', 'Default'),
+            t(
+              'ai-configuration.section.defaultTooltip',
+              'Default model used for most AI activities. The system may switch to the Low-tier or High-tier model when needed.',
+            ),
+          )}
           defaultSettingValue={defaultValueOf(llmDefaults)}
-          defaultSettingOptions={modelOptions}
+          defaultSettingOptions={models.modelOptions}
           onChangeDefaultSetting={handleDefaultChange('llm')}
           defaultSettingError={saveErrors['llm']}
           additionalDefaultSettings={llmAdditionalSettings}
@@ -257,13 +234,20 @@ export default memo(function ConfigurationsPanel({
         {/* Embedding Models */}
         <ConfigurationSection
           title={t('ai-configuration.section.embeddingModels', 'Embedding Models')}
+          display={{ testId: 'ai-providers-section-embedding-models', defaultExpanded: sectionHoldsRevealedRow(embeddingConfigs, revealConfigurationId) }}
           configurations={embeddingConfigs}
           projectId={projectId}
           isLoading={isLoading}
           hasDefaultSetting
-          defaultSettingLabel={renderInfoLabel(t('ai-configuration.section.default', 'Default'))}
+          defaultSettingLabel={renderInfoLabel(
+            t('ai-configuration.section.default', 'Default'),
+            t(
+              'ai-configuration.section.embeddingTooltip',
+              'Default embedding model used to convert content into vectors for indexing, semantic search, and retrieval.',
+            ),
+          )}
           defaultSettingValue={defaultValueOf(embeddingDefaults)}
-          defaultSettingOptions={embeddingOptions}
+          defaultSettingOptions={models.embeddingModelOptions}
           onChangeDefaultSetting={handleDefaultChange('embedding')}
           defaultSettingError={saveErrors['embedding']}
         />
@@ -271,13 +255,20 @@ export default memo(function ConfigurationsPanel({
         {/* Vector Storage */}
         <ConfigurationSection
           title={t('ai-configuration.section.vectorStorage', 'Vector Storage')}
+          display={{ testId: 'ai-providers-section-vector-storage', defaultExpanded: sectionHoldsRevealedRow(vectorStorageConfigs, revealConfigurationId) }}
           configurations={vectorStorageConfigs}
           projectId={projectId}
           isLoading={isLoading}
           hasDefaultSetting
-          defaultSettingLabel={renderInfoLabel(t('ai-configuration.section.default', 'Default'))}
+          defaultSettingLabel={renderInfoLabel(
+            t('ai-configuration.section.default', 'Default'),
+            t(
+              'ai-configuration.section.vectorStorageTooltip',
+              'Default vector storage used to store embeddings for indexing, search, and retrieval.',
+            ),
+          )}
           defaultSettingValue={defaultValueOf(vectorStorageDefaults)}
-          defaultSettingOptions={vectorStorageOptions}
+          defaultSettingOptions={models.vectorStorageOptions}
           onChangeDefaultSetting={handleDefaultChange('vectorstorage')}
           defaultSettingError={saveErrors['vectorstorage']}
         />
@@ -285,13 +276,20 @@ export default memo(function ConfigurationsPanel({
         {/* Image Generation */}
         <ConfigurationSection
           title={t('ai-configuration.section.imageGeneration', 'Image Generation')}
+          display={{ testId: 'ai-providers-section-image-generation', defaultExpanded: sectionHoldsRevealedRow(imageConfigs, revealConfigurationId) }}
           configurations={imageConfigs}
           projectId={projectId}
           isLoading={isLoading}
           hasDefaultSetting
-          defaultSettingLabel={renderInfoLabel(t('ai-configuration.section.imageDefault', 'Default image generation model:'))}
+          defaultSettingLabel={renderInfoLabel(
+            t('ai-configuration.section.default', 'Default'),
+            t(
+              'ai-configuration.section.imageTooltip',
+              'Default image generation model used when creating images in Elitea.',
+            ),
+          )}
           defaultSettingValue={defaultValueOf(imageDefaults)}
-          defaultSettingOptions={imageOptions}
+          defaultSettingOptions={models.imageGenerationOptions}
           onChangeDefaultSetting={handleDefaultChange('image_generation')}
           defaultSettingError={saveErrors['image_generation']}
         />
@@ -299,13 +297,20 @@ export default memo(function ConfigurationsPanel({
         {/* Speech Recognition (ASR) */}
         <ConfigurationSection
           title={t('ai-configuration.section.asr', 'Speech Recognition (ASR)')}
+          display={{ testId: 'ai-providers-section-asr', defaultExpanded: sectionHoldsRevealedRow(asrConfigs, revealConfigurationId) }}
           configurations={asrConfigs}
           projectId={projectId}
           isLoading={isLoading}
           hasDefaultSetting
-          defaultSettingLabel={renderInfoLabel(t('ai-configuration.section.asrDefault', 'Default ASR model:'))}
+          defaultSettingLabel={renderInfoLabel(
+            t('ai-configuration.section.default', 'Default'),
+            t(
+              'ai-configuration.section.asrTooltip',
+              'Default speech recognition model used to convert audio or speech into text.',
+            ),
+          )}
           defaultSettingValue={defaultValueOf(asrDefaults)}
-          defaultSettingOptions={asrOptions}
+          defaultSettingOptions={models.asrOptions}
           onChangeDefaultSetting={handleDefaultChange('asr')}
           defaultSettingError={saveErrors['asr']}
         />
@@ -313,13 +318,20 @@ export default memo(function ConfigurationsPanel({
         {/* Text to Speech (TTS) */}
         <ConfigurationSection
           title={t('ai-configuration.section.tts', 'Text to Speech (TTS)')}
+          display={{ testId: 'ai-providers-section-tts', defaultExpanded: sectionHoldsRevealedRow(ttsConfigs, revealConfigurationId) }}
           configurations={ttsConfigs}
           projectId={projectId}
           isLoading={isLoading}
           hasDefaultSetting
-          defaultSettingLabel={renderInfoLabel(t('ai-configuration.section.ttsDefault', 'Default TTS model:'))}
+          defaultSettingLabel={renderInfoLabel(
+            t('ai-configuration.section.default', 'Default'),
+            t(
+              'ai-configuration.section.ttsTooltip',
+              'Default text-to-speech model used to convert text into spoken audio.',
+            ),
+          )}
           defaultSettingValue={defaultValueOf(ttsDefaults)}
-          defaultSettingOptions={ttsOptions}
+          defaultSettingOptions={models.ttsOptions}
           onChangeDefaultSetting={handleDefaultChange('tts')}
           defaultSettingError={saveErrors['tts']}
         />
@@ -327,6 +339,7 @@ export default memo(function ConfigurationsPanel({
         {/* AI Credentials */}
         <ConfigurationSection
           title={t('ai-configuration.section.aiCredentials', 'AI Credentials')}
+          display={{ testId: 'ai-providers-section-ai-credentials', defaultExpanded: sectionHoldsRevealedRow(aiCredentialsConfigs, revealConfigurationId) }}
           configurations={aiCredentialsConfigs}
           projectId={projectId}
           isLoading={isLoading}
@@ -347,30 +360,20 @@ function getStyles(theme: ReturnType<typeof useTheme>) {
     },
     header: {
       display: 'flex',
-      justifyContent: 'space-between',
+      justifyContent: 'flex-end',
       alignItems: 'center',
       position: 'sticky',
       top: 0,
-      backgroundColor: t.vars.palette.background.eliteaDefault,
-      borderBottom: `1px solid ${t.vars.palette.border.lines}`,
+      backgroundColor: t.vars.palette.background.settingsPage,
       zIndex: 1,
       width: '100%',
-      height: '3.8125rem',
     },
     headerContent: {
       display: 'flex',
-      justifyContent: 'space-between',
+      justifyContent: 'flex-end',
       alignItems: 'center',
-      background: t.vars.palette.background.eliteaDefault,
       width: '100%',
-      padding: '1rem 1.5rem',
-    },
-    sectionTitle: {
-      color: t.vars.palette.text.secondary,
-      fontWeight: 600,
-      display: 'flex',
-      alignItems: 'center',
-      gap: '0.5rem',
+      padding: '0.5rem 1.5rem 0',
     },
     headerActions: {
       display: 'flex',

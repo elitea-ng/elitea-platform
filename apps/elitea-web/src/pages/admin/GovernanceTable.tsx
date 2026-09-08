@@ -50,6 +50,22 @@ function list(value: unknown): string[] {
 }
 
 /**
+ * An egress allowlist has no scope at all: it is global by construction, and the
+ * server refuses a scoped one. Falling through to "all projects" would be true
+ * but useless — the column would repeat the same three words for every egress
+ * row, while the thing the operator wants to see, the destinations, is nowhere
+ * on the list.
+ */
+function describeEgress(row: GovernanceRow): string {
+  const egress = (row.data as Record<string, unknown>).egress;
+  const group = typeof egress === 'object' && egress !== null ? (egress as Record<string, unknown>) : {};
+  const destinations = list(group.allowlist);
+  return destinations.length > 0
+    ? destinations.join(', ')
+    : t('pages.admin.governance.scope.noDestinations', 'no destinations');
+}
+
+/**
  * Renders a row's scope as a sentence.
  *
  * `model_config` is described differently on purpose: for that type the
@@ -62,6 +78,13 @@ export function describeScope(row: GovernanceRow): string {
   const projects = list(record.project_ids);
   const providers = list(record.providers);
   const models = list(record.models);
+
+  // An egress allowlist has no scope at all: it is global by construction, and
+  // the server refuses a scoped one. Falling through to "all projects" would be
+  // true but useless — the column would repeat the same three words for every
+  // egress row while the thing the operator wants to see, the destinations, is
+  // nowhere on the list.
+  if (row.type === 'egress_allowlist') return describeEgress(row);
 
   // Composed rather than interpolated. A `{{ids}}` placeholder in the fallback
   // is a trap here: once the key is backfilled into en.json the BUNDLE value

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"net/url"
 	"path/filepath"
 	"strconv"
@@ -154,7 +155,7 @@ func ConfigFromEnv(lookup LookupEnv) (Config, error) {
 		if config.AgentExecutionStreamMaxEntries, err = integer("ELITEA_RUNTIME_AGENT_EXECUTION_STREAM_MAX_ENTRIES"); err != nil {
 			return Config{}, err
 		}
-		if config.CurrentMainBaseURL, err = required("ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL"); err != nil {
+		if config.CurrentMainBaseURL, err = currentMainBaseURL(lookup); err != nil {
 			return Config{}, err
 		}
 	default:
@@ -357,17 +358,119 @@ func (c Config) Validate() error {
 	return nil
 }
 
+// currentMainBaseURL resolves the origin this process calls for the
+// next-input-suggestion policy.
+//
+// # Why this is DERIVED rather than required
+//
+// In the standalone topology the call is a SELF call: elitea-main asks itself
+// for the policy. This process never terminates TLS — `cmd/elitea-main` starts
+// one cleartext `http.Server` on ELITEA_HTTP_ADDRESS and nothing else — so an
+// https origin aimed at its own listener cannot work. The standalone stack set
+// `https://elitea-main:8080`, and every chat turn produced
+//
+//	http: server gave HTTP response to HTTPS client
+//
+// That is a DEPLOYMENT fault reported once per process at warning level and
+// once per turn at debug level, which is the wrong place to learn it. So when
+// the variable is unset the base URL comes from the LISTENER instead:
+// `http://127.0.0.1:<port of ELITEA_HTTP_ADDRESS>`. The request stays on the
+// loopback interface, and the actor bearer token it carries never reaches a
+// network.
+//
+// # Why the variable still exists
+//
+// The centry-hybrid stack does not serve this route from this process. It aims
+// the call at the edge (`https://elitea-gateway`), which routes the path to
+// legacy Centry — `deploy/centry-hybrid/traefik/index-routes.yml`. An explicit
+// origin has to stay possible for that topology.
+func currentMainBaseURL(lookup LookupEnv) (string, error) {
+	listenPort, err := publicListenPort(lookup)
+	if err != nil {
+		return "", err
+	}
+	// helm-render-optional: ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL
+	// (deploy/helm/tests/render-capabilities.sh extracts every lookup() name
+	// as a chart requirement; this one is derived from the listener when
+	// absent, so the chart deliberately omits it unless the operator sets it.)
+	raw, _ := lookup("ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL")
+	if raw == "" {
+		return "http://127.0.0.1:" + listenPort, nil
+	}
+	if err := validateCurrentMainBaseURL(raw); err != nil {
+		return "", err
+	}
+	// The one misconfiguration that used to be a per-turn warning, refused at
+	// boot instead. An https origin on THIS process's own listen port names a
+	// port that answers cleartext, so the handshake can never succeed.
+	parsed, parseErr := url.Parse(raw)
+	if parseErr == nil && parsed.Scheme == "https" && parsed.Port() == listenPort {
+		return "", fmt.Errorf(
+			"ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL is https on port %s, and this process serves "+
+				"cleartext on that port: name the address that terminates TLS, or leave the "+
+				"variable unset to call the loopback listener", listenPort)
+	}
+	return raw, nil
+}
+
+// publicListenPort is the port `cmd/elitea-main` serves on. The variable, its
+// default and its rules are `cmd/elitea-main/http_address.go`'s; this restates
+// the PORT half because `runtimecomposition` cannot import package main, and a
+// self-call needs to know where "self" listens.
+func publicListenPort(lookup LookupEnv) (string, error) {
+	address, ok := lookup("ELITEA_HTTP_ADDRESS")
+	if !ok || address == "" {
+		address = ":8080"
+	}
+	if len(address) > 256 || strings.ContainsAny(address, "\r\n\x00") {
+		return "", errors.New("ELITEA_HTTP_ADDRESS is invalid")
+	}
+	_, value, err := net.SplitHostPort(address)
+	if err != nil {
+		return "", errors.New("ELITEA_HTTP_ADDRESS must include a numeric TCP port")
+	}
+	port, err := strconv.Atoi(value)
+	if err != nil || port <= 0 || port > 65535 || strconv.Itoa(port) != value {
+		return "", errors.New("ELITEA_HTTP_ADDRESS must include a numeric TCP port")
+	}
+	return value, nil
+}
+
+// validateCurrentMainBaseURL accepts the two origins that can actually answer.
+//
+//   - An https origin. That is an address which terminates TLS — an edge, an
+//     ingress, the hybrid stack's gateway.
+//   - An http origin on a LOOPBACK host. That is this process's own listener,
+//     which serves cleartext. Nothing leaves the machine, so the actor bearer
+//     token in the request is not on a network.
+//
+// Cleartext to any OTHER host is refused: it would put that token on the wire.
 func validateCurrentMainBaseURL(raw string) error {
 	if raw == "" || len(raw) > 2048 || strings.TrimSpace(raw) != raw {
 		return errors.New("runtime current Main base URL is invalid")
 	}
 	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" ||
+	if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") ||
+		parsed.Hostname() == "" ||
 		parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" ||
 		parsed.ForceQuery || parsed.RawPath != "" || (parsed.Path != "" && parsed.Path != "/") {
-		return errors.New("runtime current Main base URL must be an HTTPS origin")
+		return errors.New("runtime current Main base URL must be an HTTPS origin, " +
+			"or an HTTP origin on a loopback address")
+	}
+	if parsed.Scheme == "http" && !loopbackHost(parsed.Hostname()) {
+		return errors.New("runtime current Main base URL may only use HTTP on a loopback " +
+			"address: cleartext to another host would send the actor token over the network")
 	}
 	return nil
+}
+
+// loopbackHost reports whether a host name names this machine only.
+func loopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	address, err := netip.ParseAddr(host)
+	return err == nil && address.IsLoopback()
 }
 
 func validSchedulerInstanceID(value string) bool {

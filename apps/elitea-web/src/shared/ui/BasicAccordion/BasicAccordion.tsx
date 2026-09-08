@@ -15,12 +15,22 @@ export interface AccordionItem {
   title: ReactNode;
   content: ReactNode;
   /**
-   * Rendered right-aligned in the summary row; clicks/mousedowns inside it
-   * never toggle the panel. `StyledAccordionSummary`'s root renders as a
-   * native `<button>` (it wraps MUI's `ButtonBase`), so this must not
-   * itself be (or contain) a literal `<button>` — nested `<button>`s are
-   * invalid HTML. Use a non-button interactive element instead (an MUI
-   * `Chip`, a `role="button"` element, etc.).
+   * Rendered right-aligned over the summary row; clicks/mousedowns inside it
+   * never toggle the panel.
+   *
+   * It is a SIBLING of the summary in the DOM, not a child of it, and the
+   * distinction is the whole point. `StyledAccordionSummary`'s root renders
+   * as a native `<button>` (it wraps MUI's `ButtonBase`), so anything
+   * FOCUSABLE placed inside it — a `<button>`, or a `role="button"` element
+   * carrying `tabIndex` — is a nested interactive control: invalid HTML for
+   * the button case, and in every case an axe `nested-interactive` failure
+   * ("Element has focusable descendants", WCAG 4.1.2), which is what the MCP
+   * detail screen shipped once the toolkit catalogue started serving an
+   * object field with a description and a Load-Tools action.
+   *
+   * A caller therefore passes an ordinary interactive control here — a real
+   * `<button>` is now the RIGHT choice — and the accordion places it beside
+   * the summary button rather than inside it.
    */
   summaryAction?: ReactNode;
 }
@@ -90,6 +100,34 @@ export interface BasicAccordionProps {
  *    component reference, which is exactly why the shield is a `Box` and
  *    not a raw `<div>`.
  */
+/**
+ * The per-item wrapper the summary action is positioned against, and the
+ * action's own box.
+ *
+ * The action is laid over the summary ROW rather than flowed inside it
+ * because MUI's `Accordion` reads its FIRST child as the summary and clones
+ * it with the expansion props — so the summary cannot be wrapped in a flex
+ * row that also holds the action, and the action cannot follow the summary as
+ * an ordinary sibling either (everything after the first child is rendered
+ * inside the collapsing panel). An absolutely-positioned overlay is what puts
+ * it beside the summary button in the DOM while keeping it on the header row
+ * on screen.
+ *
+ * `2.5rem` is `StyledAccordionSummary`'s own `minHeight`, written there for
+ * BOTH states (`&.Mui-expanded` included), so the overlay stays centred on
+ * the header whether the panel is open or closed.
+ */
+const rowSx = { position: 'relative' as const };
+const summaryActionSx = {
+  position: 'absolute' as const,
+  top: 0,
+  right: 0,
+  height: '2.5rem',
+  display: 'flex',
+  alignItems: 'center',
+  paddingInlineEnd: '0.5rem',
+};
+
 export function BasicAccordion({
   items,
   showMode = 'left',
@@ -106,44 +144,48 @@ export function BasicAccordion({
       data-testid={dataTestId}
     >
       {items.map((item, index) => (
-        <StyledAccordion
+        <Box
           key={index}
-          sx={slotSx?.accordion}
-          defaultExpanded={defaultExpanded}
-          expanded={expanded}
-          onChange={onChange}
+          sx={rowSx}
         >
-          <StyledAccordionSummary
-            id={`el-accordion-header-${index}`}
-            aria-controls={`el-accordion-panel-${index}`}
-            expandIcon={
-              <StyledExpandMoreIcon sx={{ width: '1rem', height: '1rem' }} />
-            }
-            showMode={showMode}
-            sx={slotSx?.summary}
+          <StyledAccordion
+            sx={slotSx?.accordion}
+            defaultExpanded={defaultExpanded}
+            expanded={expanded}
+            onChange={onChange}
           >
-            <Typography
-              variant="subtitle"
-              sx={combineSx(uppercase ? undefined : { textTransform: 'none' }, slotSx?.title)}
+            <StyledAccordionSummary
+              id={`el-accordion-header-${index}`}
+              aria-controls={`el-accordion-panel-${index}`}
+              expandIcon={
+                <StyledExpandMoreIcon sx={{ width: '1rem', height: '1rem' }} />
+              }
+              showMode={showMode}
+              sx={slotSx?.summary}
             >
-              {item.title}
-            </Typography>
-            {item.summaryAction && (
-              <Box
-                sx={{ marginLeft: 'auto', display: 'flex', alignItems: 'center' }}
-                onClick={(event) => {
-                  event.stopPropagation();
-                }}
-                onMouseDown={(event) => {
-                  event.stopPropagation();
-                }}
+              <Typography
+                variant="subtitle"
+                sx={combineSx(uppercase ? undefined : { textTransform: 'none' }, slotSx?.title)}
               >
-                {item.summaryAction}
-              </Box>
-            )}
-          </StyledAccordionSummary>
-          <StyledAccordionDetails sx={slotSx?.details}>{item.content}</StyledAccordionDetails>
-        </StyledAccordion>
+                {item.title}
+              </Typography>
+            </StyledAccordionSummary>
+            <StyledAccordionDetails sx={slotSx?.details}>{item.content}</StyledAccordionDetails>
+          </StyledAccordion>
+          {item.summaryAction && (
+            <Box
+              sx={summaryActionSx}
+              onClick={(event) => {
+                event.stopPropagation();
+              }}
+              onMouseDown={(event) => {
+                event.stopPropagation();
+              }}
+            >
+              {item.summaryAction}
+            </Box>
+          )}
+        </Box>
       ))}
     </Box>
   );

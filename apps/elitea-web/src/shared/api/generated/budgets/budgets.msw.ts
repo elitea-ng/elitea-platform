@@ -56,6 +56,14 @@ export const getGetProjectBudgetResponseMock = (): ProjectBudget => ({
   ...{
     project_id: faker.number.int(),
     budget_period: faker.helpers.arrayElement(["monthly"] as const),
+    nats_fail_mode: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([
+        "tiered_hybrid",
+        "fail_open",
+        "fail_closed",
+      ] as const),
+      null,
+    ]),
   },
   ...{
     ...{
@@ -117,6 +125,14 @@ export const getGetProjectBudgetAdminResponseMock = (): ProjectBudget => ({
   ...{
     project_id: faker.number.int(),
     budget_period: faker.helpers.arrayElement(["monthly"] as const),
+    nats_fail_mode: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([
+        "tiered_hybrid",
+        "fail_open",
+        "fail_closed",
+      ] as const),
+      null,
+    ]),
   },
   ...{
     ...{
@@ -178,6 +194,83 @@ export const getSetProjectBudgetResponseMock = (): ProjectBudget => ({
   ...{
     project_id: faker.number.int(),
     budget_period: faker.helpers.arrayElement(["monthly"] as const),
+    nats_fail_mode: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([
+        "tiered_hybrid",
+        "fail_open",
+        "fail_closed",
+      ] as const),
+      null,
+    ]),
+  },
+  ...{
+    ...{
+      period: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      period_start: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      period_end: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      resets_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    },
+    ...{
+      can_see_amounts: faker.helpers.arrayElement([
+        faker.datatype.boolean(),
+        undefined,
+      ]),
+      monthly_limit: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([
+          faker.number.float({ fractionDigits: 2 }),
+          null,
+        ]),
+        undefined,
+      ]),
+      effective_limit: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([
+          faker.number.float({ fractionDigits: 2 }),
+          null,
+        ]),
+        undefined,
+      ]),
+      limit_source: faker.helpers.arrayElement([
+        "explicit",
+        "unlimited",
+      ] as const),
+      currency: faker.helpers.arrayElement([
+        faker.helpers.arrayElement(["USD"] as const),
+        undefined,
+      ]),
+      enabled: faker.datatype.boolean(),
+      warning_pct: faker.number.int(),
+      spend: faker.helpers.arrayElement([
+        faker.number.float({ fractionDigits: 2 }),
+        undefined,
+      ]),
+      remaining: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([
+          faker.number.float({ fractionDigits: 2 }),
+          null,
+        ]),
+        undefined,
+      ]),
+      percent_used: faker.helpers.arrayElement([
+        faker.number.float({ fractionDigits: 2 }),
+        null,
+      ]),
+      spend_available: faker.datatype.boolean(),
+    },
+  },
+});
+
+export const getClearProjectBudgetResponseMock = (): ProjectBudget => ({
+  ...{
+    project_id: faker.number.int(),
+    budget_period: faker.helpers.arrayElement(["monthly"] as const),
+    nats_fail_mode: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([
+        "tiered_hybrid",
+        "fail_open",
+        "fail_closed",
+      ] as const),
+      null,
+    ]),
   },
   ...{
     ...{
@@ -437,6 +530,68 @@ export const getGetMemberBudgetAdminResponseMock = (): MemberBudget => ({
 });
 
 export const getSetMemberBudgetResponseMock = (): MemberBudget => ({
+  ...{
+    project_id: faker.number.int(),
+    user_id: faker.number.int(),
+    enforced: faker.datatype.boolean(),
+  },
+  ...{
+    ...{
+      period: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      period_start: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      period_end: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      resets_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    },
+    ...{
+      can_see_amounts: faker.helpers.arrayElement([
+        faker.datatype.boolean(),
+        undefined,
+      ]),
+      monthly_limit: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([
+          faker.number.float({ fractionDigits: 2 }),
+          null,
+        ]),
+        undefined,
+      ]),
+      effective_limit: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([
+          faker.number.float({ fractionDigits: 2 }),
+          null,
+        ]),
+        undefined,
+      ]),
+      limit_source: faker.helpers.arrayElement([
+        "explicit",
+        "unlimited",
+      ] as const),
+      currency: faker.helpers.arrayElement([
+        faker.helpers.arrayElement(["USD"] as const),
+        undefined,
+      ]),
+      enabled: faker.datatype.boolean(),
+      warning_pct: faker.number.int(),
+      spend: faker.helpers.arrayElement([
+        faker.number.float({ fractionDigits: 2 }),
+        undefined,
+      ]),
+      remaining: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([
+          faker.number.float({ fractionDigits: 2 }),
+          null,
+        ]),
+        undefined,
+      ]),
+      percent_used: faker.helpers.arrayElement([
+        faker.number.float({ fractionDigits: 2 }),
+        null,
+      ]),
+      spend_available: faker.datatype.boolean(),
+    },
+  },
+});
+
+export const getClearMemberBudgetResponseMock = (): MemberBudget => ({
   ...{
     project_id: faker.number.int(),
     user_id: faker.number.int(),
@@ -850,6 +1005,32 @@ export const getSetProjectBudgetMockHandler = (
   );
 };
 
+export const getClearProjectBudgetMockHandler = (
+  overrideResponse?:
+    | ProjectBudget
+    | ((
+        info: Parameters<Parameters<typeof http.delete>[1]>[0],
+      ) => Promise<ProjectBudget> | ProjectBudget),
+  options?: RequestHandlerOptions,
+) => {
+  return http.delete(
+    "*/elitea_core/project_budget/administration/:projectId/budget",
+    async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getClearProjectBudgetResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getListProjectBudgetsMockHandler = (
   overrideResponse?:
     | ProjectBudgetListing
@@ -954,6 +1135,32 @@ export const getSetMemberBudgetMockHandler = (
   );
 };
 
+export const getClearMemberBudgetMockHandler = (
+  overrideResponse?:
+    | MemberBudget
+    | ((
+        info: Parameters<Parameters<typeof http.delete>[1]>[0],
+      ) => Promise<MemberBudget> | MemberBudget),
+  options?: RequestHandlerOptions,
+) => {
+  return http.delete(
+    "*/elitea_core/user_budget/administration/:projectId/user_budget/:userId",
+    async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getClearMemberBudgetResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getListMemberBudgetsMockHandler = (
   overrideResponse?:
     | MemberBudgetListing
@@ -1035,10 +1242,12 @@ export const getBudgetsMock = () => [
   getGetProjectBudgetMockHandler(),
   getGetProjectBudgetAdminMockHandler(),
   getSetProjectBudgetMockHandler(),
+  getClearProjectBudgetMockHandler(),
   getListProjectBudgetsMockHandler(),
   getGetMemberBudgetMockHandler(),
   getGetMemberBudgetAdminMockHandler(),
   getSetMemberBudgetMockHandler(),
+  getClearMemberBudgetMockHandler(),
   getListMemberBudgetsMockHandler(),
   getListMemberBudgetsAdminMockHandler(),
   getGetProjectUsageMockHandler(),

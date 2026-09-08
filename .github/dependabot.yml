@@ -78,6 +78,7 @@ updates:
       - /services/elitea-scheduler
       - /services/elitea-subapp-host
       - /libs/go/authlib
+      - /libs/go/egresslib
       - /libs/go/eventslib
       - /libs/go/observability
       - /libs/go/rpclib
@@ -118,11 +119,30 @@ updates:
       - dependency-name: sqlx
         update-types: ["version-update:semver-minor", "version-update:semver-major"]
 
+  # The DeepWiki and Inventory packages carry byte-frozen copies of their
+  # analysis engines (COPY_MANIFEST.json), each resolved against a pinned
+  # closure in the `engine` extra. A bump anywhere inside that closure makes
+  # the extra ResolutionImpossible and the engine image unbuildable — and no
+  # CI job builds those images, so only the weekly real-engine run notices.
+  # Eight such bumps (#677, #678, #679, #757–#761) did exactly that. The pins
+  # move together with a re-copy of the engine, never one at a time; the SPI
+  # shell's own dependencies are ranges and need no bumping. Security alerts
+  # still show in the repository's Dependabot tab.
   - package-ecosystem: pip
     directories:
       - /services/elitea-deepwiki
       - /services/elitea-inventory
-      - /services/pylon-indexer
+    schedule:
+      interval: weekly
+      day: saturday
+      time: "03:00"
+      timezone: "Europe/Warsaw"
+    open-pull-requests-limit: 0
+    ignore:
+      - dependency-name: "*"
+
+  - package-ecosystem: pip
+    directories:
       - /libs/proto
     schedule:
       interval: weekly

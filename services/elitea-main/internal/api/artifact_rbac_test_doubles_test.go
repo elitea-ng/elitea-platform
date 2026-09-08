@@ -228,6 +228,34 @@ func (alwaysSucceedsArtifactRepo) GetTransferGrantByID(_ context.Context, id str
 	}, nil
 }
 
+// The per-bucket access list. This double answers "no exception anywhere",
+// which is the state every RBAC test here means: those tests are about the
+// ROUTE gate (RequireResolvedPermissions), and an exception seeded here would
+// silently move the subject of the test to the second gate.
+func (alwaysSucceedsArtifactRepo) ListBucketPermissions(context.Context, int64) ([]repos.BucketPermissionRow, error) {
+	return nil, nil
+}
+
+func (alwaysSucceedsArtifactRepo) GetBucketPermission(context.Context, int64, int64, string) ([]string, bool, error) {
+	return nil, false, nil
+}
+
+func (alwaysSucceedsArtifactRepo) ListUserBucketPermissions(context.Context, int64, int64) (map[string][]string, error) {
+	return nil, nil
+}
+
+func (alwaysSucceedsArtifactRepo) ReplaceUserBucketPermissions(context.Context, int64, int64, map[string][]string) error {
+	return nil
+}
+
+func (alwaysSucceedsArtifactRepo) DeleteUserBucketPermission(context.Context, int64, int64, string) (bool, error) {
+	return true, nil
+}
+
+func (alwaysSucceedsArtifactRepo) IsProjectAdmin(context.Context, int64, int64) (bool, error) {
+	return false, nil
+}
+
 var _ v2artifacts.Repository = alwaysSucceedsArtifactRepo{}
 
 // alwaysSucceedsArtifactStore satisfies storage.ObjectStore, returning an

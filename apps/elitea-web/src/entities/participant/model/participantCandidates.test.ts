@@ -14,6 +14,7 @@ function application(overrides: Partial<Application> = {}): Application {
     is_forked: false,
     meta: null,
     has_interrupt: false,
+    tags: [],
     ...overrides,
   };
 }
@@ -28,6 +29,9 @@ function publicApplication(overrides: Partial<PublicApplicationSummary> = {}): P
     version_name: 'v1',
     agent_type: 'classic',
     meta: null,
+    tags: [],
+    likes: 0,
+    is_liked: false,
     ...overrides,
   };
 }

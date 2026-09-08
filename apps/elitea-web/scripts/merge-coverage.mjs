@@ -74,17 +74,161 @@ const globalThresholds = {
 // The list must never be empty again: enforceLayerThresholds() fails on an
 // empty list, and fails on any rule whose glob matches no file in the merged
 // coverage map (#426 — a check with no subject must fail, not pass).
+//
+// THE THREE TOOLKIT SLICES, added 2026-09-06 at 85/85/85/80.
+//
+// They are the first rules here that are NARROWER than a layer, and they are
+// narrower on purpose. `src/features/**` cannot express "the toolkit surface
+// stays covered": that layer aggregates 1,113 files, and the 157 under
+// `features/toolkits` could fall twenty points without moving it. A percentage
+// is also not by itself the thing being asked for — "every toolkit type is
+// covered" is a per-TYPE property, and the tests that state it are the
+// table-driven ones that enumerate the served catalogue
+// (`features/toolkits/__tests__/servedCatalogue.perType.test.tsx` in this app,
+// and its Go and worker siblings). These floors are the second half: they stop
+// the percentage sliding back once those tests exist.
+//
+// Measured on this branch with the full non-sharded `node` project, before and
+// after the per-type suites landed:
+//
+//    slice                       lines  stmts  fns    branch
+//    features/toolkits  before    95.50  93.63  92.10  85.38
+//                       after     95.50  93.70  92.25  85.56
+//    pages/toolkits     before    89.97  84.52  81.34  71.66
+//                       after     93.04  89.52  86.57  83.39
+//    routes/_shell/toolkits before 66.67 66.67  25.00  100.00
+//                       after    100.00 100.00 100.00 100.00
+//
+// `routes/_shell/toolkits` read 25% FUNCTIONS before: the three route
+// components that mount the toolkit pages were executed by nothing at all.
+// `allRoutesSmoke.test.tsx` mounts the whole generated tree and never reached
+// them, which is the failure mode this per-slice floor now catches — a whole
+// directory at zero, inside a layer that has no rule of its own.
+//
+// The branch floor is 80 rather than 85 for the same reason every branch floor
+// above sits under its siblings: a branch counted by v8 includes every optional
+// chain and default parameter, and holding those to the statement number costs
+// tests that assert nothing. 80 is under the measured 83.39/85.56/100 by a
+// margin, and above the 71.66 `pages/toolkits` sat at before this change.
+//
+// THE 2026-09-07 RE-MEASUREMENT (issue 77).
+//
+// Issue 77 says a floor may never be lowered, and observed that the 2026-08-05
+// rewrite had lowered them anyway — `src/widgets/**` most visibly, at
+// 47/46/47/42. The floors below are re-measured, and every one of them either
+// ROSE or stayed where it was. None went down; scripts/merge-coverage.test.mjs
+// now holds a recorded copy of this table and fails on a floor that drops, so
+// the rule is enforced rather than written down.
+//
+// Same command as the 2026-08-28 block above, one layer at a time, so each
+// number is again a LOWER BOUND on what the full sharded suite produces:
+//
+//                                measured 2026-09-07        floor        was
+//    layer                       lines  stmts  fns    br    l/s/f/b      l/s/f/b
+//    shared/api                  91.96  90.13  85.44  86.65 93/92/84/90  same
+//    shared/config               95.52  95.58  83.33  94.59 93/93/81/92  same
+//    shared/brand                99.58  99.24  98.88  93.67 97/97/96/91  same
+//    shared/lib                  82.01  80.17  76.16  72.76 84/83/84/77  same
+//    entities                    82.72  82.52  78.60  83.52 80/80/76/81  77/77/74/79
+//    features                    85.92  84.61  83.19  77.77 83/82/81/75  82/81/79/73
+//    processes                   90.87  90.25  84.50  82.62 88/88/82/80  86/84/75/76
+//    widgets                     78.23  76.62  75.97  71.04 76/74/73/69  47/46/47/42
+//    pages                       86.24  84.42  81.45  77.16 84/82/79/75  79/77/74/70
+//    features/toolkits           93.98  92.24  90.75  83.93 91/90/88/81  85/85/85/80
+//    pages/toolkits              93.62  90.39  87.91  84.38 91/88/85/82  85/85/85/80
+//    routes/_shell/toolkits     100.00 100.00 100.00 100.00 97/97/97/97  85/85/85/80
+//
+// FOUR LAYERS KEEP THE FLOOR THEY HAD, and the reason is a property of the
+// measurement rather than of the code. A layer-only run executes only that
+// layer's own tests, so a layer that OTHER layers' tests exercise measures
+// below what the merged suite reports. `shared/api` and `shared/lib` are the
+// clearest cases: both read below their standing floors here, and both are
+// green in CI against those same floors, which is only possible because the
+// merged number is higher. Their floors are therefore left alone — raising
+// them on this evidence would be guessing, and lowering them is what this
+// issue forbids.
+//
+// THE SUPPORT-ASSISTANT, INVENTORY AND WIKI SLICES, added 2026-09-07.
+//
+// The 2026-09-06 decision on issue 77 set a target of 85% lines/statements per
+// slice for every slice this wave touches — toolkits, support assistant,
+// inventory and wiki — and only the toolkit ones were ever written down. The
+// sixteen rules below are the other three domains, measured the same way, one
+// rule per slice for the same reason the toolkit rules are per slice: neither
+// `src/features/**` nor `src/widgets/**` can express "this domain stays
+// covered" when the layer aggregates a thousand files.
+//
+//                                measured 2026-09-07        floor
+//    slice                       lines  stmts  fns    br    l/s/f/b
+//    widgets/support-assistant    96.89  94.93  94.47  88.97 94/92/92/86
+//    entities/inventory          100.00 100.00 100.00  99.54 97/97/97/97
+//    features/inventory-browser  100.00 100.00 100.00 100.00 97/97/97/97
+//    features/inventory-chat      98.91  99.03 100.00  93.33 96/97/97/91
+//    features/inventory-sources   99.31  97.60 100.00  95.41 97/95/97/93
+//    features/inventory-stats    100.00 100.00 100.00  96.00 97/97/97/94
+//    pages/inventory             100.00 100.00 100.00 100.00 97/97/97/97
+//    widgets/inventory            92.53  91.66  88.00  92.10 90/89/86/90
+//    entities/wiki                94.07  90.69  91.42  85.94 92/88/89/83
+//    features/wiki-browser       100.00 100.00 100.00  83.01 97/97/97/81
+//    features/wiki-chat           99.53  99.58 100.00  92.60 97/97/97/90
+//    features/wiki-editing       100.00 100.00 100.00 100.00 97/97/97/97
+//    features/wiki-generation     99.23  98.00 100.00  93.28 97/96/97/91
+//    features/wiki-settings      100.00 100.00 100.00  93.33 97/97/97/91
+//    pages/deepwiki               88.63  88.00  76.47  81.25 86/86/74/79
+//    widgets/deepwiki             95.19  93.66  92.25  81.67 93/91/90/79
+//
+// `pages/deepwiki` is the one slice that needed tests rather than a number. It
+// measured 65.90/64.00/47.05/45.83: `DeepWikiToolkit.tsx`, the composition root
+// BOTH `/deepwiki` entry points go through, was executed by nothing at all, and
+// `DeepWiki.tsx` had only ever been rendered without a toolkit, so eight of its
+// sixteen functions never ran. `DeepWikiToolkit.test.tsx` and
+// `DeepWikiControls.test.tsx` cover both. Its FUNCTION floor is 74 and not 85
+// because that is what is honestly reached; lines and statements are 86, which
+// is the target the decision states.
 const layerThresholdRules = [
   { pattern: 'src/shared/api/**', thresholds: { lines: 93, statements: 92, functions: 84, branches: 90 } },
   { pattern: 'src/shared/config/**', thresholds: { lines: 93, statements: 93, functions: 81, branches: 92 } },
   { pattern: 'src/shared/brand/**', thresholds: { lines: 97, statements: 97, functions: 96, branches: 91 } },
   { pattern: 'src/shared/lib/**', thresholds: { lines: 84, statements: 83, functions: 84, branches: 77 } },
-  { pattern: 'src/entities/**', thresholds: { lines: 77, statements: 77, functions: 74, branches: 79 } },
-  { pattern: 'src/features/**', thresholds: { lines: 82, statements: 81, functions: 79, branches: 73 } },
-  { pattern: 'src/processes/**', thresholds: { lines: 86, statements: 84, functions: 75, branches: 76 } },
-  { pattern: 'src/widgets/**', thresholds: { lines: 47, statements: 46, functions: 47, branches: 42 } },
-  { pattern: 'src/pages/**', thresholds: { lines: 79, statements: 77, functions: 74, branches: 70 } },
+  { pattern: 'src/entities/**', thresholds: { lines: 80, statements: 80, functions: 76, branches: 81 } },
+  { pattern: 'src/features/**', thresholds: { lines: 83, statements: 82, functions: 81, branches: 75 } },
+  { pattern: 'src/processes/**', thresholds: { lines: 88, statements: 88, functions: 82, branches: 80 } },
+  { pattern: 'src/widgets/**', thresholds: { lines: 76, statements: 74, functions: 73, branches: 69 } },
+  { pattern: 'src/pages/**', thresholds: { lines: 84, statements: 82, functions: 79, branches: 75 } },
+  // The toolkit surface, per slice. See the note above the list.
+  { pattern: 'src/features/toolkits/**', thresholds: { lines: 91, statements: 90, functions: 88, branches: 81 } },
+  { pattern: 'src/pages/toolkits/**', thresholds: { lines: 91, statements: 88, functions: 85, branches: 82 } },
+  { pattern: 'src/routes/_shell/toolkits/**', thresholds: { lines: 97, statements: 97, functions: 97, branches: 97 } },
+  // The support-assistant widget.
+  { pattern: 'src/widgets/support-assistant/**', thresholds: { lines: 94, statements: 92, functions: 92, branches: 86 } },
+  // The Inventory surface, per slice.
+  { pattern: 'src/entities/inventory/**', thresholds: { lines: 97, statements: 97, functions: 97, branches: 97 } },
+  { pattern: 'src/features/inventory-browser/**', thresholds: { lines: 97, statements: 97, functions: 97, branches: 97 } },
+  { pattern: 'src/features/inventory-chat/**', thresholds: { lines: 96, statements: 97, functions: 97, branches: 91 } },
+  { pattern: 'src/features/inventory-sources/**', thresholds: { lines: 97, statements: 95, functions: 97, branches: 93 } },
+  { pattern: 'src/features/inventory-stats/**', thresholds: { lines: 97, statements: 97, functions: 97, branches: 94 } },
+  { pattern: 'src/pages/inventory/**', thresholds: { lines: 97, statements: 97, functions: 97, branches: 97 } },
+  { pattern: 'src/widgets/inventory/**', thresholds: { lines: 90, statements: 89, functions: 86, branches: 90 } },
+  // The wiki surface, per slice.
+  { pattern: 'src/entities/wiki/**', thresholds: { lines: 92, statements: 88, functions: 89, branches: 83 } },
+  { pattern: 'src/features/wiki-browser/**', thresholds: { lines: 97, statements: 97, functions: 97, branches: 81 } },
+  { pattern: 'src/features/wiki-chat/**', thresholds: { lines: 97, statements: 97, functions: 97, branches: 90 } },
+  { pattern: 'src/features/wiki-editing/**', thresholds: { lines: 97, statements: 97, functions: 97, branches: 97 } },
+  { pattern: 'src/features/wiki-generation/**', thresholds: { lines: 97, statements: 96, functions: 97, branches: 91 } },
+  { pattern: 'src/features/wiki-settings/**', thresholds: { lines: 97, statements: 97, functions: 97, branches: 91 } },
+  { pattern: 'src/pages/deepwiki/**', thresholds: { lines: 86, statements: 86, functions: 74, branches: 79 } },
+  { pattern: 'src/widgets/deepwiki/**', thresholds: { lines: 93, statements: 91, functions: 90, branches: 79 } },
 ];
+
+/**
+ * The rules, for the ratchet test beside this file.
+ *
+ * EXPORTED FROM A SCRIPT THAT RUNS ITS OWN `main()` ON IMPORT — which is why
+ * merge-coverage.test.mjs parses this file as TEXT rather than importing it.
+ * The export is here for a reader who wants the list in one place; the test
+ * does not use it.
+ */
+export { layerThresholdRules };
 
 async function main() {
   const shardFiles = await findCoverageFiles();

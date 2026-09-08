@@ -55,7 +55,7 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 
 import { BASE_URL } from '../../playwright.config';
-import { AUTOTEST_PREFIX, expectStoredAssistantAnswer } from '../fixtures/api';
+import { AUTOTEST_PREFIX, expectStoredAssistantAnswer, fillComposer } from '../fixtures/api';
 import { COMPILER_LEGAL_NODE_ID, parseStoredGraph, readStoredPipelineVersion } from '../fixtures/pipelines';
 
 const APPLICATIONS_RE = /\/elitea_core\/applications\/prompt_lib\/(\d+)/;
@@ -429,12 +429,14 @@ test('a two-node graph connected on the canvas runs BOTH nodes, in the order the
   const conversationId = String(((await conversationResponse.json()) as { id?: string | number }).id ?? '');
   expect(conversationId, 'the pane must create a conversation before it can send').not.toBe('');
 
+  // Same shape, same reason as `chat.pipeline-authored.spec.ts`: the
+  // conversation-create re-render discards a mid-flight fill and the Send
+  // control never appears. See `fillComposer`.
+  const sendButton = await fillComposer(pane, `autotest canvas multinode pipeline ${Date.now()}`);
   const started = page.waitForResponse(response => START_RE.test(response.url()) && response.request().method() === 'POST', {
     timeout: 60_000,
   });
-  await input.fill(`autotest canvas multinode pipeline ${Date.now()}`);
-  await expect(pane.getByTestId('chat-send-button')).toBeEnabled({ timeout: 20_000 });
-  await pane.getByTestId('chat-send-button').click();
+  await sendButton.click();
 
   const startResponse = await started;
   // 422 is the status every admission refusal produces, and its body names

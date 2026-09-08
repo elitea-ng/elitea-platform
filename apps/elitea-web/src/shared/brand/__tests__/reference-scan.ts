@@ -29,13 +29,43 @@ export interface TokenReference {
 }
 
 function* sourceFiles(dir: string): Generator<string> {
-  for (const entry of readdirSync(dir)) {
-    if (SKIP_DIRS.has(entry)) continue;
-    const full = join(dir, entry);
-    if (statSync(full).isDirectory()) yield* sourceFiles(full);
-    else if (SOURCE_RE.test(entry)) yield full;
+  // `withFileTypes` answers directory-or-file from the directory entry the
+  // read already returned, instead of a `stat` syscall per entry. A symlink
+  // reports neither, so those alone still pay for a `stat` — which is what
+  // the old code did for all ~4300 entries.
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (SKIP_DIRS.has(entry.name)) continue;
+    const full = join(dir, entry.name);
+    const isDirectory = entry.isSymbolicLink()
+      ? statSync(full).isDirectory()
+      : entry.isDirectory();
+    if (isDirectory) yield* sourceFiles(full);
+    else if (SOURCE_RE.test(entry.name)) yield full;
   }
 }
+
+/**
+ * Whether a file's RAW TEXT leaves it able to contribute anything at all.
+ *
+ * Both halves of the scan need the seven characters `palette` to be present
+ * in the source: the AST half only records chains under
+ * `theme.vars.palette.`, and the literal half only matches
+ * `--el-palette-…`. The same is true of the hard failure in
+ * `classifyMember` — an aliased or computed `theme.vars.palette` read also
+ * spells `palette`. So a file without it can be skipped BEFORE the Babel
+ * parse, which is the expensive step, without changing a single result.
+ *
+ * The escape clause is what keeps that argument airtight rather than
+ * merely true in practice. JavaScript lets both identifiers and string
+ * literals spell those characters indirectly — `theme.vars.\u0070alette.x`
+ * is a legal member chain, and `'--el-\x70alette-token'` cooks to a real
+ * custom property name — and in either case the raw text no longer
+ * contains `palette`. Rather than reason about which escapes can reach
+ * which position, any file containing a `\u` or `\x` escape at all is
+ * parsed. It is a handful of files, and it means the filter is sound by
+ * construction: skipping requires PROVING the file cannot contribute.
+ */
+const CANDIDATE_RE = /palette|--el-|\\[ux]/;
 
 /** Flatten a static member chain to a dotted path; null if anything is dynamic. */
 function staticPath(node: Record<string, unknown>): string | null {
@@ -176,7 +206,11 @@ export function scanThemeVarReferences(root: string): TokenReference[] {
   for (const file of sourceFiles(root)) {
     const rel = relative(root, file).split('\\').join('/');
     const scanLiterals = !TEST_FILE_RE.test(rel);
-    const ast = parse(readFileSync(file, 'utf8'), {
+    const source = readFileSync(file, 'utf8');
+    // The parse is ~90% of this scan's cost and ~90% of the tree cannot
+    // contribute to it; see CANDIDATE_RE for why skipping is sound.
+    if (!CANDIDATE_RE.test(source)) continue;
+    const ast = parse(source, {
       sourceType: 'module',
       plugins: file.endsWith('.tsx') ? ['typescript', 'jsx'] : ['typescript'],
     });

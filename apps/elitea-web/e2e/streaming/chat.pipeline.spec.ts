@@ -80,7 +80,7 @@
 import { expect, test } from '@playwright/test';
 
 import { BASE_URL } from '../../playwright.config';
-import { AUTOTEST_PREFIX, expectStoredAssistantAnswer } from '../fixtures/api';
+import { AUTOTEST_PREFIX, expectStoredAssistantAnswer, fillComposer } from '../fixtures/api';
 
 const APPLICATIONS_RE = /\/elitea_core\/applications\/prompt_lib\/(\d+)/;
 /** Matched WITHOUT a project id: the chat persona works inside its own personal project (#290). */
@@ -338,14 +338,17 @@ test('a pipeline authored on the pipelines create page runs its graph and answer
   ).toBe('pipeline');
 
   // ── 4. Send, and require the turn to be ADMITTED ───────────────────────
+  // The composer is settled by `fillComposer` — which retries the fill,
+  // because this pane discards one that lands while it is still resolving its
+  // conversation, and run 33812152063 spent this test's whole budget clicking
+  // at the Send control that absence leaves unrendered. The response budget is
+  // armed only once that has resolved; see the helper for both halves.
+  const sendButton = await fillComposer(page, `autotest pipeline ${Date.now()}`);
   const started = page.waitForResponse(
     (r) => START_RE.test(r.url()) && r.request().method() === 'POST',
     { timeout: 45_000 },
   );
-  const input = page.getByTestId('chat-message-input');
-  await expect(input).toBeEditable({ timeout: 20_000 });
-  await input.fill(`autotest pipeline ${Date.now()}`);
-  await page.getByTestId('chat-send-button').click();
+  await sendButton.click();
 
   const startResponse = await started;
   // Spelled out because 422 is the status every admission refusal produces and

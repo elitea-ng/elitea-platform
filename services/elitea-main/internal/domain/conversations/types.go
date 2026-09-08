@@ -15,16 +15,16 @@ type Conversation struct {
 }
 
 type Message struct {
-	ID              string         `json:"id"`
-	GroupUID        string         `json:"group_uid"`
-	ConversationID  string         `json:"conversation_id"`
-	Role            string         `json:"role"`
-	Content         string         `json:"content"`
-	ContentType     string         `json:"content_type,omitempty"`
-	IsStreaming     bool           `json:"is_streaming"`
-	ParticipantID   string         `json:"participant_id,omitempty"`
-	Metadata        map[string]any `json:"metadata,omitempty"`
-	CreatedAt       time.Time      `json:"created_at"`
+	ID             string         `json:"id"`
+	GroupUID       string         `json:"group_uid"`
+	ConversationID string         `json:"conversation_id"`
+	Role           string         `json:"role"`
+	Content        string         `json:"content"`
+	ContentType    string         `json:"content_type,omitempty"`
+	IsStreaming    bool           `json:"is_streaming"`
+	ParticipantID  string         `json:"participant_id,omitempty"`
+	Metadata       map[string]any `json:"metadata,omitempty"`
+	CreatedAt      time.Time      `json:"created_at"`
 }
 
 type Participant struct {

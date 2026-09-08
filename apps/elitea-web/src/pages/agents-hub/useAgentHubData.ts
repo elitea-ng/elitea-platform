@@ -1,54 +1,31 @@
 /**
  * Agent Hub data hook — local port of the old Redux-based `useAgentHubData`.
  *
- * Strategy: fetch ALL published agents in a single request, then bucket them
- * client-side by their category tag. Special buckets (Trending, My Liked)
- * still use their own targeted requests.
+ * Strategy: fetch a page of published agents, then bucket it client-side by
+ * category tag. Special buckets (Trending, My Liked) use their own targeted
+ * requests, which the server now answers with real sorting and real
+ * per-caller filtering.
  *
- * Every request goes through `eliteaFetch`. The generated
- * `listPublicApplications` is NOT used. `ListPublicApplicationsParams` models
- * only `category`. The query string is therefore still built by hand for the
- * trending/my-liked params (a documented backend gap, spec §6.5).
+ * Every request goes through `eliteaFetch`. The query string is built by hand
+ * rather than through the generated `listPublicApplications`: that hook models
+ * the parameters but returns them through react-query's own cache, and this
+ * hook merges pages into category buckets itself.
  *
- * ── Confirmed, disclosed backend defects (adversarial-review fixes,
- *    cluster A13-agents-hub, findings 5 & 6) — NOT fixable from this file ──
+ * ── The backend gap this hook was written against is closed ─────────────
  *
- * `PublicApplications` (`internal/api/v2/eliteacore/handler.go`, the
- * handler behind `GET /elitea_core/public_applications/prompt_lib`) was
- * read directly to confirm both of these:
- *
- *  1. It parses exactly ONE query param, `category` — `page`, `pageSize`,
- *     `statuses`, `sort_by`, `sort_order`, and `my_liked` are all silently
- *     ignored. So `fetchMyLiked`'s `my_liked: 'true'` has zero effect: every
- *     user gets the identical generic list under a section labelled "My
- *     Liked" (finding 5), and `fetchTrending`'s `sort_by: 'likes'` /
- *     `sort_order: 'desc'` also have zero effect (finding 6) — the SQL is
- *     hardcoded to `ORDER BY a.id DESC`. Worse for "Trending": the response
- *     shape the handler emits per row (`project_id`, `id`, `name`,
- *     `description`, `version_id`, `version_name`, `agent_type`, `meta`)
- *     carries no `likes`/`is_liked` field AT ALL — not on this list
- *     endpoint, not on the per-agent detail endpoint either — so there is
- *     no data anywhere in this API surface a client could sort or filter on
- *     to approximate either feature honestly. Params are still sent (kept
- *     for wire-shape/intent parity, same convention
- *     `features/analytics/api/useAnalytics.ts` documents for its own
- *     backend-ignores-these-params case) so the client is already correct
- *     the moment the handler is fixed.
- *  2. The SQL hardcodes `LIMIT 50` regardless of the requested `pageSize`
- *     (`ALL_AGENTS_LIMIT` below is sent but has no effect) — the same class
- *     of hardcoded-truncation defect already confirmed in unit A1
- *     (`pages/agents/Latest.tsx`'s own doc comment). Every bucket this hook
- *     produces (bulk-categorized, Trending, and My Liked alike) is capped
- *     at 50 rows total, full stop — there is no "load more" request that
- *     could reach row 51; `AgentCategorySection`'s "Show more" only reveals
- *     more of what's already in memory (same precedent as `Latest.tsx`).
- *
- * Fixing either defect requires changing `PublicApplications` in
- * `services/elitea-main/internal/api/v2/eliteacore/handler.go` — outside
- * this cluster's (`apps/elitea-web`) file scope. My Liked additionally
- * needs the handler to join `centry`/`p_*`'s `social_likes` table filtered
- * by the current user, and Trending needs a real `likes` count to sort by
- * (neither exists in this schema today per the same read).
+ * `PublicApplications` used to read exactly ONE query parameter, `category`,
+ * and answered a hardcoded `ORDER BY a.id DESC LIMIT 50`, with no
+ * `likes`/`is_liked` on any row. Search, sort, "My Liked" and every row past
+ * the 50th were therefore impossible (issue #36 item 8). It now reads
+ * `query`, `statuses`, `agents_type`, `sort_by`, `sort_order`, `limit`,
+ * `offset` and `my_liked`, counts `total` over the FILTERED set, and puts
+ * `tags`, `likes` and `is_liked` on every row
+ * (`services/elitea-main/internal/api/v2/eliteacore/public_applications.go`).
+ * So the parameters below are read, not merely sent: the search filters
+ * server-side, Trending sorts by the real like count, My Liked filters by the
+ * CALLER's likes, and "load more" asks for the next `offset` until the rows
+ * in hand reach `total`. An out-of-allowlist `sort_by`/`sort_order`/
+ * `agents_type`/`statuses` is a 400, not a silent fallback.
  *
  * @public Wave-2 unit A13 surface.
  */
@@ -60,7 +37,7 @@ import {
 import { eliteaFetch } from '@/shared/api/generated/mutator';
 import { getConfig } from '@/shared/config';
 import type { PublicApplicationList } from '@/shared/api/generated/model';
-import type { ApplicationData } from './types';
+import type { AgentHubQueryOptions, AgentHubSortBy, AgentHubSortOrder, ApplicationData } from './types';
 
 import {
   TRENDING_CATEGORY,
@@ -91,13 +68,8 @@ function resolvePublicProjectId(): string {
 /* ── Helpers ──────────────────────────────────────────────────────────── */
 
 /**
- * Fetch a flat list of all published applications.
- * Backend gap: the OpenAPI spec only declares ?category, and the handler
- * reads only that one param — page, pageSize, statuses, agents_type,
- * trend_start_period, sort_by, sort_order, my_liked are all sent (for
- * forward-compat / documented intent) but silently ignored server-side
- * today. See this module's top-of-file doc comment for the full,
- * confirmed defect writeup.
+ * Fetch one page of published applications. Every parameter passed here is
+ * read by the handler; see this module's top-of-file doc comment.
  *
  * DEFECT, fixed here — two bugs in one function, each enough to empty the
  * whole hub:
@@ -132,8 +104,14 @@ function toLoadError(cause: unknown): Error {
 
 /* ── Hook ─────────────────────────────────────────────────────────────── */
 
-export function useAgentHubData(_selectedTagNames: string[]) {
+export function useAgentHubData(_selectedTagNames: string[], options?: AgentHubQueryOptions) {
   const publicProjectId = resolvePublicProjectId();
+  // Destructured to primitives on purpose: an options OBJECT default would be
+  // a new reference every render, so every fetch callback below would be
+  // rebuilt and the fetch effect would loop.
+  const searchQuery = (options?.query ?? '').trim();
+  const sortBy: AgentHubSortBy = options?.sortBy ?? 'created_at';
+  const sortOrder: AgentHubSortOrder = options?.sortOrder ?? 'desc';
   const {
     data: categoriesData,
     isFetching: isFetchingCategories,
@@ -151,36 +129,65 @@ export function useAgentHubData(_selectedTagNames: string[]) {
   const [refreshingTags, setRefreshingTags] = useState<Set<string>>(new Set());
   /**
    * DEFECT, fixed here: the three fetches below used `try { … } finally { … }`
-   * with NO `catch`. The effect also discarded each promise with `void`. Any
-   * refusal (a 403 on `models.applications.application.list`, a network drop)
-   * became an unhandled promise rejection. The loading flag still cleared, so
-   * the hub rendered a complete page with every category empty. The user got
-   * the normal "No agents found" empty state. The user got no sign that the
-   * request was refused. This state carries the failure out of the hook. The
-   * page can then tell "refused" apart from "nothing published".
+   * with NO `catch`, and the effect discarded each promise with `void`. Any
+   * refusal became an unhandled rejection while the loading flag still
+   * cleared, so a refused hub rendered as "No agents found". This state
+   * carries the failure out so the page can tell the two apart.
    */
   const [loadError, setLoadError] = useState<Error | null>(null);
 
-  // ── Bulk fetch: one request for all, bucket client-side ──────────────
-  const fetchAllAndCategorize = useCallback(async () => {
+  /**
+   * How many bulk rows are in hand and how many the server says match. The
+   * pair is what makes "load more" honest: it stops asking when the rows held
+   * reach `total`, instead of paging forever against a fixed row cap.
+   */
+  const [bulkLoaded, setBulkLoaded] = useState(0);
+  const [bulkTotal, setBulkTotal] = useState(0);
+
+  // ── Bulk fetch: one page, bucketed client-side by category ───────────
+  const fetchAllAndCategorize = useCallback(async (offset = 0) => {
     setLoadingTags(prev => new Set(prev).add('bulk'));
     setLoadError(null);
     try {
       const result = await fetchAllApplications({
-        page: '0',
-        pageSize: String(ALL_AGENTS_LIMIT),
+        limit: String(ALL_AGENTS_LIMIT),
+        offset: String(offset),
         statuses: 'published',
+        sort_by: sortBy,
+        sort_order: sortOrder,
+        ...(searchQuery === '' ? {} : { query: searchQuery }),
       });
-      const buckets: Record<string, ApplicationData[]> = {};
-      result.rows.forEach((app: ApplicationData) => {
-        const cat = getCategoryForApplication(app);
-        if (!buckets[cat]) buckets[cat] = [];
-        buckets[cat].push(app);
+      setBulkTotal(result.total);
+      setBulkLoaded(offset + result.rows.length);
+      setApplicationsByTag(prev => {
+        // A fresh page 0 replaces the category buckets but KEEPS the two
+        // special buckets: they are filled by their own requests, and
+        // dropping them here made them blink out whenever the search text or
+        // the sort changed.
+        const next: Record<string, ApplicationData[]> = offset === 0 ? {} : { ...prev };
+        if (offset === 0) {
+          const trending = prev[TRENDING_CATEGORY];
+          if (trending) next[TRENDING_CATEGORY] = trending;
+          const myLiked = prev[MY_LIKED_CATEGORY];
+          if (myLiked) next[MY_LIKED_CATEGORY] = myLiked;
+        }
+        result.rows.forEach((app: ApplicationData) => {
+          const cat = getCategoryForApplication(app);
+          const bucket = next[cat] ?? [];
+          // A later page can repeat a row when the underlying set shifts
+          // between requests. Appending it twice would duplicate a card.
+          next[cat] = bucket.some(existing => existing.id === app.id) ? bucket : [...bucket, app];
+        });
+        setTotalCountsByTag(counts => {
+          const updated: Record<string, number> = { ...counts };
+          Object.entries(next).forEach(([category, items]) => {
+            if (category === TRENDING_CATEGORY || category === MY_LIKED_CATEGORY) return;
+            updated[category] = items.length;
+          });
+          return updated;
+        });
+        return next;
       });
-      setApplicationsByTag(buckets);
-      setTotalCountsByTag(
-        Object.fromEntries(Object.entries(buckets).map(([k, v]) => [k, v.length])),
-      );
     } catch (cause) {
       setLoadError(toLoadError(cause));
     } finally {
@@ -190,7 +197,7 @@ export function useAgentHubData(_selectedTagNames: string[]) {
         return s;
       });
     }
-  }, []);
+  }, [searchQuery, sortBy, sortOrder]);
 
   // ── Trending: sorted by likes ────────────────────────────────────────
   const fetchTrending = useCallback(async () => {
@@ -198,10 +205,12 @@ export function useAgentHubData(_selectedTagNames: string[]) {
     setLoadError(null);
     try {
       const result = await fetchAllApplications({
-        pageSize: String(PAGE_SIZE),
+        limit: String(PAGE_SIZE),
+        offset: '0',
         statuses: 'published',
         sort_by: 'likes',
         sort_order: 'desc',
+        ...(searchQuery === '' ? {} : { query: searchQuery }),
       });
       setApplicationsByTag(prev => ({
         ...prev,
@@ -220,7 +229,7 @@ export function useAgentHubData(_selectedTagNames: string[]) {
         return s;
       });
     }
-  }, []);
+  }, [searchQuery]);
 
   // ── My Liked ─────────────────────────────────────────────────────────
   const fetchMyLiked = useCallback(async () => {
@@ -228,9 +237,11 @@ export function useAgentHubData(_selectedTagNames: string[]) {
     setLoadError(null);
     try {
       const result = await fetchAllApplications({
-        pageSize: String(PAGE_SIZE),
+        limit: String(PAGE_SIZE),
+        offset: '0',
         statuses: 'published',
         my_liked: 'true',
+        ...(searchQuery === '' ? {} : { query: searchQuery }),
       });
       setApplicationsByTag(prev => ({
         ...prev,
@@ -249,15 +260,32 @@ export function useAgentHubData(_selectedTagNames: string[]) {
         return s;
       });
     }
-  }, []);
+  }, [searchQuery]);
 
   // ── Main fetch effect ────────────────────────────────────────────────
+  // The three callbacks depend on the search text and the sort, so a change
+  // to either re-runs this effect and the server answers the new query. The
+  // page keeps NO client-side copy of the filter: a search that only matched
+  // a row on page two would otherwise never be found.
   useEffect(() => {
     if (categoryNames.length === 0) return;
-    void fetchAllAndCategorize();
+    void fetchAllAndCategorize(0);
     void fetchTrending();
     void fetchMyLiked();
   }, [categoryNames.length, fetchAllAndCategorize, fetchTrending, fetchMyLiked]);
+
+  /**
+   * Whether the server says there are rows the hub has not asked for yet.
+   * `bulkTotal` counts the FILTERED set, so this is false as soon as the
+   * search has been exhausted, not when a fixed cap is reached.
+   */
+  const hasMore = bulkLoaded < bulkTotal;
+
+  /** Ask for the next page and merge it into the category buckets. */
+  const loadMore = useCallback(async () => {
+    if (!hasMore || loadingTags.has('bulk')) return;
+    await fetchAllAndCategorize(bulkLoaded);
+  }, [hasMore, loadingTags, bulkLoaded, fetchAllAndCategorize]);
 
   // ── Derived data ─────────────────────────────────────────────────────
   const allCategories = useMemo(
@@ -329,7 +357,7 @@ export function useAgentHubData(_selectedTagNames: string[]) {
         } else if (category === MY_LIKED_CATEGORY) {
           await fetchMyLiked();
         } else {
-          await fetchAllAndCategorize();
+          await fetchAllAndCategorize(0);
         }
       } finally {
         setRefreshingTags(prev => {
@@ -361,6 +389,9 @@ export function useAgentHubData(_selectedTagNames: string[]) {
     refreshingTags,
     isFetching,
     error,
+    hasMore,
+    loadMore,
+    totalCount: bulkTotal,
     updateApplicationInState,
     addToMyLiked,
     removeFromMyLiked,

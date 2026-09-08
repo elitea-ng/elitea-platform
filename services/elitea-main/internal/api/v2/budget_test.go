@@ -42,10 +42,41 @@ var facadeBudgets = map[string]budget{
 	// ADR-0012's budget, as written.
 	"inventory": {files: 8, lines: 250},
 	// The first facade's recorded size. It was 912 before the rewrite
-	// mechanics moved to providerhost/material (ADR-0023 H4c I2); lower this
-	// again when it shrinks again.
-	"deepwiki": {files: 8, lines: 579,
-		why: "the first facade, which predates providerhost/* and owns its own mTLS proxy type"},
+	// mechanics moved to providerhost/material (ADR-0023 H4c I2), and 579
+	// before the wiki chat gained server-side history; lower this again when
+	// it shrinks again.
+	//
+	// THE HISTORY FEATURE RAISED THIS DELIBERATELY, AND THE SHARED HALF WENT
+	// DOWN FIRST. Recording a wiki chat needs four things, and three of them
+	// are nobody's in particular: reading the SPI poll envelope, deciding
+	// whether a poll was terminal, turning a `result` into text, and teeing a
+	// hop so a facade can watch the payload it is proxying. The frozen SPI
+	// contract says it "belongs to no provider", Inventory polls that same
+	// route, and the browser had already made this exact extraction and
+	// recorded why (entities/provider-run, ADR-0023 decision 4). All of it is
+	// now internal/providerhost/run — 117 of the 276 net lines the feature
+	// added.
+	//
+	// The 159 that stayed cannot follow without inventing a framework for one
+	// caller: the two headers this drawer sends, the map from a tool name to
+	// which of the two agents ran, the parameter DeepWiki's tools carry a
+	// question in, and the wiring to a store only this feature has. The ninth
+	// file is that feature (history.go); folding it into invoke.go to hold a
+	// file count would be the "deleting behaviour to satisfy a number" this
+	// gate's own header warns against.
+	// THE FOLDER SOURCE ADDED ONE LINE, AND THAT IS THE WHOLE FACADE COST.
+	// A wiki may now be generated from an artifact folder instead of a
+	// repository toolkit. Everything that feature needs of a facade — reading
+	// the source out of the body, elitea-main's own bucket and object-key
+	// rules, refusing a body that names two sources, and deriving the
+	// repository the provider reads — is in providerhost/material
+	// (artifact.go, ReferenceRewriter.folderInto), because none of it is
+	// DeepWiki's: any provider that indexes a directory can name one. What is
+	// DeepWiki's is the decision that its `Wikis` toolkit may, and a wiki
+	// query may not. That decision is the line.
+	"deepwiki": {files: 9, lines: 739,
+		why: "the first facade, which predates providerhost/* and owns its own mTLS proxy " +
+			"type, plus the wiki chat's transcript recorder (its shared half is in providerhost/run)"},
 }
 
 func TestAFacadeStaysInsideTheADR0012Budget(t *testing.T) {

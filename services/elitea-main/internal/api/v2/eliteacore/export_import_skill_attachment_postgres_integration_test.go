@@ -609,10 +609,18 @@ func TestImportKeepsTheSkillCapOfAVersion(t *testing.T) {
 // (apps/elitea-ui .../importWizardParser.helpers.js:142) reads it back as
 // `name: block.version || 'base'`.
 //
-// The assertion goes through `repos.SkillsRepo.ListForApplicationVersion` — the
-// call `skillHandler.ListForApplication` makes, on the route
-// router.go:1833 records as the one every deployment reaches — and not through
-// a copy of its SQL, so it cannot drift away from what the product runs.
+// The assertion goes through `repos.SkillsRepo.Get` — the read
+// GET /elitea_core/skill/{mode}/{projectID}/{skillID} makes, and the read the
+// skill editor and the skills list both render — and not through a copy of its
+// SQL, so it cannot drift away from what the product runs.
+//
+// NOTE(#395): it used to go through `repos.SkillsRepo.ListForApplicationVersion`.
+// That method served the PROTOTYPE attached-skills route, which #395 deleted
+// with the method. The route that answers now,
+// internal/api/v2/applicationskills, deliberately does NOT project
+// instructions, tags or versions, so it cannot see this defect at all. Get
+// projects all three through the same `skillsFromJoin` LEFT JOIN, which is
+// where the defect lives.
 func TestImportedSkillIsReadableThroughTheSkillsRoute(t *testing.T) {
 	pool := newImportLinkPool(t)
 	router := importLinkRouter(eliteacore.NewHandler(pool))
@@ -648,14 +656,19 @@ func TestImportedSkillIsReadableThroughTheSkillsRoute(t *testing.T) {
 		t.Fatalf("the import wrote no agent version: %v", err)
 	}
 
-	listed, err := repos.NewSkillsRepo(pool).ListForApplicationVersion(ctx, "1", strconv.Itoa(agentVersionID))
+	var attachedSkillID int
+	if err := pool.QueryRow(ctx, `
+SELECT mapping.skill_id
+FROM p_1.entity_skill_mapping AS mapping
+WHERE mapping.entity_version_id = $1 AND mapping.entity_type = 'agent'`,
+		agentVersionID).Scan(&attachedSkillID); err != nil {
+		t.Fatalf("the import attached no skill to the agent version: %v", err)
+	}
+
+	skill, err := repos.NewSkillsRepo(pool).Get(ctx, "1", strconv.Itoa(attachedSkillID))
 	if err != nil {
-		t.Fatalf("read the agent's skills: %v", err)
+		t.Fatalf("read the agent's skill: %v", err)
 	}
-	if len(listed.Items) != 1 {
-		t.Fatalf("the agent's Skills panel shows %d skills, want the imported one", len(listed.Items))
-	}
-	skill := listed.Items[0]
 	// Each of these is empty when the skill has no `base` version, and each is
 	// what the user actually reads.
 	if skill.Instructions != instructions {
@@ -1569,10 +1582,15 @@ func seedSkillRoundTripAgent(t *testing.T, pool *pgxpool.Pool) skillRoundTripSee
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
+	// `applications.owner_id` is the owning PROJECT, and this row lives in p_1
+	// (#533). The seed wrote the caller here, which is the shape the writers
+	// had before the meaning was settled; tenant/0131 now refuses it with a
+	// foreign key. The caller is the version author, which
+	// seedSkillRoundTripVersion writes.
 	var seed skillRoundTripSeed
 	if err := pool.QueryRow(ctx, `
 INSERT INTO p_1.applications (name, description, owner_id)
-VALUES ('skill round trip agent', 'seeded', $1) RETURNING id`, importLinkPrincipal).Scan(&seed.applicationID); err != nil {
+VALUES ('skill round trip agent', 'seeded', 1) RETURNING id`).Scan(&seed.applicationID); err != nil {
 		t.Fatalf("seed application: %v", err)
 	}
 	seed.earlierVersionID = seedSkillRoundTripVersion(t, ctx, pool, seed.applicationID, "earlier", "2 minutes")

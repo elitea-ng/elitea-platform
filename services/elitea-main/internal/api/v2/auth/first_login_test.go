@@ -14,10 +14,15 @@ import (
 // answer that.
 func TestInitialGlobalAdminMatchingAcceptsBothSpellings(t *testing.T) {
 	for _, testCase := range []struct {
-		name        string
+		name string
+		// admins is `identity.initial_global_admins`.
 		admins      []string
 		providerRef string
-		want        bool
+		// verifiedEmail is the address the identity provider STATED is
+		// verified. "" means it stated nothing, which is what every SAML login
+		// and every OIDC login without `"email_verified": true` passes.
+		verifiedEmail string
+		want          bool
 	}{
 		{
 			name:        "a bare entry names an OIDC subject",
@@ -82,12 +87,112 @@ func TestInitialGlobalAdminMatchingAcceptsBothSpellings(t *testing.T) {
 			providerRef: OIDCProviderRefPrefix + "",
 			want:        false,
 		},
+
+		// ── The `email:` spelling ────────────────────────────────────────
+		//
+		// The spelling that makes a fresh single-sign-on deployment
+		// administrable without a database session. The subject inside
+		// `oidc:<sub>` is an opaque identifier at Azure AD and Okta; the
+		// address is one the operator already knows.
+		{
+			name:          "an email entry names a login with a verified address",
+			admins:        []string{"email:alice@corp.com"},
+			providerRef:   OIDCProviderRefPrefix + "00000000-1111-2222-3333-444444444444",
+			verifiedEmail: "alice@corp.com",
+			want:          true,
+		},
+		{
+			// The single most important negative. `verifiedEmail` is "" for
+			// every login the identity provider did not state a verification
+			// for, and an address alone is a claim, not proof.
+			name:          "an email entry does NOT name a login with an unverified address",
+			admins:        []string{"email:alice@corp.com"},
+			providerRef:   OIDCProviderRefPrefix + "mallory-sub",
+			verifiedEmail: "",
+			want:          false,
+		},
+		{
+			name:          "the address comparison is case-insensitive on both sides",
+			admins:        []string{"email:Alice@Corp.COM"},
+			providerRef:   OIDCProviderRefPrefix + "alice-sub",
+			verifiedEmail: "ALICE@corp.com",
+			want:          true,
+		},
+		{
+			name:          "a different verified address matches nothing",
+			admins:        []string{"email:alice@corp.com"},
+			providerRef:   OIDCProviderRefPrefix + "mallory-sub",
+			verifiedEmail: "mallory@corp.com",
+			want:          false,
+		},
+		{
+			// The prefix is mandatory. A bare address is a REFERENCE entry —
+			// it names `saml:alice@corp.com` and the pylon-era bare ref — and
+			// it must not silently become an address match.
+			name:          "a bare address is not an email entry",
+			admins:        []string{"alice@corp.com"},
+			providerRef:   OIDCProviderRefPrefix + "alice-sub",
+			verifiedEmail: "alice@corp.com",
+			want:          false,
+		},
+		{
+			name:          "a bare address still names the SAML NameID that equals it",
+			admins:        []string{"alice@corp.com"},
+			providerRef:   SAMLProviderRefPrefix + "alice@corp.com",
+			verifiedEmail: "",
+			want:          true,
+		},
+		{
+			// THE SPOOF THE CLOSED NAMESPACE REFUSES. An identity provider
+			// that chooses its own subject asserts `sub = "email:alice@..."`.
+			// The prefix strip turns the stored ref into the exact text of the
+			// entry, so a reference comparison would hand over the grant with
+			// no verified address anywhere.
+			name:          "a subject spelled like an email entry collects nothing",
+			admins:        []string{"email:alice@corp.com"},
+			providerRef:   OIDCProviderRefPrefix + "email:alice@corp.com",
+			verifiedEmail: "",
+			want:          false,
+		},
+		{
+			name:          "a verified address matches nothing when no email entry is configured",
+			admins:        []string{OIDCProviderRefPrefix + "alice-sub"},
+			providerRef:   OIDCProviderRefPrefix + "mallory-sub",
+			verifiedEmail: "alice@corp.com",
+			want:          false,
+		},
+		{
+			name:          "an email entry with no address matches no verified address",
+			admins:        []string{"email:"},
+			providerRef:   OIDCProviderRefPrefix + "alice-sub",
+			verifiedEmail: "alice@corp.com",
+			want:          false,
+		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			require.Equal(t, testCase.want,
-				matchesInitialGlobalAdmin(testCase.admins, testCase.providerRef))
+				matchesInitialGlobalAdmin(
+					testCase.admins, testCase.providerRef, testCase.verifiedEmail))
 		})
 	}
+}
+
+// verifiedEmailClaim is the gate that decides whether an `email:` entry may be
+// consulted at all, so its rule is pinned separately from the matcher's.
+func TestVerifiedEmailClaimAcceptsOnlyAnExplicitTrue(t *testing.T) {
+	verified := true
+	unverified := false
+
+	require.Equal(t, "alice@corp.com", verifiedEmailClaim("alice@corp.com", &verified))
+	require.Empty(t, verifiedEmailClaim("alice@corp.com", &unverified))
+
+	// AN ABSENT CLAIM IS NOT A VERIFICATION. Many identity providers omit it,
+	// and OIDC_REQUIRE_EMAIL_VERIFIED does not change this answer: that
+	// variable gates joinAccountByEmail only, so a new subject still
+	// provisions an account without the claim.
+	require.Empty(t, verifiedEmailClaim("alice@corp.com", nil))
+	t.Setenv("OIDC_REQUIRE_EMAIL_VERIFIED", "true")
+	require.Empty(t, verifiedEmailClaim("alice@corp.com", nil))
 }
 
 func TestInitialGlobalAdminsFromEnvSplitsAndTrims(t *testing.T) {

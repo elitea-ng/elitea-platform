@@ -270,11 +270,15 @@ export interface ToolBaseToolsSectionProps {
 }
 
 function resolveAvailableTools(schema: ToolSchema, settings: Readonly<Record<string, unknown>>): readonly string[] {
+  // Explicit discovery supersedes the catalogue snapshot, including an empty
+  // result. Falling back then would offer operations the server removed.
+  const discovered = settings['available_mcp_tools'];
+  if (Array.isArray(discovered)) return discovered.filter((name): name is string => typeof name === 'string');
   const selectedToolsSchema = schema.properties?.['selected_tools'];
   const argsSchemas = selectedToolsSchema?.args_schemas;
   const hasArgsSchemas = argsSchemas !== undefined && Object.keys(argsSchemas).length > 0;
-  const availableMcpTools = (settings['available_mcp_tools'] as readonly string[] | undefined) ?? [];
-  return (hasArgsSchemas ? Object.keys(argsSchemas) : selectedToolsSchema?.items?.enum) ?? availableMcpTools;
+  const declaredTools = hasArgsSchemas ? Object.keys(argsSchemas) : selectedToolsSchema?.items?.enum;
+  return declaredTools ?? [];
 }
 
 function isPreconfiguredMcpType(editToolDetail: EditToolDetail): boolean {

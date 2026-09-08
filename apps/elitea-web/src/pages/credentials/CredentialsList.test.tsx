@@ -34,11 +34,11 @@ describe('CredentialsList', () => {
         onCreateNew={vi.fn()}
       />,
     );
-    expect(await screen.findByText('You have no credentials.')).toBeInTheDocument();
+    expect(await screen.findByText('No credentials yet')).toBeInTheDocument();
   });
 
   // A FAILED LIST IS NOT AN EMPTY LIST. Before this branch existed, a 403 fell
-  // through to "You have no credentials.". The screen reported an empty
+  // through to "No credentials yet". The screen reported an empty
   // project when the request never returned a list. That is what a live
   // deployment showed while every GET of the list answered 403.
   it('reports a forbidden list as an error, not as an empty project', async () => {
@@ -58,7 +58,7 @@ describe('CredentialsList', () => {
     expect(
       await screen.findByText('You do not have permission to read the credentials of this project.'),
     ).toBeInTheDocument();
-    expect(screen.queryByText('You have no credentials.')).not.toBeInTheDocument();
+    expect(screen.queryByText('No credentials yet')).not.toBeInTheDocument();
   });
 
   it('reports any other list failure as an error, not as an empty project', async () => {
@@ -76,7 +76,7 @@ describe('CredentialsList', () => {
       />,
     );
     expect(await screen.findByText('The credentials could not be loaded.')).toBeInTheDocument();
-    expect(screen.queryByText('You have no credentials.')).not.toBeInTheDocument();
+    expect(screen.queryByText('No credentials yet')).not.toBeInTheDocument();
   });
 
   it('shows the "nothing found" message when a search yields no rows', async () => {

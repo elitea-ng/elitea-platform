@@ -6,6 +6,7 @@ import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/gen
 import { server } from '@/test/setup';
 
 import { renderHookWithProviders } from '../__tests__/testUtils';
+import { PIPELINE_STARTER_TEMPLATE } from '@/shared/lib/pipelineStarterTemplate';
 import { usePipelineEditorCreate } from './usePipelineEditorCreate';
 
 beforeEach(() => {
@@ -17,10 +18,12 @@ afterEach(() => {
 });
 
 describe('usePipelineEditorCreate', () => {
-  it('starts with empty create-mode values', () => {
+  it('starts with empty create-mode values and the starter graph', () => {
     const { result } = renderHookWithProviders(() => usePipelineEditorCreate('p1'));
     expect(result.current.values.name).toBe('');
-    expect(result.current.values.version_details?.instructions).toBe('');
+    // `instructions` IS the graph. It used to start empty, which stored a
+    // pipeline no runtime could run. See `./pipelineStarterTemplate.ts`.
+    expect(result.current.values.version_details?.instructions).toBe(PIPELINE_STARTER_TEMPLATE);
   });
 
   it('onFieldChange updates a top-level field', () => {
@@ -68,6 +71,10 @@ describe('usePipelineEditorCreate', () => {
     expect(capturedBody).toMatchObject({
       name: 'My Pipeline',
       versions: [expect.objectContaining({ agent_type: 'pipeline' })],
+    });
+    // The graph reaches the wire, so the created pipeline runs as created.
+    expect(capturedBody).toMatchObject({
+      versions: [{ instructions: PIPELINE_STARTER_TEMPLATE }],
     });
   });
 

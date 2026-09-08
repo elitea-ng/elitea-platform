@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
+	applicationskillsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/applicationskills"
 	skillsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/skills"
 )
 
@@ -41,14 +43,29 @@ func (repo *fakeInternalSkillsRepo) List(
 	return repo.listResult, nil
 }
 
-func (repo *fakeInternalSkillsRepo) ListForApplicationVersion(
+func (repo *fakeInternalSkillsRepo) ListCurrentApplicationSkills(
 	_ context.Context,
-	projectID string,
-	applicationVersion string,
-) (skillsapi.ListResponse, error) {
-	repo.projectID = projectID
-	repo.applicationVersion = applicationVersion
-	return repo.attachedResult, nil
+	projectID int32,
+	applicationVersion int32,
+) ([]applicationskillsapi.CurrentApplicationSkill, error) {
+	repo.projectID = strconv.FormatInt(int64(projectID), 10)
+	repo.applicationVersion = strconv.FormatInt(int64(applicationVersion), 10)
+	var result []applicationskillsapi.CurrentApplicationSkill
+	for _, skill := range repo.attachedResult.Items {
+		id, _ := strconv.ParseInt(skill.ID, 10, 32)
+		item := applicationskillsapi.CurrentApplicationSkill{
+			SkillID: int32(id), Name: skill.Name, Description: skill.Description,
+		}
+		if skill.VersionDetails != nil {
+			versionID, _ := strconv.ParseInt(skill.VersionDetails.ID, 10, 32)
+			version := int32(versionID)
+			item.VersionID = &version
+			item.VersionName = skill.VersionDetails.Name
+			item.Instructions = skill.VersionDetails.Instructions
+		}
+		result = append(result, item)
+	}
+	return result, nil
 }
 
 func (repo *fakeInternalSkillsRepo) AttachSkill(
@@ -307,7 +324,7 @@ func TestInternalSkillRelationAndAttachedListUseAgentVersionKeys(t *testing.T) {
 			ID: "17", Name: "durable-worker", Description: "Worker guidance.", VersionDetails: &version,
 		}}},
 	}
-	executor := &repositoryInternalSkillExecutor{repo: repo}
+	executor := &repositoryInternalSkillExecutor{repo: repo, attached: repo}
 	attached, err := executor.Execute(context.Background(), 9, 41, internalUpdateSkillRelation, map[string]any{
 		"skill_id": json.Number("17"), "entity_version_id": json.Number("33"),
 		"has_relation": true, "skill_version_id": json.Number("51"),
