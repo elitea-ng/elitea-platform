@@ -59,6 +59,39 @@ describe('ToolCard', () => {
     expect(getByText('My Jira Config')).toBeInTheDocument();
   });
 
+  it('keeps the detach control focusable and reveals it on focus, not only on hover (#849)', () => {
+    const { getByTestId, getByRole, container } = renderWithTheme(<ToolCard {...baseProps()} />);
+
+    // A plain `getByRole` — no `{ hidden: true }` escape hatch. The control
+    // used to be `display: 'none'` until a mouse hovered the card header,
+    // which removed it from the accessibility tree AND from the tab order, so
+    // a keyboard or touch user had no way to detach a toolkit at all.
+    const detach = getByRole('button', { name: 'delete tool' });
+    expect(detach).toBe(getByTestId('agent-toolkit-delete-button'));
+
+    // Hidden by opacity, so the control keeps its box and stays reachable.
+    // Pinned so a later change cannot go back to `display: none`.
+    const resting = getComputedStyle(detach);
+    expect(resting.display).not.toBe('none');
+    expect(resting.opacity).toBe('0');
+    expect(resting.visibility).not.toBe('hidden');
+
+    // …and it really can hold focus, which is what `:focus-within` needs.
+    detach.focus();
+    expect(document.activeElement).toBe(detach);
+
+    // jsdom does not evaluate `:hover`/`:focus-within` in `getComputedStyle`,
+    // so the reveal itself is asserted against the rule the card header
+    // injects. Without the focus-within half, focusing the button above would
+    // leave it invisible — reachable but unusable.
+    const rules = Array.from(container.ownerDocument.querySelectorAll('style'))
+      .map((style) => style.textContent ?? '')
+      .join('\n');
+    expect(rules).toMatch(/:hover \.agents-tool-card-action\s*,[^{]*:focus-within \.agents-tool-card-action\s*\{\s*opacity:\s*1/);
+    // A device with no pointer that can hover shows the actions outright.
+    expect(rules).toMatch(/@media \(hover:\s*none\)/);
+  });
+
   it('opens and confirms the delete modal, calling onDisassociateTool with isAttachmentToolkit', async () => {
     const user = userEvent.setup();
     const onDisassociateTool = vi.fn();

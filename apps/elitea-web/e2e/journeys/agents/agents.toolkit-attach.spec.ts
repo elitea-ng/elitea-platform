@@ -172,44 +172,68 @@ test('TA-2: removing a toolkit from an agent takes it off the card and out of th
     const card = page.getByTestId('agent-toolkit-card').filter({ hasText: fixture.toolkit.toolkitName });
     await expect(card).toBeVisible({ timeout: 30_000 });
 
-    // ── the product's own remove affordance ────────────────────────────────
+    // ── the product's own remove affordance, driven by KEYBOARD ────────────
     // Scoped to THIS card: an agent may hold several toolkits and every card
     // carries the same testid, so an unscoped locator is ambiguous the moment
     // a second one exists.
     //
-    // HOVERED FIRST, which is what a mouse user does. `ToolCard`'s action
-    // cluster is reveal-on-row-hover: every button carries
-    // `agents-tool-card-action` and `actionButtonSx`'s `display: 'none'`, and
-    // the card header's `&:hover` rule (`ToolCard.styles.ts:68`) is the only
-    // thing that puts them back in flow — the same behaviour the baseline gave
-    // its `#DeleteButton`. Without the hover the button resolves in the DOM and
-    // is never visible, so the click waits out the whole test timeout.
+    // TABBED TO, not hovered. `ToolCard`'s action cluster is revealed on
+    // `:hover` OR `:focus-within`, and it is hidden by `opacity` rather than
+    // by `display` (`ToolCard.styles.ts`), so every button keeps its box, its
+    // place in the tab order, and its place in the accessibility tree. Until
+    // the fix for #849 the cluster was `display: 'none'` until a mouse
+    // hovered, which meant a keyboard or touch user could not detach a toolkit
+    // at all — and no `:focus-within` rule can fire on a control that can
+    // never hold focus. The mouse path is not the interesting one: it worked
+    // before and after.
     //
-    // NOT `force: true`: forcing would skip the visibility wait and click a
-    // control a real user cannot see, which would pass whether or not the
-    // reveal still works. `hover()` is the user's own action, and the
-    // visibility assertion below states the reveal as part of the contract.
-    //
-    // The card is the header alone here (`showActions` is false until "Show
-    // tools" is clicked), so hovering its centre lands on the header that
-    // carries the rule.
-    //
-    // What this journey does NOT cover: `display: 'none'` also takes the
-    // button out of the tab order and the accessibility tree, so a keyboard or
-    // touch user has no way to reach it — a `:focus-within` rule cannot fire
-    // on a control that can never hold focus. That is the same defect
-    // `OpenAPISchemaInput` (`editorWrapperSx`), `BucketList` and
-    // `ImageAttachment` were each already fixed for, by revealing through
-    // opacity/visibility plus `:focus-within` instead of `display`. It is left
-    // open here because reserving the cluster's width changes the card's
-    // resting layout, which is a product decision rather than this journey's.
-    await card.hover();
+    // NOT `force: true` and not `.click()`. Forcing would operate a control a
+    // real user cannot reach, which would pass whether or not the reveal
+    // works; Enter on the focused button is the keyboard user's own action.
     const remove = card.getByTestId('agent-toolkit-delete-button');
     await expect(
       remove,
-      'hovering the toolkit card must reveal its remove button',
-    ).toBeVisible({ timeout: 15_000 });
-    await remove.click();
+      'the detach control must exist before any pointer has touched the card',
+    ).toHaveCount(1);
+
+    // The pointer is parked away from the card first: the picker interaction
+    // that seeded this fixture left the mouse somewhere in the panel, and a
+    // resting card that happens to be hovered would make the opacity readings
+    // below say nothing.
+    await page.mouse.move(0, 0);
+    const opacityOf = async (): Promise<string> =>
+      remove.evaluate((element) => globalThis.getComputedStyle(element).opacity);
+    // Playwright's own visibility check reads the bounding box and
+    // `visibility`, and an `opacity: 0` control passes it. So the reveal is
+    // measured as opacity, which is the property that actually changed.
+    expect(
+      await opacityOf(),
+      'the action cluster must still be out of sight until the card is hovered or focused',
+    ).toBe('0');
+
+    // The traversal starts at the Tools panel's own first control — where a
+    // user tabbing into the section arrives — and presses Tab until the detach
+    // button holds focus. Bounded: "Tab until it works" would wrap around the
+    // whole page and pass on the wrong control, and running out of presses is
+    // exactly the failure this journey exists to state.
+    await page.getByTestId('agent-add-toolkit-button').focus();
+    let reached = false;
+    for (let press = 0; press < 12 && !reached; press += 1) {
+      await page.keyboard.press('Tab');
+      reached = await remove.evaluate((element) => element === element.ownerDocument.activeElement);
+    }
+    expect(
+      reached,
+      'the detach control was never reached by Tab: it is outside the keyboard path',
+    ).toBe(true);
+
+    await expect(remove, 'the focused detach control must occupy a box').toBeVisible({ timeout: 15_000 });
+    expect(
+      await opacityOf(),
+      'focusing the detach control must reveal it — reachable but invisible is not operable',
+    ).toBe('1');
+
+    await page.keyboard.press('Enter');
 
     // `ToolCard` opens `DeleteEntityModal` with `confirmText: 'Remove'` and
     // WITHOUT `shouldRequestInputName`, so there is no name to type — unlike
