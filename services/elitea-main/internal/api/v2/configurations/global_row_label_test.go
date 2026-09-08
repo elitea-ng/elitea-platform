@@ -127,16 +127,17 @@ func TestAnUpdateInventsNoLabel(t *testing.T) {
 // dialog sends `{elitea_title, type, data}` for the same reason, and
 // `llm_model` requires a label like every other type.
 //
-// The credential link is omitted so this test needs no database: an absent
-// link is admitted by the rewrite (the delegated create then refuses it for the
-// schema-required `data.ai_credentials`, which is that rule's business and is
-// covered where it lives).
+// `data` is omitted so this test needs no database. The rewrite asks about the
+// credential link only when a body carries `data`, and answering that question
+// means reading the platform's published credentials — so a body with `data`
+// makes this a database test about a rule that is not the label. The dialog's
+// whole body, link included, is asserted against Postgres in
+// global_create_postgres_integration_test.go.
 func TestTheModelSurfaceCompletesItsLabelToo(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	rewritten, ok := providerHandler().rewriteGlobalModelBody(recorder,
 		providerRequest(http.MethodPost, "/",
-			`{"elitea_title":"autotest_platform_model","type":"llm_model",`+
-				`"data":{"name":"autotest-model"}}`), true)
+			`{"elitea_title":"autotest_platform_model","type":"llm_model"}`), true)
 	if !ok {
 		t.Fatalf("the model rewrite refused the dialog's body: %d %s",
 			recorder.Code, recorder.Body.String())

@@ -168,20 +168,67 @@ func TestACredentialLinkIsReadInBothSpellings(t *testing.T) {
 	}
 }
 
-// TestAModelNamingNoCredentialResolves — a row with no link is not broken. The
-// gateway resolves its provider from a prefix in the model name, the standalone
-// seed relies on it, and reporting it as unresolved would be a permanent false
-// alarm on a working deployment.
-func TestAModelNamingNoCredentialResolves(t *testing.T) {
+// TestAModelNamingNoCredentialIsReportedUnresolved.
+//
+// It used to report as RESOLVING, on the argument that the gateway falls back
+// to reading the provider out of a prefix in the model name. That argument
+// described a row nothing here can write: `ai_credentials` is required on all
+// five model types, so provider admission refuses such a row and stores
+// `status_ok = false`, and every reader — the catalogue, the tier defaults and
+// the gateway itself — selects on `status_ok = true`. The row is listed by this
+// surface and served by nobody, which is exactly the state this flag exists to
+// show.
+//
+// The flag is reported without consulting the credential list, because the
+// absence of a link is a fact about the row and needs no list to establish.
+func TestAModelNamingNoCredentialIsReportedUnresolved(t *testing.T) {
 	item, err := scanGlobalModel(modelRowScan(`{"name":"gpt-4o"}`), []string{"platform-openai"}, true)
 	if err != nil {
 		t.Fatalf("scan: %v", err)
 	}
-	if !item.CredentialResolves {
-		t.Error("a model naming no credential was reported as unresolved")
+	if item.CredentialResolves {
+		t.Error("a model naming no credential at all was reported as resolving")
 	}
 	if item.ModelName != "gpt-4o" {
 		t.Errorf("model_name = %q, want the wire name", item.ModelName)
+	}
+
+	unverified, err := scanGlobalModel(modelRowScan(`{"name":"gpt-4o"}`), nil, false)
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if unverified.CredentialResolves {
+		t.Error("an unread credential list turned a row with NO link into a resolving one")
+	}
+}
+
+// TestTheTierFlagsAreReportedForTheEditForm.
+//
+// `low_tier` and `high_tier` decide whether a project's AI configuration offers
+// the model as a tier default. The edit dialog rewrites `data` whole, so a form
+// that could not read them back would clear the flag of every model it saved —
+// the same shape as the credential link this file's other tests pin.
+func TestTheTierFlagsAreReportedForTheEditForm(t *testing.T) {
+	row := `{"name":"gpt-4o","ai_credentials":{"elitea_title":"platform-openai"},` +
+		`"high_tier":true,"low_tier":false}`
+	item, err := scanGlobalModel(modelRowScan(row), []string{"platform-openai"}, true)
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if !item.HighTier || item.LowTier {
+		t.Errorf("high_tier = %v, low_tier = %v, want the flags the row carries", item.HighTier, item.LowTier)
+	}
+
+	// A row written before the flags existed carries neither key, and the
+	// registry defaults both to false.
+	plain, err := scanGlobalModel(
+		modelRowScan(`{"name":"gpt-4o","ai_credentials":{"elitea_title":"platform-openai"}}`),
+		[]string{"platform-openai"}, true)
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if plain.HighTier || plain.LowTier {
+		t.Errorf("a row carrying no flags reported high=%v low=%v", plain.HighTier, plain.LowTier)
 	}
 }
 

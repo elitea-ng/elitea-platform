@@ -516,6 +516,65 @@ adminTest('J34l: platform providers are authored from the admin panel', async ({
   await checkA11y(page);
 });
 
+adminTest('J34n: a platform model cannot be authored without a platform provider', async ({
+  page,
+}) => {
+  await openConfiguration(page);
+  await page.getByRole('button', { name: /LLM Proxy/ }).click();
+  await page.getByRole('tab', { name: 'Providers & models' }).click();
+
+  // Wait on a POSITIVE terminal state before opening the dialog: the dialog's
+  // provider select is filled from this same listing, so an assertion made
+  // while it was in flight would be about an empty form rather than an empty
+  // platform.
+  await expect(
+    page.getByTestId('platform-models-table').or(page.getByTestId('platform-models-empty')),
+  ).toBeVisible();
+
+  await page.getByTestId('platform-models-add').click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible();
+
+  // THE DEFECT THIS PINS. The provider select used to offer "None — infer from
+  // the model name" beside the published providers, and choosing it omitted the
+  // `data.ai_credentials` link. That link is required on all five model types,
+  // so the row failed provider admission and was stored with `status_ok =
+  // false` — listed on this screen and served by no reader, the gateway
+  // included. Asserted as an ABSENCE, which is what the removal is.
+  //
+  // The OPEN LISTBOX is the positive terminal state, not the first option: this
+  // deployment publishes no platform credential (see J34l for why none is
+  // created here), so the correct list is EMPTY and waiting for an option would
+  // wait for ever. What must not be in it is the one entry that never depended
+  // on the platform having a provider.
+  await dialog.getByRole('combobox', { name: /Platform provider/ }).click();
+  await expect(page.getByRole('listbox')).toBeVisible();
+  await expect(page.getByRole('option', { name: /None/ })).toHaveCount(0);
+  await expect(page.getByRole('option', { name: /infer/i })).toHaveCount(0);
+  await page.keyboard.press('Escape');
+
+  // Save waits for one. Everything else the form needs is filled in, so the
+  // disabled button is about the provider and nothing else — and the helper
+  // text says what an unlinked model would do, because "Save is greyed out"
+  // with no reason is the state an operator files a bug about.
+  await dialog.getByTestId('platform-model-name').fill('autotest_unlinked_model');
+  await dialog.getByTestId('platform-model-wire-name').fill('autotest-unlinked');
+  await expect(dialog.getByTestId('platform-model-save')).toBeDisabled();
+  await expect(dialog.getByText(/served to nobody|publishes no providers yet/)).toBeVisible();
+
+  // The tier flags are offered for the chat kind, which is the kind a new
+  // model opens on. They decide which of a project's default model slots may
+  // select the model, and a platform model that carried neither could be
+  // addressed by name and chosen as nobody's default.
+  await expect(dialog.getByTestId('platform-model-low-tier')).toBeVisible();
+  await expect(dialog.getByTestId('platform-model-high-tier')).toBeVisible();
+
+  await dialog.getByRole('button', { name: 'Cancel' }).click();
+  await expect(dialog).toHaveCount(0);
+
+  await checkA11y(page);
+});
+
 adminTest('J34m: the LLM Proxy request log is authorised and answers', async ({ page }) => {
   await openConfiguration(page);
   await page.getByRole('button', { name: /LLM Proxy/ }).click();

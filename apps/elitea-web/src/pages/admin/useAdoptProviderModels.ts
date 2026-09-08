@@ -185,9 +185,10 @@ async function adoptSelectedModels(
       await options.create({
         elitea_title: id,
         type: options.kind,
-        // The link is what makes this a PLATFORM model rather than one whose
-        // provider the gateway guesses from a prefix in its name. The server
-        // refuses a link naming anything but a published platform credential.
+        // The link is what makes this a PLATFORM model. It is required — all
+        // five model types declare it, so a model without one fails provider
+        // admission and is served by nobody — and the server refuses a link
+        // naming anything but a published platform credential.
         data: { name: id, ai_credentials: { elitea_title: options.credential } },
       });
     } catch (error) {
