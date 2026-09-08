@@ -1730,7 +1730,13 @@ PY
 
         # 1. The credential. Its shape is the one `seed-llm` writes with SQL:
         # type vllm, a literal api_key and the mock's compose address.
-        CRED_OUT="$(write_configuration "{\"elitea_title\":\"${WRITE_CRED}\",\"type\":\"vllm\",\"section\":\"ai_credentials\",\"data\":{\"api_key\":\"mock-key-not-used\",\"api_base\":\"http://llm-mock:8090\"}}")"
+        #
+        # `label` is not decoration here either. The create route refuses a
+        # body that omits a field the type's own schema requires
+        # (services/elitea-main/internal/api/v2/configurations/required_fields.go),
+        # and `label` is required by every type. It is also what keeps an
+        # llm-section row out of the catalogue reader's error path.
+        CRED_OUT="$(write_configuration "{\"elitea_title\":\"${WRITE_CRED}\",\"label\":\"${WRITE_CRED}\",\"type\":\"vllm\",\"section\":\"ai_credentials\",\"data\":{\"api_key\":\"mock-key-not-used\",\"api_base\":\"http://llm-mock:8090\"}}")"
         case "$CRED_OUT" in
           *'"status_ok":true'*) ok "a credential saved through the API is usable" ;;
           *'"status_ok":false'*)

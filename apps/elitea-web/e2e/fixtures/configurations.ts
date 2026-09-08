@@ -64,13 +64,17 @@ const CONFIGURATION_SECTIONS: Readonly<Record<ConfigurationSection, SectionShape
       api_key: `${AUTOTEST_PREFIX}not_a_real_key`,
     },
   },
-  // The same provider family, filed for embeddings rather than for chat.
+  // An embedding MODEL, which is a different kind of row from the credential
+  // it links: `embedding_model` under `embedding`, carrying a model name and a
+  // reference to an `ai_credentials` row. It used to be declared here as an
+  // `open_ai` credential, which the create route files under `ai_credentials`
+  // — so the "embedding" fixture made a row in another section, the embedding
+  // catalogue stayed empty, and a toolkit naming that model was refused for a
+  // configuration the journey had just created. Use `createEmbeddingModel`,
+  // which makes the credential too.
   embedding: {
-    defaultType: 'open_ai',
-    placeholderData: {
-      api_base: 'https://autotest.invalid/v1',
-      api_key: `${AUTOTEST_PREFIX}not_a_real_key`,
-    },
+    defaultType: 'embedding_model',
+    placeholderData: {},
   },
   // A vector store an index writes into.
   vectorstorage: {
@@ -133,6 +137,23 @@ export interface CreatedConfiguration {
   readonly title: string;
 }
 
+/**
+ * A stored embedding model, and the credential it links.
+ *
+ * `modelName` is separate from `title` ON PURPOSE, and they are deliberately
+ * different strings. A toolkit's `embedding_model` field is matched against the
+ * model CATALOGUE, and the catalogue publishes `data.name`
+ * (`services/elitea-main/internal/infra/db/repos/models.go`) — not the row's
+ * `elitea_title`. A fixture that returned one value for both would let a
+ * journey pass the title and never notice.
+ */
+export interface CreatedEmbeddingModel extends CreatedConfiguration {
+  /** The name a toolkit's `embedding_model` field must carry. */
+  readonly modelName: string;
+  /** The `ai_credentials` row this model links. Delete it too. */
+  readonly credentialId: string;
+}
+
 export async function createConfiguration(
   request: APIRequestContext,
   section: ConfigurationSection,
@@ -153,6 +174,53 @@ export async function createConfiguration(
     throw new Error(`createConfiguration(${section}): the create answered no id`);
   }
   return { id, title: input.title };
+}
+
+/**
+ * Create an embedding model the project can really see.
+ *
+ * THREE things have to be true before a toolkit may name one, and each is
+ * decided somewhere else:
+ *
+ *   1. the row is `type: "embedding_model"`, so the create route files it under
+ *      the `embedding` section — the only section the embedding catalogue reads;
+ *   2. it links an `ai_credentials` row that EXISTS, because the write route
+ *      resolves the reference and stores `status_ok = false` when it dangles;
+ *   3. the catalogue selects `status_ok = true`, so (2) is what makes the model
+ *      visible at all.
+ *
+ * So this makes the credential as well, and returns both ids. The chain is
+ * pinned server-side by `TestAToolkitCanNameAnEmbeddingModelTheProjectCanSee`
+ * (`services/elitea-main/internal/api`), which fails first and names the link
+ * that broke.
+ */
+export async function createEmbeddingModel(
+  request: APIRequestContext,
+  input: { readonly title: string; readonly modelName?: string; readonly shared?: boolean },
+  projectId: string = DEFAULT_PROJECT_ID,
+): Promise<CreatedEmbeddingModel> {
+  const credentialTitle = `${input.title}_cred`;
+  const credential = await createConfiguration(
+    request,
+    'ai_credentials',
+    { title: credentialTitle, data: { api_base: 'https://autotest.invalid/v1' } },
+    projectId,
+  );
+  const modelName = input.modelName ?? `${input.title}_name`;
+  const model = await createConfiguration(
+    request,
+    'embedding',
+    {
+      title: input.title,
+      shared: input.shared,
+      data: {
+        name: modelName,
+        ai_credentials: { elitea_title: credentialTitle, private: false },
+      },
+    },
+    projectId,
+  );
+  return { ...model, modelName, credentialId: credential.id };
 }
 
 /** Remove a configuration. Best effort by design — it runs in a `finally`. */

@@ -76,7 +76,11 @@ import {
   deleteGithubToolkit,
   type GithubToolkitFixture,
 } from '../../fixtures/api';
-import { createConfiguration, deleteConfiguration } from '../../fixtures/configurations';
+import {
+  createConfiguration,
+  createEmbeddingModel,
+  deleteConfiguration,
+} from '../../fixtures/configurations';
 import { STORAGE_STATE } from '../../../playwright.config';
 
 test.use({ storageState: STORAGE_STATE.admin });
@@ -425,7 +429,10 @@ test('a GitHub toolkit carries its credential, its vector store and its embeddin
     data: { base_url: PLACEHOLDER_BASE_URL, access_token: `${AUTOTEST_PREFIX}gh_ref_token` },
   });
   const vector = await createConfiguration(request, 'vectorstorage', { title: vectorTitle });
-  const embedding = await createConfiguration(request, 'embedding', { title: embeddingTitle });
+  // Not `createConfiguration('embedding', …)`: an embedding model is only
+  // referenceable once the project can SEE it, which takes a credential of its
+  // own and an admitted row. The fixture makes both.
+  const embedding = await createEmbeddingModel(request, { title: embeddingTitle });
 
   const name = autotestName('tk_full');
   let toolkitId = '';
@@ -444,11 +451,12 @@ test('a GitHub toolkit carries its credential, its vector store and its embeddin
          */
         github_configuration: { elitea_title: credential.title, private: false },
         pgvector_configuration: { elitea_title: vector.title, private: false },
-        // An embedding model is named by its TITLE as a plain string — the
-        // schema declares it `configuration_model: "embedding"`, not a
-        // configuration-reference object, and the two shapes are not
-        // interchangeable.
-        embedding_model: embedding.title,
+        // An embedding model is named by a plain string — the schema declares
+        // it `configuration_model: "embedding"`, not a configuration-reference
+        // object, and the two shapes are not interchangeable. The string is the
+        // model's NAME, which the catalogue publishes from `data.name`; the
+        // row's own title names nothing there.
+        embedding_model: embedding.modelName,
         selected_tools: ['get_issues', 'get_issue'],
       },
     });
@@ -465,12 +473,13 @@ test('a GitHub toolkit carries its credential, its vector store and its embeddin
       (settings['pgvector_configuration'] as Record<string, unknown> | undefined)?.['elitea_title'],
       'the vector-store reference must survive as an object',
     ).toBe(vector.title);
-    expect(settings['embedding_model'], 'the embedding model is stored by title').toBe(
-      embedding.title,
+    expect(settings['embedding_model'], 'the embedding model is stored by name').toBe(
+      embedding.modelName,
     );
   } finally {
     await removeToolkit(request, toolkitId);
     await deleteConfiguration(request, embedding.id);
+    await deleteConfiguration(request, embedding.credentialId);
     await deleteConfiguration(request, vector.id);
     await deleteConfiguration(request, credential.id);
   }

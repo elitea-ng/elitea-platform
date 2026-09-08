@@ -101,8 +101,13 @@ ALTER TABLE p_1.configuration ALTER COLUMN status_ok DROP DEFAULT;
 ALTER TABLE p_2.configuration ALTER COLUMN status_ok DROP DEFAULT;`); err != nil {
 			t.Fatalf("remove the status default: %v", err)
 		}
+		// Complete against the type's own schema. The create route refuses a
+		// body missing a schema-required field before it reaches the admission
+		// decision this file is about
+		// (internal/api/v2/configurations/required_fields.go).
 		created := postStatusOKConfiguration(t, unfixed, 1, map[string]any{
 			"elitea_title": "legacy-schema-openapi",
+			"label":        "legacy-schema-openapi",
 			"type":         "openapi",
 			"data":         map[string]any{},
 		})
@@ -114,6 +119,7 @@ ALTER TABLE p_2.configuration ALTER COLUMN status_ok DROP DEFAULT;`); err != nil
 	t.Run("the defect", func(t *testing.T) {
 		created := postStatusOKConfiguration(t, unfixed, 1, map[string]any{
 			"elitea_title": "unfixed-openai",
+			"label":        "unfixed-openai",
 			"type":         "open_ai",
 			"data":         map[string]any{"api_key": "sk-unfixed", "api_base": ""},
 		})
@@ -131,6 +137,7 @@ ALTER TABLE p_2.configuration ALTER COLUMN status_ok DROP DEFAULT;`); err != nil
 	t.Run("a saved credential becomes visible", func(t *testing.T) {
 		created := postStatusOKConfiguration(t, fixed, 1, map[string]any{
 			"elitea_title": "standalone-openai",
+			"label":        "standalone-openai",
 			"type":         "open_ai",
 			// A literal api_key is the shape this route stores. It does not
 			// extract secrets into the vault, and the gateway reads either a
@@ -152,8 +159,9 @@ ALTER TABLE p_2.configuration ALTER COLUMN status_ok DROP DEFAULT;`); err != nil
 	t.Run("a credential whose secrets cannot be redeemed stays refused", func(t *testing.T) {
 		created := postStatusOKConfiguration(t, fixed, 2, map[string]any{
 			"elitea_title": "vaultless-openai",
+			"label":        "vaultless-openai",
 			"type":         "open_ai",
-			"data":         map[string]any{"api_key": "{{secret.openai}}"},
+			"data":         map[string]any{"api_key": "{{secret.openai}}", "api_base": ""},
 		})
 		if created["status_ok"] != false {
 			t.Fatalf("create response status_ok = %v, want false", created["status_ok"])
