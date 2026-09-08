@@ -65,6 +65,16 @@ PER-REQUEST MODES, SELECTED BY THE PROMPT (see `_script_for`):
                       toolkit, then — once the tool result comes back — with a
                       normal answer quoting it verbatim and ending in
                       CALL_TOOL_SENTINEL.
+  [[mock:call_tool <toolName> {"json": "arguments"}]]
+                      the same, with ARGUMENTS. A tool whose schema declares a
+                      required field cannot be called with the empty object the
+                      short form sends: a nested Elitea agent is exposed to the
+                      model as a tool that requires a non-empty `task`, and the
+                      runtime refuses a call without one before any child runs.
+                      So the delegation journeys name the tool AND the task,
+                      and the child then answers the task as an ordinary
+                      request of its own — which is what makes a sub-agent hop
+                      observable without a model that decides to delegate.
 
 The marker travels in the PROMPT and nowhere else, and that is the whole point.
 An environment variable or a control endpoint would be process-wide: one mock
@@ -140,6 +150,18 @@ ASK_USER_MARKER = "[[mock:ask_user]]"
 # cannot pass one journey and fail the other for unrelated reasons.
 CALL_TOOL_MARKER_PREFIX = "[[mock:call_tool "
 CALL_TOOL_MARKER_SUFFIX = "]]"
+# The arguments the scripted call carries when the marker names none.
+#
+# EMPTY IS THE RIGHT DEFAULT FOR A TOOLKIT OPERATION and the wrong one for a
+# nested agent, which is why the marker takes an optional second field. Neither
+# /tool operation declares a required parameter, and an argument their JSON
+# Schema does not admit is refused by the runtime before any request is made
+# (`additionalProperties: false`). A nested Elitea application is the opposite:
+# it is presented to the model as a tool whose schema REQUIRES a non-empty
+# `task` (services/elitea-worker-rust/src/agents/application_tools.rs, and the
+# SDK's own `build_dynamic_application_schema`), so `{}` is refused as an
+# invalid configuration and the whole turn dies before the child agent runs.
+CALL_TOOL_DEFAULT_ARGUMENTS = "{}"
 # The last word of the continuation reply, and the reason it exists: the
 # stored assistant row is READABLE WHILE IT IS STILL BEING WRITTEN, and a tool
 # result is long — the native runtime's blocked-call payload alone is ~700
@@ -480,23 +502,79 @@ def _tool_openapi_document() -> dict:
     }
 
 
-def _call_tool_operation(prompt: str) -> str | None:
-    """The operation id a `[[mock:call_tool <op>]]` prompt names, or None.
+def _marker_body(prompt: str, start: int) -> str | None:
+    """The text between a marker's `[[…]]`, counting NESTED markers.
 
-    Returns None for a prompt with no marker AND for a marker naming nothing,
-    so a malformed marker falls through to the default echo rather than
-    emitting a call to the empty string — which the runtime would refuse with
-    an error that names neither the mock nor the marker.
+    A plain scan for the first `]]` is wrong for exactly one prompt shape, and
+    it is the shape a two-level delegation needs: the task a parent hands its
+    child is itself a marker, so the child's `]]` closes before the parent's.
+    Reading the first one truncates the parent's arguments to invalid JSON,
+    which falls through to the echo — a two-hop turn that quietly becomes a
+    one-line answer.
+
+    Counting `[[` and `]]` from the opening pair ends the marker at the `]]`
+    that closes IT. For a marker with nothing nested inside, that is the first
+    one, so every prompt written before this existed parses as it did — a
+    stray `]]` in the trailing text is still past the end and still ignored.
+    """
+    depth = 0
+    index = start
+    while index < len(prompt) - 1:
+        pair = prompt[index:index + 2]
+        if pair == "[[":
+            depth += 1
+            index += 2
+            continue
+        if pair == "]]":
+            depth -= 1
+            if depth == 0:
+                return prompt[start + len(CALL_TOOL_MARKER_PREFIX):index]
+            index += 2
+            continue
+        index += 1
+    return None
+
+
+def _call_tool_marker(prompt: str) -> tuple[str, str] | None:
+    """The (tool name, arguments) a `[[mock:call_tool …]]` prompt names, or None.
+
+    Two forms, and the second exists because a required parameter cannot be
+    expressed in the first:
+
+        [[mock:call_tool mock_tool_status]]
+        [[mock:call_tool elitea_agent_7_v_9 {"task": "say ready"}]]
+
+    The name is the first whitespace-separated word, so every marker written
+    before the arguments form existed parses exactly as it did — the operation
+    ids these journeys call carry no spaces (`operationId`, and the runtime's
+    own generated function names).
+
+    Returns None for a prompt with no marker, for a marker naming nothing, and
+    for arguments that are not a JSON object — so a malformed marker falls
+    through to the default echo rather than emitting a call the runtime would
+    refuse with an error that names neither the mock nor the marker. The
+    arguments must therefore not contain the `]]` that closes the marker.
     """
     start = prompt.find(CALL_TOOL_MARKER_PREFIX)
     if start < 0:
         return None
-    rest = prompt[start + len(CALL_TOOL_MARKER_PREFIX):]
-    end = rest.find(CALL_TOOL_MARKER_SUFFIX)
-    if end < 0:
+    body = _marker_body(prompt, start)
+    if body is None:
         return None
-    operation = rest[:end].strip()
-    return operation or None
+    operation, _, raw_arguments = body.strip().partition(" ")
+    operation = operation.strip()
+    if not operation:
+        return None
+    raw_arguments = raw_arguments.strip()
+    if not raw_arguments:
+        return operation, CALL_TOOL_DEFAULT_ARGUMENTS
+    try:
+        decoded = json.loads(raw_arguments)
+    except ValueError:
+        return None
+    if not isinstance(decoded, dict):
+        return None
+    return operation, json.dumps(decoded)
 
 
 def _call_tool_call_id(operation: str, prompt: str) -> str:
@@ -512,20 +590,22 @@ def _call_tool_call_id(operation: str, prompt: str) -> str:
     return f"call_mock_tool_{digest}"
 
 
-def _call_tool_calls(operation: str, prompt: str) -> list[dict]:
-    """The one scripted call to `operation`, with empty arguments.
+def _call_tool_calls(operation: str, arguments: str, prompt: str) -> list[dict]:
+    """The one scripted call to `operation`, with the arguments the marker gave.
 
-    Empty rather than populated because neither operation declares a required
+    Empty by default because neither /tool operation declares a required
     parameter, and an argument the tool's JSON Schema does not admit is
     refused by the runtime before any request is made
-    (`additionalProperties: false` in `operation_schema`).
+    (`additionalProperties: false` in `operation_schema`). A marker that names
+    arguments carries them verbatim — see CALL_TOOL_DEFAULT_ARGUMENTS for the
+    tool class that cannot be called without them.
     """
     return [
         {
             "index": 0,
             "id": _call_tool_call_id(operation, prompt),
             "type": "function",
-            "function": {"name": operation, "arguments": "{}"},
+            "function": {"name": operation, "arguments": arguments},
         }
     ]
 
@@ -575,14 +655,15 @@ def _script_for(messages: list[dict]) -> _ChatScript:
             "ask_user_resumed",
         )
 
-    operation = _call_tool_operation(prompt)
-    if operation is not None:
+    marker = _call_tool_marker(prompt)
+    if marker is not None:
+        operation, arguments = marker
         answered = _tool_result_text_this_turn(messages)
         if answered is None:
-            # First pass: invoke the toolkit operation the marker names.
+            # First pass: invoke the tool the marker names.
             return _ChatScript(
                 "",
-                _call_tool_calls(operation, prompt),
+                _call_tool_calls(operation, arguments, prompt),
                 CHUNK_DELAY_SECONDS,
                 "call_tool",
             )
