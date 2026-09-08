@@ -24,9 +24,17 @@
  * `test_send_message_and_receive_response` (already covered by
  * `support.spec.ts` test 2, on the full stack), `test_new_chat_creates_fresh_session`
  * and `test_history_restore_and_continue` (both need a real prior turn — they
- * are ported into `support.spec.ts`, the `support-stack` project), and
- * `TestSupportAssistantAttachments` (the widget is vendored and its attachment
- * path was deliberately not ported — a product decision, not a hosting gap).
+ * are ported into `support.spec.ts`, the `support-stack` project).
+ *
+ *  - `TestSupportAssistantAttachments::test_attach_button_present_and_opens_picker`
+ *    — SUP-W4 below. This file used to say the case was unportable because
+ *    "the widget is vendored and its attachment path was deliberately not
+ *    ported". That was true of the version that removed the paperclip; it is
+ *    not true now. The smoke wave restored the whole path — the control and
+ *    the chip in `vendor/components/chat/MessageInput.tsx`, the upload and
+ *    read-back routes in `internal/api/v2/supportassistant/attachments.go` —
+ *    so the sentence stood as a disclosed gap that had gone stale, which is
+ *    exactly the class of comment this repository keeps being bitten by.
  *
  * ## Why this file is not in the `support-stack` project
  *
@@ -295,5 +303,80 @@ test('SUP-W3: the widget expands to full view and collapses back (legacy test_ex
     );
     await expect(page.getByRole('button', { name: 'Collapse the assistant' })).toHaveCount(0);
     await expect(page.locator('.elitea-assistant-window')).toBeVisible();
+  });
+});
+
+test('SUP-W4: the attach control opens a file picker and the chosen file appears on the message being composed (legacy test_attach_button_present_and_opens_picker)', async ({
+  page,
+}) => {
+  await withAssistantOn(page, async () => {
+    await openApp(page);
+    const chatWindow = await openWidgetFresh(page);
+
+    // ── 1. The control is there at all ──────────────────────────────────
+    // By its accessible name, not its class: the legacy case is about a
+    // control a user can find, and a paperclip with no label is one they
+    // cannot. The version of this widget that shipped before the smoke wave
+    // had removed this button entirely while leaving its stylesheet behind,
+    // so "the class exists" would have passed against no control.
+    const attach = chatWindow.getByRole('button', { name: 'Attach a file' });
+    await expect(attach, 'the widget must offer an attach control').toBeVisible({
+      timeout: 20_000,
+    });
+    await expect(attach).toBeEnabled();
+
+    // ── 2. Clicking it OPENS A PICKER ───────────────────────────────────
+    // The `filechooser` event is the browser's own, raised only when an
+    // `input[type=file]` is really activated. `MessageInput.tsx` forwards the
+    // button's click to a hidden input through a ref, and that forwarding is
+    // the thing the legacy case is about: a button wired to nothing paints
+    // identically and raises no event, so this wait is what discriminates.
+    const [chooser] = await Promise.all([
+      page.waitForEvent('filechooser', { timeout: 20_000 }),
+      attach.click(),
+    ]);
+    expect(chooser.isMultiple(), 'this port takes one file at a time').toBe(false);
+
+    // ── 3. A small file attaches, and shows on the message ──────────────
+    // In memory, so the journey carries no fixture file and cannot fail on a
+    // path. Nothing is uploaded here: `MessageInput` holds the file and the
+    // adapter uploads it when the message is SENT — and a send is an agent
+    // turn, which the e2e-standalone stack has no worker for. What this
+    // asserts is the half that is a client fact, and the half the legacy case
+    // actually names.
+    const fileName = `${AUTOTEST_PREFIX}note_${RUN_ID}.txt`;
+    await chooser.setFiles({
+      name: fileName,
+      mimeType: 'text/plain',
+      buffer: Buffer.from('autotest support attachment\n'),
+    });
+
+    const draft = `${AUTOTEST_PREFIX}with an attachment ${RUN_ID}`;
+    const input = chatWindow.locator('#elitea-assistant-message-input');
+    await input.fill(draft);
+
+    const chip = chatWindow.locator('.elitea-assistant-file-chip');
+    await expect(chip, 'the chosen file must appear on the message being composed').toHaveCount(1, {
+      timeout: 15_000,
+    });
+    await expect(chip.locator('.elitea-assistant-file-chip-name')).toHaveText(fileName);
+    // The message text is still there beside it: attaching a file must not
+    // waive or clear the question. `SupportPredictPayload.content` is
+    // `min_length=1` server-side, so a composer that swallowed the text would
+    // make every attachment turn refusable.
+    await expect(input).toHaveValue(draft);
+    await expect(chatWindow.locator('.elitea-assistant-send-button')).toBeEnabled();
+
+    // ── 4. …and it can be taken off again ───────────────────────────────
+    // The chip's own remove control. Proves the chip is live state rather
+    // than a paint: a rendered filename that nothing owns cannot be removed.
+    await chatWindow.getByRole('button', { name: 'Remove attachment' }).click();
+    await expect
+      .poll(async () => chatWindow.locator('.elitea-assistant-file-chip').count(), {
+        timeout: 15_000,
+        message: 'removing the attachment left its chip on the message',
+      })
+      .toBe(0);
+    await expect(input, 'removing the file must not clear the message').toHaveValue(draft);
   });
 });
