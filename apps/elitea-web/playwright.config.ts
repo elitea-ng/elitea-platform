@@ -188,6 +188,29 @@ const SUPPORT_JOURNEY = /journeys\/support\/support\.spec\.ts/;
  * that can create a toolkit. See the file's own header.
  */
 const EMPTY_TOOLKIT_LIST_JOURNEY = /journeys\/toolkits\/toolkits\.emptyList\.spec\.ts/;
+
+/*
+ * The fixture self-tests (API-FX1..4), and why they need their own project.
+ *
+ * API-FX3 calls `sweepAutotestEntities`, which deletes EVERY `autotest_`
+ * conversation and agent in the shared project. That is the claim it is
+ * about — a cleanup that reports success and deletes nothing is the failure
+ * `admin.app-requests.spec.ts` (#544) and `toolkits.emptyList.spec.ts` were
+ * both eventually rewritten for — and it is also, run at the wrong moment, a
+ * way to destroy every sibling journey's rows mid-flight.
+ *
+ * So the sweep runs where it can only ever find its own: after `setup`, before
+ * the first journey that can create an agent or a conversation, exactly the
+ * slot `toolkits-empty` occupies for its own precondition. Both engine
+ * projects depend on it and both ignore it, so it runs ONCE and never again.
+ * The two projects can run together: this one touches conversations and
+ * agents, that one asserts the toolkit count.
+ *
+ * A run of this project also clears whatever an earlier, killed run left in
+ * the shared project — which is a second reason to want it first rather than
+ * a reason to want it at all.
+ */
+const FIXTURE_ISOLATION_JOURNEY = /journeys\/api\/api\.fixture-isolation\.spec\.ts/;
 /*
  * THE INVENTORY JOURNEYS (journeys/inventory, INV-001..010) HAVE NO CONSTANT
  * HERE, AND THAT IS THE DECISION.
@@ -358,28 +381,61 @@ export default defineConfig({
       testMatch: EMPTY_TOOLKIT_LIST_JOURNEY,
     },
 
+    /*
+     * ── fixtures-sweep — the fixture self-tests, before anything seeds ─────
+     *
+     * See `FIXTURE_ISOLATION_JOURNEY` above. Serial, because API-FX3's sweep
+     * would otherwise take the rows API-FX1/2/4 are holding; chromium only,
+     * because none of the four opens a page.
+     */
+    {
+      name: 'fixtures-sweep',
+      use: {
+        ...devices['Desktop Chrome'],
+        storageState: STORAGE_STATE.admin,
+        launchOptions: CHROMIUM_LAUNCH_OPTIONS,
+      },
+      dependencies: ['setup'],
+      testMatch: FIXTURE_ISOLATION_JOURNEY,
+      fullyParallel: false,
+    },
+
     // ── chromium ──────────────────────────────────────────────────────────
     {
       name: 'chromium',
-      testIgnore: [ADMISSION_JOURNEY, REAL_ENGINE_JOURNEY, WIKI_QUERY_JOURNEY, SUPPORT_JOURNEY, EMPTY_TOOLKIT_LIST_JOURNEY],
+      testIgnore: [
+        ADMISSION_JOURNEY,
+        REAL_ENGINE_JOURNEY,
+        WIKI_QUERY_JOURNEY,
+        SUPPORT_JOURNEY,
+        EMPTY_TOOLKIT_LIST_JOURNEY,
+        FIXTURE_ISOLATION_JOURNEY,
+      ],
       use: {
         ...devices['Desktop Chrome'],
         storageState: STORAGE_STATE.member,
         launchOptions: CHROMIUM_LAUNCH_OPTIONS,
       },
-      dependencies: ['setup', 'toolkits-empty'],
+      dependencies: ['setup', 'toolkits-empty', 'fixtures-sweep'],
       testMatch: /journeys\/.+\.spec\.ts/,
     },
 
     // ── webkit (spec §6.2: "chromium + webkit") ───────────────────────────
     {
       name: 'webkit',
-      testIgnore: [ADMISSION_JOURNEY, REAL_ENGINE_JOURNEY, WIKI_QUERY_JOURNEY, SUPPORT_JOURNEY, EMPTY_TOOLKIT_LIST_JOURNEY],
+      testIgnore: [
+        ADMISSION_JOURNEY,
+        REAL_ENGINE_JOURNEY,
+        WIKI_QUERY_JOURNEY,
+        SUPPORT_JOURNEY,
+        EMPTY_TOOLKIT_LIST_JOURNEY,
+        FIXTURE_ISOLATION_JOURNEY,
+      ],
       use: {
         ...devices['Desktop Safari'],
         storageState: STORAGE_STATE.member,
       },
-      dependencies: ['setup', 'toolkits-empty'],
+      dependencies: ['setup', 'toolkits-empty', 'fixtures-sweep'],
       testMatch: /journeys\/.+\.spec\.ts/,
     },
 

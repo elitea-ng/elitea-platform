@@ -511,3 +511,43 @@ describe('the live lanes must never claim coverage they did not take', () => {
     expect(liveProjectsAreEnvironmentGated(before)).toBe(false);
   });
 });
+
+/* ── rule 6 ─────────────────────────────────────────────────────────────── */
+
+/**
+ * The destructive fixture self-test must never run inside the ordinary suite.
+ *
+ * API-FX3 calls `sweepAutotestEntities`, which deletes every `autotest_`
+ * conversation and agent in the shared project. Run in its own ordering
+ * project — after `setup`, before the first sibling that can create one — it
+ * can only ever find its own rows. Run in `chromium` or `webkit` it would
+ * delete, at some unpredictable moment, whatever twenty other journeys were
+ * holding, and every one of them would fail on a 404 for a row it created.
+ *
+ * That failure has no cause anywhere near it, which is why the rule is stated
+ * here rather than left to a reviewer noticing an edit to `testIgnore`.
+ */
+export function sweepJourneyIsIsolated(source) {
+  const named = source.includes(
+    'const FIXTURE_ISOLATION_JOURNEY = /journeys\\/api\\/api\\.fixture-isolation\\.spec\\.ts/',
+  );
+  // Once per engine project, plus the project that owns it.
+  const ignored = (source.match(/^\s*FIXTURE_ISOLATION_JOURNEY,$/gm) ?? []).length;
+  const owned = source.includes("name: 'fixtures-sweep'");
+  return named && owned && ignored === 2;
+}
+
+describe('the sweep must not run beside the journeys it would sweep', () => {
+  it('the fixture self-tests own a project and are ignored by both engines', () => {
+    expect(sweepJourneyIsIsolated(read('playwright.config.ts'))).toBe(true);
+  });
+
+  it('rejects a config that let one engine pick the sweep up', () => {
+    const before = [
+      "const FIXTURE_ISOLATION_JOURNEY = /journeys\\/api\\/api\\.fixture-isolation\\.spec\\.ts/;",
+      "      name: 'fixtures-sweep',",
+      '        FIXTURE_ISOLATION_JOURNEY,',
+    ].join('\n');
+    expect(sweepJourneyIsIsolated(before)).toBe(false);
+  });
+});
