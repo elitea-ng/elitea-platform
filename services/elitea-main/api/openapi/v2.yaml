@@ -2331,11 +2331,44 @@ components:
           description: Numeric id serialized as string (strconv.Itoa).
         name: { type: string }
         status: { type: string }
-        agent_type: { type: string }
+        agent_type:
+          type: string
+          description: >
+            Kept although pylon's ApplicationVersionListModel excluded it:
+            apps/elitea-web reads it off the summary to shape the version
+            dropdown (pages/agents/lib/editApplicationMappers.ts
+            toVersionSummaries, and its pipeline twin).
         created_at: { type: string, format: date-time }
+        instructions:
+          type: string
+          description: >
+            The version's prompt text, always present as "" when the column is
+            NULL (COALESCE in getVersions). Restored for issue 844 — the
+            projection dropped it, so a client reading the prompt off the
+            version LIST saw null on a response that otherwise looked complete.
+        meta:
+          allOf: [{ $ref: '#/components/schemas/VersionMeta' }]
+          nullable: true
+          description: >
+            application_versions.meta, the same jsonb ApplicationVersionDetail
+            carries. Restored for issue 844 alongside instructions; `{}` when
+            the column is NULL.
+        is_default:
+          type: boolean
+          description: >
+            Derived, not stored: true when the owning application's
+            meta.default_version_id names this row. Emitted since the
+            default-version bar was wired, and read by
+            apps/elitea-web/src/pages/{agents,pipelines}/lib/*Mappers.ts and
+            features/agents/model/useVersionBarCommands.ts — it was simply
+            absent from this schema, which is why those readers cast it off the
+            wire.
       description: >
         NOTE(W2): getVersions row map,
-        internal/api/v2/applications/handler.go:159-165.
+        internal/api/v2/applications/handler.go:216-243. The handler emits ALL
+        eight keys on every row; `required` lists only the five the schema
+        carried before issue 844, so that adding the other three stays additive
+        for the generated fixtures rather than invalidating every existing one.
 
     VersionToolRef:
       type: object
@@ -6472,6 +6505,20 @@ components:
         versions:
           type: array
           items: { $ref: '#/components/schemas/VersionWriteRequest' }
+          description: >
+            On THIS route `versions[].agent_type` accepts `openai`, `react`,
+            `dial`, `pipeline`, `agent` and the empty string, and nothing else;
+            `versions[0]` decides, and any other value is refused on the agents
+            error channel with "invalid agent_type"
+            (internal/api/v2/eliteacore/handler.go, storedAgentType).
+
+            `agent` and the empty string are both STORED as `openai`. `agent`
+            is accepted because the platform's own markdown export writes it
+            for a stored `openai` agent (export_markdown.go,
+            markdownAgentType, mirroring pylon's _application_to_md), so
+            without the mapping an exported `.agent.md` file was not importable
+            through this API — only through a web client, which renames the
+            value in its own file parser (issue 845).
       additionalProperties: true
       x-elitea-passthrough: >-
         NOTE(W2): entities are handled as map[string]any. The import reads
