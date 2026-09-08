@@ -133,8 +133,14 @@ type conversationItem struct {
 type dateGroup struct {
 	Name          string             `json:"name"`
 	Conversations []conversationItem `json:"conversations"`
-	Total         int                `json:"total"`
-	Offset        int                `json:"offset"`
+	// Total is the size of the WHOLE bucket, not of this page. The rail's
+	// load-more sentinel mounts only while `total` exceeds the rows it
+	// already holds, so a total equal to the delivered count is the same
+	// statement as "there is no more" — see firstPage.
+	Total int `json:"total"`
+	// Offset is where the next page starts: the number of rows this response
+	// carries. The client sends it back as `?date_group=…&offset=…`.
+	Offset int `json:"offset"`
 }
 
 // groupOrder is the sidebar's date-group order, newest bucket first. Also
@@ -364,10 +370,14 @@ func paginate(items []conversationItem, limit, offset int) []conversationItem {
 	return items[offset:end]
 }
 
+// defaultPageSize is the legacy runtime's own limit (folder.py:132-133) and
+// the size of one bucket page in the grouped listing.
+const defaultPageSize = 10
+
 // pageParams reads the `limit`/`offset` pair both lazy fetchers send,
 // defaulting to the legacy runtime's own limit=10/offset=0 (folder.py:132-133).
 func pageParams(r *http.Request) (limit, offset int) {
-	limit = 10
+	limit = defaultPageSize
 	if v, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && v > 0 {
 		limit = v
 	}
@@ -375,6 +385,39 @@ func pageParams(r *http.Request) (limit, offset int) {
 		offset = v
 	}
 	return limit, offset
+}
+
+// firstPage is one bucket's opening page of the GROUPED listing, and the pair
+// of counters the client needs to ask for the next one.
+//
+// DEFECT #852. Every bucket used to be emitted whole, with
+// `total = offset = len(conversations)`. `total` is what the rail's
+// LoadMoreSentinel compares against the rows it holds
+// (`hasMore = totalAvailableCount > listCurrentSize`), so a total that always
+// equalled the delivered count made `hasMore` false for every bucket that has
+// ever existed: the sentinel never mounted, `onLoadMoreInGroup` never fired,
+// and `?date_group=…&offset=…` — a route this handler has served since #128 —
+// had no caller. A project whose sidebar was longer than one screen was not
+// slow to load; it simply never loaded the rest.
+//
+// `total` is now the SIZE OF THE BUCKET and `offset` the number of rows this
+// response carries, which is where the next page starts. The two are equal
+// only when the bucket really did fit in one page, which is the state the old
+// code asserted unconditionally.
+//
+// SEARCH IS NOT PAGED. `query=` filters the whole project before the buckets
+// are cut, and the load-more fetchers do not carry the term
+// (`dateGroupConversations` sends `date_group`/`limit`/`offset`/`sort_*` and
+// nothing else), so a paged search would drop matches on the floor and then
+// fetch UNFILTERED rows to replace them. A filtered listing is therefore
+// served whole, and its `total` still equals its delivered count — honestly
+// this time, because it is the whole answer.
+func firstPage(all []conversationItem, pageSize int, paged bool) (page []conversationItem, total, offset int) {
+	if !paged {
+		return all, len(all), len(all)
+	}
+	page = paginate(all, pageSize, 0)
+	return page, len(all), len(page)
 }
 
 // listFolderConversations answers `?folder_id=N` — one folder's page of
@@ -479,15 +522,21 @@ func (h *Handler) listGrouped(w http.ResponseWriter, r *http.Request, projectID 
 	pinned, foldered, ungrouped := partitionConversations(conversations)
 	groups := groupByDate(ungrouped, time.Now())
 
+	// One page per bucket, and a `total` that says how much is behind it.
+	// See firstPage for why a filtered listing is served whole.
+	pageSize, _ := pageParams(r)
+	paged := r.URL.Query().Get("query") == ""
+
 	dateGroups := make([]dateGroup, 0)
 	for _, label := range groupOrder {
 		convs := groups[label]
 		if len(convs) > 0 {
+			page, total, offset := firstPage(convs, pageSize, paged)
 			dateGroups = append(dateGroups, dateGroup{
 				Name:          label,
-				Conversations: convs,
-				Total:         len(convs),
-				Offset:        len(convs),
+				Conversations: page,
+				Total:         total,
+				Offset:        offset,
 			})
 		}
 	}
@@ -506,15 +555,21 @@ func (h *Handler) listGrouped(w http.ResponseWriter, r *http.Request, projectID 
 		if convs == nil {
 			convs = []conversationItem{}
 		}
+		// A folder pages exactly like a date bucket. Its client half is the
+		// same code — `onLoadMoreInFolder` beside `onLoadMoreInGroup`, reading
+		// the same `total`/`offset` pair through the same merge helper — and
+		// `?folder_id=…&offset=…` is already served, so leaving folders whole
+		// here would keep half of #852 alive.
+		page, total, offset := firstPage(convs, pageSize, paged)
 		row := map[string]any{
 			"id":            f.ID,
 			"name":          f.Name,
 			"project_id":    f.ProjectID,
 			"created_at":    f.CreatedAt,
 			"updated_at":    f.UpdatedAt,
-			"conversations": convs,
-			"total":         len(convs),
-			"offset":        len(convs),
+			"conversations": page,
+			"total":         total,
+			"offset":        offset,
 		}
 		if f.Position != nil {
 			row["position"] = *f.Position

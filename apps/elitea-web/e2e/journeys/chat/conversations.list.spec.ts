@@ -186,19 +186,19 @@ test('the rail moves from one open conversation to another', async ({ page }) =>
  * with it.
  *
  * ─────────────────────────────────────────────────────────────────────────────
- * WHAT THE "NO SECOND PAGE" ASSERTIONS MEAN
+ * WHAT THE BUCKET'S OWN ARITHMETIC MEANS
  * ─────────────────────────────────────────────────────────────────────────────
- * The rail CAN page a bucket — `LoadMoreSentinel` fires `date_group=…&offset=…`
- * once a bucket reports more rows than it delivered — and today it never does,
- * because this server answers the grouped listing with every conversation of
- * every bucket and a `total` equal to that same count. Both halves are
- * asserted: the answer's own arithmetic, and the absence of any follow-up page
- * request on the wire.
+ * The rail pages a bucket: `LoadMoreSentinel` fires `date_group=…&offset=…`
+ * once a bucket reports more rows than it delivered. It never could, until
+ * issue 852 — the grouped listing answered with every conversation of every
+ * bucket and a `total` equal to that same count, so "there is more" was not
+ * expressible and the follow-up read had no caller. This test used to assert
+ * exactly that: a `total` equal to the rows delivered, and no `date_group=`
+ * request anywhere on the wire.
  *
- * That is the load-bearing precondition for the two tests above, which find
- * their rows without ever scrolling the rail. The day the server starts paging
- * a bucket, this test fails and names the reason — instead of those two
- * starting to lose rows in a way that reads like a missing conversation.
+ * The last test in this file is now the opposite statement, and it seeds
+ * enough conversations to make it: a bucket bigger than one page reports the
+ * remainder, and the rail goes and fetches it.
  */
 test('the rail places each conversation in the date group the server assigned, in the server’s order', async ({
   page,
@@ -256,13 +256,14 @@ test('the rail places each conversation in the date group the server assigned, i
       'every conversation just created must be in the grouped listing the rail reads',
     ).toEqual([...ids].sort());
 
-    // Every bucket arrives WHOLE: `total` is the count of rows delivered, so
-    // there is nothing left for a second page to fetch.
+    // Each bucket's own arithmetic is CONSISTENT: it never claims to have
+    // delivered more rows than it did. A bucket bigger than one page reports
+    // the remainder instead, which the last test in this file exercises.
     for (const group of groups) {
       expect(
         group.total,
-        `bucket "${String(group.name)}" reports a total that does not match the rows it carries`,
-      ).toBe((group.conversations ?? []).length);
+        `bucket "${String(group.name)}" reports fewer rows than it delivered`,
+      ).toBeGreaterThanOrEqual((group.conversations ?? []).length);
     }
 
     /* ── what the screen shows ──────────────────────────────────────────── */
@@ -289,16 +290,107 @@ test('the rail places each conversation in the date group the server assigned, i
       'the rail must keep the order the server sent — newest first, by the timestamps it grouped on',
     ).toEqual(serverOrder);
 
-    /* ── and nothing on this rail asked for a second page ───────────────── */
-    // Not read as a missing sentinel element: a folder accordion renders one of
-    // those too, and a folder that holds a PINNED conversation is short by
-    // client-side filtering rather than by paging — so a count taken at page
-    // scope would flake on another journey's fixtures. The REQUEST is the
-    // unambiguous fact.
-    expect(
-      requested.filter((url) => url.includes('date_group=')),
-      'no bucket reported more rows than it delivered, so nothing had a second page to ask for',
-    ).toEqual([]);
+    // `requested` is read only to keep the wire log alive for the reader: the
+    // second-page claim is made by the test below, on a bucket seeded large
+    // enough to have one.
+    expect(requested.length, 'the page must have issued requests at all').toBeGreaterThan(0);
+  } finally {
+    for (const id of ids) await deleteConversation(page.request, id);
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// issue 852: the rail pages a bucket that is bigger than one page
+//
+// This is the inversion of what this file used to pin. The grouped listing set
+// every bucket's `total` to the number of rows it had just delivered, so
+// `LoadMoreSentinel`'s `hasMore` was false for every bucket that has ever
+// existed: it never mounted, `onLoadMoreInGroup` never fired, and the
+// `?date_group=…&offset=…` read the server has served since the folders
+// handler was fixed had no caller at all. A project longer than one page did
+// not load slowly; it never loaded the rest.
+//
+// THE SEED IS THE POINT. The bucket has to be bigger than the server's page
+// (10) for a remainder to exist, so this test creates more conversations than
+// the rest of this file put together, through the API, and deletes every one
+// of them afterwards.
+// ─────────────────────────────────────────────────────────────────────────────
+const PAGE_SIZE = 10;
+
+test('a date bucket bigger than one page reports the remainder, and the rail fetches it', async ({ page }) => {
+  // The seed and the teardown are ~24 API calls; the default 30 s budget is
+  // about the clock rather than about paging.
+  test.setTimeout(180_000);
+  const ids: string[] = [];
+  for (let i = 0; i < PAGE_SIZE + 4; i += 1) ids.push(await createConversation(page.request, uniqueName(`page${i}`)));
+
+  try {
+    const followUps: string[] = [];
+    page.on('request', (request) => {
+      if (request.url().includes('date_group=')) followUps.push(request.url());
+    });
+
+    const listed = page.waitForResponse(
+      (response) =>
+        response.request().method() === 'GET' &&
+        response.url().includes('/elitea_core/folder/prompt_lib/') &&
+        response.url().includes('grouped=true') &&
+        !response.url().includes('date_group=') &&
+        !response.url().includes('folder_id='),
+      { timeout: 30_000 },
+    );
+    await page.goto(BASE_URL + '/app/chat');
+    await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 20_000 });
+
+    const listing = (await (await listed).json()) as {
+      date_groups?: readonly {
+        readonly name?: string;
+        readonly total?: number;
+        readonly offset?: number;
+        readonly conversations?: readonly { readonly id?: string | number }[];
+      }[];
+    };
+    const groups = listing.date_groups ?? [];
+    // The bucket these conversations landed in — read from the answer rather
+    // than hardcoded, for the midnight reason the file header gives.
+    const bucket = groups.find((group) =>
+      (group.conversations ?? []).some((conversation) => ids.includes(String(conversation.id ?? ''))),
+    );
+    expect(bucket, 'the seeded conversations must be in a bucket the rail renders').toBeDefined();
+
+    const delivered = (bucket?.conversations ?? []).length;
+    expect(delivered, 'the bucket must be PAGED, not served whole').toBe(PAGE_SIZE);
+    expect(bucket?.total ?? 0, 'the bucket must report the rows it did NOT deliver').toBeGreaterThan(delivered);
+    expect(bucket?.offset, 'offset is where the next page starts — the rows delivered').toBe(delivered);
+
+    /* ── and the rail really goes and asks for them ─────────────────────── */
+    await openGroup(page, String(bucket?.name));
+    // The sentinel sits under the last row of the bucket, so it has to be
+    // brought into view. Scrolling the last rendered row into view is the
+    // gesture a reader performs; `waitForTimeout` would only be waiting for
+    // the same thing without saying so.
+    const sidebar = page.getByTestId('chat-conversation-sidebar');
+    const rows = sidebar.locator('[data-testid^="conversation-item-"]');
+    await rows.last().scrollIntoViewIfNeeded();
+
+    await expect
+      .poll(() => followUps.length, {
+        timeout: 30_000,
+        message: 'a bucket with a remainder must ask the server for its next page',
+      })
+      .toBeGreaterThan(0);
+    const followUp = new URL(followUps[0] ?? '', BASE_URL);
+    expect(followUp.searchParams.get('offset'), 'the follow-up must start where the first page ended').toBe(
+      String(delivered),
+    );
+
+    // …and the rows it fetched really reach the screen.
+    await expect
+      .poll(async () => rows.count(), {
+        timeout: 30_000,
+        message: 'the rail must render more rows after the second page than the first page carried',
+      })
+      .toBeGreaterThan(delivered);
   } finally {
     for (const id of ids) await deleteConversation(page.request, id);
   }

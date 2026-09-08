@@ -1237,6 +1237,66 @@ components:
         total_cost:
           type: number
 
+    ConversationExportMessage:
+      type: object
+      required: [id, role, content, created_at]
+      properties:
+        id: { type: string }
+        uid:
+          type: string
+          description: The message group's UUID, when it has one.
+        role:
+          type: string
+          description: >
+            `user` or `assistant` as the transcript stored it. Passed through
+            rather than normalised, so an export records what was written.
+        author:
+          type: string
+          description: >
+            The display name of the participant that wrote the message, when
+            the participant list resolves one. Absent for a message whose
+            author cannot be named; the Markdown document then falls back to
+            the role.
+        content: { type: string }
+        content_type: { type: string }
+        created_at: { type: string, format: date-time }
+        metadata:
+          type: object
+          additionalProperties: true
+          x-elitea-passthrough: >-
+            NOTE(W2): DB jsonb column `chat_messages.metadata`, re-emitted
+            verbatim (internal/api/v2/conversations/export.go:1). It is the
+            same column the transcript read returns unchanged; the runtime
+            writes whatever a turn produced into it, so the key set is not
+            fixed by this route and typing it here would describe only the
+            rows one runtime version wrote.
+
+    ConversationExport:
+      type: object
+      required: [id, project_id, name, created_at, updated_at, exported_at, message_count, messages]
+      description: >
+        The `format=json` body. The Markdown document is rendered from this
+        same model, so the two formats cannot describe different conversations.
+      properties:
+        id: { type: string }
+        uuid: { type: string }
+        project_id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        exported_at:
+          type: string
+          format: date-time
+          description: When this document was produced, in UTC.
+        message_count:
+          type: integer
+          description: The number of messages in `messages`, which is the whole transcript.
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConversationExportMessage'
+
     MessageTraceListing:
       type: object
       required: [total, rows]
@@ -10934,6 +10994,79 @@ paths:
               schema:
                 $ref: '#/components/schemas/EvalScorecard'
         '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/conversation_export/prompt_lib/{project_id}/{conversation_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: conversation_id
+        in: path
+        required: true
+        schema: { type: string }
+        description: >
+          The conversation's numeric id or its UUID. Both resolve, the same way
+          the conversation detail read resolves them.
+    get:
+      operationId: exportConversation
+      summary: Download one conversation's transcript as a document
+      description: |
+        The rail's row menu offers this as "Export", with one entry per format.
+        Both answers carry `Content-Disposition: attachment` and a filename
+        derived from the conversation's own name, so a browser saves the
+        response rather than rendering it.
+
+        The document is the WHOLE transcript, oldest message first, never a
+        page of it. A conversation with more messages than the server will
+        assemble in one document is refused with 400 rather than exported
+        truncated: a partial file that looks complete is the failure this
+        refusal exists to prevent.
+
+        Reading an export needs the same permission as reading the messages
+        (`models.chat.messages.list`). There is no separate export right.
+      tags: [chat]
+      parameters:
+        - name: format
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [md, markdown, json]
+            default: md
+          description: >
+            `md` (the default) is the readable document — a title, a short
+            header block and one section per message. `json` is the faithful
+            one, carrying every field the transcript read returns. Any other
+            value is a 400 rather than a silent fallback, because a client that
+            asked for a format it did not get would save the wrong extension.
+      responses:
+        '200':
+          description: >
+            The transcript document. `text/markdown` for `format=md`,
+            `application/json` for `format=json`.
+          headers:
+            Content-Disposition:
+              description: >
+                `attachment` plus the derived filename. Exposed to browser
+                fetch through Access-Control-Expose-Headers, because the web
+                client names the saved file from it.
+              schema: { type: string }
+          content:
+            text/markdown:
+              schema: { type: string }
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationExport'
+        '400':
+          description: >
+            An unsupported format, or a conversation too long to export in one
+            document.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '404': { $ref: '#/components/responses/404' }

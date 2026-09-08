@@ -232,7 +232,7 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
  * internal/api/v2/analytics/costs.go and internal/api/v2/messagetraces, and
  * with them the spec's first `chat` tag. No UI ships with it — the old app's
  * trace-pin fetch is recorded as unported in
- * src/processes/chat/model/useLoadMoreMessages.ts — so MANIFEST_ENTRY_COUNT is
+ * a since-deleted transcript pager (issue 852) — so MANIFEST_ENTRY_COUNT is
  * unchanged.
  * 145 -> 151 when issue #250 added the tracing ingest surface: six new spec
  * operations (collectTracesUngated, collectTraces, proxyOtlpTracesUngated,
@@ -556,8 +556,17 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
  * MANIFEST_ENTRY_COUNT is unchanged. No UI ships with this change — the tag
  * rail still reads the list alone — so neither operation acquires a caller,
  * which is the same case as every backend-only step above.
+ *
+ * 234 -> 235, when conversation export was built (issue 851). One new spec
+ * operation, `exportConversation`, landed in v2.yaml alongside
+ * internal/api/v2/conversations/export.go. The rail's row menu has rendered an
+ * "Export" entry since the feature was ported: disabled, with two children
+ * labelled `Option1`/`Option2` wired to nothing, because no route existed at
+ * all. Both halves ship together here, so MANIFEST_ENTRY_COUNT moves with it —
+ * see the note beside that number for why the entry is `handwritten` even
+ * though the operation is described.
  */
-const GENERATED_OPERATION_COUNT = 234;
+const GENERATED_OPERATION_COUNT = 235;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -651,8 +660,22 @@ const GENERATED_OPERATION_COUNT = 234;
  *     them". widgets/app-shell's budget warning banner (issue 312) is the
  *     caller, so the entry lands with the CALLER rather than with the
  *     description, the same way projectInfo.get and projectInfo.update did.
+ *
+ * 249 -> 250: `conversation.export` (issue 851). The row menu's Export entry
+ * acquires a real handler, and the entity acquires the fetcher behind it, in
+ * the same change that describes the route — so both numbers move by one.
+ *
+ * The entry is `source: "handwritten"` with a null operationId even though
+ * v2.yaml describes the operation, which is unusual enough to record: the
+ * generated client routes every call through `eliteaFetch`, which reads bodies
+ * as text and returns an envelope, so it can neither hand back a Blob nor
+ * expose `Content-Disposition` — the two things a download needs.
+ * `shared/lib/download.ts` is the sanctioned raw-fetch path for exactly this,
+ * and the fetcher still builds its URL with the generated
+ * `getExportConversationUrl`. The reverse check is satisfied by PATH coverage
+ * rather than by an operationId, so no allowlist line is added.
  */
-const MANIFEST_ENTRY_COUNT = 249;
+const MANIFEST_ENTRY_COUNT = 250;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

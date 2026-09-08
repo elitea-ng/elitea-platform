@@ -58,7 +58,7 @@ describe('unwrapList', () => {
     // Asserted against a LITERAL expected order, not against `ROWS`: if the
     // helper handed back the caller's own array, `out.reverse()` would mutate
     // the fixture too and an `expect(body.rows).toStrictEqual(ROWS)` would
-    // compare the mutated array with itself and pass. (`useLoadMoreMessages`
+    // compare the mutated array with itself and pass. (a transcript pager
     // reverses the result in place.)
     const paged = { rows: [{ id: 'a' }, { id: 'b' }] };
     unwrapList<Row>(paged, 'userList').reverse();

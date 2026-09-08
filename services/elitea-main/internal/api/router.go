@@ -2790,6 +2790,12 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						Delete("/conversation/prompt_lib/{projectID}/{conversationID}", convHandler.Delete)
 					r.With(projectPermission("models.chat.messages.list")).
 						Get("/messages/prompt_lib/{projectID}/{conversationID}", convHandler.ListMessages)
+					// Conversation export (#851). It reads the TRANSCRIPT, so
+					// it declares the transcript's own permission rather than
+					// a new name: anybody who may read the messages may keep
+					// a copy of them, and nobody else. No migration needed.
+					r.With(projectPermission("models.chat.messages.list")).
+						Get("/conversation_export/prompt_lib/{projectID}/{conversationID}", convHandler.Export)
 					r.With(requireMessageDelete).
 						Delete("/messages/prompt_lib/{projectID}/{conversationID}", convHandler.DeleteMessages)
 					// message.py declares BOTH verbs on one module, so the

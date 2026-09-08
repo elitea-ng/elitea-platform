@@ -1,7 +1,7 @@
 /**
  * Ported from `apps/elitea-ui/src/common/convertChatConversationMessages.js`
  * (392 lines) — the full message-group → chat-history converter used by
- * `processes/chat/model/useLoadMoreMessages.ts` (injected parameter, deviation
+ * a transcript pager (injected parameter, deviation
  * #3) and by playback mode (`PlaybackChatBox` / `PlaybackToolBar`).
  *
  * `entities/message/lib/normalise.ts` already ports `convertTime`,
@@ -252,8 +252,10 @@ function buildSwarmChildAction(child: MessageGroupWire): Record<string, unknown>
  *     `normaliseAssistantMessage`
  *  4. Swarm-child `toolActions` attachment (lines 315-387)
  *
- * The result is compatible with `processes/chat/model/useLoadMoreMessages.ts`
- * which takes `convertMessagesToChatHistory` as an injected parameter.
+ * The result is the shape a transcript pager would prepend onto the running
+ * chat history; the one that existed had no caller and was removed (issue
+ * 852), so this function's only consumers today are the initial seed in
+ * `widgets/chat-box` and the playback loader.
  */
 // eslint-disable-next-line eslint/complexity — full conversion pipeline with parent/child/swarm branching
 /**

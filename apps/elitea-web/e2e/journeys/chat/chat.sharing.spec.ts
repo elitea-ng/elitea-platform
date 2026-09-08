@@ -22,16 +22,18 @@
  *     `meta->>'is_pinned'`, a key nothing writes for a conversation. The row
  *     jumped to the pinned group optimistically and the next listing put it
  *     back, forever.
- *  3. EXPORT is a stub to this day: the menu entry is disabled and its two
- *     options carry placeholder labels wired to nothing. It is asserted here
- *     AS a stub — see the last test — so that the day it is implemented this
- *     assertion fails and has to be rewritten, rather than a missing feature
- *     going on looking like a passing suite.
+ *  3. EXPORT was a stub: the menu entry was disabled and its two options
+ *     carried placeholder labels wired to nothing, with no server route behind
+ *     either of them. It was asserted here AS a stub, so that the day it was
+ *     implemented the assertion would fail and have to be rewritten rather
+ *     than a missing feature going on looking like a passing suite. That day
+ *     came (issue 851), and the last two tests are the rewrite: they read the
+ *     document the route actually serves.
  *
- * The first two are fixed in the same change as this file; each is also pinned
- * by a Go integration test at the layer that was wrong. What this journey adds
- * is the only statement neither of those can make: that the gesture a user
- * actually performs reaches the store.
+ * Each of the three is also pinned by a Go integration test at the layer that
+ * was wrong. What this journey adds is the only statement none of those can
+ * make: that the gesture a user actually performs reaches the store — or, for
+ * export, comes back as a file carrying this conversation.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * THE READER WITH NO SESSION
@@ -361,33 +363,88 @@ test('S3: pin moves the conversation into the sidebar\'s pinned group on the ser
 // ─────────────────────────────────────────────────────────────────────────────
 // legacy use case: export a conversation
 //
-// STATED AS THE STUB IT IS. The legacy product exports a conversation; this one
-// renders the entry, disables it, and offers two placeholder options wired to
-// no handler at all. Asserting the disabled state is not coverage of export —
-// it is a record of the gap that FAILS the day export is implemented, which is
-// the only way a missing feature stops reading like a passing suite.
+// This test used to state the OPPOSITE: that the entry was rendered disabled
+// with two options labelled `Option1`/`Option2` wired to nothing, because
+// there was no route behind them at all. It was written to fail the day export
+// was implemented rather than to pass silently. That day is this change (issue
+// 851), so the assertion is now the real one.
+//
+// WHAT MAKES "IT EXPORTED" MEAN SOMETHING. Not that a menu item was clickable,
+// and not that a download event fired — a browser will happily save an empty
+// file. The RESPONSE is read: the export route answered 200, offered itself as
+// an attachment, and the document it returned carries the name of the
+// conversation the row belongs to. A stub that answered 200 with nothing would
+// fail on the last of those three.
 // ─────────────────────────────────────────────────────────────────────────────
-test('S4: the Export entry is present but does nothing — the port has no conversation export', async ({ page }) => {
+test('S4: the row menu exports the conversation, in the format the entry names', async ({ page }) => {
   // As S1: measured running out of the 30 s default in the cleanup call, which
   // is a report about the clock rather than about the export entry.
   test.setTimeout(120_000);
-  const conversationId = await createConversation(page.request, uniqueName('export'));
+  const name = uniqueName('export');
+  const conversationId = await createConversation(page.request, name);
   try {
     await openChat(page);
     await openRowMenu(page, conversationId);
 
     const exportItem = page.getByRole('menuitem', { name: 'Export' });
     await expect(exportItem).toBeVisible({ timeout: 10_000 });
-    await expect(exportItem, 'export is not implemented; the entry must not pretend otherwise').toHaveAttribute(
+    await expect(exportItem, 'export is implemented; the entry must be reachable').not.toHaveAttribute(
       'aria-disabled',
       'true',
     );
+    await exportItem.click();
 
-    // A disabled parent cannot be opened, so its two placeholder options are
-    // unreachable — the second half of "there is no export here".
-    await exportItem.click({ force: true });
-    await expect(page.getByRole('menuitem', { name: 'Option1' })).toHaveCount(0);
-    await closeRowMenu(page);
+    // Armed BEFORE the click, so the answer cannot be missed between the
+    // gesture and the wait.
+    const exported = page.waitForResponse(
+      (response) =>
+        response.request().method() === 'GET' &&
+        response.url().includes(`/elitea_core/conversation_export/prompt_lib/`) &&
+        response.url().includes(conversationId),
+      { timeout: 30_000 },
+    );
+    await page.getByRole('menuitem', { name: 'Markdown (.md)' }).click();
+
+    const response = await exported;
+    expect(response.status(), `the export route must serve the document${await describeRefusal(response)}`).toBe(200);
+    expect(
+      response.headers()['content-disposition'] ?? '',
+      'an export the browser renders instead of saving is not an export',
+    ).toContain('attachment');
+    expect(
+      await response.text(),
+      'the document must be THIS conversation, not an empty file that merely answered 200',
+    ).toContain(name);
+  } finally {
+    await removeConversation(page.request, conversationId);
+  }
+});
+
+// The second format the menu offers. Same route, same conversation, a document
+// a program can read back rather than one a person reads.
+test('S5: the JSON export carries the conversation as data', async ({ page }) => {
+  test.setTimeout(120_000);
+  const name = uniqueName('exportjson');
+  const conversationId = await createConversation(page.request, name);
+  try {
+    await openChat(page);
+    await openRowMenu(page, conversationId);
+    await page.getByRole('menuitem', { name: 'Export' }).click();
+
+    const exported = page.waitForResponse(
+      (response) =>
+        response.request().method() === 'GET' &&
+        response.url().includes(`/elitea_core/conversation_export/prompt_lib/`) &&
+        response.url().includes(conversationId),
+      { timeout: 30_000 },
+    );
+    await page.getByRole('menuitem', { name: 'JSON (.json)' }).click();
+
+    const response = await exported;
+    expect(response.status(), `the JSON export must be served${await describeRefusal(response)}`).toBe(200);
+    const document = (await response.json()) as { readonly name?: string; readonly messages?: readonly unknown[] };
+    expect(document.name, 'the document must name the conversation it exported').toBe(name);
+    expect(Array.isArray(document.messages), 'the document must carry a transcript, even an empty one').toBe(true);
   } finally {
     await removeConversation(page.request, conversationId);
   }
