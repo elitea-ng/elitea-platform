@@ -97,6 +97,30 @@ async function openLifecycleMenu(page: Page): Promise<void> {
   await page.getByTestId('agent-lifecycle-menu-button').click();
 }
 
+/**
+ * The id of the agent of this name that is NOT the original — the row the
+ * fork wrote.
+ *
+ * Found by name and then narrowed by id, because nothing makes
+ * `applications.name` unique and the fork deliberately keeps the name it
+ * copied.
+ */
+async function forkedCopyId(
+  request: APIRequestContext,
+  name: string,
+  sourceId: string,
+): Promise<string | undefined> {
+  const list = await request.get(
+    `${API_BASE}/elitea_core/applications/prompt_lib/${DEFAULT_PROJECT_ID}?agents_type=classic`,
+  );
+  expect(list.ok(), `the agent list answered ${list.status()}`).toBe(true);
+  const body = await list.json();
+  const rows: readonly { readonly id?: unknown; readonly name?: string }[] = body?.rows ?? body?.items ?? [];
+  return rows
+    .filter((row) => row.name === name && String(row.id) !== sourceId)
+    .map((row) => String(row.id))[0];
+}
+
 /** Reads the catalogue through the route ELITEA Catalog itself calls. */
 async function catalogNames(request: APIRequestContext): Promise<readonly string[]> {
   const response = await request.get(`${API_BASE}/elitea_core/public_applications/prompt_lib`);
@@ -253,6 +277,7 @@ test.describe('J14b: the agent publish plane', () => {
   test('fork copies the agent into the chosen project', async ({ page, request }) => {
     const name = uniqueName('forkable');
     const agent = await createAgent(request, name);
+    let copyId: string | undefined;
 
     try {
       await openAgentEditor(page, agent.id);
@@ -288,7 +313,33 @@ test.describe('J14b: the agent publish plane', () => {
           { timeout: 20_000 },
         )
         .toBeGreaterThan(1);
+
+      /*
+       * …and the copy is a FORK, not just a second agent of the same name.
+       *
+       * Two rewrites separate the two, and both live only in the fork writer
+       * (`eliteacore/handler.go`, `Fork`): the copy's model is re-pointed at
+       * the project that now owns it, and the version records the agent it
+       * came from. The route was once served by the IMPORT handler, which does
+       * neither, and the duplicate-row assertion above passes either way — so
+       * without these two reads this journey could not tell a fork from a
+       * plain copy. The cross-project half of the same contract is asserted
+       * through the API in `e2e/journeys/api/api.import-wizard.spec.ts`.
+       */
+      copyId = await forkedCopyId(request, name, agent.id);
+      expect(copyId, 'the fork wrote no second row for this name').toBeDefined();
+      const copy = await request.get(
+        `${API_BASE}/elitea_core/application/prompt_lib/${DEFAULT_PROJECT_ID}/${copyId ?? ''}`,
+      );
+      expect(copy.ok(), `the copy read answered ${copy.status()}`).toBe(true);
+      const copyBody = await copy.json();
+      const copiedVersion = copyBody?.version_details ?? copyBody?.versions?.[0] ?? {};
+      expect(String(copiedVersion?.meta?.parent_entity_id ?? '')).toBe(agent.id);
+      expect(String(copiedVersion?.llm_settings?.model_project_id ?? '')).toBe(DEFAULT_PROJECT_ID);
     } finally {
+      // The copy is deleted too. A fork journey that removed only its source
+      // leaves one agent behind on the rig for every run.
+      if (copyId !== undefined) await deleteAgent(request, copyId);
       await deleteAgent(request, agent.id);
     }
   });

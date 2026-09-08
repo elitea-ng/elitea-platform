@@ -2433,6 +2433,14 @@ components:
         fetchVersionDetails (:295-301), author_id+project_id in
         GetVersionExpanded (:1140-1147), and project_id WITHOUT author_id in
         publicApplicationDetail (:1445-1451). Only `id` is common to all.
+        The IMPORT and the FORK echoes carry a third shape: the import names
+        each link it wrote with `id`, `name` and `type` taken from the toolkit
+        it imported (eliteacore/handler.go, the link phase of
+        ExportImportPost) — the two literals `"custom"` and `""` that stood
+        there named no toolkit at all — and the fork writes an empty list,
+        because it copies no toolkit. On that import path `id` is the
+        `elitea_tools` row and it is serialized as a STRING, unlike the
+        integer the read paths above emit.
 
     VersionVariable:
       type: object

@@ -1824,10 +1824,27 @@ export interface GithubToolkitFixture {
 /** The placeholder GitHub endpoint. Deliberately unroutable. */
 const GITHUB_PLACEHOLDER_BASE_URL = 'https://autotest.invalid/api';
 
+/**
+ * A token-shaped value to store on the credential the toolkit points at.
+ *
+ * It exists for ONE caller: the export journey, which asserts that a value
+ * sealed into a credential never reaches the export document. Every other
+ * caller leaves it off and gets the base-URL-only row this fixture has always
+ * made. The value is a fixture string, never a real token — the credential
+ * write seals it into the project vault and stores a `{{secret.<uuid>}}`
+ * reference in its place, so the plain value exists nowhere the API can serve
+ * it back.
+ */
+export interface GithubToolkitOptions {
+  /** Extra `data` keys for the credential row, merged over the base URL. */
+  readonly credentialData?: Readonly<Record<string, unknown>>;
+}
+
 export async function createGithubToolkit(
   request: APIRequestContext,
   projectId: string,
   toolkitName: string,
+  options: GithubToolkitOptions = {},
 ): Promise<GithubToolkitFixture> {
   const credentialTitle = `${toolkitName}_cred`;
   const credential = await request.post(
@@ -1838,7 +1855,7 @@ export async function createGithubToolkit(
         elitea_title: credentialTitle,
         label: credentialTitle,
         shared: false,
-        data: { base_url: GITHUB_PLACEHOLDER_BASE_URL },
+        data: { base_url: GITHUB_PLACEHOLDER_BASE_URL, ...options.credentialData },
       },
     },
   );

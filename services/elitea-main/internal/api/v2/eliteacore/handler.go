@@ -2992,6 +2992,27 @@ func (h *Handler) ExportImportPost(w http.ResponseWriter, r *http.Request) {
 	importUUIDToToolID := map[string]int{}
 	failedToolkitImportUUIDs := map[string]bool{}
 
+	// What each imported toolkit IS, by the row id the link phase resolves to.
+	//
+	// Phase 3 used to describe every link it wrote as
+	// `{"type": "custom", "name": ""}`, a literal, so the import answer named
+	// no toolkit at all: an import of a real `application`, `github` or `mcp`
+	// toolkit reported an unnamed custom one on the version it had just
+	// attached it to, while `result.toolkits` — built from the same two values,
+	// one phase earlier — named it correctly. The wizard shows the version's
+	// tool list back to the user as the account of what the import did, so the
+	// one screen that reports the attachment could not say which toolkit was
+	// attached.
+	//
+	// The map is filled by the SAME statement that registers the id in
+	// `importUUIDToToolID`, and phase 3 resolves a tool id only through that
+	// map, so the two cannot disagree about a toolkit.
+	type importedToolkitSummary struct {
+		name        string
+		toolkitType string
+	}
+	importedToolkitByID := map[int]importedToolkitSummary{}
+
 	// elitea_tools.owner_id is the DESTINATION PROJECT and is NOT NULL on a
 	// schema this repository's migration corpus made — see
 	// importToolkitInsertSQL for the column's meaning and the evidence for it.
@@ -3068,6 +3089,7 @@ func (h *Handler) ExportImportPost(w http.ResponseWriter, r *http.Request) {
 			if tk.importUUID != "" {
 				importUUIDToToolID[tk.importUUID] = toolID
 			}
+			importedToolkitByID[toolID] = importedToolkitSummary{name: tkName, toolkitType: tkType}
 			resultToolkits = append(resultToolkits, map[string]any{"id": strconv.Itoa(toolID), "name": tkName, "type": tkType})
 		} else {
 			errorToolkits = append(errorToolkits, map[string]any{"index": tk.entityIdx, "name": tkName, "msg": "Import function has been failed: " + err.Error()})
@@ -3156,7 +3178,15 @@ func (h *Handler) ExportImportPost(w http.ResponseWriter, r *http.Request) {
 						// The response must not name a link that has no row.
 						continue
 					}
-					vTools = append(vTools, map[string]any{"id": strconv.Itoa(toolID), "type": "custom", "name": ""})
+					// The toolkit this link points at, named as it was
+					// imported. See `importedToolkitByID` in phase 2 for what
+					// the two literals that stood here reported instead.
+					attached := importedToolkitByID[toolID]
+					vTools = append(vTools, map[string]any{
+						"id":   strconv.Itoa(toolID),
+						"type": attached.toolkitType,
+						"name": attached.name,
+					})
 				} else {
 					hasLinkError = true
 				}
