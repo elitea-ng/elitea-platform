@@ -808,6 +808,92 @@ export async function readVersionExpanded(
   return (await response.json()) as Record<string, unknown>;
 }
 
+/* ── sub-agent references ─────────────────────────────────────────────────── */
+
+/**
+ * The route that links one agent version into another as a SUB-AGENT.
+ *
+ * The URL names the CHILD and the body names the PARENT version — an order no
+ * reader guesses, and the reason this is a helper rather than a line repeated
+ * in each case: `internal/api/v2/eliteacore/application_relation.go` reads the
+ * child's application and version out of the path and takes only
+ * `version_id` from the body. `application_id` is sent because the route
+ * refuses a body without it, and it is the CHILD's id there too.
+ *
+ * The response is returned rather than asserted, because the refusal cases need
+ * it: a published parent refuses the change, and a pair already linked refuses
+ * a second copy.
+ */
+export function attachSubAgent(
+  request: APIRequestContext,
+  parentVersionId: string,
+  child: { readonly applicationId: string; readonly versionId: string },
+  projectId: string = DEFAULT_PROJECT_ID,
+): Promise<APIResponse> {
+  const url =
+    `${API_BASE}/elitea_core/application_relation/prompt_lib/${projectId}/` +
+    `${child.applicationId}/${child.versionId}`;
+  return request.patch(url, {
+    data: {
+      application_id: Number(child.applicationId),
+      version_id: Number(parentVersionId),
+      has_relation: true,
+    },
+  });
+}
+
+/** The same route with `has_relation: false` — the detach half. */
+export function detachSubAgent(
+  request: APIRequestContext,
+  parentVersionId: string,
+  child: { readonly applicationId: string; readonly versionId: string },
+  projectId: string = DEFAULT_PROJECT_ID,
+): Promise<APIResponse> {
+  const url =
+    `${API_BASE}/elitea_core/application_relation/prompt_lib/${projectId}/` +
+    `${child.applicationId}/${child.versionId}`;
+  return request.patch(url, {
+    data: {
+      application_id: Number(child.applicationId),
+      version_id: Number(parentVersionId),
+      has_relation: false,
+    },
+  });
+}
+
+/** One sub-agent entry as a version read serves it back. */
+export interface SubAgentToolRow {
+  /** The CHILD agent this entry points at. */
+  readonly applicationId: string;
+  /** The exact child VERSION this entry points at. */
+  readonly versionId: string;
+  readonly name: string;
+}
+
+/**
+ * The sub-agent entries of a `tools` array, whichever projection served it.
+ *
+ * Three routes serve the same reference under three shapes — the editor read
+ * puts the stored blob under `config`, the expanded read and the public detail
+ * put it under `settings` — so a caller that read one key would silently find
+ * no sub-agents on the other two. Non-application tools are dropped: every
+ * caller here is asking "which agents does this version delegate to".
+ */
+export function subAgentToolsOf(tools: readonly unknown[]): readonly SubAgentToolRow[] {
+  return tools
+    .map((entry) => (entry ?? {}) as Record<string, unknown>)
+    .filter((tool) => tool['type'] === 'application')
+    .map((tool) => {
+      const settings =
+        ((tool['settings'] ?? tool['config']) as Record<string, unknown> | undefined) ?? {};
+      return {
+        applicationId: String(settings['application_id'] ?? ''),
+        versionId: String(settings['application_version_id'] ?? settings['version_id'] ?? ''),
+        name: String(tool['name'] ?? ''),
+      };
+    });
+}
+
 /** One row of the project's tag list. */
 export interface StoredTag {
   readonly id: string;
@@ -1879,10 +1965,12 @@ const GITHUB_PLACEHOLDER_BASE_URL = 'https://autotest.invalid/api';
 /**
  * A token-shaped value to store on the credential the toolkit points at.
  *
- * It exists for ONE caller: the export journey, which asserts that a value
- * sealed into a credential never reaches the export document. Every other
- * caller leaves it off and gets the base-URL-only row this fixture has always
- * made. The value is a fixture string, never a real token — the credential
+ * It exists for the two journeys whose subject IS the sealing: the export
+ * journey, which asserts that a sealed value never reaches the export
+ * document, and the expanded-version journey, which asserts that the runtime
+ * read resolves it back. Every other caller leaves it off and gets the
+ * base-URL-only row this fixture has always made. The value is a fixture
+ * string, never a real token — the credential
  * write seals it into the project vault and stores a `{{secret.<uuid>}}`
  * reference in its place, so the plain value exists nowhere the API can serve
  * it back.

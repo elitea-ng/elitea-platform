@@ -1296,7 +1296,10 @@ func (h *Handler) Publish(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
-// deleteEmbeddedSubAgents removes embedded sub-agent applications referenced by application_tools on versionID.
+// deleteEmbeddedSubAgents removes the EMBEDDED sub-agent applications that
+// versionID references, and then detaches every sub-agent reference the version
+// still holds. Applications that hold no embedded version are left alone: see
+// the loop below for why the two kinds arrive here together.
 func (h *Handler) deleteEmbeddedSubAgents(ctx context.Context, schema string, versionID string) {
 	refs, err := listApplicationToolReferences(ctx, h.pool, schema, versionID)
 	if err != nil {
@@ -1310,13 +1313,31 @@ func (h *Handler) deleteEmbeddedSubAgents(ctx context.Context, schema string, ve
 	}
 
 	for _, eAppID := range embeddedAppIDs {
-		// Recursively delete sub-agents of this embedded agent
+		// ONLY an application that really holds an embedded version may be
+		// deleted here, and the read below is the proof — not a lookup for the
+		// recursion alone.
+		//
+		// A published version carries TWO application references per sub-agent,
+		// not one. Publish copies the source version's entity_tool_mapping rows
+		// onto the clone verbatim, which brings the author's own reference
+		// across, and embedSubAgents then links the embedded copy beside it. So
+		// the list above holds the author's private sub-agent as well as the
+		// embedded snapshot, and the unguarded delete that used to follow
+		// removed the author's agent — every version of it — the moment they
+		// withdrew the parent. The agent simply vanished from their project,
+		// with a 200 on the withdrawal and nothing in the log.
+		//
+		// `status = 'embedded'` is the discriminator because embedSubAgents
+		// writes exactly that status on every copy it makes, at every level, and
+		// nothing else does.
 		var eVerID string
 		_ = h.pool.QueryRow(ctx, fmt.Sprintf(
 			`SELECT id FROM %s.application_versions WHERE application_id = $1 AND status = 'embedded' LIMIT 1`, schema), eAppID).Scan(&eVerID) // failure leaves eVerID empty, safe
-		if eVerID != "" {
-			h.deleteEmbeddedSubAgents(ctx, schema, eVerID)
+		if eVerID == "" {
+			continue
 		}
+		// Recursively delete sub-agents of this embedded agent
+		h.deleteEmbeddedSubAgents(ctx, schema, eVerID)
 		// Delete in FK-safe order: tool references → versions → application.
 		// The reference cleanup walks the embedded app's versions so each
 		// mapping is removed before its tool row is considered orphaned.
