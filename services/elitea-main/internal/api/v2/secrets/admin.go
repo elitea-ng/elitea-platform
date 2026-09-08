@@ -232,20 +232,24 @@ func (h *Handler) AdminCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	vault, err := h.adminVaultForWrite(r.Context())
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "global vault is unreadable"})
+	err := h.mutateAdminVault(r.Context(), true, func(vault *vaultData) (bool, error) {
+		if _, exists := vault.Secrets[name]; exists {
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"message": fmt.Sprintf("Secret %q already exists", name),
+			})
+			return false, errMutationRefused
+		}
+		vault.Secrets[name] = *body.Secret
+		return true, nil
+	})
+	switch {
+	case errors.Is(err, errMutationRefused):
 		return
-	}
-	if _, exists := vault.Secrets[name]; exists {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"message": fmt.Sprintf("Secret %q already exists", name),
-		})
-		return
-	}
-	vault.Secrets[name] = *body.Secret
-	if err := h.writeAdminVault(r.Context(), vault); err != nil {
+	case errors.Is(err, errVaultWrite):
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "failed to save the secret"})
+		return
+	case err != nil:
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "global vault is unreadable"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"message": "Project secret was saved"})
@@ -278,32 +282,35 @@ func (h *Handler) AdminUpdate(w http.ResponseWriter, r *http.Request) {
 		oldName = name
 	}
 
-	vault, err := h.adminVault(r.Context())
-	if errors.Is(err, ErrVaultAbsent) {
-		writeJSON(w, http.StatusNotFound, map[string]string{"message": "Project secret was not found"})
-		return
-	}
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "global vault is unreadable"})
-		return
-	}
-	if _, exists := vault.Secrets[oldName]; !exists {
-		writeJSON(w, http.StatusNotFound, map[string]string{"message": "Project secret was not found"})
-		return
-	}
-	// A rename onto an occupied name would silently destroy that entry.
-	if oldName != name {
-		if _, occupied := vault.Secrets[name]; occupied {
-			writeJSON(w, http.StatusBadRequest, map[string]string{
-				"message": fmt.Sprintf("Secret %q already exists", name),
-			})
-			return
+	err := h.mutateAdminVault(r.Context(), false, func(vault *vaultData) (bool, error) {
+		if _, exists := vault.Secrets[oldName]; !exists {
+			writeJSON(w, http.StatusNotFound, map[string]string{"message": "Project secret was not found"})
+			return false, errMutationRefused
 		}
-	}
-	delete(vault.Secrets, oldName)
-	vault.Secrets[name] = body.Secret.Value
-	if err := h.writeAdminVault(r.Context(), vault); err != nil {
+		// A rename onto an occupied name would silently destroy that entry.
+		if oldName != name {
+			if _, occupied := vault.Secrets[name]; occupied {
+				writeJSON(w, http.StatusBadRequest, map[string]string{
+					"message": fmt.Sprintf("Secret %q already exists", name),
+				})
+				return false, errMutationRefused
+			}
+		}
+		delete(vault.Secrets, oldName)
+		vault.Secrets[name] = body.Secret.Value
+		return true, nil
+	})
+	switch {
+	case errors.Is(err, errMutationRefused):
+		return
+	case errors.Is(err, ErrVaultAbsent):
+		writeJSON(w, http.StatusNotFound, map[string]string{"message": "Project secret was not found"})
+		return
+	case errors.Is(err, errVaultWrite):
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "failed to save the secret"})
+		return
+	case err != nil:
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "global vault is unreadable"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"message": "Project secret was updated"})
@@ -316,22 +323,22 @@ func (h *Handler) AdminDelete(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	vault, err := h.adminVault(r.Context())
-	if errors.Is(err, ErrVaultAbsent) {
+	err := h.mutateAdminVault(r.Context(), false, func(vault *vaultData) (bool, error) {
+		if _, exists := vault.Secrets[name]; !exists {
+			return false, nil
+		}
+		delete(vault.Secrets, name)
+		return true, nil
+	})
+	switch {
+	case errors.Is(err, ErrVaultAbsent):
 		w.WriteHeader(http.StatusNoContent)
 		return
-	}
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "global vault is unreadable"})
-		return
-	}
-	if _, exists := vault.Secrets[name]; !exists {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
-	delete(vault.Secrets, name)
-	if err := h.writeAdminVault(r.Context(), vault); err != nil {
+	case errors.Is(err, errVaultWrite):
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "failed to delete the secret"})
+		return
+	case err != nil:
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "global vault is unreadable"})
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -376,7 +383,7 @@ func sortByName(items []adminSecretListItem) {
 /* ── vault access ─────────────────────────────────────────────────────────── */
 
 // The three functions below are the global vault's names for the shared
-// id-keyed layer in handler.go — `readVaultByID`, `vaultForWriteByID` and
+// id-keyed layer in handler.go — `readVaultByID`, `mutateVaultByID` and
 // `writeVaultByID`, called with `adminVaultKey`. They were this file's own
 // implementations until the project path needed the same guarantees; the
 // contract they carry is documented there, and it is now ONE contract rather
@@ -390,14 +397,15 @@ func (h *Handler) adminVault(ctx context.Context) (vaultData, error) {
 	return h.readVaultByID(ctx, adminVaultKey)
 }
 
-// adminVaultForWrite is adminVault with the one safe fallback: an ABSENT vault
-// becomes an empty one, ready to be written. An unreadable vault still fails.
-func (h *Handler) adminVaultForWrite(ctx context.Context) (vaultData, error) {
-	return h.vaultForWriteByID(ctx, adminVaultKey)
+// mutateAdminVault is the global vault's locked read-modify-write. With
+// `init`, an ABSENT vault becomes an empty one, ready to be written. An
+// unreadable vault still fails.
+func (h *Handler) mutateAdminVault(ctx context.Context, init bool, mutate func(v *vaultData) (bool, error)) error {
+	return h.mutateVaultByID(ctx, adminVaultKey, init, mutate)
 }
 
-// writeAdminVault encrypts and persists the global vault, generating its Fernet
-// key on first write.
+// writeAdminVault replaces the global vault wholesale — a test seed, see
+// writeVaultByID.
 func (h *Handler) writeAdminVault(ctx context.Context, v vaultData) error {
 	return h.writeVaultByID(ctx, adminVaultKey, v)
 }

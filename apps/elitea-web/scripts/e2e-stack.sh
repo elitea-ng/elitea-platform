@@ -2513,9 +2513,18 @@ PUBLISH_SQL
     # Playwright output under it costs more than it gives. The file is uploaded
     # beside the report.
     #
-    # NEVER FATAL. This runs on the failure path, and a diagnostic that can fail
-    # the job it is diagnosing would replace one unexplained failure with
-    # another. Every branch ends in `|| true`.
+    # THE COMPOSE CALLS ARE NEVER FATAL, THE RESULT IS. This runs on the
+    # failure path, and a compose call that fails the job it is diagnosing
+    # would replace one unexplained failure with another — so `ps` and `logs`
+    # each end in `|| true`. But the command as a whole exits non-zero when it
+    # collected NOTHING: an unwritable output file, or zero log lines. Issue
+    # #859: the output directory came back root-owned from the Playwright
+    # container, `> "$OUT"` failed, `|| true` swallowed it, and "0 line(s)
+    # collected" printed in green on every failed run for months. The caller
+    # (ci-web-e2e.yml) keeps the job's outcome unchanged with
+    # `continue-on-error`; the exit code is there so the step is VISIBLY
+    # failed rather than quietly empty.
+    #
     # APP_ROOT is set inside the `seed` branch, so it is derived here rather
     # than borrowed: a default that silently resolved to "." would write the
     # file next to wherever the caller happened to stand.
@@ -2523,17 +2532,45 @@ PUBLISH_SQL
     OUT="${2:-${LOGS_APP_ROOT}/playwright-results/stack-logs.txt}"
     mkdir -p "$(dirname "$OUT")" 2>/dev/null || true
     echo "→ Collecting stack logs into ${OUT}…"
+    # Open the file FIRST, and loudly. This is the write that failed silently
+    # in #859; the message names the likely cause so the fix is one step away.
+    # (stderr is redirected FIRST: redirections apply left to right, and the
+    # shell's own "Permission denied" for the `>` would otherwise print above
+    # the message that explains it.)
+    if ! : 2>/dev/null > "$OUT"; then
+      echo "✗ stack logs: cannot write ${OUT}" >&2
+      echo "  $(ls -ld "$(dirname "$OUT")" 2>&1)" >&2
+      echo "  The Playwright container runs as root and leaves playwright-results/ root-owned;" >&2
+      echo "  chown it back to the runner user before collecting (see ci-web-e2e.yml)." >&2
+      exit 1
+    fi
     {
       echo "=== compose ps ==="
       $COMPOSE_BIN $COMPOSE_F ps 2>&1 || true
       echo
       echo "=== compose logs (--no-color, timestamps) ==="
-      $COMPOSE_BIN $COMPOSE_F logs --no-color --timestamps 2>&1 || true
-    } > "$OUT" 2>&1 || true
+    } >> "$OUT" 2>&1
+    # Only the `compose logs` payload counts. The headers and `compose ps`
+    # always print something (a column header for an empty project), so a
+    # count over the whole file could never reach 0 and the warning below
+    # would never fire.
+    LOGS_HEADER_LINES="$(wc -l < "$OUT" | tr -d ' ')"
+    LOGS_STDERR="$(mktemp)"
+    $COMPOSE_BIN $COMPOSE_F logs --no-color --timestamps >> "$OUT" 2> "$LOGS_STDERR" || true
+    LOGS_LINES=$(( $(wc -l < "$OUT" | tr -d ' ') - LOGS_HEADER_LINES ))
+    if [ -s "$LOGS_STDERR" ]; then
+      { echo; echo "=== compose logs stderr ==="; cat "$LOGS_STDERR"; } >> "$OUT"
+    fi
+    rm -f "$LOGS_STDERR"
     # The count is printed so a caller can tell "collected nothing" from
     # "collected and there was nothing wrong" — an empty file that nobody
     # noticed is the same dead end this command exists to remove.
-    echo "  ✓ $(wc -l < "$OUT" 2>/dev/null || echo 0) line(s) collected"
+    if [ "$LOGS_LINES" -eq 0 ]; then
+      echo "⚠ stack logs: 0 lines collected — check container names / ownership" >&2
+      echo "  project: ${E2E_PROJECT}  compose: ${COMPOSE_BIN}" >&2
+      exit 1
+    fi
+    echo "  ✓ ${LOGS_LINES} line(s) collected"
     ;;
 
   *)
