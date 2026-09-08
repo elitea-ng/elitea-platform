@@ -42,6 +42,16 @@ export interface ParticipantsProps {
   readonly disabledEdit?: boolean;
   /** When truthy, the "add participant" affordance is disabled. */
   readonly disabledAdd?: boolean;
+  /**
+   * Opens the consumer's add-participant picker.
+   *
+   * `disabledAdd` has always been here and has always been threaded down;
+   * the control it gates never existed, so the flag decided the state of
+   * nothing. The panel renders the affordance only when this callback is
+   * supplied — the rail is also mounted by surfaces (the pipeline editor's
+   * own panel) that have no user picker to open.
+   */
+  readonly onAddParticipants?: (() => void) | undefined;
   /** Currently active participant id (used for highlighting the LLM). */
   readonly activeParticipantId?: string;
   /** Called when a participant is selected as the active LLM participant. */

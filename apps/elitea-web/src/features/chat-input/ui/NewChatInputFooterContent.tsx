@@ -33,6 +33,12 @@ import type { NewChatInputSlots } from './NewChatInput.types';
  * exactly like `attachmentButton`.
  * `AgentEditorPanel` vs. `slots.modelSelector` is the one branch THIS
  * cluster still owns — see this component's own `isAgentsPage` prop.
+ *
+ * `slots.clearChat` is rendered unconditionally, like `attachmentButton` and
+ * unlike `internalToolsConfig`: which surfaces offer a clear-history control
+ * is not a rule this cluster can state (the pipeline editor already renders
+ * one of its own, outside the composer), so the composition root decides by
+ * supplying or withholding the node.
  */
 export interface NewChatInputFooterContentProps {
   readonly slots: NewChatInputSlots;
@@ -56,6 +62,7 @@ export function NewChatInputFooterContent(props: NewChatInputFooterContentProps)
       <Box sx={leftSx}>
         {slots.attachmentButton}
         {!isAgentsPage && slots.internalToolsConfig}
+        {slots.clearChat}
       </Box>
       <Box sx={rightSx}>
         {showAgentEditorPanel && <AgentEditorPanel {...agentEditorProps} />}

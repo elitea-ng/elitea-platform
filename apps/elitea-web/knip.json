@@ -361,7 +361,13 @@
     // unwired and listed here. Delete both together or neither.
     "src/features/chat-participants/lib/context/ParticipantStatusRunner.helpers.ts",
     "src/features/chat-participants/lib/hooks/useAddNewParticipants.ts",
-    "src/features/chat-participants/ui/chat-modal/AddNewUserModal.tsx",
+    // NOTE: `chat-modal/AddNewUserModal.tsx` was REMOVED from this list (knip's
+    // own "Remove from ignoreFiles" hint): `pages/chat` now mounts it as the
+    // participants panel's add-participant picker, which is what closed gap
+    // G2 — the picker had no call site anywhere in the app, so a conversation
+    // could gain an agent and could not gain a person. `UserSearchSelect.tsx`
+    // stays: it is the same feature's OTHER, autocomplete-shaped picker, and
+    // nothing mounts it.
     "src/features/chat-participants/ui/chat-modal/UserSearchSelect.tsx",
     // NOTE: `CollapsedParticipants/CollapsedParticipantsDropdown.tsx`,
     // `CollapsedParticipants/CollapsedParticipantsList.tsx` and
