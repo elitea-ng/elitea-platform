@@ -89,6 +89,10 @@ async function sendMessage(page: Page, text: string, expectedCount: number): Pro
   const input = page.getByTestId('chat-message-input');
   await expect(input).toBeEditable({ timeout: 20_000 });
   await input.fill(text);
+  // Read back before the control is looked for: the send button is rendered in
+  // response to the composer holding text, so "no send button" and "the draft
+  // did not stick" are the same symptom and only this line tells them apart.
+  await expect(input).toHaveValue(text);
   const send = page.getByTestId('chat-send-button');
   await expect(send).toBeEnabled({ timeout: 10_000 });
   await send.click();
@@ -131,6 +135,16 @@ test('the chat surface clears its whole transcript, and only after the confirmat
   await sendMessage(page, first, 1);
   const conversationId = ((await (await created).json()) as { id?: string }).id as string;
   expect(conversationId, 'the first send must create a real conversation').toMatch(/^\d+$/);
+
+  // THE FIRST SEND MOVES THE ROUTE. `handleConversationCreated` navigates to
+  // `/chat/$conversationId` once the create answers, and that route change
+  // rebuilds the chat subtree — including the composer, whose draft is reset
+  // with it. A second message typed before the navigation lands is therefore
+  // wiped: the send control never appears, because the composer it belonged
+  // to is gone. `toHaveURL`, not `waitForURL`: this is a client-side history
+  // change, which fires no navigation lifecycle event.
+  await expect(page).toHaveURL(new RegExp(`/app/chat/${conversationId}(\\?|$)`), { timeout: 20_000 });
+  await expect(page.getByTestId('chat-message-input')).toHaveValue('', { timeout: 20_000 });
 
   await sendMessage(page, uniqueMessage('c2'), 2);
   await expect(clear, 'a transcript with messages makes the control offerable').toBeEnabled({ timeout: 20_000 });

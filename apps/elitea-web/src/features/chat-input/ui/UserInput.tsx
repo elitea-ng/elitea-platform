@@ -141,7 +141,6 @@ export const UserInput = forwardRef(function UserInput(props: UserInputProps, re
   });
   const insertTextAtCursor = useUserInputInsertTextAtCursor({
     inputRef,
-    inputContent,
     setInputContent,
     setQuestion,
     setShowExpandIcon,
