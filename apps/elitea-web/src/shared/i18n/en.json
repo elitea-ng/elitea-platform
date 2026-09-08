@@ -4024,5 +4024,8 @@
   "features.agentLifecycle.menu.export": "Export",
   "pages.pipelines.editPipeline.deleteError": "Failed to delete this pipeline.",
   "pages.pipelines.editPipeline.deleteTitle": "Delete pipeline",
-  "pages.pipelines.editPipeline.exportError": "Failed to export this pipeline."
+  "pages.pipelines.editPipeline.exportError": "Failed to export this pipeline.",
+  "features.agents.instructionsFullscreen.editorAriaLabel": "Instructions, full screen",
+  "features.agents.instructionsFullscreen.open": "Open in full screen",
+  "features.agents.instructionsFullscreen.title": "Instructions"
 }

@@ -90,15 +90,19 @@ describe('ApplicationEditForm', () => {
     expect(onDescriptionChange).toHaveBeenCalledWith('x');
   });
 
-  it('shows the "0 characters left" hint only while the name field is focused at the max length', async () => {
+  it('shows the at-limit hint only while the name field is focused at the max length', async () => {
     renderForm({ name: 'x'.repeat(32) });
     const input = await screen.findByTestId('agent-name-input');
-    // Exact text, not a broad `/characters left/` regex: the description
-    // field's own counter is ALSO always in the document now (#848 — never
-    // unmounted, just visibility-toggled), and a loose regex would match it too.
-    expect(screen.queryByText('0 characters left')).not.toBeInTheDocument();
+    // The name counter mounts only at the limit, so its absence is a real
+    // absence. The description counter is a different test id — it is always
+    // in the document (#848: never unmounted, only visibility-toggled).
+    expect(screen.queryByTestId('agent-name-counter')).not.toBeInTheDocument();
     await userEvent.setup().click(input);
-    expect(screen.getByText('0 characters left')).toBeInTheDocument();
+    const counter = screen.getByTestId('agent-name-counter');
+    // The whole sentence, not just the count: a name field at its limit tells
+    // the reader nothing more will be accepted (legacy
+    // `test_agent_character_limits.py`'s own assertion).
+    expect(counter).toHaveTextContent('0 characters left. You have reached the MAXIMUM character limit');
   });
 
   it('renders an existing tag passed via the tags prop', async () => {
