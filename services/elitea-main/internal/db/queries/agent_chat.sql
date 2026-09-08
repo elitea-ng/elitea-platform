@@ -236,7 +236,25 @@ JOIN chat_participant_mapping AS target_mapping
 JOIN chat_participants AS target_participant
   ON target_participant.id = target_mapping.participant_id
  AND target_participant.entity_name = 'application'
-JOIN application_versions AS application_version
+-- A LEFT JOIN, and the WHERE below is what keeps it an inner one for every
+-- turn addressed at an agent in the conversation's OWN project.
+--
+-- `application_versions` is a per-project table: this query runs inside the
+-- conversation's tenant schema, so it can only ever see that project's rows.
+-- A participant that names the catalogue twin of a PUBLISHED agent therefore
+-- has no row to join here at all, and an inner join answered no rows -- the
+-- 422 a conversation in project A got when it addressed an agent published in
+-- the catalogue, which legacy allowed. The version for that one case is read
+-- afterwards, from the catalogue project's own schema
+-- (CurrentAgentStartRepository.resolveCatalogueApplicationVersion), so this
+-- join is allowed to miss and the projection below is then a document of
+-- nulls that the Go side REPLACES rather than reads.
+--
+-- Nothing else may miss it: the WHERE demands `application_version.id IS NOT
+-- NULL` for the same-project case, which restores the inner join's exact
+-- refusal, and admits the missing row ONLY for a participant whose project is
+-- the catalogue project and is not the conversation's own.
+LEFT JOIN application_versions AS application_version
   ON application_version.id = (target_mapping.entity_settings ->> 'version_id')::integer
  AND application_version.application_id = (target_participant.entity_meta ->> 'id')::integer
 -- Chat history for this turn: one entry per prior message group, whose
@@ -430,7 +448,33 @@ LEFT JOIN LATERAL (
     WHERE jsonb_array_length(history_group.content) > 0
 ) AS current_history ON TRUE
 WHERE conversation.uuid = sqlc.arg(conversation_uuid)::uuid
-  AND (target_participant.entity_meta ->> 'project_id')::integer = sqlc.arg(project_id)::integer
+  -- THE TENANCY BOUNDARY, AND THE ONE HOLE IN IT.
+  --
+  -- First branch: the agent lives in the project the turn runs in. That is
+  -- every ordinary turn, and `application_version.id IS NOT NULL` is what
+  -- makes the LEFT JOIN above behave exactly like the inner join it replaced.
+  --
+  -- Second branch: the agent lives in the PUBLIC (catalogue) project and the
+  -- turn does not. This is a published agent being chatted with from another
+  -- project -- the catalogue's whole purpose -- and it is the only foreign
+  -- project admitted. A private agent in somebody else's project still finds
+  -- no branch and the turn is still refused, which is the boundary itself.
+  --
+  -- The branch does NOT decide that the version may be used: it only lets the
+  -- row out of this query. Whether that version is actually `published`, and
+  -- what it contains, is settled by the second read in the catalogue project's
+  -- own schema. A DRAFT in the catalogue project is refused there.
+  AND (
+      (
+          (target_participant.entity_meta ->> 'project_id')::integer = sqlc.arg(project_id)::integer
+          AND application_version.id IS NOT NULL
+      )
+      OR (
+          (target_participant.entity_meta ->> 'project_id')::integer <> sqlc.arg(project_id)::integer
+          AND (target_participant.entity_meta ->> 'project_id')::integer
+              = sqlc.arg(catalogue_project_id)::integer
+      )
+  )
   AND jsonb_typeof(COALESCE(conversation.meta -> 'internal_tools', '[]'::jsonb)) = 'array'
   AND NOT EXISTS (
       SELECT 1
@@ -2182,13 +2226,40 @@ WITH resolved AS MATERIALIZED (
     JOIN chat_participants AS target_participant
       ON target_participant.id = target_mapping.participant_id
      AND target_participant.entity_name = 'application'
-    JOIN application_versions AS application_version
+    -- LEFT, for the same reason and under the same guard as the LEFT JOIN in
+    -- ResolveCurrentApplicationTurn: a PUBLISHED agent addressed from another
+    -- project has its version row in the CATALOGUE project's schema, which this
+    -- statement -- running in the conversation's schema -- cannot see. The WHERE
+    -- below demands `application_version.id IS NOT NULL` for every same-project
+    -- turn, so the ordinary path keeps the inner join's exact refusal, and it
+    -- re-states the two identity comparisons the join was making for the
+    -- cross-project branch, where there is no row to make them against.
+    --
+    -- Restating them is not belt-and-braces. The join is what stopped this
+    -- INSERT writing a turn whose `application_id` / `application_version_id`
+    -- disagreed with the participant it names; without the restatement the
+    -- catalogue branch would take those two ids on trust from the caller.
+    LEFT JOIN application_versions AS application_version
       ON application_version.id = sqlc.arg(application_version_id)::integer
      AND application_version.id = (target_mapping.entity_settings ->> 'version_id')::integer
      AND application_version.application_id = sqlc.arg(application_id)::integer
      AND application_version.application_id = (target_participant.entity_meta ->> 'id')::integer
     WHERE conversation.uuid = sqlc.arg(conversation_uuid)::uuid
-      AND (target_participant.entity_meta ->> 'project_id')::integer = sqlc.arg(project_id)::integer
+      AND (
+          (
+              (target_participant.entity_meta ->> 'project_id')::integer = sqlc.arg(project_id)::integer
+              AND application_version.id IS NOT NULL
+          )
+          OR (
+              (target_participant.entity_meta ->> 'project_id')::integer <> sqlc.arg(project_id)::integer
+              AND (target_participant.entity_meta ->> 'project_id')::integer
+                  = sqlc.arg(catalogue_project_id)::integer
+              AND (target_mapping.entity_settings ->> 'version_id')::integer
+                  = sqlc.arg(application_version_id)::integer
+              AND (target_participant.entity_meta ->> 'id')::integer
+                  = sqlc.arg(application_id)::integer
+          )
+      )
       AND jsonb_typeof(COALESCE(conversation.meta -> 'internal_tools', '[]'::jsonb)) = 'array'
       AND NOT EXISTS (
           SELECT 1
@@ -2216,6 +2287,14 @@ WITH resolved AS MATERIALIZED (
       -- (normalizeCurrentAgentRuntimeProfile), not refused here, or every agent the
       -- previous create form seeded it into stops answering. See the fuller note on
       -- ResolveCurrentApplicationTurn's copy of this clause.
+      --
+      -- On the cross-project branch `application_version` is NULL, so both
+      -- clauses below are vacuously true. That is not a hole: the same list is
+      -- applied to the CATALOGUE version's own `meta.internal_tools` by
+      -- currentCatalogueVersionAdmissible
+      -- (internal/infra/db/repos/agent_start.go), which reads the row out of the
+      -- schema it actually lives in, and a turn that fails it never reaches this
+      -- INSERT.
       AND jsonb_typeof(COALESCE(application_version.meta::jsonb -> 'internal_tools', '[]'::jsonb)) = 'array'
       AND NOT EXISTS (
           SELECT 1

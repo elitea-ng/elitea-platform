@@ -210,8 +210,14 @@ describe('FolderItem', () => {
     expect(getByRole('menuitem', { name: 'Unpin' })).toBeInTheDocument();
   });
 
-  it('the Export row stays disabled regardless of ownership/permission (isExportingAPIReady=false)', () => {
-    const { container, getByRole } = renderWithProviders(
+  // ISSUE 851. The folder menu used to carry an Export row that was hardcoded
+  // disabled, with two children labelled `Option1`/`Option2` wired to a
+  // callback nothing supplied — a named control that did nothing in every
+  // build. Conversation export is now real; FOLDER export is not, and there is
+  // no route for it, so the row is gone rather than disabled: a disabled
+  // control with named-but-inert options reads as "coming very soon".
+  it('offers no Export row at all — there is no folder export', () => {
+    const { container, queryByRole } = renderWithProviders(
       <FolderItem
         folder={mkFolder({ id: 'f1', name: 'My Folder', owner_id: CURRENT_USER_ID })}
         projectId={PROJECT_ID}
@@ -222,7 +228,8 @@ describe('FolderItem', () => {
       primedClient(),
     );
     openFolderMenu(container);
-    expect(getByRole('menuitem', { name: 'Export' })).toHaveAttribute('aria-disabled', 'true');
+    expect(queryByRole('menuitem', { name: 'Export' })).not.toBeInTheDocument();
+    expect(queryByRole('menuitem', { name: 'Option1' })).not.toBeInTheDocument();
   });
 
   it('calls onPinFolder(folder, true) when Pin on top is clicked from an unpinned folder', async () => {

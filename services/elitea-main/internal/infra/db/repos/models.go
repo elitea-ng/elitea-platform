@@ -209,6 +209,23 @@ func mapCurrentModelCandidate(
 		ProjectID: row.ProjectID,
 		Shared:    row.Shared,
 	}
+	// The GRANT is read for the cross-project read alone.
+	//
+	// It decides whether a CATALOGUE row is offered to the caller, and
+	// sharedOnly is true for exactly that read. A project's own rows are its
+	// own whatever their `data` says, so reading the field there would cost one
+	// more decode per row of the hot path to answer a question nobody asks. The
+	// zero value is "every project", which is what an own row is.
+	//
+	// The decode is deliberately its own, tolerant pass rather than a field on
+	// the strict document below: a row whose `share_scope` is malformed keeps
+	// behaving as it did before the field existed (model_grant.go), where a
+	// strict decode would drop the whole row out of the catalogue instead.
+	if sharedOnly {
+		var grantData map[string]any
+		_ = json.Unmarshal(row.Data, &grantData)
+		item.Grant = configurationapp.ReadModelGrant(grantData)
+	}
 	if section == configurationapp.CurrentModelSectionVectorStorage {
 		item.Name = row.EliteaTitle
 		return currentModelCandidate{id: row.ID, item: item}, nil

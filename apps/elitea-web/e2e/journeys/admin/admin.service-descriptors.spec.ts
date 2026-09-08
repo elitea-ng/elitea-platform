@@ -109,13 +109,35 @@ adminTest('J35b: the rows on screen are the rows the endpoint returned', async (
   expect(listing.body.total).toBe(listing.body.rows?.length);
 
   const rows = listing.body.rows ?? [];
+
+  // Every provider the endpoint named is on the page, as many times as the
+  // endpoint named it. A page rendering a subset would be the #132 shape: a
+  // 200 in the network tab and less on screen than the server sent.
+  //
+  // MATCHED ON THE PROVIDER CELL, not on page text, and this is the whole
+  // point of the rewrite. The assertion used to be
+  // `page.getByText(name, { exact: false }).toHaveCount(1)`, which is a
+  // SUBSTRING match over the whole document — and a provider's own name is a
+  // substring of the origin the next column shows: `inventory` occurs in both
+  // the Provider cell and `https://elitea-inventory:8080`. The count was 2 for
+  // one correct row, so this journey failed on a page that was rendering
+  // exactly what the endpoint returned. It only ever passed because the stack
+  // registered nothing and the loop had no rows to run on; the seed now
+  // restarts elitea-main after writing its project rows, so the facades'
+  // boot-time registrars reach the admission plane and the listing is no
+  // longer empty.
+  //
+  // A COUNT PER NAME, not a flat 1: `(project_id, provider_id)` is the
+  // registration key, so one provider name may legitimately appear once per
+  // project. Comparing the multiset keeps the "less on screen than the server
+  // sent" failure detectable in that case too.
+  const expected = new Map<string, number>();
   for (const row of rows) {
-    // Every provider the endpoint named is on the page. A page rendering a
-    // subset would be the #132 shape: a 200 in the network tab and less on
-    // screen than the server sent.
-    await expect(page.getByText(row.provider_name ?? '__unnamed__', { exact: false })).toHaveCount(
-      1,
-    );
+    const name = row.provider_name ?? '__unnamed__';
+    expected.set(name, (expected.get(name) ?? 0) + 1);
+  }
+  for (const [name, count] of expected) {
+    await expect(page.getByRole('gridcell', { name, exact: true })).toHaveCount(count);
   }
 
   // `healthy` is THREE-STATE and the column must be able to say so. A row the

@@ -5,14 +5,14 @@
  * credential and the most common mistake is a model naming one that is not
  * there. Two screens would put the cause and the effect a click apart.
  *
- * ## Two states the gateway will not fail on, reported here
+ * ## Two states nothing else shows, reported here
  *
  *  - `status_ok = false` — the gateway dispatches only `status_ok = true`, so
  *    such a model is stored, listed and never served.
- *  - `credential_resolves = false` — the gateway still ADVERTISES the model and
- *    guesses its provider from a prefix in the model name, saying so only in a
- *    log line on whichever pod loaded it. This screen is the only place an
- *    operator can see it.
+ *  - `credential_resolves = false` — the row names a provider this platform
+ *    does not publish, or names none at all. Both fail provider admission, so
+ *    both end as the state above; this screen is the only place the REASON is
+ *    visible, and the reason is what says what to change.
  */
 import type { ReactNode } from 'react';
 import { useMemo, useState } from 'react';
@@ -34,6 +34,12 @@ import Typography from '@mui/material/Typography';
 import { t } from '@/shared/i18n';
 
 import { PlatformModelDialog } from './PlatformModelDialog';
+import {
+  shareScopeChipColour,
+  shareScopeChipLabel,
+  shareScopeOf,
+  sharedWithOf,
+} from './platformModelGrant';
 import { configFailureReason } from './api/adminConfigurationApi';
 import {
   platformModelTypeLabel,
@@ -46,6 +52,20 @@ import {
 } from './api/adminLlmPlatformModelsApi';
 
 const EMPTY_MODELS: readonly PlatformModel[] = [];
+
+/** One row's "Available to" chip. */
+function GrantChip({ row }: { readonly row: PlatformModel }): ReactNode {
+  const scope = shareScopeOf(row);
+  return (
+    <Chip
+      size="small"
+      variant="outlined"
+      color={shareScopeChipColour(scope)}
+      data-testid="platform-model-scope"
+      label={shareScopeChipLabel(scope, sharedWithOf(row).length)}
+    />
+  );
+}
 
 function ModelRows({
   items,
@@ -66,6 +86,9 @@ function ModelRows({
             <TableCell>{t('pages.admin.platformModels.column.kind', 'Kind')}</TableCell>
             <TableCell>{t('pages.admin.platformModels.column.wireName', 'Provider model')}</TableCell>
             <TableCell>{t('pages.admin.platformModels.column.provider', 'Provider')}</TableCell>
+            <TableCell>
+              {t('pages.admin.platformModels.column.availableTo', 'Available to')}
+            </TableCell>
             <TableCell align="right">
               {t('pages.admin.platformModels.column.actions', 'Actions')}
             </TableCell>
@@ -95,19 +118,29 @@ function ModelRows({
               </TableCell>
               <TableCell>
                 {row.credential_name === '' ? (
-                  <Typography variant="bodySmall" color="text.secondary">
-                    {t('pages.admin.platformModels.inferred', 'inferred from the name')}
+                  // A row with no link at all. It used to read "inferred from
+                  // the name", which described the gateway's prefix fallback —
+                  // a fallback no row reaches, because admission refuses an
+                  // unlinked model and every reader selects on `status_ok`.
+                  // Such a row is a leftover, and it needs the words that say so.
+                  <Typography variant="bodySmall" color="error">
+                    {t('pages.admin.platformModels.noProvider', 'no provider linked')}
                   </Typography>
                 ) : (
                   <Typography
                     variant="bodySmall"
-                    // A link that does not resolve is coloured, because the
-                    // gateway serves the model anyway with a guessed provider.
                     color={row.credential_resolves ? 'text.secondary' : 'error'}
                   >
                     {row.credential_name}
                   </Typography>
                 )}
+              </TableCell>
+              <TableCell>
+                {/* The grant, on the row rather than only in the dialog: the
+                    question this table is read to answer is which model a
+                    project is missing, and a scope only the edit form showed
+                    would need one click per model to answer it. */}
+                <GrantChip row={row} />
               </TableCell>
               <TableCell align="right">
                 <Button
@@ -203,7 +236,7 @@ function ModelAlerts({
         <Alert severity="warning" data-testid="platform-models-unresolved">
           {t(
             'pages.admin.platformModels.unresolved',
-            'These models name a provider this platform does not publish. The gateway still offers them and guesses the provider from the model name: {{names}}',
+            'These models do not resolve to a platform provider — they name one this platform does not publish, or name none at all. They are stored, listed here and served to nobody: {{names}}',
             { names: unresolved.map((row) => row.elitea_title).join(', ') },
           )}
         </Alert>
@@ -301,7 +334,7 @@ export function PlatformModelsPanel(): ReactNode {
       <Typography variant="bodySmall" color="text.secondary">
         {t(
           'pages.admin.platformModels.intro',
-          'Models published here are offered to every project. Each uses a platform provider — a project’s own provider cannot back a platform model, because a published model must resolve the same way for everyone.',
+          'Models published here are offered to every project. Each names a platform provider — a project’s own provider cannot back a platform model, because a published model must resolve the same way for everyone.',
         )}
       </Typography>
 

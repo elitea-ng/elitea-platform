@@ -1273,6 +1273,13 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		r.Use(apimw.Audit(auditRecorder))
 
 		r.Route("/api/v2", func(r chi.Router) {
+			// A browser must not keep a copy of an API answer. Nothing here
+			// said so, and WebKit reads "nothing" as "decide for yourself" —
+			// it served a reloaded page the previous answer for seconds. The
+			// middleware's own doc carries the measurement. Handlers that
+			// serve something genuinely cacheable still set their own value.
+			r.Use(apimw.NoStore)
+
 			// THE GROUP'S OWN "no such route" ANSWER (F3).
 			//
 			// Auth runs ABOVE this subrouter, so a path nobody registered is
@@ -2783,6 +2790,12 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						Delete("/conversation/prompt_lib/{projectID}/{conversationID}", convHandler.Delete)
 					r.With(projectPermission("models.chat.messages.list")).
 						Get("/messages/prompt_lib/{projectID}/{conversationID}", convHandler.ListMessages)
+					// Conversation export (#851). It reads the TRANSCRIPT, so
+					// it declares the transcript's own permission rather than
+					// a new name: anybody who may read the messages may keep
+					// a copy of them, and nobody else. No migration needed.
+					r.With(projectPermission("models.chat.messages.list")).
+						Get("/conversation_export/prompt_lib/{projectID}/{conversationID}", convHandler.Export)
 					r.With(requireMessageDelete).
 						Delete("/messages/prompt_lib/{projectID}/{conversationID}", convHandler.DeleteMessages)
 					// message.py declares BOTH verbs on one module, so the

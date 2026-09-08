@@ -55,9 +55,18 @@ export type { CopyableChatMessage } from './model/useChatCopyToClipboard';
 export { copyEventHooks } from './model/useCopyEventHandlers';
 export { useChatInteractionUUID } from './model/useChatInteractionUUID';
 
-// ── Message pagination (`useLoadMoreMessages.js`) ──
-export { useLoadMoreMessages } from './model/useLoadMoreMessages';
-export type { LoadMoreMessagesConversation } from './model/useLoadMoreMessages';
+// ── Message pagination — REMOVED (issue 852) ──
+// `useLoadMoreMessages` lived here with no caller anywhere in the app. It is
+// deleted rather than wired, and the reason is worth keeping: the transcript's
+// own first read asks for `sort_order=asc&offset=0`
+// (`pages/chat/useChatPageData.ts`), so an open conversation already starts at
+// its OLDEST message — there is nothing older for a "load older messages"
+// pager to fetch. Wiring it would also have to cross the layer fence twice
+// (`widgets/chat-box` owns the transcript state and may not import
+// `processes/`), and reconcile a 50-row first page with the hook's own
+// 10-row cursor. A real transcript pager therefore starts by reversing the
+// initial read; it is a different change from this one, and leaving dead code
+// in place was not a way of holding its place.
 
 // ── Internal-tools config toggle (`useInternalToolsConfig.hooks.js`) ──
 export { useInternalToolsConfig } from './model/useInternalToolsConfig';

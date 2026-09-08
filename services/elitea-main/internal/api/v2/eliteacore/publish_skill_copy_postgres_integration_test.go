@@ -61,7 +61,7 @@ func TestPublishCarriesSkillAttachments(t *testing.T) {
 
 	recorder := publishCopyDo(t, router, fixture.versionID, map[string]any{
 		"version_name":     "v-one",
-		"validation_token": publishCopyValidationToken,
+		"validation_token": publishCopyToken(t, pool, fixture.versionID),
 	})
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("publish status = %d, body = %s", recorder.Code, recorder.Body.String())
@@ -130,7 +130,7 @@ ALTER TABLE p_1.entity_skill_mapping ADD CONSTRAINT copy_must_fail CHECK (entity
 
 	recorder := publishCopyDo(t, router, fixture.versionID, map[string]any{
 		"version_name":     "v-one",
-		"validation_token": publishCopyValidationToken,
+		"validation_token": publishCopyToken(t, pool, fixture.versionID),
 	})
 	if recorder.Code == http.StatusOK {
 		t.Fatalf("publish reported success while the skill copy failed: %s", recorder.Body.String())

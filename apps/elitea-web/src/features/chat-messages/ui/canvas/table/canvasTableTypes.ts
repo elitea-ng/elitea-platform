@@ -1,4 +1,5 @@
 import type { MarkdownTableData } from '../../../lib/markdownTable';
+import type { TableExportFormat } from '../../../lib/tableExport';
 
 /**
  * The table-editing control surface, shared by `CanvasEditHeader` (which renders
@@ -20,4 +21,6 @@ export interface CanvasEditHeaderTable {
   readonly onImportTableData?: ((data: MarkdownTableData) => void) | undefined;
   /** Surfaces a failed CSV/TSV read from the import picker (this app has no toast hook yet). */
   readonly onImportError?: ((error: unknown) => void) | undefined;
+  /** Saves the table as a file. Omitted, no export control is rendered — the same rule every other control here follows. */
+  readonly onExportTable?: ((format: TableExportFormat) => void) | undefined;
 }

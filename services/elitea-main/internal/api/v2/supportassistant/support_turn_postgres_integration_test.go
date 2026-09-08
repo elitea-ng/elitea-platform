@@ -405,7 +405,7 @@ func newSupportHarness(t *testing.T) *supportHarness {
 	pool := newSupportPool(t)
 
 	chat := repos.NewConversationsRepo(pool)
-	startRepository, err := repos.NewCurrentAgentStartRepository(pool)
+	startRepository, err := repos.NewCurrentAgentStartRepository(pool, 1)
 	if err != nil {
 		t.Fatalf("build the current-agent start repository: %v", err)
 	}

@@ -14,12 +14,12 @@
  * public credentials alone, deliberately, so "a published model must not resolve
  * differently for each caller". The server refuses a link to anything else.
  *
- * ## `credential_resolves` reports a state the gateway will not fail on
+ * ## `credential_resolves` reports a state nothing else shows
  *
- * A model whose link does not resolve is still advertised, with its provider
- * guessed from a prefix in the model name, and says so only in a gateway log
- * line. The listing reports it because this screen is the only place an operator
- * can see it.
+ * A model whose link does not resolve, and a model that names no link at all,
+ * are both stored and both undispatchable: admission refuses them and every
+ * reader selects on `status_ok`. The listing reports the reason because this
+ * screen is the only place an operator can see it.
  *
  * Not generated: `orval` builds from `v2.yaml`, which does not describe the
  * admin-panel routes.
@@ -67,14 +67,53 @@ export interface PlatformModel {
   readonly status_logs: string;
   /** The provider's own model string. */
   readonly model_name: string;
-  /** The platform credential this model uses, by name. Empty means none. */
+  /**
+   * The platform credential this model uses, by name. Empty means the row names
+   * none, which this surface no longer writes and the server no longer accepts.
+   */
   readonly credential_name: string;
   /**
-   * False when the named credential is not among the platform's published
-   * providers. A model naming NO credential reports true — the gateway then
-   * resolves the provider from a prefix, which is a supported configuration.
+   * False when the row names no credential at all, and when the one it names is
+   * not among the platform's published providers. Neither row is dispatched.
    */
   readonly credential_resolves: boolean;
+  /**
+   * The two `data` flags a project's AI configuration filters its tier defaults
+   * on. Read back because the edit dialog rewrites `data` whole: a form that
+   * could not see them would clear the flag of every model it saved.
+   */
+  readonly low_tier?: boolean;
+  readonly high_tier?: boolean;
+  /**
+   * Which projects this platform model is offered to — `all`, `none`, or the
+   * ids in `shared_with`.
+   *
+   * `shared = true` still means "this is a platform row"; the grant NARROWS it.
+   * A row written before the grant existed carries neither field and was
+   * offered to every project, so the SERVER reports such a row as `all`. The
+   * field is optional here for a different reason: a server that predates it
+   * sends none, and this screen must not render "granted to nobody" for every
+   * model on that deployment.
+   */
+  readonly share_scope?: string;
+  /** Empty for every scope but `projects`. */
+  readonly shared_with?: readonly number[];
+  /**
+   * The row's stored `data` object, ENTIRE — the merge base the edit dialog
+   * writes its own fields over.
+   *
+   * The fields above name what the listing interprets, and that is not what the
+   * row holds: an `llm_model` also declares `context_window`,
+   * `max_output_tokens`, `openai_compatible`, `supports_reasoning` and
+   * `supports_vision`. The update replaces `data` whole, so a dialog that could
+   * only read the interpreted fields REBUILT the object from them and dropped
+   * the rest on every save. Naming five more fields here would fix the five that
+   * exist and lose the next one the registry adds.
+   *
+   * Optional because a server that predates the field sends none. The dialog
+   * then merges over nothing, which is what it used to do in every case.
+   */
+  readonly data?: Readonly<Record<string, unknown>>;
   readonly created_at: string;
   readonly updated_at: string;
 }
@@ -96,14 +135,49 @@ export interface PlatformModelList {
   readonly credential_error?: string;
 }
 
-/** What the model dialog sends. `section` is derived by the server. */
+/**
+ * What the model dialog sends. `section` is derived by the server.
+ *
+ * `ai_credentials` is REQUIRED, and the registry is where that comes from: all
+ * five model types declare it, so a body without it fails the create's
+ * required-field rule and — were it stored — would fail provider admission and
+ * be served by nobody.
+ *
+ * The tier flags are optional because only `llm_model` declares them. The other
+ * four decode their `data` with unknown fields refused, so sending a flag they
+ * do not declare makes the row an invalid binding.
+ */
 export interface PlatformModelDraft {
   readonly elitea_title: string;
   readonly type: string;
-  readonly data: {
-    readonly name: string;
-    readonly ai_credentials?: { readonly elitea_title: string };
-  };
+  readonly data: PlatformModelData;
+}
+
+/**
+ * The `data` object a save writes, whole.
+ *
+ * The index signature is the point rather than a loosening: the dialog sends the
+ * stored object with its edited fields written over it, so a field neither this
+ * type nor the form has heard of is carried through instead of erased. The named
+ * fields are the ones the form actually authors.
+ */
+export interface PlatformModelData {
+  readonly name: string;
+  readonly ai_credentials: { readonly elitea_title: string };
+  readonly low_tier?: boolean;
+  readonly high_tier?: boolean;
+  readonly context_window?: number;
+  readonly openai_compatible?: boolean;
+  readonly supports_reasoning?: boolean;
+  readonly supports_vision?: boolean;
+  /**
+   * The grant. Both fields are sent on every save, whatever the kind: the five
+   * model types all carry it, because it is a fact about the ROW's audience and
+   * not about what the model can do.
+   */
+  readonly share_scope?: string;
+  readonly shared_with?: readonly number[];
+  readonly [field: string]: unknown;
 }
 
 /**
@@ -113,8 +187,8 @@ export interface PlatformModelDraft {
  * name — so it is the query that backs the model dialog's "Platform provider"
  * select. Creating a provider invalidated only the providers query, and this
  * one stayed cached: the operator added a provider, opened "Add a platform
- * model", and the select still offered "None" alone until a full reload,
- * although the server was already returning the new name.
+ * model", and the select was still empty until a full reload, although the
+ * server was already returning the new name.
  *
  * `adminLlmProvidersApi.ts` is the only importer, and it imports nothing else
  * from this module, so the two files do not form a cycle.

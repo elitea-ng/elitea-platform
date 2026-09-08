@@ -47,12 +47,14 @@ export const PublishBadRequestResponse = zod
     error: zod
       .union([zod.string(), zod.array(ValidationFieldError)])
       .describe(
-        'Either a plain message (e.g. \"llm_not_shared\", \"pipeline_not_publishable\") or a pydantic-style field error list.\n',
+        'Either a plain message (e.g. \"llm_not_shared\", \"pipeline_not_publishable\", \"validation_token_invalid\") or a pydantic-style field error list.\n',
       ),
     msg: zod
       .string()
       .optional()
-      .describe('Present only alongside error=\"pipeline_not_publishable\".'),
+      .describe(
+        'Present alongside error=\"pipeline_not_publishable\" and error=\"validation_token_invalid\", where it says which of the four token findings was made. Also present alongside error=\"llm_not_shared\" when the version names a PLATFORM model that is not granted to every project: a platform model is available to all projects, to none, or to a chosen set (share_scope \/ shared_with on the catalogue row), and a published agent is read by every project that opens the catalogue, so it may only name a model available to all of them. The message names the model and the scope that was found.\n',
+      ),
   })
   .describe(
     "NOTE(W2): union of the 400 bodies written by Publish (internal\/api\/v2\/eliteacore\/handler.go:452, 456-461, 467-473, 486, 547, 585) and PublishValidate (1197, 1203-1218).\n",

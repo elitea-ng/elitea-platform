@@ -114,11 +114,35 @@ export function useQueryFoldersList(params: UseQueryFoldersListParams): UseQuery
     { enabled: projectId !== undefined && hasGetPermission },
   );
 
+  /**
+   * `total` and `offset` are carried through from the answer, not recomputed.
+   *
+   * This function used to build `{name, conversations, offset:
+   * conversations.length}` and nothing else, so every bucket reached the rail
+   * with `total` undefined. `DateGroup.tsx` passes `group.total ?? 0` to
+   * `LoadMoreSentinel`, whose `hasMore` is `totalAvailableCount >
+   * listCurrentSize` — with a total of 0 that is false for every bucket that
+   * has ever existed. The sentinel never rendered, `onLoadMoreInGroup` had no
+   * caller, and a project longer than one page did not load slowly: it never
+   * loaded the rest. The folder half of the same feature always worked
+   * because `updateFolders` below spreads the whole `Folder`.
+   *
+   * `offset` is the server's own "where the next page starts", which is the
+   * number of rows it DELIVERED. Falling back to `conversations.length` is
+   * only for a listing served whole (no `offset` on the wire); using the
+   * post-filter length when the server did send one would ask for a page that
+   * starts before the rows already held, every time a pinned row was dropped.
+   */
   const updateDateGroups = useCallback((dateGroupsList: readonly DateGroup[], pinnedIds: ReadonlySet<string>): void => {
     const processedGroups: DateGroupListItem[] = dateGroupsList.map((group) => {
       const filtered = pinnedIds.size > 0 ? group.conversations.filter((c) => !pinnedIds.has(c.id)) : group.conversations;
       const conversations = sortConversations(filtered.map((ref) => toConversation(ref)));
-      return { name: group.name, conversations, offset: conversations.length };
+      return {
+        name: group.name,
+        conversations,
+        offset: group.offset ?? conversations.length,
+        ...(group.total !== undefined ? { total: group.total } : {}),
+      };
     });
     setDateGroupsRef.current(processedGroups);
   }, []);
@@ -127,7 +151,9 @@ export function useQueryFoldersList(params: UseQueryFoldersListParams): UseQuery
     const folderedConversations: FolderListItem[] = folderList.map((folder) => {
       const filtered = pinnedIds.size > 0 ? folder.conversations.filter((c) => !pinnedIds.has(c.id)) : folder.conversations;
       const conversations = sortConversations(filtered.map((ref) => toConversation(ref)));
-      return { ...folder, conversations, offset: conversations.length };
+      // The spread already carries `total`; `offset` is taken from the answer
+      // for the same reason `updateDateGroups` above takes it.
+      return { ...folder, conversations, offset: folder.offset ?? conversations.length };
     });
 
     setFoldersRef.current((prevFolders) => {

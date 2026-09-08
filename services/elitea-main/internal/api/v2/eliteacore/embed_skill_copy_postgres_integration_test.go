@@ -82,7 +82,7 @@ func TestEmbedCarriesSubAgentSkillAttachments(t *testing.T) {
 
 	recorder := publishCopyDo(t, router, fixture.parentVersionID, map[string]any{
 		"version_name":     "v-one",
-		"validation_token": publishCopyValidationToken,
+		"validation_token": publishCopyToken(t, pool, fixture.parentVersionID),
 	})
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("publish status = %d, body = %s", recorder.Code, recorder.Body.String())
@@ -165,7 +165,7 @@ ALTER TABLE p_1.entity_skill_mapping ADD CONSTRAINT embed_copy_must_fail CHECK (
 	router := publishCopyRouter(eliteacore.NewHandler(pool))
 	recorder := publishCopyDo(t, router, fixture.parentVersionID, map[string]any{
 		"version_name":     "v-one",
-		"validation_token": publishCopyValidationToken,
+		"validation_token": publishCopyToken(t, pool, fixture.parentVersionID),
 	})
 	// The publish is durable before the embed starts. Reporting a failure here
 	// would tell the caller to retry a publish that already succeeded.

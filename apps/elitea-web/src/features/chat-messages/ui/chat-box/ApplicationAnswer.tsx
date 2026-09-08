@@ -22,9 +22,14 @@
  * unrelated offset at the same position. `speakingSegments` still has no
  * reader; nothing in this pass needed it.
  *
- * Not ported: canvas message items and the References accordion —
- * `entities/message`'s wire type does not model canvas fields yet, and
- * References wasn't part of this fix round's scope.
+ * Canvas message items ARE rendered now (issue 853): `./AnswerMessageItems`
+ * walks `message_items` in their stored order and mounts the ported `Canvas`
+ * block — the transcript's opener — for every `canvas_message`. Before that,
+ * this component filtered the items down to `text_message` alone, so a canvas
+ * carved out of an answer showed the two halves of the text and dropped the
+ * middle, with nothing anywhere on the chat surface able to open it again.
+ * Still not ported: the References accordion, which was not part of this
+ * round's scope.
  */
 import type { ReactNode } from 'react';
 import { useCallback, useEffect, useMemo } from 'react';
@@ -42,6 +47,11 @@ import { ChatHitlActions } from '../chat-hitl-actions/ChatHitlActions';
 import type { HitlInterrupt, HitlResumePayload } from '../chat-hitl-actions/ChatHitlActions';
 import { ErrorTrace } from '../error-trace/ErrorTrace';
 
+import { AnswerContent } from './AnswerContent';
+import type { AnswerCanvasSelection } from './AnswerContent';
+import { readAnswerItems } from './AnswerMessageItems';
+import type { CanvasEditPayload, CodeBlockInfo } from '../canvas/Canvas';
+
 import { t } from '@/shared/i18n';
 import { BasicAccordion } from '@/shared/ui/BasicAccordion';
 import { Markdown } from '@/shared/ui/Markdown';
@@ -49,8 +59,6 @@ import { TOOL_ACTION_TYPES, ToolActionStatus } from '@/shared/lib/chat';
 
 import type { SubAgentGroupable } from '../../lib/subAgentGrouping';
 import type { ChatMessage } from '../../lib/convertMessagesToChatHistory';
-
-const TEXT_MESSAGE_ITEM_TYPE = 'text_message';
 
 /** Loading/streaming/regenerating status flags, grouped to stay under the component-props budget. */
 export interface ApplicationAnswerStatus {
@@ -65,6 +73,17 @@ export interface ApplicationAnswerActionHandlers {
   readonly onDelete?: (() => void) | undefined;
   readonly onRegenerate?: (() => void) | undefined;
   readonly shouldDisableRegenerate?: boolean;
+  /**
+   * Opens the canvas editor for a `canvas_message` item in this answer — the
+   * opener issue 853 is about. It rides in this group rather than as its own
+   * prop because the component is at its §3.5 props ceiling, and it belongs
+   * with the other per-message actions.
+   */
+  readonly onEditCanvas?: ((payload: CanvasEditPayload) => void) | undefined;
+  /** The canvas block currently open in the editor, so this answer's copy of it shows a placeholder instead. */
+  readonly selectedCodeBlockInfo?: CodeBlockInfo | undefined;
+  /** Carves a canvas out of a range the reader HIGHLIGHTED in this answer — see `./AnswerContent`, which stamps this row's group onto it. */
+  readonly onCreateCanvasFromSelection?: ((payload: AnswerCanvasSelection) => void) | undefined;
 }
 
 /** Read-aloud (TTS) props, grouped to stay under the component-props budget. */
@@ -129,20 +148,6 @@ export interface ApplicationAnswerProps {
   readonly hitl?: ApplicationAnswerHitl;
 }
 
-/** The `text_message` entries of `messageItems`, defensively read the same way `UserMessage.tsx` reads them (the declared `MessageItemWire` type only models `id`/`item_details.content`). */
-function getTextMessageItems(
-  messageItems: ChatMessage['messageItems'],
-): ReadonlyArray<{ readonly key: string; readonly content: string }> {
-  const raw = (messageItems ?? []) as unknown as ReadonlyArray<Record<string, unknown>>;
-  return raw
-    .filter((item) => item.item_type === TEXT_MESSAGE_ITEM_TYPE)
-    .map((item, index) => {
-      const details = item.item_details as { content?: string } | undefined;
-      const uuid = item.uuid as string | undefined;
-      return { key: uuid ?? `text-item-${index}`, content: details?.content ?? '' };
-    });
-}
-
 /** Defensive read of a message-level token-limit pause signal — not yet a typed `ChatMessage` field (see module doc). */
 function getRequiresConfirmation(answer: ChatMessage): { readonly message?: string } | undefined {
   return (answer as unknown as { requiresConfirmation?: { readonly message?: string } }).requiresConfirmation;
@@ -162,7 +167,7 @@ export function ApplicationAnswer({
   isLastMessage = false,
   author: { participantName, isSwarmChild = false, swarmAgentName = '' } = {},
   status: { isLoading = false, isStreaming = false, isRegenerating = false } = {},
-  actions: { onCopy, onDelete, onRegenerate, shouldDisableRegenerate = false } = {},
+  actions: { onCopy, onDelete, onRegenerate, shouldDisableRegenerate = false, onEditCanvas, selectedCodeBlockInfo, onCreateCanvasFromSelection } = {},
   tts: { onAutoSpeak, speakingMessageId, spokenRange } = {},
   continuation: { onContinueMcpExecution, onContinueTokenLimitExecution, hideContinueButton = false } = {},
   hitl: { hitlInterrupt, hitlInterrupts, onHitlResume } = {},
@@ -177,8 +182,11 @@ export function ApplicationAnswer({
   const currentSpokenRange = speakingMessageId === messageId ? spokenRange : undefined;
   const requiresConfirmationSignal = getRequiresConfirmation(answer);
 
-  const textItems = useMemo(() => getTextMessageItems(answer.messageItems), [answer.messageItems]);
-  const hasTextContent = !!answer.content || textItems.length > 0;
+  const items = useMemo(() => readAnswerItems(answer.messageItems), [answer.messageItems]);
+  // A canvas counts as content: an answer that is nothing but a canvas would
+  // otherwise render as an empty bubble. Which of `content` and the text items
+  // actually carries the words is `./AnswerContent`'s subject.
+  const hasTextContent = !!answer.content || items.length > 0;
 
   const { swarmChildActions, nonSwarmChildActions } = useMemo(() => {
     if (isProcessing) return { swarmChildActions: [] as readonly SubAgentGroupable[], nonSwarmChildActions: toolActions };
@@ -301,19 +309,18 @@ export function ApplicationAnswer({
             marginTop: nonSwarmChildActions.length > 0 || !!exception ? '0.5rem' : 0,
           })}
         >
-          {canRenderContent && !!answer.content && textItems.length === 0 && (
-            <Markdown spokenRange={currentSpokenRange}>{answer.content}</Markdown>
+          {canRenderContent && (
+            <AnswerContent
+              content={answer.content}
+              items={items}
+              messageGroupUuid={answer.id}
+              isStreaming={isStreaming}
+              spokenRange={currentSpokenRange}
+              onEditCanvas={onEditCanvas}
+              selectedCodeBlockInfo={selectedCodeBlockInfo}
+              onCreateCanvasFromSelection={onCreateCanvasFromSelection}
+            />
           )}
-
-          {canRenderContent &&
-            textItems.map((item) => (
-              <Markdown
-                key={item.key}
-                spokenRange={currentSpokenRange}
-              >
-                {item.content}
-              </Markdown>
-            ))}
 
           {!!exception && <ErrorTrace error={exception} />}
 

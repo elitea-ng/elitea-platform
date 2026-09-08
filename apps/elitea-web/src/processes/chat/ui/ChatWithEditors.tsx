@@ -1,6 +1,8 @@
 import type { ReactNode } from 'react';
 import { useCallback } from 'react';
 
+import { useRouteContext } from '@tanstack/react-router';
+
 import Box from '@mui/material/Box';
 import Drawer from '@mui/material/Drawer';
 import Typography from '@mui/material/Typography';
@@ -20,7 +22,40 @@ import { toCreatedResult } from './ChatWithEditors.helpers';
 import { usePlusMenuEntities } from '../model/usePlusMenuEntities';
 import { useChatWithEditors } from './ChatWithEditors.hooks';
 import { renderAgentEditorShell, renderPipelineEditorShell, renderToolkitEditorShell } from './EditorShell';
+import { useCanvasCreation } from './useCanvasCreation';
 import { useCreateChatReset } from './useCreateChatReset';
+
+/**
+ * Who is signed in, read off the router root context's `auth` seam — the same
+ * local-copy shape every other reader of that seam uses
+ * (`pages/user-public/api/useRouterAuth.ts` states why it is copied rather
+ * than imported across a slice boundary).
+ *
+ * It is read HERE and not inside `useCanvasEditing`, because this component is
+ * always mounted under `<RouterProvider>` and that hook is not: reading the
+ * route context from a hook a plain `renderHook` can mount would make the hook
+ * throw outside a router.
+ *
+ * The id is the one the canvas presence roster is keyed by:
+ * `/forward-auth/info` answers `user_id` and `/social/author` answers `id`,
+ * and both are the principal id the presence handler writes as
+ * `Editor.user_id`.
+ */
+interface ViewerRouterContext {
+  readonly auth?: { readonly getUser?: () => { readonly id?: string } | undefined };
+}
+
+/**
+ * Pure extraction, kept module-local: both of its branches are covered through
+ * the real route by `chatCanvasOpener.test.tsx` (a viewer that is on the roster
+ * keeps editing; a roster held by somebody else goes read-only), which is where
+ * the wiring itself can be observed at all.
+ */
+function selectViewerId(context: unknown): string | undefined {
+  if (typeof context !== 'object' || context === null) return undefined;
+  const id = (context as ViewerRouterContext).auth?.getUser?.()?.id;
+  return id === undefined || id === '' ? undefined : id;
+}
 
 /**
  * `ChatWithEditors` — the real composition root this whole unit exists to
@@ -85,8 +120,30 @@ export function ChatWithEditors(): ReactNode {
     handleShowAgentEditor,
     handleShowPipelineEditor,
     handleShowToolkitEditor,
+    handleShowCanvasEditor,
     canvas,
   } = useChatWithEditors();
+
+  /*
+   * The canvas CREATE. Called HERE and not inside `useChatWithEditors`, for
+   * the same reason `viewerId` is read here: it needs the route — the
+   * conversation the selection belongs to — and `useChatWithEditors` is
+   * mounted by a plain `renderHook` in its own tests, where `useParams` has no
+   * router to read and throws.
+   *
+   * It is deliberately NOT routed through the editor mutex either: making a
+   * canvas opens no editor, so there is no second editor to queue behind. It
+   * writes the canvas and re-reads the transcript; the reader then opens the
+   * new block with the control every stored canvas already has.
+   */
+  const canvasCreation = useCanvasCreation();
+
+  /*
+   * `strict: false` reads the ROOT's merged context from any component under
+   * `<RouterProvider>`, the same call `useRouterAuth.ts` makes.
+   */
+  const routeContext: unknown = useRouteContext({ strict: false });
+  const viewerId = selectViewerId(routeContext);
 
   // "+ Create -> Chat" writes `?create=1` and had no reader, so the click did
   // nothing while the user was already on `/chat`. `resetToken` keys the chat
@@ -142,6 +199,16 @@ export function ChatWithEditors(): ReactNode {
               onShowToolkitEditor: handleShowToolkitEditor,
               onCloseAgentEditor: editAgent.onCloseAgentEditor,
               onClosePipelineEditor: editPipeline.onClosePipelineEditor,
+              /*
+                * The transcript's canvas opener (issue 853). Both halves travel
+                * together: the handler that opens a stored canvas block, and the
+                * block currently open — the transcript swaps that one for an
+                * editing placeholder so the same document is not shown twice.
+                */
+              onShowCanvasEditor: handleShowCanvasEditor,
+              selectedCanvasBlock: canvas.selectedCodeBlockInfo,
+              /* And the gesture that MAKES one: a range highlighted in an answer. */
+              onCreateCanvasFromSelection: canvasCreation.onCreateCanvasFromSelection,
             }}
           />
           )}
@@ -183,7 +250,15 @@ export function ChatWithEditors(): ReactNode {
         <Drawer
           anchor="right"
           open
-          onClose={canvas.onCloseCanvasEditor}
+          /*
+           * `() => …`, not the handler itself. MUI calls `onClose(event,
+           * reason)`, and `onCloseCanvasEditor`'s own contract is
+           * `(hasChange, finalResult, language)` — handed the pair directly it
+           * would read the event as "there are changes" and the string
+           * `"backdropClick"` as the document to save, and write that over the
+           * user's canvas.
+           */
+          onClose={() => canvas.onCloseCanvasEditor()}
           slotProps={{ paper: { sx: { width: { xs: '100%', md: '48rem' }, maxWidth: '100%', p: 2, boxSizing: 'border-box' } } }}
           data-testid="chat-canvas-editor"
         >
@@ -191,6 +266,24 @@ export function ChatWithEditors(): ReactNode {
             ref={canvas.canvasEditorRef}
             selectedCodeBlockInfo={canvas.selectedCodeBlockInfo}
             onCloseCanvasEditor={canvas.onCloseCanvasEditor}
+            /*
+             * The language picker's own write. It was omitted, so
+             * `CanvasEditor`'s `onChangeLanguage` guard (`if (editCanvas &&
+             * …)`) was permanently false and switching a canvas's language
+             * changed the highlighting and nothing else.
+             */
+            editCanvas={canvas.editCanvas}
+            {...(canvas.projectId !== undefined ? { projectId: canvas.projectId } : {})}
+            /*
+             * Who is looking. It was omitted, and that is not a cosmetic gap:
+             * the presence roster the editor reads back from its OWN first
+             * beat contains this tab, so an editor with no viewer identity
+             * counted itself as "somebody else is editing this canvas" and
+             * mounted read-only — CodeMirror with `aria-readonly`, the table
+             * grid with every cell disabled. A single user could not type in
+             * their own canvas.
+             */
+            {...(viewerId !== undefined ? { viewer: { id: viewerId } } : {})}
           />
         </Drawer>
       )}

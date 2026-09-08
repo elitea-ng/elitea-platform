@@ -34,8 +34,8 @@ import {
   buildUserParticipant,
   deriveChatBoxIds,
   deriveChatBoxInputState,
-  flattenChatBoxProps,
-  resolveConversationStarters,
+  buildCanvasProps, flattenChatBoxProps,
+  resolveConversationStarters, shouldDisableClearChat,
 } from './ChatBox.helpers';
 import type { ChatBoxEditorCallbacks } from './ChatBox.helpers';
 import type { ChatBoxAgentEventSink, ChatBoxConversationProp } from './ChatBox.props';
@@ -339,7 +339,7 @@ const ChatBoxInner = memo(function ChatBox({
             onContinueMcpExecution: handleContinueMcpExecution,
             onContinueTokenLimitExecution: handleContinueTokenLimit,
           }}
-          tts={buildTtsProps(readAloud)}
+          tts={buildTtsProps(readAloud)} canvas={buildCanvasProps(editorCallbacks)}
         />
         {state.shouldShowStarters && (
           <ChatConversationStarters
@@ -381,10 +381,10 @@ const ChatBoxInner = memo(function ChatBox({
             attachments: { attachments: data.attachments.state.attachments, onAttachFiles: data.attachments.state.onAttachFiles },
             internalTools: { disabled: isInputLoading, tools: internalToolsButtonTools, onToolChange: handleInternalToolChange },
             model: { llmSettings, onSetLLMSettings, selectedModel: selectedLlmModel, onSelectModel: handleSelectModel, models: modelsList },
+            clearChat: { disabled: shouldDisableClearChat(isStreaming, messages.length), onClear: handleClear },
             refs: { attachmentButtonRef, voiceButtonRef, voiceInputRef: chatInputRef },
-            isAgentsPage: !!isAgentsPage,
+            isAgentsPage: !!isAgentsPage, participants: normalisedParticipants,
             entitySubmenus: { ...entitySubmenus, onSelectParticipant: entityParticipantActions.onSelectParticipant, getParticipantMenuState: entityParticipantActions.getParticipantMenuState },
-            participants: normalisedParticipants,
           })}
           refs={{ attachmentButtonRef, voiceButtonRef }}
         />

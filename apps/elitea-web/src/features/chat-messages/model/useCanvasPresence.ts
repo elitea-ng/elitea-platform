@@ -29,6 +29,18 @@
  * caller uses to go read-only, which is what the reference user saw, but the
  * server refuses no write on the roster: a lock enforced by the client alone is
  * a control that looks live and never fires.
+ *
+ * WHO "I" AM, AND WHY IT IS LOAD-BEARING. The roster the server answers a beat
+ * with always contains the CALLER — the beat is what put it there. So the
+ * read-only rule is only ever "is anyone here who is not me", and it is wrong
+ * by exactly one entry for any client that cannot recognise its own. That was
+ * the defect this file shipped with: the caller supplied no identity at all, a
+ * single tab announced itself, read its own entry back as a stranger, and made
+ * the editor read-only against the only person in it — CodeMirror rendered
+ * `aria-readonly="true"` and the table grid disabled every cell. `userId` is
+ * the identifier that fixes it (the server keys each entry by principal id and
+ * puts it on the wire); the name is kept as the fallback for a roster with no
+ * id, and an unidentifiable viewer stays editable rather than guessing.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
@@ -64,6 +76,17 @@ export interface UseCanvasPresenceParams {
   readonly canvasId?: string | undefined;
   /** The signed-in user's display name, for the read-only decision. */
   readonly userName?: string | undefined;
+  /**
+   * The signed-in user's principal id — the SAME id the server puts on its own
+   * roster entry (`Editor.user_id`).
+   *
+   * This is the identifier the self-check should use, and the name is only a
+   * fallback for a roster that carries no id. The roster the server answers a
+   * beat with ALWAYS contains the caller, so a viewer that cannot recognise
+   * its own entry reads "one editor, none of them me" and locks the only
+   * person editing out of their own canvas — see `isReadOnly` below.
+   */
+  readonly userId?: string | undefined;
   /** What to announce while the tab is visible. */
   readonly state?: 'editing' | 'viewing';
   /** Set false to keep the hook mounted and silent (e.g. a read-only preview). */
@@ -82,7 +105,28 @@ export interface UseCanvasPresenceResult {
 /** The wire roster, mapped onto the entity shape the selectors already speak. */
 function toPresence(editors: readonly CanvasPresenceEditorWire[] | undefined): CanvasEditorPresence[] {
   if (!editors) return [];
-  return editors.map((editor) => ({ userName: editor.user_name }));
+  return editors.map((editor) => ({
+    userName: editor.user_name,
+    ...(typeof editor.user_id === 'string' && editor.user_id !== '' ? { userId: editor.user_id } : {}),
+  }));
+}
+
+/**
+ * Is this roster entry the viewer's own?
+ *
+ * The id wins when both the entry and the viewer carry one, because the id is
+ * what the server keyed the entry by; the name is the fallback for a roster
+ * that carries no id. An entry that matches NEITHER is somebody else.
+ */
+function isSelf(
+  editor: CanvasEditorPresence,
+  viewer: { readonly userId?: string | undefined; readonly userName?: string | undefined },
+): boolean {
+  if (viewer.userId !== undefined && viewer.userId !== '' && editor.userId !== undefined) {
+    return editor.userId === viewer.userId;
+  }
+  if (viewer.userName !== undefined && viewer.userName !== '') return editor.userName === viewer.userName;
+  return false;
 }
 
 /**
@@ -103,7 +147,7 @@ function parseFrame(raw: string): CanvasPresenceWire | null {
 }
 
 export function useCanvasPresence(params: UseCanvasPresenceParams): UseCanvasPresenceResult {
-  const { projectId, canvasId, userName, state = 'editing', enabled = true } = params;
+  const { projectId, canvasId, userName, userId, state = 'editing', enabled = true } = params;
 
   const [editors, setEditors] = useState<readonly CanvasEditorPresence[]>([]);
   const [ttlSeconds, setTtlSeconds] = useState(FALLBACK_TTL_SECONDS);
@@ -210,13 +254,28 @@ export function useCanvasPresence(params: UseCanvasPresenceParams): UseCanvasPre
   });
 
   const real = useMemo(() => realCanvasEditors(editors), [editors]);
+  /**
+   * Can this client recognise its own roster entry at all? A viewer with no id
+   * and no name cannot, and the read-only rule below then has no way to tell
+   * "somebody else is here" from "I am here".
+   */
+  const knowsSelf = (userId !== undefined && userId !== '') || (userName !== undefined && userName !== '');
   const otherEditors = useMemo(
-    () => (userName ? real.filter((editor) => editor.userName !== userName) : real),
-    [real, userName],
+    () => (knowsSelf ? real.filter((editor) => !isSelf(editor, { userId, userName })) : real),
+    [knowsSelf, real, userId, userName],
   );
-  // Read-only exactly when somebody else holds it. An EMPTY roster is editable,
-  // which is what keeps behaviour unchanged with no second editor.
-  const isReadOnly = real.length > 0 && otherEditors.length === real.length;
+  /*
+   * Read-only exactly when somebody ELSE holds it. An EMPTY roster is editable,
+   * which is what keeps behaviour unchanged with no second editor.
+   *
+   * FAIL OPEN when the viewer is unidentifiable. Every beat's own answer
+   * contains the caller, so an unidentifiable viewer sees a roster of one
+   * stranger and would go read-only on its own presence — a canvas nobody but
+   * its single editor has open, locked against that editor, with no second tab
+   * anywhere. This is not a lock in the first place (the server refuses no
+   * write on this roster), so refusing to guess is strictly the safer half.
+   */
+  const isReadOnly = knowsSelf && real.length > 0 && otherEditors.length === real.length;
 
   return { editors: real, isReadOnly, otherEditors };
 }

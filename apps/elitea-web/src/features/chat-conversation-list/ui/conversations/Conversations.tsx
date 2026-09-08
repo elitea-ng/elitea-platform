@@ -5,11 +5,11 @@ import { DndContext, closestCenter } from '@dnd-kit/core';
 import Box from '@mui/material/Box';
 import { useTheme } from '@mui/material/styles';
 
-import type { Conversation } from '@/entities/conversation';
+import { conversationApi, type Conversation } from '@/entities/conversation';
 import { folderApi } from '@/entities/folder';
 import { PERMISSIONS } from '@/shared/lib/permissions';
 
-import { conversationListErrorMessage } from '../../lib/errorMessage';
+import { conversationExportErrorMessage, conversationListErrorMessage } from '../../lib/errorMessage';
 import { useDragAndDrop } from '../../lib/hooks/useDragAndDrop';
 import { useIsSmallWindow } from '../../lib/hooks/useIsSmallWindow';
 import { useHasPermission } from '../../lib/useHasPermission';
@@ -231,7 +231,31 @@ export function Conversations(props: ConversationsProps): ReactNode {
   // (extracted purely to keep THIS file under the §3.5 `max-lines` budget —
   // see that file's own module doc for why each is a `useLatestRef`-backed
   // hook rather than a plain `useCallback` with every input listed).
+  /**
+   * ISSUE 851 — the Export row's missing caller.
+   *
+   * The row menu has rendered "Export" since this feature was ported, and
+   * nothing has ever supplied the callback that makes it live: the entry was
+   * `disabled: true` with two placeholder options. This is the composition
+   * root the exporter belongs at — the row itself has no project id and no
+   * toast, and the entity's fetcher deliberately resolves its outcome rather
+   * than rejecting, so a refusal becomes a message instead of an unhandled
+   * rejection inside a menu click.
+   */
+  const onExportConversation = useCallback(
+    (conversation: Conversation, format: 'md' | 'json'): void => {
+      if (projectId === undefined) return;
+      void conversationApi
+        .downloadExport({ projectId, conversationId: conversation.id, conversationName: conversation.name, format })
+        .then((result) => {
+          if (!result.ok) toastError(conversationExportErrorMessage(result.error));
+        });
+    },
+    [projectId, toastError],
+  );
+
   const renderConversationItem = useRenderConversationItem({
+    onExportConversation,
     selectedConversationId,
     onSelectConversation,
     onEditConversation,

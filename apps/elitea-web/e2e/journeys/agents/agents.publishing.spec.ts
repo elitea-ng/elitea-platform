@@ -15,7 +15,19 @@
 import { test, expect } from '@playwright/test';
 
 import { BASE_URL } from '../../../playwright.config';
-import { API_BASE, AUTOTEST_PREFIX, DEFAULT_PROJECT_ID, createAgent, deleteAgent } from '../../fixtures/api';
+import {
+  API_BASE,
+  AUTOTEST_PREFIX,
+  DEFAULT_PROJECT_ID,
+  createAgent,
+  createAgentWithVersion,
+  deleteAgent,
+  readAgentList,
+  readApplicationVersions,
+  readProjectModels,
+  readVersion,
+  resolveCatalogueProjectId,
+} from '../../fixtures/api';
 
 import type { APIRequestContext, Page } from '@playwright/test';
 
@@ -86,6 +98,30 @@ async function chooseCategory(page: Page, name = 'Development'): Promise<void> {
 
 async function openLifecycleMenu(page: Page): Promise<void> {
   await page.getByTestId('agent-lifecycle-menu-button').click();
+}
+
+/**
+ * The id of the agent of this name that is NOT the original — the row the
+ * fork wrote.
+ *
+ * Found by name and then narrowed by id, because nothing makes
+ * `applications.name` unique and the fork deliberately keeps the name it
+ * copied.
+ */
+async function forkedCopyId(
+  request: APIRequestContext,
+  name: string,
+  sourceId: string,
+): Promise<string | undefined> {
+  const list = await request.get(
+    `${API_BASE}/elitea_core/applications/prompt_lib/${DEFAULT_PROJECT_ID}?agents_type=classic`,
+  );
+  expect(list.ok(), `the agent list answered ${list.status()}`).toBe(true);
+  const body = await list.json();
+  const rows: readonly { readonly id?: unknown; readonly name?: string }[] = body?.rows ?? body?.items ?? [];
+  return rows
+    .filter((row) => row.name === name && String(row.id) !== sourceId)
+    .map((row) => String(row.id))[0];
 }
 
 /** Reads the catalogue through the route ELITEA Catalog itself calls. */
@@ -244,6 +280,7 @@ test.describe('J14b: the agent publish plane', () => {
   test('fork copies the agent into the chosen project', async ({ page, request }) => {
     const name = uniqueName('forkable');
     const agent = await createAgent(request, name);
+    let copyId: string | undefined;
 
     try {
       await openAgentEditor(page, agent.id);
@@ -279,7 +316,33 @@ test.describe('J14b: the agent publish plane', () => {
           { timeout: 20_000 },
         )
         .toBeGreaterThan(1);
+
+      /*
+       * …and the copy is a FORK, not just a second agent of the same name.
+       *
+       * Two rewrites separate the two, and both live only in the fork writer
+       * (`eliteacore/handler.go`, `Fork`): the copy's model is re-pointed at
+       * the project that now owns it, and the version records the agent it
+       * came from. The route was once served by the IMPORT handler, which does
+       * neither, and the duplicate-row assertion above passes either way — so
+       * without these two reads this journey could not tell a fork from a
+       * plain copy. The cross-project half of the same contract is asserted
+       * through the API in `e2e/journeys/api/api.import-wizard.spec.ts`.
+       */
+      copyId = await forkedCopyId(request, name, agent.id);
+      expect(copyId, 'the fork wrote no second row for this name').toBeDefined();
+      const copy = await request.get(
+        `${API_BASE}/elitea_core/application/prompt_lib/${DEFAULT_PROJECT_ID}/${copyId ?? ''}`,
+      );
+      expect(copy.ok(), `the copy read answered ${copy.status()}`).toBe(true);
+      const copyBody = await copy.json();
+      const copiedVersion = copyBody?.version_details ?? copyBody?.versions?.[0] ?? {};
+      expect(String(copiedVersion?.meta?.parent_entity_id ?? '')).toBe(agent.id);
+      expect(String(copiedVersion?.llm_settings?.model_project_id ?? '')).toBe(DEFAULT_PROJECT_ID);
     } finally {
+      // The copy is deleted too. A fork journey that removed only its source
+      // leaves one agent behind on the rig for every run.
+      if (copyId !== undefined) await deleteAgent(request, copyId);
       await deleteAgent(request, agent.id);
     }
   });
@@ -388,6 +451,318 @@ test.describe('J14b: the agent publish plane', () => {
     } finally {
       await request.delete(`${API_BASE}/elitea_core/skill/prompt_lib/${DEFAULT_PROJECT_ID}/${String(skill.id)}`);
       await deleteAgent(request, agent.id);
+    }
+  });
+});
+
+/**
+ * The three publish rules that need no browser, ported from the legacy API
+ * suite (cases PUB-03, PUB-09 and PUB-79).
+ *
+ * HERE, and not in `e2e/journeys/api/api.publish-lifecycle.spec.ts`, because
+ * all three are about the project every persona already stands in — the one
+ * this file's journeys publish from. The lifecycle file owns the cases that
+ * need a SECOND project, where the author's schema and the catalogue's are not
+ * the same schema.
+ *
+ * `request`, not `page`: each one is a statement about what the server allows,
+ * and driving the wizard three more times would assert the dialog instead.
+ */
+test.describe('the publish rules the wizard rests on', () => {
+  /** Withdraw whatever is live, then delete — a live version refuses the delete. */
+  async function withdrawAndDelete(request: APIRequestContext, agentId: string): Promise<void> {
+    const detail = await request.get(
+      `${API_BASE}/elitea_core/application/prompt_lib/${DEFAULT_PROJECT_ID}/${agentId}`,
+    );
+    if (detail.ok()) {
+      const body = await detail.json();
+      const versions: readonly { readonly id?: string; readonly status?: string }[] = body?.versions ?? [];
+      for (const version of versions) {
+        if (version.status === 'published') {
+          await request.post(
+            `${API_BASE}/elitea_core/unpublish/prompt_lib/${DEFAULT_PROJECT_ID}/${String(version.id)}`,
+            { data: {} },
+          );
+        }
+      }
+    }
+    await deleteAgent(request, agentId);
+  }
+
+  test('after a withdrawal the same version name is free again', async ({
+    request,
+  }) => {
+    const name = uniqueName('republish');
+    const agent = await createPublishableAgent(request, name);
+    const first = `rel${String(Date.now()).slice(-6)}`;
+
+    try {
+      const published = await request.post(
+        `${API_BASE}/elitea_core/publish/prompt_lib/${DEFAULT_PROJECT_ID}/${agent.versionId}`,
+        { data: { version_name: first } },
+      );
+      expect(published.status(), await published.text()).toBe(200);
+      const cloneId = String((await published.json()).public_version_id);
+
+      const withdrawn = await request.post(
+        `${API_BASE}/elitea_core/unpublish/prompt_lib/${DEFAULT_PROJECT_ID}/${cloneId}`,
+        { data: {} },
+      );
+      expect(withdrawn.status(), await withdrawn.text()).toBe(200);
+
+      // "Unpublish, fix, publish again under the same name" is what an author
+      // expects, and it used to be refused forever: the withdrawal REVERTED the
+      // clone rather than deleting it and the reverted draft kept the release
+      // name, which is unique per agent, so the name was spent for good. The
+      // withdrawal now renames the clone it reverts, so the name comes back.
+      const again = await request.post(
+        `${API_BASE}/elitea_core/publish/prompt_lib/${DEFAULT_PROJECT_ID}/${agent.versionId}`,
+        { data: { version_name: first } },
+      );
+      expect(again.status(), await again.text()).toBe(200);
+
+      // The withdrawn clone is still there — an author who withdrew a release
+      // keeps the version they published — under a name that says what it is,
+      // and the release name is held by the live version alone.
+      const detail = await request.get(
+        `${API_BASE}/elitea_core/application/prompt_lib/${DEFAULT_PROJECT_ID}/${agent.id}`,
+      );
+      expect(detail.status(), await detail.text()).toBe(200);
+      const versions: readonly { readonly id?: string; readonly name?: string; readonly status?: string }[] =
+        (await detail.json())?.versions ?? [];
+      const withdrawnClone = versions.find((version) => String(version.id) === cloneId);
+      expect(withdrawnClone?.status).toBe('draft');
+      expect(withdrawnClone?.name).toContain('-withdrawn-');
+      const holders = versions.filter((version) => version.name === first);
+      expect(holders).toHaveLength(1);
+      expect(holders[0]?.status).toBe('published');
+
+      // A different name goes through as well, which is what makes the answers
+      // above rules about the NAME and not about the withdrawn agent.
+      const second = await request.post(
+        `${API_BASE}/elitea_core/publish/prompt_lib/${DEFAULT_PROJECT_ID}/${agent.versionId}`,
+        { data: { version_name: `${first}b` } },
+      );
+      expect(second.status(), await second.text()).toBe(200);
+      await expect.poll(async () => (await catalogNames(request)).includes(name), { timeout: 20_000 }).toBe(true);
+    } finally {
+      await withdrawAndDelete(request, agent.id);
+    }
+  });
+
+  test('two different agents may each publish a version of the same name', async ({ request }) => {
+    const shared = `rel${String(Date.now()).slice(-6)}`;
+    const firstName = uniqueName('samename-a');
+    const secondName = uniqueName('samename-b');
+    const first = await createPublishableAgent(request, firstName);
+    const second = await createPublishableAgent(request, secondName);
+
+    try {
+      // The version-name uniqueness is per AGENT, not per project. A guard that
+      // read it as per project would refuse the second publish here, and every
+      // author on the deployment would be competing for names like `v1`.
+      for (const agent of [first, second]) {
+        const published = await request.post(
+          `${API_BASE}/elitea_core/publish/prompt_lib/${DEFAULT_PROJECT_ID}/${agent.versionId}`,
+          { data: { version_name: shared } },
+        );
+        expect(published.status(), await published.text()).toBe(200);
+      }
+
+      await expect
+        .poll(
+          async () => {
+            const names = await catalogNames(request);
+            return names.includes(firstName) && names.includes(secondName);
+          },
+          { timeout: 20_000 },
+        )
+        .toBe(true);
+    } finally {
+      await withdrawAndDelete(request, first.id);
+      await withdrawAndDelete(request, second.id);
+    }
+  });
+
+  test('an agent bound to a shared model from the catalogue project publishes', async ({ request }) => {
+    // The guard compares the version's `model_project_id` against the ONE
+    // public project (`internal/publicproject`), so this case needs the id the
+    // deployment actually resolved and a model that really lives there —
+    // asserting on a literal would pass on a rig where the two disagree, which
+    // is the state the guard exists to refuse.
+    const catalogueProjectId = await resolveCatalogueProjectId(request);
+    const models = await readProjectModels(request, catalogueProjectId);
+    expect(models.length, 'the catalogue project serves no model').toBeGreaterThan(0);
+    const model = models[0];
+
+    const name = uniqueName('sharedmodel');
+    const agent = await createAgentWithVersion(request, name, {
+      instructions:
+        'You are a meeting preparation assistant. Turn the notes and agendas the user gives you ' +
+        'into a short briefing that names the open decisions and the questions worth asking.',
+      welcomeMessage: 'Send me your notes.',
+      conversationStarters: ['Summarise these notes.'],
+      model: { modelName: model.name, modelProjectId: catalogueProjectId },
+    });
+
+    try {
+      const published = await request.post(
+        `${API_BASE}/elitea_core/publish/prompt_lib/${DEFAULT_PROJECT_ID}/${agent.versionId}`,
+        { data: { version_name: `rel${String(Date.now()).slice(-6)}` } },
+      );
+      expect(published.status(), await published.text()).toBe(200);
+      await expect.poll(async () => (await catalogNames(request)).includes(name), { timeout: 20_000 }).toBe(true);
+    } finally {
+      await withdrawAndDelete(request, agent.id);
+    }
+  });
+});
+
+/**
+ * Publishing from INSIDE the catalogue project, ported from the legacy API
+ * suite (cases PUB-31, PUB-36, PUB-38 and PUB-41).
+ *
+ * HERE, and not in `e2e/journeys/api/api.publish-immutability.spec.ts`,
+ * because all four are about the project every persona already stands in —
+ * which on this rig IS the catalogue. That is what makes them a distinct set:
+ * a publish issued from the catalogue project writes NO twin (the clone it
+ * makes is already in the schema the catalogue reads), so the question these
+ * cases ask is whether the agent is then listed ONCE or twice. The immutability
+ * file owns the cases that need the author and the catalogue to be two
+ * different schemas.
+ *
+ * `request`, not `page`: each one is a statement about what the server lists,
+ * and driving the wizard again would assert the dialog instead.
+ */
+test.describe('publishing inside the catalogue project', () => {
+  /** Withdraw whatever is live, then delete — a live version refuses the delete. */
+  async function withdrawAndDeleteInPlace(
+    request: APIRequestContext,
+    agentId: string,
+  ): Promise<void> {
+    const versions = await readApplicationVersions(request, agentId, DEFAULT_PROJECT_ID);
+    for (const version of versions) {
+      if (version.status === 'published') {
+        await request.post(
+          `${API_BASE}/elitea_core/unpublish/prompt_lib/${DEFAULT_PROJECT_ID}/${version.id}`,
+          { data: {} },
+        );
+      }
+    }
+    await deleteAgent(request, agentId);
+  }
+
+  /** The rows the owner's own Agents listing holds under this name. */
+  async function ownerListing(request: APIRequestContext, name: string) {
+    const { rows } = await readAgentList(request, { query: name });
+    return rows.filter((row) => row.name === name);
+  }
+
+  test('an in-place publish lists the agent once in the catalogue and once in the owner listing', async ({
+    request,
+  }) => {
+    // Asserted, not assumed. The whole point of these cases is that the author
+    // project and the catalogue are the SAME project here; on a deployment
+    // where they differ, this file's premise is gone and the cases below would
+    // silently be testing the cross-project path the other file owns.
+    expect(await resolveCatalogueProjectId(request)).toBe(DEFAULT_PROJECT_ID);
+
+    const name = uniqueName('inplace');
+    const agent = await createPublishableAgent(request, name);
+
+    try {
+      const before = await ownerListing(request, name);
+      expect(before).toHaveLength(1);
+
+      const published = await request.post(
+        `${API_BASE}/elitea_core/publish/prompt_lib/${DEFAULT_PROJECT_ID}/${agent.versionId}`,
+        { data: { version_name: `rel${String(Date.now()).slice(-6)}` } },
+      );
+      expect(published.status(), await published.text()).toBe(200);
+      const body = await published.json();
+      // The SAME agent gains a version. A publish that created a second agent
+      // record to hold the public copy would answer 200 with a different id
+      // here, and the author would find their agent twice on their own screen.
+      expect(String(body.public_agent_id)).toBe(agent.id);
+
+      await expect
+        .poll(async () => (await catalogNames(request)).filter((row) => row === name).length, {
+          timeout: 20_000,
+        })
+        .toBe(1);
+
+      const after = await ownerListing(request, name);
+      expect(after).toHaveLength(1);
+      expect(after[0]?.id).toBe(agent.id);
+    } finally {
+      await withdrawAndDeleteInPlace(request, agent.id);
+    }
+  });
+
+  test('the draft stays editable after an in-place publish', async ({ request }) => {
+    const name = uniqueName('inplacedraft');
+    const agent = await createPublishableAgent(request, name);
+    const edited =
+      'You are a meeting preparation assistant, and this sentence was written after the publish.';
+
+    try {
+      const published = await request.post(
+        `${API_BASE}/elitea_core/publish/prompt_lib/${DEFAULT_PROJECT_ID}/${agent.versionId}`,
+        { data: { version_name: `rel${String(Date.now()).slice(-6)}` } },
+      );
+      expect(published.status(), await published.text()).toBe(200);
+
+      // The freeze is on the published COPY. An author who publishes a release
+      // and then cannot touch their own draft has lost the agent, and the
+      // wizard offers no way back — so this is the half that makes publishing
+      // usable rather than final.
+      const saved = await request.put(
+        `${API_BASE}/elitea_core/version/prompt_lib/${DEFAULT_PROJECT_ID}/${agent.id}/${agent.versionId}`,
+        { data: { instructions: edited } },
+      );
+      expect([200, 201], await saved.text()).toContain(saved.status());
+
+      const stored = await readVersion(request, agent.id, agent.versionId);
+      expect(stored.instructions).toBe(edited);
+      expect(stored.status, 'the publish moved the source version').toBe('draft');
+    } finally {
+      await withdrawAndDeleteInPlace(request, agent.id);
+    }
+  });
+
+  test('a withdrawal leaves the agent in the owner listing and takes it out of the catalogue', async ({
+    request,
+  }) => {
+    const name = uniqueName('inplacewithdraw');
+    const agent = await createPublishableAgent(request, name);
+
+    try {
+      const published = await request.post(
+        `${API_BASE}/elitea_core/publish/prompt_lib/${DEFAULT_PROJECT_ID}/${agent.versionId}`,
+        { data: { version_name: `rel${String(Date.now()).slice(-6)}` } },
+      );
+      expect(published.status(), await published.text()).toBe(200);
+      const cloneId = String((await published.json()).public_version_id);
+      await expect
+        .poll(async () => (await catalogNames(request)).includes(name), { timeout: 20_000 })
+        .toBe(true);
+
+      const withdrawn = await request.post(
+        `${API_BASE}/elitea_core/unpublish/prompt_lib/${DEFAULT_PROJECT_ID}/${cloneId}`,
+        { data: {} },
+      );
+      expect(withdrawn.status(), await withdrawn.text()).toBe(200);
+
+      // Out of the catalogue…
+      await expect
+        .poll(async () => (await catalogNames(request)).includes(name), { timeout: 20_000 })
+        .toBe(false);
+      // …and still the author's. A withdrawal that removed the agent from the
+      // owner's own listing would read as a delete, and the author would have
+      // no way to publish it again.
+      expect(await ownerListing(request, name)).toHaveLength(1);
+    } finally {
+      await withdrawAndDeleteInPlace(request, agent.id);
     }
   });
 });

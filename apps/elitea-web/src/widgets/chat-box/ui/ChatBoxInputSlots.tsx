@@ -15,11 +15,12 @@
  */
 import type { ComponentProps, ReactNode, RefObject } from 'react';
 
-import { AttachmentButton, ChatInternalToolsConfigButton, PlusChatButton, SendButton, VoiceButton } from '@/widgets/chat';
+import { AttachmentButton, ChatInternalToolsConfigButton, ClearChatButton, PlusChatButton, SendButton, VoiceButton } from '@/widgets/chat';
 import type { AttachmentButtonHandle, PlusChatButtonEntitySubmenus, VoiceButtonHandle, VoiceButtonInputHandle } from '@/widgets/chat';
 import { FileList, HighlightedText } from '@/features/chat-messages';
 import { NewChatInput } from '@/features/chat-input';
 import { LLMModelSelector } from '@/widgets/llm-model-selector';
+import { t } from '@/shared/i18n';
 
 import { optField } from './ChatBox.helpers';
 
@@ -52,6 +53,30 @@ interface ChatBoxInputSlotsModel {
   readonly models: readonly LLMModelListItem[];
 }
 
+/**
+ * The conversation-surface "clear the history" control (gap G1).
+ *
+ * The mechanism behind it was complete and unreachable: `ChatBox` exposes
+ * `onClear` on its imperative handle, `useChatBoxActions.handleClear` opens
+ * the delete-all confirmation, `useDeleteMessageAlert`'s `ALL_MESSAGES`
+ * sentinel routes the confirm to `clearChat`, and `clearChat` issues
+ * `DELETE /elitea_core/messages/prompt_lib/{projectId}/{conversationId}`.
+ * The ONLY caller was the pipeline editor's test-chat panel, which reaches
+ * the handle through a ref. On `/chat` nothing called it, so a user could
+ * empty a conversation only by deleting one message at a time or deleting
+ * the conversation itself. Both halves were correct; the composition was
+ * missing.
+ *
+ * `disabled` reproduces the baseline's own `shouldDisableClear`
+ * (`!chat_history.length || isStreaming`): there is nothing to clear in an
+ * empty transcript, and clearing mid-turn would delete rows the running turn
+ * is still writing.
+ */
+interface ChatBoxInputSlotsClearChat {
+  readonly disabled: boolean;
+  readonly onClear: () => void;
+}
+
 interface ChatBoxInputSlotsRefs {
   readonly attachmentButtonRef: RefObject<AttachmentButtonHandle | null>;
   readonly voiceButtonRef: RefObject<VoiceButtonHandle | null>;
@@ -62,6 +87,7 @@ export interface ChatBoxInputSlotsProps {
   readonly attachments: ChatBoxInputSlotsAttachments;
   readonly internalTools: ChatBoxInputSlotsInternalTools;
   readonly model: ChatBoxInputSlotsModel;
+  readonly clearChat: ChatBoxInputSlotsClearChat;
   readonly refs: ChatBoxInputSlotsRefs;
   /**
    * The baseline's `fromTheChat` — true on the chat surface, false when the
@@ -83,6 +109,8 @@ export interface ChatBoxInputSlotsResult {
   readonly attachmentButton: ReactNode;
   /** `undefined` on the chat surface — the "+" menu owns the modules there. */
   readonly internalToolsConfig: ReactNode;
+  /** `undefined` on the agent/pipeline editor surface, which renders its own. */
+  readonly clearChat: ReactNode;
   readonly voiceButton: ReactNode;
   readonly modelSelector: ReactNode;
 }
@@ -128,7 +156,7 @@ function buildSendButtonProps(props: SendControlSlotProps) {
 }
 
 /** Builds `NewChatInput`'s `slots` prop bundle — a function (not a component) so its return type slots directly into `NewChatInput`'s `slots` prop without an extra wrapper element. Prop objects are built as local consts (not inline `{...optField(...)}` spreads) so their `optField`-derived string keys aren't parsed as JSX-nested literals by the `i18next/no-literal-string` gate. */
-export function buildChatBoxInputSlots({ attachments, internalTools, model, refs, isAgentsPage, entitySubmenus, participants }: ChatBoxInputSlotsProps): ChatBoxInputSlotsResult {
+export function buildChatBoxInputSlots({ attachments, internalTools, model, clearChat, refs, isAgentsPage, entitySubmenus, participants }: ChatBoxInputSlotsProps): ChatBoxInputSlotsResult {
   const attachmentButtonProps = {
     disableAttachments: false,
     ...optField('attachments', attachments.attachments),
@@ -153,6 +181,12 @@ export function buildChatBoxInputSlots({ attachments, internalTools, model, refs
   // IS the tool's `name` (`useChatBoxInternalTools` builds it from
   // `tool.name`), so the translation is shape-only, not a re-keying.
   const onToolChange = internalTools.onToolChange;
+  const clearChatProps = {
+    disabled: clearChat.disabled,
+    onClear: clearChat.onClear,
+    label: t('widgets.chatBox.clearHistoryLabel', 'Clear the chat history'),
+    testId: 'chat-clear-history',
+  };
   const plusButtonProps = {
     ...attachmentButtonProps,
     // The drop/paste bridge (`useNewChatInputAttachmentBridge`) delivers files
@@ -198,6 +232,12 @@ export function buildChatBoxInputSlots({ attachments, internalTools, model, refs
     // BESIDE the "+" that already contains it. The composition root is what
     // withholds it, exactly as that component's own doc comment specifies.
     internalToolsConfig: isAgentsPage ? <ChatInternalToolsConfigButton {...internalToolsConfigProps} /> : undefined,
+    // The mirror image of the line above, and withheld for the same kind of
+    // reason: the agent/pipeline editor surface already renders a clear
+    // control of its own beside the panel (`features/pipelines/ui/
+    // ChatPanel.tsx`'s `renderClearChatButton`), so supplying one here would
+    // put two on the same screen.
+    clearChat: isAgentsPage ? undefined : <ClearChatButton {...clearChatProps} />,
     voiceButton: <VoiceButton ref={refs.voiceButtonRef} inputRef={refs.voiceInputRef} disabled={false} onRecordingChange={() => {}} />,
     modelSelector: <LLMModelSelector {...modelSelectorProps} />,
   };

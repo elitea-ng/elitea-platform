@@ -1,4 +1,4 @@
-import { type ComponentProps, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type ComponentProps, type ReactNode, useCallback, useEffect, useState } from 'react';
 
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
@@ -7,17 +7,16 @@ import type { SxProps, Theme } from '@mui/material/styles';
 import { useParams } from '@tanstack/react-router';
 
 import { ConfigurationTab, DeleteToolkitButton, ExportToolkitButton, IndexesTab, ToolkitsControls, type ToolkitEditorDeps, useToolkitEdit } from '@/features/toolkits';
-import { usePermissionList } from '@/shared/api/generated/auth/auth';
-import type { Permission, ToolkitInstance } from '@/shared/api/generated/model';
+import type { ToolkitInstance } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
-import { handleCopy } from '@/shared/lib/clipboard';
 import { ViewMode } from '@/shared/lib/enums';
-import { PERMISSIONS } from '@/shared/lib/permissions';
 import { BaseTab } from '@/shared/ui/BaseTab';
 import { BaseTabs } from '@/shared/ui/BaseTabs';
-import type { ControlsDropdownItem } from '@/shared/ui/ControlsDropdown';
 
 import { useScheduleCredentialsSelectSlot, useToolkitCredentialPickerSlot } from './lib/credentialPickerSlots';
+import { useCopyLinkMenuItem, useToolkitActionPermissions } from './lib/useToolkitHeaderActions';
+import { useToolkitSaveControls } from './lib/useToolkitSaveControls';
+import { ToolkitSaveBar } from './ui/ToolkitSaveBar';
 import { useConfigurationTabSlots } from './lib/configurationTabSlots';
 import { useMcpLoadTools } from './lib/useMcpLoadTools';
 import { useSelectedProjectId } from './lib/useSelectedProjectId';
@@ -41,6 +40,8 @@ const headerSx: SxProps<Theme> = {
 const actionsSx: SxProps<Theme> = { display: 'flex', alignItems: 'center', gap: '0.5rem' };
 const tabBarSx: SxProps<Theme> = { flexShrink: 0, borderBottom: 1, borderColor: 'divider', padding: '0 1.5rem' };
 const contentSx: SxProps<Theme> = { flex: 1, minHeight: 0 };
+/** The refused save's own words. Without it a rejected `PUT` left the screen looking exactly like a successful one. */
+const saveErrorSx: SxProps<Theme> = { flexShrink: 0, padding: '0.5rem 1.5rem' };
 const indexesPanelSx: SxProps<Theme> = { height: '100%', display: 'flex', minHeight: 0 };
 
 export interface EditToolkitDeps {
@@ -63,84 +64,6 @@ interface EditToolkitRouteParams {
 function toEditDetail(detail: ToolkitInstance | undefined): EditToolDetail | null {
   if (detail === undefined) return null;
   return { id: detail.id, type: detail.type, name: detail.name, description: detail.description, settings: detail.settings, meta: detail.meta };
-}
-
-interface ToolkitActionPermissions {
-  readonly canExport: boolean;
-  readonly canDelete: boolean;
-}
-
-/**
- * Regression fix (parity-review finding R2): the baseline's
- * `ToolkitsControls.jsx` (lines 55-69) builds its Export/Delete kebab-menu
- * items with `disabled: !checkPermission(PERMISSIONS.applications.export) ||
- * !checkPermission(PERMISSIONS.toolkits.export)` (and the analogous
- * `applications.delete`/`toolkits.delete` pair) via `useCheckPermission()`,
- * computed fresh on every render. `DeleteToolkitButton`/`ExportToolkitButton`
- * (`features/toolkits/ui/*.tsx`, both outside this cluster's file scope)
- * already accept a `disabled` prop (defaulting to `false`) but their own doc
- * comments disclose "no `useCheckPermission`/`validatePermission`… port"
- * exists internally — this page (the only real caller) is where that gate
- * belongs instead. Local, not a shared hook: same "duplication is two
- * lines, not worth threading a new shared primitive through for" reasoning
- * `features/agents/lib/useHasPermission.ts`'s own doc comment gives for the
- * identical `usePermissionList` + `Set` composition (`no-upward-from-features`
- * bars THAT file from being reached from `pages/` anyway — a `features/`
- * slice's internals are off-limits to `pages/` regardless of which slice).
- */
-function useToolkitActionPermissions(projectId: string | undefined): ToolkitActionPermissions {
-  const query = usePermissionList(projectId ?? '', { query: { enabled: projectId !== undefined } });
-
-  return useMemo(() => {
-    // `query.data.data`'s declared type includes the error-envelope variant —
-    // never actually reachable here, since `eliteaFetch` throws instead of
-    // resolving with it (mutator.ts's §3.6 unwrap contract).
-    const list = query.data?.data as Permission[] | undefined;
-    const granted = new Set((list ?? []).filter((entry) => entry.enabled).map((entry) => entry.name));
-    return {
-      canExport: granted.has(PERMISSIONS.applications.export) && granted.has(PERMISSIONS.toolkits.export),
-      canDelete: granted.has(PERMISSIONS.applications.delete) && granted.has(PERMISSIONS.toolkits.delete),
-    };
-  }, [query.data]);
-}
-
-const COPIED_LABEL_DURATION_MS = 2500;
-
-/**
- * Regression fix (parity-review finding R3, partial): the baseline's
- * `ToolkitsControls.jsx` `rightToolbar` renders a kebab dropdown with
- * Pin/Copy-Link/Fork/Export/Delete items, built by `usePinMenu`/
- * `useCopyLinkMenu`/`useForkEntityMenu`/`useDeleteToolkitMenu`/
- * `useExportToolkitMenu`. Of those five, ONLY copy-link is genuinely
- * buildable here: no `usePin`/`useToolkitFork`-equivalent endpoint wrapper
- * exists anywhere in this app (grepped: zero hits), and forking additionally
- * opens the baseline's `import-wizard` modal, which has no port anywhere
- * either — see the `EditToolkit` doc comment below for the full disclosure
- * of what remains unbuilt (Pin/Fork/the public-view Authors indicator).
- * Copy-link needs neither: `@/shared/lib/clipboard`'s real `handleCopy`
- * (the SAME primitive every other copy-to-clipboard call site in this app
- * already uses) plus the current page's own URL is the entire feature.
- * `window.location.href` (not the baseline's unported `useProjectEntityLink`)
- * is a disclosed simplification — THIS page's URL already IS the toolkit's
- * own detail-page URL.
- */
-function useCopyLinkMenuItem(): ControlsDropdownItem[] {
-  const [copied, setCopied] = useState(false);
-  const timeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-
-  useEffect(() => () => clearTimeout(timeoutRef.current), []);
-
-  const onClick = useCallback(() => {
-    void handleCopy(window.location.href);
-    setCopied(true);
-    clearTimeout(timeoutRef.current);
-    timeoutRef.current = setTimeout(() => setCopied(false), COPIED_LABEL_DURATION_MS);
-  }, []);
-
-  const label = copied
-    ? t('pages.toolkits.editToolkit.copyLinkCopied', 'Copied!')
-    : t('pages.toolkits.editToolkit.copyLink', 'Copy link');
-  return [{ key: 'copy-link', label, onClick }];
 }
 
 /**
@@ -247,11 +170,12 @@ function resolveTitle(isMCP: boolean, name: string | undefined): string {
  *    `ExportToolkitButton` icon buttons (same functional actions, a flat
  *    row instead of living inside the kebab — a disclosed layout
  *    simplification) with REAL `disabled` permission gating (finding R2):
- *    `useToolkitActionPermissions` reproduces the baseline `ToolkitsControls.
+ *    `./lib/useToolkitHeaderActions.ts`'s `useToolkitActionPermissions`
+ *    reproduces the baseline `ToolkitsControls.
  *    jsx`'s own `checkPermission(PERMISSIONS.applications.{export,delete})
  *    && checkPermission(PERMISSIONS.toolkits.{export,delete})` gate via the
  *    real `usePermissionList` endpoint. `ToolkitsControls`'s own kebab now
- *    carries ONE real item, Copy Link (`useCopyLinkMenuItem` above) — Pin,
+ *    carries ONE real item, Copy Link (`./lib/useToolkitHeaderActions.ts`'s `useCopyLinkMenuItem`) — Pin,
  *    Fork, and the public-view Authors indicator remain genuinely
  *    unavailable: `usePin`/`useToolkitFork`-equivalent endpoints and an
  *    Authors/user-lookup UI have no port anywhere in this worktree (grepped:
@@ -259,6 +183,18 @@ function resolveTitle(isMCP: boolean, name: string | undefined): string {
  *    outside this cluster's owned scope (a `features/toolkits/api` pin/fork
  *    mutation wrapper, plus — for Fork — the baseline's unported
  *    `import-wizard` modal) — disclosed, not silently dropped.
+ *  - **The Save/Cancel control IS now rendered** (`./ui/ToolkitSaveBar.tsx`,
+ *    driven by `./lib/useToolkitSaveControls.ts`). It used to be missing
+ *    outright: a saved toolkit could not be edited from its own page at all,
+ *    because the only save path in the port —
+ *    `ToolkitsOperationButtons.handleUpdateToolkit` — listens for
+ *    `ToolEvents.ToolkitsUpdateToolkit` and nothing emitted it. The baseline
+ *    emits it from its toolkit tab bar; this page is that emitter now, so the
+ *    seam is wired rather than duplicated. Save is dirty-gated like the agent
+ *    editor's, and REFUSED with the reason stated when the selected
+ *    credential's stored check came back `auth_failed`/`unreachable` — see
+ *    `./lib/useCredentialSaveGate.ts` for why the gate reads the probe's
+ *    reason and never the `invalid` status.
  *  - **`redirect`/`iframe`-type application custom-UI branches, the
  *    embedding-model-change confirmation modal (`ToolkitsTabBar`'s own
  *    `isEmbeddingModelDirty` alert), the `destTab`/`name` URL-sync search
@@ -305,6 +241,13 @@ export function EditToolkit({ isMCP = false, deps }: EditToolkitProps): ReactNod
     setEditToolDetail(updater);
   }, []);
 
+  const handleSaved = useCallback(() => setIsToolDirty(false), []);
+  const handleDiscarded = useCallback(() => {
+    setEditToolDetail(toEditDetail(detail));
+    setIsToolDirty(false);
+  }, [detail]);
+  const saveControls = useToolkitSaveControls({ isDirty: isToolDirty, onSaved: handleSaved, onDiscarded: handleDiscarded });
+
   const handleTabChange = useCallback((_event: unknown, value: number) => setTab(value), []);
 
   /**
@@ -320,7 +263,7 @@ export function EditToolkit({ isMCP = false, deps }: EditToolkitProps): ReactNod
   // and `features/credentials`. Supplying these slots is what makes the toolkit
   // credential field, the schedule credential select and — for an MCP toolkit —
   // the "Load Tools" action render at all. See `./lib/useMcpLoadTools.tsx`.
-  const renderCredentialPicker = useToolkitCredentialPickerSlot(projectId);
+  const renderCredentialPicker = useToolkitCredentialPickerSlot(projectId, saveControls.reportCredentialRefusal);
   const renderCredentialsSelect = useScheduleCredentialsSelectSlot(projectId);
   const mcpLoadTools = useMcpLoadTools({ projectId, editToolDetail, onChangeToolDetail: handleChangeToolDetail });
   const configurationTabSlots = useConfigurationTabSlots({ renderCredentialPicker, mcpLoadTools });
@@ -347,6 +290,13 @@ export function EditToolkit({ isMCP = false, deps }: EditToolkitProps): ReactNod
               viewMode={ViewMode.Owner}
               menuItems={copyLinkMenuItems}
             />
+            <ToolkitSaveBar
+              onSave={saveControls.onSave}
+              onDiscard={saveControls.onDiscard}
+              canSave={saveControls.canSave}
+              isSaving={saveControls.isSaving}
+              disabledReason={saveControls.disabledReason}
+            />
           </Box>
         )}
       </Box>
@@ -360,6 +310,16 @@ export function EditToolkit({ isMCP = false, deps }: EditToolkitProps): ReactNod
           {!indexesTab.hidden && <BaseTab label={t('pages.toolkits.editToolkit.indexesTab', 'Indexes')} />}
         </BaseTabs>
       </Box>
+      {saveControls.saveError !== undefined && (
+        <Typography
+          role="alert"
+          variant="bodyMedium"
+          color="error"
+          sx={saveErrorSx}
+        >
+          {saveControls.saveError}
+        </Typography>
+      )}
       <Box
         sx={contentSx}
         role="tabpanel"
@@ -372,7 +332,8 @@ export function EditToolkit({ isMCP = false, deps }: EditToolkitProps): ReactNod
             toolDetailState={{ editToolDetail, onChangeToolDetail: handleChangeToolDetail, isToolDirty }}
             isMCP={isMCP}
             projectId={projectId}
-            saveHandlers={{ saveToolkit: saveToolkitMutation }}
+            onValidationStateChange={saveControls.onValidationStateChange}
+            saveHandlers={{ saveToolkit: saveToolkitMutation, onSaveSuccess: saveControls.onSaveSuccess, onSaveError: saveControls.onSaveError }}
             slots={configurationTabSlots}
           />
         )}

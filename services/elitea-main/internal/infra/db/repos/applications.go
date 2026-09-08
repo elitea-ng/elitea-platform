@@ -252,7 +252,7 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 			WHERE tv.application_id = a.id), '{}')`, s)
 	query := fmt.Sprintf(`
 		SELECT DISTINCT ON (a.id) a.id, a.name, COALESCE(a.description, ''), COALESCE(a.icon, ''),
-			a.owner_id, a.created_at, COALESCE(a.shared_id, 0),
+			a.owner_id, a.created_at, a.updated_at, COALESCE(a.shared_id, 0),
 			COALESCE(a.meta, '{}'::jsonb)::text,
 			COALESCE(av.agent_type, '`+defaultAgentType+`'),
 			COALESCE(u.id, 0), COALESCE(u.email, ''), COALESCE(u.name, ''),
@@ -289,7 +289,7 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 		)
 		if err := rows.Scan(
 			&app.ID, &app.Name, &app.Description, &app.Icon,
-			&app.OwnerID, &app.CreatedAt, &sharedID,
+			&app.OwnerID, &app.CreatedAt, &app.UpdatedAt, &sharedID,
 			&metaStr, &app.AgentType,
 			&authorID, &authorEmail, &authorName,
 			&app.Status, &app.Tags,
@@ -324,13 +324,13 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 }
 
 const applicationColumns = `id, name, COALESCE(description, ''), COALESCE(icon, ''),
-	owner_id, created_at, COALESCE(uuid::text, '')`
+	owner_id, created_at, updated_at, COALESCE(uuid::text, '')`
 
 func scanApplication(row rowScanner, projectID string) (applications.Application, error) {
 	var app applications.Application
 	if err := row.Scan(
 		&app.ID, &app.Name, &app.Description, &app.Icon,
-		&app.OwnerID, &app.CreatedAt, &app.UUID,
+		&app.OwnerID, &app.CreatedAt, &app.UpdatedAt, &app.UUID,
 	); err != nil {
 		return applications.Application{}, err
 	}
@@ -453,6 +453,12 @@ func (r *ApplicationsRepo) Update(ctx context.Context, req applications.UpdateRe
 	if len(setClauses) == 0 {
 		return r.Get(ctx, req.ProjectID, req.ApplicationID)
 	}
+	// Stamped in the SAME statement as the edit, never as a second write: a
+	// timestamp that can fail on its own is a timestamp that is sometimes
+	// wrong, and this one is the only answer the API has to "when did this
+	// agent last change". It is appended AFTER the early return above, so a
+	// request that changes nothing does not report a change.
+	setClauses = append(setClauses, "updated_at = now()")
 
 	args = append(args, req.ApplicationID)
 	query := fmt.Sprintf(`UPDATE %s.applications SET %s WHERE id = $%d RETURNING `+applicationColumns,
@@ -615,6 +621,13 @@ func insertVersion(ctx context.Context, q querier, s, applicationID string, v ap
 	// The INSERT ... RETURNING is wrapped in a CTE so the read projection —
 	// which needs the owning applications row for is_default — is the same
 	// SQL as GetVersion's.
+	// `touched` stamps the OWNING agent, in the same statement. A new version
+	// is a change to the agent, and applications.updated_at is what a client
+	// sorting by "last modified" reads. It is a CTE and not a second Exec so
+	// the two cannot disagree, and the SELECT below still reads the
+	// pre-statement `a` row (a data-modifying CTE is invisible to the rest of
+	// the query) — which is right: the version projection carries the
+	// version's own fields, not the agent's timestamp.
 	query := fmt.Sprintf(`
 		WITH v AS (
 			INSERT INTO %s.application_versions
@@ -622,8 +635,11 @@ func insertVersion(ctx context.Context, q querier, s, applicationID string, v ap
 				 welcome_message, llm_settings, conversation_starters, meta)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10::jsonb)
 			RETURNING *
+		), touched AS (
+			UPDATE %s.applications SET updated_at = now()
+			WHERE id = (SELECT application_id FROM v)
 		)
-		SELECT `+versionColumns+` FROM v JOIN %s.applications a ON a.id = v.application_id`, s, s)
+		SELECT `+versionColumns+` FROM v JOIN %s.applications a ON a.id = v.application_id`, s, s, s)
 
 	ver, err := scanVersion(q.QueryRow(ctx, query,
 		applicationID, name, status, v.AuthorID, agentType, v.Instructions,
@@ -684,12 +700,46 @@ func (r *ApplicationsRepo) UpdateVersion(ctx context.Context, projectID, applica
 		}
 		appendSet("conversation_starters = $%d::jsonb", encoded)
 	}
+	// `meta` MERGES, key by key. Every other jsonb column above replaces,
+	// and this one used to as well — `meta = $n::jsonb`, a whole-column
+	// overwrite.
+	//
+	// WHY THE DIFFERENCE. `meta` is not one feature's object. It is a bag of
+	// independent keys, each written by a different part of the product and
+	// read by a different one:
+	//
+	//	step_limit         the number the Rust runtime admits an agent on
+	//	icon_meta          the agent's icon
+	//	internal_tools     the built-in tools the version enables
+	//	variables          the version's variables (they have no column)
+	//	parent_entity_id   ┐
+	//	parent_project_id  ├ the fork provenance
+	//	parent_author_id   ┘
+	//
+	// NO client sends the whole bag. The agent editor's own draft models
+	// exactly two of those keys (apps/elitea-web/src/entities/
+	// application-form/model/initialValues.ts: `{step_limit,
+	// internal_tools}`), and the HTTP layer synthesises a one-key
+	// `{"variables": …}` for a body that carries `variables` and no `meta`
+	// at all. Under the replace, an ordinary save therefore wrote a two-key
+	// or one-key object over a six-key column and every absent key was
+	// destroyed — silently, behind a 201. `step_limit` is one of the four
+	// gates a stored agent must pass to be admitted by the Rust runtime, so
+	// editing an agent's variables could make it unrunnable.
+	//
+	// A merge cannot express "delete this key", and nothing needs to: every
+	// key above is owned by the feature that writes it, and a feature clears
+	// its own key by sending an empty value for it (`{"variables": []}`
+	// still replaces the whole array, because the merge is over TOP-LEVEL
+	// keys). The concatenation happens inside the UPDATE, so the read and
+	// the write are one statement and two concurrent saves cannot interleave
+	// a read-modify-write.
 	if v.Meta != nil {
 		encoded, err := encodeJSONObject(v.Meta)
 		if err != nil {
 			return applications.Version{}, err
 		}
-		appendSet("meta = $%d::jsonb", encoded)
+		appendSet("meta = COALESCE(meta, '{}'::jsonb) || $%d::jsonb", encoded)
 	}
 	if v.PipelineSettings != nil {
 		encoded, err := encodeJSONObject(v.PipelineSettings)
@@ -703,14 +753,19 @@ func (r *ApplicationsRepo) UpdateVersion(ctx context.Context, projectID, applica
 	}
 
 	args = append(args, applicationID, versionID)
+	// …and the owning agent's `updated_at`, for the reason insertVersion
+	// stamps it: a version save IS the save a user made to the agent.
 	query := fmt.Sprintf(`
 		WITH v AS (
 			UPDATE %s.application_versions SET %s
 			WHERE application_id = $%d AND id = $%d
 			RETURNING *
+		), touched AS (
+			UPDATE %s.applications SET updated_at = now()
+			WHERE id = (SELECT application_id FROM v)
 		)
 		SELECT `+versionColumns+` FROM v JOIN %s.applications a ON a.id = v.application_id`,
-		s, strings.Join(setClauses, ", "), len(args)-1, len(args), s)
+		s, strings.Join(setClauses, ", "), len(args)-1, len(args), s, s)
 
 	ver, err := scanVersion(r.pool.QueryRow(ctx, query, args...))
 	if err != nil {
@@ -730,8 +785,17 @@ func (r *ApplicationsRepo) DeleteVersion(ctx context.Context, projectID, applica
 	if !isNumericRowID(applicationID) || !isNumericRowID(versionID) {
 		return apierr.NotFound("version not found")
 	}
-	ct, err := r.pool.Exec(ctx,
-		fmt.Sprintf(`DELETE FROM %s.application_versions WHERE application_id = $1 AND id = $2`, s),
+	// The count read below is the count of the STAMP, not of the delete, and
+	// they are the same number: the UPDATE touches one agent row for each
+	// version row the CTE removed, so zero still means "no such version".
+	ct, err := r.pool.Exec(ctx, fmt.Sprintf(`
+		WITH d AS (
+			DELETE FROM %s.application_versions
+			WHERE application_id = $1 AND id = $2
+			RETURNING application_id
+		)
+		UPDATE %s.applications SET updated_at = now()
+		WHERE id IN (SELECT application_id FROM d)`, s, s),
 		applicationID, versionID)
 	if err != nil {
 		return fmt.Errorf("applications: delete version: %w", err)
@@ -776,7 +840,8 @@ func (r *ApplicationsRepo) SetDefaultVersion(ctx context.Context, projectID, app
 
 	ct, err := r.pool.Exec(ctx, fmt.Sprintf(`
 		UPDATE %s.applications
-		SET meta = jsonb_set(COALESCE(meta, '{}'::jsonb), '{`+defaultVersionMetaKey+`}', to_jsonb($1::text))
+		SET meta = jsonb_set(COALESCE(meta, '{}'::jsonb), '{`+defaultVersionMetaKey+`}', to_jsonb($1::text)),
+			updated_at = now()
 		WHERE id = $2`, s), versionID, applicationID)
 	if err != nil {
 		return fmt.Errorf("applications: set default version: %w", err)

@@ -37,13 +37,15 @@ import Box from '@mui/material/Box';
 
 import { conversationNavigation, useChatSessionStore } from '@/entities/conversation';
 import { useDeleteParticipantMutation, type Participant } from '@/entities/participant';
-import { canParticipantBeActiveInChat, ParticipantsWrapper, useLocalActiveParticipant } from '@/features/chat-participants';
+import type { AnswerCanvasSelection, CanvasEditPayload, CodeBlockInfo } from '@/features/chat-messages';
+import { AddNewUserModal, canParticipantBeActiveInChat, ParticipantsWrapper, useLocalActiveParticipant } from '@/features/chat-participants';
 import type { ChatBoxProps } from '@/widgets/chat-box';
 import { ChatBox, toParticipant } from '@/widgets/chat-box';
 import { ContextBudget } from '@/widgets/context-budget';
 
 import { useChatPageData } from './useChatPageData';
 import { useChatModelSettings } from './useChatModelSettings';
+import { useAddParticipants } from './useAddParticipants';
 
 /**
  * Baseline `rightPanelWidth` (`NewChat.jsx:187`). `ParticipantsWrapper`'s own
@@ -102,6 +104,19 @@ function useMessageIdToView(messageId: string | undefined, loadedConversationId:
   }, [messageId, loadedConversationId]);
 }
 
+/**
+ * The conversation's participant rows, for the add-participant picker's
+ * already-added exclusion.
+ *
+ * `ChatBoxActiveConversation` types them as `unknown[]` while the picker reads
+ * each row's `entity_name`/`entity_meta` — the same rows, described at two
+ * precisions by two slices. Module scope, not inline: `ChatPage` is on its
+ * §3.5 complexity ceiling and this is two more branches there.
+ */
+function participantRows(activeConversation: { readonly participants?: readonly unknown[] } | undefined): readonly Record<string, unknown>[] {
+  return (activeConversation?.participants ?? []) as readonly Record<string, unknown>[];
+}
+
 function conversationIdOf(activeConversation: unknown): string | undefined {
   return (activeConversation as { readonly id?: string } | undefined)?.id;
 }
@@ -121,6 +136,11 @@ export interface ChatEditorCallbacks {
   readonly onShowToolkitEditor?: (participant: Participant) => void;
   readonly onCloseAgentEditor?: () => void;
   readonly onClosePipelineEditor?: () => void;
+  /** Opens the canvas editor for a stored `canvas_message` block in the transcript (issue 853), and the block already open in it. Forwarded to `ChatBox` untouched, like every other member of this bag. */
+  readonly onShowCanvasEditor?: (payload: CanvasEditPayload) => void;
+  readonly selectedCanvasBlock?: CodeBlockInfo | undefined;
+  /** Carves a canvas out of a range the reader highlighted in an answer. */
+  readonly onCreateCanvasFromSelection?: (payload: AnswerCanvasSelection) => void;
 }
 
 /** @public */
@@ -149,6 +169,9 @@ const ChatPage = memo(({ editorCallbacks, entitySubmenus }: ChatPageProps) => {
   const [activeParticipant, setActiveParticipant] = useState<unknown>(undefined);
   // Baseline default: collapsed (`NewChat.jsx:166`).
   const [participantsCollapsed, setParticipantsCollapsed] = useState(true);
+  // The panel's add-participant picker — see `useAddParticipants` for what
+  // was missing and why `open` can be `undefined`.
+  const addParticipants = useAddParticipants({ projectId, conversationId });
 
   /**
    * A conversation is written by the FIRST SEND, not by a button
@@ -286,6 +309,7 @@ const ChatPage = memo(({ editorCallbacks, entitySubmenus }: ChatPageProps) => {
         onSelectParticipant={handleChangeParticipant}
         onDeleteParticipant={handleDeleteParticipant}
         onEditParticipant={handleEditParticipant}
+        onAddParticipants={addParticipants.open}
         /*
          * The context-budget panel. `ParticipantsWrapper` has always accepted
          * this slot (and gates the `conversationId` it hands over on the
@@ -302,6 +326,12 @@ const ChatPage = memo(({ editorCallbacks, entitySubmenus }: ChatPageProps) => {
             collapsed={budgetCollapsed ?? false}
           />
         )}
+      />
+      <AddNewUserModal
+        open={addParticipants.isOpen}
+        onClose={addParticipants.close}
+        onAddUsers={addParticipants.addUsers}
+        participants={participantRows(activeConversation)}
       />
     </Box>
   );

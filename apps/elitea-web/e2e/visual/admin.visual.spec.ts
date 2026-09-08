@@ -376,15 +376,29 @@ const ADMIN_ROUTES: readonly AdminVisualRoute[] = [
     // a landmark still waiting for it fails against a page that is working —
     // which is what turned this spec red rather than any pixel changing.
     //
+    // THE SECOND DATA ROW, and not the grid alone. The grid was enough while
+    // this stack registered nothing, because "grid present" and "grid final"
+    // were the same state. They no longer are: `scripts/e2e-stack.sh seed`
+    // restarts elitea-main after writing its project rows, so the Inventory
+    // and DeepWiki facades' boot-time registrars file an origin and an
+    // inactive revision each, and the reference is now a listing with two
+    // rows in it. Both are filed from goroutines started at boot, so a shot
+    // taken on the grid alone could catch the page one registration early and
+    // record whichever half had landed.
+    //
+    // Row 0 is the column header (`rowgroup > row` in the accessibility tree),
+    // so `nth(2)` is the SECOND registered provider. Waiting for it waits for
+    // the whole listing without naming a provider — the names come from the
+    // providers' own descriptors ("wikis", not "deepwiki") and are theirs to
+    // change.
+    //
     // Not the empty-state text: the DataGrid's `noRowsLabel` renders for an
-    // empty list AND is what an unmounted-rows state would show, while the grid
-    // itself is present only after the query resolved. This stack registers no
-    // descriptors, so the reference is the empty listing on purpose — a page
-    // that says "nothing is registered" is the honest answer here, and it is a
-    // different sentence from "this platform has no provider hub".
-    // Measured: loaded YES, stalled no.
+    // empty list AND is what an unmounted-rows state would show. On this stack
+    // it is now also the WRONG reference — a page that says "nothing is
+    // registered" here would mean the admission plane never heard from the
+    // facades this deployment composes.
     landmark: (page) =>
-      page.getByRole('grid', { name: 'Registered service descriptors' }),
+      page.getByRole('grid', { name: 'Registered service descriptors' }).getByRole('row').nth(2),
   },
   {
     // @covers /admin/app/toolkits

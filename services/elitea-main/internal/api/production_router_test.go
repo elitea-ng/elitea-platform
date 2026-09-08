@@ -1846,6 +1846,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"GET /api/v2/elitea_core/context_analytics/prompt_lib/{projectID}/{conversationID}",
 		"GET /api/v2/elitea_core/context_strategy/prompt_lib/{projectID}/{conversationID}",
 		"GET /api/v2/elitea_core/conversation/prompt_lib/{projectID}/{conversationID}",
+		"GET /api/v2/elitea_core/conversation_export/prompt_lib/{projectID}/{conversationID}",
 		"GET /api/v2/elitea_core/conversations/prompt_lib/{projectID}",
 		"GET /api/v2/elitea_core/default_icons/prompt_lib/{projectID}",
 		"GET /api/v2/elitea_core/default_version/prompt_lib/{projectID}/{applicationID}",
@@ -2393,7 +2394,7 @@ func newCompleteProductionRouter(sessionSecret string) chi.Router {
 		// the browser-auth surface below PINS the SAML paths — a handler left
 		// out of this router would let all three routes be removed without a
 		// test noticing.
-		SAMLHandler:    &v2auth.SAMLHandler{},
+		SAMLHandler:   &v2auth.SAMLHandler{},
 		SessionSecret: sessionSecret,
 		RuntimeRoutes: RuntimeRoutes{
 			Validation:      runtimeHandler,

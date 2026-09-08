@@ -20,15 +20,35 @@
  * was never what made that work). Keyboard reordering and the screen-reader
  * drag instructions both survive.
  *
- * `aria-pressed` is the one attribute dropped: it is a toggle-button state and
- * is not allowed on `role="group"` (axe `aria-allowed-attr`). dnd-kit only
- * ever sets it to `undefined` for a non-toggle draggable anyway.
+ * Two attributes are dropped, both for the same reason: they are WIDGET
+ * STATES, and this node is no longer a widget.
+ *
+ * `aria-pressed` is a toggle-button state and is not allowed on
+ * `role="group"` (axe `aria-allowed-attr`). dnd-kit only ever sets it to
+ * `undefined` for a non-toggle draggable anyway.
+ *
+ * `aria-disabled` is dnd-kit's report of whether THE DRAG is available, and
+ * on a container it silently disables everything inside it. Disabled state
+ * INHERITS: a control inside a subtree marked `aria-disabled="true"` is
+ * disabled to assistive technology, and Playwright's own `toBeEnabled`
+ * resolves it the same way by walking ancestors. So a pinned conversation —
+ * pinned rows are the ones that cannot be dragged into a folder
+ * (`Conversations.renderers.tsx`) — rendered its whole row menu as disabled.
+ * The ⋮ trigger was announced as disabled and could not be clicked, which
+ * left Unpin, Rename, Delete and Share unreachable on exactly the rows a user
+ * pins because they matter most. Nothing showed it: the row still looked
+ * ordinary, and the menu simply never opened.
+ *
+ * Dropping it costs nothing dnd-kit needs. The library reads the `disabled`
+ * OPTION passed to `useDraggable`/`useSortable`, never this attribute, so
+ * both the pointer and the keyboard sensor keep refusing a disabled drag
+ * exactly as before.
  */
 
 /** The keys this rewrites or removes from dnd-kit's `DraggableAttributes`. */
-type DragAriaKeys = 'role' | 'aria-pressed';
+type DragAriaKeys = 'role' | 'aria-pressed' | 'aria-disabled';
 
 export function asDragGroupAria<T extends Partial<Record<DragAriaKeys, unknown>>>(attributes: T): Omit<T, DragAriaKeys> & { readonly role: 'group' } {
-  const { role: _role, 'aria-pressed': _pressed, ...rest } = attributes;
+  const { role: _role, 'aria-pressed': _pressed, 'aria-disabled': _disabled, ...rest } = attributes;
   return { ...rest, role: 'group' };
 }

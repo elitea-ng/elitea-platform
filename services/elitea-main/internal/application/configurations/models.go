@@ -38,6 +38,16 @@ type CurrentModelCatalogItem struct {
 	HighTier          *bool   `json:"high_tier,omitempty"`
 	OpenAICompatible  *bool   `json:"openai_compatible,omitempty"`
 	Default           bool    `json:"default"`
+
+	// Grant is the row's platform GRANT SCOPE, read off its `data` object by
+	// the adapter (model_grant.go). It never reaches the wire: it is the rule
+	// that decides whether a catalogue row is offered to the caller at all,
+	// and a client that could read it would learn which other projects hold a
+	// grant it does not.
+	//
+	// It is meaningful on a PUBLIC-scope candidate only. A project's own row is
+	// its own and is offered to it whatever the field says.
+	Grant ModelGrant `json:"-"`
 }
 
 // CurrentModelDefault identifies one configured model. ProjectID is canonical
@@ -111,7 +121,19 @@ func BuildCurrentModelCatalog(request CurrentModelCatalogRequest) CurrentModelCa
 
 	items := deduplicateCurrentModelItems(request.Section, request.ProjectItems, nil, false)
 	if request.IncludeShared && request.ProjectID != request.PublicProjectID {
-		items = deduplicateCurrentModelItems(request.Section, request.PublicSharedItems, items, true)
+		// THE GRANT IS APPLIED HERE, on the public candidates alone.
+		//
+		// `shared = true` says a row is a platform row; the grant says which
+		// projects it is offered to. A row this project does not hold a grant
+		// for must not reach the picker at all — an entry a caller can see and
+		// cannot dispatch is worse than an absent one, because the refusal
+		// arrives at the first message rather than at the choice.
+		//
+		// The caller's OWN rows are never filtered: the catalogue project reads
+		// its own catalogue through ProjectItems, so a `none` row stays visible
+		// to the operator who has to be able to re-grant it.
+		granted := grantedCurrentModelItems(request.PublicSharedItems, request.ProjectID)
+		items = deduplicateCurrentModelItems(request.Section, granted, items, true)
 	}
 
 	defaultName, defaultProjectID := selectCurrentModelDefault(items, resolveCurrentModelDefault(request.Defaults.Model), true, nil)
@@ -129,6 +151,20 @@ func BuildCurrentModelCatalog(request CurrentModelCatalogRequest) CurrentModelCa
 		populateCurrentLLMTierDefaults(&response, items, request.Defaults)
 	}
 	return response
+}
+
+// grantedCurrentModelItems keeps the catalogue candidates projectID holds a
+// grant for. See model_grant.go for what an absent grant means.
+func grantedCurrentModelItems(
+	candidates []CurrentModelCatalogItem, projectID int32,
+) []CurrentModelCatalogItem {
+	granted := make([]CurrentModelCatalogItem, 0, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.Grant.Allows(projectID) {
+			granted = append(granted, candidate)
+		}
+	}
+	return granted
 }
 
 func deduplicateCurrentModelItems(

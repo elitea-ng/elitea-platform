@@ -45,8 +45,7 @@ func NewCurrentModelDefaultRoute(
 	authConfig apimw.AuthConfig,
 	permissions auth.PermissionResolver,
 ) (*CurrentModelDefaultRoute, error) {
-	if writer == nil || authConfig.PrincipalValidator == nil ||
-		authConfig.ForwardedIdentityVerifier == nil || permissions == nil {
+	if writer == nil || !authConfig.CredentialPlaneComposed() || permissions == nil {
 		return nil, ErrInvalidCurrentModelDefaultRoute
 	}
 

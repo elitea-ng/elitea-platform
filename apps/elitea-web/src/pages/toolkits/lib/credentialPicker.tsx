@@ -31,7 +31,7 @@
  * rows instead was rejected: a project with no saved credential of the wanted
  * type would then get a picker with nothing in it at all.
  */
-import { useCallback, useEffect, useMemo, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react';
 
 import { useNavigate } from '@tanstack/react-router';
 
@@ -90,6 +90,24 @@ interface CredentialPickerFieldProps {
   readonly disabled: boolean;
 }
 
+/**
+ * What the picker reports UP about the credential currently selected in it,
+ * and only when the platform reached a verdict AGAINST that credential.
+ *
+ * `refusalReason` is the toolkit probe's own `auth_failed`/`unreachable`
+ * (`useCredentialValidation`'s `getCredentialRefusalReason`, which already
+ * filters out every non-verdict). A deployment that cannot run the check at
+ * all answers with no reason, so it produces `null` here — the check being
+ * unavailable is not evidence about the credential and must never gate the
+ * user's own work.
+ */
+export interface SelectedCredentialRefusal {
+  readonly eliteaTitle: string;
+  readonly refusalReason: string;
+  /** The server's own words for the refusal; `''` when it sent none. */
+  readonly message: string;
+}
+
 export interface ToolkitCredentialPickerProps {
   readonly projectId: string | undefined;
   /** `credentials` or `vectorstorage`, read off the property's resolved `$defs` entry. */
@@ -99,16 +117,24 @@ export interface ToolkitCredentialPickerProps {
   readonly onChange: (value: unknown, options?: { readonly isAutoSelect: boolean }) => void;
   readonly field: CredentialPickerFieldProps;
   readonly onlyPublic?: boolean | undefined;
+  /**
+   * Fired with the selected credential's refusal, or `null` when there is
+   * none. The picker owns the check (`useCredentialValidation` is its own
+   * state, one instance per field), so this is the only way a screen ABOVE
+   * the form can learn the verdict — see `pages/toolkits/lib/useCredentialSaveGate.ts`.
+   */
+  readonly onRefusalChange?: ((refusal: SelectedCredentialRefusal | null) => void) | undefined;
 }
 
 export function ToolkitCredentialPicker(props: ToolkitCredentialPickerProps): ReactNode {
-  const { projectId, section, configurationTypes, value, onChange, field, onlyPublic = false } = props;
+  const { projectId, section, configurationTypes, value, onChange, field, onlyPublic = false, onRefusalChange } = props;
   const navigate = useNavigate();
   const { rows, hasFetchedData, isFetching, refresh } = useCredentialRows({ projectId, section, configurationTypes, onlyPublic });
   const validation = useCredentialValidation();
 
   const credentialType = configurationTypes[0] ?? '';
   useBatchValidation({ rows, hasFetchedData, section, projectId, validation });
+  useReportRefusal({ value, validation, onRefusalChange });
 
   const state = useMemo(
     () => ({
@@ -232,4 +258,38 @@ function useRevalidate({ rows, projectId, validation }: RevalidateParams): (elit
     },
     [rows, projectId, resetStatus, validateStoredCredential],
   );
+}
+
+interface ReportRefusalParams {
+  readonly value: unknown;
+  readonly validation: ReturnType<typeof useCredentialValidation>;
+  readonly onRefusalChange: ((refusal: SelectedCredentialRefusal | null) => void) | undefined;
+}
+
+/**
+ * Reports the SELECTED row's refusal upward.
+ *
+ * The callback is held in a ref and kept out of the effect's dependencies on
+ * purpose: a slot supplier rebuilds its per-field closure on every render
+ * (`./credentialPickerSlots.tsx` builds one per rendered field), so depending
+ * on its identity would re-run this effect every render for no change. The
+ * VALUES it reports are the dependencies, which is what actually decides
+ * whether the screen above needs telling.
+ */
+function useReportRefusal({ value, validation, onRefusalChange }: ReportRefusalParams): void {
+  const selected = toSelectValue(value);
+  const eliteaTitle = selected?.eliteaTitle;
+  const refusalReason = validation.getCredentialRefusalReason(eliteaTitle);
+  const message = validation.getCredentialMessage(eliteaTitle);
+
+  const callbackRef = useRef(onRefusalChange);
+  callbackRef.current = onRefusalChange;
+
+  useEffect(() => {
+    if (eliteaTitle === undefined || refusalReason === undefined) {
+      callbackRef.current?.(null);
+      return;
+    }
+    callbackRef.current?.({ eliteaTitle, refusalReason, message });
+  }, [eliteaTitle, refusalReason, message]);
 }

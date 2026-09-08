@@ -1,7 +1,28 @@
 /**
  * Create / edit one platform-wide model.
  *
- * ## The credential is a select, not a text field
+ * ## "Available to" decides WHO gets the model
+ *
+ * A platform model used to be offered to every project the moment it existed.
+ * It can now be granted to every project, to none, or to a chosen set
+ * (`PlatformModelGrantFields.tsx`). The control is offered for every kind,
+ * because the grant is a fact about the row's audience rather than about what
+ * the model can do — unlike the chat fields, which only one kind declares.
+ *
+ * ## An edit MERGES over the stored row
+ *
+ * The update replaces the `data` column whole. This dialog used to build that
+ * column out of the fields it shows, so every field it did not show was erased
+ * by any save at all — an `llm_model` declares nine, and a rename reset the
+ * model's context window, its output limit and its three capability flags to the
+ * registry defaults, with a 200 and nothing on the screen that read the loss
+ * back.
+ *
+ * The listing now carries the stored object and the submit writes the edited
+ * fields OVER it (`platformModelForm.ts`), so a field this dialog has never
+ * heard of survives an edit it was not part of.
+ *
+ * ## The credential is a required select, not a text field and not optional
  *
  * A model names its credential by TITLE, and the server refuses a title that is
  * not among the platform's published providers. Offering free text would make
@@ -9,9 +30,15 @@
  * spelled differently — and the failure it guards against is a model advertised
  * to every project whose provider is guessed from a prefix in its name.
  *
- * "None" is a real option, not a placeholder: a model with no link resolves its
- * provider from that prefix, which is a supported configuration the standalone
- * seed relies on.
+ * "None — infer from the model name" used to be offered beside them, on the
+ * argument that the gateway falls back to reading the provider out of a prefix.
+ * It never described a row this dialog could write. The registry declares
+ * `ai_credentials` required on all five model types, so a model with no link
+ * fails provider admission and is stored with `status_ok = false` — and the
+ * catalogue, the tier defaults and the gateway all select on `status_ok = true`.
+ * The option produced a row that was listed HERE and served nowhere, and the
+ * server now answers 400 for it. So the select has no empty value, and Save
+ * waits for one.
  *
  * ## The type cannot change on an edit
  *
@@ -19,6 +46,13 @@
  * on the (section, type) pair. Retyping a stored model would need both columns
  * rewritten together; the partial update writes what it is sent, so the honest
  * path is to delete and re-create.
+ *
+ * ## The chat fields are only offered where the schema has them
+ *
+ * The tiers, the context window and the capabilities are `llm_model` fields. The
+ * other four model types decode their `data` with unknown fields REFUSED, so
+ * sending one they do not declare would turn a valid model into an invalid
+ * binding — see PlatformModelChatFields.tsx.
  */
 import type { ReactNode } from 'react';
 import { useEffect, useState } from 'react';
@@ -35,35 +69,47 @@ import Typography from '@mui/material/Typography';
 
 import { t } from '@/shared/i18n';
 
+import { PlatformModelChatFields } from './PlatformModelChatFields';
+import { PlatformModelGrantFields } from './PlatformModelGrantFields';
 import {
   platformModelTypeLabel,
   type PlatformModel,
   type PlatformModelDraft,
 } from './api/adminLlmPlatformModelsApi';
-
-/** The sentinel for "this model names no credential". */
-const NO_CREDENTIAL = '';
+import {
+  formIsComplete,
+  formOf,
+  modelDraftOf,
+  NO_CREDENTIAL_CHOSEN,
+  TIERED_MODEL_TYPE,
+  type ModelForm,
+} from './platformModelForm';
 
 /**
- * The Kind a NEW platform model opens on.
+ * What the provider select says when nothing is chosen.
  *
- * The dialog took `modelTypes[0]`, and `model_types` arrives in the server's
- * own order, not in an order this screen chose. On this deployment the first
- * entry is `asr_model`, so "Add a platform model" opened on "Speech to text" —
- * an operator adding a chat model had to notice the wrong Kind and change it,
- * and one who did not published a model the gateway dispatches to the ASR
- * section. Chat is what almost every platform model is.
- *
- * The server still decides what is OFFERED: this default is used only when the
- * deployment actually dispatches it, and a deployment that does not falls back
- * to the first type it does.
+ * Two different dead ends, and they need different words. With providers to
+ * pick from, the operator has to pick one. With none published, no choice on
+ * this screen can complete the form, and saying "select a provider" would send
+ * them looking for a control that is not there.
  */
-const DEFAULT_MODEL_TYPE = 'llm_model';
-
-/** The Kind to open on: chat when this deployment dispatches it, else whatever it does. */
-function defaultModelType(modelTypes: readonly string[]): string {
-  if (modelTypes.includes(DEFAULT_MODEL_TYPE)) return DEFAULT_MODEL_TYPE;
-  return modelTypes[0] ?? DEFAULT_MODEL_TYPE;
+function credentialHelp(credentialNames: readonly string[], chosen: string): string {
+  if (chosen !== NO_CREDENTIAL_CHOSEN) {
+    return t(
+      'pages.admin.platformModels.field.credentialHelp',
+      'The platform provider this model authenticates through. A platform model may only use a platform provider.',
+    );
+  }
+  if (credentialNames.length === 0) {
+    return t(
+      'pages.admin.platformModels.field.credentialNonePublished',
+      'This platform publishes no providers yet. Add one above before publishing a model — a model with no provider is stored and never served.',
+    );
+  }
+  return t(
+    'pages.admin.platformModels.field.credentialRequired',
+    'Required. A model with no provider fails admission, so it would be listed here and served to nobody.',
+  );
 }
 
 export interface PlatformModelDialogProps {
@@ -89,25 +135,25 @@ export function PlatformModelDialog({
   onClose,
   onSubmit,
 }: PlatformModelDialogProps): ReactNode {
-  const [name, setName] = useState('');
-  const [type, setType] = useState(DEFAULT_MODEL_TYPE);
-  const [modelName, setModelName] = useState('');
-  const [credential, setCredential] = useState<string>(NO_CREDENTIAL);
+  const [form, setForm] = useState<ModelForm>(() => formOf(undefined, []));
+
+  function update<K extends keyof ModelForm>(key: K, value: ModelForm[K]): void {
+    setForm((current) => ({ ...current, [key]: value }));
+  }
 
   // Reset on OPEN only: a dialog that reset while open would discard what the
   // operator was typing on every list refetch.
   useEffect(() => {
     if (!open) return;
-    setName(editing?.elitea_title ?? '');
-    setType(editing?.type ?? defaultModelType(modelTypes));
-    setModelName(editing?.model_name ?? '');
-    setCredential(editing?.credential_name ?? NO_CREDENTIAL);
+    setForm(formOf(editing, modelTypes));
     // `modelTypes` is read rather than depended on, so a refetch cannot reset a
     // form mid-edit.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, editing]);
 
-  const canSubmit = name.trim() !== '' && modelName.trim() !== '' && !isSaving;
+  const tiered = form.type === TIERED_MODEL_TYPE;
+  const credentialMissing = form.credential === NO_CREDENTIAL_CHOSEN;
+  const canSubmit = formIsComplete(form) && !isSaving;
 
   return (
     <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm">
@@ -126,14 +172,14 @@ export function PlatformModelDialog({
         <Typography variant="bodySmall" color="text.secondary">
           {t(
             'pages.admin.platformModels.dialog.intro',
-            'A platform model is offered to every project on this deployment, and uses a platform provider.',
+            'A platform model names the platform provider it uses, and says which projects may use it. Both are required: a model with no provider is stored and never served.',
           )}
         </Typography>
 
         <TextField
           label={t('pages.admin.platformModels.field.name', 'Model ID')}
-          value={name}
-          onChange={(event) => setName(event.target.value)}
+          value={form.name}
+          onChange={(event) => update('name', event.target.value)}
           size="small"
           required
           slotProps={{ htmlInput: { 'data-testid': 'platform-model-name' } }}
@@ -145,8 +191,8 @@ export function PlatformModelDialog({
 
         <TextField
           label={t('pages.admin.platformModels.field.modelName', 'Provider model name')}
-          value={modelName}
-          onChange={(event) => setModelName(event.target.value)}
+          value={form.modelName}
+          onChange={(event) => update('modelName', event.target.value)}
           size="small"
           required
           placeholder={t('pages.admin.platformModels.field.modelNamePlaceholder', 'gpt-4o')}
@@ -160,9 +206,9 @@ export function PlatformModelDialog({
         <TextField
           select
           label={t('pages.admin.platformModels.field.type', 'Kind')}
-          value={type}
+          value={form.type}
           disabled={editing !== undefined}
-          onChange={(event) => setType(event.target.value)}
+          onChange={(event) => update('type', event.target.value)}
           size="small"
           slotProps={{ htmlInput: { 'data-testid': 'platform-model-type' } }}
           helperText={
@@ -183,25 +229,28 @@ export function PlatformModelDialog({
 
         <TextField
           select
+          required
+          error={credentialMissing}
           label={t('pages.admin.platformModels.field.credential', 'Platform provider')}
-          value={credential}
-          onChange={(event) => setCredential(event.target.value)}
+          value={form.credential}
+          onChange={(event) => update('credential', event.target.value)}
           size="small"
           slotProps={{ htmlInput: { 'data-testid': 'platform-model-credential' } }}
-          helperText={t(
-            'pages.admin.platformModels.field.credentialHelp',
-            'Without one, the provider is guessed from the model name.',
-          )}
+          helperText={credentialHelp(credentialNames, form.credential)}
         >
-          <MenuItem value={NO_CREDENTIAL}>
-            {t('pages.admin.platformModels.field.noCredential', 'None — infer from the model name')}
-          </MenuItem>
           {credentialNames.map((value) => (
             <MenuItem key={value} value={value}>
               {value}
             </MenuItem>
           ))}
         </TextField>
+
+        {/* Offered for EVERY kind. The grant is a fact about who the row is
+            for, not about what the model can do, so all five model types carry
+            it — unlike the chat fields below. */}
+        <PlatformModelGrantFields form={form} onChange={update} />
+
+        {tiered ? <PlatformModelChatFields form={form} onChange={update} /> : null}
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose} disabled={isSaving}>
@@ -212,20 +261,8 @@ export function PlatformModelDialog({
           disabled={!canSubmit}
           data-testid="platform-model-save"
           onClick={() => {
-            onSubmit({
-              elitea_title: name.trim(),
-              type,
-              data: {
-                name: modelName.trim(),
-                // The link is OMITTED when there is none, rather than sent as an
-                // empty object: the gateway treats a link naming nothing as no
-                // link, but writing one would make a row that says it has a
-                // credential and does not.
-                ...(credential !== NO_CREDENTIAL
-                  ? { ai_credentials: { elitea_title: credential } }
-                  : {}),
-              },
-            });
+            // The stored object is the merge base — see platformModelForm.ts.
+            onSubmit(modelDraftOf(form, editing?.data));
           }}
         >
           {isSaving

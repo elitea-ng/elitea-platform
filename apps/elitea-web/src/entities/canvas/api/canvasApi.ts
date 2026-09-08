@@ -93,6 +93,22 @@ export function useCanvasDetailsQuery(params: CanvasDetailsParams): UseQueryResu
 
 /* ── createCanvas — POST elitea_core/canvases/prompt_lib/{projectId} ── */
 
+/**
+ * The create's own body, including the RANGE the route splits a stored message
+ * on.
+ *
+ * The four range fields were missing, and their absence was not cosmetic: this
+ * endpoint does not take a canvas's CONTENT, it takes a message item and two
+ * offsets into it, deletes that item and writes text / canvas / text in its
+ * place. Without them the only reachable call was one the server refuses, so
+ * the sole working caller of this route in the whole repository was a
+ * journey's own HTTP client.
+ *
+ * `canvas_content_starts_at` / `canvas_content_ends_at` are BYTE offsets — the
+ * server slices a Go string with them. `features/chat-messages`'
+ * `canvasByteRange` is what measures them; a character index sent here carves
+ * a different range than the reader selected and is accepted.
+ */
 export interface CreateCanvasParams {
   readonly projectId: string | number;
   readonly name?: string;
@@ -100,6 +116,12 @@ export interface CreateCanvasParams {
   readonly code_language?: string;
   readonly canvas_content?: string;
   readonly message_group_uuid?: string;
+  /** The message group the split happens in — the row id, not the uuid. */
+  readonly message_group_id?: number;
+  /** The `text_message` item that is split. */
+  readonly message_item_id?: number;
+  readonly canvas_content_starts_at?: number;
+  readonly canvas_content_ends_at?: number;
 }
 
 async function createCanvas(params: CreateCanvasParams): Promise<Canvas> {

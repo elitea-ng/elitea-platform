@@ -16,6 +16,7 @@ import (
 	toolkitrun "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkitrun"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/toolkitnaming"
 )
 
 type Tool struct {
@@ -1649,8 +1650,21 @@ func (r *pgRepo) GetToolkit(ctx context.Context, projectID, toolkitID string) (m
 
 	author := map[string]any{"id": strconv.Itoa(uID), "email": uEmail, "name": uName}
 
-	// toolkit_name is a sanitized version: only alphanumeric chars kept
-	sanitizedName := sanitizeToolkitName(name)
+	// toolkit_name is the identifier the RUNTIME addresses this toolkit's tools
+	// by, and the runtime is the only authority on it — so it comes from the
+	// one shared rule (internal/toolkitnaming) that index admission, the
+	// tool-run path, the built-in name deriver, the Python worker's SDK adapter
+	// and the web client all apply.
+	//
+	// This route used to keep alphanumerics ONLY. The rule everywhere else
+	// keeps `_`, `.` and `-` and then folds `.` into `_`, so for any toolkit
+	// whose name carried one of those three this route reported a name no
+	// runtime path uses: a toolkit called "autotest github toolkit.v1" was
+	// reported as `autotestgithubtoolkitv1` and addressed as
+	// `autotestgithubtoolkit_v1`. The type is passed as well because a row with
+	// an empty name is addressed by its type, which the previous copy rendered
+	// as an empty string.
+	sanitizedName := toolkitnaming.RuntimeName(name, typ)
 
 	result := map[string]any{
 		"id":           id,
@@ -1747,16 +1761,6 @@ func (r *pgRepo) DeleteToolkit(ctx context.Context, projectID, toolkitID string)
 	q := fmt.Sprintf(`DELETE FROM %s.elitea_tools WHERE id = $1`, s)
 	_, err = r.pool.Exec(ctx, q, toolkitID)
 	return err
-}
-
-func sanitizeToolkitName(name string) string {
-	var b strings.Builder
-	for _, c := range name {
-		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') {
-			b.WriteRune(c)
-		}
-	}
-	return b.String()
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

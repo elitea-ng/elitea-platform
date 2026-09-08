@@ -2,7 +2,6 @@ import type { ChangeEvent, KeyboardEvent, ReactNode } from 'react';
 import { useCallback, useMemo, useState } from 'react';
 
 import DeleteOutlinedIcon from '@mui/icons-material/DeleteOutlined';
-import FileDownloadOutlinedIcon from '@mui/icons-material/FileDownloadOutlined';
 import type { Theme } from '@mui/material/styles';
 
 import { useGetCurrentAuthor } from '@/shared/api/generated/social/social';
@@ -30,18 +29,10 @@ import type { FolderAccordionSlotProps } from './FolderAccordion';
 import { FolderAccordionItem } from './FolderAccordionItem';
 import { FolderItemEditor } from './FolderItemEditor';
 
-/**
- * Matches the old app's hardcoded module constant (`FolderItem.jsx:535` —
- * `const isExportingAPIReady = false;`). The Export menu row stays disabled
- * regardless of ownership/permission until a real export endpoint exists.
- */
-const isExportingAPIReady = false;
-
 /** The folder-CRUD callbacks this component needs, derived from the 3 real hook result types (`useCreateFolder`/`useEditFolder`/`useDeleteFolder`) rather than re-declared by hand — keeps this bag's signatures from drifting out of sync with the hooks that actually implement them. */
 export type FolderItemCallbacks = Pick<UseCreateFolderResult, 'onCreateFolder' | 'onCancelCreateFolder'> &
   Pick<UseEditFolderResult, 'onEditFolder' | 'onPinFolder'> &
   Pick<UseDeleteFolderResult, 'onDeleteFolder'> & {
-    readonly onExport?: (() => void) | undefined;
     readonly onChangeActiveFolderName?: ((name: string) => void) | undefined;
   };
 
@@ -188,17 +179,6 @@ export function FolderItem({
     void callbacks.onPinFolder(folder, folder.isPinned !== true);
   }, [folder, callbacks]);
 
-  // Wraps the optional `callbacks.onExport` in an always-present `() => void`
-  // — `ControlsDropdownLeafItem.onClick` is `(() => void) | undefined` under
-  // `exactOptionalPropertyTypes`, which forbids assigning an explicit
-  // `undefined` value to it directly (the key must be ABSENT instead); a
-  // stable wrapper sidesteps that without conditionally omitting the key.
-  // Unreachable in practice regardless: the Export row stays `disabled`
-  // (`isExportingAPIReady`) until a real export endpoint exists.
-  const handleExportClick = useCallback((): void => {
-    callbacks.onExport?.();
-  }, [callbacks]);
-
   const menuItems = useMemo<ControlsDropdownItem[]>(
     () => [
       {
@@ -220,16 +200,6 @@ export function FolderItem({
         onClick: handleEditFolder,
       },
       {
-        key: 'export',
-        label: t('features.chatConversationList.folderItem.export', 'Export'),
-        icon: <FileDownloadOutlinedIcon fontSize="small" />,
-        disabled: !isExportingAPIReady,
-        items: [
-          { key: 'export-option-1', label: t('features.chatConversationList.folderItem.exportOption1', 'Option1'), onClick: handleExportClick },
-          { key: 'export-option-2', label: t('features.chatConversationList.folderItem.exportOption2', 'Option2'), onClick: handleExportClick },
-        ],
-      },
-      {
         key: 'pin',
         label: folder.isPinned === true ? t('features.chatConversationList.folderItem.unpin', 'Unpin') : t('features.chatConversationList.folderItem.pinOnTop', 'Pin on top'),
         icon: <PinIcon style={{ width: '1rem', height: '1rem' }} />,
@@ -237,7 +207,7 @@ export function FolderItem({
         onClick: handlePinFolder,
       },
     ],
-    [isOwner, hasDeletePermission, hasUpdatePermission, handleDeleteFolder, handleEditFolder, handlePinFolder, handleExportClick, folder.isPinned],
+    [isOwner, hasDeletePermission, hasUpdatePermission, handleDeleteFolder, handleEditFolder, handlePinFolder, folder.isPinned],
   );
 
   const onMouseEnter = useCallback((): void => {

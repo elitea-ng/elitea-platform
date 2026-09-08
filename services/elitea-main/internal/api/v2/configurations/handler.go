@@ -1023,6 +1023,27 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The type's own schema decides which fields a create must carry
+	// (required_fields.go). It runs FIRST, on the body as sent: a row with no
+	// label and no data used to be stored with a 201 and could then be
+	// explained by nobody — the catalogue reader treats an unlabelled model row
+	// as an error, and a credential with no data names no endpoint.
+	//
+	// An unknown type carries no schema and keeps the behaviour it had. A row
+	// filed under a section that is not the type's own is checked as a ROW and
+	// not as an instance of the type — see required_fields.go for the
+	// compatibility shape that rule exists for.
+	if entry, known := h.catalog.EntryByType(strVal(body, "type")); known {
+		depth := requiredFieldDepthRow
+		if requested := strVal(body, "section"); requested == "" || requested == entry.Section {
+			depth = requiredFieldDepthData
+		}
+		if missing := missingRequiredConfigurationFields(entry.ConfigSchema, body, depth); len(missing) > 0 {
+			apierr.WriteStatus(w, http.StatusBadRequest, requiredConfigurationFieldsMessage(missing))
+			return
+		}
+	}
+
 	dataMap, _ := body["data"].(map[string]any)
 	if dataMap == nil {
 		dataMap = map[string]any{}
@@ -1094,6 +1115,16 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	title := firstStrVal(body, "elitea_title", "name")
+	// The display label, read once and used TWICE — stored in the INSERT below
+	// and echoed on the created row.
+	//
+	// It used to be read for the INSERT alone. The field is `omitempty`, so the
+	// stored value simply vanished from the 201 while both read routes served
+	// it, and a client that rendered its list from the create's own answer
+	// showed a credential with no label until something else reloaded the row.
+	// This is the same class as the `elitea_title`/`name` gap one field over in
+	// the same struct.
+	label := strVal(body, "label")
 	section := h.sectionFor(configType, strVal(body, "section"))
 
 	var id int
@@ -1102,7 +1133,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	err = h.withConfigurationSecretTx(ctx, pID, secretMutations, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx, q,
 			pID,
-			strVal(body, "label"),
+			label,
 			title,
 			configType,
 			section,
@@ -1121,6 +1152,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		ID:        id,
 		UUID:      uuid,
 		ProjectID: pID,
+		Label:     label,
 		Name:      title,
 		Type:      configType,
 		Section:   section,
@@ -1267,6 +1299,14 @@ func (h *Handler) applyConfigurationUpdate(
 	configType, err := h.updatedConfigurationType(ctx, tx, body, schema, configID)
 	if err != nil {
 		return c, nil, err
+	}
+	// The required-field rule, for the `data` object this body carries. It runs
+	// on the resolved type — which the body may have omitted — and before any
+	// secret is sealed, so a refused update writes nothing and mints no vault
+	// entry. See refuseIncompleteUpdatedModelData for why it is the model rows
+	// that are held to it.
+	if failure := h.refuseIncompleteUpdatedModelData(body, configType); failure != nil {
+		return c, failure, nil
 	}
 	secretMutations, failure := h.sealConfigurationBodyData(ctx, body, configType)
 	if failure != nil {

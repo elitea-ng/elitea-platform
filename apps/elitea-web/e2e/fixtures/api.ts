@@ -92,6 +92,215 @@ export const API_BASE = (process.env['PLAYWRIGHT_BASE_URL'] ?? 'http://localhost
 /** Default public project ID (matches compose env VITE_PUBLIC_PROJECT_ID). */
 export const DEFAULT_PROJECT_ID = process.env['E2E_PROJECT_ID'] ?? '1';
 
+/* ── the tenancy the publish journeys need ───────────────────────────────── */
+
+/**
+ * The project the publish journeys AUTHOR in, by name (`scripts/e2e-stack.sh`).
+ *
+ * Publishing is cross-project: the clone stays in the author's schema and a
+ * twin is written into the public project's, which is the only schema the
+ * catalogue reads. Project 1 is the public project on this rig, so a publish
+ * issued from it never writes a twin and the two halves cannot be told apart.
+ * This project is the author side of that pair.
+ *
+ * NAMED, NOT NUMBERED, and resolved through the product's own project listing
+ * below. The seed picks the id out of a reserved range, and a journey that
+ * repeated the literal would keep passing against a project that had moved —
+ * or, worse, against whatever row later took that id.
+ */
+export const PUBLISH_AUTHOR_PROJECT_NAME = 'e2e-publish-author';
+
+/**
+ * The seeded model that is NOT shared: it lives in the author project, so
+ * `llm_settings.model_project_id` naming it is refused publication
+ * (`llm_not_shared`) and flagged critical by the pre-publish check.
+ *
+ * The name is the `data.name` the catalogue serves, which is the value a
+ * version's `llm_settings.model_name` carries.
+ */
+export const PRIVATE_MODEL_NAME = 'E2E-PRIVATE-MODEL';
+
+/**
+ * The route the project switcher itself calls.
+ *
+ * The trailing `1` is part of the reference URL, not a project id the caller
+ * chooses: `internal/api/v2/projects/handler.go` mounts this exact path and
+ * uses the segment for the `check_public_role` filter alone. The handler
+ * answers the CALLER's projects, whatever stands there.
+ */
+const PROJECT_LIST_PATH = '/projects/project/default/1';
+
+/** Resolved ids, memoised per worker process. Only successes are cached. */
+const resolvedProjectIds = new Map<string, string>();
+
+/**
+ * The id of a project the caller belongs to, found by its seeded NAME.
+ *
+ * Reads through `?search=`, then matches the name EXACTLY: `search` is an
+ * `ILIKE '%…%'` on the server, so asking for `e2e-publish-author` would also
+ * answer a project someone later names `e2e-publish-author-2`.
+ */
+export async function resolveProjectIdByName(
+  request: APIRequestContext,
+  name: string,
+): Promise<string> {
+  const cached = resolvedProjectIds.get(name);
+  if (cached !== undefined) return cached;
+  const url = `${API_BASE}${PROJECT_LIST_PATH}?search=${encodeURIComponent(name)}`;
+  const response = await request.get(url);
+  if (!response.ok()) {
+    throw new Error(
+      `resolveProjectIdByName(${name}): GET ${url} -> ${response.status()}` +
+        `${await describeRefusal(response)}\n${(await response.text()).slice(0, 300)}`,
+    );
+  }
+  const rows = (await response.json()) as readonly { readonly id?: unknown; readonly name?: unknown }[];
+  const found = (Array.isArray(rows) ? rows : []).find((row) => row.name === name);
+  if (found === undefined) {
+    throw new Error(
+      `resolveProjectIdByName(${name}): the caller is a member of no project of that name. ` +
+        `scripts/e2e-stack.sh seeds it and grants both personas the admin role in it; a stack ` +
+        `seeded before that change has the row missing. Answer was ` +
+        `${JSON.stringify(rows).slice(0, 300)}`,
+    );
+  }
+  const id = String(found.id);
+  resolvedProjectIds.set(name, id);
+  return id;
+}
+
+/** The seeded author project's id — the project a publish is issued FROM. */
+export async function resolvePublishAuthorProjectId(
+  request: APIRequestContext,
+): Promise<string> {
+  return resolveProjectIdByName(request, PUBLISH_AUTHOR_PROJECT_NAME);
+}
+
+/**
+ * The CATALOGUE project's id, as the server itself reports it.
+ *
+ * The deployment decides this (`ELITEA_AI_PROJECT_ID`, `internal/publicproject`),
+ * and the browser learns it from `platform_settings` — so a journey reads it
+ * from the same place rather than repeating a default that is only true while
+ * nobody sets the variable.
+ */
+export async function resolveCatalogueProjectId(request: APIRequestContext): Promise<string> {
+  const cached = resolvedProjectIds.get('#catalogue');
+  if (cached !== undefined) return cached;
+  const url = `${API_BASE}/elitea_core/platform_settings/prompt_lib`;
+  const response = await request.get(url);
+  if (!response.ok()) {
+    throw new Error(
+      `resolveCatalogueProjectId: GET ${url} -> ${response.status()}` +
+        `${await describeRefusal(response)}`,
+    );
+  }
+  const body = (await response.json()) as { public_project_id?: unknown };
+  const id = body.public_project_id;
+  if (typeof id !== 'number' && typeof id !== 'string') {
+    throw new Error(
+      `resolveCatalogueProjectId: platform_settings named no public_project_id: ` +
+        `${JSON.stringify(body).slice(0, 300)}`,
+    );
+  }
+  const value = String(id);
+  resolvedProjectIds.set('#catalogue', value);
+  return value;
+}
+
+/** One row of the model catalogue, as the picker reads it. */
+export interface CatalogueModel {
+  /** The model NAME a version carries in `llm_settings.model_name`. */
+  readonly name: string;
+  /** The configuration row's own title, for a message that names the row. */
+  readonly title: string;
+  /** The project the row lives in — what the publish guard compares. */
+  readonly projectId: string;
+}
+
+/**
+ * The models a project may name, through the route the picker itself calls.
+ *
+ * TWO SHAPES, one route. When the Configurations plane is composed
+ * (`ELITEA_CONFIGURATIONS_ENABLED` + `ELITEA_AI_PROJECT_ID`) the production
+ * route answers items whose `name` is already the model name; without it the
+ * legacy handler answers the configuration ROW, whose `name` is the row's
+ * title and whose `data.name` is the model. The e2e rig runs the second, a
+ * full deployment the first, and a helper that read only one of them would
+ * resolve a title as a model name on one of the two and fail to match at all.
+ */
+export interface ReadProjectModelsOptions {
+  /**
+   * Merge the CATALOGUE's published models into the answer.
+   *
+   * The route defaults it to false, and the product sends it as
+   * `projectId !== publicProjectId` (`configurationsPanel.helpers.ts`). A
+   * journey about a PLATFORM model has to ask for it: without it the answer is
+   * the project's own rows and a platform model — granted or not — is absent
+   * from every one of them, so an assertion made on the default would pass
+   * whatever the grant said.
+   */
+  readonly includeShared?: boolean;
+}
+
+export async function readProjectModels(
+  request: APIRequestContext,
+  projectId: string,
+  options: ReadProjectModelsOptions = {},
+): Promise<readonly CatalogueModel[]> {
+  const query = options.includeShared === true ? '?include_shared=true' : '';
+  const url = `${API_BASE}/configurations/models/${projectId}${query}`;
+  const response = await request.get(url);
+  if (!response.ok()) {
+    throw new Error(
+      `readProjectModels(${projectId}): GET ${url} -> ${response.status()}` +
+        `${await describeRefusal(response)}\n${(await response.text()).slice(0, 300)}`,
+    );
+  }
+  const body = (await response.json()) as { items?: readonly Record<string, unknown>[] };
+  return (body.items ?? []).map((row) => {
+    const title = String(row['name'] ?? '');
+    const data = (row['data'] as Record<string, unknown> | undefined) ?? {};
+    const modelName = typeof data['name'] === 'string' && data['name'] !== '' ? data['name'] : title;
+    return { name: modelName, title, projectId: String(row['project_id'] ?? '') };
+  });
+}
+
+/**
+ * The seeded NON-shared model: its name and the project that owns it.
+ *
+ * Resolved rather than assumed. The refusal it exists for is decided on
+ * `llm_settings.model_project_id` against the ONE public project, so a journey
+ * that invented an id would prove the guard refuses an id naming nothing —
+ * which a guard comparing against "any project the caller can see" also passes.
+ * This one names a model that really exists, in a project the caller really
+ * belongs to, and is private for the only reason that matters here: its project
+ * is not the catalogue's.
+ */
+export async function resolvePrivateModel(
+  request: APIRequestContext,
+): Promise<{ readonly modelName: string; readonly projectId: string }> {
+  const projectId = await resolvePublishAuthorProjectId(request);
+  const catalogueProjectId = await resolveCatalogueProjectId(request);
+  if (projectId === catalogueProjectId) {
+    throw new Error(
+      `resolvePrivateModel: the author project IS the catalogue project (${projectId}), so no ` +
+        `model in it can be private. The deployment resolved a different public project than ` +
+        `the seed assumes.`,
+    );
+  }
+  const models = await readProjectModels(request, projectId);
+  const found = models.find((model) => model.name === PRIVATE_MODEL_NAME);
+  if (found === undefined) {
+    throw new Error(
+      `resolvePrivateModel: project ${projectId} serves no model named ${PRIVATE_MODEL_NAME}. ` +
+        `scripts/e2e-stack.sh seeds it with shared = false; it answered ` +
+        `${JSON.stringify(models).slice(0, 300)}`,
+    );
+  }
+  return { modelName: found.name, projectId };
+}
+
 /**
  * Create a conversation via API.
  * Returns the new conversation id.
@@ -99,8 +308,9 @@ export const DEFAULT_PROJECT_ID = process.env['E2E_PROJECT_ID'] ?? '1';
 export async function createConversation(
   request: APIRequestContext,
   name: string,
+  projectId: string = DEFAULT_PROJECT_ID,
 ): Promise<string> {
-  const url = `${API_BASE}/elitea_core/conversations/prompt_lib/${DEFAULT_PROJECT_ID}`;
+  const url = `${API_BASE}/elitea_core/conversations/prompt_lib/${projectId}`;
   const resp = await request.post(url, { data: { name } });
   // Check the status BEFORE parsing. Calling `.json()` on a 401 (whose body is
   // not JSON) produced `SyntaxError: Unexpected non-whitespace character after
@@ -127,10 +337,9 @@ export async function createConversation(
 export async function deleteConversation(
   request: APIRequestContext,
   id: string,
+  projectId: string = DEFAULT_PROJECT_ID,
 ): Promise<void> {
-  await request.delete(
-    `${API_BASE}/elitea_core/conversation/prompt_lib/${DEFAULT_PROJECT_ID}/${id}`,
-  );
+  await request.delete(`${API_BASE}/elitea_core/conversation/prompt_lib/${projectId}/${id}`);
 }
 
 /** An agent created through the API, with the initial version it owns. */
@@ -199,10 +408,796 @@ export async function createAgent(
 export async function deleteAgent(
   request: APIRequestContext,
   id: string,
+  projectId: string = DEFAULT_PROJECT_ID,
 ): Promise<void> {
   await request.delete(
-    `${API_BASE}/elitea_core/application/prompt_lib/${DEFAULT_PROJECT_ID}/${id}`,
+    `${API_BASE}/elitea_core/application/prompt_lib/${projectId}/${id}`,
   );
+}
+
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * THE AGENT-VERSION WRITE CONTRACT
+ *
+ * `createAgent` above is the smallest agent that exists. The helpers below are
+ * for the journeys that are ABOUT the version write itself, and they exist
+ * because that body has three properties a hand-rolled literal keeps getting
+ * wrong:
+ *
+ *  1. PRESENCE IS THE CONTRACT. `name`, `instructions`, `meta`, `variables`
+ *     and `tags` each mean something different when the key is ABSENT than
+ *     when it is present and empty — an absent key leaves the stored value
+ *     alone, an empty one clears it. A builder that always emits every key
+ *     cannot express half the cases, and one that emits `undefined` sends
+ *     `null` over the wire, which is a third meaning again. `agentVersionBody`
+ *     therefore omits what the caller did not name.
+ *  2. `variables` AND `meta` ARE THE SAME COLUMN. Variables have no column of
+ *     their own; the server folds them into `meta`. So a body that sends
+ *     `variables` and no `meta` is the exact shape that used to destroy the
+ *     rest of that column.
+ *  3. `llm_settings.model_project_id` NAMES A PROJECT, not a model. It is the
+ *     project the model is published in, and the create path refuses one that
+ *     does not exist.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/** One version variable, in the shape both the write and the read use. */
+export interface VersionVariableInput {
+  readonly name: string;
+  readonly value: string;
+}
+
+/** One topical tag. `data` is the free-form blob pylon's tag model carries. */
+export interface VersionTagInput {
+  readonly name: string;
+  readonly data?: Readonly<Record<string, unknown>>;
+}
+
+/** The model reference a version carries, as `llm_settings`. */
+export interface VersionModelInput {
+  readonly modelName: string;
+  /** The PROJECT the model is published in — not the model's own id. */
+  readonly modelProjectId?: string;
+  readonly temperature?: number;
+  readonly maxTokens?: number;
+}
+
+/**
+ * Everything a version write can carry. Every field is optional on purpose:
+ * an omitted one is omitted from the body, which is the only way to write the
+ * "leave the stored value alone" half of the contract.
+ */
+export interface AgentVersionInput {
+  readonly name?: string;
+  readonly agentType?: string;
+  readonly instructions?: string;
+  readonly welcomeMessage?: string;
+  readonly conversationStarters?: readonly string[];
+  readonly variables?: readonly VersionVariableInput[];
+  readonly tags?: readonly VersionTagInput[];
+  /** A PATCH of the version's meta bag — the server merges it, key by key. */
+  readonly meta?: Readonly<Record<string, unknown>>;
+  readonly model?: VersionModelInput;
+  /** Ids the id-guard cases send. Only a refusal journey needs them. */
+  readonly id?: string;
+  readonly applicationId?: string;
+}
+
+
+/** One row of `GET /elitea_core/application/prompt_lib/{project}/{id}`. */
+export interface StoredApplicationVersion {
+  readonly id: string;
+  readonly name: string;
+  readonly status: string;
+}
+
+/**
+ * Every version an agent owns, as the Published tab and the version selector
+ * read them.
+ *
+ * This is the read that tells a publish from a MOVE: publishing clones the
+ * source version and leaves the original alone, so after one publish this
+ * answers two rows — the untouched draft and the published clone. A handler
+ * that flipped the source row's status instead would answer one, and the
+ * publish response alone cannot tell the difference.
+ */
+export async function readApplicationVersions(
+  request: APIRequestContext,
+  applicationId: string,
+  projectId: string = DEFAULT_PROJECT_ID,
+): Promise<readonly StoredApplicationVersion[]> {
+  const url = `${API_BASE}/elitea_core/application/prompt_lib/${projectId}/${applicationId}`;
+  const response = await request.get(url);
+  if (!response.ok()) {
+    throw new Error(
+      `readApplicationVersions: GET ${url} -> ${response.status()}` +
+        `${await describeRefusal(response)}\n${(await response.text()).slice(0, 300)}`,
+    );
+  }
+  const body = (await response.json()) as { versions?: readonly Record<string, unknown>[] };
+  return (body.versions ?? []).map((row) => ({
+    id: String(row['id'] ?? ''),
+    name: String(row['name'] ?? ''),
+    status: String(row['status'] ?? ''),
+  }));
+}
+
+/** One row of the public catalogue. */
+export interface CatalogueRow extends Record<string, unknown> {
+  readonly name?: string;
+  readonly meta?: Record<string, unknown>;
+}
+
+/**
+ * ELITEA Catalog, through the route the catalogue page itself calls.
+ *
+ * Read WITHOUT a page size: the catalogue offers no filter narrow enough to
+ * name one agent, and every caller here asks "is this name in it", which a
+ * first page cannot answer once the table outgrows it. The route's own default
+ * page is what the page renders, so this is the same set a reader sees.
+ *
+ * `category` narrows it to one tab of the Catalog page, which is the only
+ * filter the route offers that a journey can state an expectation about.
+ */
+export async function readCatalogue(
+  request: APIRequestContext,
+  category?: string,
+): Promise<readonly CatalogueRow[]> {
+  const url = `${API_BASE}/elitea_core/public_applications/prompt_lib`;
+  // `category` is the ONE filter the catalogue offers that a journey can name
+  // its own row through, and it is the subject of its own cases: `Other` is a
+  // catch-all that also matches a row carrying no category at all, so "is my
+  // agent in this bucket" is a different question from "is my agent in the
+  // catalogue" and both are asked here.
+  const response = await request.get(
+    url,
+    category === undefined ? {} : { params: { category } },
+  );
+  if (!response.ok()) {
+    throw new Error(
+      `readCatalogue: GET ${url} -> ${response.status()}` +
+        `${await describeRefusal(response)}\n${(await response.text()).slice(0, 300)}`,
+    );
+  }
+  const body = (await response.json()) as { rows?: readonly CatalogueRow[] };
+  return body.rows ?? [];
+}
+
+/** The version write body, carrying only the keys the caller named. */
+export function agentVersionBody(version: AgentVersionInput): Record<string, unknown> {
+  const body: Record<string, unknown> = {};
+  if (version.id !== undefined) body['id'] = version.id;
+  if (version.applicationId !== undefined) body['application_id'] = version.applicationId;
+  if (version.name !== undefined) body['name'] = version.name;
+  if (version.agentType !== undefined) body['agent_type'] = version.agentType;
+  if (version.instructions !== undefined) body['instructions'] = version.instructions;
+  if (version.welcomeMessage !== undefined) body['welcome_message'] = version.welcomeMessage;
+  if (version.conversationStarters !== undefined) {
+    body['conversation_starters'] = [...version.conversationStarters];
+  }
+  if (version.variables !== undefined) {
+    body['variables'] = version.variables.map((variable) => ({
+      name: variable.name,
+      value: variable.value,
+    }));
+  }
+  if (version.tags !== undefined) {
+    body['tags'] = version.tags.map((tag) => ({ name: tag.name, data: tag.data ?? {} }));
+  }
+  if (version.meta !== undefined) body['meta'] = { ...version.meta };
+  if (version.model !== undefined) {
+    const llm: Record<string, unknown> = { model_name: version.model.modelName };
+    if (version.model.modelProjectId !== undefined) {
+      llm['model_project_id'] = version.model.modelProjectId;
+    }
+    if (version.model.temperature !== undefined) llm['temperature'] = version.model.temperature;
+    if (version.model.maxTokens !== undefined) llm['max_tokens'] = version.model.maxTokens;
+    body['llm_settings'] = llm;
+  }
+  return body;
+}
+
+/**
+ * Create an agent whose first version is exactly what the caller asked for.
+ *
+ * `createAgent` above hard-codes that version, which is right for the twenty
+ * journeys that only need an agent to exist. This one is for the journeys
+ * whose subject IS the version — the ones that seed a full `meta` and then
+ * assert what an ordinary save did to it.
+ */
+export async function createAgentWithVersion(
+  request: APIRequestContext,
+  name: string,
+  version: AgentVersionInput,
+  projectId: string = DEFAULT_PROJECT_ID,
+  description?: string,
+): Promise<CreatedAgent> {
+  const path = `/elitea_core/applications/prompt_lib/${projectId}`;
+  const response = await request.post(`${API_BASE}${path}`, {
+    data: {
+      name,
+      // The DESCRIPTION is a parameter because the pre-publish check reads it:
+      // a description under 20 characters raises a warning attributed to the
+      // agent it belongs to, and a fixture that always sent a long one could
+      // not build the sub-agent a quality journey needs to be warned about.
+      description: description ?? `${AUTOTEST_PREFIX}version contract fixture`,
+      type: 'agent',
+      versions: [agentVersionBody({ name: 'base', agentType: 'openai', ...version })],
+    },
+  });
+  if (!response.ok()) {
+    throw new Error(
+      `createAgentWithVersion: POST ${path} -> ${response.status()}: ` +
+        `${(await response.text()).slice(0, 300)}`,
+    );
+  }
+  const body = (await response.json()) as {
+    id?: unknown;
+    version_details?: { id?: unknown };
+  };
+  const id: unknown = body.id;
+  const versionId: unknown = body.version_details?.id;
+  if (typeof id !== 'string' || typeof versionId !== 'string') {
+    throw new Error(
+      `createAgentWithVersion: the create answered no id/version_details.id: ` +
+        `${JSON.stringify(body).slice(0, 300)}`,
+    );
+  }
+  return { id, versionId };
+}
+
+/** One version as `GET /version/...` serves it — the editor's own reload. */
+export interface StoredVersionDetails {
+  readonly id: string;
+  readonly applicationId: string;
+  readonly name: string;
+  readonly status: string;
+  readonly agentType: string;
+  readonly instructions: string;
+  readonly welcomeMessage: string;
+  readonly llmSettings: Record<string, unknown>;
+  /** The version's key bag: step_limit, icon_meta, variables, fork provenance. */
+  readonly meta: Record<string, unknown>;
+  readonly variables: readonly VersionVariableInput[];
+  readonly tags: readonly { readonly id: string; readonly name: string }[];
+  readonly tools: readonly Record<string, unknown>[];
+  readonly authorId: string;
+}
+
+function versionDetailsFrom(body: Record<string, unknown>): StoredVersionDetails {
+  const llm = (body['llm_settings'] as Record<string, unknown> | null) ?? {};
+  const meta = (body['meta'] as Record<string, unknown> | null) ?? {};
+  const variables = (body['variables'] as readonly Record<string, unknown>[] | null) ?? [];
+  const tags = (body['tags'] as readonly Record<string, unknown>[] | null) ?? [];
+  const tools = (body['tools'] as readonly Record<string, unknown>[] | null) ?? [];
+  return {
+    id: String(body['id'] ?? ''),
+    applicationId: String(body['application_id'] ?? ''),
+    name: String(body['name'] ?? ''),
+    status: String(body['status'] ?? ''),
+    agentType: String(body['agent_type'] ?? ''),
+    instructions: String(body['instructions'] ?? ''),
+    welcomeMessage: String(body['welcome_message'] ?? ''),
+    llmSettings: llm,
+    meta,
+    variables: variables.map((row) => ({
+      name: String(row['name'] ?? ''),
+      value: String(row['value'] ?? ''),
+    })),
+    tags: tags.map((row) => ({ id: String(row['id'] ?? ''), name: String(row['name'] ?? '') })),
+    tools,
+    authorId: String(body['author_id'] ?? ''),
+  };
+}
+
+/**
+ * Read one version back the way the agent editor reloads it.
+ *
+ * Asserting on THIS and not on the write's own 201 echo is the point: the
+ * echo is built in Go from the value the handler decided to send, so a write
+ * that never reached the column answers a correct-looking echo. Only the read
+ * goes back to the row.
+ */
+export async function readVersion(
+  request: APIRequestContext,
+  applicationId: string,
+  versionId: string,
+  projectId: string = DEFAULT_PROJECT_ID,
+): Promise<StoredVersionDetails> {
+  const url =
+    `${API_BASE}/elitea_core/version/prompt_lib/${projectId}/${applicationId}/${versionId}`;
+  const response = await request.get(url);
+  if (!response.ok()) {
+    throw new Error(
+      `readVersion: GET ${url} -> ${response.status()}${await describeRefusal(response)}\n` +
+        `${(await response.text()).slice(0, 300)}`,
+    );
+  }
+  return versionDetailsFrom((await response.json()) as Record<string, unknown>);
+}
+
+/** The vault key the expanded version-details route compares `X-SECRET` against. */
+export const SECRETS_HEADER_NAME = 'secrets_header_value';
+
+/**
+ * The project's `secrets_header_value` as the vault holds it — or `undefined`
+ * when it holds none. It NEVER writes.
+ *
+ * The read and the repair are separated because they answer different
+ * questions, and one caller wants only the first. `auth.setup.ts` asserts that
+ * the STACK gave the seeded project its value (`scripts/e2e-stack.sh seed`
+ * restarts elitea-main so its backfill writes one); a read that quietly minted
+ * the value on the way would make that assertion unable to fail, and the
+ * absence it exists to catch would go on being repaired by whichever caller
+ * happened to run first.
+ *
+ * An EMPTY value is not "absent": it is a vault that answered, with something
+ * no caller can authenticate with. It throws rather than inviting a mint over
+ * the top of it.
+ */
+export async function readProjectSecretHeader(
+  request: APIRequestContext,
+  projectId: string = DEFAULT_PROJECT_ID,
+): Promise<string | undefined> {
+  const url = `${API_BASE}/secrets/secret/default/${projectId}/${SECRETS_HEADER_NAME}`;
+  const response = await request.get(url);
+  if (response.status() === 404) return undefined;
+  if (!response.ok()) {
+    throw new Error(
+      `readProjectSecretHeader: GET ${url} -> ${response.status()}${await describeRefusal(response)}`,
+    );
+  }
+  const body = (await response.json()) as { value?: unknown };
+  const value = typeof body.value === 'string' ? body.value : '';
+  if (value === '') {
+    throw new Error(`readProjectSecretHeader: the vault answered an empty ${SECRETS_HEADER_NAME}`);
+  }
+  return value;
+}
+
+/**
+ * The project's `X-SECRET` value, resolved from the project's own vault —
+ * minted through the API first if the project has none.
+ *
+ * The expanded version-details read is gated on this header, and the value is
+ * per project and random — so a journey that wanted a literal would need one
+ * configured per environment, and would silently start asserting "a wrong
+ * header is refused" everywhere the literal went stale. Reading it makes the
+ * journey portable and keeps the refusal case honest.
+ *
+ * WHY IT STILL MINTS ONE. elitea-main gives a project its value in exactly two
+ * places: the project PROVISIONER, and a boot pass over `centry.project` that
+ * creates the vault it needs. The journeys stack is reached by the second one
+ * only because `scripts/e2e-stack.sh seed` RESTARTS elitea-main after writing
+ * its project rows — the pass elitea-main did at `up` ran against a database
+ * that had no `centry` schema yet. That is now the guarantee this suite runs
+ * on, and `auth.setup.ts` asserts it.
+ *
+ * The mint is kept as the fallback for the deployments this fixture is also
+ * pointed at and does not seed: a hand-built stack, a branch image whose seed
+ * predates that restart, a project created after the pass. It is a repair, no
+ * longer the ordinary path, and on the journeys stack it never fires.
+ *
+ * A 404 is therefore the ONLY status that mints. Anything else is reported as
+ * itself: a 403 is a missing grant on the persona, and a 500 is a vault this
+ * deployment can no longer open — neither is repaired by writing a new secret
+ * over it.
+ */
+export async function resolveProjectSecretHeader(
+  request: APIRequestContext,
+  projectId: string = DEFAULT_PROJECT_ID,
+): Promise<string> {
+  const existing = await readProjectSecretHeader(request, projectId);
+  if (existing !== undefined) return existing;
+
+  await mintProjectSecretHeader(request, projectId);
+  const minted = await readProjectSecretHeader(request, projectId);
+  if (minted === undefined) {
+    throw new Error(
+      `resolveProjectSecretHeader: project ${projectId} holds no ${SECRETS_HEADER_NAME} and one ` +
+        `could not be minted; elitea-main writes it when a project is provisioned and in a boot ` +
+        `pass over centry.project, and this stack's seed restarts elitea-main to run that pass.`,
+    );
+  }
+  return minted;
+}
+
+/**
+ * Writes a `secrets_header_value` into the project's vault.
+ *
+ * The project-mode create route, which is the only one that serves this: the
+ * per-name POST is administration-only and answers 405 here. A 400 is accepted
+ * silently because it is what a concurrent worker's own mint looks like from
+ * this side ("Secret … already exists"), and the caller re-reads either way.
+ */
+async function mintProjectSecretHeader(
+  request: APIRequestContext,
+  projectId: string,
+): Promise<void> {
+  const url = `${API_BASE}/secrets/secrets/default/${projectId}`;
+  const response = await request.post(url, {
+    // Never a fixed literal: this is the value the runtime authenticates with
+    // for the rest of the run, and a constant checked into a public repository
+    // would be one every deployment that ever ran this suite shared.
+    data: { name: SECRETS_HEADER_NAME, value: `autotest${Date.now()}${Math.random().toString(36).slice(2, 10)}` },
+  });
+  if (response.status() === 201 || response.status() === 400) return;
+  throw new Error(
+    `resolveProjectSecretHeader: POST ${url} -> ${response.status()} while minting a ` +
+      `${SECRETS_HEADER_NAME} for the project${await describeRefusal(response)}`,
+  );
+}
+
+/**
+ * The EXPANDED version details — the read the runtime and the SDK make.
+ *
+ * It is a PATCH on the version path, not a GET (the route is a read that
+ * carries a header, and pylon shaped it that way), and it is gated on the
+ * project's `X-SECRET`. Reading a version through it as well as through
+ * `readVersion` is what says a stored value reaches the RUNTIME, not only the
+ * editor: they are two different projections of the same row.
+ */
+export async function readVersionExpanded(
+  request: APIRequestContext,
+  applicationId: string,
+  versionId: string,
+  secretHeader: string,
+  projectId: string = DEFAULT_PROJECT_ID,
+): Promise<Record<string, unknown>> {
+  const url =
+    `${API_BASE}/elitea_core/version/prompt_lib/${projectId}/${applicationId}/${versionId}`;
+  const response = await request.patch(url, { headers: { 'X-SECRET': secretHeader } });
+  if (!response.ok()) {
+    throw new Error(
+      `readVersionExpanded: PATCH ${url} -> ${response.status()}: ` +
+        `${(await response.text()).slice(0, 300)}`,
+    );
+  }
+  return (await response.json()) as Record<string, unknown>;
+}
+
+/* ── sub-agent references ─────────────────────────────────────────────────── */
+
+/**
+ * The route that links one agent version into another as a SUB-AGENT.
+ *
+ * The URL names the CHILD and the body names the PARENT version — an order no
+ * reader guesses, and the reason this is a helper rather than a line repeated
+ * in each case: `internal/api/v2/eliteacore/application_relation.go` reads the
+ * child's application and version out of the path and takes only
+ * `version_id` from the body. `application_id` is sent because the route
+ * refuses a body without it, and it is the CHILD's id there too.
+ *
+ * The response is returned rather than asserted, because the refusal cases need
+ * it: a published parent refuses the change, and a pair already linked refuses
+ * a second copy.
+ */
+export function attachSubAgent(
+  request: APIRequestContext,
+  parentVersionId: string,
+  child: { readonly applicationId: string; readonly versionId: string },
+  projectId: string = DEFAULT_PROJECT_ID,
+): Promise<APIResponse> {
+  const url =
+    `${API_BASE}/elitea_core/application_relation/prompt_lib/${projectId}/` +
+    `${child.applicationId}/${child.versionId}`;
+  return request.patch(url, {
+    data: {
+      application_id: Number(child.applicationId),
+      version_id: Number(parentVersionId),
+      has_relation: true,
+    },
+  });
+}
+
+/** The same route with `has_relation: false` — the detach half. */
+export function detachSubAgent(
+  request: APIRequestContext,
+  parentVersionId: string,
+  child: { readonly applicationId: string; readonly versionId: string },
+  projectId: string = DEFAULT_PROJECT_ID,
+): Promise<APIResponse> {
+  const url =
+    `${API_BASE}/elitea_core/application_relation/prompt_lib/${projectId}/` +
+    `${child.applicationId}/${child.versionId}`;
+  return request.patch(url, {
+    data: {
+      application_id: Number(child.applicationId),
+      version_id: Number(parentVersionId),
+      has_relation: false,
+    },
+  });
+}
+
+/** One sub-agent entry as a version read serves it back. */
+export interface SubAgentToolRow {
+  /** The CHILD agent this entry points at. */
+  readonly applicationId: string;
+  /** The exact child VERSION this entry points at. */
+  readonly versionId: string;
+  readonly name: string;
+}
+
+/**
+ * The sub-agent entries of a `tools` array, whichever projection served it.
+ *
+ * Three routes serve the same reference under three shapes — the editor read
+ * puts the stored blob under `config`, the expanded read and the public detail
+ * put it under `settings` — so a caller that read one key would silently find
+ * no sub-agents on the other two. Non-application tools are dropped: every
+ * caller here is asking "which agents does this version delegate to".
+ */
+export function subAgentToolsOf(tools: readonly unknown[]): readonly SubAgentToolRow[] {
+  return tools
+    .map((entry) => (entry ?? {}) as Record<string, unknown>)
+    .filter((tool) => tool['type'] === 'application')
+    .map((tool) => {
+      const settings =
+        ((tool['settings'] ?? tool['config']) as Record<string, unknown> | undefined) ?? {};
+      return {
+        applicationId: String(settings['application_id'] ?? ''),
+        versionId: String(settings['application_version_id'] ?? settings['version_id'] ?? ''),
+        name: String(tool['name'] ?? ''),
+      };
+    });
+}
+
+/** One row of the project's tag list. */
+export interface StoredTag {
+  readonly id: string;
+  readonly name: string;
+  /** The free-form blob the tag carries — the colour the rail draws it in. */
+  readonly data: unknown;
+}
+
+/**
+ * Which entities' tags to read.
+ *
+ * A project's `tags` table is shared by everything that can be tagged, so
+ * "the tags in this project" and "the tags I can filter agents by" are
+ * different sets. `all` — the default — is every row, including one that
+ * nothing carries yet, which is the only coverage a freshly CREATED tag
+ * appears in.
+ */
+export type TagCoverage = 'all' | 'application' | 'pipeline' | 'skill';
+
+/** How to read the project's tags. */
+export interface ReadTagsOptions {
+  readonly coverage?: TagCoverage;
+  readonly projectId?: string;
+}
+
+/**
+ * The project's tags, as the tag control reads them.
+ *
+ * The list is filtered by NAME by the caller rather than paged: this reads
+ * the whole set because the caller matches its own `autotest_` names out of
+ * it, and the route offers no name filter to narrow with. It does offer
+ * `entity_coverage`, which narrows by the KIND of entity carrying the tag,
+ * and that is what `options.coverage` sends.
+ */
+export async function readTags(
+  request: APIRequestContext,
+  options: ReadTagsOptions = {},
+): Promise<readonly StoredTag[]> {
+  const projectId = options.projectId ?? DEFAULT_PROJECT_ID;
+  const url = `${API_BASE}/elitea_core/tags/prompt_lib/${projectId}`;
+  const response = await request.get(url, {
+    params: options.coverage === undefined ? {} : { entity_coverage: options.coverage },
+  });
+  if (!response.ok()) {
+    throw new Error(
+      `readTags: GET ${url} -> ${response.status()}: ${(await response.text()).slice(0, 300)}`,
+    );
+  }
+  const body = (await response.json()) as {
+    rows?: readonly Record<string, unknown>[];
+    total?: unknown;
+  };
+  return (body.rows ?? []).map((row) => ({
+    id: String(row['id'] ?? ''),
+    name: String(row['name'] ?? ''),
+    data: row['data'] ?? null,
+  }));
+}
+
+/** The whole tag-list response, for the journey whose subject is the envelope. */
+export async function readTagsEnvelope(
+  request: APIRequestContext,
+  options: ReadTagsOptions = {},
+): Promise<Record<string, unknown>> {
+  const projectId = options.projectId ?? DEFAULT_PROJECT_ID;
+  const url = `${API_BASE}/elitea_core/tags/prompt_lib/${projectId}`;
+  const response = await request.get(url, {
+    params: options.coverage === undefined ? {} : { entity_coverage: options.coverage },
+  });
+  if (!response.ok()) {
+    throw new Error(
+      `readTagsEnvelope: GET ${url} -> ${response.status()}: ` +
+        `${(await response.text()).slice(0, 300)}`,
+    );
+  }
+  return (await response.json()) as Record<string, unknown>;
+}
+
+/**
+ * Create a tag through the tag write API and answer the STORED row.
+ *
+ * Idempotent on the name, which is what the server is: one name is one row
+ * per project, shared by every version that carries it.
+ */
+export async function createTag(
+  request: APIRequestContext,
+  name: string,
+  data?: Readonly<Record<string, unknown>>,
+  projectId: string = DEFAULT_PROJECT_ID,
+): Promise<StoredTag> {
+  const url = `${API_BASE}/elitea_core/tags/prompt_lib/${projectId}`;
+  const response = await request.post(url, {
+    data: data === undefined ? { name } : { name, data },
+  });
+  if (!response.ok()) {
+    throw new Error(
+      `createTag: POST ${url} -> ${response.status()}: ${(await response.text()).slice(0, 300)}`,
+    );
+  }
+  const row = (await response.json()) as Record<string, unknown>;
+  return {
+    id: String(row['id'] ?? ''),
+    name: String(row['name'] ?? ''),
+    data: row['data'] ?? null,
+  };
+}
+
+/**
+ * Delete a tag by id. Answers the status, so a cleanup can stay quiet and a
+ * journey about the delete can assert on it.
+ */
+export async function deleteTag(
+  request: APIRequestContext,
+  tagId: string,
+  projectId: string = DEFAULT_PROJECT_ID,
+): Promise<number> {
+  const response = await request.delete(
+    `${API_BASE}/elitea_core/tags/prompt_lib/${projectId}/${tagId}`,
+  );
+  return response.status();
+}
+
+/**
+ * Remove every tag the project holds whose name starts with `autotest_`.
+ *
+ * A tag row outlives the agent that carried it — deleting an agent takes the
+ * ASSOCIATION and leaves the row — so a journey that saves a tag has to
+ * remove the row itself or leave one behind on every run.
+ */
+export async function deleteAutotestTags(
+  request: APIRequestContext,
+  names: readonly string[],
+  projectId: string = DEFAULT_PROJECT_ID,
+): Promise<void> {
+  const wanted = new Set(names);
+  for (const tag of await readTags(request, { projectId })) {
+    if (wanted.has(tag.name) && tag.id !== '') {
+      await deleteTag(request, tag.id, projectId);
+    }
+  }
+}
+
+/** One row of the agents list, as `GET /applications/...` serves it. */
+export interface ListedAgent extends Record<string, unknown> {
+  readonly id?: string;
+  readonly name?: string;
+}
+
+/** The agents-list envelope: `{rows, total, page, page_size, total_pages}`. */
+export interface AgentListEnvelope {
+  readonly rows: readonly ListedAgent[];
+  readonly body: Record<string, unknown>;
+}
+
+/**
+ * The agents list, NAMING what it wants.
+ *
+ * `query` is the list's own name filter, so a journey finds its own agents
+ * instead of asking for the first page of everything and hoping they are on
+ * it — the shape rule 2 of scripts/e2e-journey-shape.test.mjs states, and the
+ * one a suite that creates rows in parallel needs anyway.
+ */
+export async function readAgentList(
+  request: APIRequestContext,
+  options: {
+    readonly query?: string;
+    readonly limit?: number;
+    readonly agentsType?: string;
+    readonly projectId?: string;
+  } = {},
+): Promise<AgentListEnvelope> {
+  const projectId = options.projectId ?? DEFAULT_PROJECT_ID;
+  const url = `${API_BASE}/elitea_core/applications/prompt_lib/${projectId}`;
+  const params: Record<string, string | number> = { limit: options.limit ?? 20 };
+  if (options.query !== undefined) params['query'] = options.query;
+  if (options.agentsType !== undefined) params['agents_type'] = options.agentsType;
+  const response = await request.get(url, { params });
+  if (!response.ok()) {
+    throw new Error(
+      `readAgentList: GET ${url} -> ${response.status()}` +
+        `${await describeRefusal(response)}\n${(await response.text()).slice(0, 300)}`,
+    );
+  }
+  const body = (await response.json()) as Record<string, unknown>;
+  const rows = (body['rows'] as readonly ListedAgent[] | undefined) ?? [];
+  return { rows, body };
+}
+
+/**
+ * The author profile: identity plus the counters the profile page shows.
+ *
+ * `GET /elitea_core/author/prompt_lib/{author}` is a different route from
+ * `/social/author`, which answers the CALLER. This one answers any author by
+ * id, and counts the agents, pipelines and toolkits they own across every
+ * project they belong to.
+ */
+export async function readAuthorProfile(
+  request: APIRequestContext,
+  authorId: string,
+): Promise<Record<string, unknown>> {
+  const url = `${API_BASE}/elitea_core/author/prompt_lib/${authorId}`;
+  const response = await request.get(url);
+  if (!response.ok()) {
+    throw new Error(
+      `readAuthorProfile: GET ${url} -> ${response.status()}` +
+        `${await describeRefusal(response)}\n${(await response.text()).slice(0, 300)}`,
+    );
+  }
+  return (await response.json()) as Record<string, unknown>;
+}
+
+/** The signed-in caller, as `/social/author` answers it. */
+export async function readCallerIdentity(
+  request: APIRequestContext,
+): Promise<{ readonly id: string; readonly email: string }> {
+  const url = `${API_BASE}/social/author/`;
+  const response = await request.get(url);
+  if (!response.ok()) {
+    throw new Error(
+      `readCallerIdentity: GET ${url} -> ${response.status()}${await describeRefusal(response)}`,
+    );
+  }
+  const body = (await response.json()) as { id?: unknown; email?: unknown };
+  return { id: String(body.id ?? ''), email: String(body.email ?? '') };
+}
+
+/**
+ * The caller's OWN project — `project_user_<uid>` — as `/social/author` names it.
+ *
+ * Wanted by the journeys whose subject is a rule that DISCRIMINATES between the
+ * public project and any other one. The server's public project is resolved
+ * from `ELITEA_AI_PROJECT_ID` and defaults to 1, which is also the project
+ * every seeded persona works in, so a rule of the form "only entities that live
+ * in the public project may do X" is satisfied by everything a journey creates
+ * in the ordinary way and its refusing half is unreachable. The caller's own
+ * personal project is a second REAL project, owned by the same persona, and it
+ * is the one place a journey can put an entity that the rule must refuse.
+ *
+ * `''` is answered rather than thrown when the server names the seeded project:
+ * `resolvePersonalProjectID` falls back to the lowest-id project the caller
+ * holds any role in, so project 1 comes back for a persona whose own project
+ * was never provisioned. That answer is an absence, not an id — see
+ * `e2e/auth.setup.ts`, which waits for a real one before any journey runs — and
+ * a caller that treated it as one would create its "not published" fixture in
+ * the very project the rule calls published.
+ */
+export async function readCallerPersonalProjectId(request: APIRequestContext): Promise<string> {
+  const url = `${API_BASE}/social/author/`;
+  const response = await request.get(url);
+  if (!response.ok()) {
+    throw new Error(
+      `readCallerPersonalProjectId: GET ${url} -> ${response.status()}${await describeRefusal(response)}`,
+    );
+  }
+  const body = (await response.json()) as { personal_project_id?: unknown };
+  const id = String(body.personal_project_id ?? '');
+  return id === DEFAULT_PROJECT_ID ? '' : id;
 }
 
 /** What one sweep actually did, so a caller can assert on the work and not on the silence. */
@@ -780,6 +1775,15 @@ export async function readStoredAssistantAnswer(
 
 /** One `chat_message_items` row as the conversation-details route serves it. */
 export interface StoredMessageItem {
+  /**
+   * `chat_message_items.id` — the numeric key.
+   *
+   * Carried because it is the only handle on ONE item of a message: the canvas
+   * create route takes `message_item_id` and splits exactly that row, and a
+   * caller that could only name the group would have to guess which of its
+   * items it meant.
+   */
+  readonly id: string;
   /** `chat_message_items.item_type` — `text_message`, `attachment_message`, … */
   readonly itemType: string;
   /**
@@ -800,6 +1804,23 @@ export interface StoredMessageGroup {
   /** `string_agg` of the group's `text_message` items ALONE — attachments are not spliced in. */
   readonly content: string;
   readonly items: readonly StoredMessageItem[];
+  /**
+   * `chat_message_group.author_participant_id` — WHO wrote this group.
+   *
+   * The only field that says which participant answered, and the reason it is
+   * carried: in a conversation holding more than one addressable participant
+   * every reply looks alike from its text (the offline mock echoes the
+   * question), so "the participant this turn addressed is the one that
+   * replied" cannot be stated any other way. The admission writes it from the
+   * question's `sent_to_id` in the same statement
+   * (`InsertCurrentAdhocTurn` / `InsertCurrentApplicationTurn`), so a turn
+   * routed to the wrong participant differs HERE and nowhere else.
+   */
+  readonly authorParticipantId: string;
+  /** `sent_to_id` — the participant a QUESTION group was addressed to. */
+  readonly sentToId: string;
+  /** `reply_to_id` — the question group an ANSWER group belongs to. */
+  readonly replyToId: string;
 }
 
 /**
@@ -855,14 +1876,27 @@ export async function readStoredMessageGroups(
       id?: unknown;
       uuid?: unknown;
       content?: unknown;
-      message_items?: readonly { item_type?: unknown; item_details?: unknown }[];
+      author_participant_id?: unknown;
+      sent_to_id?: unknown;
+      reply_to_id?: unknown;
+      message_items?: readonly { id?: unknown; item_type?: unknown; item_details?: unknown }[];
     }[];
   };
+  // An absent id becomes `''`, never the string `'undefined'`: `reply_to_id` is
+  // omitted for a question group and `sent_to_id` for a group nobody addressed,
+  // and a caller comparing ids must be able to tell "no such link" from a link
+  // that happens to be spelled oddly.
+  const optionalId = (value: unknown): string =>
+    value === undefined || value === null ? '' : String(value);
   return (body.message_groups ?? []).map((group) => ({
     id: String(group.id ?? ''),
     uuid: String(group.uuid ?? ''),
     content: typeof group.content === 'string' ? group.content : '',
+    authorParticipantId: optionalId(group.author_participant_id),
+    sentToId: optionalId(group.sent_to_id),
+    replyToId: optionalId(group.reply_to_id),
     items: (group.message_items ?? []).map((item) => ({
+      id: item.id === undefined || item.id === null ? '' : String(item.id),
       itemType: typeof item.item_type === 'string' ? item.item_type : '',
       details:
         typeof item.item_details === 'object' && item.item_details !== null
@@ -986,10 +2020,12 @@ export async function createMcpConnection(
  *
  * `github_configuration` is a configuration REFERENCE, resolved by
  * `refuseUnresolvableToolkitSettings` (`settings_validation.go:183`) whenever
- * the deployment composes the Configurations graph. The e2e stack does not set
- * `ELITEA_CONFIGURATIONS_ENABLED`, so a made-up `elitea_title` would be
- * accepted there today — and would start answering 400 on any deployment that
- * turns the graph on. One extra POST buys a fixture that is correct on both.
+ * the deployment composes the Configurations graph. The e2e stack composes it
+ * — `deploy/docker-compose.e2e-standalone.yml` sets
+ * `ELITEA_CONFIGURATIONS_ENABLED` — so a made-up `elitea_title` is answered
+ * 400 here, exactly as it is on a shipped stack. This helper made the real row
+ * before that was true, which is why turning the graph on cost its callers
+ * nothing.
  *
  * NEVER a real credential: `data` carries only the placeholder base URL below,
  * and nothing here contacts api.github.com.
@@ -1004,10 +2040,29 @@ export interface GithubToolkitFixture {
 /** The placeholder GitHub endpoint. Deliberately unroutable. */
 const GITHUB_PLACEHOLDER_BASE_URL = 'https://autotest.invalid/api';
 
+/**
+ * A token-shaped value to store on the credential the toolkit points at.
+ *
+ * It exists for the two journeys whose subject IS the sealing: the export
+ * journey, which asserts that a sealed value never reaches the export
+ * document, and the expanded-version journey, which asserts that the runtime
+ * read resolves it back. Every other caller leaves it off and gets the
+ * base-URL-only row this fixture has always made. The value is a fixture
+ * string, never a real token — the credential
+ * write seals it into the project vault and stores a `{{secret.<uuid>}}`
+ * reference in its place, so the plain value exists nowhere the API can serve
+ * it back.
+ */
+export interface GithubToolkitOptions {
+  /** Extra `data` keys for the credential row, merged over the base URL. */
+  readonly credentialData?: Readonly<Record<string, unknown>>;
+}
+
 export async function createGithubToolkit(
   request: APIRequestContext,
   projectId: string,
   toolkitName: string,
+  options: GithubToolkitOptions = {},
 ): Promise<GithubToolkitFixture> {
   const credentialTitle = `${toolkitName}_cred`;
   const credential = await request.post(
@@ -1018,7 +2073,7 @@ export async function createGithubToolkit(
         elitea_title: credentialTitle,
         label: credentialTitle,
         shared: false,
-        data: { base_url: GITHUB_PLACEHOLDER_BASE_URL },
+        data: { base_url: GITHUB_PLACEHOLDER_BASE_URL, ...options.credentialData },
       },
     },
   );
@@ -1207,6 +2262,98 @@ export const MOCK_CALL_TOOL_SENTINEL = 'MOCKCALLTOOLEND';
 /** The prompt that makes the mock answer with a call to `operation`. */
 export function callToolPrompt(operation: string, tail: string): string {
   return `[[mock:call_tool ${operation}]] ${tail}`;
+}
+
+/**
+ * The same marker, WITH arguments — the form a tool with a required field needs.
+ *
+ * `callToolPrompt` above sends the empty object, which is right for the mock's
+ * two `/tool` operations (neither declares a required parameter) and refused
+ * for a nested Elitea agent: the runtime presents a saved agent to the model as
+ * a tool whose schema requires a non-empty `task`, and a call without one is an
+ * invalid configuration that kills the turn before the child ever runs. So a
+ * delegation journey names the tool AND the task it delegates.
+ *
+ * The arguments travel inside the marker, which the mock closes on the `]]`
+ * that BALANCES its opening `[[` (`_marker_body`), and that nesting rule is
+ * what a two-level delegation needs: the task a parent hands its child is
+ * itself a whole marker, so the child's `]]` closes before the parent's.
+ *
+ * So a `]]` is refused here only when it would close the marker EARLY — an
+ * unbalanced one. The check mirrors the mock's own scan rather than banning the
+ * sequence, because banning it made the nested form unwritable while the mock
+ * has parsed it since the day it was written. An unclosed `[[` is refused for
+ * the same reason from the other side: it would swallow the marker's own `]]`
+ * and the arguments would then be truncated at the tail.
+ */
+export function callToolWithArgumentsPrompt(
+  toolName: string,
+  args: Readonly<Record<string, unknown>>,
+  tail: string,
+): string {
+  const encoded = JSON.stringify(args);
+  expect(
+    markerNestingDepth(encoded),
+    'the marker closes on the `]]` that balances its `[[`, so a scripted argument may ' +
+      'not carry an unbalanced one — it would close the marker early or swallow its close',
+  ).toBe(0);
+  return `[[mock:call_tool ${toolName} ${encoded}]] ${tail}`;
+}
+
+/**
+ * The nesting depth `text` leaves behind, or `-1` if it ever closes past zero.
+ *
+ * The same two-character scan `_marker_body` makes in `deploy/mock-llm/server.py`:
+ * `[[` opens, `]]` closes, and everything else is one character of content. A
+ * result of `0` is the only value that leaves the enclosing marker intact.
+ */
+function markerNestingDepth(text: string): number {
+  let depth = 0;
+  let index = 0;
+  while (index < text.length - 1) {
+    const pair = text.slice(index, index + 2);
+    if (pair === '[[') {
+      depth += 1;
+      index += 2;
+      continue;
+    }
+    if (pair === ']]') {
+      depth -= 1;
+      if (depth < 0) return -1;
+      index += 2;
+      continue;
+    }
+    index += 1;
+  }
+  return depth;
+}
+
+/**
+ * The function name a SAVED AGENT is offered to the model under, when it is
+ * attached to another agent or sitting in a conversation as a participant.
+ *
+ * The two runtimes name it differently and both names are derived from the
+ * SAME stored reference, so the leg decides which one a scripted call must
+ * use:
+ *
+ *  - the native Rust runtime names it `elitea_agent_<applicationId>_v_<versionId>`
+ *    (`application_tool_name`, services/elitea-worker-rust/src/agents/application_tools.rs);
+ *  - the SDK worker names it after the agent itself (`ApplicationToolkit.get_toolkit`
+ *    passes `app_details['name']`), which reaches the model unchanged for a
+ *    name in the `autotest_` alphabet.
+ *
+ * `E2E_WORKER` is set by `scripts/chat-stream-e2e.sh`, the one entry point that
+ * knows which runtime is answering. Every caller asserts the offered tool list
+ * actually CONTAINS what this returns, so a naming change fails with the list
+ * the runtime really sent rather than with a turn that quietly did nothing.
+ */
+export function agentAsToolName(agent: {
+  readonly agentId: string;
+  readonly versionId: string;
+  readonly name: string;
+}): string {
+  const worker = process.env['E2E_WORKER'] ?? 'rust';
+  return worker === 'rust' ? `elitea_agent_${agent.agentId}_v_${agent.versionId}` : agent.name;
 }
 
 /** One entry of the mock's TOOL journal — see `_record_tool` in the mock. */

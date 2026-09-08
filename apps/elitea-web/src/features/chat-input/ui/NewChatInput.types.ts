@@ -63,6 +63,17 @@ export interface NewChatInputSlots {
   readonly attachmentButton?: ReactNode | undefined;
   /** Baseline: `ChatButton.ChatInternalToolsConfigButton` (unit C6). */
   readonly internalToolsConfig?: ReactNode | undefined;
+  /**
+   * The conversation's own "clear the history" control
+   * (`ChatButton.ClearChatButton`).
+   *
+   * A slot rather than a component this cluster builds, for the reason every
+   * other control here is one: the action it fires belongs to whatever owns
+   * the transcript. The composition root withholds it (passes `undefined`)
+   * on the agent/pipeline editor surface, which mounts its own clear control
+   * beside the panel and would otherwise show two.
+   */
+  readonly clearChat?: ReactNode | undefined;
   /** Baseline: `ChatButton.VoiceButton` (unit C6) — see `refs.voiceButtonRef`. */
   readonly voiceButton?: ReactNode | undefined;
   /** Baseline: `widgets/llm-model-selector`'s `LLMModelSelector` — confirmed NOT owned by any tracked Wave-2 unit (a genuine ungoverned gap). Rendered only as the fallback branch — see this file's module doc for the exact baseline branch condition preserved. */

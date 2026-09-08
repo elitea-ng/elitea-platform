@@ -12,7 +12,7 @@ import { ToolEvents } from '@/entities/toolkit';
 import { t } from '@/shared/i18n';
 import { BaseBtn } from '@/shared/ui/BaseBtn';
 
-import { eventEmitter } from '../../../lib/eventEmitter';
+import { eventEmitter } from '@/shared/lib/eventEmitter';
 import { toolkitFormErrorMessage } from '../../../lib/errorMessage';
 import { useCredentialWarning } from '../../../model/useCredentialWarning.hooks';
 import type { RevertedCredentialDetail } from '../../../model/credentialWarning.helpers';

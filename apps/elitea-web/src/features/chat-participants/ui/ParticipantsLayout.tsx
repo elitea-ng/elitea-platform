@@ -32,6 +32,7 @@ import Typography from '@mui/material/Typography';
 
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import PersonAddAltOutlinedIcon from '@mui/icons-material/PersonAddAltOutlined';
 
 import { t } from '@/shared/i18n';
 
@@ -40,7 +41,7 @@ import { getChatParticipantUniqueId } from '../lib/helpers';
 import { useParticipantDetailsContext } from '../lib/context/ParticipantDetailsContext';
 import { styles } from './ExpandedParticipants/participants.styles';
 import ParticipantItem from './ExpandedParticipants/ParticipantItem';
-import ParticipantItemRow from './ExpandedParticipants/ParticipantItemRow';
+import { UsersRow } from './ExpandedParticipants/UsersRow';
 import { CollapsedParticipantsStrip } from './ParticipantsLayout.CollapsedStrip';
 import type { ParticipantsProps } from './Participants.types';
 
@@ -80,6 +81,8 @@ interface ParticipantActions {
   onUpdateParticipant?: (p: TransformedParticipant) => void;
   editingToolkit?: string;
   resolveToolkitIcon?: ParticipantsProps['resolveToolkitIcon'];
+  /** Opens the consumer's add-participant picker — see `ParticipantsProps`. */
+  onAddParticipants?: () => void;
 }
 
 export interface ParticipantsLayoutProps {
@@ -255,23 +258,14 @@ function ExpandedParticipantsContent({
     <>
       {/* Users row (always at top when visible) */}
       {users.visibleCount > 0 && (
-        <Box sx={styles.usersRow} data-testid="users-section">
-          <Box sx={styles.usersDisplay}>
-            {usersToRender.map((p) => (
-              <ParticipantItemRow
-                key={getChatParticipantUniqueId(p)}
-                participant={p as unknown as ParticipantItemRowProps['participant']}
-                isActive={sections.activeParticipantId === getChatParticipantUniqueId(p)}
-                onClickItem={actions.onSelectParticipant!}
-              />
-            ))}
-            {usersOverflowCount > 0 && (
-              <Typography variant="bodySmall" sx={styles.usersOverflow}>
-                +{usersOverflowCount}
-              </Typography>
-            )}
-          </Box>
-        </Box>
+        <UsersRow
+          usersToRender={usersToRender}
+          overflowCount={usersOverflowCount}
+          activeParticipantId={sections.activeParticipantId}
+          onSelectParticipant={actions.onSelectParticipant!}
+          onDeleteParticipant={actions.onDeleteParticipant}
+          disabledEdit={sections.disabledEdit}
+        />
       )}
 
       {/* Type sections — real ParticipantItem rows. `collapsed` is hard-false
@@ -327,6 +321,31 @@ export function ParticipantsLayout({
             <Typography variant="subtitle" sx={styles.titleText}>
               {t('chat-participants.participants.title', 'Participants')}
             </Typography>
+          )}
+          {/*
+            * The add-participant control (gap G2).
+            *
+            * `disabledAdd` — the playback flag AND the caller's
+            * `configuration.users.users.view` grant — has been computed and
+            * threaded through this rail since the port landed, and there was
+            * nothing for it to disable: the picker it gates
+            * (`ui/chat-modal/AddNewUserModal.tsx`) had no call site anywhere
+            * in the app, so a conversation could gain an AGENT from the
+            * composer and could never gain a person at all. Rendered only
+            * when the consumer supplies the callback, so the rail's other
+            * mount points do not grow a control that opens nothing.
+            */}
+          {!header.collapsed && actions.onAddParticipants && (
+            <IconButton
+              sx={styles.collapseButton}
+              size="small"
+              disabled={sections.disabledAdd === true}
+              onClick={actions.onAddParticipants}
+              data-testid="participants-add-button"
+              aria-label={t('chat-participants.participants.addParticipants', 'Add participants')}
+            >
+              <PersonAddAltOutlinedIcon fontSize="small" />
+            </IconButton>
           )}
           {header.onCollapsed && (
             <IconButton

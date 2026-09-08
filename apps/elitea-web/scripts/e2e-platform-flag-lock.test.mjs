@@ -16,7 +16,7 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { withPlatformFlagLock } from '../e2e/fixtures/platformFlags';
+import { readsPlatformFlags, withPlatformFlagLock } from '../e2e/fixtures/platformFlags';
 
 const ROOT = join(tmpdir(), 'elitea-e2e-platform-flags');
 const WRITER = join(ROOT, 'writer');
@@ -121,5 +121,57 @@ describe('the platform-flag window', () => {
       entered = true;
     });
     expect(entered).toBe(true);
+  });
+});
+
+/**
+ * The reader hook's own budget.
+ *
+ * A reader may legitimately wait up to the lock's stale bound for an open
+ * window, and the hook runs inside the TEST's timeout — 30 s for most
+ * projects. Without the extension the waiter is killed by the test clock and
+ * the report names `platformFlags.ts:360` for a wait that was working
+ * correctly, which is how `toolkits.catalogue.spec.ts` failed on webkit.
+ */
+describe('readsPlatformFlags', () => {
+  /** Captures what the hook pair registers, the way Playwright's `test` would. */
+  function recordingTest() {
+    const hooks = { before: undefined, after: undefined };
+    return {
+      hooks,
+      beforeEach: (fn) => {
+        hooks.before = fn;
+      },
+      afterEach: (fn) => {
+        hooks.after = fn;
+      },
+    };
+  }
+
+  it('lengthens the test budget before it starts waiting', async () => {
+    const recorder = recordingTest();
+    readsPlatformFlags(recorder);
+
+    const set = [];
+    await recorder.hooks.before({}, {
+      timeout: 30_000,
+      setTimeout: (value) => set.push(value),
+    });
+    await recorder.hooks.after();
+
+    // 30 s of test plus the 90 s a reader may spend waiting for a window.
+    expect(set).toEqual([120_000]);
+  });
+
+  it('leaves a disabled clock disabled', async () => {
+    const recorder = recordingTest();
+    readsPlatformFlags(recorder);
+
+    const set = [];
+    await recorder.hooks.before({}, { timeout: 0, setTimeout: (value) => set.push(value) });
+    await recorder.hooks.after();
+
+    // `0` means the project turned the clock off; adding to it would impose one.
+    expect(set).toEqual([]);
   });
 });

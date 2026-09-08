@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -148,7 +150,7 @@ func (r *ConversationsRepo) Get(ctx context.Context, projectID, conversationID s
 
 	q := fmt.Sprintf(`
 		SELECT c.id::text, c.name, COALESCE(c.uuid::text, ''), c.author_id, c.folder_id::text, c.created_at, COALESCE(c.updated_at, c.created_at),
-			c.meta,
+			c.meta, c.is_private,
 			(SELECT COUNT(*) FROM %s.chat_message_group mg WHERE mg.conversation_id = c.id)
 		FROM %s.chat_conversations c WHERE %s`, s, s, predicate)
 
@@ -156,8 +158,9 @@ func (r *ConversationsRepo) Get(ctx context.Context, projectID, conversationID s
 	var authorID int
 	var folderID *string
 	var metaBytes []byte
+	var isPrivate bool
 	err := r.pool.QueryRow(ctx, q, conversationID).Scan(
-		&c.ID, &c.Name, &c.UUID, &authorID, &folderID, &c.CreatedAt, &c.UpdatedAt, &metaBytes, &c.MessageCount,
+		&c.ID, &c.Name, &c.UUID, &authorID, &folderID, &c.CreatedAt, &c.UpdatedAt, &metaBytes, &isPrivate, &c.MessageCount,
 	)
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -169,6 +172,7 @@ func (r *ConversationsRepo) Get(ctx context.Context, projectID, conversationID s
 	c.CreatedBy = fmt.Sprintf("%d", authorID)
 	c.FolderID = folderID
 	c.Meta = decodeConversationMeta(metaBytes)
+	c.IsPrivate = &isPrivate
 	return c, nil
 }
 
@@ -280,7 +284,149 @@ func (r *ConversationsRepo) ListParticipants(ctx context.Context, projectID, con
 	if items == nil {
 		items = []conversations.Participant{}
 	}
+	r.enrichAgentParticipantTools(ctx, s, items)
 	return items, nil
+}
+
+// enrichAgentParticipantTools resolves each agent participant's toolkits at
+// READ time and writes them to `meta.tools`.
+//
+// WHY THE READ RESOLVES THEM. A participant's `meta` is written once, when the
+// agent is attached, and it holds the display name and nothing else
+// (participantDisplayMeta). The legacy conversation read served the agent's
+// tool list with the participant, and a client that draws the participant rail
+// — which toolkits this agent brings to the conversation, whether it carries
+// sub-agents — had no other place to read it from (issue 856). A snapshot taken
+// at attach time could not answer it either: an author edits an agent's
+// toolkits after attaching it, and the conversation must show what the agent
+// HAS, not what it had.
+//
+// The version is read from the participant's own `entity_settings.version_id`,
+// which is where the attach path records which version of the agent joined.
+//
+// EVERY FAILURE DEGRADES THE PARTICIPANT, NEVER THE CONVERSATION. A participant
+// whose settings lost their version, a version that no longer exists, a tenant
+// whose toolkit tables were never created — each of those leaves the
+// participant exactly as it was read and the conversation still loads. That is
+// the contract the conversation read already keeps for its other enrichments,
+// and the one a participant rail depends on: a conversation that refuses to
+// open because one attached agent was deleted is worse than a rail with a
+// missing tool list.
+func (r *ConversationsRepo) enrichAgentParticipantTools(ctx context.Context, s string, items []conversations.Participant) {
+	byVersion := map[int32][]int{}
+	for i := range items {
+		if items[i].EntityName != participantEntityApplication {
+			continue
+		}
+		versionID, ok := participantVersionID(items[i].EntitySettings)
+		if !ok {
+			continue
+		}
+		byVersion[versionID] = append(byVersion[versionID], i)
+	}
+	if len(byVersion) == 0 {
+		return
+	}
+	versionIDs := make([]int32, 0, len(byVersion))
+	for versionID := range byVersion {
+		versionIDs = append(versionIDs, versionID)
+	}
+
+	// The toolkit row carries the name and the type; the mapping row carries
+	// which of the toolkit's tools this version selected. Both are what the
+	// agent read serves for the same version
+	// (internal/api/v2/applications/handler.go fetchVersionDetails), so the
+	// participant and the agent page agree on what is attached.
+	rows, err := r.pool.Query(ctx, fmt.Sprintf(`
+		SELECT etm.entity_version_id, etm.tool_id, COALESCE(t.name, ''), COALESCE(t.type, ''),
+		       COALESCE(etm.selected_tools::text, '[]')
+		FROM %s.entity_tool_mapping etm
+		LEFT JOIN %s.elitea_tools t ON t.id = etm.tool_id
+		WHERE etm.entity_version_id = ANY($1::int[])
+		ORDER BY etm.id`, s, s), versionIDs)
+	if err != nil {
+		return // no toolkit tables on this tenant: the participants stand as read
+	}
+	defer rows.Close()
+
+	resolved := map[int32][]map[string]any{}
+	for rows.Next() {
+		var versionID int32
+		var toolID int64
+		var name, toolType, selected string
+		if err := rows.Scan(&versionID, &toolID, &name, &toolType, &selected); err != nil {
+			continue
+		}
+		tool := map[string]any{
+			"id":   toolID,
+			"name": name,
+			"type": toolType,
+			// `toolkit_name` repeats the toolkit's own name because the legacy
+			// payload carried both keys: `name` is what a reader renders, and
+			// for a sub-agent tool it is the CHILD AGENT's name rather than the
+			// toolkit's, which is why the two are separate keys at all.
+			"toolkit_name": name,
+		}
+		var selectedTools any
+		if json.Unmarshal([]byte(selected), &selectedTools) == nil {
+			tool["selected_tools"] = selectedTools
+		}
+		resolved[versionID] = append(resolved[versionID], tool)
+	}
+	if rows.Err() != nil {
+		return // a partial tool list would read as "these are all the tools"
+	}
+
+	for versionID, indexes := range byVersion {
+		tools := resolved[versionID]
+		if tools == nil {
+			// An agent version with no toolkits and an agent version that is
+			// gone both answer an empty list. The key is PRESENT either way:
+			// an absent key reads to a client as "not resolved", which is the
+			// state this enrichment exists to end.
+			tools = []map[string]any{}
+		}
+		for _, i := range indexes {
+			// The resolved list WINS over anything stored. The stored document
+			// is an attach-time snapshot, and this is the answer for now.
+			items[i].Meta["tools"] = tools
+		}
+	}
+}
+
+// participantEntityApplication is the entity_name an attached agent carries.
+const participantEntityApplication = "application"
+
+// participantVersionID reads the version an agent participant was attached at.
+// The document is written by clients as well as by this service, so the number
+// arrives as a JSON number or as a string, and neither form may be trusted to
+// be a version id at all.
+func participantVersionID(settings map[string]any) (int32, bool) {
+	raw, ok := settings["version_id"]
+	if !ok || raw == nil {
+		return 0, false
+	}
+	switch value := raw.(type) {
+	case float64:
+		if value < 1 || value > math.MaxInt32 {
+			return 0, false
+		}
+		return int32(value), true
+	case json.Number:
+		parsed, err := strconv.ParseInt(value.String(), 10, 32)
+		if err != nil || parsed < 1 {
+			return 0, false
+		}
+		return int32(parsed), true
+	case string:
+		parsed, err := strconv.ParseInt(strings.TrimSpace(value), 10, 32)
+		if err != nil || parsed < 1 {
+			return 0, false
+		}
+		return int32(parsed), true
+	default:
+		return 0, false
+	}
 }
 
 func (r *ConversationsRepo) Create(ctx context.Context, projectID string, conv conversations.Conversation) (conversations.Conversation, error) {
@@ -339,6 +485,14 @@ func (r *ConversationsRepo) Update(ctx context.Context, projectID, conversationI
 			argIdx++
 		}
 	}
+	// Set only when the caller stated it. The INSERT hardcodes `true`, so
+	// without this clause the column could never change and "Make public"
+	// wrote nothing at all.
+	if conv.IsPrivate != nil {
+		setClauses += fmt.Sprintf(", is_private = $%d", argIdx)
+		args = append(args, *conv.IsPrivate)
+		argIdx++
+	}
 	// Written whole, and only when the caller stated one: the handler sets
 	// this field exactly when the request body carried a `meta` object, so a
 	// rename never touches the column while a settings write replaces the
@@ -364,15 +518,16 @@ func (r *ConversationsRepo) Update(ctx context.Context, projectID, conversationI
 	// 6: every update answered with `"created_by": ""`, so a client that
 	// refreshed its cache from the mutation response lost the owner.
 	q := fmt.Sprintf(`UPDATE %s.chat_conversations SET %s WHERE id = $%d
-		RETURNING id::text, name, COALESCE(uuid::text, ''), author_id, folder_id::text, created_at, COALESCE(updated_at, created_at), meta`,
+		RETURNING id::text, name, COALESCE(uuid::text, ''), author_id, folder_id::text, created_at, COALESCE(updated_at, created_at), meta, is_private`,
 		s, setClauses, argIdx)
 
 	var c conversations.Conversation
 	var authorID int
 	var folderID *string
 	var metaBytes []byte
+	var isPrivate bool
 	if err := r.pool.QueryRow(ctx, q, args...).Scan(
-		&c.ID, &c.Name, &c.UUID, &authorID, &folderID, &c.CreatedAt, &c.UpdatedAt, &metaBytes,
+		&c.ID, &c.Name, &c.UUID, &authorID, &folderID, &c.CreatedAt, &c.UpdatedAt, &metaBytes, &isPrivate,
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return conversations.Conversation{}, apierr.NotFound("conversation not found")
@@ -383,6 +538,7 @@ func (r *ConversationsRepo) Update(ctx context.Context, projectID, conversationI
 	c.CreatedBy = fmt.Sprintf("%d", authorID)
 	c.FolderID = folderID
 	c.Meta = decodeConversationMeta(metaBytes)
+	c.IsPrivate = &isPrivate
 	return c, nil
 }
 
@@ -788,6 +944,25 @@ func (r *ConversationsRepo) CreateCanvas(ctx context.Context, projectID string, 
 		return nil, fmt.Errorf("fetch message item: %w", err)
 	}
 
+	// The selection must be INSIDE the message, and it is refused here rather
+	// than clamped.
+	//
+	// The offsets are byte positions the CLIENT computes over text it holds a
+	// copy of, so a selection the stored message cannot satisfy is ordinary
+	// caller input: a message edited or regenerated between the read and the
+	// selection produces one, and so does an off-by-one in a client. Without
+	// this the slice below indexed the string out of range and took the whole
+	// request down — the caller read a server error for a selection it made,
+	// and the panic said nothing about which of the two ends was wrong.
+	//
+	// Clamping was the other option and is worse: silently carving a
+	// DIFFERENT range than the user selected splits their message somewhere
+	// they did not choose, and the split is destructive (the original text
+	// item is deleted). A refusal leaves the message as it was.
+	if startsAt < 0 || endsAt > len(oldContent) {
+		return nil, apierr.BadRequest("canvas_content_starts_at and canvas_content_ends_at must lie inside the message content")
+	}
+
 	// 2. Slice content
 	preContent := ""
 	canvasContent := oldContent[startsAt:endsAt]
@@ -897,26 +1072,245 @@ func (r *ConversationsRepo) CreateCanvas(ctx context.Context, projectID string, 
 	return result, nil
 }
 
-func (r *ConversationsRepo) GetCanvas(ctx context.Context, projectID, canvasID string) (map[string]any, error) {
-	s := schema(projectID)
-	q := fmt.Sprintf(`SELECT id, name, created_at FROM %s.chat_conversations WHERE id = $1`, s)
-	var id, name string
-	var createdAt time.Time
-	if err := r.pool.QueryRow(ctx, q, canvasID).Scan(&id, &name, &createdAt); err != nil {
-		if err == pgx.ErrNoRows {
-			return nil, apierr.NotFound("canvas not found")
-		}
-		return nil, fmt.Errorf("get canvas: %w", err)
+// canvasItemPredicate matches a canvas message item by whichever identifier
+// the route carries.
+//
+// `CreateCanvas` answers BOTH — a numeric `id` and a `uuid` — and the web
+// client stores the uuid (`entities/canvas`'s `canvasUUID`), while the
+// message item embeds the numeric one. Accepting only one of them would make
+// the read and the write address different canvases.
+func canvasItemPredicate(canvasID string) (predicate string, ok bool) {
+	if canvasID == "" {
+		return "", false
 	}
-	return map[string]any{"id": id, "name": name, "conversations": []any{}, "created_at": createdAt}, nil
+	numeric := true
+	for i := 0; i < len(canvasID); i++ {
+		if canvasID[i] < '0' || canvasID[i] > '9' {
+			numeric = false
+			break
+		}
+	}
+	if numeric {
+		return "mi.id = $1::bigint", true
+	}
+	if _, err := uuid.Parse(canvasID); err == nil {
+		return "mi.uuid = $1::uuid", true
+	}
+	return "", false
 }
 
+// canvasRow is one canvas message item with the newest version on it.
+type canvasRow struct {
+	itemID     int
+	itemUUID   string
+	name       string
+	canvasType string
+	// The newest `chat_canvas_versions` row. `versionID` is 0 when the canvas
+	// carries none, which is a real state: `CreateCanvas` writes one, but a
+	// row imported from elsewhere need not have.
+	versionID int
+	content   string
+	language  string
+	createdAt time.Time
+	groupUUID string
+}
+
+// readCanvas loads a canvas item and its newest version.
+//
+// The version is picked by `created_at DESC, id DESC` and not by `id` alone:
+// the column is the ordering the deployed schema indexes, and the id
+// tiebreaker keeps two versions written inside one clock tick deterministic.
+func (r *ConversationsRepo) readCanvas(ctx context.Context, s, canvasID string) (canvasRow, error) {
+	predicate, ok := canvasItemPredicate(canvasID)
+	if !ok {
+		return canvasRow{}, apierr.NotFound("canvas not found")
+	}
+	q := fmt.Sprintf(`
+		SELECT mi.id, COALESCE(mi.uuid::text, ''), cv.name, cv.canvas_type,
+			COALESCE(ver.id, 0), COALESCE(ver.canvas_content, ''), COALESCE(ver.code_language, ''),
+			COALESCE(ver.created_at, now()), COALESCE(mg.uuid::text, '')
+		FROM %s.chat_message_items mi
+		JOIN %s.chat_messages_canvas cv ON cv.id = mi.id
+		LEFT JOIN %s.chat_message_group mg ON mg.id = mi.message_group_id
+		LEFT JOIN LATERAL (
+			SELECT id, canvas_content, code_language, created_at
+			FROM %s.chat_canvas_versions v
+			WHERE v.canvas_item_id = mi.id
+			ORDER BY v.created_at DESC, v.id DESC
+			LIMIT 1
+		) ver ON true
+		WHERE %s`, s, s, s, s, predicate)
+
+	var row canvasRow
+	if err := r.pool.QueryRow(ctx, q, canvasID).Scan(
+		&row.itemID, &row.itemUUID, &row.name, &row.canvasType,
+		&row.versionID, &row.content, &row.language, &row.createdAt, &row.groupUUID,
+	); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return canvasRow{}, apierr.NotFound("canvas not found")
+		}
+		return canvasRow{}, fmt.Errorf("conversations: read canvas: %w", err)
+	}
+	return row, nil
+}
+
+// canvasResponse is the one shape both canvas reads answer.
+//
+// FLAT AND NESTED AT ONCE, deliberately: the REST client normalises the flat
+// keys (`entities/canvas/lib/normalise.ts` reads `canvas_content` and
+// `code_language` off the top level), while a message item embeds the nested
+// `latest_version` (the baseline's chat history patches
+// `item_details.latest_version.canvas_content`). Answering one of the two
+// would leave the other reader with an undefined document and no error.
+func canvasResponse(row canvasRow) map[string]any {
+	latest := map[string]any{
+		"id":             row.versionID,
+		"canvas_content": row.content,
+		"code_language":  row.language,
+		"created_at":     row.createdAt,
+	}
+	response := map[string]any{
+		"id":             row.itemID,
+		"uuid":           row.itemUUID,
+		"name":           row.name,
+		"canvas_type":    row.canvasType,
+		"item_type":      "canvas_message",
+		"editors":        []any{},
+		"created_at":     row.createdAt,
+		"canvas_content": row.content,
+		"code_language":  row.language,
+		"latest_version": latest,
+	}
+	if row.groupUUID != "" {
+		response["message_group_uuid"] = row.groupUUID
+	}
+	return response
+}
+
+// canvasItemDetailsInput is what one `canvas_message` row carries.
+type canvasItemDetailsInput struct {
+	itemID    int
+	itemUUID  string
+	name      string
+	canvasT   string
+	versionID *int
+	content   *string
+	language  *string
+	createdAt *time.Time
+}
+
+// canvasItemDetails shapes a canvas message item the way the chat history
+// reads it: `item_details.latest_version.canvas_content`, with the flat keys
+// beside it for the REST normaliser (see canvasResponse for why both).
+func canvasItemDetails(in canvasItemDetailsInput) map[string]any {
+	content := ""
+	if in.content != nil {
+		content = *in.content
+	}
+	language := ""
+	if in.language != nil {
+		language = *in.language
+	}
+	versionID := 0
+	if in.versionID != nil {
+		versionID = *in.versionID
+	}
+	latest := map[string]any{
+		"id":             versionID,
+		"canvas_content": content,
+		"code_language":  language,
+	}
+	if in.createdAt != nil {
+		latest["created_at"] = *in.createdAt
+	}
+	details := map[string]any{
+		"id":             in.itemID,
+		"item_type":      "canvas_message",
+		"name":           in.name,
+		"canvas_type":    in.canvasT,
+		"canvas_content": content,
+		"code_language":  language,
+		"editors":        []any{},
+		"latest_version": latest,
+	}
+	if in.itemUUID != "" {
+		details["uuid"] = in.itemUUID
+	}
+	return details
+}
+
+// GetCanvas serves `GET /elitea_core/canvas/prompt_lib/{p}/{canvasID}`.
+//
+// It used to read `chat_conversations` by that id and answer the
+// CONVERSATION's name — a different table, a different id space and a
+// document with no canvas content in it at all. A caller asking for a canvas
+// got either somebody's conversation or a 404, and never the text it was
+// editing.
+func (r *ConversationsRepo) GetCanvas(ctx context.Context, projectID, canvasID string) (map[string]any, error) {
+	row, err := r.readCanvas(ctx, schema(projectID), canvasID)
+	if err != nil {
+		return nil, err
+	}
+	return canvasResponse(row), nil
+}
+
+// UpdateCanvas serves `PUT /elitea_core/canvas/prompt_lib/{p}/{canvasID}` —
+// the only route that can persist an edit made in the canvas editor.
+//
+// WHAT IT USED TO DO, because the failure was silent and destructive in two
+// directions at once: `UPDATE chat_conversations SET name = $1 WHERE id = $2`.
+// The canvas id was read as a CONVERSATION id, so a save either matched
+// nothing (uuid against an integer column — an error the handler reported as a
+// 500) or RENAMED an unrelated conversation to the canvas's title. The edited
+// text was never written anywhere: `chat_canvas_versions` had exactly one
+// writer, `CreateCanvas`, so every edit after the first was lost the moment
+// the editor closed.
+//
+// A new VERSION row, not an update in place: the table is a version history
+// (`chat_canvas_versions`, `chat_canvas_version_authors`) and the reads above
+// take the newest. Overwriting the current row would make the history a lie
+// and lose the previous text.
 func (r *ConversationsRepo) UpdateCanvas(ctx context.Context, projectID, canvasID string, body map[string]any) error {
 	s := schema(projectID)
-	name, _ := body["name"].(string)
-	q := fmt.Sprintf(`UPDATE %s.chat_conversations SET name = $1, updated_at = now() WHERE id = $2`, s)
-	if _, err := r.pool.Exec(ctx, q, name, canvasID); err != nil {
-		return fmt.Errorf("conversations: update canvas: %w", err)
+	row, err := r.readCanvas(ctx, s, canvasID)
+	if err != nil {
+		return err
+	}
+
+	// Name and type are updated only when stated, for the reason the
+	// conversation Update states its own: the editor PUTs a language change
+	// alone, and reading an absent key as "" would blank the canvas's title.
+	if name, ok := body["name"].(string); ok && name != "" {
+		if _, err := r.pool.Exec(ctx,
+			fmt.Sprintf(`UPDATE %s.chat_messages_canvas SET name = $1 WHERE id = $2`, s), name, row.itemID); err != nil {
+			return fmt.Errorf("conversations: update canvas name: %w", err)
+		}
+	}
+	if canvasType, ok := body["canvas_type"].(string); ok && canvasType != "" {
+		if _, err := r.pool.Exec(ctx,
+			fmt.Sprintf(`UPDATE %s.chat_messages_canvas SET canvas_type = $1 WHERE id = $2`, s), canvasType, row.itemID); err != nil {
+			return fmt.Errorf("conversations: update canvas type: %w", err)
+		}
+	}
+
+	content, hasContent := body["canvas_content"].(string)
+	language, hasLanguage := body["code_language"].(string)
+	if !hasContent && !hasLanguage {
+		return nil
+	}
+	// A language-only PUT carries the text forward rather than blanking it:
+	// `canvas_content` is NOT NULL, and a version holding "" would read as a
+	// canvas the user emptied.
+	if !hasContent {
+		content = row.content
+	}
+	if !hasLanguage {
+		language = row.language
+	}
+	if _, err := r.pool.Exec(ctx, fmt.Sprintf(`
+		INSERT INTO %s.chat_canvas_versions (canvas_content, code_language, canvas_item_id)
+		VALUES ($1, $2, $3)`, s), content, nilIfEmpty(language), row.itemID); err != nil {
+		return fmt.Errorf("conversations: write canvas version: %w", err)
 	}
 	return nil
 }
@@ -1554,17 +1948,47 @@ func (r *ConversationsRepo) ListMessages(ctx context.Context, projectID, convers
 	// each group's text into `content` (the string_agg above), which every
 	// client reads as the message body; re-emitting the same text as items
 	// would give two sources for one sentence and let them drift. Attachments
-	// have no such representation here — they exist in this response only as
-	// items — so they are what this carries.
+	// and CANVASES have no such representation here — they exist in this
+	// response only as items — so they are what this carries.
+	//
+	// The canvas half is the same gap as the attachment half, one route later
+	// (issue 853). `content` above aggregates `text_message` items ALONE, and
+	// this projection carried attachments alone, so a canvas carved out of an
+	// answer was invisible to the chat page in both halves of this response at
+	// once: its text was not in `content` and its item was not in
+	// `message_items`. The details route (ListMessageGroups) served it and this
+	// one did not — two projections of one transcript disagreeing, which is the
+	// defect the attachment note above already names. A frontend opener alone
+	// could not have closed it: there was nothing in this payload to open.
 	if len(groupIDs) > 0 {
 		byGroup, err := r.attachmentItemsByGroup(ctx, s, groupIDs)
 		if err != nil {
 			return conversations.MessagesListResponse{}, err
 		}
+		canvasByGroup, err := r.canvasItemsByGroup(ctx, s, groupIDs)
+		if err != nil {
+			return conversations.MessagesListResponse{}, err
+		}
 		for i := range items {
-			if attachments := byGroup[groupIDs[i]]; len(attachments) > 0 {
-				items[i].MessageItems = attachments
+			// One list per group, in the order the items are STORED. Each
+			// projection is ordered on its own, so concatenating them would
+			// put every attachment before every canvas whatever the message
+			// actually looks like; `order_index` is what says where the canvas
+			// sits, and a client rendering the items in the order given must
+			// be given the right one.
+			merged := append(append([]map[string]any{}, byGroup[groupIDs[i]]...), canvasByGroup[groupIDs[i]]...)
+			if len(merged) == 0 {
+				continue
 			}
+			sort.SliceStable(merged, func(a, b int) bool {
+				left, leftOK := merged[a]["order_index"].(int)
+				right, rightOK := merged[b]["order_index"].(int)
+				if !leftOK || !rightOK {
+					return false
+				}
+				return left < right
+			})
+			items[i].MessageItems = merged
 		}
 	}
 
@@ -1647,6 +2071,80 @@ func (r *ConversationsRepo) attachmentItemsByGroup(ctx context.Context, s string
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("conversations: list message attachments: %w", err)
+	}
+	return byGroup, nil
+}
+
+// canvasItemsByGroup projects the `canvas_message` items of the given message
+// groups in the SAME shape ListMessageGroups serves them — the discriminator,
+// the order index and the `canvasItemDetails` payload, which carries both the
+// flat keys and `latest_version`.
+//
+// INNER JOIN on chat_messages_canvas, for the reason the attachment projection
+// above states: an item whose discriminator says `canvas_message` but which has
+// no canvas row is not a canvas with empty fields, it is a mislabelled row, and
+// serving it as a map of nils would make the client render an editor over
+// nothing.
+//
+// The version join is LEFT and LATERAL: a canvas with no version yet still gets
+// its details, carrying an empty document. The client reads
+// `item_details.latest_version.canvas_content`, and an ABSENT `latest_version`
+// there is a crash rather than an empty editor.
+//
+// A query failure PROPAGATES. Reporting "this transcript has no canvases"
+// because a tenant migration has not run is exactly how the read-side gap this
+// function closes stayed invisible on the other route for as long as it did.
+func (r *ConversationsRepo) canvasItemsByGroup(ctx context.Context, s string, groupIDs []int) (map[int][]map[string]any, error) {
+	q := fmt.Sprintf(`
+		SELECT mi.message_group_id, mi.id, COALESCE(mi.uuid::text, ''), mi.order_index,
+			cv.name, cv.canvas_type, ver.id, ver.canvas_content, ver.code_language, ver.created_at
+		FROM %s.chat_message_items mi
+		JOIN %s.chat_messages_canvas cv ON cv.id = mi.id
+		LEFT JOIN LATERAL (
+			SELECT id, canvas_content, code_language, created_at
+			FROM %s.chat_canvas_versions v
+			WHERE v.canvas_item_id = mi.id
+			ORDER BY v.created_at DESC, v.id DESC
+			LIMIT 1
+		) ver ON true
+		WHERE mi.message_group_id = ANY($1) AND mi.item_type = 'canvas_message'
+		ORDER BY mi.message_group_id, mi.order_index`, s, s, s)
+
+	rows, err := r.pool.Query(ctx, q, groupIDs)
+	if err != nil {
+		return nil, fmt.Errorf("conversations: list message canvases: %w", err)
+	}
+	defer rows.Close()
+
+	byGroup := map[int][]map[string]any{}
+	for rows.Next() {
+		var groupID, itemID, orderIndex int
+		var itemUUID, name, canvasType string
+		var versionID *int
+		var content, language *string
+		var createdAt *time.Time
+		if err := rows.Scan(&groupID, &itemID, &itemUUID, &orderIndex, &name, &canvasType,
+			&versionID, &content, &language, &createdAt); err != nil {
+			return nil, fmt.Errorf("conversations: scan message canvas: %w", err)
+		}
+		byGroup[groupID] = append(byGroup[groupID], map[string]any{
+			"id":          itemID,
+			"item_type":   "canvas_message",
+			"order_index": orderIndex,
+			"item_details": canvasItemDetails(canvasItemDetailsInput{
+				itemID:    itemID,
+				itemUUID:  itemUUID,
+				name:      name,
+				canvasT:   canvasType,
+				versionID: versionID,
+				content:   content,
+				language:  language,
+				createdAt: createdAt,
+			}),
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("conversations: list message canvases: %w", err)
 	}
 	return byGroup, nil
 }
@@ -1753,15 +2251,30 @@ func (r *ConversationsRepo) ListMessageGroups(ctx context.Context, projectID, co
 	// indistinguishable from an attachment whose name really is empty, and this
 	// function must not hang empty attachment keys off a text item. So they are
 	// scanned as pointers and nil means "no attachment row", full stop.
+	// The canvas join is the same class of gap #606 closed for attachments:
+	// a `canvas_message` item came back with NO `item_details` at all, so the
+	// text a user moved into a canvas was invisible to every reader of a
+	// conversation — the transcript route drops it (it aggregates
+	// `text_message` items alone, deliberately) and this route carried
+	// nothing in its place. The canvas was written and then unreadable.
 	itemQ := fmt.Sprintf(`
-		SELECT mi.id, mi.message_group_id, mi.item_type, mi.order_index, mi.meta,
+		SELECT mi.id, COALESCE(mi.uuid::text, ''), mi.message_group_id, mi.item_type, mi.order_index, mi.meta,
 			COALESCE(mt.content, ''),
-			ma.name, ma.bucket, ma.attachment_type, ma.content
+			ma.name, ma.bucket, ma.attachment_type, ma.content,
+			cv.name, cv.canvas_type, ver.id, ver.canvas_content, ver.code_language, ver.created_at
 		FROM %s.chat_message_items mi
 		LEFT JOIN %s.chat_messages_text mt ON mt.id = mi.id
 		LEFT JOIN %s.chat_messages_attachment ma ON ma.id = mi.id
+		LEFT JOIN %s.chat_messages_canvas cv ON cv.id = mi.id
+		LEFT JOIN LATERAL (
+			SELECT id, canvas_content, code_language, created_at
+			FROM %s.chat_canvas_versions v
+			WHERE v.canvas_item_id = mi.id
+			ORDER BY v.created_at DESC, v.id DESC
+			LIMIT 1
+		) ver ON true
 		WHERE mi.message_group_id = ANY($1)
-		ORDER BY mi.message_group_id, mi.order_index`, s, s, s)
+		ORDER BY mi.message_group_id, mi.order_index`, s, s, s, s, s)
 
 	// PROPAGATED, not swallowed. `if err == nil { ... }` returned every group
 	// with an empty `message_items` and a 200, which a caller cannot tell from
@@ -1785,17 +2298,22 @@ func (r *ConversationsRepo) ListMessageGroups(ctx context.Context, projectID, co
 
 		for itemRows.Next() {
 			var itemID, groupID int
+			var itemUUID string
 			var itemType string
 			var orderIndex int
 			var itemMeta []byte
 			var textContent string
 			var attachmentName, attachmentBucket, attachmentType *string
 			var attachmentContent []byte
+			var canvasName, canvasType, canvasContent, canvasLanguage *string
+			var canvasVersionID *int
+			var canvasCreatedAt *time.Time
 
 			// A scan failure used to `continue`, silently dropping one message
 			// from the transcript.
-			if err := itemRows.Scan(&itemID, &groupID, &itemType, &orderIndex, &itemMeta, &textContent,
-				&attachmentName, &attachmentBucket, &attachmentType, &attachmentContent); err != nil {
+			if err := itemRows.Scan(&itemID, &itemUUID, &groupID, &itemType, &orderIndex, &itemMeta, &textContent,
+				&attachmentName, &attachmentBucket, &attachmentType, &attachmentContent,
+				&canvasName, &canvasType, &canvasVersionID, &canvasContent, &canvasLanguage, &canvasCreatedAt); err != nil {
 				return nil, fmt.Errorf("conversations: scan message item: %w", err)
 			}
 
@@ -1816,6 +2334,32 @@ func (r *ConversationsRepo) ListMessageGroups(ctx context.Context, projectID, co
 			// database yields no item_details rather than a map of nils.
 			if itemType == "attachment_message" && attachmentName != nil && attachmentBucket != nil && attachmentType != nil {
 				item["item_details"] = attachmentItemDetails(itemID, itemType, *attachmentName, *attachmentBucket, *attachmentType, attachmentContent)
+			}
+
+			// The item's own uuid rides INSIDE `item_details`, never beside
+			// `item_type`: `TestListMessagesCarriesTheGroupsAttachmentItem`
+			// pins that this projection and the transcript route's serve one
+			// shape, and a key only one of them carries is exactly the drift
+			// that test exists to catch.
+			//
+			// The canvas row is required as well as the item_type, for the
+			// reason the attachment branch states: an item mislabelled in the
+			// database yields no details rather than a map of nils. A canvas
+			// with no version yet still gets its details, carrying an empty
+			// document — the client reads
+			// `item_details.latest_version.canvas_content` and an absent
+			// `latest_version` there is a crash, not an empty editor.
+			if itemType == "canvas_message" && canvasName != nil && canvasType != nil {
+				item["item_details"] = canvasItemDetails(canvasItemDetailsInput{
+					itemID:    itemID,
+					itemUUID:  itemUUID,
+					name:      *canvasName,
+					canvasT:   *canvasType,
+					versionID: canvasVersionID,
+					content:   canvasContent,
+					language:  canvasLanguage,
+					createdAt: canvasCreatedAt,
+				})
 			}
 
 			if idx, ok := groupIndex[groupID]; ok {

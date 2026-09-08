@@ -43,6 +43,32 @@
  * `context-budget-*` or `default_context_management`), and the original value —
  * including "the user had never saved one" — is put back in a `finally`.
  *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * ONE ACCOUNT, ONE WRITER — why this file runs in one worker, in order
+ * ─────────────────────────────────────────────────────────────────────────────
+ * "Nothing else in the suite" was true of every OTHER file and false of this
+ * one: both tests below write the same account-wide field, and
+ * `fullyParallel: true` puts them on two workers. The second test opens by
+ * setting the budget to FIRST_BUDGET, which is exactly the value the first
+ * test has just replaced with SECOND_BUDGET — so a second worker landing
+ * there while the first is reloading makes the panel report "0 / 10 000
+ * tokens" and the first test blames the product for a value the suite itself
+ * wrote back.
+ *
+ * That is the failure this file kept reporting as "a changed profile budget
+ * must reach the panel", intermittently and in BOTH engines, which is what
+ * ruled out the browser cache it was first read as: the panel's own read is
+ * `no-store`, and the server had already resolved SECOND_BUDGET one line
+ * above (that poll passed every time). The stale number came from a
+ * concurrent writer, not from a stale reader.
+ *
+ * Serial is the narrow fix, not a broad one: it costs this one file its
+ * parallelism, and it is the only file in the suite that writes a field
+ * scoped to the whole account rather than to an `autotest_*` entity it
+ * created. Giving the second test its own persona would keep both workers,
+ * but the personas are shared fixtures too — the next file to write a
+ * profile field would collide with them instead.
+ *
  * THE CARRY-FORWARD IS NOT OPTIONAL. `UpdateAuthor` upserts `title`,
  * `description`, `avatar` and `personalization` from the body outright, and only
  * the two memory blocks are COALESCEd against the stored row. A body carrying
@@ -62,6 +88,10 @@ import {
   createConversation,
   deleteConversation,
 } from '../../fixtures/api';
+
+/* See "ONE ACCOUNT, ONE WRITER" above. Both tests write the same
+   `default_context_management` field of the same persona. */
+test.describe.configure({ mode: 'serial' });
 
 /** Every entity this file creates carries this suffix (concurrent-agent hygiene). */
 const SUFFIX = '-ctx';
@@ -134,6 +164,15 @@ async function tokensLine(page: Page): Promise<string> {
 }
 
 test('the Context Budget panel reports the budget the profile sets, and follows it when it changes', async ({ page }) => {
+  /*
+   * THE BUDGET IS THE SUM OF THE WAITS BELOW. This test loads the chat page
+   * TWICE (20 s each), runs an accessibility sweep, and holds four polls of
+   * 20 s. The default 30 s cannot contain that, so the second poll was cut
+   * short by the test clock rather than by its own timeout: the report read
+   * "a changed profile budget must reach the panel" — a product claim — for
+   * what was a budget that had already run out (webkit).
+   */
+  test.setTimeout(180_000);
   const author = await readAuthor(page.request);
   const original = author.default_context_management;
 

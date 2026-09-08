@@ -42,15 +42,27 @@
  */
 import { test, expect } from '@playwright/test';
 
-import { AUTOTEST_PREFIX } from '../../fixtures/api';
 import {
+  API_BASE,
+  AUTOTEST_PREFIX,
+  DEFAULT_PROJECT_ID,
+  agentVersionBody,
+  createAgentWithVersion,
+  createGithubToolkit,
+  deleteGithubToolkit,
+  type GithubToolkitFixture,
+} from '../../fixtures/api';
+import {
+  EXPORT_SCRUBBED_SETTING_KEYS,
   FIXTURE_MODEL,
   applicationIsGone,
+  attachToolkitToVersion,
   buildImportPayload,
   buildImportPayloadFromExport,
   createApplication,
   defaultVersionOf,
   deleteApplication,
+  exportBundle,
   exportMarkdown,
   importWizard,
   importedAgentId,
@@ -418,5 +430,214 @@ test('EXP-009: an agent can be imported from a hand-built payload, with no expor
     expect(variablesAsRecord(version)).toStrictEqual({ mode: 'test' });
   } finally {
     if (importedId !== undefined) await deleteApplication(request, importedId);
+  }
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * THE JSON BUNDLE — the legacy API suite, cases EXP-01…03
+ *
+ * The nine cases above all drive `?format=md`, which is one file per version
+ * and has nowhere to put a toolkit. The DEFAULT document is the JSON bundle,
+ * and it is the one the Export button downloads, the one the import wizard
+ * reads back and the only one that carries a toolkit at all. Nothing covered
+ * it, so three separate promises were unasserted:
+ *
+ *   EXP-B01  the bundle carries the agent AND its toolkit, cross-linked by
+ *            `import_uuid`, with every credential-shaped key stripped;
+ *   EXP-B02  `?fork=true` answers a DIFFERENT document — one version, plus the
+ *            provenance keys only the fork writer reads;
+ *   EXP-B03  an export whose toolkit has since been deleted still succeeds,
+ *            and names no toolkit the document does not carry.
+ *
+ * The `B` distinguishes these from the markdown cases EXP-001…009 above; they
+ * come from a different suite and their numbering is its own.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * A value that must never leave the vault.
+ *
+ * The credential write seals `access_token` into the project secret store and
+ * keeps a `{{secret.<uuid>}}` reference in the row
+ * (`internal/application/configurations`), and the toolkit stores only a
+ * REFERENCE to the credential by title. So a bundle that contained this string
+ * would mean one of two things: the export expanded a credential it should not
+ * have, or the sealing did not happen. The assertion is on the whole document
+ * text rather than on a key, because a leak does not have to land where the
+ * scrub list looks.
+ */
+function scrubSentinel(): string {
+  return `${AUTOTEST_PREFIX}scrub_sentinel_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+test('EXP-B01: the JSON bundle carries the toolkit, cross-linked, and no credential value', async ({
+  request,
+}) => {
+  const name = autotestName('bundle');
+  const sentinel = scrubSentinel();
+  let createdId: string | undefined;
+  let toolkit: GithubToolkitFixture | undefined;
+  try {
+    const agent = await createAgentWithVersion(request, name, {
+      instructions: 'Answer questions about the repository.',
+      model: { modelName: FIXTURE_MODEL, temperature: 0.5, maxTokens: 2048 },
+    });
+    createdId = agent.id;
+    toolkit = await createGithubToolkit(request, DEFAULT_PROJECT_ID, `${name}_tk`, {
+      credentialData: { access_token: sentinel },
+    });
+    await attachToolkitToVersion(request, toolkit.toolkitId, {
+      applicationId: agent.id,
+      versionId: agent.versionId,
+      selectedTools: ['get_issue'],
+    });
+
+    const exported = await exportBundle(request, agent.id);
+    expect(exported.bundle.ok).toBe(true);
+
+    const application = exported.bundle.applications?.[0];
+    expect(application?.id).toBe(agent.id);
+    expect(application?.name).toBe(name);
+    expect(application?.type).toBe('agent');
+    // The agent's own import id. Without it an import cannot resolve a
+    // sub-agent toolkit back to the agent it belongs to.
+    expect(String(application?.import_uuid ?? ''), 'the bundle names no import_uuid').not.toBe('');
+
+    const bundled = exported.bundle.toolkits ?? [];
+    expect(bundled, 'the bundle carries no toolkit for an agent that has one').toHaveLength(1);
+    const bundledToolkit = bundled[0];
+    expect(bundledToolkit?.name).toBe(toolkit.toolkitName);
+    expect(bundledToolkit?.type).toBe('github');
+
+    // THE CROSS-LINK. The version references the toolkit by the SAME
+    // `import_uuid` the toolkit entry declares — that pair is the only thing
+    // that survives leaving this deployment, because every row id in the file
+    // belongs to the project it came from.
+    const version = application?.versions?.[0];
+    const reference = version?.tools?.[0];
+    expect(reference?.import_uuid, 'the version references no toolkit').toBe(
+      bundledToolkit?.import_uuid,
+    );
+    expect(String(bundledToolkit?.import_uuid ?? '')).not.toBe('');
+    // The selection travels with the reference, as an ARRAY — a bundle that
+    // wrote it as an object is the shape that used to uncheck every tool on
+    // the way back in.
+    expect(reference?.selected_tools).toStrictEqual(['get_issue']);
+
+    // The settings the toolkit needs to reach its service survive…
+    const settings = bundledToolkit?.settings ?? {};
+    expect(settings['repository']).toBe(`${AUTOTEST_PREFIX}org/${AUTOTEST_PREFIX}repo`);
+    // …including the credential REFERENCE, which is a title and not a value.
+    expect(settings['github_configuration']).toMatchObject({
+      elitea_title: toolkit.credentialTitle,
+    });
+    // …and every credential-shaped key is gone.
+    for (const key of EXPORT_SCRUBBED_SETTING_KEYS) {
+      expect(settings, `the export left ${key} in the toolkit settings`).not.toHaveProperty(key);
+    }
+    expect(
+      exported.text.includes(sentinel),
+      'the exported document carries a value that was sealed into the credential vault',
+    ).toBe(false);
+  } finally {
+    await deleteGithubToolkit(request, DEFAULT_PROJECT_ID, toolkit);
+    if (createdId !== undefined) await deleteApplication(request, createdId);
+  }
+});
+
+test('EXP-B02: the fork-flavoured export answers one version and the provenance keys', async ({
+  request,
+}) => {
+  const name = autotestName('forkexport');
+  let createdId: string | undefined;
+  try {
+    const agent = await createAgentWithVersion(request, name, {
+      instructions: 'The first version follows the original brief.',
+      model: { modelName: FIXTURE_MODEL },
+    });
+    createdId = agent.id;
+
+    const secondName = autotestName('v2');
+    const second = await request.post(
+      `${API_BASE}/elitea_core/versions/prompt_lib/${DEFAULT_PROJECT_ID}/${agent.id}`,
+      { data: agentVersionBody({ name: secondName, agentType: 'openai', instructions: 'The later brief.' }) },
+    );
+    expect(second.status(), `the second version answered ${(await second.text()).slice(0, 300)}`).toBe(201);
+
+    // The plain export is the WHOLE agent, and it says nothing about where the
+    // agent came from — the baseline that makes the fork document a different
+    // document rather than the same one read twice.
+    const plain = await exportBundle(request, agent.id);
+    const plainApplication = plain.bundle.applications?.[0];
+    expect(plainApplication?.versions ?? []).toHaveLength(2);
+    expect(plainApplication).not.toHaveProperty('original_exported');
+    expect(plainApplication).not.toHaveProperty('owner_id');
+
+    const forkFlavoured = await exportBundle(request, agent.id, { fork: true });
+    const application = forkFlavoured.bundle.applications?.[0];
+    // ONE version, and the LATEST one: a fork copies what the agent is now,
+    // not its whole history.
+    expect(application?.versions ?? [], 'the fork export carried more than the latest version').toHaveLength(1);
+    expect(application?.versions?.[0]?.name).toBe(secondName);
+
+    // The four keys only the fork writer reads. `owner_id` here is the PROJECT
+    // the agent belongs to, which is what the copy records as its parent
+    // project; the two shared-origin keys are present and null for an agent
+    // that was never published.
+    expect(application?.original_exported).toBe(true);
+    expect(application?.owner_id).toBe(DEFAULT_PROJECT_ID);
+    expect(application).toHaveProperty('shared_id');
+    expect(application).toHaveProperty('shared_owner_id');
+    expect(application?.shared_id ?? null).toBeNull();
+    expect(application?.shared_owner_id ?? null).toBeNull();
+  } finally {
+    if (createdId !== undefined) await deleteApplication(request, createdId);
+  }
+});
+
+test('EXP-B03: an export whose toolkit was deleted succeeds and names no missing toolkit', async ({
+  request,
+}) => {
+  const name = autotestName('dangling');
+  let createdId: string | undefined;
+  let toolkit: GithubToolkitFixture | undefined;
+  try {
+    const agent = await createAgentWithVersion(request, name, {
+      instructions: 'Answer questions about the repository.',
+      model: { modelName: FIXTURE_MODEL },
+    });
+    createdId = agent.id;
+    toolkit = await createGithubToolkit(request, DEFAULT_PROJECT_ID, `${name}_tk`, {});
+    await attachToolkitToVersion(request, toolkit.toolkitId, {
+      applicationId: agent.id,
+      versionId: agent.versionId,
+    });
+
+    // The attachment is real before it is removed. Without this read the case
+    // could pass against an export that never carried a toolkit at all.
+    const before = await exportBundle(request, agent.id);
+    expect(before.bundle.toolkits ?? []).toHaveLength(1);
+    expect(before.bundle.applications?.[0]?.versions?.[0]?.tools ?? []).toHaveLength(1);
+
+    const removed = await request.delete(
+      `${API_BASE}/elitea_core/tool/prompt_lib/${DEFAULT_PROJECT_ID}/${toolkit.toolkitId}`,
+    );
+    expect(removed.status(), `the toolkit delete answered ${await removed.text()}`).toBe(204);
+
+    const after = await exportBundle(request, agent.id);
+    // A backup is worth nothing if the missing row makes the export fail: the
+    // agent is still exportable, with everything of its own intact.
+    expect(after.bundle.ok).toBe(true);
+    expect(after.bundle.toolkits ?? []).toStrictEqual([]);
+    const version = after.bundle.applications?.[0]?.versions?.[0];
+    expect(version?.instructions).toBe('Answer questions about the repository.');
+    // …and it names no toolkit the document does not carry. A reference left
+    // behind here would export as an empty `import_uuid`, which the import
+    // skips in silence — the agent would come back with the toolkit gone and
+    // nothing said about it.
+    expect(version?.tools ?? []).toStrictEqual([]);
+  } finally {
+    // The toolkit row is already gone; this clears the credential beside it.
+    await deleteGithubToolkit(request, DEFAULT_PROJECT_ID, toolkit);
+    if (createdId !== undefined) await deleteApplication(request, createdId);
   }
 });

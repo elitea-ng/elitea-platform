@@ -16,7 +16,6 @@ const PUBLIC_SURFACE = [
   'useChatCopyToClipboard',
   'copyEventHooks',
   'useChatInteractionUUID',
-  'useLoadMoreMessages',
   'useInternalToolsConfig',
   'useRefetchAgentVersionDetailsOnClose',
   'useChatEntityBrowser',

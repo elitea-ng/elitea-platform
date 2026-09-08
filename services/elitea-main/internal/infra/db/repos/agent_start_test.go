@@ -61,7 +61,7 @@ func TestCurrentAgentRegenerationResolverDistinguishesFinalizingResponse(t *test
 		},
 	}
 	projects := &currentRegenerationProjectStoreStub{executor: executor}
-	repository, err := newCurrentAgentStartRepository(projects)
+	repository, err := newCurrentAgentStartRepository(projects, 1)
 	if err != nil {
 		t.Fatal(err)
 	}

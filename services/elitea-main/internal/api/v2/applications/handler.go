@@ -289,20 +289,30 @@ func (h *Handler) fetchVersionDetails(ctx context.Context, projectID, applicatio
 	var llmSettingsJSON, metaJSON, startersJSON, pipelineSettingsJSON []byte
 	var createdAt interface{}
 	var authorID *int
+	var authorEmail, authorName string
 
+	// The author is JOINED here rather than left to the caller. The write
+	// echo answers an `author` object — `{id, email, name}`, built by
+	// versionDetailsResponse — and this read, which is the agent editor's own
+	// RELOAD of the row it has just written, answered `author_id` and nothing
+	// else. The name a user saw beside a version therefore survived until the
+	// page was refreshed and then became an id, and every other reader that
+	// attributes a version (moderation, publish) had to make a second request
+	// for the same three fields the write already knew.
 	err := h.pool.QueryRow(ctx, fmt.Sprintf(`
 		SELECT v.id, v.application_id, v.name, v.status, v.created_at,
 			v.agent_type, v.instructions, v.welcome_message,
 			COALESCE(v.llm_settings::text, '{}'), COALESCE(v.meta::text, '{}'),
 			COALESCE(v.conversation_starters::text, '[]'),
 			COALESCE(v.pipeline_settings::text, '{}'),
-			v.author_id
+			v.author_id, COALESCE(u.email, ''), COALESCE(u.name, '')
 		FROM %s.application_versions v
+		LEFT JOIN public.auth_core__user u ON u.id = v.author_id
 		WHERE v.application_id = $1 AND v.id = $2`, s), applicationID, versionID).Scan(
 		&id, &appID, &name, &status, &createdAt,
 		&agentType, &instructions, &welcomeMsg,
 		&llmSettingsJSON, &metaJSON, &startersJSON, &pipelineSettingsJSON,
-		&authorID,
+		&authorID, &authorEmail, &authorName,
 	)
 	if err != nil {
 		return nil
@@ -423,7 +433,7 @@ func (h *Handler) fetchVersionDetails(ctx context.Context, projectID, applicatio
 	// control blanked itself. The rows exist; nothing read them.
 	tags := h.versionTagsOrEmpty(ctx, s, versionID)
 
-	return map[string]any{
+	detail := map[string]any{
 		"id":                    strconv.Itoa(id),
 		"application_id":        strconv.Itoa(appID),
 		"name":                  name,
@@ -441,6 +451,18 @@ func (h *Handler) fetchVersionDetails(ctx context.Context, projectID, applicatio
 		"tags":                  tags,
 		"variables":             variables,
 	}
+	// The same object the write echo carries, so a reload of a version reads
+	// the way the save of it did. `application_versions.author_id` is NOT
+	// NULL, so the key is absent only for a row written outside this schema's
+	// rules; when the join finds no account the id is still answered and the
+	// two name fields are empty, which says "this author is gone" rather than
+	// "this version has no author".
+	if authorID != nil {
+		detail["author"] = map[string]any{
+			"id": authorIDStr, "email": authorEmail, "name": authorName,
+		}
+	}
+	return detail
 }
 
 // principal resolves the owning auth_core__user id of the authenticated
@@ -495,6 +517,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	// is invisible to List (which INNER JOINs application_versions) and cannot
 	// be opened in the agent editor, so a half-created agent must not commit.
 	var initialVariables []any
+	var initialTags []any
 	if versions, ok := body["versions"].([]any); ok && len(versions) > 0 {
 		if vBody, ok := versions[0].(map[string]any); ok {
 			// Validate model_project_id if llm_settings provided
@@ -509,6 +532,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 			}
 			req.InitialVersion = versionFromBody(vBody, ownerID)
 			initialVariables, _ = vBody["variables"].([]any)
+			initialTags, _ = vBody["tags"].([]any)
 		}
 	}
 
@@ -535,15 +559,39 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	// above states for a missing version row, and the FK's ON DELETE CASCADE
 	// takes any rows that did land with it. A create the caller was told
 	// failed must leave nothing behind for them to find in the list.
+	rollback := func(cause error) {
+		if delErr := h.repo.Delete(r.Context(), projectID, app.ID); delErr != nil {
+			// Nothing left to do for the caller — they get the failure
+			// either way — but a stranded agent is worth a trail.
+			slog.ErrorContext(r.Context(), "rollback of a half-created application failed",
+				"application_id", app.ID, "err", delErr)
+		}
+		apierr.Write(w, cause)
+	}
 	if len(initialVariables) > 0 && len(app.Versions) > 0 {
 		if err := h.replaceVersionVariables(r.Context(), projectID, app.Versions[0].ID, initialVariables); err != nil {
-			if delErr := h.repo.Delete(r.Context(), projectID, app.ID); delErr != nil {
-				// Nothing left to do for the caller — they get the failure
-				// either way — but a stranded agent is worth a trail.
-				slog.ErrorContext(r.Context(), "rollback of a half-created application failed",
-					"application_id", app.ID, "err", delErr)
-			}
-			apierr.Write(w, err)
+			rollback(err)
+			return
+		}
+	}
+
+	// The tags the create body carried, written to the same association table
+	// a SAVE writes to.
+	//
+	// This path used to read every other key of the version body and not this
+	// one, so the create-agent form's tag control was accepted with a 201 and
+	// dropped: the same payload persisted its tags through
+	// `PUT /version/...` and lost them through `POST /applications/...`. The
+	// user who tagged an agent while creating it had to open it again and tag
+	// it a second time, and nothing said so.
+	//
+	// It runs AFTER repo.Create for the reason the variables above do — the
+	// association references application_versions(id), so the version row has
+	// to exist — and it takes the same rollback: a create the caller was told
+	// failed must leave no agent behind.
+	if len(initialTags) > 0 && len(app.Versions) > 0 {
+		if err := h.replaceVersionTags(r.Context(), projectID, app.Versions[0].ID, initialTags); err != nil {
+			rollback(err)
 			return
 		}
 	}
@@ -561,9 +609,14 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		"created_at": app.CreatedAt,
 	}
 	if len(app.Versions) > 0 {
-		// Create writes no tag association, so the echo says "none" and is
-		// true. `tags` on the write body is read by UpdateVersion only.
-		versionDetails := versionDetailsResponse(app.Versions[0], user, userID, nil)
+		// The echo reports the tags the DATABASE holds after the write, the
+		// same way the save's echo does: a duplicate name collapses to one
+		// row and a blank name is dropped, so echoing the request would
+		// over-report. It answered a hardcoded "none" while the create wrote
+		// no association at all.
+		s, _ := tenantSchema(projectID)
+		versionDetails := versionDetailsResponse(app.Versions[0], user, userID,
+			h.versionTagsOrEmpty(r.Context(), s, app.Versions[0].ID))
 		resp["version_details"] = versionDetails
 		resp["versions"] = []any{versionDetails}
 	}
@@ -832,16 +885,98 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Clean up application_tools entries on other versions that reference this deleted app
+	// Detach the deleted agent from every parent that used it as a sub-agent.
 	if h.pool != nil {
-		// best-effort cleanup; ignore error so the 204 response is still sent
-		_, _ = h.pool.Exec(r.Context(), fmt.Sprintf(`
-			DELETE FROM %s.application_tools
-			WHERE type = 'application'
-			AND settings->>'application_id' = $1`, s), applicationID)
+		h.detachSubAgentReferences(r.Context(), s, applicationID)
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// detachSubAgentReferences removes every sub-agent reference that points at a
+// deleted application, so no parent version goes on offering a tool whose agent
+// is gone.
+//
+// It used to be one statement against `%s.application_tools`, discarded with
+// `_, _ =`. No migration in this repository creates that table — it exists only
+// in pylon-migrated tenants — so on every schema this service builds the
+// statement failed with 42P01 and the discard hid it. Nothing was ever
+// detached: the parent's version kept listing the child, the chat resolver kept
+// reading the row, and the only way to notice was to open the parent and find a
+// tool whose agent no longer existed.
+//
+// The canonical pair is the same one internal/api/v2/eliteacore/application_relation.go
+// writes and reads: an `elitea_tools` row of type `application` carrying the
+// child pair in `settings`, plus an `entity_tool_mapping` row binding it to the
+// parent version. The mapping goes first and the tool row goes only when
+// nothing references it any more — publish CLONES mappings onto the published
+// version reusing the same tool_id, so deleting the tool row first would strip
+// the child from rows this delete was never asked to touch.
+//
+// Failures are logged rather than returned: the agent itself is already gone,
+// and re-reporting the delete as a failure would tell the caller to retry a
+// deletion that has happened.
+func (h *Handler) detachSubAgentReferences(ctx context.Context, schema, applicationID string) {
+	rows, err := h.pool.Query(ctx, fmt.Sprintf(`
+		DELETE FROM %s.entity_tool_mapping AS mapping
+		USING %s.elitea_tools AS tool
+		WHERE mapping.tool_id = tool.id
+		  AND tool.type = 'application'
+		  AND tool.settings->>'application_id' = $1
+		RETURNING mapping.tool_id`, schema, schema), applicationID)
+	if err != nil {
+		slog.ErrorContext(ctx, "delete agent: sub-agent detach failed",
+			"schema", schema, "application_id", applicationID, "error", err)
+		return
+	}
+	toolIDs := []int64{}
+	for rows.Next() {
+		var toolID int64
+		if err := rows.Scan(&toolID); err != nil {
+			rows.Close()
+			slog.ErrorContext(ctx, "delete agent: sub-agent detach read failed",
+				"schema", schema, "application_id", applicationID, "error", err)
+			return
+		}
+		toolIDs = append(toolIDs, toolID)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		slog.ErrorContext(ctx, "delete agent: sub-agent detach read failed",
+			"schema", schema, "application_id", applicationID, "error", err)
+		return
+	}
+	if len(toolIDs) > 0 {
+		// A second statement, not a data-modifying CTE: the outer query of a
+		// CTE reads the pre-delete snapshot, so it would still see the mappings
+		// removed above and never collect the now-orphaned tool rows.
+		if _, err := h.pool.Exec(ctx, fmt.Sprintf(`
+			DELETE FROM %s.elitea_tools AS tool
+			WHERE tool.id = ANY($1)
+			  AND NOT EXISTS (
+				SELECT 1 FROM %s.entity_tool_mapping AS other
+				WHERE other.tool_id = tool.id)`, schema, schema), toolIDs); err != nil {
+			slog.ErrorContext(ctx, "delete agent: orphaned sub-agent tool rows survived",
+				"schema", schema, "application_id", applicationID, "error", err)
+		}
+	}
+
+	// The legacy leg, probe-guarded exactly as the repository's own delete is
+	// (internal/infra/db/repos/applications.go): a pylon-migrated tenant can
+	// hold the same reference in `application_tools`, and leaving it there
+	// resurrects the relation through the union read.
+	var legacyTable *string
+	if err := h.pool.QueryRow(ctx, `SELECT to_regclass($1)::text`,
+		schema+".application_tools").Scan(&legacyTable); err != nil || legacyTable == nil {
+		return
+	}
+	if _, err := h.pool.Exec(ctx, fmt.Sprintf(`
+		DELETE FROM %s.application_tools
+		WHERE type = 'application'
+		  AND settings->>'application_id' = $1`, schema), applicationID); err != nil {
+		slog.ErrorContext(ctx, "delete agent: legacy sub-agent detach failed",
+			"schema", schema, "application_id", applicationID, "error", err)
+	}
 }
 
 func (h *Handler) ListVersions(w http.ResponseWriter, r *http.Request) {
@@ -1011,6 +1146,22 @@ func (h *Handler) UpdateVersion(w http.ResponseWriter, r *http.Request) {
 	if starters, ok := body["conversation_starters"].([]any); ok {
 		v.ConversationStarters = starters
 	}
+	// `meta` on a version save is a PATCH, not the whole column.
+	//
+	// The repository MERGES what arrives here into the stored object
+	// (infra/db/repos/applications.go, UpdateVersion), and this branch is
+	// half of the reason it has to. The other half is the `variables` fold
+	// below, which builds a `meta` out of nothing when the body carries no
+	// `meta` key at all.
+	//
+	// Neither one carries the keys it is not about. The agent editor sends
+	// `{step_limit, internal_tools}`; the fold sends `{variables}`; the
+	// stored column also holds `icon_meta` and the three fork-provenance
+	// keys. While the repository replaced the column, an ordinary save
+	// therefore destroyed every key the client did not happen to model —
+	// `step_limit` included, which is one of the gates the Rust runtime
+	// admits a stored agent on, so an agent could be edited into being
+	// unrunnable by a request that answered 201.
 	if meta, ok := body["meta"].(map[string]any); ok {
 		v.Meta = meta
 	}
@@ -1037,6 +1188,11 @@ func (h *Handler) UpdateVersion(w http.ResponseWriter, r *http.Request) {
 	// — reports what was actually saved. It must run AFTER the `meta`
 	// assignment above or the client's stale `meta.variables` (which it
 	// spreads from the stored blob) would win over the edit.
+	//
+	// When the body carries no `meta` key this builds a ONE-KEY object. It
+	// is a patch and the repository merges it; it was a whole-column write,
+	// which is how a save of the variables alone erased `step_limit`,
+	// `icon_meta` and the fork provenance.
 	if hasVariables {
 		if v.Meta == nil {
 			v.Meta = map[string]any{}
@@ -1510,6 +1666,20 @@ func (h *Handler) GetVersionExpanded(w http.ResponseWriter, r *http.Request) {
 		welcomeVal = *welcomeMsg
 	}
 
+	// The project every tool below belongs to.
+	//
+	// Read BEFORE the tool loops, because both of them stamp it. Pylon's
+	// expanded projection types this key on the tool model itself
+	// (ToolValidatedDetails.project_id is required, and
+	// get_application_version_details_expanded forwards the caller's project
+	// into every entry), so the SDK reads it on each tool and a sub-agent tool
+	// without it names an application the runtime cannot then locate: the
+	// child lives in a tenant schema, and the id alone does not say which.
+	// Only the pylon-era `application_tools` branch below used to carry it, and
+	// no schema this service builds has that table — so on every deployment of
+	// this branch the key was absent from every tool.
+	projIDInt, _ := strconv.Atoi(projectID)
+
 	// Fetch tools from entity_tool_mapping
 	tools := make([]map[string]any, 0)
 	toolRows, err := h.pool.Query(ctx, fmt.Sprintf(`
@@ -1549,6 +1719,7 @@ func (h *Handler) GetVersionExpanded(w http.ResponseWriter, r *http.Request) {
 				"entity_type":    entityType,
 				"selected_tools": selectedTools,
 				"settings":       expandedSettings,
+				"project_id":     projIDInt,
 			}
 			if tName != nil {
 				tool["name"] = *tName
@@ -1565,8 +1736,7 @@ func (h *Handler) GetVersionExpanded(w http.ResponseWriter, r *http.Request) {
 		authorIDStr = strconv.Itoa(*authorID)
 	}
 
-	// Also fetch from application_tools (sub-agent references)
-	projIDInt, _ := strconv.Atoi(projectID)
+	// Also fetch from application_tools (pylon-migrated tenants only)
 	appToolRows, err := h.pool.Query(ctx, fmt.Sprintf(`
 		SELECT id, name, type, settings::text
 		FROM %s.application_tools

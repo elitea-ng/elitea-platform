@@ -694,7 +694,11 @@ func TestApplicationsRepoPostgres_UpdateVersionWritesOnlySuppliedFields(t *testi
 		t.Errorf("name = %q, want base", updated.Name)
 	}
 
-	// Explicitly supplied JSON replaces the column.
+	// Explicitly supplied JSON replaces the column — for `llm_settings` and
+	// `conversation_starters`. `meta` is the one exception and merges
+	// instead; the column is empty here, so both readings agree on this row
+	// and the difference is pinned where it can be seen, in
+	// TestApplicationsRepoPostgres_UpdateVersionMergesMetaInsteadOfReplacingIt.
 	replaced, err := repo.UpdateVersion(ctx, testProjectID, app.ID, versionID, applications.Version{
 		LLMSettings:          map[string]any{"model_name": "claude"},
 		ConversationStarters: []any{"a"},

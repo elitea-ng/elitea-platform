@@ -193,28 +193,73 @@ describe('UserInput', () => {
   });
 
   it('insertTextAtCursor inserts at the caret position', () => {
-    vi.useFakeTimers();
-    try {
-      const ref = createRef<UserInputHandle>();
-      renderWithTheme(
-        <UserInput
-          ref={ref}
-          slots={{}}
-        />,
-      );
-      const textarea = getTextarea();
-      act(() => {
-        fireEvent.change(textarea, { target: { value: 'ac' } });
-      });
-      act(() => textarea.setSelectionRange(1, 1));
-      act(() => ref.current?.insertTextAtCursor('b'));
-      act(() => {
-        vi.runAllTimers();
-      });
-      expect(ref.current?.getInputContent()).toBe('abc');
-    } finally {
-      vi.useRealTimers();
-    }
+    const ref = createRef<UserInputHandle>();
+    renderWithTheme(
+      <UserInput
+        ref={ref}
+        slots={{}}
+      />,
+    );
+    const textarea = getTextarea();
+    act(() => {
+      fireEvent.change(textarea, { target: { value: 'ac' } });
+    });
+    act(() => textarea.setSelectionRange(1, 1));
+    act(() => ref.current?.insertTextAtCursor('b'));
+    expect(ref.current?.getInputContent()).toBe('abc');
+  });
+
+  /*
+   * THE CARET IS BACK BEFORE THE NEXT KEYSTROKE, not one macrotask later.
+   *
+   * No timers are run here, and that is the assertion. The caret used to be
+   * restored from `setTimeout(…, 0)`, which left the composer live with the
+   * caret at the END of the value for one macrotask: everything typed in that
+   * window landed there and was then stranded behind the caret when the timer
+   * finally fired. Typing `one`, Shift+Enter, `two` came out as
+   * `one\nwo…t`. A layout effect leaves no such window.
+   */
+  it('restores the caret without waiting for a timer', () => {
+    const ref = createRef<UserInputHandle>();
+    renderWithTheme(
+      <UserInput
+        ref={ref}
+        slots={{}}
+      />,
+    );
+    const textarea = getTextarea();
+    act(() => {
+      fireEvent.change(textarea, { target: { value: 'ac' } });
+    });
+    act(() => textarea.setSelectionRange(1, 1));
+    act(() => ref.current?.insertTextAtCursor('b'));
+    expect(textarea.selectionStart).toBe(2);
+    expect(textarea.selectionEnd).toBe(2);
+  });
+
+  /*
+   * The splice reads the TEXTAREA, not the state copy: a keystroke that has
+   * not been committed yet is still part of what the person is looking at,
+   * and splicing into the stale copy silently deletes it.
+   */
+  it('splices into what the textarea holds, not into a state copy one render behind', () => {
+    const ref = createRef<UserInputHandle>();
+    renderWithTheme(
+      <UserInput
+        ref={ref}
+        slots={{}}
+      />,
+    );
+    const textarea = getTextarea();
+    act(() => {
+      fireEvent.change(textarea, { target: { value: 'ac' } });
+    });
+    // The DOM moved on without an event React saw — the shape of a keystroke
+    // whose commit has not landed.
+    textarea.value = 'acd';
+    textarea.setSelectionRange(3, 3);
+    act(() => ref.current?.insertTextAtCursor('!'));
+    expect(ref.current?.getInputContent()).toBe('acd!');
   });
 
   it('bubbles mention matches via slotProps.mention.onMentionChange', () => {

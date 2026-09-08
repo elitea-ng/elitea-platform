@@ -55,8 +55,10 @@ import type {
 import type {
   CanvasPresence,
   CanvasPresenceRequest,
+  ConversationExport,
   CreateSupportConversationBody,
   ErrorResponse,
+  ExportConversationParams,
   GetMessageTraceParams,
   ListMessageTracesParams,
   ListSupportConversationsParams,
@@ -1514,6 +1516,300 @@ export function useHeartbeatCanvasPresence<
     projectId,
     canvasId,
     canvasPresenceRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type exportConversationResponse200TextMarkdown = {
+  data: string;
+  status: 200;
+};
+
+export type exportConversationResponse200ApplicationJson = {
+  data: ConversationExport;
+  status: 200;
+};
+
+export type exportConversationResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type exportConversationResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type exportConversationResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type exportConversationResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type exportConversationResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type exportConversationResponseSuccess = (
+  | exportConversationResponse200TextMarkdown
+  | exportConversationResponse200ApplicationJson
+) & {
+  headers: Headers;
+};
+export type exportConversationResponseError = (
+  | exportConversationResponse400
+  | exportConversationResponse401
+  | exportConversationResponse403
+  | exportConversationResponse404
+  | exportConversationResponse500
+) & {
+  headers: Headers;
+};
+
+export type exportConversationResponse =
+  exportConversationResponseSuccess | exportConversationResponseError;
+
+export const getExportConversationUrl = (
+  projectId: string,
+  conversationId: string,
+  params?: ExportConversationParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/elitea_core/conversation_export/prompt_lib/${projectId}/${conversationId}?${stringifiedParams}`
+    : `/elitea_core/conversation_export/prompt_lib/${projectId}/${conversationId}`;
+};
+
+/**
+ * The rail's row menu offers this as "Export", with one entry per format.
+ * Both answers carry `Content-Disposition: attachment` and a filename
+ * derived from the conversation's own name, so a browser saves the
+ * response rather than rendering it.
+ *
+ * The document is the WHOLE transcript, oldest message first, never a
+ * page of it. A conversation with more messages than the server will
+ * assemble in one document is refused with 400 rather than exported
+ * truncated: a partial file that looks complete is the failure this
+ * refusal exists to prevent.
+ *
+ * Reading an export needs the same permission as reading the messages
+ * (`models.chat.messages.list`). There is no separate export right.
+ * @summary Download one conversation's transcript as a document
+ */
+export const exportConversation = async (
+  projectId: string,
+  conversationId: string,
+  params?: ExportConversationParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<exportConversationResponse> => {
+  return eliteaFetch<exportConversationResponse>(
+    getExportConversationUrl(projectId, conversationId, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getExportConversationQueryKey = (
+  projectId: string,
+  conversationId: string,
+  params?: ExportConversationParams,
+) => {
+  return [
+    `/elitea_core/conversation_export/prompt_lib/${projectId}/${conversationId}`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getExportConversationQueryOptions = <
+  TData = Awaited<ReturnType<typeof exportConversation>>,
+  TError =
+    ErrorResponse | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  params?: ExportConversationParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof exportConversation>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getExportConversationQueryKey(projectId, conversationId, params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof exportConversation>>
+  > = ({ signal }) =>
+    exportConversation(projectId, conversationId, params, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      conversationId !== null &&
+      conversationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof exportConversation>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ExportConversationQueryResult = NonNullable<
+  Awaited<ReturnType<typeof exportConversation>>
+>;
+export type ExportConversationQueryError =
+  ErrorResponse | N401Response | N403Response | N404Response | N500Response;
+
+export function useExportConversation<
+  TData = Awaited<ReturnType<typeof exportConversation>>,
+  TError =
+    ErrorResponse | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  params: undefined | ExportConversationParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof exportConversation>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof exportConversation>>,
+          TError,
+          Awaited<ReturnType<typeof exportConversation>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useExportConversation<
+  TData = Awaited<ReturnType<typeof exportConversation>>,
+  TError =
+    ErrorResponse | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  params?: ExportConversationParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof exportConversation>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof exportConversation>>,
+          TError,
+          Awaited<ReturnType<typeof exportConversation>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useExportConversation<
+  TData = Awaited<ReturnType<typeof exportConversation>>,
+  TError =
+    ErrorResponse | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  params?: ExportConversationParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof exportConversation>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Download one conversation's transcript as a document
+ */
+
+export function useExportConversation<
+  TData = Awaited<ReturnType<typeof exportConversation>>,
+  TError =
+    ErrorResponse | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  params?: ExportConversationParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof exportConversation>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getExportConversationQueryOptions(
+    projectId,
+    conversationId,
+    params,
     options,
   );
 

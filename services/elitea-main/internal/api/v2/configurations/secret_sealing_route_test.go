@@ -17,7 +17,10 @@ func TestCreateRefusesAPlaintextCredentialWithoutAVault(t *testing.T) {
 	t.Parallel()
 	router := gatedConfigurationRouter(t, entitledResolver())
 
-	body := `{"elitea_title":"prod","type":"open_ai",` +
+	// Complete against the type's schema: an incomplete body is refused for
+	// the missing field first (required_fields.go), which would make this
+	// assertion pass for the wrong reason.
+	body := `{"elitea_title":"prod","label":"prod","type":"open_ai",` +
 		`"data":{"api_key":"sk-live-secret-value","api_base":"https://api.openai.com/v1"}}`
 	request := httptest.NewRequest(
 		http.MethodPost, "/api/v2/configurations/configurations/7", strings.NewReader(body))
@@ -40,7 +43,8 @@ func TestCreateWithoutASecretStillReachesTheStore(t *testing.T) {
 	t.Parallel()
 	router := gatedConfigurationRouter(t, entitledResolver())
 
-	body := `{"elitea_title":"prod","type":"open_ai","data":{"api_base":"https://api.openai.com/v1"}}`
+	body := `{"elitea_title":"prod","label":"prod","type":"open_ai",` +
+		`"data":{"api_base":"https://api.openai.com/v1"}}`
 	request := httptest.NewRequest(
 		http.MethodPost, "/api/v2/configurations/configurations/7", strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")

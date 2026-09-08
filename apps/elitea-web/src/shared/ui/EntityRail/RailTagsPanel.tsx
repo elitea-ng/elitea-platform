@@ -149,7 +149,11 @@ export interface RailTagsPanelProps extends Omit<RailTagsPanelViewProps, 'tags' 
 
 /** `RailTagsPanelView` wired to the real, already-generated `ListTags` client. */
 export function RailTagsPanel({ projectId, ...viewProps }: RailTagsPanelProps): ReactNode {
-  const query = useListTags(projectId ?? '', { query: { enabled: projectId !== undefined } });
+  // `undefined` is the tag-list QUERY parameters (see AgentTagEditor): the
+  // rail lists every tag in the project, unnarrowed by entity kind.
+  const query = useListTags(projectId ?? '', undefined, {
+    query: { enabled: projectId !== undefined },
+  });
   const tags = useMemo(() => unwrapListPage<RailTag>(query.data, 'RailTagsPanel/listTags').rows, [query.data]);
 
   return (

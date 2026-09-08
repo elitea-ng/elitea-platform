@@ -47,6 +47,16 @@
  */
 export interface CanvasEditorPresence {
   readonly userName: string;
+  /**
+   * The server-derived principal id of this entry, when the roster carries
+   * one. ADDED to the old client's shape, and the reason is a defect the name
+   * alone cannot avoid: a display name is not an identity. A viewer whose name
+   * the client does not hold — or holds in a different spelling from the one
+   * the server puts on the roster — cannot recognise its OWN entry, and the
+   * "somebody else holds this canvas" rule then fires against the only person
+   * editing it. `undefined` means the roster did not name an id.
+   */
+  readonly userId?: string;
 }
 
 export interface Canvas {

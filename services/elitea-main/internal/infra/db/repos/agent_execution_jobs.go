@@ -25,6 +25,12 @@ import (
 type AgentExecutionJobsRepository struct {
 	pool   *pgxpool.Pool
 	policy AgentExecutionDispatchPolicy
+	// catalogueProjectID is the ONE public project, the same id
+	// CurrentAgentStartRepository admits a foreign participant from. The turn
+	// INSERT repeats that admission rather than trusting the resolve that
+	// preceded it: the two run in separate transactions, and this is the
+	// statement that writes the row.
+	catalogueProjectID int32
 }
 
 func (r *AgentExecutionJobsRepository) ExpectedAgentExecution(
@@ -88,6 +94,7 @@ func (r *AgentExecutionJobsRepository) ExpectedAgentExecution(
 func NewAgentExecutionJobsRepository(
 	pool *pgxpool.Pool,
 	policy AgentExecutionDispatchPolicy,
+	catalogueProjectID int32,
 ) (*AgentExecutionJobsRepository, error) {
 	if pool == nil {
 		return nil, errors.New("agent admission database is required")
@@ -95,7 +102,14 @@ func NewAgentExecutionJobsRepository(
 	if err := policy.validate(); err != nil {
 		return nil, err
 	}
-	return &AgentExecutionJobsRepository{pool: pool, policy: policy}, nil
+	if catalogueProjectID <= 0 {
+		return nil, errors.New("agent admission catalogue project id is required")
+	}
+	return &AgentExecutionJobsRepository{
+		pool:               pool,
+		policy:             policy,
+		catalogueProjectID: catalogueProjectID,
+	}, nil
 }
 
 func (r *AgentExecutionJobsRepository) AdmitAgentExecution(
@@ -419,6 +433,7 @@ func (r *AgentExecutionJobsRepository) AdmitAgentExecution(
 			txQueries,
 			admission.Record.Job.ID,
 			*admission.CurrentTurn,
+			r.catalogueProjectID,
 		); err != nil {
 			return executionapp.AdmissionOutcome{}, err
 		}
@@ -718,7 +733,11 @@ func insertCurrentApplicationTurn(
 	queries *sqlcgen.Queries,
 	executionID string,
 	turn agentexecutionapp.CurrentApplicationTurn,
+	catalogueProjectID int32,
 ) error {
+	if catalogueProjectID <= 0 {
+		return executionapp.ErrInvalidAdmission
+	}
 	conversationUUID, err := currentPGUUID(turn.ConversationUUID)
 	if err != nil {
 		return executionapp.ErrInvalidAdmission
@@ -770,6 +789,7 @@ func insertCurrentApplicationTurn(
 			ResponseMessageID:    responseMessageID,
 			ExecutionID:          executionID,
 			ExecutionGeneration:  turn.QuestionID,
+			CatalogueProjectID:   catalogueProjectID,
 		},
 	)
 	if errors.Is(err, pgx.ErrNoRows) {

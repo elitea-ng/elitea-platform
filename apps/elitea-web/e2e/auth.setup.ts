@@ -18,6 +18,7 @@ import * as path from 'path';
 import { test as setup, expect } from '@playwright/test';
 
 import { BASE_URL, STORAGE_STATE } from '../playwright.config';
+import { readProjectSecretHeader, SECRETS_HEADER_NAME } from './fixtures/api';
 import {
   DEFAULT_PROJECT_ID,
   DEFAULT_PROJECT_NAME,
@@ -51,6 +52,7 @@ setup.describe('Auth setup', () => {
   setup('authenticate as admin persona', async ({ page }) => {
     setup.setTimeout(PERSONA_TIMEOUT_MS);
     await performOidcLogin(page, 'e2e-admin@autotest.local', STORAGE_STATE.admin, 'seeded');
+    await assertRuntimeSecretHeader(page);
   });
 
   // The #284 chat driver. Its personal project is what the /llm hop resolves
@@ -273,4 +275,58 @@ async function readPersonalProjectId(
     )
     .not.toBe('');
   return id;
+}
+
+/**
+ * Asserts that the seeded project ALREADY carries its runtime secret header.
+ * It writes nothing.
+ *
+ * `secrets_header_value` is what the SDK's expanded-version read authenticates
+ * with, and a project without one refuses every caller — 403 `This project has
+ * no secrets_header_value secret`. elitea-main seals one into every project it
+ * PROVISIONS, and into every row of `centry.project` in a pass it runs before
+ * its listeners bind. The seeded project of this stack is not provisioned, and
+ * the pass elitea-main ran at `up` saw no projects at all, because the schema
+ * did not exist yet. `scripts/e2e-stack.sh seed` therefore RESTARTS elitea-main
+ * after writing its rows, and waits until project 1's vault blob changes: the
+ * value is minted by the stack, before any browser starts, and this function is
+ * only the receipt.
+ *
+ * ── WHY IT IS NOT A MINT ANY MORE ─────────────────────────────────────────
+ *
+ * It used to be one, best-effort, with the failure swallowed to a
+ * `console.warn`. Two things were wrong with that, and the second is the one
+ * that cost a run. A mint is a WRITE on the critical path of a SCREENSHOT:
+ * `settings-secrets` photographs Settings > Secrets, and the single row in that
+ * baseline is this very secret. A mint that failed for a reason of its own — a
+ * persona without `configuration.secrets.secret.create`, a route absent from
+ * the image under test, a vault this deployment can no longer open — left the
+ * page rendering "No secrets", and the run then reported a VISUAL DIFF on the
+ * Secrets page. The warning that named the real cause sat in the setup log,
+ * which nobody reads when a picture has changed.
+ *
+ * So the failure is moved to where it can be read: absent, this fails SETUP,
+ * before a single journey or screenshot runs, and says which step of the seed
+ * was supposed to write it. `resolveProjectSecretHeader` keeps its mint-on-404
+ * for the deployments this suite is also pointed at and does not seed; on this
+ * stack it never fires.
+ */
+async function assertRuntimeSecretHeader(page: import('@playwright/test').Page): Promise<void> {
+  const explain =
+    `project ${DEFAULT_PROJECT_ID} carries no ${SECRETS_HEADER_NAME}. elitea-main mints it in ` +
+    `BackfillProjectSecretsHeaderValues, which runs before its listeners bind, so the seed ` +
+    `restarts elitea-main after writing its project rows and waits for the vault to change — ` +
+    `see the "Restarting elitea-main so the X-SECRET backfill reaches the seeded projects" step ` +
+    `of \`scripts/e2e-stack.sh seed\`. Without the value every expanded version-details read is ` +
+    `refused 403 and Settings > Secrets draws an empty table.`;
+
+  // The read's OWN failure is rewritten too. A 403 here is a persona that
+  // cannot read the vault and a 500 is a vault that will not open; neither is
+  // the absence above, and both are answered by looking at the same step.
+  const value = await readProjectSecretHeader(page.request, DEFAULT_PROJECT_ID).catch(
+    (error: unknown) => {
+      throw new Error(`${explain}\nThe read itself failed: ${String(error)}`);
+    },
+  );
+  expect(value, explain).toBeTruthy();
 }

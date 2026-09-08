@@ -34,7 +34,7 @@ func NewCurrentAvailableRoute(
 	catalog CurrentAvailableCatalogReader,
 	authConfig apimw.AuthConfig,
 ) (*CurrentAvailableRoute, error) {
-	if catalog == nil || authConfig.PrincipalValidator == nil || authConfig.ForwardedIdentityVerifier == nil {
+	if catalog == nil || !authConfig.CredentialPlaneComposed() {
 		return nil, ErrInvalidCurrentAvailableRoute
 	}
 
