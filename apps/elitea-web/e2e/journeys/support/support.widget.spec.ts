@@ -68,6 +68,12 @@
  * They now share one window (`group`), and the assistant is switched off by
  * the LAST member to leave (`onLastExit`) — inside the window, so no other
  * journey ever sees the launcher.
+ *
+ * THAT WAS NOT ENOUGH ON ITS OWN, and the block below the imports says why:
+ * a shared window removed the four tests' ability to break each other's
+ * switch, and left them queueing for it. The file runs in ONE worker now, so
+ * there is no queue to wait in. Both halves are kept: the window is still what
+ * hides the launcher from every other journey.
  */
 import type { Page } from '@playwright/test';
 import { expect, test } from '@playwright/test';
