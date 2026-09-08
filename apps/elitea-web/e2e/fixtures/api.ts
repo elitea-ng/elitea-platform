@@ -205,44 +205,154 @@ export async function deleteAgent(
   );
 }
 
+/** What one sweep actually did, so a caller can assert on the work and not on the silence. */
+export interface AutotestSweepReport {
+  /** Rows deleted, per kind. */
+  readonly conversations: number;
+  readonly agents: number;
+  readonly pipelines: number;
+  /**
+   * Reads and deletes that failed, as one line each.
+   *
+   * A sweep used to swallow every failure and return `void`, so a LIST that
+   * answered 500 and a project that was already clean were the same
+   * observation. They are not: the first leaves every row behind and reports
+   * success. The per-row deletes stay best effort — a teardown must not fail
+   * the run over one stubborn row — but the failure is now countable, and
+   * `api.fixture-isolation.spec.ts` asserts it is empty.
+   */
+  readonly failures: readonly string[];
+}
+
+/** One page of a `prompt_lib` list route, whatever envelope it uses. */
+async function listPage(
+  request: APIRequestContext,
+  url: string,
+): Promise<readonly { id?: string; name?: string }[]> {
+  const response = await request.get(url);
+  if (!response.ok()) {
+    throw new Error(`GET ${url} -> ${response.status()} ${response.statusText()}`);
+  }
+  const body = (await response.json()) as {
+    rows?: readonly { id?: string; name?: string }[];
+    items?: readonly { id?: string; name?: string }[];
+  };
+  return body.rows ?? body.items ?? [];
+}
+
 /**
- * Sweep any leftover autotest_* entities (session-scoped safety net).
- * Call this from an afterAll to clean up regardless of test outcome.
+ * Every row of a list route, PAGED.
+ *
+ * The applications route clamps `limit` to 100 and silently falls back to its
+ * default of 20 for anything outside that range
+ * (`internal/api/v2/applications/handler.go`), so `?limit=200` asks for two
+ * hundred rows and receives twenty — a sweep written that way stops after the
+ * first page and reports success. That is the same shape as #544, where a
+ * paged read walked off the end of a list and the missing row read as lost
+ * work.
+ */
+async function listAll(
+  request: APIRequestContext,
+  base: string,
+): Promise<readonly { id?: string; name?: string }[]> {
+  const pageSize = 100;
+  const all: { id?: string; name?: string }[] = [];
+  for (let offset = 0; offset < 5_000; offset += pageSize) {
+    const separator = base.includes('?') ? '&' : '?';
+    const page = await listPage(request, `${base}${separator}limit=${pageSize}&offset=${offset}`);
+    all.push(...page);
+    if (page.length < pageSize) break;
+  }
+  return all;
+}
+
+/**
+ * Sweep every leftover `autotest_*` entity out of the shared project.
+ *
+ * Scoped by NAME, and only by name: a sweep that ignored the prefix would
+ * destroy the seeded rows every journey depends on.
+ *
+ * ## The two things it used to miss, silently
+ *
+ *  1. **Pipelines.** `GET .../applications/prompt_lib/{project}` INNER JOINs
+ *     `application_versions` on `agent_type != 'pipeline'` unless the caller
+ *     sends `agents_type=pipeline` (`internal/infra/db/repos/applications.go`),
+ *     so the classic listing NEVER carries a pipeline. Every
+ *     `autotest_`-named pipeline survived every sweep, and the sweep said it
+ *     was done.
+ *  2. **Everything past row twenty**, per the `limit` clamp `listAll` above
+ *     documents.
+ *
+ * Both are the class of defect this whole file's callers keep paying for:
+ * absence read as correctness. The report it now returns is what makes the
+ * difference assertable.
  */
 export async function sweepAutotestEntities(
   request: APIRequestContext,
-): Promise<void> {
-  // Sweep conversations
+): Promise<AutotestSweepReport> {
+  const failures: string[] = [];
+  let conversations = 0;
+  let agents = 0;
+  let pipelines = 0;
+
+  const named = (rows: readonly { id?: string; name?: string }[]) =>
+    rows.filter((row) => (row.name ?? '').startsWith(AUTOTEST_PREFIX));
+
+  /*
+   * The DELETE, with its status read.
+   *
+   * `deleteAgent`/`deleteConversation` above are deliberately best effort and
+   * ignore the status — an `afterEach` cleaning up after a failing test must
+   * not fail it a second time. A SWEEP is the opposite case: its whole claim
+   * is that the rows are gone, so a 403 or a 500 has to be counted or the
+   * report says "swept 0 failures" about a project it never touched. 404 is
+   * not a failure: another journey's own teardown may have taken the row
+   * between the list and the delete.
+   */
+  const removeRow = async (kind: string, path: string, id: string): Promise<boolean> => {
+    const response = await request.delete(`${API_BASE}/${path}/prompt_lib/${DEFAULT_PROJECT_ID}/${id}`);
+    if (response.ok() || response.status() === 404) return response.ok();
+    failures.push(`${kind} ${id}: ${response.status()} ${(await response.text()).slice(0, 120)}`);
+    return false;
+  };
+
   try {
-    const resp = await request.get(
-      `${API_BASE}/elitea_core/conversations/prompt_lib/${DEFAULT_PROJECT_ID}`,
+    const rows = named(
+      await listAll(request, `${API_BASE}/elitea_core/conversations/prompt_lib/${DEFAULT_PROJECT_ID}`),
     );
-    const body = await resp.json();
-    const convs: Array<{ id: string; name: string }> = body.rows ?? body ?? [];
-    for (const c of convs) {
-      if (c.name?.startsWith(AUTOTEST_PREFIX)) {
-        await deleteConversation(request, c.id);
-      }
+    for (const row of rows) {
+      if (row.id === undefined) continue;
+      if (await removeRow('conversation', 'elitea_core/conversation', row.id)) conversations += 1;
     }
-  } catch {
-    // Best effort — don't fail the test run on cleanup failures.
+  } catch (error) {
+    failures.push(`list conversations: ${String(error)}`);
   }
 
-  // Sweep agents
-  try {
-    const resp = await request.get(
-      `${API_BASE}/elitea_core/applications/prompt_lib/${DEFAULT_PROJECT_ID}`,
-    );
-    const body = await resp.json();
-    const agents: Array<{ id: string; name: string }> = body.rows ?? body ?? [];
-    for (const a of agents) {
-      if (a.name?.startsWith(AUTOTEST_PREFIX)) {
-        await deleteAgent(request, a.id);
+  // Classic agents and pipelines are two different listings of one table, and
+  // the sweep needs both. See this function's own note.
+  for (const [kind, query] of [
+    ['agent', ''],
+    ['pipeline', '?agents_type=pipeline'],
+  ] as const) {
+    try {
+      const rows = named(
+        await listAll(
+          request,
+          `${API_BASE}/elitea_core/applications/prompt_lib/${DEFAULT_PROJECT_ID}${query}`,
+        ),
+      );
+      for (const row of rows) {
+        if (row.id === undefined) continue;
+        if (!(await removeRow(kind, 'elitea_core/application', row.id))) continue;
+        if (kind === 'agent') agents += 1;
+        else pipelines += 1;
       }
+    } catch (error) {
+      failures.push(`list ${kind}s: ${String(error)}`);
     }
-  } catch {
-    // Best effort.
   }
+
+  return { conversations, agents, pipelines, failures };
 }
 
 /* ────────────────────────────────────────────────────────────────────────────

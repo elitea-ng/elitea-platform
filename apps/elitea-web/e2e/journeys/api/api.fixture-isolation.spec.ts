@@ -49,7 +49,18 @@
  * ─────────────────────────────────────────────────────────────────────────────
  * Nothing, and API-FX3 is the proof: it ends by asserting the shared project
  * holds no `autotest_` row this file created. The one row it deliberately
- * keeps out of the sweep's reach is deleted by name in the same test.
+ * keeps out of the sweep's reach is deleted by id in the same test.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * WHEN THIS FILE RUNS
+ * ─────────────────────────────────────────────────────────────────────────────
+ * As `setup`'s TEARDOWN project (`fixtures-sweep`), so after every browser
+ * project has finished. API-FX3's sweep is destructive and must never meet a
+ * journey that is still running; a teardown is the only ordering Playwright
+ * offers that guarantees that WITHOUT a dependency edge — and the edge is what
+ * had to go, because a dependency's failure SKIPS its dependents and one
+ * assertion in this file reported `308 did not run` for the whole chromium
+ * suite. See `playwright.config.ts`'s own note.
  */
 import { expect, test, type APIRequestContext } from '@playwright/test';
 
@@ -70,17 +81,58 @@ test.use({ storageState: STORAGE_STATE.admin });
 
 const RUN = String(Date.now() % 1_000_000);
 
-/** The named rows of one entity list, as the server holds them right now. */
-async function listNames(request: APIRequestContext, path: string): Promise<readonly string[]> {
-  const response = await request.get(`${API_BASE}/${path}/prompt_lib/${DEFAULT_PROJECT_ID}?limit=200`);
+/**
+ * How many rows of this listing carry exactly `name`.
+ *
+ * ── THE READ THIS REPLACES, AND WHY IT ANSWERED `[]` ──────────────────────
+ * It used to page `.../applications/prompt_lib/{project}?limit=200` and search
+ * the answer, and it received an empty array for a pipeline that had just been
+ * created. Two independent reasons, both in the server:
+ *
+ *  1. THE LISTING IS TYPED. `applications.List` INNER JOINs
+ *     `application_versions` on `agent_type != 'pipeline'` unless the caller
+ *     sends `agents_type=pipeline` (`internal/infra/db/repos/applications.go`),
+ *     so the default listing is the CLASSIC agents and never carries a
+ *     pipeline at all. This file ran before any journey had created a classic
+ *     agent, so the answer was legitimately empty.
+ *  2. `limit=200` IS NOT 200. The handler clamps `limit` to 1..100 and falls
+ *     back to its default of TWENTY for anything else
+ *     (`internal/api/v2/applications/handler.go`), so the read asked for two
+ *     hundred rows and would have received twenty — the #544 shape again.
+ *
+ * So the row is NAMED rather than hoped for: `query` is the applications
+ * route's own search filter, and a filtered read cannot walk off the end of a
+ * page. `count()` and not the name list, so callers poll it — a create is
+ * visible to a list read a moment after the POST answers.
+ *
+ * ONLY the applications route is read this way. The conversations listing
+ * offers no search parameter at all (`internal/api/v2/conversations/handler.go`
+ * reads `limit`, `offset`, `source`, `entity_name`, `entity_meta_id` and
+ * nothing else), and by the time this file runs — as `setup`'s teardown, after
+ * every journey — the shared project can easily hold more than one page of
+ * `autotest_` conversations. So the conversation is read by ID instead, which
+ * is exact and cannot page past itself.
+ */
+async function countNamed(
+  request: APIRequestContext,
+  path: string,
+  name: string,
+  query = '',
+): Promise<number> {
+  const url =
+    `${API_BASE}/${path}/prompt_lib/${DEFAULT_PROJECT_ID}` +
+    `?limit=100&query=${encodeURIComponent(name)}${query}`;
+  const response = await request.get(url);
   expect(response.status(), await response.text()).toBe(200);
   const body = (await response.json()) as {
     rows?: readonly { name?: string }[];
     items?: readonly { name?: string }[];
   };
-  const rows = body.rows ?? body.items ?? [];
-  return rows.map((row) => row.name ?? '');
+  return (body.rows ?? body.items ?? []).filter((row) => row.name === name).length;
 }
+
+/** The pipeline listing — the typed half the default listing cannot answer. */
+const PIPELINES = '&agents_type=pipeline';
 
 test('API-FX1: a conversation the fixture creates is FRESH — no message another journey wrote (legacy TestConversationIsolation::test_fixture_creates_fresh_conversation)', async ({
   request,
@@ -173,44 +225,66 @@ test('API-FX3: the autotest_ sweep really removes the rows, and removes ONLY tho
   try {
     // ── the rows exist before the sweep ──────────────────────────────────
     // Asserted, not assumed: a sweep run against an empty project passes
-    // every assertion below while proving nothing at all.
+    // every assertion below while proving nothing at all. The conversation by
+    // id, the two pipelines through a polled list read — a create is visible
+    // to a LIST a moment after its POST answers, which a single read races.
+    const before = await request.get(
+      `${API_BASE}/elitea_core/conversation/prompt_lib/${DEFAULT_PROJECT_ID}/${conversationId}`,
+    );
+    expect(before.status(), 'the conversation this test created must exist before the sweep').toBe(
+      200,
+    );
     await expect
-      .poll(async () => listNames(request, 'elitea_core/conversations'), {
+      .poll(async () => countNamed(request, 'elitea_core/applications', pipelineName, PIPELINES), {
         timeout: 20_000,
-        message: 'the created conversation never appeared in the list',
+        message: 'the created pipeline never appeared in the pipeline listing',
       })
-      .toContain(conversationName);
-    const applicationsBefore = await listNames(request, 'elitea_core/applications');
-    expect(applicationsBefore).toContain(pipelineName);
-    expect(applicationsBefore).toContain(bystanderName);
+      .toBe(1);
+    await expect
+      .poll(async () => countNamed(request, 'elitea_core/applications', bystanderName, PIPELINES), {
+        timeout: 20_000,
+        message: 'the bystander pipeline never appeared in the pipeline listing',
+      })
+      .toBe(1);
 
     // ── the sweep ────────────────────────────────────────────────────────
-    await sweepAutotestEntities(request);
+    const report = await sweepAutotestEntities(request);
 
-    const conversationsAfter = await listNames(request, 'elitea_core/conversations');
+    // What it DID, before what happened afterwards. A sweep whose list read
+    // failed used to return `void` and look identical to one that found a
+    // clean project — the failure list is what tells those apart, and the
+    // counts are what stop "0 rows removed" from reading as success.
+    expect(report.failures, 'the sweep must not swallow a failed read or delete').toEqual([]);
     expect(
-      conversationsAfter,
-      'the sweep reported success and left the conversation behind',
-    ).not.toContain(conversationName);
-
-    const applicationsAfter = await listNames(request, 'elitea_core/applications');
-    expect(applicationsAfter, 'the sweep left the pipeline behind').not.toContain(pipelineName);
+      report.conversations,
+      'the sweep must have removed at least the conversation this test created',
+    ).toBeGreaterThanOrEqual(1);
     expect(
-      applicationsAfter,
-      'the sweep removed a row that does not carry the autotest_ prefix — it is scoped by ' +
-        'NAME, and a sweep that ignores the scope destroys the seeded project',
-    ).toContain(bystanderName);
+      report.pipelines,
+      'the sweep must reach PIPELINES — the classic listing does not carry them, and a ' +
+        'sweep that reads only that listing leaves every autotest_ pipeline behind forever',
+    ).toBeGreaterThanOrEqual(1);
 
-    // …and the deleted conversation is gone from the server, not only from a
-    // list: a list that filtered it out and a delete that ran are different
-    // facts, and only the second one frees the name.
+    // ── and the rows really are gone, read back from the server ──────────
+    // The conversation by ID: gone from the SERVER, not merely unlisted. A
+    // list that filtered it out and a delete that ran are different facts, and
+    // only the second one frees the name.
     const reread = await request.get(
       `${API_BASE}/elitea_core/conversation/prompt_lib/${DEFAULT_PROJECT_ID}/${conversationId}`,
     );
     expect(
       reread.status(),
-      'a swept conversation must be gone from the server, not merely unlisted',
+      'the sweep reported success and left the conversation behind',
     ).toBe(404);
+    expect(
+      await countNamed(request, 'elitea_core/applications', pipelineName, PIPELINES),
+      'the sweep left the pipeline behind',
+    ).toBe(0);
+    expect(
+      await countNamed(request, 'elitea_core/applications', bystanderName, PIPELINES),
+      'the sweep removed a row that does not carry the autotest_ prefix — it is scoped by ' +
+        'NAME, and a sweep that ignores the scope destroys the seeded project',
+    ).toBe(1);
   } finally {
     // The bystander is this test's own row and the sweep will never take it.
     await deletePipeline(request, bystander);
