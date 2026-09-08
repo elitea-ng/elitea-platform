@@ -41,24 +41,17 @@
  */
 import * as zod from "zod";
 
-export const projectContextContentMax = 2500;
+export const McpOAuthProxyResponse = zod.object({
+  access_token: zod.string(),
+  token_type: zod.string().optional(),
+  refresh_token: zod.string().optional(),
+  id_token: zod.string().optional(),
+  session_id: zod.string().optional(),
+  scope: zod.string().optional(),
+  expires_in: zod.union([zod.number(), zod.string()]).optional(),
+});
 
-export const projectContextActivationDescriptionMax = 300;
-
-export const ProjectContext = zod
-  .object({
-    id: zod.int().nullable(),
-    content: zod.string().max(projectContextContentMax),
-    enabled: zod.boolean(),
-    activation_description: zod
-      .string()
-      .max(projectContextActivationDescriptionMax)
-      .nullable(),
-    updated_at: zod.iso.datetime({ offset: true }).nullable(),
-  })
-  .describe(
-    "The current project-context builder response. An absent configuration returns id\/activation_description\/updated_at as null, empty content, and enabled=true.\n",
-  );
-
-export type ProjectContext = zod.input<typeof ProjectContext>;
-export type ProjectContextOutput = zod.output<typeof ProjectContext>;
+export type McpOAuthProxyResponse = zod.input<typeof McpOAuthProxyResponse>;
+export type McpOAuthProxyResponseOutput = zod.output<
+  typeof McpOAuthProxyResponse
+>;

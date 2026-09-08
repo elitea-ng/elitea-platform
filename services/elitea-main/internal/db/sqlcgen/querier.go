@@ -64,6 +64,9 @@ type Querier interface {
 	ClaimScheduledOccurrence(ctx context.Context, arg ClaimScheduledOccurrenceParams) (int64, error)
 	CompareAndSwapCurrentConfigurationRenameToolkit(ctx context.Context, arg CompareAndSwapCurrentConfigurationRenameToolkitParams) (int64, error)
 	CompleteScheduledOccurrence(ctx context.Context, arg CompleteScheduledOccurrenceParams) (int64, error)
+	// The tenant executor installs a transaction-local search_path. These queries
+	// never accept a schema from the caller.
+	CopyApplicationVersionSkills(ctx context.Context, arg CopyApplicationVersionSkillsParams) (int64, error)
 	CountActiveRuntimeExecutionsUpTo(ctx context.Context, arg CountActiveRuntimeExecutionsUpToParams) (int64, error)
 	CountArtifactBucketObjects(ctx context.Context, bucketID int64) (int64, error)
 	CountAttachmentChunks(ctx context.Context, arg CountAttachmentChunksParams) (int64, error)
@@ -119,6 +122,9 @@ type Querier interface {
 	// without their dependencies, which the repository refuses.
 	CurrentFolderAccessState(ctx context.Context) (int32, error)
 	CurrentNotificationHighWater(ctx context.Context, userID int32) (int64, error)
+	// entity_skill_mapping is polymorphic and has no version FK. Remove only the
+	// bindings of the version actually deleted, including on create compensation.
+	DeleteApplicationVersionWithSkills(ctx context.Context, arg DeleteApplicationVersionWithSkillsParams) (int64, error)
 	DeleteArtifactObjectRows(ctx context.Context, ids []int64) (int64, error)
 	DeleteArtifactObjects(ctx context.Context, arg DeleteArtifactObjectsParams) (int64, error)
 	DeleteAttachmentChunks(ctx context.Context, arg DeleteAttachmentChunksParams) (int64, error)

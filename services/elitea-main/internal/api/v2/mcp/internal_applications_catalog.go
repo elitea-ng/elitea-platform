@@ -83,6 +83,8 @@ var internalApplicationToolDefinitions = []internalApplicationToolDefinition{
 		schema: mergeObjectSchema(versionWriteSchema(true), map[string]any{
 			"project_id":     intProperty("Current project ID. The server verifies this value."),
 			"application_id": intProperty("Application ID."),
+			"copy_skills_from_version_id": integerRangeProperty(
+				"Optional source version in the same application. Copy its exact skill bindings. A missing or foreign source is ignored.", 1, 2147483647),
 		}, "project_id", "application_id", "name"),
 	},
 	{

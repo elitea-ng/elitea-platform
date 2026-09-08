@@ -41,24 +41,42 @@
  */
 import * as zod from "zod";
 
-export const projectContextContentMax = 2500;
+export const mcpDcrProxyRequestRedirectUrisMax = 32;
 
-export const projectContextActivationDescriptionMax = 300;
+export const mcpDcrProxyRequestGrantTypesMax = 32;
 
-export const ProjectContext = zod
+export const mcpDcrProxyRequestResponseTypesMax = 32;
+
+export const McpDcrProxyRequest = zod
   .object({
-    id: zod.int().nullable(),
-    content: zod.string().max(projectContextContentMax),
-    enabled: zod.boolean(),
-    activation_description: zod
-      .string()
-      .max(projectContextActivationDescriptionMax)
-      .nullable(),
-    updated_at: zod.iso.datetime({ offset: true }).nullable(),
+    registration_endpoint: zod.url(),
+    token_endpoint: zod
+      .url()
+      .optional()
+      .describe(
+        "Required when registration issues a secret. Main binds the stored client to this endpoint.",
+      ),
+    resource: zod.url().optional(),
+    redirect_uris: zod
+      .array(zod.url())
+      .min(1)
+      .max(mcpDcrProxyRequestRedirectUrisMax),
+    client_name: zod.string().optional(),
+    grant_types: zod
+      .array(zod.string())
+      .max(mcpDcrProxyRequestGrantTypesMax)
+      .optional(),
+    response_types: zod
+      .array(zod.string())
+      .max(mcpDcrProxyRequestResponseTypesMax)
+      .optional(),
+    token_endpoint_auth_method: zod.string().optional(),
+    application_type: zod.string().optional(),
+    scope: zod.string().optional(),
+    software_id: zod.string().optional(),
+    software_version: zod.string().optional(),
   })
-  .describe(
-    "The current project-context builder response. An absent configuration returns id\/activation_description\/updated_at as null, empty content, and enabled=true.\n",
-  );
+  .describe("Register an OAuth client. DCR does not replace user consent.");
 
-export type ProjectContext = zod.input<typeof ProjectContext>;
-export type ProjectContextOutput = zod.output<typeof ProjectContext>;
+export type McpDcrProxyRequest = zod.input<typeof McpDcrProxyRequest>;
+export type McpDcrProxyRequestOutput = zod.output<typeof McpDcrProxyRequest>;

@@ -41,24 +41,55 @@
  */
 import * as zod from "zod";
 
-export const projectContextContentMax = 2500;
+export const mcpOAuthProxyRequestGrantTypeDefault = `authorization_code`;
+export const mcpOAuthProxyRequestUsedDcrDefault = false;
+export const mcpOAuthProxyRequestToolkitIdTwoMax = 2147483647;
 
-export const projectContextActivationDescriptionMax = 300;
-
-export const ProjectContext = zod
+export const McpOAuthProxyRequest = zod
   .object({
-    id: zod.int().nullable(),
-    content: zod.string().max(projectContextContentMax),
-    enabled: zod.boolean(),
-    activation_description: zod
+    token_endpoint: zod.url(),
+    resource: zod.url().optional(),
+    grant_type: zod
+      .enum(["authorization_code", "refresh_token"])
+      .default(mcpOAuthProxyRequestGrantTypeDefault),
+    code: zod.string().optional(),
+    redirect_uri: zod.url().optional(),
+    code_verifier: zod.string().optional(),
+    refresh_token: zod.string().optional(),
+    scope: zod
       .string()
-      .max(projectContextActivationDescriptionMax)
-      .nullable(),
-    updated_at: zod.iso.datetime({ offset: true }).nullable(),
+      .optional()
+      .describe(
+        "Omitted refresh scope retains the existing grant. It never expands to toolkit defaults.",
+      ),
+    client_id: zod.string().optional(),
+    client_secret: zod
+      .string()
+      .optional()
+      .describe(
+        "Legacy or manually supplied client credential. Do not combine with client_reference.",
+      ),
+    client_reference: zod
+      .string()
+      .optional()
+      .describe(
+        "Opaque Main-owned DCR client reference. Requires used_dcr and the original client, endpoint, and resource.",
+      ),
+    used_dcr: zod.boolean().default(mcpOAuthProxyRequestUsedDcrDefault),
+    toolkit_id: zod
+      .union([
+        zod.string(),
+        zod.int().min(1).max(mcpOAuthProxyRequestToolkitIdTwoMax),
+      ])
+      .optional(),
+    toolkit_type: zod.string().optional(),
+    configuration_uuid: zod.string().optional(),
   })
   .describe(
-    "The current project-context builder response. An absent configuration returns id\/activation_description\/updated_at as null, empty content, and enabled=true.\n",
+    "Exchange a code or refresh a delegated grant. Main resolves stored client credentials.",
   );
 
-export type ProjectContext = zod.input<typeof ProjectContext>;
-export type ProjectContextOutput = zod.output<typeof ProjectContext>;
+export type McpOAuthProxyRequest = zod.input<typeof McpOAuthProxyRequest>;
+export type McpOAuthProxyRequestOutput = zod.output<
+  typeof McpOAuthProxyRequest
+>;

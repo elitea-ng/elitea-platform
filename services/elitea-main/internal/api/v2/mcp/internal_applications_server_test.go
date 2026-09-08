@@ -117,6 +117,17 @@ func TestInternalApplicationsCategoryPublishesExactlyTheCurrentEightOperations(t
 		}
 	}
 	listProperties := tools[0].InputSchema["properties"].(map[string]any)
+	copyProperties := tools[3].InputSchema["properties"].(map[string]any)
+	copySource, ok := copyProperties["copy_skills_from_version_id"].(map[string]any)
+	if !ok || copySource["type"] != "integer" {
+		t.Fatal("create-version schema omits the optional skill source")
+	}
+	for _, toolIndex := range []int{1, 5} {
+		properties := tools[toolIndex].InputSchema["properties"].(map[string]any)
+		if _, exists := properties["copy_skills_from_version_id"]; exists {
+			t.Fatal("skill copy was advertised outside create-version")
+		}
+	}
 	for _, unsupported := range []string{"tags", "folder_id", "author_id", "statuses", "my_liked", "ids"} {
 		if _, advertised := listProperties[unsupported]; advertised {
 			t.Fatalf("list schema advertises unsupported filter %q", unsupported)

@@ -39,6 +39,8 @@ export interface SaveNewVersionButtonProps {
   existingVersionNames: readonly string[];
   /** The current version's fields, cloned onto the new one (old app: `version_details` with `id: undefined`). */
   version: Omit<VersionWriteRequest, 'name'>;
+  /** Copy skill bindings from the selected version, not the default version. */
+  sourceVersionId?: number;
   disabled?: boolean;
   onClickHandler?: () => void;
   onSuccess?: (newVersion: ApplicationVersionDetail) => void;
@@ -57,9 +59,8 @@ export interface SaveNewVersionButtonProps {
  *    useSaveNewVersion.ts`, a sibling A1 sub-unit's already-landed port of
  *    the SAME baseline hook this button used) rather than re-deriving the
  *    POST call — see that file's own doc comment for the real,
- *    handler-traced backend behaviour (`tools`/`copy_skills_from_version_id`/
- *    `webhook_secret` are silently ignored by the real Go handler, not
- *    sent) and the dropped pipeline/navigation/nav-blocker orchestration.
+ *    shared backend contract, including copying skills from the selected
+ *    source version, and the dropped pipeline/navigation/nav-blocker orchestration.
  *  - No local `InputVersionDialog` port exists anywhere in this app yet;
  *    the name-entry dialog is rebuilt inline here on plain MUI `Dialog`
  *    components, matching the sibling `VersionReplacementModal.tsx`'s own
@@ -86,7 +87,17 @@ export interface SaveNewVersionButtonProps {
  */
 export const SaveNewVersionButton = forwardRef<SaveNewVersionButtonHandle, SaveNewVersionButtonProps>(
   function SaveNewVersionButton(
-    { applicationId, projectId, existingVersionNames, version, disabled = false, onClickHandler, onSuccess, onError },
+    {
+      applicationId,
+      projectId,
+      existingVersionNames,
+      version,
+      sourceVersionId,
+      disabled = false,
+      onClickHandler,
+      onSuccess,
+      onError,
+    },
     ref,
   ): ReactNode {
     const [showInputVersion, setShowInputVersion] = useState(false);
@@ -148,10 +159,16 @@ export const SaveNewVersionButton = forwardRef<SaveNewVersionButtonHandle, SaveN
         return;
       }
       if (projectId === undefined) return;
-      const input: SaveNewVersionInput = { projectId, applicationId: Number(applicationId), name: trimmed, version };
+      const input: SaveNewVersionInput = {
+        projectId,
+        applicationId: Number(applicationId),
+        name: trimmed,
+        version,
+        ...(sourceVersionId === undefined ? {} : { sourceVersionId }),
+      };
       pendingSaveRef.current = true;
       void onCreateNewVersion(input);
-    }, [newVersion, existingVersionNames, projectId, applicationId, version, onCreateNewVersion]);
+    }, [newVersion, existingVersionNames, projectId, applicationId, version, sourceVersionId, onCreateNewVersion]);
 
     return (
       <>

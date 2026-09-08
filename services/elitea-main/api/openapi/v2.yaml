@@ -12142,15 +12142,12 @@ paths:
       operationId: saveApplicationNewVersion
       summary: Create a new version for an existing application
       description: |
-        NOTE(W2): internal/api/v2/applications/handler.go:696-806 — responds
-        201 with the full new-version detail (author/is_forked variant).
-        `name` is REQUIRED on this operation only: CreateVersion hard-rejects
-        an empty/missing name with 400 "version name is required" (:706-710),
-        whereas the shared VersionWriteRequest is also used by the PUT (which
-        only applies name when non-empty, :841) and by
-        ApplicationCreateRequest.versions[0] (which defaults it to "latest",
-        :388-391) — hence the allOf+required override rather than a required
-        list on the shared schema.
+        CreateVersion in internal/api/v2/applications/handler.go returns 201
+        with the new version detail. The name is required on this operation.
+        The optional copy_skills_from_version_id copies exact skill bindings
+        from a version in the same application and project. A missing, invalid,
+        or foreign source is ignored. A database copy failure rolls back the
+        new version. The source option is not stored in version metadata.
       tags: [applications]
       requestBody:
         required: true
@@ -12161,6 +12158,12 @@ paths:
                 - $ref: '#/components/schemas/VersionWriteRequest'
                 - type: object
                   required: [name]
+                  properties:
+                    copy_skills_from_version_id:
+                      type: integer
+                      minimum: 1
+                      maximum: 2147483647
+                      description: Optional source version in the same application and project.
       responses:
         '201':
           description: Created version

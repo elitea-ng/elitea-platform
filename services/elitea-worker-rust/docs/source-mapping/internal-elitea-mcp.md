@@ -2,8 +2,8 @@
 
 Status: the applications and skills categories, five Main-owned toolkit
 builder operations, eight Main-owned configuration operations, three
-Main-owned notification operations, and the complete three-operation project
-context builder category, plus the three-operation project-secret category are
+Main-owned notification operations, three project-context CRUD operations,
+and the three-operation project-secret category are
 implemented. The three typed configuration operations require Main's current configuration composition.
 Live per-instance toolkit discovery, model-backed draft generation, discovery, chat, analytics, and
 artifacts remain gated by their owning Main capabilities.
@@ -66,6 +66,51 @@ It does not advertise the current Python endpoint's author, status, tag, like,
 ID, or sort filters because Main cannot honor them yet. Adding those filters is
 a shared application-list parity slice; silently accepting them here would make
 the MCP result incorrect.
+
+### Copy skills when creating a version
+
+Rechecked on 2026-09-08 against `elitea_core`
+`b701a00aeff0af1a416916c4a537bfdd4b7d8337` and `EliteaUI`
+`137f2ce67f5a186c91a7318a1e44ece298cc33a9`.
+
+| Current platform evidence | Replatform implementation |
+| --- | --- |
+| `elitea_core/api/v2/versions.py::ProjectAPI.post` accepts optional `copy_skills_from_version_id` before model validation. | `internal/api/v2/applications/handler.go::CreateVersion` normalizes the option into a request-only domain field. REST and internal MCP use this handler. |
+| `elitea_core/utils/create_utils.py::create_version` and `utils/skill_utils.py::copy_skill_mappings` copy exact skill bindings in the version transaction. | `internal/infra/db/repos/applications.go::CreateVersion`, `internal/db/queries/application_version_skills.sql`, generated sqlc bindings, and the shared tenant transaction executor. |
+| `EliteaUI/src/hooks/application/useSaveNewVersion.js` sends the selected source version. | `apps/elitea-web/src/features/agents/ui/AgentVersionControls.tsx`, `SaveNewVersionButton.tsx`, and `model/useSaveNewVersion.ts`. Agents and pipelines use the shared control. |
+
+The internal `post_elitea_core_versions` schema and the REST OpenAPI operation
+publish the optional source ID. The initial application-create and version-update
+operations do not publish this option. Main requires the source and target to
+belong to the same application in the endpoint project. It copies `entity_type`,
+`skill_id`, and nullable `skill_version_id` without selecting a newer skill version
+or checking the attachment cap again. It does not modify the source.
+
+A missing or foreign source is a no-op. Positive integer JSON numbers and decimal
+strings are accepted by REST. Invalid values are ignored. Unlike Python's `int`
+coercion, fractions and booleans cannot select an unrelated numeric version.
+The published schemas describe the canonical integer input.
+
+Version insertion and skill copying commit together. Copy failure or cancellation
+rolls back both. The existing handler writes variables and tags after version
+creation. If either write fails, its compensating version deletion now removes
+the copied skill bindings in the same delete transaction. The polymorphic mapping
+table has no version foreign key, so a plain version delete is not sufficient.
+This change does not claim atomicity for every existing version attachment path.
+
+No Rust command or MCP transport change is required. Rust calls the existing
+internal MCP operation; Main owns product data and persistence. Runtime consumption
+of the copied skills is a separate end-to-end proof.
+
+Verification includes six PostgreSQL/MCP regression tests, existing application
+repository and REST version tests, optional-ID unit and fuzz tests, and 32 UI
+component tests. Cases include five bindings, unpinned skills, agent and pipeline
+versions, foreign application and project IDs, denied permission, rollback after
+copy and later write failures, cancellation inside copying, and transaction-local
+tenant state on a reused connection. SQL is generated with sqlc 1.31.1. Go OpenAPI
+and UI clients are regenerated from the schema. UI regeneration also reconciles
+earlier OAuth/DCR proxy and project-context schema changes with their client bindings.
+Deployed browser and runtime verification remain in TG-16.
 
 ## Skills category
 
@@ -288,8 +333,8 @@ This category is the CRUD builder used by an Elitea agent to inspect and edit
 project context. It is not the runtime progressive-disclosure reader that
 decides when full context enters model instructions, and it does not publish
 `generate_project_context_draft`. Draft generation is a separate model-backed
-use case and remains closed until Main owns its model, service-prompt, failure,
-and validation contract.
+use case. Current Main now has its REST handler; MCP composition and contract
+review remain open, as described below.
 
 ## Secrets category
 
@@ -544,9 +589,18 @@ Main parity gate. It must use the exact saved instance and current actor's
 expanded configuration. The existing attachment/type SQL is not an acceptable
 fallback.
 
-Skill draft generation remains gated because Main does not yet own its model
-operation. Multi-version skills, rich tag metadata, extended list filters, and
-actor attribution also remain Main parity gates.
+Current Main implements skill, application, and project-context draft generation
+in `internal/api/v2/drafts/drafts.go`. `internal/api/router.go` composes those
+REST handlers with the shared completion client. The earlier claim that Main
+has no model-backed draft operation is stale. Skill and project-context draft
+generation remain unpublished through internal MCP. Their current-platform
+`generate_skill_draft.py` and `generate_project_context_draft.py` operations have
+`mcp_tool=True`; `generate_application_draft.py` has `mcp_tool=False` and must
+remain excluded. Before publication, verify permission mapping, the source-owned
+service prompts, failure and validation behavior, and skill edit-by-ID support.
+Current Main refuses skill and application edit-by-ID requests rather than
+returning an incorrect from-scratch draft. Multi-version skills, rich tag metadata,
+extended list filters, and actor attribution remain separate parity gates.
 
 Project-context AI draft generation and runtime progressive-disclosure loading
 remain separate gates. Completing builder CRUD does not claim either behavior.
@@ -559,9 +613,10 @@ The Python configuration-list `ids` filter remains a Main parity gate.
 The three typed configuration operations now reuse the production services.
 Deployed chat-driven use remains a verification gap in [the test register](../testing-gaps.md).
 
-The extended application-list filters and version-copy skill option remain
-explicit parity gates. Main must own their durable data and validation before
-the internal MCP schema can publish them.
+The extended application-list filters remain an explicit parity gate. Main must
+own their durable data and validation before the internal MCP schema can publish them.
+The version-copy skill option is implemented through the shared Main handler.
+Its deployed verification remains open in [the test register](../testing-gaps.md).
 
 External Elitea-as-MCP stays separate from this internal category. Its
 catalogue, direct read-only toolkit runtime, live proof, and remaining gates are

@@ -97,6 +97,10 @@ type Version struct {
 	// It is not part of the wire shape — the HTTP layer decodes presence
 	// from the request body and sets it here.
 	Present VersionFieldSet `json:"-"`
+
+	// CopySkillsFromVersionID is a create-version option, not stored metadata.
+	// Zero disables copying. The repository requires the same application and tenant.
+	CopySkillsFromVersionID int32 `json:"-"`
 }
 
 // VersionFieldSet marks which string-valued columns a version write carries.

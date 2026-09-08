@@ -46,6 +46,8 @@ import type { RequestHandlerOptions } from "msw";
 
 import type {
   InternalMcpPatStatus,
+  McpDcrProxyResponse,
+  McpOAuthProxyResponse,
   McpRegisteredServer,
   ToolkitInstance,
   ToolkitInstanceListResponse,
@@ -53,6 +55,88 @@ import type {
   ToolkitToolsPayload,
   ToolkitTypeSchemas,
 } from "../model";
+
+export const getExchangeMcpOAuthGrantResponseMock = (
+  overrideResponse: Partial<Extract<McpOAuthProxyResponse, object>> = {},
+): McpOAuthProxyResponse => ({
+  access_token: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  token_type: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  refresh_token: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  id_token: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  session_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  scope: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  expires_in: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([
+      faker.number.float({ fractionDigits: 2 }),
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+    ]),
+    undefined,
+  ]),
+  ...overrideResponse,
+});
+
+export const getRegisterMcpOAuthClientResponseMock = (
+  overrideResponse: Partial<Extract<McpDcrProxyResponse, object>> = {},
+): McpDcrProxyResponse => ({
+  client_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  client_reference: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  client_id_issued_at: faker.helpers.arrayElement([
+    faker.number.int(),
+    undefined,
+  ]),
+  client_secret_expires_at: faker.helpers.arrayElement([
+    faker.number.int(),
+    undefined,
+  ]),
+  token_endpoint_auth_method: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  redirect_uris: faker.helpers.arrayElement([
+    Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+    undefined,
+  ]),
+  grant_types: faker.helpers.arrayElement([
+    Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+    undefined,
+  ]),
+  response_types: faker.helpers.arrayElement([
+    Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+    undefined,
+  ]),
+  scope: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  ...overrideResponse,
+});
 
 export const getGetToolkitResponseMock = (
   overrideResponse: Partial<Extract<ToolkitInstance, object>> = {},
@@ -219,6 +303,58 @@ export const getGetInternalMcpPatStatusResponseMock = (
   state: faker.string.alpha({ length: { min: 10, max: 20 } }),
   ...overrideResponse,
 });
+
+export const getExchangeMcpOAuthGrantMockHandler = (
+  overrideResponse?:
+    | McpOAuthProxyResponse
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<McpOAuthProxyResponse> | McpOAuthProxyResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/mcp_oauth_proxy/:projectId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getExchangeMcpOAuthGrantResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getRegisterMcpOAuthClientMockHandler = (
+  overrideResponse?:
+    | McpDcrProxyResponse
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<McpDcrProxyResponse> | McpDcrProxyResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/mcp_dcr_proxy/:projectId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getRegisterMcpOAuthClientResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
 
 export const getGetToolkitMockHandler = (
   overrideResponse?:
@@ -502,6 +638,8 @@ export const getGetInternalMcpPatStatusMockHandler = (
   );
 };
 export const getToolkitsMock = () => [
+  getExchangeMcpOAuthGrantMockHandler(),
+  getRegisterMcpOAuthClientMockHandler(),
   getGetToolkitMockHandler(),
   getUpdateToolkitMockHandler(),
   getListToolkitsMockHandler(),

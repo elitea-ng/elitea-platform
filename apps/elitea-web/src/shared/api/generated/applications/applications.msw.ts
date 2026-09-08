@@ -5340,22 +5340,34 @@ export const getGetProjectStatisticsResponseMock = (
 export const getGetProjectContextResponseMock = (
   overrideResponse: Partial<Extract<ProjectContext, object>> = {},
 ): ProjectContext => ({
-  content: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
+  id: faker.helpers.arrayElement([faker.number.int(), null]),
+  content: faker.string.alpha({ length: { min: 10, max: 2500 } }),
+  enabled: faker.datatype.boolean(),
+  activation_description: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 300 } }),
     null,
   ]),
-  enabled: faker.helpers.arrayElement([faker.datatype.boolean(), null]),
+  updated_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
   ...overrideResponse,
 });
 
 export const getUpdateProjectContextResponseMock = (
   overrideResponse: Partial<Extract<ProjectContext, object>> = {},
 ): ProjectContext => ({
-  content: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
+  id: faker.helpers.arrayElement([faker.number.int(), null]),
+  content: faker.string.alpha({ length: { min: 10, max: 2500 } }),
+  enabled: faker.datatype.boolean(),
+  activation_description: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 300 } }),
     null,
   ]),
-  enabled: faker.helpers.arrayElement([faker.datatype.boolean(), null]),
+  updated_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
   ...overrideResponse,
 });
 
@@ -7344,6 +7356,28 @@ export const getUpdateProjectContextMockHandler = (
   );
 };
 
+export const getDeleteProjectContextMockHandler = (
+  overrideResponse?:
+    | void
+    | ((
+        info: Parameters<Parameters<typeof http.delete>[1]>[0],
+      ) => Promise<void> | void),
+  options?: RequestHandlerOptions,
+) => {
+  return http.delete(
+    "*/elitea_core/project_context/prompt_lib/:projectId/project-context",
+    async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
+      await delay(0);
+      if (typeof overrideResponse === "function") {
+        await overrideResponse(info);
+      }
+
+      return new HttpResponse(null, { status: 204 });
+    },
+    options,
+  );
+};
+
 export const getGetProjectInfoMockHandler = (
   overrideResponse?:
     | ProjectInfo
@@ -7741,6 +7775,7 @@ export const getApplicationsMock = () => [
   getGetProjectStatisticsMockHandler(),
   getGetProjectContextMockHandler(),
   getUpdateProjectContextMockHandler(),
+  getDeleteProjectContextMockHandler(),
   getGetProjectInfoMockHandler(),
   getUpdateProjectInfoMockHandler(),
   getListProjectIconsMockHandler(),

@@ -913,7 +913,9 @@ func (h *Handler) CreateVersion(w http.ResponseWriter, r *http.Request) {
 	}
 	userID := strconv.FormatInt(ownerID, 10)
 
-	ver, err := h.repo.CreateVersion(r.Context(), projectID, applicationID, *versionFromBody(body, ownerID))
+	input := versionFromBody(body, ownerID)
+	input.CopySkillsFromVersionID = optionalSkillSourceVersionID(body["copy_skills_from_version_id"])
+	ver, err := h.repo.CreateVersion(r.Context(), projectID, applicationID, *input)
 	if err != nil {
 		apierr.Write(w, err)
 		return

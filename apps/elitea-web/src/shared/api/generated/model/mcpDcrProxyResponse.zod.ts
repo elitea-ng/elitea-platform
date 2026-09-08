@@ -41,24 +41,26 @@
  */
 import * as zod from "zod";
 
-export const projectContextContentMax = 2500;
-
-export const projectContextActivationDescriptionMax = 300;
-
-export const ProjectContext = zod
+export const McpDcrProxyResponse = zod
   .object({
-    id: zod.int().nullable(),
-    content: zod.string().max(projectContextContentMax),
-    enabled: zod.boolean(),
-    activation_description: zod
+    client_id: zod.string(),
+    client_reference: zod
       .string()
-      .max(projectContextActivationDescriptionMax)
-      .nullable(),
-    updated_at: zod.iso.datetime({ offset: true }).nullable(),
+      .optional()
+      .describe(
+        "Actor- and project-bound reference to the encrypted confidential client.",
+      ),
+    client_id_issued_at: zod.int().optional(),
+    client_secret_expires_at: zod.int().optional(),
+    token_endpoint_auth_method: zod.string().optional(),
+    redirect_uris: zod.array(zod.string()).optional(),
+    grant_types: zod.array(zod.string()).optional(),
+    response_types: zod.array(zod.string()).optional(),
+    scope: zod.string().optional(),
   })
   .describe(
-    "The current project-context builder response. An absent configuration returns id\/activation_description\/updated_at as null, empty content, and enabled=true.\n",
+    "Main never returns the registered client secret or registration access token.",
   );
 
-export type ProjectContext = zod.input<typeof ProjectContext>;
-export type ProjectContextOutput = zod.output<typeof ProjectContext>;
+export type McpDcrProxyResponse = zod.input<typeof McpDcrProxyResponse>;
+export type McpDcrProxyResponseOutput = zod.output<typeof McpDcrProxyResponse>;

@@ -49,6 +49,7 @@ The existing attachment query cannot replace live per-instance discovery.
 | TG-13 | Verification and UI parity: UI, Main | Participant editing, guard placement, history rendering, and regeneration under collaborative use. | Retain toolkit and owning-agent labels. Prove correct action routing separately from visual parity. Do not attribute a runtime defect to appearance alone. |
 | TG-14 | Implementation: Rust, Main | Standalone `toolkit.available_tools.v1` and the internal saved-instance discovery operation. | Implement the shared command with current actor authority and fenced results. Reuse native enumeration. Stored attachment rows cannot replace live discovery. |
 | TG-15 | Verification: Main, Rust, UI | Chat-driven entity building with the three newly exposed typed configuration operations. | Select a real model and verify the endpoint project's saved default. Confirm denied permissions cause no mutation. Component and MCP protocol fixtures are not deployed proof. |
+| TG-16 | Verification: Main, Rust, UI | Save As Version with attached skills, from the agent and pipeline editors and through internal MCP. | Select a non-default source version. Verify exact skill revisions after save and reload, then launch the new version and confirm runtime consumption. Main transaction and MCP protocol fixtures plus UI component tests pass; deployed browser and runtime proof remain open. |
 
 ## Mixed-guard test fixture
 

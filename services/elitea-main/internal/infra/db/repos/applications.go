@@ -11,7 +11,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenant"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
 )
@@ -577,7 +579,30 @@ func (r *ApplicationsRepo) CreateVersion(ctx context.Context, projectID, applica
 	if v.AuthorID <= 0 {
 		return applications.Version{}, apierr.Unauthorized("an authenticated author is required to create a version")
 	}
-	return insertVersion(ctx, r.pool, s, applicationID, v)
+	if v.CopySkillsFromVersionID <= 0 {
+		return insertVersion(ctx, r.pool, s, applicationID, v)
+	}
+	project, err := parseProjectID(projectID)
+	if err != nil {
+		return applications.Version{}, err
+	}
+	var created applications.Version
+	err = tenant.NewExecutor(r.pool).WithinTx(ctx, tenant.Project{ID: project}, pgx.TxOptions{}, func(ctx context.Context, tx pgx.Tx) error {
+		var err error
+		created, err = insertVersion(ctx, tx, s, applicationID, v)
+		if err != nil {
+			return err
+		}
+		_, err = sqlcgen.New(tx).CopyApplicationVersionSkills(ctx, sqlcgen.CopyApplicationVersionSkillsParams{
+			SourceVersionID: v.CopySkillsFromVersionID,
+			TargetVersionID: created.ID,
+		})
+		return err
+	})
+	if err != nil {
+		return applications.Version{}, fmt.Errorf("applications: create version with skills: %w", err)
+	}
+	return created, nil
 }
 
 // querier is the subset of pgxpool.Pool / pgx.Tx insertVersion needs, so the
@@ -727,20 +752,30 @@ func (r *ApplicationsRepo) UpdateVersion(ctx context.Context, projectID, applica
 }
 
 func (r *ApplicationsRepo) DeleteVersion(ctx context.Context, projectID, applicationID, versionID string) error {
-	s, err := tenantSchema(projectID)
+	_, err := tenantSchema(projectID)
 	if err != nil {
 		return err
 	}
 	if !isNumericRowID(applicationID) || !isNumericRowID(versionID) {
 		return apierr.NotFound("version not found")
 	}
-	ct, err := r.pool.Exec(ctx,
-		fmt.Sprintf(`DELETE FROM %s.application_versions WHERE application_id = $1 AND id = $2`, s),
-		applicationID, versionID)
+	project, err := parseProjectID(projectID)
+	if err != nil {
+		return err
+	}
+	var count int64
+	err = tenant.NewExecutor(r.pool).WithinTx(ctx, tenant.Project{ID: project}, pgx.TxOptions{}, func(ctx context.Context, tx pgx.Tx) error {
+		var err error
+		count, err = sqlcgen.New(tx).DeleteApplicationVersionWithSkills(ctx, sqlcgen.DeleteApplicationVersionWithSkillsParams{
+			ApplicationID: applicationID,
+			VersionID:     versionID,
+		})
+		return err
+	})
 	if err != nil {
 		return fmt.Errorf("applications: delete version: %w", err)
 	}
-	if ct.RowsAffected() == 0 {
+	if count == 0 {
 		return apierr.NotFound("version not found")
 	}
 	return nil
