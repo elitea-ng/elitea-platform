@@ -700,7 +700,43 @@ export async function readVersion(
 }
 
 /** The vault key the expanded version-details route compares `X-SECRET` against. */
-const SECRETS_HEADER_NAME = 'secrets_header_value';
+export const SECRETS_HEADER_NAME = 'secrets_header_value';
+
+/**
+ * The project's `secrets_header_value` as the vault holds it — or `undefined`
+ * when it holds none. It NEVER writes.
+ *
+ * The read and the repair are separated because they answer different
+ * questions, and one caller wants only the first. `auth.setup.ts` asserts that
+ * the STACK gave the seeded project its value (`scripts/e2e-stack.sh seed`
+ * restarts elitea-main so its backfill writes one); a read that quietly minted
+ * the value on the way would make that assertion unable to fail, and the
+ * absence it exists to catch would go on being repaired by whichever caller
+ * happened to run first.
+ *
+ * An EMPTY value is not "absent": it is a vault that answered, with something
+ * no caller can authenticate with. It throws rather than inviting a mint over
+ * the top of it.
+ */
+export async function readProjectSecretHeader(
+  request: APIRequestContext,
+  projectId: string = DEFAULT_PROJECT_ID,
+): Promise<string | undefined> {
+  const url = `${API_BASE}/secrets/secret/default/${projectId}/${SECRETS_HEADER_NAME}`;
+  const response = await request.get(url);
+  if (response.status() === 404) return undefined;
+  if (!response.ok()) {
+    throw new Error(
+      `readProjectSecretHeader: GET ${url} -> ${response.status()}${await describeRefusal(response)}`,
+    );
+  }
+  const body = (await response.json()) as { value?: unknown };
+  const value = typeof body.value === 'string' ? body.value : '';
+  if (value === '') {
+    throw new Error(`readProjectSecretHeader: the vault answered an empty ${SECRETS_HEADER_NAME}`);
+  }
+  return value;
+}
 
 /**
  * The project's `X-SECRET` value, resolved from the project's own vault —
@@ -712,16 +748,18 @@ const SECRETS_HEADER_NAME = 'secrets_header_value';
  * header is refused" everywhere the literal went stale. Reading it makes the
  * journey portable and keeps the refusal case honest.
  *
- * WHY IT MINTS ONE. elitea-main gives a project its value in exactly two
- * places: the project PROVISIONER, and a boot pass over the vaults that
- * already exist. The journeys stack has neither — its working project is
- * inserted by the seed SQL, not provisioned, and it owns no vault at all until
- * something writes a secret into it, which is after the boot pass has run. So
- * the value is absent there and present in every provisioned deployment, and a
- * fixture that only read it made this one stack's seeding gap look like a
- * broken route. The create below is the same write the provisioner makes (an
- * absent vault is initialised by the handler), it is done once per run, and it
- * is what the boot pass would have done had the vault existed.
+ * WHY IT STILL MINTS ONE. elitea-main gives a project its value in exactly two
+ * places: the project PROVISIONER, and a boot pass over `centry.project` that
+ * creates the vault it needs. The journeys stack is reached by the second one
+ * only because `scripts/e2e-stack.sh seed` RESTARTS elitea-main after writing
+ * its project rows — the pass elitea-main did at `up` ran against a database
+ * that had no `centry` schema yet. That is now the guarantee this suite runs
+ * on, and `auth.setup.ts` asserts it.
+ *
+ * The mint is kept as the fallback for the deployments this fixture is also
+ * pointed at and does not seed: a hand-built stack, a branch image whose seed
+ * predates that restart, a project created after the pass. It is a repair, no
+ * longer the ordinary path, and on the journeys stack it never fires.
  *
  * A 404 is therefore the ONLY status that mints. Anything else is reported as
  * itself: a 403 is a missing grant on the persona, and a 500 is a vault this
@@ -732,26 +770,19 @@ export async function resolveProjectSecretHeader(
   request: APIRequestContext,
   projectId: string = DEFAULT_PROJECT_ID,
 ): Promise<string> {
-  const url = `${API_BASE}/secrets/secret/default/${projectId}/${SECRETS_HEADER_NAME}`;
-  let response = await request.get(url);
-  if (response.status() === 404) {
-    await mintProjectSecretHeader(request, projectId);
-    response = await request.get(url);
-  }
-  if (!response.ok()) {
+  const existing = await readProjectSecretHeader(request, projectId);
+  if (existing !== undefined) return existing;
+
+  await mintProjectSecretHeader(request, projectId);
+  const minted = await readProjectSecretHeader(request, projectId);
+  if (minted === undefined) {
     throw new Error(
-      `resolveProjectSecretHeader: GET ${url} -> ${response.status()}. The project vault holds no ` +
-        `${SECRETS_HEADER_NAME} and one could not be minted; elitea-main writes it when a project ` +
-        `is provisioned and in a boot pass over the vaults that already exist.` +
-        `${await describeRefusal(response)}`,
+      `resolveProjectSecretHeader: project ${projectId} holds no ${SECRETS_HEADER_NAME} and one ` +
+        `could not be minted; elitea-main writes it when a project is provisioned and in a boot ` +
+        `pass over centry.project, and this stack's seed restarts elitea-main to run that pass.`,
     );
   }
-  const body = (await response.json()) as { value?: unknown };
-  const value = typeof body.value === 'string' ? body.value : '';
-  if (value === '') {
-    throw new Error(`resolveProjectSecretHeader: the vault answered an empty ${SECRETS_HEADER_NAME}`);
-  }
-  return value;
+  return minted;
 }
 
 /**

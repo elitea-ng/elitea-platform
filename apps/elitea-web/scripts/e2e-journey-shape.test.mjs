@@ -742,3 +742,146 @@ describe('the publish journeys must find the tenancy their fixtures resolve', ()
     expect(publishTenancySeeded(moved, read('e2e/fixtures/api.ts'))).toBe(false);
   });
 });
+
+/* ── rule 8 ─────────────────────────────────────────────────────────────── */
+
+/**
+ * The seeded project's `secrets_header_value` is made by the STACK, and the
+ * setup only asserts it.
+ *
+ * ## What the value is
+ *
+ * `secrets_header_value` is the `X-SECRET` the expanded version-details read
+ * compares against — the call the SDK worker materializes a nested agent with,
+ * and the one three API journeys authenticate with. A project without one
+ * refuses every caller with 403 `This project has no secrets_header_value
+ * secret`. It lives in the project's Fernet vault, so only elitea-main can
+ * write it: `BackfillProjectSecretsHeaderValues` gives one to every row of
+ * `centry.project` before the listeners bind. On this stack that pass ran at
+ * `up`, against a database with no `centry` schema at all, so it saw nothing —
+ * which is why the seed has to restart elitea-main after writing its rows.
+ *
+ * ## Why it is a rule and not a comment
+ *
+ * `auth.setup.ts` used to mint the value through the API, best-effort, with
+ * the failure swallowed to a `console.warn`. That put a WRITE on the critical
+ * path of a SCREENSHOT: the single row of the `settings-secrets` visual
+ * baseline IS this secret, so a mint that failed for a reason of its own — a
+ * persona without `configuration.secrets.secret.create`, a route absent from
+ * the image under test — left the page drawing "No secrets" and the run
+ * reported a visual diff on the Secrets page. The line that named the cause
+ * sat in the setup log, which nobody reads when a picture has changed.
+ *
+ * Three properties, and each one alone restores that reading:
+ *
+ *  1. the seed restarts elitea-main AFTER it has written the project vaults —
+ *     a restart before them repeats the pass that saw nothing;
+ *  2. it PROVES the pass wrote one, by watching project 1's vault blob change,
+ *     rather than only waiting for the container to report healthy: the pass
+ *     logs a warning and returns success for a project it skipped;
+ *  3. `auth.setup.ts` READS and asserts, and does not mint or swallow. A setup
+ *     that repairs the absence cannot detect it, and the next reader of an
+ *     empty Secrets page is a baseline diff again.
+ */
+export function runtimeSecretHeaderSeeded(seedSource, setupSource) {
+  const vaultInsert = seedSource.indexOf('INSERT INTO centry.secrets_data');
+  const restart = seedSource.indexOf('$COMPOSE_F restart elitea-main');
+  if (vaultInsert < 0 || restart < 0 || restart < vaultInsert) return false;
+
+  // The digest of project 1's vault, and a bounded wait on it AFTER the
+  // restart. The reader is a function defined above the restart, so the wait is
+  // what has to sit below it — a seed that reads the digest once and never
+  // again proves the container came back, not that the pass wrote anything.
+  const readsTheDigest = seedSource.includes(
+    "md5(data) FROM centry.secrets_data WHERE id = 'project-1'",
+  );
+  const waitsForIt = seedSource.slice(restart).includes('project_one_vault_digest');
+  if (!readsTheDigest || !waitsForIt) return false;
+
+  // The IMPORT and the CALL, not the prose: the doc comment on the assertion
+  // names `resolveProjectSecretHeader` on purpose — it says where the mint went
+  // — and a rule that read prose would forbid the sentence that explains it.
+  if (/import\s*\{[^}]*resolveProjectSecretHeader[^}]*\}/.test(setupSource)) return false;
+  const helperAt = setupSource.indexOf('async function assertRuntimeSecretHeader');
+  if (helperAt < 0) return false;
+  const helper = setupSource.slice(helperAt);
+  if (helper.includes('console.warn') || helper.includes('resolveProjectSecretHeader(')) {
+    return false;
+  }
+  return helper.includes('readProjectSecretHeader') && helper.includes('expect(');
+}
+
+describe("the seeded project's X-SECRET value is a property of the stack", () => {
+  const SETUP = 'e2e/auth.setup.ts';
+
+  it('the seed mints it and the setup asserts it', () => {
+    expect(runtimeSecretHeaderSeeded(read(SEED_SCRIPT), read(SETUP))).toBe(true);
+  });
+
+  it('rejects a seed that never restarts elitea-main', () => {
+    const seed = read(SEED_SCRIPT).replace(
+      '$COMPOSE_BIN $COMPOSE_F restart elitea-main',
+      '# restart removed',
+    );
+    expect(runtimeSecretHeaderSeeded(seed, read(SETUP))).toBe(false);
+  });
+
+  it('rejects a restart that runs before the vaults it is meant to fill', () => {
+    const seed = read(SEED_SCRIPT).replace(
+      '$COMPOSE_BIN $COMPOSE_F restart elitea-main',
+      '# moved',
+    );
+    const moved = seed.replace(
+      'INSERT INTO centry.secrets_data',
+      '$COMPOSE_BIN $COMPOSE_F restart elitea-main\nINSERT INTO centry.secrets_data',
+    );
+    expect(runtimeSecretHeaderSeeded(moved, read(SETUP))).toBe(false);
+  });
+
+  it('rejects a restart that waits for health instead of for the write', () => {
+    const seed = read(SEED_SCRIPT).replaceAll('md5(data)', 'length(data)');
+    expect(runtimeSecretHeaderSeeded(seed, read(SETUP))).toBe(false);
+  });
+
+  it('rejects a seed that reads the digest once and never waits on it', () => {
+    const seed = read(SEED_SCRIPT);
+    const poll = seed.indexOf('$COMPOSE_BIN $COMPOSE_F restart elitea-main');
+    const trimmed =
+      seed.slice(0, poll) +
+      seed.slice(poll).replaceAll('project_one_vault_digest', 'true # digest wait removed');
+    expect(runtimeSecretHeaderSeeded(trimmed, read(SETUP))).toBe(false);
+  });
+
+  it('rejects the best-effort mint the visual gate used to report for', () => {
+    const before = [
+      'async function ensureRuntimeSecretHeader(page) {',
+      '  try {',
+      '    await resolveProjectSecretHeader(page.request, DEFAULT_PROJECT_ID);',
+      '  } catch (error) {',
+      '    console.warn(`[auth.setup] could not pre-mint the project secret header`);',
+      '  }',
+      '}',
+    ].join('\n');
+    expect(runtimeSecretHeaderSeeded(read(SEED_SCRIPT), before)).toBe(false);
+  });
+
+  it('rejects an assertion that swallows its own failure', () => {
+    const swallowed = read(SETUP).replace(
+      'expect(value, explain).toBeTruthy();',
+      'if (!value) console.warn(explain);',
+    );
+    expect(runtimeSecretHeaderSeeded(read(SEED_SCRIPT), swallowed)).toBe(false);
+  });
+  it('rejects a setup that mints through the resolver instead of reading', () => {
+    const setup = read(SETUP)
+      .replace(
+        "import { readProjectSecretHeader, SECRETS_HEADER_NAME } from './fixtures/api';",
+        "import { resolveProjectSecretHeader, SECRETS_HEADER_NAME } from './fixtures/api';",
+      )
+      .replace(
+        'await readProjectSecretHeader(page.request, DEFAULT_PROJECT_ID)',
+        'await resolveProjectSecretHeader(page.request, DEFAULT_PROJECT_ID)',
+      );
+    expect(runtimeSecretHeaderSeeded(read(SEED_SCRIPT), setup)).toBe(false);
+  });
+});

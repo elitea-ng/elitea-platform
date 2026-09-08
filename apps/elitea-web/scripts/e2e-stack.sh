@@ -1164,8 +1164,14 @@ ON CONFLICT (elitea_title) DO UPDATE
 -- empty one: on THIS row, "replace with empty" would silently delete the
 -- deployment's shared secrets and, here, break J20f.
 --
--- J21 (Settings > Secrets) is still unaffected: that page reads
--- `project-1`, which stays empty.
+-- J21 (Settings > Secrets) reads `project-1`, and this pair leaves it EMPTY.
+-- It does not stay empty: the restart at the end of this seed makes
+-- elitea-main write one entry into it, `secrets_header_value` — the single row
+-- of the `settings-secrets` visual baseline. That entry is the whole content
+-- of project 1's vault, and it is written by the stack rather than by a test,
+-- which is what makes the baseline reproducible. Adding the five upload limits
+-- here would put five MORE rows on that page; that is why they live in the
+-- `admin` vault, which the page does not list.
 INSERT INTO centry.secrets_key (id, data) VALUES
     ('admin', '\x6f4b47696f36536c7071656f71617172724b32757237437873724f3074626133754c6d36753779397672383d'::bytea),
     ('project-1', '\x45424553457851564668635947526f62484230654879416849694d6b4a53596e4b436b714b7977744c69383d'::bytea)
@@ -2396,6 +2402,98 @@ $publish$;
 PUBLISH_SQL
 
     echo "  ✓ Publish author project 90500 and its non-shared model seeded"
+
+    # ── the one thing this seed cannot write, and the restart that writes it ──
+    #
+    # WHAT IS MISSING. Every project needs a `secrets_header_value` in its own
+    # vault: it is the `X-SECRET` the expanded version-details read compares
+    # against (`PATCH /elitea_core/version/prompt_lib/...`), which is the call
+    # the SDK worker materializes a NESTED AGENT with, and it is the value the
+    # API journeys authenticate that read with. A project without one refuses
+    # every caller — 403 `This project has no secrets_header_value secret`.
+    #
+    # WHY SQL CANNOT WRITE IT. The value is sealed into the project's vault with
+    # that project's Fernet key, and the one-minter rule puts every vault write
+    # inside elitea-main (internal/api/v2/secrets). psql can write the blob only
+    # by producing Fernet ciphertext, which it cannot do. So the seed writes the
+    # EMPTY vault pair above and nothing else.
+    #
+    # WHY A RESTART IS THE WRITE. elitea-main runs
+    # `BackfillProjectSecretsHeaderValues` before its listeners bind, over every
+    # row of `centry.project`. On this stack it bound BEFORE this seed ran — at
+    # `up`, against a database that had no `centry` schema at all — so the pass
+    # it already did saw nothing. Restarting it here runs the pass over the rows
+    # this seed has just written: project 1, the admin fixtures, the DeepWiki,
+    # Inventory and publish projects, and any personal project a previous run
+    # left behind (whose vault the block above has just reset to empty).
+    #
+    # WHAT DEPENDED ON THIS BEFORE. `e2e/auth.setup.ts` pre-minted project 1's
+    # value through the API, best-effort, with the failure swallowed to a
+    # console warning. That put a WRITE on the critical path of a screenshot:
+    # a mint that failed for any reason of its own — a persona without
+    # `configuration.secrets.secret.create`, a route not in the image under
+    # test — left Settings > Secrets empty, and the run then reported a visual
+    # diff on the Secrets page instead of the failed mint. The value is a
+    # property of the stack, so the stack makes it, and the setup only asserts.
+    echo "  → Restarting elitea-main so the X-SECRET backfill reaches the seeded projects…"
+
+    # The vault's digest, not its content: the blob is Fernet ciphertext with a
+    # random IV, so "the pass wrote something" is exactly "the digest changed".
+    # Read through a function because it is read once before and once per poll.
+    project_one_vault_digest() {
+      $EXEC_BIN exec -i "$POSTGRES_CONTAINER" psql -U elitea -d elitea -tAc \
+        "SELECT md5(data) FROM centry.secrets_data WHERE id = 'project-1';" 2>/dev/null \
+        | tr -d '[:space:]'
+    }
+
+    VAULT_BEFORE=$(project_one_vault_digest || true)
+    if [ -z "$VAULT_BEFORE" ]; then
+      echo "ERROR: project 1 has no vault row in centry.secrets_data." >&2
+      echo "  The seed writes that pair itself (the 'centry secret vaults' block above)," >&2
+      echo "  so its absence means the seed SQL did not reach that statement." >&2
+      exit 1
+    fi
+
+    $COMPOSE_BIN $COMPOSE_F restart elitea-main
+
+    # The digest has to CHANGE, and waiting for the container to report healthy
+    # is not the same assertion. The backfill runs before the listeners bind, so
+    # a healthy container proves the pass finished — it does not prove the pass
+    # reached project 1, and a pass that skipped it (a vault it cannot open, an
+    # advisory lock another replica holds) logs a warning and returns success.
+    # This is the postcondition the rest of the run depends on, so it is checked
+    # rather than assumed.
+    SECRET_DEADLINE=$(( $(date +%s) + 180 ))
+    VAULT_AFTER="$VAULT_BEFORE"
+    while [ "$VAULT_AFTER" = "$VAULT_BEFORE" ]; do
+      if [ "$(date +%s)" -ge "$SECRET_DEADLINE" ]; then
+        echo "ERROR: project 1's vault still holds no secrets_header_value after the restart." >&2
+        echo "  elitea-main writes it in BackfillProjectSecretsHeaderValues" >&2
+        echo "  (services/elitea-main/internal/api/v2/secrets/secrets_header_value.go)," >&2
+        echo "  which runs before its listeners bind. Read that container's log for the" >&2
+        echo "  'skipped' count: a vault it cannot open is reported there and nowhere else." >&2
+        echo "  Without the value, every expanded version-details read for project 1 is" >&2
+        echo "  refused 403 and Settings > Secrets shows an empty table." >&2
+        exit 1
+      fi
+      sleep 2
+      VAULT_AFTER=$(project_one_vault_digest || true)
+      [ -n "$VAULT_AFTER" ] || VAULT_AFTER="$VAULT_BEFORE"
+    done
+    echo "  ✓ project 1 carries a secrets_header_value (written by the boot backfill)"
+
+    # And it has to be SERVING again before the browser arrives. The same probe
+    # the compose healthcheck runs, so "healthy" means here what it means there.
+    HEALTH_DEADLINE=$(( $(date +%s) + 120 ))
+    until $EXEC_BIN exec "$MAIN_CONTAINER" /elitea-main -healthcheck >/dev/null 2>&1; do
+      if [ "$(date +%s)" -ge "$HEALTH_DEADLINE" ]; then
+        echo "ERROR: elitea-main did not become healthy after the seed restart." >&2
+        $COMPOSE_BIN $COMPOSE_F ps --all >&2 || true
+        exit 1
+      fi
+      sleep 2
+    done
+    echo "  ✓ elitea-main is serving again"
 
     echo "→ Seed complete."
     ;;
