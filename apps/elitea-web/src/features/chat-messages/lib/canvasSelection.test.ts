@@ -102,4 +102,18 @@ describe('selectionTextWithin', () => {
     expect(selectionTextWithin(null, fakeSelection({ ancestor: container, text: 'x' }))).toBeUndefined();
     expect(selectionTextWithin(container, null)).toBeUndefined();
   });
+
+  /*
+   * A MEASURED browser state, not an invented one. A paragraph is a block as
+   * wide as the answer bubble; a double click in the empty space PAST the end
+   * of a short line leaves chromium reporting a range that is NOT collapsed
+   * and whose text is the empty string. `isCollapsed` alone therefore does
+   * not answer "did the reader highlight anything" — the emptiness of the
+   * text does, and a rule that trusted the flag would offer to carve a range
+   * of nothing.
+   */
+  it('answers nothing for the empty range a click past the end of a line leaves', () => {
+    const container = document.createElement('div');
+    expect(selectionTextWithin(container, fakeSelection({ collapsed: false, ancestor: container, text: '' }))).toBeUndefined();
+  });
 });

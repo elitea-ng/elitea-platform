@@ -697,14 +697,18 @@ test('a table canvas and a diagram canvas live side by side, and each opens its 
  * canvas the server stores must hold that word and nothing else, so a resolver
  * that carved the neighbouring range would fail here rather than pass with a
  * canvas that merely exists.
+ *
+ * WHERE the double click lands is part of the gesture, not a detail. See the
+ * comment on the `dblclick` below: aimed at the element's default point this
+ * journey selected NOTHING and read as a control that was never wired.
  */
 test('a range selected in an answer becomes a canvas the server keeps', async ({ page }) => {
   test.setTimeout(300_000);
 
   const token = uniqueToken('CANVASSEL');
   // The token on a line of its own: the paragraph it renders as is then
-  // exactly one word, so a double click at its centre selects the token and
-  // the assertion on the stored canvas can be an equality.
+  // exactly one word, so one double click selects the token and nothing else
+  // and the assertion on the stored canvas can be an equality.
   const seed = await seedAnswer(page, token, `autotest ${token}\n\n${token}`);
 
   try {
@@ -716,7 +720,39 @@ test('a range selected in an answer becomes a canvas the server keeps', async ({
     // Nothing offers to carve anything until something is highlighted.
     await expect(page.getByTestId('canvas-create-from-selection')).toHaveCount(0);
 
-    await answer.getByText(token, { exact: true }).last().dblclick();
+    /*
+     * THE CLICK POINT, and why it is written out.
+     *
+     * A double click with no `position` lands on the middle of the element,
+     * and the element here is a PARAGRAPH: a block as wide as the answer
+     * bubble holding one short word. Its middle is therefore empty space past
+     * the end of the text, and a double click there selects nothing at all —
+     * chromium answers `document.getSelection()` with a non-collapsed range
+     * whose text is the empty string (measured, headless chromium 151: the
+     * same gesture aimed at the first characters selects the whole word).
+     *
+     * An empty selection is exactly what a reader who highlighted nothing
+     * has, so the page correctly offered no control, and the journey read
+     * that as "highlighting part of an answer offers nothing" — a product
+     * claim the gesture had never actually made. The click is aimed at the
+     * word instead.
+     */
+    const word = answer.getByText(token, { exact: true }).last();
+    await word.dblclick({ position: { x: 8, y: 4 } });
+
+    /*
+     * The gesture has to have produced a real selection before the control is
+     * waited for. Without this the failure below cannot tell a browser that
+     * selected nothing from a control that was never wired — and it was the
+     * first of the two, reported as the second, that cost this journey its
+     * first run.
+     */
+    await expect
+      .poll(async () => page.evaluate(() => (document.getSelection()?.toString() ?? '').trim()), {
+        timeout: 10_000,
+        message: 'the double click selected nothing, so nothing downstream of it means anything',
+      })
+      .toBe(token);
 
     const create = page.getByTestId('canvas-create-from-selection').first();
     await expect(create, 'highlighting part of an answer must offer to carve it out').toBeVisible({ timeout: 20_000 });
