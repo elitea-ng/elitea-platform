@@ -65,6 +65,33 @@ The full locked Rust run passes 893 library tests and 84 integration/contract te
 No tests are ignored. PostgreSQL tests use isolated databases on the rehearsal service.
 Formatting and strict all-target, all-feature Clippy checks pass.
 
+## Required new-UI proof
+
+Component tests do not close the browser gate. Use Playwright against the
+replatform UI in the Private project after the data-preserving deployment.
+Do not use the legacy UI deployment procedure for this environment.
+
+| Browser scenario | Required evidence | Status |
+| --- | --- | --- |
+| Direct OpenAPI node rejects a previously accepted delegated token | Toolkit identity and enabled Authorize/Skip controls belong to the paused node. No dependent node executes. | Pending |
+| Authorize succeeds | The exact paused operation resumes with the replacement token. Completed nodes do not repeat. Downstream nodes finish. | Pending |
+| User selects Skip | The pipeline reports the unavailable node and stops dependent work without a generic runtime failure. | Pending |
+| Replacement token is rejected | The run terminates with a clear result, without repeated guards or an automatic retry loop. | Pending |
+| Reload, later turn, and regeneration | History survives reload. A prior Skip does not permanently decline authorization. New runs use the correct input and participants. | Pending |
+| Multiple tabs | Authorization and logout state remain consistent. Old tabs cannot resume a different or already resolved guard. | Pending |
+
+Correlate each browser action with Main execution identity, Rust checkpoint and
+settlement evidence, and emulator request counts. A visible final answer alone
+does not prove exact-node resume or absence of duplicate protected calls.
+
+A read-only Playwright readiness check on 2026-09-08 reached the authenticated
+Private-project chat page. It did not start an execution or exercise this fix.
+The running worker predates this commit, and the migration conflict below remains.
+The check also observed HTTP 429 responses from the notification event endpoint
+with existing browser tabs open. Track this separately from execution failures;
+the check does not establish the cause of a worker or authorization failure.
+The temporary inspection tab was closed. Existing tabs and chats were retained.
+
 ## Remaining boundaries
 
 - Recover active agent and LLM-node tool loops through their authorization tools.
