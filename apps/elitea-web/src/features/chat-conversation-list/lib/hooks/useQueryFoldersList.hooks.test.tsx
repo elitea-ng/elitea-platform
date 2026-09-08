@@ -69,6 +69,47 @@ describe('useQueryFoldersList', () => {
     expect(applied[0]).toMatchObject({ id: 'f1', name: 'Folder 1', offset: 1 });
   });
 
+  /*
+   * The gap the rail's load-more fell through.
+   *
+   * `Conversations.pagination.test.tsx` proves the follow-up read fires once a
+   * bucket knows it has a remainder, but it hands `dateGroups` to the
+   * component ALREADY carrying `total`. Nothing asserted that the value ever
+   * survived the trip from the wire, and it did not: this hook rebuilt each
+   * bucket from `name`/`conversations` alone. Every bucket reached
+   * `LoadMoreSentinel` with `totalAvailableCount` 0, so the sentinel never
+   * mounted and the second page was unreachable in the real app while both
+   * unit suites stayed green.
+   */
+  it('carries each bucket’s total and offset through from the answer, so a remainder is expressible', async () => {
+    grantPermission();
+    server.use(
+      http.get(`${BASE}/elitea_core/folder/prompt_lib/7`, () =>
+        HttpResponse.json({
+          pinned: { conversations: [] },
+          date_groups: [{ name: 'Today', conversations: [{ id: 't1' }, { id: 't2' }], total: 14, offset: 2 }],
+          folders: [{ id: 'f1', name: 'Folder 1', conversations: [{ id: 'c1' }], total: 9, offset: 1 }],
+          total_folders: 1,
+        }),
+      ),
+    );
+
+    const setFolders = vi.fn();
+    const setDateGroups = vi.fn();
+    const { result } = renderHook(
+      () => useQueryFoldersList({ projectId: '7', toastError: vi.fn(), setFolders, setDateGroups, setPinnedConversations: vi.fn() }),
+      { wrapper },
+    );
+    await waitFor(() => expect(result.current.isConversationsLoaded).toBe(true));
+
+    expect(setDateGroups, 'a bucket must reach the rail knowing how big it really is').toHaveBeenCalledWith([
+      expect.objectContaining({ name: 'Today', total: 14, offset: 2 }),
+    ]);
+
+    const foldersUpdater = setFolders.mock.calls[0]?.[0] as (prev: readonly FolderListItem[]) => readonly FolderListItem[];
+    expect(foldersUpdater([])[0]).toMatchObject({ id: 'f1', total: 9, offset: 1 });
+  });
+
   it('excludes any pinned conversation id from its date group / folder bucket', async () => {
     grantPermission();
     server.use(

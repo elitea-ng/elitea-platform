@@ -153,12 +153,33 @@ async function openTodayGroup(page: Page): Promise<void> {
  * decoration — without it the click fails on an invisible element, which reads
  * like a missing control.
  */
+/**
+ * Opens one rail row's action menu.
+ *
+ * THE HOVER AND THE CLICK ARE ONE RETRIED GESTURE, deliberately. The trigger
+ * is `display: none` until its row is hovered
+ * (`ConversationItem.styles.ts`'s `menuWrapper`), and the rail re-orders
+ * under a resting pointer: a listing that lands between the hover and the
+ * click moves this row out from under the cursor, the browser hands the row
+ * its `mouseleave`, the trigger goes back to `display: none` — and a
+ * `click()` carrying no timeout of its own then waits for it for the whole
+ * remaining test budget. That is a 120 s hang whose report names whichever
+ * teardown call was running when the clock ran out, not the click; the
+ * screenshot showed the trigger open on the row the pointer had drifted onto.
+ */
 async function openRowMenu(page: Page, conversationId: string): Promise<void> {
   const row = page.getByTestId(`conversation-item-${conversationId}`);
   await expect(row).toBeVisible({ timeout: 20_000 });
-  await row.hover();
-  await row.getByRole('button', { name: 'More actions' }).click();
-  await expect(page.getByRole('menu')).toBeVisible({ timeout: 10_000 });
+  const menu = page.getByRole('menu');
+  await expect(async () => {
+    // Guarded, so a retry that only lost the visibility race does not try to
+    // hover a row the open menu's own surface now covers.
+    if ((await menu.count()) === 0) {
+      await row.hover();
+      await row.getByRole('button', { name: 'More actions' }).click({ timeout: 5_000 });
+    }
+    await expect(menu).toBeVisible({ timeout: 5_000 });
+  }).toPass({ timeout: 40_000 });
 }
 
 async function closeRowMenu(page: Page): Promise<void> {

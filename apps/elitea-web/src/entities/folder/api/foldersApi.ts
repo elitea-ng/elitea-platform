@@ -98,9 +98,17 @@ function normaliseFolder(wire: FolderWire): Folder {
   };
 }
 
+/**
+ * The bucket wire shape carries `total`/`offset` exactly as `FolderWire` does
+ * — the grouped listing pages every bucket and reports the remainder. Both
+ * were absent from this interface, so the normaliser below dropped them and
+ * the rail's per-bucket load-more had nothing to fire on.
+ */
 interface DateGroupWire {
   readonly name: string;
   readonly conversations?: readonly FolderConversationRefWire[];
+  readonly total?: number;
+  readonly offset?: number;
 }
 
 interface GroupedFoldersResponseWire {
@@ -117,6 +125,8 @@ function normaliseGroupedFoldersResponse(wire: GroupedFoldersResponseWire): Grou
     dateGroups: (wire.date_groups ?? []).map((group) => ({
       name: group.name,
       conversations: (group.conversations ?? []).map(normaliseFolderConversationRef),
+      ...(group.total !== undefined ? { total: group.total } : {}),
+      ...(group.offset !== undefined ? { offset: group.offset } : {}),
     })),
     folders: (wire.folders ?? []).map(normaliseFolder),
     ...(wire.selected_conversation_id !== undefined ? { selectedConversationId: wire.selected_conversation_id } : {}),

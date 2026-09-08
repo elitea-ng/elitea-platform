@@ -36,6 +36,7 @@ import type { Page } from '@playwright/test';
 import { checkA11y } from '../../fixtures/axe';
 import { BASE_URL } from '../../../playwright.config';
 import {
+  API_BASE,
   AUTOTEST_PREFIX,
   DEFAULT_PROJECT_ID,
   createConversation,
@@ -46,6 +47,17 @@ import {
 const SUFFIX = '-list';
 
 const CONVERSATION_PATH = `/elitea_core/conversation/prompt_lib/${DEFAULT_PROJECT_ID}`;
+const FOLDER_PATH = `/elitea_core/folder/prompt_lib/${DEFAULT_PROJECT_ID}`;
+
+/** The `?grouped=true` envelope, read for the three fields these tests assert on. */
+interface GroupedListing {
+  readonly date_groups?: readonly {
+    readonly name?: string;
+    readonly total?: number;
+    readonly offset?: number;
+    readonly conversations?: readonly { readonly id?: string | number }[];
+  }[];
+}
 
 function uniqueName(tag: string): string {
   return `${AUTOTEST_PREFIX}${tag}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}${SUFFIX}`;
@@ -203,15 +215,43 @@ test('the rail moves from one open conversation to another', async ({ page }) =>
 test('the rail places each conversation in the date group the server assigned, in the server’s order', async ({
   page,
 }) => {
-  const names = [uniqueName('when1'), uniqueName('when2'), uniqueName('when3')];
+  // The assertions below cover EVERY row the listing sent, not three of them,
+  // so the budget is the page load plus one visibility check per row of every
+  // bucket the rail was given — more than the default 30 s allows for on a
+  // project that a whole suite has been seeding.
+  test.setTimeout(120_000);
+  // ONE token across all three names, so the server's own filtered listing
+  // below selects exactly these three and nothing another worker made.
+  const token = Math.random().toString(36).slice(2, 10);
+  const names = [1, 2, 3].map((n) => `${AUTOTEST_PREFIX}when${n}-${token}${SUFFIX}`);
   const ids: string[] = [];
   for (const name of names) ids.push(await createConversation(page.request, name));
 
   try {
-    // Every request the page makes from here, so the "no second page" claim
-    // below is measured on the wire rather than inferred from the screen.
-    const requested: string[] = [];
-    page.on('request', (request) => requested.push(request.url()));
+    /* ── which bucket the SERVER put these three in ─────────────────────── */
+    /*
+     * Asked with a `query=`, which the handler serves WHOLE — it pages only
+     * an unfiltered listing. That matters since issue 852: the rail's own
+     * read now carries ONE PAGE per bucket, and a date bucket is a
+     * PROJECT-WIDE queue, so a concurrent journey seeding a dozen
+     * conversations of its own pushes these three off page one entirely.
+     * That happened, and the assertion it broke ("these three are in the
+     * listing the rail read") was making a claim about paging, not about
+     * grouping. The grouping claim is asked here, where it is answerable.
+     */
+    const filtered = await page.request.get(`${API_BASE}${FOLDER_PATH}?grouped=true&query=${encodeURIComponent(token)}`);
+    expect(filtered.status(), 'the filtered grouped listing must answer').toBe(200);
+    const seeded = (await filtered.json()) as GroupedListing;
+    const assignedGroup = new Map<string, string>();
+    for (const group of seeded.date_groups ?? []) {
+      for (const conversation of group.conversations ?? []) {
+        assignedGroup.set(String(conversation.id ?? ''), String(group.name ?? ''));
+      }
+    }
+    expect(
+      [...assignedGroup.keys()].sort(),
+      'every conversation just created must be in a date group the server names',
+    ).toEqual([...ids].sort());
 
     // Armed before the navigation: this is the rail's OWN read, and the
     // load-more fetchers hit the same path with a `date_group`/`folder_id`
@@ -228,33 +268,39 @@ test('the rail places each conversation in the date group the server assigned, i
     await page.goto(BASE_URL + '/app/chat');
     await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 20_000 });
 
-    const listing = (await (await listed).json()) as {
-      date_groups?: readonly {
-        readonly name?: string;
-        readonly total?: number;
-        readonly conversations?: readonly { readonly id?: string | number }[];
-      }[];
-    };
+    const listing = (await (await listed).json()) as GroupedListing;
     const groups = listing.date_groups ?? [];
     expect(groups.length, 'the grouped listing must carry the buckets the rail renders').toBeGreaterThan(0);
 
-    /* ── what the server said about THESE three ─────────────────────────── */
-    // The flattened server order: buckets in the order the response lists them
-    // (newest bucket first), rows in the order inside each bucket.
+    /* ── what the server said, for the WHOLE page it sent ───────────────── */
+    /*
+     * Every row of every bucket, not just this test's own three. Which rows
+     * those are is decided by whatever else the project holds at this moment,
+     * so naming them would be the race again; that they are rendered, under
+     * the bucket the server named and in the order the server sent, is the
+     * claim this test exists to make, and it holds for any set of rows.
+     *
+     * Order: buckets as the response lists them (newest bucket first), rows
+     * in the order inside each bucket.
+     */
     const serverOrder: string[] = [];
     const groupOf = new Map<string, string>();
     for (const group of groups) {
       for (const conversation of group.conversations ?? []) {
         const id = String(conversation.id ?? '');
-        if (!ids.includes(id)) continue;
         serverOrder.push(id);
         groupOf.set(id, String(group.name ?? ''));
       }
     }
-    expect(
-      [...serverOrder].sort(),
-      'every conversation just created must be in the grouped listing the rail reads',
-    ).toEqual([...ids].sort());
+    expect(serverOrder.length, 'the rail’s own listing must carry rows for it to render').toBeGreaterThan(0);
+
+    // The two listings agree about the bucket. An id the rail's page does not
+    // carry is on page two of its bucket — the last test in this file fetches
+    // one of those — and says nothing about grouping either way.
+    for (const [id, groupName] of assignedGroup) {
+      if (!groupOf.has(id)) continue;
+      expect(groupOf.get(id), 'the filtered and unfiltered listings must agree about the bucket').toBe(groupName);
+    }
 
     // Each bucket's own arithmetic is CONSISTENT: it never claims to have
     // delivered more rows than it did. A bucket bigger than one page reports
@@ -269,7 +315,7 @@ test('the rail places each conversation in the date group the server assigned, i
     /* ── what the screen shows ──────────────────────────────────────────── */
     for (const groupName of new Set(groupOf.values())) await openGroup(page, groupName);
 
-    for (const id of ids) {
+    for (const id of serverOrder) {
       // Visible, not merely attached: a row sitting in a COLLAPSED bucket is
       // mounted but hidden, so visibility here is what says the row is under
       // the header the server named.
@@ -285,15 +331,15 @@ test('the rail places each conversation in the date group the server assigned, i
       .evaluateAll((nodes) =>
         nodes.map((node) => (node.getAttribute('data-testid') ?? '').replace('conversation-item-', '')),
       );
+    // Filtered to the date-group rows: the same rail also renders the pinned
+    // section and every folder, and the server partitions a conversation into
+    // exactly one of the three, so this selects the bucket rows and nothing
+    // else.
+    const fromBuckets = new Set(serverOrder);
     expect(
-      rendered.filter((id) => ids.includes(id)),
+      rendered.filter((id) => fromBuckets.has(id)),
       'the rail must keep the order the server sent — newest first, by the timestamps it grouped on',
     ).toEqual(serverOrder);
-
-    // `requested` is read only to keep the wire log alive for the reader: the
-    // second-page claim is made by the test below, on a bucket seeded large
-    // enough to have one.
-    expect(requested.length, 'the page must have issued requests at all').toBeGreaterThan(0);
   } finally {
     for (const id of ids) await deleteConversation(page.request, id);
   }
@@ -325,9 +371,14 @@ test('a date bucket bigger than one page reports the remainder, and the rail fet
   for (let i = 0; i < PAGE_SIZE + 4; i += 1) ids.push(await createConversation(page.request, uniqueName(`page${i}`)));
 
   try {
-    const followUps: string[] = [];
+    // Recorded per bucket: the rail holds a sentinel per bucket, and a
+    // follow-up fired by SOME OTHER bucket says nothing about this one.
+    const followUps = new Map<string, string[]>();
     page.on('request', (request) => {
-      if (request.url().includes('date_group=')) followUps.push(request.url());
+      const url = new URL(request.url(), BASE_URL);
+      const group = url.searchParams.get('date_group');
+      if (group === null) return;
+      followUps.set(group, [...(followUps.get(group) ?? []), request.url()]);
     });
 
     const listed = page.waitForResponse(
@@ -342,14 +393,7 @@ test('a date bucket bigger than one page reports the remainder, and the rail fet
     await page.goto(BASE_URL + '/app/chat');
     await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 20_000 });
 
-    const listing = (await (await listed).json()) as {
-      date_groups?: readonly {
-        readonly name?: string;
-        readonly total?: number;
-        readonly offset?: number;
-        readonly conversations?: readonly { readonly id?: string | number }[];
-      }[];
-    };
+    const listing = (await (await listed).json()) as GroupedListing;
     const groups = listing.date_groups ?? [];
     // The bucket these conversations landed in — read from the answer rather
     // than hardcoded, for the midnight reason the file header gives.
@@ -364,31 +408,70 @@ test('a date bucket bigger than one page reports the remainder, and the rail fet
     expect(bucket?.offset, 'offset is where the next page starts — the rows delivered').toBe(delivered);
 
     /* ── and the rail really goes and asks for them ─────────────────────── */
-    await openGroup(page, String(bucket?.name));
-    // The sentinel sits under the last row of the bucket, so it has to be
-    // brought into view. Scrolling the last rendered row into view is the
-    // gesture a reader performs; `waitForTimeout` would only be waiting for
-    // the same thing without saying so.
+    const bucketName = String(bucket?.name);
+    await openGroup(page, bucketName);
+
     const sidebar = page.getByTestId('chat-conversation-sidebar');
-    const rows = sidebar.locator('[data-testid^="conversation-item-"]');
-    await rows.last().scrollIntoViewIfNeeded();
+
+    /*
+     * How many rows THIS bucket holds, taken from the bucket's own subtree.
+     *
+     * The rail also renders the pinned section and every folder, so a count
+     * over the whole sidebar would already be past one page before any paging
+     * happened. The bucket's body is found by walking up from a row it
+     * carries to the first ancestor that holds more than one row — not to the
+     * one that holds the sentinel, which is unmounted again the moment the
+     * bucket is exhausted.
+     */
+    const bucketRowCount = (rowId: string): Promise<number> =>
+      page.evaluate((id: string) => {
+        const held = (node: Element): number => node.querySelectorAll('[data-testid^="conversation-item-"]').length;
+        let node: Element | null = document.querySelector(`[data-testid="conversation-item-${id}"]`);
+        while (node !== null && held(node) < 2) node = node.parentElement;
+        return node === null ? 0 : held(node);
+      }, rowId);
+
+    /*
+     * THE SENTINEL, not the last row.
+     *
+     * The sentinel sits UNDER the bucket's last row and is `visibility:
+     * hidden`, and the rail is its own scroll container: scrolling the last
+     * row into view parks that row against the container's bottom edge and
+     * leaves the sentinel clipped just below it, where no intersection is
+     * reported (the observer's 50px `rootMargin` widens the viewport, not the
+     * intermediate scroller). So the bucket's own sentinel is centred
+     * directly — found by walking up from the bucket's last row to the
+     * nearest ancestor that holds one, which is that bucket's collapse body.
+     * A `scrollIntoViewIfNeeded` on the sentinel would refuse it for being
+     * invisible, and `waitForTimeout` would only be waiting for a scroll to
+     * happen without saying so.
+     */
+    const lastInBucket = String((bucket?.conversations ?? []).at(-1)?.id ?? '');
+    await expect(sidebar.getByTestId(`conversation-item-${lastInBucket}`)).toBeVisible({ timeout: 20_000 });
+    await page.evaluate((rowId: string) => {
+      let node: Element | null = document.querySelector(`[data-testid="conversation-item-${rowId}"]`);
+      while (node !== null && node.querySelector('[data-testid="conversation-load-more-sentinel"]') === null) {
+        node = node.parentElement;
+      }
+      node?.querySelector('[data-testid="conversation-load-more-sentinel"]')?.scrollIntoView({ block: 'center' });
+    }, lastInBucket);
 
     await expect
-      .poll(() => followUps.length, {
+      .poll(() => followUps.get(bucketName)?.length ?? 0, {
         timeout: 30_000,
         message: 'a bucket with a remainder must ask the server for its next page',
       })
       .toBeGreaterThan(0);
-    const followUp = new URL(followUps[0] ?? '', BASE_URL);
+    const followUp = new URL(followUps.get(bucketName)?.[0] ?? '', BASE_URL);
     expect(followUp.searchParams.get('offset'), 'the follow-up must start where the first page ended').toBe(
-      String(delivered),
+      String(bucket?.offset),
     );
 
     // …and the rows it fetched really reach the screen.
     await expect
-      .poll(async () => rows.count(), {
+      .poll(() => bucketRowCount(lastInBucket), {
         timeout: 30_000,
-        message: 'the rail must render more rows after the second page than the first page carried',
+        message: 'the bucket must hold more rows than its first page carried once the second page lands',
       })
       .toBeGreaterThan(delivered);
   } finally {

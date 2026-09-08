@@ -146,6 +146,29 @@ describe('foldersList', () => {
     expect(result.folders[0]?.conversations[0]?.authorId).toBe('7');
   });
 
+  /*
+   * DEFECT: the bucket wire shape declared only `name`/`conversations`, so the
+   * normaliser dropped the `total`/`offset` pair the grouped listing sends per
+   * date group — the same pair it already kept for a folder. Downstream, a
+   * bucket that does not know its own total can never report a remainder, and
+   * the rail's load-more sentinel is gated on exactly that.
+   */
+  it('carries each date group’s `total`/`offset` through, as it already does for a folder', async () => {
+    server.use(
+      http.get(`${BASE}/elitea_core/folder/prompt_lib/7`, () =>
+        HttpResponse.json({
+          pinned: { conversations: [] },
+          date_groups: [{ name: 'Today', conversations: [{ id: 't1' }], total: 14, offset: 10 }],
+          folders: [{ id: 'f1', name: 'Folder', conversations: [{ id: 'c1' }], total: 9, offset: 1 }],
+          total_folders: 1,
+        }),
+      ),
+    );
+    const result = await foldersList({ projectId: 7 });
+    expect(result.dateGroups[0]).toMatchObject({ name: 'Today', total: 14, offset: 10 });
+    expect(result.folders[0]).toMatchObject({ id: 'f1', total: 9, offset: 1 });
+  });
+
   it('forces grouped=true even when a caller-supplied params object tries to override it', async () => {
     let capturedUrl: URL | undefined;
     server.use(
