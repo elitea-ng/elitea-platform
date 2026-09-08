@@ -1,7 +1,7 @@
 # Direct toolkit terminal recovery
 
-Status: partial. Encrypted-spool component tests cover replacement claims.
-The live old-protocol repair, service replacement, and cross-replica proofs remain open.
+Status: partial. Component tests and live old-protocol recovery pass.
+Injected process-loss, cross-replica, and broader replacement proofs remain open.
 
 This slice applies to `toolkit.execute.read.v1`. It does not implement the broader toolkit Test contract.
 See [toolkit-test.md](toolkit-test.md) for `TKTEST-RUST-01`.
@@ -103,14 +103,64 @@ Formatting, strict all-target Clippy, and warning-free Rust documentation checks
 Eleven new tests cover this recovery slice.
 These checks do not constitute a deployed takeover, browser, load, or Kubernetes proof.
 
+### Live old-protocol recovery: 2026-09-08
+
+An isolated repair branch starts at the pre-merge protocol revision `046e84a2`.
+Commit `4a422f5d` backports only the terminal recovery implementation and tests.
+The branch is `fix/rust-rehearsal-terminal-recovery-20260908`.
+It does not change protobuf fields, generated bindings, migrations, dependencies, or runtime configuration.
+The development branch retains the merged protocol and all current work.
+
+The repair passes 898 library tests and 83 integration or contract tests.
+No tests are ignored. PostgreSQL component tests use isolated rehearsal databases.
+Strict all-target, all-feature Clippy passes.
+The locked Linux ARM64 release build uses `cargo auditable`.
+
+The deployed image is `elitea-worker-rust:rehearsal-terminal-recovery-20260908`.
+Its image ID is `sha256:bb5dd292b1212afb876cb8ad39964aa0689ba66f5d25ca4226fdd4bb442d9350`.
+The worker starts at `2026-09-08T11:50:30Z`.
+Only the worker service changes. Main, UI, PostgreSQL, and Redis remain running.
+The replacement preserves the environment, command, five mounts, network, resource limits, and container security settings.
+The previous image and private database and spool snapshots remain available.
+
+The replacement accepts claim 1,815 for the previously stuck execution.
+At `11:50:50.717240Z`, it reports `toolkit_output_terminal_rebound`.
+At `11:50:50.737287Z`, it reports `toolkit_delivery.accepted_terminal_retired`.
+Main commits one failed terminal with `RUNTIME_ERROR_CODE_V1_DEADLINE_EXCEEDED`.
+The settlement commit time is `2026-09-08T11:50:50.734402Z`.
+The signed command deadline has expired. Recovery must not start the tool again.
+
+Read-only checks confirm these outcomes:
+
+- The execution and settlement both have the `FAILED` state.
+- The output inbox contains one terminal frame.
+- The exact Redis stream entry and pending delivery are absent.
+- The acknowledged local spool frame is absent.
+- The claim count remains 1,815 during follow-up checks.
+
+The output-only recovery type and terminal events prove that this attempt does not enter fresh tool execution.
+This proof does not include an external service request counter for the original tool call.
+No manual claim, job, ledger, spool, or Redis edit completes the recovery.
+The normal durable acknowledgement, settlement, and transport-retirement path completes it.
+
+The outbox `retired_at` field remains unset.
+That field covers pre-authority retirement paths, not this worker settlement path.
+The exact Redis checks establish transport retirement here.
+
+Playwright creates chat 538 in the Private project through the existing UI.
+The worker returns `RUST_RECLAIM_RECOVERY_20260908` and the same text remains after page reload.
+Only the added browser tab closes. Existing user tabs remain open.
+This smoke test proves repaired-worker compatibility with the existing UI.
+It does not prove the pending merged-UI, OAuth, DCR, or multi-tab recovery changes.
+
 ## Remaining recovery gates
 
 Horizontal scaling requires transferable state and recovery, not only additional replicas.
-The following gates remain open:
+The gate register separates completed recovery from the remaining proofs:
 
 | Gate | Required proof | Status |
 | --- | --- | --- |
-| `REC-RUST-01` | Recover and settle old-protocol rehearsal output before the merged-schema cutover. | Open |
+| `REC-RUST-01` | Recover and settle old-protocol rehearsal output before the merged-schema cutover. | Complete: live settlement, Redis retirement, and spool removal pass on 2026-09-08. |
 | `REC-RUST-02` | Replace a worker process during result publication. Prove one result, committed settlement, and Redis retirement. | Open |
 | `REC-RUST-03` | Transfer ownership to another replica without the original local spool. Recover shared checkpoints and output ownership. | Open |
 | `REC-RUST-04` | Recover paused and running nested agents and pipelines. Preserve completed siblings and exact interrupt ownership. | Open |
