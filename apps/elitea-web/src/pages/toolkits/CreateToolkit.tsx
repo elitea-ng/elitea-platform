@@ -12,6 +12,7 @@ import { t } from '@/shared/i18n';
 import { useToolkitCredentialPickerSlot } from './lib/credentialPickerSlots';
 import { SHAREPOINT_AUTH_MODALS } from './lib/sharepointAuthModals';
 import { useSelectedProjectId } from './lib/useSelectedProjectId';
+import { useMcpDiscoverySlot } from './lib/useMcpDiscoverySlot';
 import type { EditToolDetail } from './lib/toolkitFormTypes';
 
 const pageSx: SxProps<Theme> = { height: '100%', display: 'flex', flexDirection: 'column' };
@@ -188,10 +189,6 @@ export function CreateToolkit({ isMCP = false, isApplication = false, deps }: Cr
    * `projectId`) and both slots must travel in one object.
    */
   const renderCredentialPicker = useToolkitCredentialPickerSlot(projectId);
-  const toolkitFormSlots = useMemo(
-    () => ({ sharepointAuthModals: SHAREPOINT_AUTH_MODALS, renderCredentialPicker }),
-    [renderCredentialPicker],
-  );
 
   const handleSelectTool = useCallback((detail: EditToolDetail) => {
     setEditToolDetail(detail);
@@ -218,6 +215,11 @@ export function CreateToolkit({ isMCP = false, isApplication = false, deps }: Cr
   const handleSetFormField = useCallback((field: string, value: unknown) => {
     setFormValues((prev) => ({ ...prev, [field]: value }));
   }, []);
+  const toolActionsExtra = useMcpDiscoverySlot({ editToolDetail, onChangeToolDetail: handleChangeToolDetail, projectId });
+  const toolkitFormSlots = useMemo(
+    () => ({ sharepointAuthModals: SHAREPOINT_AUTH_MODALS, renderCredentialPicker, toolActionsExtra }),
+    [renderCredentialPicker, toolActionsExtra],
+  );
 
   const handleClearEditTool = useCallback(() => {
     setEditToolDetail(null);

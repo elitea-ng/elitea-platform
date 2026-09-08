@@ -69,6 +69,7 @@ export interface ToolkitSaveHandlers {
  * grouping).
  */
 export interface ConfigurationTabSlots {
+  readonly toolActionsExtra?: ToolBaseSlots['toolActionsExtra'];
   /** The RIGHT panel's live test-chat content — see the module doc comment for why this is a slot, not a direct import. */
   readonly renderTestPane: (props: ToolkitTestPaneRenderProps) => ReactNode;
   readonly renderRunHistory?: (props: ToolkitRunHistoryRenderProps) => ReactNode;
@@ -159,7 +160,7 @@ export function ConfigurationTab({
   saveHandlers,
   slots,
 }: ConfigurationTabProps): ReactNode {
-  const { renderTestPane, renderRunHistory, sharepointAuth, renderCredentialPicker } = slots;
+  const { renderTestPane, renderRunHistory, sharepointAuth, renderCredentialPicker, toolActionsExtra } = slots;
   const { editToolDetail, onChangeToolDetail, isToolDirty } = toolDetailState;
   const { saveToolkit, onSaveSuccess, onSaveError } = saveHandlers;
   /**
@@ -177,12 +178,13 @@ export function ConfigurationTab({
   // `ToolkitForm.hooks.ts`'s own note — but a fresh object here would also
   // remount nothing, it would just churn; keep it cheap and stable).
   const formSlots = useMemo<ToolBaseSlots | undefined>(() => {
-    if (sharepointAuth === undefined && renderCredentialPicker === undefined) return undefined;
+    if (sharepointAuth === undefined && renderCredentialPicker === undefined && toolActionsExtra === undefined) return undefined;
     return {
       ...(sharepointAuth === undefined ? {} : { sharepointAuthModals: sharepointAuth }),
       ...(renderCredentialPicker === undefined ? {} : { renderCredentialPicker }),
+      toolActionsExtra,
     };
-  }, [sharepointAuth, renderCredentialPicker]);
+  }, [sharepointAuth, renderCredentialPicker, toolActionsExtra]);
 
   const handleShowHistory = useCallback(() => setShowHistory(true), []);
   const handleCloseHistory = useCallback(() => setShowHistory(false), []);

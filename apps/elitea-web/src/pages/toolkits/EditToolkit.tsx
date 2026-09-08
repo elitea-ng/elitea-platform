@@ -20,6 +20,7 @@ import type { ControlsDropdownItem } from '@/shared/ui/ControlsDropdown';
 import { useScheduleCredentialsSelectSlot, useToolkitCredentialPickerSlot } from './lib/credentialPickerSlots';
 import { SHAREPOINT_AUTH_MODALS } from './lib/sharepointAuthModals';
 import { useSelectedProjectId } from './lib/useSelectedProjectId';
+import { useMcpDiscoverySlot } from './lib/useMcpDiscoverySlot';
 import { INDEXES_CHAT_UI } from './lib/indexesChatUI';
 import type { EditToolDetail } from './lib/toolkitFormTypes';
 import { useIndexesTabState } from './lib/useIndexesTabState';
@@ -144,11 +145,8 @@ function useCopyLinkMenuItem(): ControlsDropdownItem[] {
 }
 
 /**
- * The Indexes tab panel. A separate component purely so `EditToolkit` stays
- * under the §3.5 complexity budget (12) — same reason
- * `useSaveToolkitMutation` below is not inlined. `toolkitId` is `undefined`
- * only while the route params are still resolving, at which point there is
- * no toolkit to list indexes for.
+ * Separate panel keeps `EditToolkit` within its complexity budget.
+ * An unresolved route has no toolkit whose indexes can be listed.
  */
 interface IndexesTabPanelProps {
   readonly toolkitId: string | undefined;
@@ -302,6 +300,7 @@ export function EditToolkit({ isMCP = false, deps }: EditToolkitProps): ReactNod
   }, []);
 
   const handleTabChange = useCallback((_event: unknown, value: number) => setTab(value), []);
+  const toolActionsExtra = useMcpDiscoverySlot({ editToolDetail, onChangeToolDetail: handleChangeToolDetail, projectId });
 
   /**
    * Issue #149. The baseline hides the Indexes tab outright on MCP screens
@@ -372,6 +371,7 @@ export function EditToolkit({ isMCP = false, deps }: EditToolkitProps): ReactNod
               // `./lib/sharepointAuthModals.tsx`.
               sharepointAuth: SHAREPOINT_AUTH_MODALS,
               renderCredentialPicker,
+              toolActionsExtra,
               renderTestPane: () => (
                 // Composition gap: the right-pane live test-chat content
                 // (`TestTools`, a sibling A4 sub-unit's owned file — see

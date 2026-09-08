@@ -361,7 +361,9 @@ func (h *Handler) resolveMCPOAuthCredentials(
 	}
 	needsStoredCredentials := !body.UsedDCR &&
 		(credentials.clientID == "" || credentials.clientSecret == "" || placeholder)
-	needsStoredScope := credentials.scope == "" && h.delegatedAuth != nil
+	// RFC 6749 section 6: an omitted refresh scope means the original grant.
+	// Toolkit defaults may be broader than what the user actually authorized.
+	needsStoredScope := body.GrantType != "refresh_token" && credentials.scope == "" && h.delegatedAuth != nil
 	if !present || (!needsStoredCredentials && !needsStoredScope) {
 		return credentials, nil
 	}
@@ -401,7 +403,7 @@ func (h *Handler) resolveMCPOAuthCredentials(
 			credentials.clientSecret = storedSecret
 		}
 	}
-	if credentials.scope == "" {
+	if needsStoredScope {
 		credentials.scope = firstOAuthScope(layers)
 	}
 	if storedSecret != "" && !oauthTokenEndpointIsBound(tokenEndpoint, layers) {

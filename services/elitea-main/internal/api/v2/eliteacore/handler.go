@@ -4082,13 +4082,13 @@ func (h *Handler) MCPSyncTools(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var body struct {
-		URL         string            `json:"url"`
-		Headers     map[string]string `json:"headers"`
-		Timeout     int               `json:"timeout"`
-		ToolkitType string            `json:"toolkit_type"`
+		URL         string                       `json:"url"`
+		Headers     map[string]string            `json:"headers"`
+		Timeout     int                          `json:"timeout"`
+		ToolkitType string                       `json:"toolkit_type"`
+		MCPTokens   map[string]mcpDiscoveryToken `json:"mcp_tokens"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request"})
+	if !decodeMCPProxyRequest(w, r, &body) {
 		return
 	}
 
@@ -4150,8 +4150,12 @@ func (h *Handler) MCPSyncTools(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	tools, err := mcpregistry.NewDiscoverer(h.doMCPProxyRequest).
-		Discover(ctx, endpoint.String(), body.Headers)
+		Discover(ctx, endpoint.String(), mcpDiscoveryHeaders(body.Headers, body.MCPTokens, endpoint.String(), body.ToolkitType))
 	if err != nil {
+		if metadata, authErr := h.mcpDiscoveryAuthorization(ctx, endpoint, err); authErr == nil {
+			writeJSON(w, http.StatusOK, map[string]any{"success": false, "requires_authorization": true, "response_metadata": metadata})
+			return
+		}
 		// The stated cause is the remote server's, not this service's, so it is
 		// reported as a failed discovery rather than a fault here. The web
 		// client renders `error` directly.

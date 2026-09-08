@@ -93,7 +93,16 @@ func TestMCPOAuthProtocolTLSGrantsAndProtectedOpenAPI(t *testing.T) {
 					reject("invalid_client")
 					return
 				}
-				if r.PostForm.Get("scope") != "records.read" || r.PostForm.Has("toolkit_id") || r.PostForm.Has("used_dcr") {
+				expectedScope := "records.read"
+				if r.PostForm.Get("grant_type") == "refresh_token" && !mode.dcr {
+					// This client omits refresh scope: reuse the original grant,
+					// rather than restoring potentially broader toolkit defaults.
+					expectedScope = ""
+					if r.PostForm.Has("scope") {
+						t.Error("omitted refresh scope was filled from toolkit defaults")
+					}
+				}
+				if r.PostForm.Get("scope") != expectedScope || r.PostForm.Has("toolkit_id") || r.PostForm.Has("used_dcr") {
 					t.Error("scope or platform-only fields changed at the provider boundary")
 				}
 				switch r.PostForm.Get("grant_type") {

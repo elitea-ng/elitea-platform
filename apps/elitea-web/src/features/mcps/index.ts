@@ -27,7 +27,6 @@ export type { McpAuthStatusBadgeProps } from './ui/McpAuthStatusBadge';
 export { McpLogInButton } from './ui/McpLogInButton';
 export type { McpLogInButtonProps } from './ui/McpLogInButton';
 export { McpLogInLink } from './ui/McpLogInLink';
-export type { McpLogInLinkProps } from './ui/McpLogInLink';
 export { McpLogoutButton } from './ui/McpLogoutButton';
 export type { McpLogoutButtonProps } from './ui/McpLogoutButton';
 
@@ -35,6 +34,7 @@ export type { McpLogoutButtonProps } from './ui/McpLogoutButton';
 export { useMcpLogin } from './model/useMcpLogin';
 export type { UseMcpLoginOptions, McpLoginAuthConfig } from './model/useMcpLogin';
 export { useMcpTokenChange } from './model/useMcpTokenChange';
+export { useGetRemoteMcpTools } from './model/useGetRemoteMcpTools';
 
 // lib — the storage/flow primitives a non-UI caller (e.g. a chat tool-action
 // handler reacting to `mcp_authorization_required`, per manifest JRNY-018)

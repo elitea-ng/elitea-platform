@@ -803,13 +803,98 @@ The next ordinary task refreshes the confidential client token without another c
 Execution `da5679e973c46ee972d805a4a81cd6b7` returns the new marker with mode `dcr-secret` and generation 2.
 It settles and retires its delivery. Real-provider checks remain open.
 
+### Protected MCP discovery from the create and edit pages
+
+The current-platform business evidence is Indexer's
+`methods/indexer_mcp_sync_tools.py`: it uses the exact resource token or a prebuilt
+toolkit alias and returns `requires_authorization` with consent metadata.
+Current UI `features/toolkits/ui/form/ToolBase/ToolActionsSelector.jsx` connects
+Load Tools to the discovery hook and authorization modal.
+
+Main `internal/mcpregistry/authorization.go` preserves a bounded Bearer challenge
+without retaining the provider response body. `eliteacore/mcp_sync_auth.go`
+resolves public protected-resource and authorization-server metadata, validates
+the exact resource and issuer, and projects only consent fields. Metadata reads
+receive no invocation credentials or custom headers. Existing proxy validation
+rejects cross-origin redirects; TLS verification remains enabled. Discovery
+uses only the exact bound access token or an admitted prebuilt alias, never a
+refresh token. The existing request-body bound also applies to tool discovery.
+
+Web `pages/toolkits/lib/useMcpDiscoverySlot.tsx` composes the existing MCP hook and
+modal into both `CreateToolkit` and `EditToolkit`. No sideways feature import is
+introduced. `ConfigurationTab` forwards the slot, and `ToolBase` displays the
+discovered names even when the registry schema has an empty tool enum. Empty
+selections initialize from discovery; existing nonempty selections are retained.
+Discovered metadata and credentials are not saved as toolkit settings.
+
+`useGetRemoteMcpTools.ts` refreshes session tokens before discovery, selects only
+the bound resource, rejects a missing project, ignores responses for a changed
+form, and retries once after successful authorization without a timer.
+`useMcpAuthModal.ts` stores remote MCP grants by resource rather than issuer.
+`discoveryMetadata.ts` retains the advertised token-endpoint authentication
+methods so confidential DCR requirements reach the consent flow.
+
+Verification on 2026-09-08:
+
+- 307 focused MCP and toolkit-page tests pass, including both real page
+  compositions, consent metadata, token isolation, refresh, stale responses,
+  and the post-consent retry. The creation fixture explicitly supplies the
+  real platform-settings route, avoiding a generated random visibility flag.
+- Main's focused OAuth, DCR, discovery, and challenge-parser race tests pass.
+  Negative cases cover resource/issuer mismatch, oversized bodies, invalid
+  endpoints, cross-origin redirects, and credential-free metadata reads.
+- TypeScript checking, targeted UI lint, Go vet, and the full UI container
+  build pass. No dependency or database schema changes are needed.
+- Public DCR discovery passes through both the edit page and a new, unsaved
+  MCP form: automatic registration, explicit fixture consent, code exchange,
+  automatic discovery retry, and the visible `echo_marker` operation.
+- Confidential DCR editor discovery passes the same sequence on fixture 29
+  without operator-entered client credentials.
+
+The initial discovery-proof Main image configuration is
+`sha256:88512b0b082e45a8d35664e72494afad33cd783e889f09f88e616c2d1018cdac`.
+The final Web image configuration is
+`sha256:ec20fe53674fb2b9dbc33f6e4c28b92d1cbbbad1e4631e90499610b8b8d5507f`.
+Scoped replacement preserves environment values and original mounts. No
+conversation, emulator state, or test toolkit is deleted by this slice.
+
+### Refresh must not expand the authorized scope
+
+The confidential editor's next Load Tools request exposed a Main defect:
+`mcp_oauth_proxy` returned HTTP 400 with the safe error `invalid_scope`.
+The browser omitted `scope` on refresh, but Main populated it from the toolkit's
+configured defaults. Those included `offline_access`, while the completed consent
+granted only `records.read`. The emulator rejected that scope expansion before
+issuing a refreshed token. Registration and initial consent were not the failure.
+
+[RFC 6749 section 6](https://www.rfc-editor.org/rfc/rfc6749#section-6) defines an
+omitted refresh scope as the original grant's scope. Main
+`mcp_oauth_proxy.go::resolveMCPOAuthCredentials` now leaves it absent on refresh,
+including when stored client credentials must be resolved. An explicit scope is
+forwarded unchanged; the authorization server still enforces its grant bound.
+Code-grant defaults are unchanged. Four regression cases cover stored-client and
+DCR refresh with omitted or explicit scope. Both omitted-scope cases fail before
+the change; all four pass after it, along with the focused OAuth/discovery race
+suite and vet.
+
+The same browser document and confidential grant were retained for the deployed
+refresh retest. After replacing only rehearsal Main, cancelling the unnecessary
+consent prompt and pressing Load Tools returned HTTP 200 from both the OAuth
+proxy and discovery endpoint. The response contained `echo_marker`. Emulator
+confidential-client refresh count advanced from 1 to 2 and initialization/list
+counts from 3 to 4; registration, consent, and code-exchange counts all remained
+at 2. No new authorization was performed. Main reports healthy with deployed
+image `sha256:3d85a6997df216be4951de1488f7fdac034cf66ce23c0a16579e3b529a95e453`.
+This is a same-document refresh proof, not confidential-client reload recovery.
+
 ## Remaining gates
 
 ### Open verification
 
 - Repeat DCR against a real provider.
   Both variants now pass the local emulator grant, durable resume, tool call, and between-turn refresh proof.
-  Wire editor discovery. Toolkit authorization before operation names are known now passes runtime and browser checks.
+  Editor discovery and toolkit authorization before operation names are known
+  now pass local browser checks.
 - Repeat stored delegated code and refresh grants against a real provider.
   The deployed OpenAPI emulator proves both grants and first-turn session reuse.
 - Extend the deployed authorization-tool proof to a real provider grant.
@@ -819,6 +904,15 @@ It settles and retires its delivery. Real-provider checks remain open.
 - Prove logout and concurrent-tab behavior against the replatform stack.
   A second tab on conversation 533 temporarily retained active guard controls after the deciding tab completed.
   The controls later cleared; immediate collaborator synchronization is not proven.
+- Close confidential DCR credential ownership across a document reload.
+  `clientSecretVault.ts` intentionally retains issued client secrets only in
+  memory. The same-document refresh proof does not demonstrate reload recovery;
+  any durable solution must keep client secrets server-side, not put them back
+  into browser storage or reuse an unrelated toolkit OAuth client.
+- Review consent scope defaults: the editor currently prefers resource-advertised
+  scopes over configured scopes. A configured `offline_access` scope is therefore
+  not automatically selected when only `records.read` is advertised. The emulator
+  issues refresh tokens in this case; that does not prove a real provider will.
 - Repeat the earlier conversation 529 scenario if it recurs with complete child results.
   The latest direct-agent and pipeline proofs complete after one Skip without a repeated guard.
 - Publish both proxy schemas in Main's OpenAPI document.

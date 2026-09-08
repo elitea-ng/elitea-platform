@@ -358,7 +358,7 @@ export function ToolBaseToolsSection({ schema, editToolDetail, passParams, isMcp
 
   return (
     <ToolActionsSelector
-      availableTools={resolveAvailableTools(schema, passParams.settings)}
+      availableTools={slots?.toolActionsExtra?.availableTools ?? resolveAvailableTools(schema, passParams.settings)}
       onChange={(value) => passParams.editField('settings.selected_tools', value)}
       selectedTools={passParams.settings['selected_tools'] as readonly string[] | undefined}
       isRemoteMcp={schema.title === 'mcp'}
