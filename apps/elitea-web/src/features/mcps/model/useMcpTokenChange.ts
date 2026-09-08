@@ -11,7 +11,7 @@ import { useCallback, useEffect, useState } from 'react';
 
 import { MCP_TOKEN_CHANGE_EVENT } from '../lib/constants';
 import { getLogoutMarkerEventKey } from '../lib/logoutSync';
-import { getAccessToken, getStorageKey } from '../lib/storage';
+import { getAccessToken, getStorageKey, getTokenInfo } from '../lib/storage';
 
 export interface McpTokenChangeOptions {
   serverUrl?: string | undefined;
@@ -20,6 +20,8 @@ export interface McpTokenChangeOptions {
 
 export interface McpTokenChangeResult {
   isLoggedIn: boolean;
+  /** Allows logout after access-token expiry, including a saved refresh grant. */
+  hasStoredAuthorization: boolean;
   refreshLoginStatus: () => void;
 }
 
@@ -36,9 +38,11 @@ export function useMcpTokenChange(serverUrlOrOptions: string | McpTokenChangeOpt
   const logoutMarkerKey = getLogoutMarkerEventKey(storageKey);
 
   const [isLoggedIn, setIsLoggedIn] = useState<boolean>(() => (storageKey ? getAccessToken(serverUrl, toolkitType) !== null : false));
+  const [hasStoredAuthorization, setHasStoredAuthorization] = useState(() => getTokenInfo(serverUrl, toolkitType) !== null);
 
   const refreshLoginStatus = useCallback(() => {
-    if (storageKey) setIsLoggedIn(getAccessToken(serverUrl, toolkitType) !== null);
+    setIsLoggedIn(Boolean(storageKey) && getAccessToken(serverUrl, toolkitType) !== null);
+    setHasStoredAuthorization(getTokenInfo(serverUrl, toolkitType) !== null);
   }, [storageKey, serverUrl, toolkitType]);
 
   useEffect(() => {
@@ -65,5 +69,5 @@ export function useMcpTokenChange(serverUrlOrOptions: string | McpTokenChangeOpt
     };
   }, [storageKey, logoutMarkerKey, refreshLoginStatus]);
 
-  return { isLoggedIn, refreshLoginStatus };
+  return { isLoggedIn, hasStoredAuthorization, refreshLoginStatus };
 }

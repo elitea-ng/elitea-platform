@@ -25,7 +25,6 @@
 export const MC_TOKENS_STORAGE_KEY = 'mcp.tokens';
 export const MCP_CREDENTIALS_STORAGE_KEY = 'mcp.credentials';
 export const MCP_IGNORED_SERVERS_STORAGE_KEY = 'mcp.ignoredServers';
-export const MCP_LOGOUT_SYNC_STORAGE_KEY = 'mcp.logout';
 
 /** Cross-window/tab notification, dispatched on `window` (not persisted). */
 export const MCP_TOKEN_CHANGE_EVENT = 'elitea_mcp_token_change';

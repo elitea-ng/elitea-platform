@@ -48,6 +48,7 @@ export interface CredentialPickerRow {
    * the SAVED-row route, which addresses the row by id and carries no body.
    */
   readonly id: string;
+  readonly uuid?: string;
   readonly eliteaTitle: string;
   readonly isPrivate: boolean;
   readonly displayLabel: string;
@@ -95,6 +96,7 @@ function toRows(items: readonly Credential[], isPrivate: boolean, accepted: Read
     if (eliteaTitle === '') continue;
     rows.push({
       id: item.uid ?? item.id,
+      ...(item.uuid !== undefined ? { uuid: item.uuid } : {}),
       eliteaTitle,
       isPrivate,
       displayLabel: readDisplayLabel(item, eliteaTitle),

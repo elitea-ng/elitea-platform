@@ -991,6 +991,36 @@ Mounted-page tests cover Login, consent cancellation, and confirmed Logout witho
 The MCP, discovery, and configuration-tab selection passes 320 tests across 31 files.
 Type checking and focused lint pass. Deployed multi-tab logout verification remains pending.
 
+### Credential-backed toolkit logout: 2026-09-08
+
+Delegated authorization belongs to a credential, not a toolkit family.
+Every credential picker now exposes logout when its selected credential has an OAuth discovery endpoint and UUID.
+The key remains `configuration_uuid:oauth_discovery_endpoint`, as used by the runtime.
+The credential normalizer now preserves the UUID separately from the numeric row identifier.
+Client-credentials configurations do not show this delegated control.
+
+| Current source | Contract | Replatform source |
+| --- | --- | --- |
+| EliteaUI `features/openapi/ui/OpenApiOAuthStatus.jsx` and `useResolvedOpenApiConfig.hooks.js` | Resolve the selected credential and its authorization key. | `pages/toolkits/lib/DelegatedCredentialStatus.tsx`, `useCredentialRows.ts` |
+| EliteaUI `features/mcp/lib/helpers/mcpAuth.helpers.js` | Remove the selected grant without clearing other credentials. | `features/mcps/lib/storage.ts` |
+| EliteaUI `features/mcp/lib/hooks/useMcpTokenChange.hooks.js` | React to logout from another tab. | `shared/lib/oauthLogoutSync.ts`, MCP and SharePoint status readers |
+
+Only logout markers use local storage. Tokens remain in tab-local session storage.
+Logout remains available after access-token expiry and removes the refresh grant too.
+The older SharePoint reader now rejects grants invalidated in another tab.
+The confirmation names the credential. It does not render an internal storage key as a link.
+
+Mounted-page tests cover OpenAPI and an arbitrary toolkit type without family-specific branches.
+They cover confirmed logout, cancellation, cross-tab invalidation, refresh grants, credential isolation, and non-delegated configurations.
+The focused selection passes 409 tests across 43 files.
+Browser verification of this new composition remains pending.
+
+The generic control uses the existing runtime authorization guard for the next authorization.
+Standalone editor Login for regular toolkits is not complete.
+The current Main configuration-check result does not supply the legacy delegated authorization metadata.
+Its mounted SharePoint test uses mocked metadata and does not prove that deployed route.
+Keep this editor entry-point gap separate from runtime authorization and logout.
+
 ### Open verification
 
 - Repeat DCR against a real provider.
