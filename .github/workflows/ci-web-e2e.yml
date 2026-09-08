@@ -48,6 +48,19 @@ on:
           artifact, look at the PNGs, commit the ones you meant to change.
         type: boolean
         default: false
+      live_toolkits:
+        description: >-
+          Run the LIVE lanes (`toolkits-live`, `image-live`) against real
+          provider credentials taken from this repository's secrets. These are
+          the legacy public suite's credential-bound cases — the ones no mock
+          can answer — ported under apps/elitea-web/e2e/live. With no secrets
+          configured the job still runs: it asserts that both live projects
+          list ZERO tests, prints which E2E_LIVE_* variables were missing, and
+          passes. That is deliberate and it is not vacuous — a project that
+          listed zero tests because it was BROKEN rather than unconfigured
+          fails the same assertion the moment a secret is added.
+        type: boolean
+        default: false
       full_visual_refresh:
         description: >-
           Rewrite EVERY @visual baseline (--update-snapshots=all) instead of
@@ -672,6 +685,179 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: playwright-report-chat-stream-real
+          path: apps/elitea-web/playwright-report/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  live-toolkits:
+    name: Live toolkit and image lanes (real credentials)
+    # workflow_dispatch ONLY, and only when asked for. These journeys create
+    # rows in a real GitHub/Jira/GitLab/Bitbucket/Confluence account and spend
+    # a real provider's quota; nothing about a pull request should do that on
+    # its own.
+    if: github.event_name == 'workflow_dispatch' && inputs.live_toolkits
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      # Mapped by NAME so `apps/elitea-web/e2e/live/liveEnv.ts` sees exactly
+      # what a developer's shell would set. A secret this repository does not
+      # hold expands to the EMPTY STRING here, which liveEnv reads as absent —
+      # that equivalence is pinned by scripts/live-env.test.mjs, because a lane
+      # that treated '' as configured would arm itself on every run and fail
+      # against a provider with an empty token.
+      E2E_LIVE_GITHUB_TOKEN: ${{ secrets.E2E_LIVE_GITHUB_TOKEN }}
+      E2E_LIVE_GITHUB_REPOSITORY: ${{ secrets.E2E_LIVE_GITHUB_REPOSITORY }}
+      E2E_LIVE_GITHUB_BASE_URL: ${{ secrets.E2E_LIVE_GITHUB_BASE_URL }}
+      E2E_LIVE_GITHUB_BRANCH: ${{ secrets.E2E_LIVE_GITHUB_BRANCH }}
+      E2E_LIVE_JIRA_BASE_URL: ${{ secrets.E2E_LIVE_JIRA_BASE_URL }}
+      E2E_LIVE_JIRA_USERNAME: ${{ secrets.E2E_LIVE_JIRA_USERNAME }}
+      E2E_LIVE_JIRA_API_KEY: ${{ secrets.E2E_LIVE_JIRA_API_KEY }}
+      E2E_LIVE_JIRA_PROJECT_KEY: ${{ secrets.E2E_LIVE_JIRA_PROJECT_KEY }}
+      E2E_LIVE_GITLAB_URL: ${{ secrets.E2E_LIVE_GITLAB_URL }}
+      E2E_LIVE_GITLAB_PRIVATE_TOKEN: ${{ secrets.E2E_LIVE_GITLAB_PRIVATE_TOKEN }}
+      E2E_LIVE_GITLAB_REPOSITORY: ${{ secrets.E2E_LIVE_GITLAB_REPOSITORY }}
+      E2E_LIVE_GITLAB_BRANCH: ${{ secrets.E2E_LIVE_GITLAB_BRANCH }}
+      E2E_LIVE_BITBUCKET_URL: ${{ secrets.E2E_LIVE_BITBUCKET_URL }}
+      E2E_LIVE_BITBUCKET_USERNAME: ${{ secrets.E2E_LIVE_BITBUCKET_USERNAME }}
+      E2E_LIVE_BITBUCKET_TOKEN: ${{ secrets.E2E_LIVE_BITBUCKET_TOKEN }}
+      E2E_LIVE_BITBUCKET_PROJECT: ${{ secrets.E2E_LIVE_BITBUCKET_PROJECT }}
+      E2E_LIVE_BITBUCKET_REPOSITORY: ${{ secrets.E2E_LIVE_BITBUCKET_REPOSITORY }}
+      E2E_LIVE_BITBUCKET_BRANCH: ${{ secrets.E2E_LIVE_BITBUCKET_BRANCH }}
+      E2E_LIVE_CONFLUENCE_BASE_URL: ${{ secrets.E2E_LIVE_CONFLUENCE_BASE_URL }}
+      E2E_LIVE_CONFLUENCE_USERNAME: ${{ secrets.E2E_LIVE_CONFLUENCE_USERNAME }}
+      E2E_LIVE_CONFLUENCE_API_KEY: ${{ secrets.E2E_LIVE_CONFLUENCE_API_KEY }}
+      E2E_LIVE_CONFLUENCE_SPACE: ${{ secrets.E2E_LIVE_CONFLUENCE_SPACE }}
+      E2E_LIVE_CONFLUENCE_LABEL: ${{ secrets.E2E_LIVE_CONFLUENCE_LABEL }}
+      E2E_LIVE_IMAGE_MODEL: ${{ secrets.E2E_LIVE_IMAGE_MODEL }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: apps/elitea-web/package-lock.json
+      - name: Install (locked)
+        run: npm ci
+      - name: Ask Playwright what the live lanes actually hold
+        id: lanes
+        # `--list` needs no stack: the gate is computed at config load from the
+        # environment. The counts are taken per PROJECT PREFIX rather than from
+        # the "Total:" line, because the `setup` project is a dependency of
+        # both and contributes three rows to it — a total-line reading would
+        # report a fully unconfigured machine as holding three live tests.
+        run: |
+          set -euo pipefail
+          npx playwright test --list --project=toolkits-live --project=image-live \
+            > /tmp/live-list.txt 2>&1 || true
+          toolkits=$(grep -c '^\s*\[toolkits-live\]' /tmp/live-list.txt || true)
+          images=$(grep -c '^\s*\[image-live\]' /tmp/live-list.txt || true)
+          echo "toolkits=${toolkits}" >> "$GITHUB_OUTPUT"
+          echo "images=${images}" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Live lanes"
+            echo
+            echo "| project | tests listed |"
+            echo "|---|---|"
+            echo "| toolkits-live | ${toolkits} |"
+            echo "| image-live | ${images} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          missing=""
+          for name in E2E_LIVE_GITHUB_TOKEN E2E_LIVE_GITHUB_REPOSITORY \
+                      E2E_LIVE_JIRA_BASE_URL E2E_LIVE_JIRA_USERNAME \
+                      E2E_LIVE_JIRA_API_KEY E2E_LIVE_JIRA_PROJECT_KEY \
+                      E2E_LIVE_GITLAB_PRIVATE_TOKEN E2E_LIVE_GITLAB_REPOSITORY \
+                      E2E_LIVE_BITBUCKET_USERNAME E2E_LIVE_BITBUCKET_TOKEN \
+                      E2E_LIVE_BITBUCKET_PROJECT E2E_LIVE_BITBUCKET_REPOSITORY \
+                      E2E_LIVE_CONFLUENCE_BASE_URL E2E_LIVE_CONFLUENCE_USERNAME \
+                      E2E_LIVE_CONFLUENCE_API_KEY E2E_LIVE_CONFLUENCE_SPACE \
+                      E2E_LIVE_IMAGE_MODEL; do
+            if [ -z "${!name:-}" ]; then missing="${missing} ${name}"; fi
+          done
+          if [ -n "${missing}" ]; then
+            {
+              echo
+              echo "Repository secrets not set:${missing}"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          # THE ASSERTION THAT KEEPS THE PASS HONEST. A lane with no secret must
+          # list ZERO tests; a lane with every secret must list some. Either way
+          # the count is checked against the environment rather than accepted,
+          # so "0 tests, green" can never mean "the project is broken".
+          if [ -n "${E2E_LIVE_GITHUB_TOKEN:-}" ] && [ "${toolkits}" -eq 0 ]; then
+            echo "::error::a GitHub credential is configured but toolkits-live listed 0 tests" >&2
+            cat /tmp/live-list.txt >&2
+            exit 1
+          fi
+          if [ -z "${E2E_LIVE_GITHUB_TOKEN:-}" ] && [ -z "${E2E_LIVE_JIRA_API_KEY:-}" ] \
+             && [ "${toolkits}" -ne 0 ]; then
+            echo "::error::no toolkit credential is configured, yet toolkits-live listed ${toolkits} tests" >&2
+            exit 1
+          fi
+          if [ -n "${E2E_LIVE_IMAGE_MODEL:-}" ] && [ "${images}" -eq 0 ]; then
+            echo "::error::an image model is configured but image-live listed 0 tests" >&2
+            exit 1
+          fi
+          if [ -z "${E2E_LIVE_IMAGE_MODEL:-}" ] && [ "${images}" -ne 0 ]; then
+            echo "::error::no image model is configured, yet image-live listed ${images} tests" >&2
+            exit 1
+          fi
+          if [ "${toolkits}" -eq 0 ] && [ "${images}" -eq 0 ]; then
+            echo "No live credential is configured for this repository."
+            echo "Both live projects listed 0 tests, which is what an unconfigured"
+            echo "machine must produce — see apps/elitea-web/e2e/live/README.md for"
+            echo "the variables to add as repository secrets."
+          fi
+      - name: Build the stack images (shared cache)
+        if: steps.lanes.outputs.toolkits != '0'
+        uses: ./.github/actions/build-stack-images
+        with:
+          compose-files: |
+            docker-compose.standalone-full.yml
+            docker-compose.standalone-rust-agent.yml
+          cache-hcl: |
+            ci/bake-cache.hcl
+            ci/bake-cache-rust.hcl
+          targets: standalone
+          mount-cache-suffix: rust
+      - name: Run the live toolkit journeys against a real-model stack
+        if: steps.lanes.outputs.toolkits != '0'
+        # The same stack and the same script as `chat-stream-real` — every live
+        # journey drives a real chat turn, so it needs the real model as well
+        # as the real credential. The script forwards every E2E_LIVE_* name
+        # into the Playwright container; see its own note.
+        #
+        # `image-live` is NOT run here. Its prerequisite is an image-capable
+        # provider CONFIGURED ON THE STACK, which the `real-llm` profile
+        # (llama.cpp, text only) is not and a repository secret cannot make it.
+        # The lane is driven against a deployment that has one; the step above
+        # still reports its listed count, so the pair stays legible.
+        working-directory: ${{ github.workspace }}
+        env:
+          COMPOSE_BIN: docker compose
+          CI: "true"
+          STANDALONE_SKIP_BUILD: "1"
+          STANDALONE_WORKER: rust
+          COMPOSE_PROFILES: real-llm
+          LLM_PROVIDER: vllm
+          LLM_API_BASE: http://llm-real:8090
+          LLM_MODEL: qwen3-0.6b
+          LLM_EMBEDDING_MODEL: vllm/nomic-embed-text-v1.5
+          PLAYWRIGHT_PROJECT: toolkits-live
+          E2E_CHAT_MODEL: vllm/qwen3-0.6b
+          CHAT_STREAM_PROJECT: elitea-live-toolkits-ci
+          # Not 8085/8086/8087 — the three chat lanes' ports — so this stack can
+          # never collide with one of them on a shared host.
+          CHAT_STREAM_PORT: "8088"
+          PLAYWRIGHT_CONTAINER_IMAGE: mcr.microsoft.com/playwright:v1.62.1-noble
+        run: bash apps/elitea-web/scripts/chat-stream-e2e.sh
+      - name: Give the report back to the runner user
+        if: always()
+        run: sudo chown -R "$(id -u):$(id -g)" playwright-results playwright-report 2>/dev/null || true
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report-live-toolkits
           path: apps/elitea-web/playwright-report/
           if-no-files-found: ignore
           retention-days: 14

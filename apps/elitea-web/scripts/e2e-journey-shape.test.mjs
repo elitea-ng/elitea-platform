@@ -47,7 +47,16 @@ const APP = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const read = (relative) => readFileSync(join(APP, relative), 'utf8');
 
-const JOURNEYS = 'e2e/journeys';
+/**
+ * Every directory that holds journey SPECS.
+ *
+ * `e2e/live` joined the list when the credential-gated lanes landed: rule 3 is
+ * about the shared session, and a live journey signs in on the same storage
+ * state every other one does. A rule that enumerated only `e2e/journeys` would
+ * have gone on reporting "clean" for a directory it never opened — the
+ * "absence reads as correctness" shape this file exists to close.
+ */
+const JOURNEY_ROOTS = ['e2e/journeys', 'e2e/live'];
 const REDIRECT_SPEC = 'e2e/journeys/shell/shell.redirect.spec.ts';
 const FEATURES_SPEC = 'e2e/journeys/admin/admin.features.spec.ts';
 const APP_REQUESTS_SPEC = 'e2e/journeys/admin/admin.app-requests.spec.ts';
@@ -177,7 +186,7 @@ function journeySpecs() {
       else if (entry.name.endsWith('.spec.ts')) found.push([child, read(child)]);
     }
   };
-  walk(JOURNEYS);
+  for (const root of JOURNEY_ROOTS) walk(root);
   return found;
 }
 
@@ -425,5 +434,120 @@ describe('#839 — every persona must leave the setup owning a personal project'
       '}',
     ].join('\n');
     expect(personalProjectPollAcceptsSeededId(commentOnly)).toBe(true);
+  });
+});
+
+/* ── rule 5 ─────────────────────────────────────────────────────────────── */
+
+/**
+ * The live lanes' contract, stated where it can be read in one second.
+ *
+ * `e2e/live` holds the journeys ported from the legacy suite's
+ * credential-bound cases. The wave rule they exist for is that a legacy test
+ * is REUSED wherever its prerequisites exist and never parked behind a
+ * permanent skip — and a skip is exactly what a tired author reaches for when
+ * a credential is missing. Two properties keep that honest, and neither is
+ * visible from inside any one spec:
+ *
+ *  1. NO `test.skip` under `e2e/live`. A skipped test is reported as a
+ *     pass-shaped row; an unconfigured provider must contribute zero rows.
+ *  2. The config GATES the lanes on the environment. Without the gate every
+ *     live spec would list on every run and fail for want of a secret, which
+ *     reads as a broken suite rather than as an unconfigured machine.
+ */
+export function liveSkips(specs) {
+  return specs
+    .filter(([path]) => path.startsWith('e2e/live/'))
+    .flatMap(([path, source]) =>
+      source
+        .split('\n')
+        .map((line, index) => ({ line: line.trim(), number: index + 1 }))
+        // A comment that explains the rule is prose, not a skip.
+        .filter((entry) => !entry.line.startsWith('*') && !entry.line.startsWith('//'))
+        .filter((entry) => /\btest\.skip\s*\(/.test(entry.line) || /\btest\.fixme\s*\(/.test(entry.line))
+        .map((entry) => `${path}:${entry.number}`),
+    );
+}
+
+/** Does the config compute a live project's `testIgnore` from the environment? */
+export function liveProjectsAreEnvironmentGated(source) {
+  return (
+    source.includes('testIgnore: unconfiguredLiveToolkitSpecs()') &&
+    source.includes("testIgnore: liveImageModel() === '' ? [LIVE_IMAGE_SPECS] : []")
+  );
+}
+
+describe('the live lanes must never claim coverage they did not take', () => {
+  it('no journey under e2e/live skips itself', () => {
+    expect(liveSkips(journeySpecs())).toEqual([]);
+  });
+
+  it('rejects the shape a missing credential invites', () => {
+    const before = [
+      "test('LIVE-TK-github-1: …', async ({ page }) => {",
+      "  test.skip(!process.env.E2E_LIVE_GITHUB_TOKEN, 'no GitHub token');",
+      '});',
+    ].join('\n');
+    expect(liveSkips([['e2e/live/toolkits.github.spec.ts', before]])).toEqual([
+      'e2e/live/toolkits.github.spec.ts:2',
+    ]);
+  });
+
+  it('reads a comment about skipping as prose', () => {
+    const commentOnly = ['// There is no test.skip( here, and there must never be one.'].join('\n');
+    expect(liveSkips([['e2e/live/README.spec.ts', commentOnly]])).toEqual([]);
+  });
+
+  it('both live projects take their testIgnore from the environment', () => {
+    expect(liveProjectsAreEnvironmentGated(read('playwright.config.ts'))).toBe(true);
+  });
+
+  it('rejects a live project that lists its specs unconditionally', () => {
+    const before = [
+      "      name: 'toolkits-live',",
+      '      testMatch: /live\\/toolkits\\..+\\.spec\\.ts/,',
+      '      fullyParallel: false,',
+    ].join('\n');
+    expect(liveProjectsAreEnvironmentGated(before)).toBe(false);
+  });
+});
+
+/* ── rule 6 ─────────────────────────────────────────────────────────────── */
+
+/**
+ * The destructive fixture self-test must never run inside the ordinary suite.
+ *
+ * API-FX3 calls `sweepAutotestEntities`, which deletes every `autotest_`
+ * conversation and agent in the shared project. Run in its own ordering
+ * project — after `setup`, before the first sibling that can create one — it
+ * can only ever find its own rows. Run in `chromium` or `webkit` it would
+ * delete, at some unpredictable moment, whatever twenty other journeys were
+ * holding, and every one of them would fail on a 404 for a row it created.
+ *
+ * That failure has no cause anywhere near it, which is why the rule is stated
+ * here rather than left to a reviewer noticing an edit to `testIgnore`.
+ */
+export function sweepJourneyIsIsolated(source) {
+  const named = source.includes(
+    'const FIXTURE_ISOLATION_JOURNEY = /journeys\\/api\\/api\\.fixture-isolation\\.spec\\.ts/',
+  );
+  // Once per engine project, plus the project that owns it.
+  const ignored = (source.match(/^\s*FIXTURE_ISOLATION_JOURNEY,$/gm) ?? []).length;
+  const owned = source.includes("name: 'fixtures-sweep'");
+  return named && owned && ignored === 2;
+}
+
+describe('the sweep must not run beside the journeys it would sweep', () => {
+  it('the fixture self-tests own a project and are ignored by both engines', () => {
+    expect(sweepJourneyIsIsolated(read('playwright.config.ts'))).toBe(true);
+  });
+
+  it('rejects a config that let one engine pick the sweep up', () => {
+    const before = [
+      "const FIXTURE_ISOLATION_JOURNEY = /journeys\\/api\\/api\\.fixture-isolation\\.spec\\.ts/;",
+      "      name: 'fixtures-sweep',",
+      '        FIXTURE_ISOLATION_JOURNEY,',
+    ].join('\n');
+    expect(sweepJourneyIsIsolated(before)).toBe(false);
   });
 });
