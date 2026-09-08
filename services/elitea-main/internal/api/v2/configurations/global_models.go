@@ -24,7 +24,7 @@ package configurations
 // The gateway does not fail a model whose credential link does not resolve. It
 // logs a warning and falls back to reading the provider out of a PREFIX in the
 // model name (`applyCredentialLink`), which is the pre-#451 behaviour and is
-// kept so a seeded row with no link keeps working.
+// kept so a row written straight into the database by a seed keeps loading.
 //
 // That fallback is right for the gateway and wrong as the only check. A
 // platform model naming a credential that does not exist is advertised to every
@@ -33,6 +33,17 @@ package configurations
 // authoring it sees a success. So the link is validated at WRITE time, against
 // the public project's shared credentials, and a name that does not resolve is
 // refused with the names that would have.
+//
+// ## A model with NO link is refused as well
+//
+// It reads as the lenient case and is the worse one. The registry declares
+// `ai_credentials` REQUIRED on all five model types, so provider admission
+// refuses such a row and stores `status_ok = false` — and every reader, the
+// gateway included, selects on `status_ok = true`. The row is therefore
+// written, listed by this surface alone, and served to nobody, which is the
+// state an operator has no way to read back from the screen that wrote it.
+// This surface refuses the body instead, on the create and on the update that
+// would clear the link.
 //
 // ## Everything else is the provider surface's argument, unchanged
 //
@@ -111,16 +122,21 @@ type GlobalModel struct {
 	// ModelName is `data.name`, the provider's own model string.
 	ModelName string `json:"model_name"`
 	// CredentialName is the platform credential this model uses, by title.
-	// Empty means the row names none — the gateway then resolves the provider
-	// from a prefix in the model name.
+	// Empty means the row names none, which this surface no longer writes.
 	CredentialName string `json:"credential_name"`
-	// CredentialResolves is false when the named credential is not among the
-	// platform's shared credentials. Such a model is still advertised by the
-	// gateway, with its provider guessed from the model name, so this is the
-	// only place the divergence is visible.
-	CredentialResolves bool   `json:"credential_resolves"`
-	CreatedAt          string `json:"created_at"`
-	UpdatedAt          string `json:"updated_at"`
+	// CredentialResolves is false when the row names no platform credential at
+	// all, and when the one it names is not among the platform's shared
+	// credentials. Neither row is dispatched, and this is the only place either
+	// state is visible to an operator.
+	CredentialResolves bool `json:"credential_resolves"`
+	// LowTier and HighTier are the two `data` flags a project's AI
+	// configuration filters its tier defaults on. They are reported because the
+	// edit dialog rewrites `data` whole: a form that could not read them back
+	// would clear the flag of every model it saved.
+	LowTier   bool   `json:"low_tier"`
+	HighTier  bool   `json:"high_tier"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
 }
 
 // listGlobalModelsSQL reads the public project's shared model rows.
@@ -271,11 +287,20 @@ func scanGlobalModel(
 
 	item.ModelName = globalProviderString(decoded, "name")
 	item.CredentialName = credentialTitleOf(decoded)
-	// A row that names NO credential resolves by prefix and is not broken, so
-	// it reports true: `credential_resolves` answers "is this link usable",
-	// and an absent link is not an unusable one.
-	item.CredentialResolves = !verified || item.CredentialName == "" ||
-		containsString(credentials, item.CredentialName)
+	item.LowTier = globalModelFlag(decoded, "low_tier")
+	item.HighTier = globalModelFlag(decoded, "high_tier")
+	// A row that names NO credential is reported as unresolved, and the absence
+	// of the link is the whole reason. `ai_credentials` is required on all five
+	// model types, so admission refuses such a row and every reader selects it
+	// out on `status_ok`. Reporting it as resolving described the gateway's
+	// prefix fallback, which no row this surface can write ever reaches.
+	//
+	// `verified` guards only the LOOKUP. When the credential list could not be
+	// read, a named link is given the benefit of the doubt — see this
+	// function's header — but an absent link is a fact about the row itself and
+	// needs no list to establish.
+	item.CredentialResolves = item.CredentialName != "" &&
+		(!verified || containsString(credentials, item.CredentialName))
 	if createdAt != nil {
 		item.CreatedAt = createdAt.Format(time.RFC3339)
 	}
@@ -303,6 +328,19 @@ func credentialTitleOf(data map[string]any) string {
 		return title
 	}
 	return globalProviderString(link, "alita_title")
+}
+
+// globalModelFlag reads one boolean `data` flag, defaulting to false.
+//
+// A row written before the flag existed carries no key, and the registry
+// declares both flags `default: false`, so an absent key and `false` are the
+// same answer.
+func globalModelFlag(data map[string]any, key string) bool {
+	if data == nil {
+		return false
+	}
+	value, _ := data[key].(bool)
+	return value
 }
 
 func containsString(values []string, want string) bool {
@@ -435,23 +473,33 @@ func admitGlobalModelType(
 	return modelType, true
 }
 
-// admitGlobalModelCredential refuses a link that names no platform credential.
+// admitGlobalModelCredential refuses a `data` object that names no published
+// platform credential — whether it names the wrong one or names none.
 //
-// The gateway would ACCEPT such a row — it logs a warning and resolves the
-// provider from a prefix in the model name — so this is the only place the
+// The gateway would ACCEPT a wrong name — it logs a warning and resolves the
+// provider from a prefix in the model name — so this is the only place that
 // mistake is caught while the operator is still looking at it. See the file
 // header for why the gateway's leniency is right there and insufficient here.
 //
-// A model naming NO credential is admitted: the prefix path is a supported way
-// to configure one, and the standalone seed relies on it.
+// A model naming NO credential is refused for a different reason: the registry
+// declares `ai_credentials` required on all five model types, so such a row
+// fails admission, stores `status_ok = false` and is served by nobody. The
+// refusal here names the providers the operator can pick instead; the
+// schema-driven check in Create would otherwise answer with the field path
+// alone, and an update that dropped the link would be caught only by the
+// generic model-data rule in required_fields.go.
+//
+// It keys on the PRESENCE of `data`, so a partial update that only renames a
+// model touches no link and is not asked about one.
 func (h *Handler) admitGlobalModelCredential(
 	w http.ResponseWriter, r *http.Request, body map[string]any,
 ) bool {
-	data, _ := body["data"].(map[string]any)
-	title := credentialTitleOf(data)
-	if title == "" {
+	raw, present := body["data"]
+	if !present {
 		return true
 	}
+	data, _ := raw.(map[string]any)
+	title := credentialTitleOf(data)
 	if h.pool == nil {
 		apierr.WriteStatus(w, http.StatusServiceUnavailable, "the configuration store is not available")
 		return false
@@ -465,6 +513,13 @@ func (h *Handler) admitGlobalModelCredential(
 		// from a string — which is the state this validation exists to prevent.
 		apierr.WriteStatus(w, http.StatusServiceUnavailable,
 			"the platform credentials could not be read, so this model's credential could not be verified")
+		return false
+	}
+	if title == "" {
+		apierr.WriteStatus(w, http.StatusBadRequest,
+			"a platform model must name the platform provider it uses. A model with no "+
+				"ai_credentials link is refused admission, so it would be listed here and served "+
+				"to nobody. Published providers: "+strings.Join(credentials, ", "))
 		return false
 	}
 	if !containsString(credentials, title) {

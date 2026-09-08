@@ -68,9 +68,18 @@
 //     OpenAI credential (deploy/scripts/seed-llm-api.py writes it). The four
 //     top-level fields are still required there, because they are the row and
 //     not the provider.
-//   - It does not run on UPDATE. The compatibility PUT is a PARTIAL write by
-//     contract (see Handler.Update): a body that carries only `{"shared":true}`
-//     must not be refused for the fields it deliberately omits.
+//   - On UPDATE it checks the `data` object of a MODEL row and nothing else.
+//     The compatibility PUT is a PARTIAL write by contract (see
+//     Handler.Update): a body that carries only `{"shared":true}` must not be
+//     refused for the fields it deliberately omits. But the `data` COLUMN is
+//     replaced whole, so a `data` object the body does carry is a complete
+//     statement of that column — a field it omits is a field the stored row
+//     loses. For the five model types that column is authored whole by
+//     whoever writes it (a wire name, a credential link, a few flags, no
+//     secret), so it is held to the type's own required list. A CREDENTIAL
+//     row's is not: an untouched password is deliberately omitted on an edit
+//     (`LlmProviderDraft`), and refusing that body would refuse the ordinary
+//     edit of a working credential. See refuseIncompleteUpdatedModelData.
 //   - It says nothing about a type the registry does not carry. An unknown
 //     type has no schema, so there is nothing to be missing, and the route
 //     keeps storing it exactly as before.
@@ -78,6 +87,7 @@ package configurations
 
 import (
 	"encoding/json"
+	"net/http"
 	"sort"
 	"strings"
 )
@@ -305,4 +315,85 @@ func stringsOf(raw any) []string {
 // the next one only by trying again.
 func requiredConfigurationFieldsMessage(missing []string) string {
 	return "the configuration is missing required fields: " + strings.Join(missing, ", ")
+}
+
+// refuseIncompleteUpdatedModelData applies the create's required-field rule to
+// the `data` object of a partial UPDATE, for the five MODEL types alone.
+//
+// # The state this closes
+//
+// A platform model whose `ai_credentials` link an update dropped is stored and
+// listed. It is not served: the registry declares the link required, so
+// provider admission refuses the row and writes `status_ok = false`, and every
+// reader — the model catalogue, the tier defaults, the LLM gateway — selects on
+// `status_ok = true`. The operator who cleared it sees a 200 and a row that
+// looks complete on the only screen that shows it.
+//
+// The create already answers 400 for that body. Leaving the update lenient made
+// the same row reachable in two steps instead of one.
+//
+// # Why the scope is the model types
+//
+// The `data` column is replaced whole by this route, so a present `data` object
+// states the whole column. For a model that object is authored whole as well —
+// a wire name, a credential link and a few boolean flags, no secret — so the
+// create's contract applies to it unchanged. For a CREDENTIAL it is not: a
+// secret the operator did not retype is deliberately absent from an edit body
+// (see `LlmProviderDraft`), and holding that body to the type's required list
+// would refuse the ordinary edit of a working credential. `globalModelSections`
+// is the same map the platform-model surface derives a section from, and is
+// pinned against the registry snapshot by its own test.
+func (h *Handler) refuseIncompleteUpdatedModelData(
+	body map[string]any, configType string,
+) *configurationWriteFailure {
+	if _, isModel := globalModelSections[configType]; !isModel {
+		return nil
+	}
+	// An ABSENT `data` key writes no column, so there is nothing it could
+	// remove. That is the partial-update contract, and it is why a rename does
+	// not have to restate the link.
+	data, isObject := body["data"].(map[string]any)
+	if !isObject {
+		return nil
+	}
+	dataSchema, known := h.catalog.DataSchemaByType(configType)
+	if !known {
+		return nil
+	}
+	missing := missingRequiredUpdatedDataFields(dataSchema, data)
+	if len(missing) == 0 {
+		return nil
+	}
+	return &configurationWriteFailure{
+		status:  http.StatusBadRequest,
+		message: requiredUpdatedDataFieldsMessage(missing),
+	}
+}
+
+// missingRequiredUpdatedDataFields walks one type's `data` schema against the
+// `data` object an update carries, and returns the dotted paths it fails, in a
+// stable order.
+//
+// The same walk the create runs, entered one level down. The depth bound is
+// reduced by the level that is skipped, so the two reach the same distance
+// into a nested contract.
+func missingRequiredUpdatedDataFields(dataSchema, data map[string]any) []string {
+	if dataSchema == nil || data == nil {
+		return nil
+	}
+	missing := missingObjectFields(
+		dataSchema, data, "data.", definitionsOf(dataSchema, nil), 0, requiredFieldDepthData-1)
+	sort.Strings(missing)
+	return missing
+}
+
+// requiredUpdatedDataFieldsMessage names the fields and the mechanism.
+//
+// The mechanism is half the information: an operator who cleared one field
+// reads "missing required fields" as being about the field they did not send,
+// not about the column the write replaces.
+func requiredUpdatedDataFieldsMessage(missing []string) string {
+	return "the update would leave the configuration without required fields: " +
+		strings.Join(missing, ", ") +
+		". The data column is replaced whole, so a field this body omits is removed from the stored row."
 }

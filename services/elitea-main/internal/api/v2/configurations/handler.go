@@ -1300,6 +1300,14 @@ func (h *Handler) applyConfigurationUpdate(
 	if err != nil {
 		return c, nil, err
 	}
+	// The required-field rule, for the `data` object this body carries. It runs
+	// on the resolved type — which the body may have omitted — and before any
+	// secret is sealed, so a refused update writes nothing and mints no vault
+	// entry. See refuseIncompleteUpdatedModelData for why it is the model rows
+	// that are held to it.
+	if failure := h.refuseIncompleteUpdatedModelData(body, configType); failure != nil {
+		return c, failure, nil
+	}
 	secretMutations, failure := h.sealConfigurationBodyData(ctx, body, configType)
 	if failure != nil {
 		return c, failure, nil

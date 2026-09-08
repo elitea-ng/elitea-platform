@@ -14,12 +14,12 @@
  * public credentials alone, deliberately, so "a published model must not resolve
  * differently for each caller". The server refuses a link to anything else.
  *
- * ## `credential_resolves` reports a state the gateway will not fail on
+ * ## `credential_resolves` reports a state nothing else shows
  *
- * A model whose link does not resolve is still advertised, with its provider
- * guessed from a prefix in the model name, and says so only in a gateway log
- * line. The listing reports it because this screen is the only place an operator
- * can see it.
+ * A model whose link does not resolve, and a model that names no link at all,
+ * are both stored and both undispatchable: admission refuses them and every
+ * reader selects on `status_ok`. The listing reports the reason because this
+ * screen is the only place an operator can see it.
  *
  * Not generated: `orval` builds from `v2.yaml`, which does not describe the
  * admin-panel routes.
@@ -67,14 +67,23 @@ export interface PlatformModel {
   readonly status_logs: string;
   /** The provider's own model string. */
   readonly model_name: string;
-  /** The platform credential this model uses, by name. Empty means none. */
+  /**
+   * The platform credential this model uses, by name. Empty means the row names
+   * none, which this surface no longer writes and the server no longer accepts.
+   */
   readonly credential_name: string;
   /**
-   * False when the named credential is not among the platform's published
-   * providers. A model naming NO credential reports true — the gateway then
-   * resolves the provider from a prefix, which is a supported configuration.
+   * False when the row names no credential at all, and when the one it names is
+   * not among the platform's published providers. Neither row is dispatched.
    */
   readonly credential_resolves: boolean;
+  /**
+   * The two `data` flags a project's AI configuration filters its tier defaults
+   * on. Read back because the edit dialog rewrites `data` whole: a form that
+   * could not see them would clear the flag of every model it saved.
+   */
+  readonly low_tier?: boolean;
+  readonly high_tier?: boolean;
   readonly created_at: string;
   readonly updated_at: string;
 }
@@ -96,13 +105,26 @@ export interface PlatformModelList {
   readonly credential_error?: string;
 }
 
-/** What the model dialog sends. `section` is derived by the server. */
+/**
+ * What the model dialog sends. `section` is derived by the server.
+ *
+ * `ai_credentials` is REQUIRED, and the registry is where that comes from: all
+ * five model types declare it, so a body without it fails the create's
+ * required-field rule and — were it stored — would fail provider admission and
+ * be served by nobody.
+ *
+ * The tier flags are optional because only `llm_model` declares them. The other
+ * four decode their `data` with unknown fields refused, so sending a flag they
+ * do not declare makes the row an invalid binding.
+ */
 export interface PlatformModelDraft {
   readonly elitea_title: string;
   readonly type: string;
   readonly data: {
     readonly name: string;
-    readonly ai_credentials?: { readonly elitea_title: string };
+    readonly ai_credentials: { readonly elitea_title: string };
+    readonly low_tier?: boolean;
+    readonly high_tier?: boolean;
   };
 }
 
@@ -113,8 +135,8 @@ export interface PlatformModelDraft {
  * name — so it is the query that backs the model dialog's "Platform provider"
  * select. Creating a provider invalidated only the providers query, and this
  * one stayed cached: the operator added a provider, opened "Add a platform
- * model", and the select still offered "None" alone until a full reload,
- * although the server was already returning the new name.
+ * model", and the select was still empty until a full reload, although the
+ * server was already returning the new name.
  *
  * `adminLlmProvidersApi.ts` is the only importer, and it imports nothing else
  * from this module, so the two files do not form a cycle.
