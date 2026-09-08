@@ -789,6 +789,92 @@ export async function readVersionExpanded(
   return (await response.json()) as Record<string, unknown>;
 }
 
+/* ── sub-agent references ─────────────────────────────────────────────────── */
+
+/**
+ * The route that links one agent version into another as a SUB-AGENT.
+ *
+ * The URL names the CHILD and the body names the PARENT version — an order no
+ * reader guesses, and the reason this is a helper rather than a line repeated
+ * in each case: `internal/api/v2/eliteacore/application_relation.go` reads the
+ * child's application and version out of the path and takes only
+ * `version_id` from the body. `application_id` is sent because the route
+ * refuses a body without it, and it is the CHILD's id there too.
+ *
+ * The response is returned rather than asserted, because the refusal cases need
+ * it: a published parent refuses the change, and a pair already linked refuses
+ * a second copy.
+ */
+export function attachSubAgent(
+  request: APIRequestContext,
+  parentVersionId: string,
+  child: { readonly applicationId: string; readonly versionId: string },
+  projectId: string = DEFAULT_PROJECT_ID,
+): Promise<APIResponse> {
+  const url =
+    `${API_BASE}/elitea_core/application_relation/prompt_lib/${projectId}/` +
+    `${child.applicationId}/${child.versionId}`;
+  return request.patch(url, {
+    data: {
+      application_id: Number(child.applicationId),
+      version_id: Number(parentVersionId),
+      has_relation: true,
+    },
+  });
+}
+
+/** The same route with `has_relation: false` — the detach half. */
+export function detachSubAgent(
+  request: APIRequestContext,
+  parentVersionId: string,
+  child: { readonly applicationId: string; readonly versionId: string },
+  projectId: string = DEFAULT_PROJECT_ID,
+): Promise<APIResponse> {
+  const url =
+    `${API_BASE}/elitea_core/application_relation/prompt_lib/${projectId}/` +
+    `${child.applicationId}/${child.versionId}`;
+  return request.patch(url, {
+    data: {
+      application_id: Number(child.applicationId),
+      version_id: Number(parentVersionId),
+      has_relation: false,
+    },
+  });
+}
+
+/** One sub-agent entry as a version read serves it back. */
+export interface SubAgentToolRow {
+  /** The CHILD agent this entry points at. */
+  readonly applicationId: string;
+  /** The exact child VERSION this entry points at. */
+  readonly versionId: string;
+  readonly name: string;
+}
+
+/**
+ * The sub-agent entries of a `tools` array, whichever projection served it.
+ *
+ * Three routes serve the same reference under three shapes — the editor read
+ * puts the stored blob under `config`, the expanded read and the public detail
+ * put it under `settings` — so a caller that read one key would silently find
+ * no sub-agents on the other two. Non-application tools are dropped: every
+ * caller here is asking "which agents does this version delegate to".
+ */
+export function subAgentToolsOf(tools: readonly unknown[]): readonly SubAgentToolRow[] {
+  return tools
+    .map((entry) => (entry ?? {}) as Record<string, unknown>)
+    .filter((tool) => tool['type'] === 'application')
+    .map((tool) => {
+      const settings =
+        ((tool['settings'] ?? tool['config']) as Record<string, unknown> | undefined) ?? {};
+      return {
+        applicationId: String(settings['application_id'] ?? ''),
+        versionId: String(settings['application_version_id'] ?? settings['version_id'] ?? ''),
+        name: String(tool['name'] ?? ''),
+      };
+    });
+}
+
 /** One row of the project's tag list. */
 export interface StoredTag {
   readonly id: string;
@@ -1857,12 +1943,23 @@ export interface GithubToolkitFixture {
 /** The placeholder GitHub endpoint. Deliberately unroutable. */
 const GITHUB_PLACEHOLDER_BASE_URL = 'https://autotest.invalid/api';
 
+/**
+ * @param accessToken when given, the credential also carries a SEALED
+ * `access_token`. The type declares it hidden, so the create seals it into the
+ * project vault and stores a `{{secret.…}}` reference — which is what the
+ * expanded version read has to resolve back for the runtime. Omitted by
+ * default, because every other caller only needs the credential to exist and a
+ * secret it does not use is a secret it would have to clean up.
+ */
 export async function createGithubToolkit(
   request: APIRequestContext,
   projectId: string,
   toolkitName: string,
+  accessToken?: string,
 ): Promise<GithubToolkitFixture> {
   const credentialTitle = `${toolkitName}_cred`;
+  const credentialData: Record<string, unknown> = { base_url: GITHUB_PLACEHOLDER_BASE_URL };
+  if (accessToken !== undefined) credentialData['access_token'] = accessToken;
   const credential = await request.post(
     `${BASE_URL}/api/v2/configurations/configurations/${projectId}`,
     {
@@ -1871,7 +1968,7 @@ export async function createGithubToolkit(
         elitea_title: credentialTitle,
         label: credentialTitle,
         shared: false,
-        data: { base_url: GITHUB_PLACEHOLDER_BASE_URL },
+        data: credentialData,
       },
     },
   );
