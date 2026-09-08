@@ -8,7 +8,7 @@ import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/gen
 import { server } from '@/test/setup';
 
 import { renderWithRouterSocketAndProject } from '../../../__tests__/testUtils';
-import { eventEmitter } from '../../../lib/eventEmitter';
+import { eventEmitter } from '@/shared/lib/eventEmitter';
 
 import type { ToolkitFormEditDetail, ToolkitFormProps, ToolkitValidationInjected } from './ToolkitForm';
 import { ToolkitForm } from './ToolkitForm';

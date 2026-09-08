@@ -800,6 +800,25 @@ func (r *ConversationsRepo) CreateCanvas(ctx context.Context, projectID string, 
 		return nil, fmt.Errorf("fetch message item: %w", err)
 	}
 
+	// The selection must be INSIDE the message, and it is refused here rather
+	// than clamped.
+	//
+	// The offsets are byte positions the CLIENT computes over text it holds a
+	// copy of, so a selection the stored message cannot satisfy is ordinary
+	// caller input: a message edited or regenerated between the read and the
+	// selection produces one, and so does an off-by-one in a client. Without
+	// this the slice below indexed the string out of range and took the whole
+	// request down — the caller read a server error for a selection it made,
+	// and the panic said nothing about which of the two ends was wrong.
+	//
+	// Clamping was the other option and is worse: silently carving a
+	// DIFFERENT range than the user selected splits their message somewhere
+	// they did not choose, and the split is destructive (the original text
+	// item is deleted). A refusal leaves the message as it was.
+	if startsAt < 0 || endsAt > len(oldContent) {
+		return nil, apierr.BadRequest("canvas_content_starts_at and canvas_content_ends_at must lie inside the message content")
+	}
+
 	// 2. Slice content
 	preContent := ""
 	canvasContent := oldContent[startsAt:endsAt]
