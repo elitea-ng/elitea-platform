@@ -47,7 +47,15 @@ const TOOLKIT_LIST_URL = '/api/v2/elitea_core/tools/prompt_lib/:projectId';
 const TOOLKIT_TYPES_URL = '/api/v2/elitea_core/toolkits/prompt_lib/:projectId';
 const CONFIGURATIONS_LIST_URL = '/api/v2/configurations/configurations/:projectId';
 const CONFIGURATIONS_AVAILABLE_URL = '/api/v2/configurations/available/';
-const CHECK_CONNECTIONS_URL = '/api/v2/configurations/check_connections/:projectId';
+/**
+ * The SAVED-row batch check, not the candidate-payload one. The picker moved to
+ * it because every stored `data` object carries a `{{secret.NAME}}` reference
+ * rather than the token (`secret_sealing.go`), so the candidate route could only
+ * ever ask the provider to authenticate a template string.
+ */
+const CHECK_CONNECTIONS_URL = '/api/v2/configurations/check_stored_connections/:projectId';
+/** The single-row form of the stored check — what the option row's Reload control calls. */
+const CHECK_CONNECTION_URL = '/api/v2/configurations/check_stored_connection/:projectId/:configId';
 const INDEX_META_URL = '/api/v2/elitea_core/index_meta/prompt_lib/:projectId/:toolkitId';
 const MODELS_URL = '/api/v2/configurations/models/:projectId';
 
@@ -95,6 +103,8 @@ interface EndpointOptions {
   readonly credentials?: readonly Record<string, unknown>[];
   readonly toolkitRow?: Record<string, unknown>;
   readonly indexes?: readonly Record<string, unknown>[];
+  /** The batch stored-check rows the server answers with. Default: none checked. */
+  readonly storedCheckRows?: readonly Record<string, unknown>[];
 }
 
 function mockEndpoints(options: EndpointOptions = {}): void {
@@ -106,7 +116,7 @@ function mockEndpoints(options: EndpointOptions = {}): void {
       HttpResponse.json({ items: credentials, total: credentials.length, limit: 500, offset: 0, shared: { items: [], total: 0 } }),
     ),
     http.get(CONFIGURATIONS_AVAILABLE_URL, () => HttpResponse.json([])),
-    http.post(CHECK_CONNECTIONS_URL, () => HttpResponse.json([])),
+    http.post(CHECK_CONNECTIONS_URL, () => HttpResponse.json([...(options.storedCheckRows ?? [])])),
     http.get(MODELS_URL, () => HttpResponse.json({ items: [], total: 0 })),
     http.get(INDEX_META_URL, () => HttpResponse.json(options.indexes ?? [])),
   );
@@ -234,5 +244,84 @@ describe('the index schedule modal credential select is supplied by the real com
 
     await user.click(select);
     expect(within(await screen.findByRole('listbox')).getByText('CI Bot Token')).toBeInTheDocument();
+  });
+});
+
+/*
+ * ── THE CREDENTIAL STATUS INDICATOR (#319, toolkit half) ────────────────────
+ *
+ * The attention indicator on a credential row is driven by the stored-check
+ * routes. Until `internal/api/v2/configurations/toolkit_check.go` existed those
+ * routes answered "Checking connection is not supported yet for configuration
+ * type github" for EVERY toolkit credential, which `useCredentialValidation`
+ * maps to `unsupported` — so the indicator could not light for any toolkit
+ * credential, right or wrong. These pin both directions.
+ */
+describe('the credential status indicator reads the real stored connection check', () => {
+  it('marks a credential the provider refused, with the reason on the control', async () => {
+    mockEndpoints({
+      storedCheckRows: [
+        { id: 'cfg-1', success: false, reason: 'auth_failed', message: 'Authentication failed. The provider rejected this credential.' },
+      ],
+    });
+    const user = userEvent.setup();
+
+    renderToolkitsRoute(<EditToolkit deps={{ saveToolkit: vi.fn() }} />, '/toolkits/latest/tk-1', { projectId: 'proj-1' });
+
+    await screen.findByText('My GitHub');
+    await user.click(await screen.findByRole('combobox', { name: /Github Configuration/i }));
+
+    const indicator = await screen.findByTestId('credential-status-indicator');
+    expect(indicator).toHaveAttribute('aria-label', expect.stringMatching(/Authentication failed/i));
+    expect(await screen.findByTestId('credential-reload-button')).toBeInTheDocument();
+  });
+
+  it('clears the indicator when a re-check finds the credential works, without a page reload', async () => {
+    mockEndpoints({
+      storedCheckRows: [
+        { id: 'cfg-1', success: false, reason: 'auth_failed', message: 'Authentication failed. The provider rejected this credential.' },
+      ],
+    });
+    // The re-check is the SAVED-row route with no body: the browser never held
+    // the token, so this is the only request that can answer the question.
+    let recheckBody: string | undefined;
+    server.use(
+      http.post(CHECK_CONNECTION_URL, async ({ request }) => {
+        recheckBody = await request.text();
+        return HttpResponse.json({ success: true, reason: 'ok', message: 'Connection successful' });
+      }),
+    );
+    const user = userEvent.setup();
+
+    renderToolkitsRoute(<EditToolkit deps={{ saveToolkit: vi.fn() }} />, '/toolkits/latest/tk-1', { projectId: 'proj-1' });
+
+    await screen.findByText('My GitHub');
+    await user.click(await screen.findByRole('combobox', { name: /Github Configuration/i }));
+    await user.click(await screen.findByTestId('credential-reload-button'));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('credential-status-indicator')).not.toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('credential-reload-button')).not.toBeInTheDocument();
+    expect(recheckBody, 'the stored check must send no credential — the browser does not hold one').toBe('');
+  });
+
+  it('does NOT mark a credential whose type this build carries no probe for', async () => {
+    // `unsupported_type` is not evidence that the credential is broken, and the
+    // attention indicator means exactly that.
+    mockEndpoints({
+      storedCheckRows: [
+        { id: 'cfg-1', success: false, reason: 'unsupported_type', message: 'Checking connection is not supported yet for configuration type github' },
+      ],
+    });
+    const user = userEvent.setup();
+
+    renderToolkitsRoute(<EditToolkit deps={{ saveToolkit: vi.fn() }} />, '/toolkits/latest/tk-1', { projectId: 'proj-1' });
+
+    await screen.findByText('My GitHub');
+    await user.click(await screen.findByRole('combobox', { name: /Github Configuration/i }));
+    await screen.findByText('CI Bot Token');
+
+    expect(screen.queryByTestId('credential-status-indicator')).not.toBeInTheDocument();
   });
 });

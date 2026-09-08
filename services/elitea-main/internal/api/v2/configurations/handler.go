@@ -71,6 +71,13 @@ type Handler struct {
 	// response's `shared` block serves. Zero means "not configured", and the
 	// block is then empty — see sharedConfigurationSchema.
 	publicProjectID int
+	// toolkitChecker probes a TOOLKIT credential (github, gitlab, bitbucket,
+	// jira, confluence) with one authenticated metadata GET — the half of #319
+	// the gateway cannot serve, because the gateway speaks to LLM providers.
+	// See toolkit_check.go. NewHandler always supplies one, so a toolkit type
+	// this build carries a probe for is never refused for want of composition;
+	// WithToolkitConnectionChecker replaces it in a test.
+	toolkitChecker ToolkitConnectionChecker
 }
 
 type Option func(*Handler)
@@ -137,6 +144,14 @@ func NewHandler(pool *pgxpool.Pool, opts ...Option) *Handler {
 	}
 	for _, opt := range opts {
 		opt(handler)
+	}
+	if handler.toolkitChecker == nil {
+		// Built here rather than at the composition root because it needs no
+		// dependency the root owns — an allowlist read from the environment and
+		// an HTTP client. A nil checker would read as "this type cannot be
+		// checked", which is a different claim from the one an unconfigured
+		// allowlist makes (toolkit_check.go's own doc says so).
+		handler.toolkitChecker = NewToolkitConnectionCheckerFromEnv()
 	}
 	return handler
 }

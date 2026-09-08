@@ -2899,6 +2899,32 @@
             "usedBy": [
                 "pages/help-center"
             ]
+        },
+        {
+            "$comment": "The admin CROSS-PROJECT bulk membership invite (issue 247). GENERATED, unlike the rest of pages/admin/api/**: those routes are undescribed in v2.yaml and hand-written, this operation is described, so orval builds the caller and a shape drift with the Go handler becomes a codegen diff rather than a runtime surprise. Called through src/pages/admin/api/adminBulkInviteApi.ts, which wraps the generated function in a useMutation and peels the envelope through unwrapBody.",
+            "id": "admin.bulkInviteMembers",
+            "method": "POST",
+            "path": "/admin/invites_bulk/administration",
+            "operationId": "bulkInviteMembers",
+            "source": "generated",
+            "responseSchema": "BulkInviteSummary",
+            "fixture": null,
+            "usedBy": [
+                "pages/admin"
+            ]
+        },
+        {
+            "$comment": "The MEMBER-reachable project budget read (issue 312). It has existed since #322 with nothing calling it, so a project crossing its soft-alert threshold had no signal at all and went straight from 'fine' to 'every call refused'. widgets/app-shell's BudgetWarningBanner is the caller. HANDWRITTEN yet naming an operationId, the shape budgets.listProjectBudgets documents: the app calls it through src/widgets/app-shell/model/useProjectBudgetWarning.ts, which polls on an interval and disables retry, neither of which a generated useQuery signature carries.",
+            "id": "budgets.getProjectBudget",
+            "method": "GET",
+            "path": "/elitea_core/project_budget/prompt_lib/{project_id}/budget",
+            "operationId": "getProjectBudget",
+            "source": "handwritten",
+            "responseSchema": "ProjectBudget",
+            "fixture": null,
+            "usedBy": [
+                "widgets/app-shell"
+            ]
         }
     ]
 }

@@ -47,7 +47,13 @@ const TOOLKIT_LIST_URL = '/api/v2/elitea_core/tools/prompt_lib/:projectId';
 const TOOLKIT_TYPES_URL = '/api/v2/elitea_core/toolkits/prompt_lib/:projectId';
 const CONFIGURATIONS_LIST_URL = '/api/v2/configurations/configurations/:projectId';
 const CONFIGURATIONS_AVAILABLE_URL = '/api/v2/configurations/available/';
-const CHECK_CONNECTIONS_URL = '/api/v2/configurations/check_connections/:projectId';
+/**
+ * The SAVED-row batch check, not the candidate-payload one. The picker moved to
+ * it because every stored `data` object carries a `{{secret.NAME}}` reference
+ * rather than the token (`secret_sealing.go`), so the candidate route could only
+ * ever ask the provider to authenticate a template string.
+ */
+const CHECK_CONNECTIONS_URL = '/api/v2/configurations/check_stored_connections/:projectId';
 const MODELS_URL = '/api/v2/configurations/models/:projectId';
 
 /** The same served shape `credentialPickerWiring.test.tsx` pins: a `$defs` entry the property `$ref`s, which is what makes the field a credential field at all. */

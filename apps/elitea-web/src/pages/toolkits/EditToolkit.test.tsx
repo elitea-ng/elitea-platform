@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { configure, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -21,6 +21,13 @@ import { renderToolkitsRoute } from './__tests__/testRouter';
 // same jsdom polyfills `YamlCodeEditor.test.tsx` (a sibling CodeMirror
 // consumer) already establishes for mounting one under jsdom.
 installCodeMirrorTestPolyfills();
+
+// This file mounts the REAL edit route, whose tree fires several server reads
+// before anything is on screen. The repo's own convention for a route-mounting
+// vitest file (see the wave preamble) is a widened async util timeout plus a
+// widened per-test timeout.
+configure({ asyncUtilTimeout: 5_000 });
+vi.setConfig({ testTimeout: 30_000 });
 
 beforeEach(() => {
   configureGeneratedClient({ baseUrl: '/api/v2' });
@@ -446,5 +453,65 @@ describe('EditToolkit', () => {
       eventEmitter.emit(ToolEvents.ToolkitsUpdateToolkit);
       expect(saveToolkit.mock.calls.at(-1)?.[0]).toMatchObject({ projectId: 'proj-1', toolId: 'tk-1', type: 'github', description: 'UPDATED DESCRIPTION' });
     });
+  });
+
+  /*
+   * The COMPOSITION ROOT of the Test-settings pane.
+   *
+   * `pages/toolkits/lib/configurationTabSlots.tsx` used to supply
+   * `renderTestPane` as an empty `<Box data-testid="edit-toolkit-test-pane-
+   * slot" />`, and every unit test of the pieces passed while the right-hand
+   * half of this screen rendered nothing at all — the "unit suite blind to the
+   * composition root" shape this repository keeps meeting. So the assertion is
+   * made HERE, on the real route: pick a tool, fill it, press Run, and read
+   * what came back off the real REST call.
+   */
+  it('mounts a working Test settings pane on the real edit route: pick a tool, fill it, Run, read the result', async () => {
+    let seen: unknown;
+    server.use(
+      http.get('/api/v2/elitea_core/tools/prompt_lib/:projectId', () =>
+        HttpResponse.json({ rows: [mockToolkitRow({ settings: { selected_tools: ['list_branches_in_repo'] } })], total: 1 }),
+      ),
+      http.get('/api/v2/elitea_core/toolkits/prompt_lib/:projectId', () =>
+        HttpResponse.json({
+          github: {
+            properties: {
+              selected_tools: {
+                args_schemas: {
+                  list_branches_in_repo: { type: 'object', properties: { repository: { type: 'string', title: 'Repository' } }, required: ['repository'] },
+                },
+              },
+            },
+          },
+        }),
+      ),
+      http.post('/api/v2/elitea_core/test_tool/prompt_lib/:projectId/:toolkitId', async ({ request, params }) => {
+        seen = { body: await request.json(), params };
+        return HttpResponse.json({ ok: true, result: { branches: ['main'] }, truncated: false });
+      }),
+    );
+
+    const user = userEvent.setup();
+    renderToolkitsRoute(<EditToolkit deps={{ saveToolkit: vi.fn() }} />, '/toolkits/latest/tk-1', { projectId: 'proj-1' });
+
+    const pane = await screen.findByTestId('edit-toolkit-test-pane-slot');
+    // It is no longer an empty Box: the panel is inside it.
+    const picker = await within(pane).findByRole('combobox');
+    await user.click(picker);
+    await user.click(await screen.findByRole('option', { name: /list branches in repo/i }));
+
+    await user.type(await within(pane).findByLabelText(/repository/i), 'octo/repo');
+    await user.click(within(pane).getByRole('button', { name: /run tool/i }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('test-tool-result')).toHaveAttribute('data-status', 'ok');
+    });
+    // The route's own ids reached the request — the page, not the pane, is what
+    // resolves the project and the toolkit.
+    expect(seen).toEqual({
+      body: { tool_name: 'list_branches_in_repo', tool_params: { repository: 'octo/repo' } },
+      params: { projectId: 'proj-1', toolkitId: 'tk-1' },
+    });
+    expect(screen.getByTestId('test-tool-result-payload')).toHaveTextContent('main');
   });
 });

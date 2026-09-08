@@ -294,6 +294,15 @@ export const getCheckStoredConfigurationConnectionResponseMock = (
 ): CheckStoredConfigurationConnection200 => ({
   success: faker.datatype.boolean(),
   message: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  reason: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([
+      "ok",
+      "auth_failed",
+      "unreachable",
+      "unsupported_type",
+    ] as const),
+    undefined,
+  ]),
   ...overrideResponse,
 });
 
@@ -310,6 +319,15 @@ export const getBatchCheckStoredConfigurationConnectionsResponseMock =
       success: faker.datatype.boolean(),
       message: faker.helpers.arrayElement([
         faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      reason: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([
+          "ok",
+          "auth_failed",
+          "unreachable",
+          "unsupported_type",
+        ] as const),
         undefined,
       ]),
       unsupported: faker.helpers.arrayElement([

@@ -121,9 +121,18 @@ export interface TestToolSettingsProps {
   readonly isValidForm: boolean;
   readonly selectedToolSchema: JsonSchemaLike | null | undefined;
   readonly values: ToolkitConversationValues;
-  /** Grouped — see the module doc comment's DI-treaty item 4. */
-  readonly llm: LLMModelSelectorProps;
-  readonly LLMModelSelector: ComponentType<LLMModelSelectorProps>;
+  /**
+   * Grouped — see the module doc comment's DI-treaty item 4.
+   *
+   * OPTIONAL since the synchronous test pane (`./TestToolPane.tsx`) reuses this
+   * panel: that pane runs ONE tool through
+   * `POST /elitea_core/test_tool/prompt_lib/{projectId}/{toolId}` and never
+   * asks a model anything, so there is no model for a selector to pick. Both
+   * fields move together — a selector with no props, or props with no
+   * selector, is a half-wired control.
+   */
+  readonly llm?: LLMModelSelectorProps | undefined;
+  readonly LLMModelSelector?: ComponentType<LLMModelSelectorProps> | undefined;
   /** Grouped — the four `useIndexNameValidation()` fields the baseline reads individually. */
   readonly indexNameValidation: UseIndexNameValidationResult;
   /**
@@ -281,9 +290,11 @@ export function TestToolSettings(props: TestToolSettingsProps): ReactNode {
         <Box>
           <Typography variant="subtitle">{t('features.toolkits.testToolSettings.title', 'Test Settings')}</Typography>
         </Box>
-        <Box sx={llmModelContainerSx}>
-          <LLMModelSelector {...llm} />
-        </Box>
+        {LLMModelSelector !== undefined && llm !== undefined && (
+          <Box sx={llmModelContainerSx}>
+            <LLMModelSelector {...llm} />
+          </Box>
+        )}
         <Box sx={toolSelectContainerSx}>
           <ToolPicker
             dynamicTierActive={usesDynamicTier}
