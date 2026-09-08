@@ -355,6 +355,7 @@ type Querier interface {
 	// metadata_created_at) rejects. Reusing one Go-computed timestamp for both
 	// columns guarantees equality, which satisfies >=.
 	InsertIndexResultArtifact(ctx context.Context, arg InsertIndexResultArtifactParams) (InsertIndexResultArtifactRow, error)
+	InsertMCPOAuthClient(ctx context.Context, arg InsertMCPOAuthClientParams) error
 	InsertRuntimeCommandOutbox(ctx context.Context, arg InsertRuntimeCommandOutboxParams) error
 	InsertRuntimeInputBundle(ctx context.Context, arg InsertRuntimeInputBundleParams) error
 	InsertRuntimeInputBundleEntry(ctx context.Context, arg InsertRuntimeInputBundleEntryParams) error
@@ -421,6 +422,7 @@ type Querier interface {
 	ListPendingAgentExecutionIDs(ctx context.Context, arg ListPendingAgentExecutionIDsParams) ([]string, error)
 	ListPendingToolkitExecuteReadIDs(ctx context.Context, arg ListPendingToolkitExecuteReadIDsParams) ([]string, error)
 	LoadIndexMetaInitializationWork(ctx context.Context, arg LoadIndexMetaInitializationWorkParams) (LoadIndexMetaInitializationWorkRow, error)
+	LoadMCPOAuthClient(ctx context.Context, arg LoadMCPOAuthClientParams) ([]byte, error)
 	LoadRuntimeAdmissionTiming(ctx context.Context, deadlineTtlMillis int64) (LoadRuntimeAdmissionTimingRow, error)
 	LockAgentExecutionEnvelope(ctx context.Context, arg LockAgentExecutionEnvelopeParams) (LockAgentExecutionEnvelopeRow, error)
 	LockAgentExecutionPublication(ctx context.Context, arg LockAgentExecutionPublicationParams) (LockAgentExecutionPublicationRow, error)
@@ -469,6 +471,7 @@ type Querier interface {
 	MarkToolkitExecuteReadDispatched(ctx context.Context, arg MarkToolkitExecuteReadDispatchedParams) (int64, error)
 	MarkToolkitExecuteReadPublished(ctx context.Context, arg MarkToolkitExecuteReadPublishedParams) (int64, error)
 	ProjectCurrentAgentStop(ctx context.Context, arg ProjectCurrentAgentStopParams) (ProjectCurrentAgentStopRow, error)
+	PruneMCPOAuthClients(ctx context.Context) error
 	QuarantineExpiredTerminalIndexMetaInitializations(ctx context.Context, quarantineLimit int32) (int64, error)
 	QuarantineIndexMetaInitialization(ctx context.Context, arg QuarantineIndexMetaInitializationParams) (string, error)
 	RefreshAgentExecutionPublication(ctx context.Context, arg RefreshAgentExecutionPublicationParams) (int64, error)

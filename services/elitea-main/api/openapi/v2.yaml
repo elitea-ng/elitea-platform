@@ -193,6 +193,116 @@ components:
       description: End of date range (inclusive)
 
   schemas:
+    McpOAuthProxyRequest:
+      type: object
+      required: [token_endpoint]
+      description: Exchange a code or refresh a delegated grant. Main resolves stored client credentials.
+      properties:
+        token_endpoint: { type: string, format: uri }
+        resource: { type: string, format: uri }
+        grant_type:
+          type: string
+          enum: [authorization_code, refresh_token]
+          default: authorization_code
+        code: { type: string }
+        redirect_uri: { type: string, format: uri }
+        code_verifier: { type: string }
+        refresh_token: { type: string }
+        scope:
+          type: string
+          description: Omitted refresh scope retains the existing grant. It never expands to toolkit defaults.
+        client_id: { type: string }
+        client_secret:
+          type: string
+          writeOnly: true
+          description: Legacy or manually supplied client credential. Do not combine with client_reference.
+        client_reference:
+          type: string
+          description: Opaque Main-owned DCR client reference. Requires used_dcr and the original client, endpoint, and resource.
+        used_dcr: { type: boolean, default: false }
+        toolkit_id:
+          oneOf:
+            - { type: string }
+            - { type: integer, minimum: 1, maximum: 2147483647 }
+        toolkit_type: { type: string }
+        configuration_uuid: { type: string }
+
+    McpOAuthProxyResponse:
+      type: object
+      required: [access_token]
+      properties:
+        access_token: { type: string }
+        token_type: { type: string }
+        refresh_token: { type: string }
+        id_token: { type: string }
+        session_id: { type: string }
+        scope: { type: string }
+        expires_in:
+          oneOf:
+            - { type: number }
+            - { type: string }
+
+    McpDcrProxyRequest:
+      type: object
+      required: [registration_endpoint, redirect_uris]
+      description: Register an OAuth client. DCR does not replace user consent.
+      properties:
+        registration_endpoint: { type: string, format: uri }
+        token_endpoint:
+          type: string
+          format: uri
+          description: Required when registration issues a secret. Main binds the stored client to this endpoint.
+        resource: { type: string, format: uri }
+        redirect_uris:
+          type: array
+          minItems: 1
+          maxItems: 32
+          items: { type: string, format: uri }
+        client_name: { type: string }
+        grant_types:
+          type: array
+          maxItems: 32
+          items: { type: string }
+        response_types:
+          type: array
+          maxItems: 32
+          items: { type: string }
+        token_endpoint_auth_method: { type: string }
+        application_type: { type: string }
+        scope: { type: string }
+        software_id: { type: string }
+        software_version: { type: string }
+
+    McpDcrProxyResponse:
+      type: object
+      required: [client_id]
+      description: Main never returns the registered client secret or registration access token.
+      properties:
+        client_id: { type: string }
+        client_reference:
+          type: string
+          description: Actor- and project-bound reference to the encrypted confidential client.
+        client_id_issued_at: { type: integer, format: int64 }
+        client_secret_expires_at: { type: integer, format: int64 }
+        token_endpoint_auth_method: { type: string }
+        redirect_uris:
+          type: array
+          items: { type: string }
+        grant_types:
+          type: array
+          items: { type: string }
+        response_types:
+          type: array
+          items: { type: string }
+        scope: { type: string }
+
+    McpOAuthError:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+        error_description: { type: string }
+
     DeepWikiSlots:
       type: object
       description: |
@@ -8798,6 +8908,64 @@ components:
 # Paths
 # ---------------------------------------------------------------------------
 paths:
+  /elitea_core/mcp_oauth_proxy/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    post:
+      operationId: exchangeMcpOAuthGrant
+      summary: Exchange or refresh a delegated OAuth grant
+      tags: [toolkits]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/McpOAuthProxyRequest'
+      responses:
+        '200':
+          description: Successful response. Cache-Control is no-store.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/McpOAuthProxyResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        default:
+          description: Safe OAuth error. No credential values or raw provider response appear.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/McpOAuthError'
+
+  /elitea_core/mcp_dcr_proxy/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    post:
+      operationId: registerMcpOAuthClient
+      summary: Register an OAuth client and retain its secret in Main
+      tags: [toolkits]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/McpDcrProxyRequest'
+      responses:
+        '200':
+          description: Successful response. Cache-Control is no-store.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/McpDcrProxyResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        default:
+          description: Safe OAuth error. No credential values or raw provider response appear.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/McpOAuthError'
+
 
   # ==========================================================================
   # ADMIN — users

@@ -141,7 +141,7 @@ func TestMCPOAuthProtocolTLSGrantsAndProtectedOpenAPI(t *testing.T) {
 					"client_id": clientID, "client_secret": "stored-test-secret", "token_url": issuer.URL + "/token", "scope": "records.read",
 				}},
 			}}
-			handler := eliteacore.NewHandler(nil, eliteacore.WithHTTPClient(issuer.Client()), eliteacore.WithDelegatedAuthToolkitSettingsResolver(resolver))
+			handler := eliteacore.NewHandler(nil, eliteacore.WithHTTPClient(issuer.Client()), eliteacore.WithDelegatedAuthToolkitSettingsResolver(resolver), eliteacore.WithMCPDCRClients(&dcrClientsStub{}))
 			call := func(dcr bool, body map[string]any, status int) map[string]any {
 				t.Helper()
 				raw, err := json.Marshal(body)
@@ -168,18 +168,31 @@ func TestMCPOAuthProtocolTLSGrantsAndProtectedOpenAPI(t *testing.T) {
 					method = "client_secret_post"
 				}
 				registered := call(true, map[string]any{"registration_endpoint": issuer.URL + "/register",
-					"redirect_uris": []string{callback}, "token_endpoint_auth_method": method}, http.StatusOK)
+					"token_endpoint": issuer.URL + "/token",
+					"redirect_uris":  []string{callback}, "token_endpoint_auth_method": method}, http.StatusOK)
 				grant["client_id"] = registered["client_id"]
 				if secret, present := registered["client_secret"]; present {
-					grant["client_secret"] = secret
+					t.Fatalf("DCR secret crossed the browser boundary: %T", secret)
+				}
+				if reference, present := registered["client_reference"]; present {
+					grant["client_reference"] = reference
 				}
 				grant["used_dcr"], grant["scope"] = true, "records.read"
 			}
 			for _, field := range []string{"client_id", "client_secret"} {
 				original, present := grant[field]
 				grant[field] = "different-client-credential"
-				if response := call(false, grant, http.StatusBadRequest); response["error_description"] != "invalid_client" {
-					t.Error("client credential rejection was not preserved")
+				response := call(false, grant, http.StatusBadRequest)
+				if grant["client_reference"] != nil {
+					expected := "invalid_client"
+					if field == "client_secret" {
+						expected = "invalid_dcr_client_reference"
+					}
+					if response["error"] != expected {
+						t.Error("client reference rejection was not preserved")
+					}
+				} else if response["error_description"] != "invalid_client" {
+					t.Error("provider client rejection was not preserved")
 				}
 				if present {
 					grant[field] = original

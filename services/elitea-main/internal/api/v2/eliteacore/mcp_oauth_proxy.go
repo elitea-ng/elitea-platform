@@ -36,6 +36,7 @@ type mcpOAuthProxyRequest struct {
 	RedirectURI     string          `json:"redirect_uri,omitempty"`
 	ClientID        string          `json:"client_id,omitempty"`
 	ClientSecret    string          `json:"client_secret,omitempty"`
+	ClientReference string          `json:"client_reference,omitempty"`
 	CodeVerifier    string          `json:"code_verifier,omitempty"`
 	GrantType       string          `json:"grant_type,omitempty"`
 	RefreshToken    string          `json:"refresh_token,omitempty"`
@@ -47,6 +48,8 @@ type mcpOAuthProxyRequest struct {
 }
 
 type mcpDCRProxyRequest struct {
+	TokenEndpoint           string   `json:"token_endpoint,omitempty"`
+	Resource                string   `json:"resource,omitempty"`
 	RegistrationEndpoint    string   `json:"registration_endpoint"`
 	RedirectURIs            []string `json:"redirect_uris"`
 	ClientName              string   `json:"client_name,omitempty"`
@@ -188,6 +191,18 @@ func (h *Handler) mcpDCRProxy(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_dcr_request"})
 		return
 	}
+	if body.TokenEndpoint != "" {
+		if _, err := validateMCPProxyURL(body.TokenEndpoint); err != nil || len(body.TokenEndpoint) > 4096 {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_token_endpoint"})
+			return
+		}
+	}
+	if body.Resource != "" {
+		if _, err := validateMCPProxyURL(body.Resource); err != nil || len(body.Resource) > 4096 {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_resource"})
+			return
+		}
+	}
 
 	grantTypes := body.GrantTypes
 	if len(grantTypes) == 0 {
@@ -255,7 +270,7 @@ func (h *Handler) mcpDCRProxy(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "invalid_dcr_response"})
 		return
 	}
-	writeJSON(w, http.StatusOK, providerBody)
+	h.writeMCPDCRClient(w, r, body, providerBody)
 }
 
 func preventMCPCredentialCaching(w http.ResponseWriter) {
@@ -342,6 +357,9 @@ func (h *Handler) resolveMCPOAuthCredentials(
 	tokenEndpoint *url.URL,
 	body mcpOAuthProxyRequest,
 ) (mcpOAuthCredentials, error) {
+	if body.ClientReference != "" {
+		return h.loadMCPDCRCredentials(ctx, projectIDText, tokenEndpoint, body)
+	}
 	credentials := mcpOAuthCredentials{
 		clientID: body.ClientID,
 		scope:    body.Scope,

@@ -75,7 +75,7 @@ export function McpAuthModal(props: McpAuthModalProps): ReactNode {
 
   const [clientId, setClientId] = useState('');
   const [clientSecret, setClientSecret] = useState('');
-  const [scope, setScope] = useState(() => scopesToString(resourceScopes) || scopesToString(scopes));
+  const [scope, setScope] = useState(() => scopesToString(scopes) || scopesToString(resourceScopes));
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState('');
   const [authSuccess, setAuthSuccess] = useState(false);
@@ -97,7 +97,7 @@ export function McpAuthModal(props: McpAuthModalProps): ReactNode {
       setClientSecret('');
       setSaveCredentials(false);
     }
-    setScope(scopesToString(resourceScopes) || scopesToString(scopes));
+    setScope(scopesToString(scopes) || scopesToString(resourceScopes));
     setAuthError('');
     setAuthSuccess(false);
     // `scopes`/`resourceScopes` ARE real dependencies (baseline includes

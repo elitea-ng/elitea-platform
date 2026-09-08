@@ -30,14 +30,14 @@
  *    eagerly, so signing one MCP server out does not leave its secret behind
  *    in a document that keeps running.
  *
- * ## The cost, stated plainly
+ * ## Reload ownership
  *
- * After a reload the browser can no longer prove a confidential client for a
- * refresh grant. `tokenLifecycle.ts` then falls back to the backend OAuth
- * proxy, which loads the toolkit's DB-configured secret server-side, or the
- * user authorizes again. Holding the secret in the browser at all is the
- * underlying problem; moving the token exchange server-side is the fix for
- * that, and persisting the secret again is not.
+ * Main owns newly registered confidential clients and returns an opaque
+ * reference. Refresh uses that reference after reload, without this map.
+ * Stored toolkit clients also resolve their secret server-side. Only legacy
+ * or manually supplied secrets depend on this document's lifetime; those
+ * flows may require authorization again after reload. Never persist a secret
+ * to work around that limitation or substitute another client's secret.
  */
 
 /**
@@ -47,6 +47,8 @@
  * Dynamic Client Registration). They were separate Storage records before
  * this module existed, and one must not overwrite the other.
  */
+import type { SetAccessTokenOAuthMeta, StoredMcpToken } from './types';
+
 export type ClientSecretScope = 'credential' | 'token';
 
 /** Any record shape that used to carry a persisted `client_secret`. */
@@ -75,6 +77,15 @@ export function recallClientSecret(scope: ClientSecretScope, storageKey: string)
 
 export function forgetClientSecret(scope: ClientSecretScope, storageKey: string): void {
   secrets.delete(vaultKey(scope, storageKey));
+}
+
+/** A new client must not inherit another client's reference or document-held secret. */
+export function rememberGrantClient(storageKey: string, metadata: SetAccessTokenOAuthMeta, existing: Partial<StoredMcpToken>): string | undefined {
+  const changedClient = metadata.client_id !== undefined && metadata.client_id !== existing.client_id;
+  const reference = metadata.client_reference ?? (changedClient || metadata.used_dcr === false ? undefined : existing.client_reference);
+  const secret = reference ? undefined : metadata.client_secret ?? (changedClient ? undefined : recallClientSecret('token', storageKey));
+  rememberClientSecret('token', storageKey, secret);
+  return reference;
 }
 
 /**

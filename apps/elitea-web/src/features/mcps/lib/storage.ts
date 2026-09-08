@@ -24,7 +24,7 @@
  */
 import { createStorage } from '@/shared/lib/storage';
 
-import { forgetClientSecret, recallClientSecret, rememberClientSecret, stripClientSecrets, withRecalledSecret } from './clientSecretVault';
+import { forgetClientSecret, rememberClientSecret, rememberGrantClient, stripClientSecrets, withRecalledSecret } from './clientSecretVault';
 import { MC_TOKENS_STORAGE_KEY, MCP_CONNECTION_VERIFIED, MCP_CREDENTIALS_STORAGE_KEY, MCP_IGNORED_SERVERS_STORAGE_KEY, MCP_PREBUILD_PREFIX, MCP_TOKEN_CHANGE_EVENT } from './constants';
 import { loadLogoutMarker, publishLogout } from './logoutSync';
 import type { IgnoredServerMap, SetAccessTokenOAuthMeta, StoredMcpCredential, StoredMcpCredentialMap, StoredMcpToken, StoredMcpTokenMap } from './types';
@@ -244,9 +244,7 @@ export function setAccessToken(
     return (oauthMeta[field] as StoredMcpToken[K] | undefined) ?? existingToken[field];
   }
 
-  // NOT a record field, and not routed through `getOrExisting`: the held
-  // secret is what "carry the existing value forward" now means for it.
-  rememberClientSecret('token', key, oauthMeta.client_secret ?? recallClientSecret('token', key));
+  const clientReference = rememberGrantClient(key, oauthMeta, existingToken);
 
   tokens[key] = {
     access_token: accessToken,
@@ -259,6 +257,7 @@ export function setAccessToken(
     ...(refreshToken ? { refresh_token: refreshToken } : {}),
     token_endpoint: getOrExisting('token_endpoint'),
     client_id: getOrExisting('client_id'),
+    client_reference: clientReference,
     project_id: getOrExisting('project_id'),
     toolkit_id: getOrExisting('toolkit_id'),
     // Not routed through getOrExisting: toolkitType is a positional

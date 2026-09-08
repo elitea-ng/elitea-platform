@@ -336,6 +336,18 @@ type Configuration struct {
 	UpdatedAt   pgtype.Timestamp `db:"updated_at" json:"updated_at"`
 }
 
+type EliteaAuthMcpOauthClient struct {
+	ID                   string             `db:"id" json:"id"`
+	ProjectID            int32              `db:"project_id" json:"project_id"`
+	ActorID              int32              `db:"actor_id" json:"actor_id"`
+	ClientID             string             `db:"client_id" json:"client_id"`
+	TokenEndpoint        string             `db:"token_endpoint" json:"token_endpoint"`
+	Resource             string             `db:"resource" json:"resource"`
+	EncryptedCredentials []byte             `db:"encrypted_credentials" json:"encrypted_credentials"`
+	SecretExpiresAt      pgtype.Timestamptz `db:"secret_expires_at" json:"secret_expires_at"`
+	IdleExpiresAt        pgtype.Timestamptz `db:"idle_expires_at" json:"idle_expires_at"`
+}
+
 type EliteaIdentityTokenProjectBinding struct {
 	TokenID   int32              `db:"token_id" json:"token_id"`
 	ProjectID int32              `db:"project_id" json:"project_id"`

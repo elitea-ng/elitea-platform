@@ -177,7 +177,7 @@ export interface McpOAuthTokenResult {
 
 /** Both refresh paths retain the original grant's audience and client ownership. */
 function grantContext(token: StoredMcpToken | null) {
-  return { resource: token?.resource, used_dcr: token?.used_dcr || undefined };
+  return { resource: token?.resource, used_dcr: token?.used_dcr || undefined, client_reference: token?.client_reference };
 }
 
 function clearFailedRefresh(serverUrl: string, token: StoredMcpToken | null): void {

@@ -428,7 +428,7 @@ func TestMCPDCRProxyForwardsRFC7591Fields(t *testing.T) {
 		if len(body["response_types"].([]any)) != 1 || len(body["grant_types"].([]any)) != 1 {
 			t.Fatalf("RFC 7591 lists were not forwarded: %#v", body)
 		}
-		return oauthResponse(request, http.StatusCreated, `{"client_id":"registered","client_secret":"issued"}`), nil
+		return oauthResponse(request, http.StatusCreated, `{"client_id":"registered"}`), nil
 	})}
 	handler := eliteacore.NewHandler(nil, eliteacore.WithHTTPClient(client))
 	request := authenticatedOAuthRequest(t, `{
@@ -449,7 +449,7 @@ func TestMCPDCRProxyForwardsRFC7591Fields(t *testing.T) {
 
 	assertStatus(t, recorder, http.StatusOK)
 	response := decodeObj(t, recorder)
-	if response["client_id"] != "registered" || response["client_secret"] != "issued" {
+	if response["client_id"] != "registered" || response["client_secret"] != nil {
 		t.Fatalf("unexpected DCR response: %#v", response)
 	}
 }

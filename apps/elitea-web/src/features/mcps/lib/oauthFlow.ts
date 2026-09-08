@@ -109,6 +109,7 @@ function ensureAuthWindow(providedWindow: Window | null | undefined): Window {
 }
 
 interface ClientCredentialsResolution {
+  clientReference?: string | undefined;
   clientId: string;
   /** The DCR-issued secret, when DCR was used and the server issued one — `undefined` on the caller-provided-`client_id` branch, where there is no DCR-issued secret at all. See `startMcpAuthFlow`'s `resolveEffectiveClientSecret` for how this combines with a caller-supplied secret. */
   clientSecret: string | undefined;
@@ -135,12 +136,13 @@ async function resolveClientCredentials(
   registrationEndpoint: string | undefined,
   initialClientId: string | undefined,
   projectId: string | number | undefined,
+  binding: { tokenEndpoint: string | undefined; resource: string | undefined },
 ): Promise<ClientCredentialsResolution> {
   if (initialClientId) return { clientId: initialClientId, clientSecret: undefined, usedDCR: false };
   if (registrationEndpoint) {
     const redirectUri = getRedirectUri();
-    const { clientId, clientSecret } = await registerDynamicClient(registrationEndpoint, redirectUri, projectId);
-    return { clientId, clientSecret, usedDCR: true };
+    const { clientId, clientSecret, clientReference } = await registerDynamicClient(registrationEndpoint, redirectUri, projectId, binding);
+    return { clientId, clientSecret, clientReference, usedDCR: true };
   }
   throw new Error(
     `${MCP_OAUTH_ERRORS.MISSING_CLIENT_ID}. Server does not support Dynamic Client Registration. Please register an OAuth application manually and provide client credentials.`,
@@ -179,6 +181,7 @@ async function awaitAuthorizationCode(authWindow: Window, authUrl: string, state
 }
 
 interface ExchangeAuthorizationCodeParams {
+  clientReference: string | undefined;
   resource: string | undefined;
   projectId: string | number | undefined;
   tokenEndpoint: string | undefined;
@@ -213,6 +216,7 @@ async function exchangeAuthorizationCode(params: ExchangeAuthorizationCodeParams
       redirect_uri: params.redirectUri,
       client_id: shouldSendCredentials ? (params.clientId ?? undefined) : undefined,
       client_secret: shouldSendCredentials ? params.clientSecret : undefined,
+      client_reference: params.clientReference,
       code_verifier: params.usePKCE ? params.codeVerifier : undefined,
       scope: params.normalizedScope || undefined,
       resource: params.resource,
@@ -256,6 +260,7 @@ async function exchangeAuthorizationCode(params: ExchangeAuthorizationCodeParams
 }
 
 interface TokenPersistenceMetadataParams {
+  clientReference: string | undefined;
   resource: string | undefined;
   tokenEndpoint: string | undefined;
   clientId: string | undefined;
@@ -273,11 +278,12 @@ function buildTokenPersistenceMetadata(params: TokenPersistenceMetadataParams) {
     token_endpoint: params.tokenEndpoint,
     client_id: params.clientId,
     client_secret: params.clientSecret,
+    client_reference: params.clientReference,
     project_id: params.projectId === undefined ? undefined : String(params.projectId),
     toolkit_id: params.toolkitId,
     // Retain the issued client's ownership. A later refresh must not replace
     // DCR credentials with the toolkit's unrelated stored OAuth client.
-    used_dcr: params.usedDCR || undefined,
+    used_dcr: params.usedDCR,
     ...(params.providedOauthMetadata
       ? {
           authorization_endpoint: params.providedOauthMetadata.authorization_endpoint,
@@ -307,14 +313,7 @@ export interface StartMcpAuthFlowOptions {
   toolkitType?: string | undefined;
 }
 
-/**
- * Full authorization-code + PKCE flow: resolve auth-server metadata ->
- * (DCR or require a caller-provided client_id) -> open/navigate the popup
- * -> await the redirected code -> exchange it -> persist the token.
- * Throws on any step failure (POPUP_BLOCKED, MISSING_CLIENT_ID, a rejected
- * exchange, ...) — the caller (an OAuth modal) surfaces this as an inline
- * error, matching the baseline.
- */
+/** Registers or resolves a client, obtains consent, exchanges the code, and stores the grant metadata. */
 export async function startMcpAuthFlow(options: StartMcpAuthFlowOptions): Promise<{ access_token: string; expires_in?: number; session_id?: string; id_token?: string; refresh_token?: string }> {
   const { serverUrl, resourceMetadata, oauthMetadata: providedOauthMetadata, clientId: initialClientId, clientSecret, scope, authWindow: initialAuthWindow, projectId, toolkitId, toolkitType } = options;
 
@@ -328,7 +327,10 @@ export async function startMcpAuthFlow(options: StartMcpAuthFlowOptions): Promis
   const asMetadata = extractAuthServerMetadata(resourceMetadata);
   const { authorization_endpoint: authorizationEndpoint, token_endpoint: tokenEndpoint, registration_endpoint: registrationEndpoint } = asMetadata;
 
-  const { clientId, clientSecret: dcrClientSecret, usedDCR } = await resolveClientCredentials(registrationEndpoint, initialClientId, projectId);
+  const { clientId, clientSecret: dcrClientSecret, clientReference, usedDCR } = await resolveClientCredentials(
+    registrationEndpoint, initialClientId, projectId,
+    { tokenEndpoint, resource: options.resourceUrl ?? serverUrl },
+  );
   const effectiveClientSecret = resolveEffectiveClientSecret(usedDCR, dcrClientSecret, clientSecret);
   const resource = options.resourceUrl ?? (usedDCR ? serverUrl : undefined);
 
@@ -369,6 +371,7 @@ export async function startMcpAuthFlow(options: StartMcpAuthFlowOptions): Promis
     redirectUri,
     clientId,
     clientSecret: effectiveClientSecret,
+    clientReference,
     usedDCR,
     isPrebuildMcp,
     usePKCE,
@@ -387,7 +390,7 @@ export async function startMcpAuthFlow(options: StartMcpAuthFlowOptions): Promis
     sessionId,
     tokenJson.id_token,
     tokenJson.refresh_token,
-    buildTokenPersistenceMetadata({ resource, tokenEndpoint, clientId, clientSecret: effectiveClientSecret, projectId, toolkitId, providedOauthMetadata, usedDCR }),
+    buildTokenPersistenceMetadata({ resource, tokenEndpoint, clientId, clientSecret: effectiveClientSecret, clientReference, projectId, toolkitId, providedOauthMetadata, usedDCR }),
     toolkitType,
   );
 

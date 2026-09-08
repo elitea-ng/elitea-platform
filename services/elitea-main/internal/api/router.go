@@ -1309,6 +1309,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		v2core.WithInviteMailer(inviteMailer),
 		v2core.WithPrebuiltMCPCatalogue(prebuiltMCPStore, prebuiltMCPVault),
 		v2core.WithDelegatedAuthToolkitSettingsResolver(cfg.DelegatedAuthToolkitSettings),
+		v2core.WithMCPDCRClients(mcpOAuthClientStore(cfg.Pool)),
 		v2core.WithCostBudgets(cfg.GatewayStatus != nil),
 	)
 

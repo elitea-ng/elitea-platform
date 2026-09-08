@@ -905,6 +905,55 @@ This is a UI integration gap, not missing runtime toolkit binding.
 
 ## Remaining gates
 
+### Confidential DCR ownership: 2026-09-08
+
+Main now stores registered client secrets in `elitea_auth.mcp_oauth_clients`.
+Shared migration 124 adds the table. Applied migration receipts remain unchanged.
+The browser receives an opaque `client_reference`, not the registered secret or registration access token.
+The reference requires the original actor, project, client ID, token endpoint, and protected resource.
+The reference is not an authorization grant. Each exchange still requires a valid code or refresh token.
+
+Main uses AES-256-GCM with random nonces and authenticated ownership fields.
+HKDF derives a separate storage key from the configured secrets master key.
+No unencrypted fallback exists. Missing storage or key material fails confidential registration safely.
+Public registration remains available without confidential storage.
+
+Records expire after 30 days without use or at the provider's earlier secret expiry.
+Each registration prunes at most 128 idle-expired records through an indexed query.
+Toolkit logout removes browser grant material. It does not revoke the issuer's registered application.
+Storage references cannot replace consent or override a revoked provider grant.
+A failed registration response is not retried automatically. The remote registration can already exist.
+
+| Current-platform behavior | Replatform implementation |
+| --- | --- |
+| EliteaUI `mcpAuthFlow.helpers.js` preserves the registered client's identity across refresh. | `oauthFlow.ts`, `tokenLifecycle.ts`, and `storage.ts` retain the Main reference. |
+| EliteaUI `mcpDiscovery.helpers.js::registerDynamicClient` preserves secrets issued for public-client registration requests. | Main `mcp_dcr_clients.go` stores the secret before returning the reference. |
+| The current browser stores DCR client secrets with token metadata. | Main `mcpoauth/clients.go` owns encrypted storage. Browser secret persistence remains prohibited. |
+| Registration and code exchange precede protected tool execution. | The existing Rust guard and execution contracts remain unchanged. |
+
+Queries come from `internal/db/queries/mcp_oauth_clients.sql`.
+`sqlc` 1.31.1 generates the Go bindings.
+The OAuth and DCR schemas now appear in Main's OpenAPI document.
+`oapi-codegen` 2.7.2 regenerates the server bindings.
+
+PostgreSQL tests use isolated databases on the rehearsal server.
+They cover migration replay, concurrent reads, replacement clients, expiry, cancellation, bounded pruning, and ciphertext substitution.
+All three tests and five ownership subtests pass with the race detector. No database tests skip.
+The temporary databases are removed after verification.
+TLS component tests cover both grants with the Main reference and preserve provider PKCE rejection.
+The complete MCP UI and mounted-page selection passes 320 tests across 31 files.
+Type checking and focused lint pass.
+Deployed confidential-client reload verification remains pending for this slice.
+
+### Chat visibility and consent defaults: 2026-09-08
+
+The chat page now passes the existing MCP visibility hook to the participant panel.
+Mounted-page tests cover enabled settings and both disabling settings.
+The authorization dialog preserves configured consent scopes before resource-advertised fallback scopes.
+A popup test retains `offline_access` in the authorization request.
+Refresh still cannot expand the original grant.
+Deployed browser verification remains pending.
+
 ### Open verification
 
 - Wire the chat participant panel to the existing MCP visibility hook.
@@ -935,7 +984,6 @@ This is a UI integration gap, not missing runtime toolkit binding.
   issues refresh tokens in this case; that does not prove a real provider will.
 - Repeat the earlier conversation 529 scenario if it recurs with complete child results.
   The latest direct-agent and pipeline proofs complete after one Skip without a repeated guard.
-- Publish both proxy schemas in Main's OpenAPI document.
 - Add load and Kubernetes evidence before production capability registration.
 
 ### Deferred diagnostic follow-up

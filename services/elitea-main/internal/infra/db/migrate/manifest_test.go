@@ -525,7 +525,8 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// 122 adds the Rust read-only capability without removing Python tool runs.
 	// 123 preserves parameterized static MCP configuration from the Rust branch.
 	// The old rehearsal versions 111 and 112 require explicit reconciliation.
-	require.EqualValues(t, 123, Head(shared))
+	// 124 stores encrypted confidential DCR clients without changing old receipts.
+	require.EqualValues(t, 124, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

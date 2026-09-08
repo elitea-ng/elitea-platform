@@ -20,6 +20,8 @@
  * `undefined` (`exactOptionalPropertyTypes`).
  */
 export interface StoredMcpToken {
+  /** Opaque Main-owned DCR client reference. This is not an authorization grant. */
+  client_reference?: string | undefined;
   resource?: string | undefined;
   access_token: string;
   issued_at: number;
@@ -73,6 +75,7 @@ export type StoredMcpTokenMap = Record<string, StoredMcpToken>;
  * `clientSecretVault.ts` (issue #177).
  */
 export interface SetAccessTokenOAuthMeta {
+  client_reference?: string | undefined;
   resource?: string | undefined;
   issued_at?: number | undefined;
   token_endpoint?: string | undefined;

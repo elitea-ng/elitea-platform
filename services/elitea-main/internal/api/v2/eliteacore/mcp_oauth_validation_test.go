@@ -40,11 +40,11 @@ func TestMCPProxiesValidateSuccessfulCredentialResponses(t *testing.T) {
 			client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 				return oauthResponse(request, http.StatusOK, test.provider), nil
 			})}
-			handler := eliteacore.NewHandler(nil, eliteacore.WithHTTPClient(client))
+			handler := eliteacore.NewHandler(nil, eliteacore.WithHTTPClient(client), eliteacore.WithMCPDCRClients(&dcrClientsStub{}))
 			recorder := httptest.NewRecorder()
 			if test.dcr {
 				handler.MCPDCRProxy(recorder, authenticatedOAuthRequest(t,
-					`{"registration_endpoint":"https://identity.example/register","redirect_uris":["https://elitea.example/callback"]}`))
+					`{"registration_endpoint":"https://identity.example/register","token_endpoint":"https://identity.example/token","redirect_uris":["https://elitea.example/callback"]}`))
 			} else {
 				handler.MCPOAuthProxy(recorder, authenticatedOAuthRequest(t,
 					`{"token_endpoint":"https://identity.example/token","client_id":"public","code":"code","redirect_uri":"https://elitea.example/callback"}`))

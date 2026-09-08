@@ -71,6 +71,33 @@ function baseProps(overrides: Partial<Parameters<typeof McpAuthModal>[0]> = {}) 
 }
 
 describe('McpAuthModal', () => {
+  it('uses configured consent scopes instead of replacing them with resource scopes', async () => {
+    configureGeneratedClient({ baseUrl: '/api/v2' });
+    const user = userEvent.setup();
+    const popup = stubPopup();
+    renderWithTheme(
+      <McpAuthModal
+        {...baseProps({
+          mcpAuthMetadata: {
+            authServers: ['https://as.example.com'],
+            oauthAuthorizationServer: {
+              authorization_endpoint: 'https://as.example.com/authorize',
+              token_endpoint: 'https://as.example.com/token',
+              code_challenge_methods_supported: ['S256'],
+            },
+            providedSettings: { mcp_client_id: 'configured-client', scopes: ['records.read', 'offline_access'] },
+            resourceScopes: ['records.read'],
+          },
+        })}
+      />,
+    );
+    expect(screen.getByPlaceholderText('Enter OAuth scopes (space-separated)')).toHaveValue('records.read offline_access');
+    await user.click(screen.getByRole('button', { name: 'Authorize' }));
+    await waitFor(() => expect(popup.location.href).toContain('https://as.example.com/authorize?'));
+    expect(new URL(popup.location.href).searchParams.get('scope')).toBe('records.read offline_access');
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+  });
+
   it('DCR-capable server: no client-id/secret fields shown, Authorize is enabled', () => {
     renderWithTheme(<McpAuthModal {...baseProps()} />);
     expect(screen.queryByLabelText(/Client ID/i)).not.toBeInTheDocument();
