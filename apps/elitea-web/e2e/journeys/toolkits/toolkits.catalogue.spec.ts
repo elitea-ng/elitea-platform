@@ -380,6 +380,15 @@ test.describe('JRNY-017C: the served toolkit catalogue', () => {
   });
 
   test('J17C.2: an index-capable type opens the real Indexes panel', async ({ page }) => {
+    // Budget, not behaviour: a catalogue read, a create POST, a page load and
+    // then four waits of 20 s each (the test pane, the Indexes tab, the two
+    // panel controls) plus the 20 s `waitForResponse` and `checkA11y` — the
+    // waits this test already declares sum to well over the 30 s file
+    // default, so it passed only while the stack was fast. It timed out on
+    // webkit in the first CI read of the ported suite with no failing
+    // assertion of its own, which is the shape an exhausted budget takes.
+    test.setTimeout(120_000);
+
     // The type is DERIVED from the live catalogue, never hardcoded: if the
     // served schemas stop offering index_data the assertion fails loudly
     // instead of silently testing a type that no longer indexes.

@@ -224,6 +224,19 @@ test('J4: logout clears user state and el.* storage', async ({ browser }) => {
   // covers the storage sweep in jsdom and names THIS journey as the half that
   // proves the browser really leaves the app, so the page it opens has to be
   // the page the control is on.
+  // THE DEFAULT 30 s BUDGET CANNOT HOLD THIS TEST — measured, not guessed.
+  // Unlike every other journey, this one does not start signed in: it drives
+  // the provider round trip itself, and `signInThroughOidc` alone holds two
+  // 15 s `waitForURL`s plus two navigations and a `/forward-auth/info` read.
+  // The profile load and the 20 s wait for the logout control come after
+  // that, so the waits this test already declares add up to more than the
+  // file default and it can only pass while every hop is fast. It timed out
+  // on webkit in the first CI read of the ported suite, at the logout control
+  // with an empty call log — the shape a budget exhausted elsewhere takes,
+  // not a missing control. `shell.reauth-popup.spec.ts` carries the same
+  // 120 s for the same reason: a real OIDC round trip inside the test body.
+  test.setTimeout(120_000);
+
   const context = await browser.newContext({ storageState: undefined });
   const page = await context.newPage();
   await signInThroughOidc(page, 'e2e-member@autotest.local');

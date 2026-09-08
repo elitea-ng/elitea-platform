@@ -102,6 +102,14 @@ function typeSearchBox(page: Page) {
  */
 
 test('J17.2: the create page offers real, server-supplied toolkit types', async ({ page }) => {
+  // Budget, not behaviour: this test's own waits (two 15 s tile waits, seven
+  // further assertions on default timeouts, and `checkA11y` over a grid of
+  // sixty-odd tiles) already exceed the 30 s file default, so it passed only
+  // while every step was fast. In the first CI read of the ported suite it
+  // timed out on webkit INSIDE `checkA11y` — axe injecting and analysing this
+  // page, which is the largest DOM in the toolkits area, not a missing tile.
+  test.setTimeout(90_000);
+
   // PASSES as of the #129 route fix. The tile label "GitHub" is derivable ONLY
   // from a schema map that actually contains the key `github`
   // (entities/toolkit/model/toolMenu.ts labels each map key through ToolTypes),
