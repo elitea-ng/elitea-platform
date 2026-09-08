@@ -1288,6 +1288,96 @@ JOIN auth_core__project_role r ON r.project_id = 90200 AND r.name = 'editor'
 WHERE u.email = 'e2e-member@autotest.local'
 ON CONFLICT (project_id, user_id, role_id) DO NOTHING;
 
+-- ── the bulk-invite journey's own projects and accounts (issue 247) ──────────
+--
+-- ONE PROJECT PER BROWSER ENGINE, for the reason `suspendFixture` in
+-- admin.users.spec.ts gives: `fullyParallel` is on, chromium and webkit run the
+-- same spec against ONE platform-wide table, and a shared project would have
+-- each engine observing the other's membership writes.
+--
+-- NOT project 1 and NOT 90001. Project 1 is where every persona lands, and
+-- 90001 (`e2e-team-active`) is the row admin.projects.spec.ts asserts an exact
+-- Admins cell for — a bulk invite into either would break a journey that never
+-- mentions this one, which is the trap the DeepWiki project's own comment
+-- above records.
+--
+-- The two invitees are permanent, invite-only accounts. They sign in nowhere
+-- and hold no role anywhere else, so no other journey can observe them.
+INSERT INTO auth_core__user (id, email, name, suspended) VALUES
+    (90401, 'e2e-bulkinvite-a@autotest.local', 'E2E Bulk Invitee A', false),
+    (90402, 'e2e-bulkinvite-b@autotest.local', 'E2E Bulk Invitee B', false)
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO centry.project (id, name, owner_id, keycloak_groups, create_success, suspended) VALUES
+    (90401, 'e2e-bulkinvite-chromium', 90401, '{}', true, false),
+    (90402, 'e2e-bulkinvite-webkit',   90401, '{}', true, false)
+ON CONFLICT (id) DO UPDATE
+    SET name = EXCLUDED.name, owner_id = EXCLUDED.owner_id, suspended = EXCLUDED.suspended;
+
+INSERT INTO auth_core__project_role (project_id, name) VALUES
+    (90401, 'admin'), (90401, 'editor'), (90401, 'viewer'),
+    (90402, 'admin'), (90402, 'editor'), (90402, 'viewer')
+ON CONFLICT (project_id, name) DO NOTHING;
+
+-- ── the budget-warning journey's own project (issue 312) ─────────────────────
+--
+-- The banner needs SPEND, and spend is not writable through any API: the
+-- accumulator is the gateway's write-back target, and the budgets API only
+-- authors the ceiling and the threshold. So the accrued cost is seeded here and
+-- the journey sets the limit through the admin PUT, which is the half a product
+-- surface owns.
+--
+-- One project per engine again, and for a second reason on top of parallelism:
+-- the journey PUTs and then DELETEs a budget on its project, and two engines
+-- doing that to one row would each see the other's window.
+--
+-- `period_start` is the CURRENT month, computed rather than written: the read
+-- resolves the period from the clock, and a fixed date would make this fixture
+-- work in the month it was authored and silently stop warning in the next one.
+INSERT INTO centry.project (id, name, owner_id, keycloak_groups, create_success, suspended) VALUES
+    (90411, 'e2e-budget-chromium', 90401, '{}', true, false),
+    (90412, 'e2e-budget-webkit',   90401, '{}', true, false)
+ON CONFLICT (id) DO UPDATE
+    SET name = EXCLUDED.name, owner_id = EXCLUDED.owner_id, suspended = EXCLUDED.suspended;
+
+INSERT INTO auth_core__project_role (project_id, name) VALUES
+    (90411, 'admin'), (90411, 'editor'), (90411, 'viewer'),
+    (90412, 'admin'), (90412, 'editor'), (90412, 'viewer')
+ON CONFLICT (project_id, name) DO NOTHING;
+
+-- Project 1's permission matrix, copied for the same reason 90200 copies it: a
+-- hand-written subset drifts the moment a permission is added, and the journey
+-- would then fail on a permission nobody thought about.
+INSERT INTO auth_core__project_role_permission (project_id, role_id, permission)
+SELECT target.project_id, target.id, source.permission
+FROM auth_core__project_role_permission source
+JOIN auth_core__project_role origin
+  ON origin.id = source.role_id AND origin.project_id = 1
+JOIN auth_core__project_role target
+  ON target.project_id IN (90411, 90412) AND target.name = origin.name
+WHERE source.project_id = 1
+ON CONFLICT (project_id, role_id, permission) DO NOTHING;
+
+-- The admin persona is an ADMIN of both, so the project switcher lists them and
+-- the budget read is not redacted for that caller.
+INSERT INTO auth_core__project_user_role (project_id, user_id, role_id)
+SELECT r.project_id, u.id, r.id
+FROM auth_core__user u
+JOIN auth_core__project_role r ON r.project_id IN (90411, 90412) AND r.name = 'admin'
+WHERE u.email = 'e2e-admin@autotest.local'
+ON CONFLICT (project_id, user_id, role_id) DO NOTHING;
+
+INSERT INTO gateway.llm_budget_accumulators
+    (project_id, scope, scope_id, period_start, period_end, accumulated_cost)
+VALUES
+    (90411, 'project', '90411', date_trunc('month', now()),
+     date_trunc('month', now()) + interval '1 month', 9.00),
+    (90412, 'project', '90412', date_trunc('month', now()),
+     date_trunc('month', now()) + interval '1 month', 9.00)
+ON CONFLICT (scope, scope_id, period_start) DO UPDATE
+    SET accumulated_cost = EXCLUDED.accumulated_cost,
+        period_end       = EXCLUDED.period_end;
+
 -- ── the Inventory journeys' own project (INV-001..010) ───────────────────────
 --
 -- A SECOND dedicated project, and NOT 90200. The two applications are

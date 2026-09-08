@@ -34,8 +34,11 @@
  * see `./adminUiConfig`. Every mutation is authorised server-side on each
  * request; the flags here only decide what is worth rendering.
  */
+import { useState } from 'react';
+
 import DeleteIcon from '@mui/icons-material/Delete';
 import FileDownloadOutlinedIcon from '@mui/icons-material/FileDownloadOutlined';
+import GroupAddOutlinedIcon from '@mui/icons-material/GroupAddOutlined';
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
@@ -51,6 +54,7 @@ import { SimpleSearchBar } from '@/shared/ui/SimpleSearchBar';
 import { t } from '@/shared/i18n';
 import { DrawerPage } from '@/shared/ui/settings/DrawerPage';
 
+import { AdminBulkInviteDialog } from './AdminBulkInviteDialog';
 import { AdminUsersTable } from './AdminUsersTable';
 import { UserActivityDrawer } from './UserActivityDrawer';
 import { ADMIN_USERS_PAGE_SIZE, useAdminUsersPage } from './useAdminUsersPage';
@@ -58,6 +62,11 @@ import { ADMIN_USERS_PAGE_SIZE, useAdminUsersPage } from './useAdminUsersPage';
 
 export function AdminUsers() {
   const state = useAdminUsersPage();
+  // The cross-project bulk invite (issue 247). It lives on this page because
+  // its subject is ACCOUNTS: pylon put "add every user to a project" under
+  // Invites, beside the global user list, and the picker it needs is the very
+  // list this page already holds.
+  const [bulkInviteOpen, setBulkInviteOpen] = useState(false);
 
   const { total, page, deleteIds, rows } = state;
   const lastPage = total === 0 ? 0 : Math.ceil(total / ADMIN_USERS_PAGE_SIZE) - 1;
@@ -120,6 +129,17 @@ export function AdminUsers() {
               {`${t('pages.admin.users.action.deleteSelected', 'Delete')} (${state.selectedIds.length})`}
             </Button>
           ) : null}
+          <Button
+            variant="elitea"
+            color="tertiary"
+            size="small"
+            startIcon={<GroupAddOutlinedIcon fontSize="small" />}
+            onClick={() => setBulkInviteOpen(true)}
+            sx={{ flexShrink: 0, whiteSpace: 'nowrap' }}
+            data-testid="admin-bulk-invite-open"
+          >
+            {t('pages.admin.users.action.bulkInvite', 'Bulk invite')}
+          </Button>
           <Tooltip title={t('pages.admin.users.action.export', 'Export to CSV')}>
             {/* `span`: a disabled button fires no events, so the tooltip needs
                 a wrapper to hang its listeners on while the export runs. */}
@@ -207,6 +227,8 @@ export function AdminUsers() {
         name={deleteTargetName}
         copy={{ title: t('pages.admin.users.deleteModal.title', 'Delete confirmation') }}
       />
+
+      <AdminBulkInviteDialog open={bulkInviteOpen} onClose={() => setBulkInviteOpen(false)} />
 
       <UserActivityDrawer user={state.activityUser} onClose={state.onCloseActivity} />
     </DrawerPage>

@@ -532,7 +532,17 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
  * and these four families were absent from the manifest entirely rather than
  * excused on it.
  */
-const GENERATED_OPERATION_COUNT = 231;
+/*
+ * 231 -> 232, when the admin cross-project bulk membership invite was described
+ * (`bulkInviteMembers`, issue 247). It replaces pylon's two console pages,
+ * invites_bulkusers and invites_bulkprojects, which are the same cross product
+ * with one side pinned, so ONE operation replaces two forms.
+ *
+ * The budget half of the same package moves NEITHER number by an operation:
+ * `warning_active` is a new FIELD on BudgetState, not a new operation, and
+ * every route that carries it was already described.
+ */
+const GENERATED_OPERATION_COUNT = 232;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -613,7 +623,21 @@ const GENERATED_OPERATION_COUNT = 231;
  * note above GENERATED_OPERATION_COUNT for why this number and that one move
  * by the same amount for different reasons.
  */
-const MANIFEST_ENTRY_COUNT = 247;
+/*
+ * 247 -> 249, and the two entries arrive for different reasons.
+ *
+ *   - `admin.bulkInviteMembers` is the new operation above, with the Admin >
+ *     Users bulk-invite dialog calling it. Operation and caller ship together,
+ *     so both numbers move by one.
+ *   - `budgets.getProjectBudget` is NOT new to the contract. It has been
+ *     described since the budgets family landed and called by nothing —
+ *     internal/api/v2/admin/config_schemas.go says so of the whole threshold
+ *     surface, "the endpoints have existed since #322 with nothing calling
+ *     them". widgets/app-shell's budget warning banner (issue 312) is the
+ *     caller, so the entry lands with the CALLER rather than with the
+ *     description, the same way projectInfo.get and projectInfo.update did.
+ */
+const MANIFEST_ENTRY_COUNT = 249;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {
