@@ -83,8 +83,12 @@ test('SKILL-1: a skill is created on the form, opens on its own page, and is del
     );
     await page.getByRole('button', { name: 'Save' }).click();
     const created = await createResponse;
-    expect([200, 201], await created.text()).toContain(created.status());
-    skillId = String((await created.json())?.id);
+    // One read of the body, reused for both the status message and the id:
+    // the create DOES answer with a body, but reading it twice is the same
+    // habit that breaks on the bodiless delete below.
+    const createdBody = await created.json();
+    expect([200, 201], JSON.stringify(createdBody).slice(0, 300)).toContain(created.status());
+    skillId = String(createdBody?.id);
 
     await page.waitForURL(new RegExp(`/skills/all/${skillId}`), { timeout: 15_000 });
 
@@ -111,7 +115,10 @@ test('SKILL-1: a skill is created on the form, opens on its own page, and is del
     await expect(dialog).toBeVisible({ timeout: 10_000 });
     await dialog.getByRole('button', { name: 'Delete', exact: true }).click();
     const removed = await deleteResponse;
-    expect(removed.status(), await removed.text()).toBeLessThan(400);
+    // STATUS ONLY: a 204 carries no body, and reading one that does not exist
+    // fails on webkit with "Missing content of resource" before the assertion
+    // is even evaluated. The server read below is the real proof.
+    expect(removed.status(), `DELETE ${removed.url()}`).toBeLessThan(400);
 
     // Back on the list, and gone from it — on screen and on the server.
     await page.waitForURL(/\/skills\/all$/, { timeout: 15_000 });

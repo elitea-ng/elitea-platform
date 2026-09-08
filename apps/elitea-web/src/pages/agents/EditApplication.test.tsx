@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { configure, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 
@@ -23,6 +23,22 @@ import { renderAgentsRoute } from './__tests__/testRouter';
 // tests below, though the same mount runs — and can throw — in every test in
 // this file.
 installCodeMirrorTestPolyfills();
+
+/*
+ * This file mounts the REAL agent edit route — router, query client, the whole
+ * configuration panel — so its first paint waits on the detail read plus every
+ * query the panel's own sections fire. Adding the Information section (#846)
+ * gave it one more, and CI unit shard 5 then failed `renders the Save/Cancel
+ * bar once loaded` on `findByTestId('agent-save-button')` at Testing Library's
+ * 1 s default while the same command passed locally: the gap is v8 coverage
+ * instrumentation on the CI runner, not the assertion.
+ *
+ * The sibling page that already mounted this section needed exactly this and
+ * says so — `pages/pipelines/EditPipeline.test.tsx:21-30`. Same remedy, same
+ * numbers, so the two composition-root suites cannot drift apart.
+ */
+configure({ asyncUtilTimeout: 5_000 });
+vi.setConfig({ testTimeout: 30_000 });
 
 const globals = globalThis as unknown as Record<string, unknown>;
 

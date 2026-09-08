@@ -46,7 +46,7 @@ import {
   deleteAgent,
 } from '../../fixtures/api';
 
-import type { Page } from '@playwright/test';
+import type { APIRequestContext, Page } from '@playwright/test';
 
 /**
  * The platform's own limit, from `src/shared/lib/limits.ts`
@@ -60,6 +60,47 @@ const MAX_TEXT_FIELD_CHARS = 768;
 /** A name unique per run, so two runs on one stack cannot collide. */
 function uniqueName(stem: string): string {
   return `${AUTOTEST_PREFIX}${stem}-${String(Date.now()).slice(-7)}`;
+}
+
+/**
+ * Creates an agent that already HOLDS one chat starter.
+ *
+ * The shared `createAgent` seeds `conversation_starters: []`, and the journey
+ * below needs a starter row on screen at load. It cannot click `+ Starter` to
+ * get one — see that test's own comment for the click-swallowing defect this
+ * routes around — so the row is seeded server-side instead.
+ *
+ * A local helper rather than a new parameter on `e2e/fixtures/api.ts`:
+ * that file is edited by every journey unit in this wave at once, and one
+ * caller's convenience is not worth the merge.
+ */
+async function createAgentWithStarter(
+  request: APIRequestContext,
+  name: string,
+  starter: string,
+): Promise<{ readonly id: string; readonly versionId: string }> {
+  const path = `${API_BASE}/elitea_core/applications/prompt_lib/${DEFAULT_PROJECT_ID}`;
+  const response = await request.post(path, {
+    data: {
+      name,
+      description: `${AUTOTEST_PREFIX}e2e character-limit agent`,
+      type: 'agent',
+      versions: [
+        {
+          name: 'base',
+          agent_type: 'openai',
+          instructions: 'You are a helpful assistant.',
+          conversation_starters: [starter],
+        },
+      ],
+    },
+  });
+  expect(response.ok(), `seeding the agent returned ${response.status()}`).toBe(true);
+  const body = await response.json();
+  // Asserted, not assumed: a server that silently dropped the starter would
+  // otherwise surface as an unexplained missing row in the browser.
+  expect(body?.version_details?.conversation_starters, 'the server must store the seeded starter').toEqual([starter]);
+  return { id: String(body.id), versionId: String(body.version_details.id) };
 }
 
 /** Opens an existing agent's editor and waits for the real configuration panel. */
@@ -209,19 +250,57 @@ test('J14c: the welcome message and chat starters count down to 768 and refuse t
   request,
 }) => {
   const name = uniqueName('limits');
-  const agent = await createAgent(request, name);
+  const seededStarter = 'Seeded by the character-limit journey.';
+  const agent = await createAgentWithStarter(request, name, seededStarter);
   const atLimit = 'X'.repeat(MAX_TEXT_FIELD_CHARS);
   try {
     await openAgentEditor(page, agent.id);
     const panel = page.getByTestId('edit-application-configuration-tab-panel');
 
+    /*
+     * The STARTER half runs first, and on a row the API seeded rather than one
+     * clicked into existence.
+     *
+     * The first version of this journey clicked `+ Starter`, and it failed on
+     * CI in both browsers with the row never appearing. That is not a flake and
+     * not a missing control — it is a real defect, reproduced against a live
+     * stack and measured:
+     *
+     *   the counter under the welcome message is focus-gated, so BLURRING that
+     *   field unmounts a 24px line, and every control below it — `+ Starter`
+     *   among them — jumps up by exactly that much. A real mouse click sends
+     *   mousedown (which blurs), the layout shifts 24px, and mouseup lands off
+     *   the ~24px-tall button, so no click event is ever produced. Clicking a
+     *   SECOND time, with the field already blurred, adds the row normally.
+     *
+     * Filed as #848. This journey routes around it instead of
+     * asserting the broken order, because its subject is the 768-character
+     * contract, not the add button; `ConversationStartersEditor.test.tsx` and
+     * `CreateApplication.test.tsx` already cover adding a row.
+     */
+    const starter = panel.getByTestId('agent-conversation-starter-input').first();
+    await expect(starter).toBeVisible({ timeout: 20_000 });
+    await expect(starter).toHaveValue(seededStarter);
+    await expect(starter).toHaveAttribute('maxlength', String(MAX_TEXT_FIELD_CHARS));
+
+    await starter.fill(atLimit);
+    // The counter is focus-gated (`useFieldFocus`), so it shows only while the
+    // field is being edited — `fill` leaves the field focused.
+    await expect(panel.getByTestId('agent-conversation-starter-counter').first()).toHaveText('0 characters left');
+
+    // A REAL keystroke, not another `fill`: `fill` assigns the value and walks
+    // straight past the `maxLength` the browser enforces on typed input, so it
+    // would prove nothing about the refusal.
+    await starter.press('End');
+    await starter.pressSequentially('Z');
+    expect((await starter.inputValue()).length).toBe(MAX_TEXT_FIELD_CHARS);
+
+    // The same contract on the welcome message, which carries its own counter.
     const welcome = panel.getByTestId('agent-welcome-message-input');
-    await expect(welcome).toBeVisible({ timeout: 20_000 });
+    await expect(welcome).toBeVisible();
     // The contract the browser itself enforces, before any counter is read.
     await expect(welcome).toHaveAttribute('maxlength', String(MAX_TEXT_FIELD_CHARS));
 
-    // The counter is focus-gated (`useFieldFocus`), so it shows only while the
-    // field is being edited — `fill` leaves the field focused.
     await welcome.fill('Hello');
     const welcomeCounter = panel.getByTestId('agent-welcome-message-counter');
     await expect(welcomeCounter).toHaveText(`${MAX_TEXT_FIELD_CHARS - 5} characters left`);
@@ -229,26 +308,10 @@ test('J14c: the welcome message and chat starters count down to 768 and refuse t
     await welcome.fill(atLimit);
     await expect(welcomeCounter).toHaveText('0 characters left');
 
-    // A REAL keystroke, not another `fill`: `fill` assigns the value and walks
-    // straight past the `maxLength` the browser enforces on typed input, so it
-    // would prove nothing about the refusal.
     await welcome.press('End');
     await welcome.pressSequentially('Z');
     expect((await welcome.inputValue()).length).toBe(MAX_TEXT_FIELD_CHARS);
     await expect(welcomeCounter).toHaveText('0 characters left');
-
-    // The same contract on a chat starter. The agent is created with none, so
-    // the row has to be added first.
-    await panel.getByTestId('agent-conversation-starter-add').click();
-    const starter = panel.getByTestId('agent-conversation-starter-input').first();
-    await expect(starter).toBeVisible({ timeout: 10_000 });
-    await expect(starter).toHaveAttribute('maxlength', String(MAX_TEXT_FIELD_CHARS));
-
-    await starter.fill(atLimit);
-    await expect(panel.getByTestId('agent-conversation-starter-counter').first()).toHaveText('0 characters left');
-    await starter.press('End');
-    await starter.pressSequentially('Z');
-    expect((await starter.inputValue()).length).toBe(MAX_TEXT_FIELD_CHARS);
   } finally {
     await deleteAgent(request, agent.id);
   }
@@ -297,7 +360,14 @@ test('J14c: deleting an agent from its editor removes it from the list and from 
     );
     await confirm.click();
     const answered = await deleteResponse;
-    expect(answered.status(), await answered.text()).toBeLessThan(400);
+    /*
+     * STATUS ONLY — never `await answered.text()` here. A successful delete
+     * answers 204 with no body at all, and webkit then fails the whole test on
+     * the read itself ("Protocol error (Network.getResponseBody): Missing
+     * content of resource") before any assertion runs. The status IS the
+     * contract; the server read below is what proves the row is gone.
+     */
+    expect(answered.status(), `DELETE ${answered.url()}`).toBeLessThan(400);
     deleted = true;
 
     // The page leaves the deleted agent behind, for the list it came from.
