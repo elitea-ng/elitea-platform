@@ -971,7 +971,7 @@ Code exchange succeeds using the reference. Discovery exposes `echo_marker`.
 | --- | --- | --- |
 | Navigate to conversation 537 after consent and token expiry. Call the attached MCP. | `9d06ffad77054cbe7c5f85cd712ca532` | `SUCCEEDED`; marker `RUST_DCR_CONFIDENTIAL_RELOAD_20260908`, generation 2. |
 | Reload the document and select Regenerate. | `4fa2dc0eacabd32156e11970760cc0b3` | `SUCCEEDED`; the same marker, generation 3. |
-| Restart Main, reload, and send another turn after token expiry. | `28de1a257fd59414235dc46c103aca32` | The browser returns `RUST_DCR_MAIN_RESTART_20260908`, generation 4. |
+| Restart Main, reload, and send another turn after token expiry. | `28de1a257fd59414235dc46c103aca32` | `SUCCEEDED`, settled; marker `RUST_DCR_MAIN_RESTART_20260908`, generation 4. |
 
 All three refresh requests use the Main reference and omit the client secret.
 No additional registration or consent occurs for those requests.
@@ -989,7 +989,9 @@ No separate token store or socket-only login path is added.
 
 Mounted-page tests cover Login, consent cancellation, and confirmed Logout without clearing another toolkit's grant.
 The MCP, discovery, and configuration-tab selection passes 320 tests across 31 files.
-Type checking and focused lint pass. Deployed multi-tab logout verification remains pending.
+Type checking and focused lint pass.
+The credential-backed browser proof below exercises shared logout invalidation.
+A deployed two-tab logout proof from the MCP editor remains separate.
 
 ### Credential-backed toolkit logout: 2026-09-08
 
@@ -1013,7 +1015,46 @@ The confirmation names the credential. It does not render an internal storage ke
 Mounted-page tests cover OpenAPI and an arbitrary toolkit type without family-specific branches.
 They cover confirmed logout, cancellation, cross-tab invalidation, refresh grants, credential isolation, and non-delegated configurations.
 The focused selection passes 409 tests across 43 files.
-Browser verification of this new composition remains pending.
+Type checking, focused lint, and the full UI image build pass.
+The dependency-cycle check fails on two existing chat-handler cycles outside this change.
+Both cycles involve `useChatBoxHandlers.authorization.ts` and `useChatBoxHandlers.helpers.ts`.
+One also includes `useChatBoxHandlers.turns.ts`.
+
+### Deployed credential logout and reauthorization: 2026-09-08
+
+The web image uses commit `9280341b`. Main remains at `1e3114ae`.
+The Rust worker and gateway remain at `0f789b57`.
+Only the web container changes. The database remains at shared migration 124.
+
+The browser proof uses the delegated OpenAPI toolkit 27 in Private conversation 535.
+An ordinary tool request opens the authorization guard before a protected operation.
+The emulator consent flow then authorizes the credential and returns the requested marker.
+
+The test opens a second browser tab with the saved session authorization.
+Both toolkit editors show saved authorization.
+The first tab confirms Logout through the generic credential control.
+Both tabs remove the selected access and refresh tokens without a reload.
+Both tabs retain the unrelated confidential MCP credential.
+
+The second tab sends another ordinary tool request in the existing conversation.
+The authorization guard appears again. The protected-call counter does not change before consent.
+Consent resumes execution and returns the actual tool result.
+The next turn reuses authorization without another consent prompt.
+
+| Browser operation | Execution | Evidence |
+| --- | --- | --- |
+| Request the toolkit after cross-tab logout. | `c9221bfd88623206ca260f49aef4cbd2` | The authorization guard appears. The pause job settles. No protected call occurs. |
+| Authorize the credential and resume. | `907dd86fa21118811e395bd5c7bde736` | `SUCCEEDED`, settled; marker `RUST_OAUTH_MULTITAB_REAUTHORIZE_20260908`, mode `stored`, generation 1. |
+| Send another tool request. | `85f9730bd2b49862fbac7a446d69263b` | `SUCCEEDED`, settled; marker `RUST_OAUTH_MULTITAB_REUSE_20260908`, mode `stored`, generation 1. |
+
+The initial setup and subsequent reauthorization add two consent events and two code exchanges.
+The setup, reauthorization, and reuse turns add three protected calls.
+The counters change from 5 consents, 5 code exchanges, and 9 protected calls to 7, 7, and 12.
+The refresh counter remains at 6.
+These observations prove local credential-scoped logout and subsequent runtime authorization.
+They do not prove logout during an active protected call or an external provider grant.
+
+### Regular-toolkit editor Login gap
 
 The generic control uses the existing runtime authorization guard for the next authorization.
 Standalone editor Login for regular toolkits is not complete.
@@ -1035,7 +1076,12 @@ Keep this editor entry-point gap separate from runtime authorization and logout.
   The existing-conversation, between-turn removal path passes the deployed proof above.
   [OpenAPI direct-node recovery](delegated-auth-expiry.md) now has component proof.
   Agent loops, remote MCP, and deployed active-run recovery remain open.
-- Prove logout and concurrent-tab behavior against the replatform stack.
+- Complete standalone editor Login for regular delegated toolkits.
+  Main must supply the authorization metadata required by the existing consent flow.
+  The deployed generic credential logout and runtime reauthorization proof does not close this editor entry point.
+- Extend concurrent-tab verification beyond credential logout.
+  The OpenAPI proof covers cross-tab token removal, credential isolation, reauthorization, and the next turn.
+  Repeat the deployed logout proof from the MCP editor.
   A second tab on conversation 533 temporarily retained active guard controls after the deciding tab completed.
   The controls later cleared; immediate collaborator synchronization is not proven.
 - Repeat the earlier conversation 529 scenario if it recurs with complete child results.
