@@ -289,10 +289,28 @@ describe('EliteaAssistant — sending a message and a streamed answer', () => {
       { timeout: 3000 },
     );
 
-    // The welcome message is a finished assistant message too, and carries
-    // its own Copy button — the ANSWER's is the last one on screen.
-    const copyButtons = await screen.findAllByRole('button', { name: 'Copy to clipboard' });
-    await userEvent.click(copyButtons.at(-1) as HTMLElement);
+    // The ANSWER's own Copy button, found INSIDE the answer's bubble.
+    //
+    // It used to be `findAllByRole(...).at(-1)`, on the reasoning that the
+    // welcome message carries a Copy button too and the answer's is therefore
+    // the last one. That holds only once the answer HAS one: `MessageItem`
+    // renders Copy on `!isAnimating`, and the typewriter clears that flag one
+    // React commit AFTER it has typed the last character. So between the
+    // assertion above and this line there is a window in which the answer is
+    // fully on screen and the only Copy button in the document is the WELCOME
+    // message's — and `findAllBy*` resolves on the first match rather than
+    // waiting for a second. The run that caught this copied the greeting.
+    //
+    // Scoping to the bubble removes the count from the assertion entirely:
+    // `findBy*` inside it waits for the button this test means.
+    const answerBubble = screen
+      .getByText('Open Settings and pick "Reset password".')
+      .closest('.elitea-assistant-message') as HTMLElement;
+    expect(answerBubble).not.toBeNull();
+    const copyButton = await within(answerBubble).findByRole('button', {
+      name: 'Copy to clipboard',
+    });
+    await userEvent.click(copyButton);
     expect(writeText).toHaveBeenCalledWith('Open Settings and pick "Reset password".');
 
     await waitFor(() => expect(input).toBeEnabled());
