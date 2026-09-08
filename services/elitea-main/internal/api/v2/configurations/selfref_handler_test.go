@@ -99,8 +99,12 @@ func TestCreate_RejectsSelfReferentialAPIBase(t *testing.T) {
 
 	// azure_open_ai passes validateConfigData when api_base is present, so the
 	// next gate reached is the self-referential guard.
+	// `label` is present because the create route now refuses a body that
+	// omits a schema-required field before it reaches any other gate
+	// (required_fields.go). The subject here is still api_base.
 	body := mustJSON(t, map[string]any{
 		"elitea_title": "loop-cred",
+		"label":        "loop-cred",
 		"type":         "azure_open_ai",
 		"data": map[string]any{
 			"api_base": selfOrigin,
@@ -118,6 +122,7 @@ func TestCreate_RejectsSelfReferentialAPIBaseSubPath(t *testing.T) {
 
 	body := mustJSON(t, map[string]any{
 		"elitea_title": "loop-cred",
+		"label":        "loop-cred",
 		"type":         "azure_open_ai",
 		"data": map[string]any{
 			// Segment-prefix match on the configured self origin.
@@ -137,8 +142,12 @@ func TestCreate_RejectsSelfReferentialAPIBaseSubPath(t *testing.T) {
 func TestCreate_NonSelfReferentialPassesGuard(t *testing.T) {
 	r := selfRefRouter()
 
+	// Complete, so the control still reaches the guard: a body missing a
+	// schema-required field is refused before it, and a refusal for the wrong
+	// reason would make this control pass while proving nothing.
 	body := mustJSON(t, map[string]any{
 		"elitea_title": "upstream-cred",
+		"label":        "upstream-cred",
 		"type":         "azure_open_ai",
 		"data": map[string]any{
 			"api_base": "https://api.openai.com/v1",

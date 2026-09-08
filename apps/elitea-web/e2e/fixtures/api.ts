@@ -1757,6 +1757,23 @@ export interface StoredMessageGroup {
   /** `string_agg` of the group's `text_message` items ALONE — attachments are not spliced in. */
   readonly content: string;
   readonly items: readonly StoredMessageItem[];
+  /**
+   * `chat_message_group.author_participant_id` — WHO wrote this group.
+   *
+   * The only field that says which participant answered, and the reason it is
+   * carried: in a conversation holding more than one addressable participant
+   * every reply looks alike from its text (the offline mock echoes the
+   * question), so "the participant this turn addressed is the one that
+   * replied" cannot be stated any other way. The admission writes it from the
+   * question's `sent_to_id` in the same statement
+   * (`InsertCurrentAdhocTurn` / `InsertCurrentApplicationTurn`), so a turn
+   * routed to the wrong participant differs HERE and nowhere else.
+   */
+  readonly authorParticipantId: string;
+  /** `sent_to_id` — the participant a QUESTION group was addressed to. */
+  readonly sentToId: string;
+  /** `reply_to_id` — the question group an ANSWER group belongs to. */
+  readonly replyToId: string;
 }
 
 /**
@@ -1812,13 +1829,25 @@ export async function readStoredMessageGroups(
       id?: unknown;
       uuid?: unknown;
       content?: unknown;
+      author_participant_id?: unknown;
+      sent_to_id?: unknown;
+      reply_to_id?: unknown;
       message_items?: readonly { id?: unknown; item_type?: unknown; item_details?: unknown }[];
     }[];
   };
+  // An absent id becomes `''`, never the string `'undefined'`: `reply_to_id` is
+  // omitted for a question group and `sent_to_id` for a group nobody addressed,
+  // and a caller comparing ids must be able to tell "no such link" from a link
+  // that happens to be spelled oddly.
+  const optionalId = (value: unknown): string =>
+    value === undefined || value === null ? '' : String(value);
   return (body.message_groups ?? []).map((group) => ({
     id: String(group.id ?? ''),
     uuid: String(group.uuid ?? ''),
     content: typeof group.content === 'string' ? group.content : '',
+    authorParticipantId: optionalId(group.author_participant_id),
+    sentToId: optionalId(group.sent_to_id),
+    replyToId: optionalId(group.reply_to_id),
     items: (group.message_items ?? []).map((item) => ({
       id: item.id === undefined || item.id === null ? '' : String(item.id),
       itemType: typeof item.item_type === 'string' ? item.item_type : '',
@@ -1944,10 +1973,12 @@ export async function createMcpConnection(
  *
  * `github_configuration` is a configuration REFERENCE, resolved by
  * `refuseUnresolvableToolkitSettings` (`settings_validation.go:183`) whenever
- * the deployment composes the Configurations graph. The e2e stack does not set
- * `ELITEA_CONFIGURATIONS_ENABLED`, so a made-up `elitea_title` would be
- * accepted there today — and would start answering 400 on any deployment that
- * turns the graph on. One extra POST buys a fixture that is correct on both.
+ * the deployment composes the Configurations graph. The e2e stack composes it
+ * — `deploy/docker-compose.e2e-standalone.yml` sets
+ * `ELITEA_CONFIGURATIONS_ENABLED` — so a made-up `elitea_title` is answered
+ * 400 here, exactly as it is on a shipped stack. This helper made the real row
+ * before that was true, which is why turning the graph on cost its callers
+ * nothing.
  *
  * NEVER a real credential: `data` carries only the placeholder base URL below,
  * and nothing here contacts api.github.com.
@@ -2184,6 +2215,61 @@ export const MOCK_CALL_TOOL_SENTINEL = 'MOCKCALLTOOLEND';
 /** The prompt that makes the mock answer with a call to `operation`. */
 export function callToolPrompt(operation: string, tail: string): string {
   return `[[mock:call_tool ${operation}]] ${tail}`;
+}
+
+/**
+ * The same marker, WITH arguments — the form a tool with a required field needs.
+ *
+ * `callToolPrompt` above sends the empty object, which is right for the mock's
+ * two `/tool` operations (neither declares a required parameter) and refused
+ * for a nested Elitea agent: the runtime presents a saved agent to the model as
+ * a tool whose schema requires a non-empty `task`, and a call without one is an
+ * invalid configuration that kills the turn before the child ever runs. So a
+ * delegation journey names the tool AND the task it delegates.
+ *
+ * The arguments travel inside the marker, which the mock closes on `]]` — a
+ * value carrying that sequence would truncate it, so it is refused here rather
+ * than silently producing a call the runtime cannot parse.
+ */
+export function callToolWithArgumentsPrompt(
+  toolName: string,
+  args: Readonly<Record<string, unknown>>,
+  tail: string,
+): string {
+  const encoded = JSON.stringify(args);
+  expect(
+    encoded.includes(']]'),
+    'the marker closes on `]]`, so a scripted argument may not contain that sequence',
+  ).toBe(false);
+  return `[[mock:call_tool ${toolName} ${encoded}]] ${tail}`;
+}
+
+/**
+ * The function name a SAVED AGENT is offered to the model under, when it is
+ * attached to another agent or sitting in a conversation as a participant.
+ *
+ * The two runtimes name it differently and both names are derived from the
+ * SAME stored reference, so the leg decides which one a scripted call must
+ * use:
+ *
+ *  - the native Rust runtime names it `elitea_agent_<applicationId>_v_<versionId>`
+ *    (`application_tool_name`, services/elitea-worker-rust/src/agents/application_tools.rs);
+ *  - the SDK worker names it after the agent itself (`ApplicationToolkit.get_toolkit`
+ *    passes `app_details['name']`), which reaches the model unchanged for a
+ *    name in the `autotest_` alphabet.
+ *
+ * `E2E_WORKER` is set by `scripts/chat-stream-e2e.sh`, the one entry point that
+ * knows which runtime is answering. Every caller asserts the offered tool list
+ * actually CONTAINS what this returns, so a naming change fails with the list
+ * the runtime really sent rather than with a turn that quietly did nothing.
+ */
+export function agentAsToolName(agent: {
+  readonly agentId: string;
+  readonly versionId: string;
+  readonly name: string;
+}): string {
+  const worker = process.env['E2E_WORKER'] ?? 'rust';
+  return worker === 'rust' ? `elitea_agent_${agent.agentId}_v_${agent.versionId}` : agent.name;
 }
 
 /** One entry of the mock's TOOL journal — see `_record_tool` in the mock. */

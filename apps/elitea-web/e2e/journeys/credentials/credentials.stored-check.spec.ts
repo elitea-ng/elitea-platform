@@ -32,14 +32,15 @@
  * ─────────────────────────────────────────────────────────────────────────────
  * WHAT THIS STACK CANNOT REACH, AND WHY NOTHING BELOW RESTS ON IT
  * ─────────────────────────────────────────────────────────────────────────────
- * `deploy/docker-compose.e2e-standalone.yml` composes neither the stored
- * resolver nor the gateway connection checker: the first needs
- * `ELITEA_CONFIGURATIONS_ENABLED`, which `cmd/elitea-main` refuses without the
- * full production-auth composition this stack does not build, and the second
- * needs `LLM_GATEWAY_URL`, which this stack has no gateway for. So
- * `checkStoredRow` takes its "not composed" branch and answers HTTP 400
- * `{"success":false,"message":"Connection checking is not available right
- * now."}` — an honest refusal, measured, and NOT a product verdict.
+ * This stack composes the stored resolver — `deploy/docker-compose.e2e-standalone.yml`
+ * sets `ELITEA_CONFIGURATIONS_ENABLED` — but no gateway connection checker,
+ * because that needs `LLM_GATEWAY_URL` and this stack runs no gateway. The
+ * credential under test is an `open_ai` one, and the LLM branch of
+ * `checkStoredRow` needs BOTH, so it still takes its "not composed" branch and
+ * answers HTTP 400 `{"success":false,"message":"Connection checking is not
+ * available right now."}` — an honest refusal, measured, and NOT a product
+ * verdict. (A TOOLKIT credential takes a different branch on this stack now,
+ * and really is probed: see `e2e/journeys/toolkits/toolkits.credential-status.spec.ts`.)
  *
  * Nothing here asserts a particular verdict because of that. What is asserted
  * is the contract that holds on ANY stack: the route is mounted and authorised
