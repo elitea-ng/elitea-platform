@@ -76,6 +76,16 @@ export interface LiveToolkitProvider {
   toolkitSettings(eliteaTitle: string): Readonly<Record<string, unknown>>;
   /** The tool the legacy Test-Settings case selected, by its runtime name. */
   readonly probeTool: string;
+  /**
+   * The arguments `probeTool` REQUIRES, keyed by the schema property name.
+   *
+   * The Test-settings pane fills every argument that has a schema default and
+   * leaves Run disabled while a required one is empty, so a provider whose
+   * probe tool takes a required argument has to name it here — Confluence's
+   * `list_pages_with_label` is the only one of the five that does. The journey
+   * types each value into the field the form labels with that name.
+   */
+  probeToolArgs(): Readonly<Record<string, string>>;
   /** A prompt that names `probeTool`, for the tool-run journey. */
   readonly probePrompt: string;
   /**
@@ -126,6 +136,7 @@ export const LIVE_TOOLKIT_PROVIDERS: Readonly<Record<LiveToolkitId, LiveToolkitP
     probeTool: 'list_branches_in_repo',
     probePrompt: 'Use the list_branches_in_repo tool and report every branch name it returns.',
     probeEvidence: () => envOr('E2E_LIVE_GITHUB_BRANCH', 'main'),
+    probeToolArgs: () => ({}),
     chatPrompt: 'List branches in the repository',
     answerKeywords: ['branch', 'repository'],
   },
@@ -162,6 +173,7 @@ export const LIVE_TOOLKIT_PROVIDERS: Readonly<Record<LiveToolkitId, LiveToolkitP
       selected_tools: ['list_projects'],
     }),
     probeTool: 'list_projects',
+    probeToolArgs: () => ({}),
     probePrompt: 'Use the list_projects tool and report the project keys it returns.',
     probeEvidence: () => env('E2E_LIVE_JIRA_PROJECT_KEY'),
     chatPrompt: 'List all Jira projects',
@@ -190,6 +202,7 @@ export const LIVE_TOOLKIT_PROVIDERS: Readonly<Record<LiveToolkitId, LiveToolkitP
     probeTool: 'list_branches_in_repo',
     probePrompt: 'Use the list_branches_in_repo tool and report every branch name it returns.',
     probeEvidence: () => envOr('E2E_LIVE_GITLAB_BRANCH', 'main'),
+    probeToolArgs: () => ({}),
     chatPrompt: 'List branches in the repository',
     answerKeywords: ['branch', 'repository'],
   },
@@ -224,6 +237,7 @@ export const LIVE_TOOLKIT_PROVIDERS: Readonly<Record<LiveToolkitId, LiveToolkitP
     probeTool: 'list_branches_in_repo',
     probePrompt: 'Use the list_branches_in_repo tool and report every branch name it returns.',
     probeEvidence: () => envOr('E2E_LIVE_BITBUCKET_BRANCH', 'master'),
+    probeToolArgs: () => ({}),
     chatPrompt: 'List branches in the repository',
     answerKeywords: ['branch', 'repository'],
   },
@@ -256,6 +270,7 @@ export const LIVE_TOOLKIT_PROVIDERS: Readonly<Record<LiveToolkitId, LiveToolkitP
       selected_tools: ['list_pages_with_label'],
     }),
     probeTool: 'list_pages_with_label',
+    probeToolArgs: () => ({ label: envOr('E2E_LIVE_CONFLUENCE_LABEL', 'test') }),
     probePrompt: `Use the list_pages_with_label tool with label '${envOr('E2E_LIVE_CONFLUENCE_LABEL', 'test')}' and report the space key of every page it returns.`,
     probeEvidence: () => env('E2E_LIVE_CONFLUENCE_SPACE'),
     chatPrompt: `Use the list_pages_with_label tool to list pages with label '${envOr('E2E_LIVE_CONFLUENCE_LABEL', 'test')}' in Confluence`,

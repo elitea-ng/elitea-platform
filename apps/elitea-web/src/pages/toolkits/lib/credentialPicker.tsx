@@ -169,25 +169,37 @@ interface BatchValidationParams {
  * (`useCredentialsData.hooks.js`'s second effect), which is what turns a row's
  * "invalid credential" marker on. Only the `credentials` section is tested; a
  * vector-storage reference has no connection to check.
+ *
+ * THE SAVED-ROW ROUTE, NOT THE CANDIDATE-PAYLOAD ONE. This used to post
+ * `row.data` to `POST /configurations/check_connection/…`, and `row.data` is
+ * what the list endpoint returned — a `{{secret.NAME}}` reference where the
+ * token used to be (`internal/api/v2/configurations/secret_sealing.go`). So the
+ * provider was asked to authenticate a literal template string. For a toolkit
+ * credential that answered "not supported yet" and the mistake was invisible;
+ * now that toolkit types are really probed
+ * (`internal/api/v2/configurations/toolkit_check.go`) it would mark every saved
+ * credential in the project as refused, and keep marking a FIXED one refused
+ * for ever. `check_stored_connections` reads the row and redeems the secret
+ * server-side, which is the only form of this check that can ever come back
+ * green.
  */
 function useBatchValidation({ rows, hasFetchedData, section, projectId, validation }: BatchValidationParams): void {
-  const batchValidateCredentials = validation.batchValidateCredentials;
+  const batchValidateStoredCredentials = validation.batchValidateStoredCredentials;
   useEffect(() => {
     if (!hasFetchedData || section !== CREDENTIALS_SECTION || rows.length === 0 || projectId === undefined) return;
-    void batchValidateCredentials(
+    void batchValidateStoredCredentials(
       rows.map((row) => ({
         projectId: row.ownerProjectId ?? projectId,
         // `useCredentialValidation` keys its statuses by `credentialId`, and
         // `CredentialsSelect` reads them back by `eliteaTitle`. The title IS
         // the key on both sides; using the row's uid here would key every
         // status under an id the select never asks for, and every row would
-        // report `idle` for ever.
+        // report `idle` for ever. The row id travels separately, as `configId`.
         credentialId: row.eliteaTitle,
-        credentialType: row.type,
-        data: row.data,
+        configId: row.id,
       })),
     );
-  }, [hasFetchedData, section, projectId, rows, batchValidateCredentials]);
+  }, [hasFetchedData, section, projectId, rows, batchValidateStoredCredentials]);
 }
 
 interface RevalidateParams {
@@ -196,21 +208,28 @@ interface RevalidateParams {
   readonly validation: ReturnType<typeof useCredentialValidation>;
 }
 
-/** The per-row "check again" action behind `CredentialOptionLabel`'s refresh control. */
+/**
+ * The per-row "check again" action behind `CredentialOptionLabel`'s refresh
+ * control.
+ *
+ * It is the half of the indicator a user acts on: fix the credential, press
+ * Reload, and the marker clears without a page reload. That only works over the
+ * SAVED-row route — see `useBatchValidation` above for why the candidate-payload
+ * route can never answer this question about a stored row.
+ */
 function useRevalidate({ rows, projectId, validation }: RevalidateParams): (eliteaTitle: string) => void {
-  const { resetStatus, validateCredential } = validation;
+  const { resetStatus, validateStoredCredential } = validation;
   return useCallback(
     (eliteaTitle: string) => {
       const row = rows.find((candidate) => candidate.eliteaTitle === eliteaTitle);
       if (row === undefined || projectId === undefined) return;
       resetStatus(eliteaTitle);
-      void validateCredential({
+      void validateStoredCredential({
         projectId: row.ownerProjectId ?? projectId,
         credentialId: eliteaTitle,
-        credentialType: row.type,
-        data: row.data,
+        configId: row.id,
       });
     },
-    [rows, projectId, resetStatus, validateCredential],
+    [rows, projectId, resetStatus, validateStoredCredential],
   );
 }

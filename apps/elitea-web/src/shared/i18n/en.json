@@ -4034,5 +4034,9 @@
   "widgets.contextBudget.edit.range": "Enter a whole number between {{min}} and {{max}}.",
   "widgets.contextBudget.edit.save": "Save",
   "widgets.contextBudget.edit.title": "Context settings",
-  "widgets.contextBudget.editTooltip": "Edit context settings"
+  "widgets.contextBudget.editTooltip": "Edit context settings",
+  "features.toolkits.testToolPane.resultJobId": "Job id:",
+  "features.toolkits.testToolPane.resultOk": "The tool ran and returned:",
+  "features.toolkits.testToolPane.resultTruncated": "The result was too large to show in full.",
+  "features.toolkits.testToolPane.running": "Running the tool…"
 }

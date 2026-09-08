@@ -12,6 +12,7 @@ import { useToolkitSaveValidation } from '../model/useToolkitSaveValidation';
 import type { SharepointAuthModalRenderers } from '../sharepoint/ui/SharepointOAuthStatus';
 import type { ToolBaseSlots } from './form/ToolBase/ToolBase.types';
 import { ToolkitForm, type ToolkitFormEditDetail } from './form/ToolkitForm/ToolkitForm';
+import { TestToolPane } from './test-tools/TestToolPane';
 import type { SaveToolkitPayload } from './form/ToolkitForm/ToolkitsOperationButtons';
 
 export interface ToolkitTestPaneRenderProps {
@@ -69,8 +70,24 @@ export interface ToolkitSaveHandlers {
  * grouping).
  */
 export interface ConfigurationTabSlots {
-  /** The RIGHT panel's live test-chat content — see the module doc comment for why this is a slot, not a direct import. */
-  readonly renderTestPane: (props: ToolkitTestPaneRenderProps) => ReactNode;
+  /**
+   * The RIGHT panel's live test-chat content — see the module doc comment for
+   * why this is a slot, not a direct import.
+   *
+   * OPTIONAL, and normally omitted. Omitted, this component renders
+   * `../ui/test-tools/TestToolPane.tsx`: the "pick a tool, fill its arguments,
+   * Run, read the result" pane, which needs no `features/chat` and no
+   * `widgets/` model selector and is therefore an ordinary intra-slice import.
+   * Before that pane existed the only supplier of this slot was
+   * `pages/toolkits/lib/configurationTabSlots.tsx`, and what it supplied was an
+   * empty `<Box>` — a disclosed composition gap that made the whole right-hand
+   * half of the toolkit editor blank.
+   *
+   * Supply it to render the FULLER surface (`./test-tools/TestTools.tsx`: a
+   * live chat transcript and a model) the day this app has the two slices that
+   * component needs.
+   */
+  readonly renderTestPane?: (props: ToolkitTestPaneRenderProps) => ReactNode;
   readonly renderRunHistory?: (props: ToolkitRunHistoryRenderProps) => ReactNode;
   /**
    * The `features/mcps` login/logout modals a SharePoint toolkit's delegated
@@ -158,6 +175,61 @@ export interface ConfigurationTabProps {
  *    orchestration; `showHistory` is local state here, toggled via
  *    `onShowHistory`/`renderRunHistory`'s own `onClose`.
  */
+/**
+ * The toolkit AS EDITED, not as saved.
+ *
+ * `settings.selected_tools` is the explicit tool list the test pane's picker
+ * reads first, so a tool the user has just ticked is offered without a save
+ * first — which is the whole point of a test pane on an editing screen. The
+ * keys are conditionally spread rather than set to `undefined`:
+ * `exactOptionalPropertyTypes` makes "absent" and "present and undefined" two
+ * different types, and `ToolkitConversationValues` declares the first.
+ */
+function toTestPaneValues(detail: ToolkitFormEditDetail | null): { readonly type?: string; readonly settings?: Readonly<Record<string, unknown>> } {
+  return {
+    ...(detail?.type === undefined ? {} : { type: detail.type }),
+    ...(detail?.settings === undefined ? {} : { settings: detail.settings }),
+  };
+}
+
+/**
+ * The right-hand pane: the caller's own, or this slice's `TestToolPane`.
+ *
+ * Its own component rather than a ternary inside `ConfigurationTab`, which sits
+ * at the §3.5 complexity budget (12): the branch plus the two conditional prop
+ * keys pushed it to 14.
+ */
+interface TestPaneAreaProps {
+  readonly render: ConfigurationTabSlots['renderTestPane'];
+  readonly projectId: string | undefined;
+  readonly toolkitId: string | undefined;
+  readonly editToolDetail: ToolkitFormEditDetail | null;
+  readonly applicationId: string | undefined;
+  readonly isFullScreenChat: boolean;
+  readonly onFullScreenChatChange: (value: boolean) => void;
+  readonly onShowHistory: () => void;
+}
+
+function TestPaneArea(props: TestPaneAreaProps): ReactNode {
+  const { render, projectId, toolkitId, editToolDetail, applicationId, isFullScreenChat, onFullScreenChatChange, onShowHistory } = props;
+  if (render !== undefined) {
+    return render({
+      applicationId,
+      toolkitId,
+      isFullScreenChat,
+      onFullScreenChatChange,
+      ...(toolkitId !== undefined ? { onShowHistory } : {}),
+    });
+  }
+  return (
+    <TestToolPane
+      projectId={projectId}
+      toolkitId={toolkitId}
+      values={toTestPaneValues(editToolDetail)}
+    />
+  );
+}
+
 export function ConfigurationTab({
   isFetching,
   applicationId,
@@ -282,13 +354,16 @@ export function ConfigurationTab({
             <ViewRunHistoryButton onShowHistory={handleShowHistory} />
           </Box>
         )}
-        {renderTestPane({
-          applicationId,
-          toolkitId,
-          isFullScreenChat,
-          onFullScreenChatChange: setIsFullScreenChat,
-          ...(toolkitId !== undefined ? { onShowHistory: handleShowHistory } : {}),
-        })}
+        <TestPaneArea
+          render={renderTestPane}
+          projectId={projectId}
+          toolkitId={toolkitId}
+          editToolDetail={editToolDetail}
+          applicationId={applicationId}
+          isFullScreenChat={isFullScreenChat}
+          onFullScreenChatChange={setIsFullScreenChat}
+          onShowHistory={handleShowHistory}
+        />
       </Grid>
     </Grid>
   );

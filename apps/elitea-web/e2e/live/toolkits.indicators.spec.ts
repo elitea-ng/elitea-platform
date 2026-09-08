@@ -17,27 +17,33 @@
  * noticed.
  *
  * ─────────────────────────────────────────────────────────────────────────────
- * THESE THREE ARE EXPECTED RED TODAY, AND THAT IS WHY THEY ARE HERE
+ * ONE OF THE THREE IS REAL NOW; THE OTHER TWO ARE STILL EXPECTED RED
  * ─────────────────────────────────────────────────────────────────────────────
- * Two named product gaps stand between this lane and a green run. Both were
- * read out of the code rather than inferred from a failure:
+ * This header used to name TWO product gaps. The first is closed:
  *
- *  1. **No toolkit-type connection check.** `checkableConnectionTypes`
+ *  1. **CLOSED — the toolkit-type connection check.**
+ *     `checkableConnectionTypes`
  *     (`services/elitea-main/internal/api/v2/configurations/check_connection.go`)
- *     holds the eight `ai_credentials` provider types only, and #319 scoped
- *     that route to the LiteLLM path deliberately. A `jira` payload therefore
- *     answers "Checking connection is not supported yet for configuration type
- *     jira", which `useCredentialValidation.ts` maps to the `unsupported`
- *     status — and `CredentialOptionLabel` renders the attention indicator on
- *     `invalid` alone. So the indicator cannot light for ANY toolkit
- *     credential, valid or not.
- *  2. **No credential picker on the agent or pipeline page.**
+ *     still holds the eight `ai_credentials` provider types only, and #319 did
+ *     scope that route to the LiteLLM path deliberately. What was missing was
+ *     the OTHER family's check, and
+ *     `internal/api/v2/configurations/toolkit_check.go` is now it: one
+ *     authenticated metadata GET per family (github, gitlab, bitbucket, jira,
+ *     confluence), bounded at 5 s, behind the host allowlist, answering
+ *     `ok | auth_failed | unreachable | unsupported_type`. The credential card
+ *     reads it through the SAVED-row routes — which is the second half of the
+ *     fix: the picker used to re-check a stored row by posting the row's own
+ *     `data`, and every read path seals that secret as a `{{secret.NAME}}`
+ *     reference, so the provider was asked to authenticate a template string.
+ *     LIVE-TK-IND-1 asserts the whole path, in both directions.
+ *
+ *  2. **STILL OPEN — no credential picker on the agent or pipeline page.**
  *     `useToolkitCredentialPickerSlot` is composed by
  *     `pages/toolkits/{Create,Edit}Toolkit.tsx` and by nothing else, so
  *     LIVE-TK-IND-2 and LIVE-TK-IND-3 have no picker to open at all.
  *
- * They are written as journeys, not left as skips, for the reason this wave
- * states throughout: a skip reads as coverage. Each one fails on a single
+ * Those two are written as journeys, not left as skips, for the reason this
+ * wave states throughout: a skip reads as coverage. Each one fails on a single
  * named line that says which gap it hit, which is what turns "we know" into
  * "we will be told the day it changes". `e2e/journeys/api/
  * api.export-import-agents.spec.ts` carries the same shape for Go defect D1.
@@ -95,9 +101,9 @@ test('LIVE-TK-IND-1: a Jira credential the provider rejects shows the auth-faile
     const indicator = page.getByTestId('credential-status-indicator');
     await expect(
       indicator,
-      'a credential the provider refuses must carry the attention indicator — ' +
-        'today it cannot, because check_connection answers "unsupported" for every ' +
-        'toolkit type (checkableConnectionTypes, #319)',
+      'a credential the provider refuses must carry the attention indicator — it is ' +
+        'the toolkit check (internal/api/v2/configurations/toolkit_check.go) reaching ' +
+        'the real provider through the SAVED-row route that lights it',
     ).toBeVisible({ timeout: 60_000 });
     await expect(indicator).toHaveAttribute('aria-label', /Authentication failed/i);
     await expect(page.getByTestId('credential-reload-button')).toBeVisible();
