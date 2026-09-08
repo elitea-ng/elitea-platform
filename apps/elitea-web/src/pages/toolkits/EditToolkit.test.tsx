@@ -3,8 +3,6 @@ import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { ToolEvents } from '@/entities/toolkit';
-import { eventEmitter } from '@/features/toolkits/lib/eventEmitter';
 import { getPermissionListMockHandler } from '@/shared/api/generated/auth/auth.msw';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { PERMISSIONS } from '@/shared/lib/permissions';
@@ -405,7 +403,7 @@ describe('EditToolkit', () => {
     await waitFor(() => expect(getCodeMirrorContent(container)).toHaveTextContent('REAL SAVED DESCRIPTION'));
   });
 
-  it('passes an edited description through to deps.saveToolkit on save (real ToolkitsUpdateToolkit save path)', async () => {
+  it('passes an edited description through to deps.saveToolkit when the page’s own Save is pressed', async () => {
     server.use(
       http.get('/api/v2/elitea_core/tools/prompt_lib/:projectId', () => HttpResponse.json({ rows: [mockToolkitRow({ description: 'REAL SAVED DESCRIPTION' })], total: 1 })),
       http.get('/api/v2/elitea_core/toolkits/prompt_lib/:projectId', () => HttpResponse.json({ github: { metadata: { label: 'GitHub' } } })),
@@ -434,27 +432,195 @@ describe('EditToolkit', () => {
     await user.paste(newJson);
     await waitFor(() => expect(content).toHaveTextContent('UPDATED DESCRIPTION'));
 
-    // `ToolkitsOperationButtons` (`features/toolkits/ui/form/ToolkitForm/
-    // ToolkitsOperationButtons.tsx`) is driven entirely through the shared
-    // `eventEmitter` — its own doc comment and test suite establish
-    // `eventEmitter.emit(ToolEvents.ToolkitsUpdateToolkit)` as the real
-    // save trigger a click on `ToolkitsTabBar`'s Save button would emit;
-    // `EditToolkit`'s own page doesn't compose that tab bar (a disclosed,
-    // pre-existing gap, not this unit's fix), so this exercises the same
-    // real internal save path directly. The edited description only
-    // reaches `ToolkitsOperationButtons`'s own `formValues` closure after
-    // `ToolCustom`'s parse effect finishes its `editField` round-trip and
-    // the tree re-renders — one or more passive-effect cycles after the
-    // CodeMirror view itself already shows the new text — so the emit is
-    // retried (a real click on a real Save button would just as validly be
-    // a second real click) until the save call actually carries the
-    // edited value.
+    // THE PAGE'S OWN CONTROL, not a synthesised event. This assertion used
+    // to emit `ToolEvents.ToolkitsUpdateToolkit` by hand, because there was
+    // no Save control on this route at all and the listener in
+    // `ToolkitsOperationButtons` had no emitter anywhere in the app. The
+    // header now emits it (`lib/useToolkitSaveControls.ts`), so the whole
+    // path — click, validation guard, `ToolkitForm.onSave`,
+    // `ConfigurationTab`'s payload build, the injected mutation — runs for
+    // real here.
+    //
+    // The button is clicked only once it reports itself available: the
+    // edited description reaches the form's own values through
+    // `ToolCustom`'s parse effect, one or more passive-effect cycles after
+    // CodeMirror already shows the new text, and the dirty flag is set by
+    // the same update. Waiting for the enabled control is therefore waiting
+    // for the edit to have landed, not a sleep.
+    const saveButton = screen.getByTestId('toolkit-save-button');
+    await waitFor(() => expect(saveButton).toBeEnabled());
+    await user.click(saveButton);
+
     await waitFor(() => {
-      eventEmitter.emit(ToolEvents.ToolkitsUpdateToolkit);
       expect(saveToolkit.mock.calls.at(-1)?.[0]).toMatchObject({ projectId: 'proj-1', toolId: 'tk-1', type: 'github', description: 'UPDATED DESCRIPTION' });
     });
   });
 
+  /*
+   * ── THE SAVE CONTROL ITSELF ────────────────────────────────────────────
+   *
+   * Measured before this change: `/app/toolkits/all/{id}` had NO save
+   * affordance. `ToolkitsOperationButtons` renders only its two dialogs, and
+   * the update path behind it listens for an event nothing emitted, so a
+   * saved toolkit could not be edited from its own page. These pin the
+   * control's two gates — dirty, and the credential check — on the real
+   * route.
+   */
+  it('offers a Save control that is refused until the toolkit is actually edited', async () => {
+    server.use(
+      http.get('/api/v2/elitea_core/tools/prompt_lib/:projectId', () => HttpResponse.json({ rows: [mockToolkitRow()], total: 1 })),
+      http.get('/api/v2/elitea_core/toolkits/prompt_lib/:projectId', () => HttpResponse.json({ github: { metadata: { label: 'GitHub' } } })),
+    );
+    const saveToolkit = vi.fn().mockResolvedValue({ id: 'tk-1' });
+    const user = userEvent.setup();
+
+    const { container } = renderToolkitsRoute(<EditToolkit deps={{ saveToolkit }} />, '/toolkits/latest/tk-1', { projectId: 'proj-1' });
+
+    await screen.findByText('My GitHub');
+    const saveButton = await screen.findByTestId('toolkit-save-button');
+    // Nothing has been changed, so there is nothing to save — and the
+    // control says so rather than issuing a no-op write.
+    expect(saveButton).toBeDisabled();
+    expect(screen.queryByTestId('toolkit-save-disabled-reason')).not.toBeInTheDocument();
+
+    const content = getCodeMirrorContent(container);
+    await user.click(content);
+    await user.keyboard('{Control>}a{/Control}');
+    await user.paste('{"name":"My GitHub","description":"EDITED","settings":{},"type":"github"}');
+
+    await waitFor(() => expect(saveButton).toBeEnabled());
+    expect(saveToolkit).not.toHaveBeenCalled();
+  });
+});
+
+/*
+ * ── THE CREDENTIAL GATE ON SAVE ─────────────────────────────────────────────
+ *
+ * The legacy screen refused a save whose selected credential had failed its
+ * connection check, and said why. Restoring it needs one distinction the
+ * status alone cannot make: the stored check answers `auth_failed` /
+ * `unreachable` when it reached a verdict ABOUT THE CREDENTIAL, and answers a
+ * bare refusal with NO reason when the deployment cannot run the check at all
+ * ("Connection checking is not available right now." —
+ * `internal/api/v2/configurations/stored_check.go`, which needs a resolver
+ * this build composes only under `ELITEA_CONFIGURATIONS_ENABLED`, and the e2e
+ * stack does not set it). Both are `success: false`, and a gate keyed on that
+ * would refuse every save on every stack that cannot probe — the whole e2e
+ * stack included. These two tests are the pair that tells them apart.
+ *
+ * The served schema is the one PR #352 makes the catalogue serve: a `$defs`
+ * entry with `metadata.section`, and a property that `$ref`s it. That
+ * reference is what makes the field a credential picker at all — see
+ * `__tests__/credentialPickerWiring.test.tsx`.
+ */
+const CREDENTIAL_TYPE_SCHEMA = {
+  title: 'github',
+  type: 'object',
+  metadata: { label: 'GitHub' },
+  $defs: { github: { type: 'object', metadata: { section: 'credentials', type: 'github' } } },
+  properties: {
+    github_configuration: { $ref: '#/$defs/github', configuration_types: ['github'] },
+    selected_tools: { args_schemas: { search_code: { type: 'object' } } },
+  },
+};
+
+const SAVED_CREDENTIAL = {
+  uuid: 'cfg-1',
+  id: 'cfg-1',
+  type: 'github',
+  elitea_title: 'ci-bot',
+  label: 'CI Bot Token',
+  project_id: 'proj-1',
+  section: 'credentials',
+  data: { base_url: 'https://api.github.com' },
+};
+
+/** Serves the credential-bearing toolkit and the batch stored-check answer under test. */
+function mockCredentialEndpoints(storedCheckRows: readonly Record<string, unknown>[]): void {
+  server.use(
+    http.get('/api/v2/elitea_core/tools/prompt_lib/:projectId', () =>
+      HttpResponse.json({
+        // The toolkit REFERENCES the credential, so the picker starts with it
+        // selected and the gate has a row to be about.
+        rows: [mockToolkitRow({ settings: { github_configuration: { elitea_title: 'ci-bot', private: false }, selected_tools: [] } })],
+        total: 1,
+      }),
+    ),
+    http.get('/api/v2/elitea_core/toolkits/prompt_lib/:projectId', () => HttpResponse.json({ github: CREDENTIAL_TYPE_SCHEMA })),
+    http.get('/api/v2/configurations/configurations/:projectId', () =>
+      HttpResponse.json({ items: [SAVED_CREDENTIAL], total: 1, limit: 500, offset: 0, shared: { items: [], total: 0 } }),
+    ),
+    http.get('/api/v2/configurations/available/', () => HttpResponse.json([])),
+    http.post('/api/v2/configurations/check_stored_connections/:projectId', () => HttpResponse.json([...storedCheckRows])),
+    http.get('/api/v2/configurations/models/:projectId', () => HttpResponse.json({ items: [], total: 0 })),
+  );
+}
+
+/** Makes the form dirty through a real field, so the dirty gate cannot be what the assertions below are reading. */
+async function editToolkitName(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+  const nameField = await screen.findByRole('textbox', { name: /Toolkit Name/i });
+  await user.type(nameField, ' edited');
+}
+
+describe('EditToolkit save gate on the stored credential check', () => {
+  it('refuses Save, with the reason stated, when the selected credential’s check came back auth_failed', async () => {
+    mockCredentialEndpoints([
+      { id: 'cfg-1', success: false, reason: 'auth_failed', message: 'Authentication failed. The provider rejected this credential.' },
+    ]);
+    const saveToolkit = vi.fn().mockResolvedValue({ id: 'tk-1' });
+    const user = userEvent.setup();
+
+    renderToolkitsRoute(<EditToolkit deps={{ saveToolkit }} />, '/toolkits/latest/tk-1', { projectId: 'proj-1' });
+
+    await screen.findByText('My GitHub');
+    await editToolkitName(user);
+
+    const saveButton = screen.getByTestId('toolkit-save-button');
+    // Dirty, and still refused: the credential is what refuses it.
+    await waitFor(() => expect(saveButton).toBeDisabled());
+
+    // The reason is SAID, not merely implied by a dead button — and it is
+    // said in a place assistive technology reaches, which is what
+    // `aria-describedby` on the button points at.
+    const reason = screen.getByTestId('toolkit-save-disabled-reason');
+    expect(saveButton).toHaveAttribute('aria-describedby', reason.id);
+    expect(reason).toHaveTextContent('did not pass its connection check');
+    // The SERVER's own words, not only the app's headline.
+    expect(reason).toHaveTextContent('Authentication failed. The provider rejected this credential.');
+
+    // `fireEvent`, not `userEvent`: a disabled MUI button carries
+    // `pointer-events: none`, so `userEvent` refuses the gesture before the
+    // DOM ever sees it — which would prove the CSS, not the handler. This
+    // dispatches the click straight at the element, and a disabled button
+    // still runs nothing.
+    fireEvent.click(saveButton);
+    expect(saveToolkit).not.toHaveBeenCalled();
+  });
+
+  it('keeps Save available when the check itself is unavailable (a refusal carrying no reason)', async () => {
+    // What this build's own stack answers when the stored-configuration
+    // resolver is not composed. It is `success: false` and it is NOT evidence
+    // about the credential, so it must not cost the user their edit.
+    mockCredentialEndpoints([{ id: 'cfg-1', success: false, message: 'Connection checking is not available right now.' }]);
+    const saveToolkit = vi.fn().mockResolvedValue({ id: 'tk-1' });
+    const user = userEvent.setup();
+
+    renderToolkitsRoute(<EditToolkit deps={{ saveToolkit }} />, '/toolkits/latest/tk-1', { projectId: 'proj-1' });
+
+    await screen.findByText('My GitHub');
+    await editToolkitName(user);
+
+    const saveButton = screen.getByTestId('toolkit-save-button');
+    await waitFor(() => expect(saveButton).toBeEnabled());
+    expect(screen.queryByTestId('toolkit-save-disabled-reason')).not.toBeInTheDocument();
+
+    await user.click(saveButton);
+    await waitFor(() => expect(saveToolkit).toHaveBeenCalledTimes(1));
+    expect(saveToolkit.mock.calls[0]?.[0]).toMatchObject({ projectId: 'proj-1', toolId: 'tk-1', type: 'github' });
+  });
+});
+
+describe('EditToolkit test pane', () => {
   /*
    * The COMPOSITION ROOT of the Test-settings pane.
    *

@@ -86,6 +86,14 @@ const UNROUTABLE_BASE_URL = 'https://autotest.invalid/api';
  */
 const PLACEHOLDER_TOKEN = 'autotest-placeholder-token-not-a-credential';
 
+/**
+ * The toolkit probe's closed vocabulary for a verdict ABOUT THE CREDENTIAL
+ * (`internal/api/v2/configurations/toolkit_check.go`). Every other refusal
+ * shape carries no reason at all, and says only that the check could not be
+ * made — see the second test below.
+ */
+const REFUSAL_REASONS: readonly string[] = ['auth_failed', 'unreachable'];
+
 interface SeededToolkit {
   readonly toolkitId: string;
   /**
@@ -320,28 +328,25 @@ test('a toolkit credential the platform will not certify carries the failure on 
 /*
  * The second half of the legacy case: what the FORM does about it.
  *
- * The legacy behaviour (itself a fix for a legacy bug) was that Save is
- * disabled, with the reason stated, so a toolkit that cannot authenticate
- * cannot be saved in ignorance. This journey asserts what this build really
- * does, which is measured below and is NOT that:
+ * The legacy behaviour (itself a fix for a legacy bug) is that Save is
+ * refused, with the reason stated, so a toolkit that cannot authenticate
+ * cannot be saved in ignorance. This journey used to record the OPPOSITE as
+ * measured state — this route had no Save control at all, so no save-time
+ * gate could exist. That gap is closed, and the two assertions that recorded
+ * it are inverted here rather than deleted: the control must exist, and the
+ * gate must act on the SERVER'S OWN verdict.
  *
- *   - nothing on the toolkit form is gated on the credential's status. The
- *     save path (`ToolkitsOperationButtons.handleUpdateToolkit`) consults
- *     `hasErrors`, `hasNotSavedToolConfiguration` and the credential-CHANGE
- *     warning modal, and none of those is the check's verdict;
- *   - and there is no Save control on this route at all. The visible
- *     Save/Discard row of the baseline's operation buttons is not part of the
- *     port — `ToolkitsOperationButtons` renders only its two dialogs and
- *     listens for `ToolEvents.ToolkitsUpdateToolkit`, which nothing in the app
- *     emits (the only other reader, `ToolkitsTabBar`, has no call site).
- *
- * So the refusal reaches the user as a tooltip on one row of a dropdown and
- * nowhere else. That is a product gap, and it is recorded as this journey's
- * measured state rather than as a red test: the day a Save control lands on
- * this route this assertion fails, and the line that replaces it is the gate's
- * own acceptance test.
+ * THE GATE IS KEYED ON THE PROBE'S REASON, NOT ON "the check failed". The
+ * header comment above explains why this stack answers every stored check
+ * with the honest "not composed" refusal: `success: false` and NO `reason`.
+ * That is the deployment saying it could not ask, and it must never cost a
+ * user their edit — so on THIS stack the correct behaviour is Save ENABLED.
+ * On a stack that composes the resolver and gets a 401 the same row comes
+ * back `reason: "auth_failed"` and the correct behaviour is Save REFUSED with
+ * the reason on screen. Both are asserted below, chosen by what the wire
+ * actually said, exactly as the first test chooses its expected message.
  */
-test('the toolkit form gates nothing on a credential the platform will not certify', async ({
+test('the toolkit form gates Save on the server’s own verdict about the credential', async ({
   page,
   request,
 }, testInfo) => {
@@ -357,20 +362,42 @@ test('the toolkit form gates nothing on a credential the platform will not certi
     const verdict = await openToolkitAndReadVerdict(page, seed);
     refusalMessageOf(verdict);
 
-    // The form is fully editable: the refusal disables no field.
+    // The form is fully editable: the refusal freezes no field.
     const nameField = page.getByRole('textbox', { name: 'Toolkit Name' });
     await expect(nameField).toBeVisible({ timeout: 30_000 });
-    await expect(
-      nameField,
-      'a refused credential must not silently freeze the form — and today it does not gate anything at all',
-    ).toBeEditable();
+    await expect(nameField, 'a refused credential must not silently freeze the form').toBeEditable();
 
+    // ── INVERTED. This used to assert `toHaveCount(0)` for "this route offers
+    // no Save control". It offers one now, and that is the whole fix.
+    const saveButton = page.getByTestId('toolkit-save-button');
     await expect(
-      page.getByRole('button', { name: 'Save', exact: true }),
-      'measured state: this route offers no Save control, so no save-time gate on the credential check can exist. ' +
-        'When one lands, replace this line with the gate itself: Save refused (or refusing with the reason stated) ' +
-        'while the selected credential carries the server’s refusal.',
-    ).toHaveCount(0);
+      saveButton,
+      'the toolkit edit page must offer a Save control — without one a saved toolkit cannot be edited from its own page',
+    ).toHaveCount(1);
+
+    // Dirty the form, so what the control reports afterwards is about the
+    // credential and not about "nothing has changed".
+    await nameField.fill(`${AUTOTEST_PREFIX}renamed_${tag}`);
+    const reason = page.getByTestId('toolkit-save-disabled-reason');
+
+    if (REFUSAL_REASONS.includes(String(verdict.reason ?? ''))) {
+      // A verdict ABOUT THE CREDENTIAL: refuse the save and say why.
+      await expect(
+        saveButton,
+        'a credential the provider refused must refuse the save that would ship it',
+      ).toBeDisabled({ timeout: 30_000 });
+      await expect(reason, 'a refused Save must state its reason').toHaveCount(1);
+      await expect(reason).toContainText(String(verdict.message ?? ''));
+      await expect(saveButton).toHaveAttribute('aria-describedby', 'toolkit-save-disabled-reason');
+    } else {
+      // The check could not be made. That is a fact about the deployment, not
+      // about the credential, and the rule must not turn it into one.
+      await expect(
+        saveButton,
+        `a check that could not be made (reason ${JSON.stringify(verdict.reason ?? null)}) must never block a save`,
+      ).toBeEnabled({ timeout: 30_000 });
+      await expect(reason).toHaveCount(0);
+    }
   } finally {
     await removeSeed(request, seed);
   }

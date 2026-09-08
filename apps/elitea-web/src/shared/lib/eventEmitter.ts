@@ -5,11 +5,15 @@
  * Save/Validate event flow (`entities/toolkit`'s `ToolEvents` catalogue)
  * across the two components without prop-drilling every handler through.
  *
- * Local, not shared: no other sub-unit's owned files reference
- * `common/eventEmitter.js` (grepped the whole old app: every consumer is
- * inside `features/toolkits`'s own `ui/form/ToolkitForm/` tree or the
- * `pages/`-layer callers that compose it — out of this port's reach either
- * way), so there is no cross-slice need to promote this to `shared/lib`.
+ * PROMOTED to `shared/lib` (it used to live in `features/toolkits/lib/`).
+ * The bus has two ends by design: the form component that LISTENS
+ * (`features/toolkits`' `ToolkitsOperationButtons`) and the screen header
+ * that EMITS. In the baseline both ends sit inside the same slice; here the
+ * emitting end is the toolkit edit PAGE, and `no-deep-slice-import` (R-L3)
+ * lets `pages/` reach a slice only through its `index.ts` — whose 20-symbol
+ * budget is full. `shared/` is beneath every layer and needs no barrel slot,
+ * so this is the one home both ends can legally reach. Nothing about the bus
+ * itself changed.
  */
 type Listener = (data: unknown) => void;
 
