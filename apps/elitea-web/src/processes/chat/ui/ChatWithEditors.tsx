@@ -183,7 +183,15 @@ export function ChatWithEditors(): ReactNode {
         <Drawer
           anchor="right"
           open
-          onClose={canvas.onCloseCanvasEditor}
+          /*
+           * `() => …`, not the handler itself. MUI calls `onClose(event,
+           * reason)`, and `onCloseCanvasEditor`'s own contract is
+           * `(hasChange, finalResult, language)` — handed the pair directly it
+           * would read the event as "there are changes" and the string
+           * `"backdropClick"` as the document to save, and write that over the
+           * user's canvas.
+           */
+          onClose={() => canvas.onCloseCanvasEditor()}
           slotProps={{ paper: { sx: { width: { xs: '100%', md: '48rem' }, maxWidth: '100%', p: 2, boxSizing: 'border-box' } } }}
           data-testid="chat-canvas-editor"
         >
@@ -191,6 +199,14 @@ export function ChatWithEditors(): ReactNode {
             ref={canvas.canvasEditorRef}
             selectedCodeBlockInfo={canvas.selectedCodeBlockInfo}
             onCloseCanvasEditor={canvas.onCloseCanvasEditor}
+            /*
+             * The language picker's own write. It was omitted, so
+             * `CanvasEditor`'s `onChangeLanguage` guard (`if (editCanvas &&
+             * …)`) was permanently false and switching a canvas's language
+             * changed the highlighting and nothing else.
+             */
+            editCanvas={canvas.editCanvas}
+            {...(canvas.projectId !== undefined ? { projectId: canvas.projectId } : {})}
           />
         </Drawer>
       )}
