@@ -29,6 +29,8 @@ import { t } from '@/shared/i18n';
 import { BaseBtn } from '@/shared/ui/BaseBtn';
 import { BaseModal } from '@/shared/ui/BaseModal';
 
+import { buildSharedConversationUrl, getConversationShareBasename } from '../../lib/shareUrl';
+
 const EXPIRY_OPTIONS: readonly { readonly value: ShareLinkExpiry; readonly label: string }[] = [
   { value: '1h', label: t('features.chatConversationList.shareLink.expiry.1h', '1 hour') },
   { value: '1d', label: t('features.chatConversationList.shareLink.expiry.1d', '1 day') },
@@ -82,7 +84,14 @@ export function ShareLinkDialog(props: ShareLinkDialogProps): React.JSX.Element 
       },
       {
         onSuccess: (link) => {
-          const url = `${window.location.origin}/shared/chat/${link.token}`;
+          // The BASENAME is part of the address: this router is mounted at
+          // `/app/`, and a link that omitted it 404'd at the edge for its
+          // recipient while looking correct to the person who created it.
+          const url = buildSharedConversationUrl({
+            origin: window.location.origin,
+            basename: getConversationShareBasename(),
+            token: link.token,
+          });
           setCreatedUrl(url);
           setPassword('');
           // Best-effort: a clipboard write can be refused (no permission, no

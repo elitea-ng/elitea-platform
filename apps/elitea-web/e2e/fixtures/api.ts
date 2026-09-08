@@ -673,34 +673,85 @@ export async function readVersion(
   return versionDetailsFrom((await response.json()) as Record<string, unknown>);
 }
 
+/** The vault key the expanded version-details route compares `X-SECRET` against. */
+const SECRETS_HEADER_NAME = 'secrets_header_value';
+
 /**
- * The project's `X-SECRET` value, resolved from the project's own vault.
+ * The project's `X-SECRET` value, resolved from the project's own vault —
+ * minted through the API first if the project has none.
  *
  * The expanded version-details read is gated on this header, and the value is
- * per project and generated at boot — so a journey that wanted a literal
- * would need one configured per environment, and would silently start
- * asserting "a wrong header is refused" everywhere the literal went stale.
- * Reading it makes the journey portable and keeps the refusal case honest.
+ * per project and random — so a journey that wanted a literal would need one
+ * configured per environment, and would silently start asserting "a wrong
+ * header is refused" everywhere the literal went stale. Reading it makes the
+ * journey portable and keeps the refusal case honest.
+ *
+ * WHY IT MINTS ONE. elitea-main gives a project its value in exactly two
+ * places: the project PROVISIONER, and a boot pass over the vaults that
+ * already exist. The journeys stack has neither — its working project is
+ * inserted by the seed SQL, not provisioned, and it owns no vault at all until
+ * something writes a secret into it, which is after the boot pass has run. So
+ * the value is absent there and present in every provisioned deployment, and a
+ * fixture that only read it made this one stack's seeding gap look like a
+ * broken route. The create below is the same write the provisioner makes (an
+ * absent vault is initialised by the handler), it is done once per run, and it
+ * is what the boot pass would have done had the vault existed.
+ *
+ * A 404 is therefore the ONLY status that mints. Anything else is reported as
+ * itself: a 403 is a missing grant on the persona, and a 500 is a vault this
+ * deployment can no longer open — neither is repaired by writing a new secret
+ * over it.
  */
 export async function resolveProjectSecretHeader(
   request: APIRequestContext,
   projectId: string = DEFAULT_PROJECT_ID,
 ): Promise<string> {
-  const url = `${API_BASE}/secrets/secret/default/${projectId}/secrets_header_value`;
-  const response = await request.get(url);
+  const url = `${API_BASE}/secrets/secret/default/${projectId}/${SECRETS_HEADER_NAME}`;
+  let response = await request.get(url);
+  if (response.status() === 404) {
+    await mintProjectSecretHeader(request, projectId);
+    response = await request.get(url);
+  }
   if (!response.ok()) {
     throw new Error(
-      `resolveProjectSecretHeader: GET ${url} -> ${response.status()}. The project vault holds ` +
-        `no secrets_header_value; cmd/elitea-main backfills one at boot.` +
+      `resolveProjectSecretHeader: GET ${url} -> ${response.status()}. The project vault holds no ` +
+        `${SECRETS_HEADER_NAME} and one could not be minted; elitea-main writes it when a project ` +
+        `is provisioned and in a boot pass over the vaults that already exist.` +
         `${await describeRefusal(response)}`,
     );
   }
   const body = (await response.json()) as { value?: unknown };
   const value = typeof body.value === 'string' ? body.value : '';
   if (value === '') {
-    throw new Error('resolveProjectSecretHeader: the vault answered an empty secrets_header_value');
+    throw new Error(`resolveProjectSecretHeader: the vault answered an empty ${SECRETS_HEADER_NAME}`);
   }
   return value;
+}
+
+/**
+ * Writes a `secrets_header_value` into the project's vault.
+ *
+ * The project-mode create route, which is the only one that serves this: the
+ * per-name POST is administration-only and answers 405 here. A 400 is accepted
+ * silently because it is what a concurrent worker's own mint looks like from
+ * this side ("Secret … already exists"), and the caller re-reads either way.
+ */
+async function mintProjectSecretHeader(
+  request: APIRequestContext,
+  projectId: string,
+): Promise<void> {
+  const url = `${API_BASE}/secrets/secrets/default/${projectId}`;
+  const response = await request.post(url, {
+    // Never a fixed literal: this is the value the runtime authenticates with
+    // for the rest of the run, and a constant checked into a public repository
+    // would be one every deployment that ever ran this suite shared.
+    data: { name: SECRETS_HEADER_NAME, value: `autotest${Date.now()}${Math.random().toString(36).slice(2, 10)}` },
+  });
+  if (response.status() === 201 || response.status() === 400) return;
+  throw new Error(
+    `resolveProjectSecretHeader: POST ${url} -> ${response.status()} while minting a ` +
+      `${SECRETS_HEADER_NAME} for the project${await describeRefusal(response)}`,
+  );
 }
 
 /**
