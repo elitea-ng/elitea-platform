@@ -23,7 +23,7 @@
 import type { ReactNode } from 'react';
 
 import { Outlet, RouterProvider, createMemoryHistory, createRootRoute, createRoute, createRouter } from '@tanstack/react-router';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -401,5 +401,118 @@ describe('ChatPage participant removal', () => {
 
     await waitFor(() => expect(deletedParticipants).toEqual(['25']), { timeout: 5000 });
     await waitFor(() => expect(screen.queryByText('rust_openapi_echo')).toBeNull(), { timeout: 5000 });
+  });
+});
+
+/**
+ * DEFECT (#312): an MCP authorization pause could not be resumed at all.
+ *
+ * `continueHitl`/`continueTokenLimit` were moved onto the REST continuation
+ * route in PR #613, but MCP authorization stayed on `chat_continue_predict`
+ * because `agent.continue.authorization.v1` needs an
+ * `authorization_request_id` and nothing read that field off the
+ * `mcp_authorization_required` frame. The socket client is a no-op stub
+ * whenever `vite_socket_server` is empty — which is what the shipped
+ * deployment serves — so pressing "Skip Auth" wiped the card, spun the bubble
+ * and reached NO transport, leaving the run paused server-side.
+ *
+ * Mounted through the real page because both halves were individually fine:
+ * the reducer stored the frame's metadata, and the route accepted the
+ * contract; only the seam between the card and the continuation call was
+ * missing, and no unit test spans it.
+ */
+describe('ChatPage MCP authorization continuation', () => {
+  const AUTH_MESSAGE_ID = 'e3f5b0f2-8a3c-4d9a-9a1e-0c2b7f5d1a44';
+
+  it('resumes over the REST authorization contract, carrying the id off the frame', async () => {
+    const eventSources = installTestEventSource();
+    const originalScrollIntoView = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollIntoView');
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    const continuations: { readonly contract: string | null; readonly body: unknown }[] = [];
+    server.use(
+      http.post(`${BASE}/elitea_core/conversations/prompt_lib/${PROJECT}`, () =>
+        HttpResponse.json(
+          { id: CONVERSATION, uuid: 'conversation-uuid-5', project_id: PROJECT, name: 'First turn', participants: [] },
+          { status: 201 },
+        ),
+      ),
+      http.post(`${BASE}/elitea_core/participants/prompt_lib/${PROJECT}/${CONVERSATION}`, () => HttpResponse.json([])),
+      http.get(`${BASE}/configurations/tts_voices/${PROJECT}`, () => HttpResponse.json({ items: [] })),
+      http.get(`${BASE}/elitea_core/context_analytics/prompt_lib/${PROJECT}/${CONVERSATION}`, () =>
+        HttpResponse.json({ current_tokens: 0, max_tokens: 0, message_groups_in_context: 0 }),
+      ),
+      http.post(`${BASE}/elitea_core/messages/prompt_lib/${PROJECT}/:conversationUuid`, () =>
+        HttpResponse.json({ execution_id: 'execution-1', events_url: `${BASE}/executions/${PROJECT}/execution-1/events` }),
+      ),
+      http.post(
+        `${BASE}/elitea_core/continue_predict/prompt_lib/${PROJECT}/:conversationUuid`,
+        async ({ request }) => {
+          continuations.push({
+            contract: new URL(request.url).searchParams.get('execution_contract'),
+            body: await request.json(),
+          });
+          return HttpResponse.json({
+            execution_id: 'execution-2',
+            events_url: `${BASE}/executions/${PROJECT}/execution-2/events`,
+          });
+        },
+      ),
+    );
+
+    try {
+      renderAt('/chat');
+      const user = userEvent.setup();
+      const input = await screen.findByPlaceholderText('Type your message...');
+      await user.type(input, 'First turn{Enter}');
+      await waitFor(() => expect(eventSources.getOpen()).toHaveLength(1), { timeout: 5000 });
+
+      // The run starts, then pauses on an MCP toolkit that needs OAuth. Both
+      // frames carry the SAME `message_id`, which is how the reducer finds the
+      // answer they belong to.
+      const frame = (payload: Record<string, unknown>): string =>
+        JSON.stringify({ message_id: AUTH_MESSAGE_ID, question_id: null, ...payload });
+      act(() => {
+        eventSources.emit('execution.node_event', frame({ type: 'agent_start', content: '' }));
+      });
+      act(() => {
+        eventSources.emit(
+          'execution.node_event',
+          frame({
+            type: 'mcp_authorization_required',
+            content: 'Authorization required.',
+            response_metadata: {
+              // The identity the route resumes by. `interrupt_id` wins the
+              // COALESCE the server reads it back with.
+              interrupt_id: 'mcp_auth_sharepoint-1',
+              tool_call_id: 'call-9',
+              tool_run_id: 'run-1',
+              tool_name: 'sharepoint___search',
+              toolkit_type: 'mcp',
+              server_url: 'https://mcp.example.com',
+              authorization_servers: ['https://auth.example.com'],
+              authorization_requests: [{ interrupt_id: 'mcp_auth_sharepoint-1' }],
+            },
+          }),
+        );
+      });
+
+      await user.click(await screen.findByRole('button', { name: 'Skip Auth' }));
+
+      await waitFor(() => expect(continuations).toHaveLength(1), { timeout: 5000 });
+      expect(continuations[0]?.contract).toBe('agent.continue.authorization.v1');
+      expect(continuations[0]?.body).toMatchObject({
+        project_id: Number(PROJECT),
+        conversation_uuid: 'conversation-uuid-5',
+        message_id: AUTH_MESSAGE_ID,
+        authorization_request_id: 'mcp_auth_sharepoint-1',
+        authorization_action: 'skip',
+        mcp_tokens: {},
+        ignored_mcp_servers: [],
+      });
+    } finally {
+      if (originalScrollIntoView) Object.defineProperty(Element.prototype, 'scrollIntoView', originalScrollIntoView);
+      else Reflect.deleteProperty(Element.prototype, 'scrollIntoView');
+      eventSources.restore();
+    }
   });
 });

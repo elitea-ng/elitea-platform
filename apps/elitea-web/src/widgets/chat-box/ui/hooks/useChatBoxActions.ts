@@ -130,7 +130,7 @@ export function useChatBoxActions({
   );
 
   const handleContinueMcpExecution = useCallback(
-    (messageId: string, addToIgnoreList?: boolean) => { handlers.resumeMcpFlow(messageId, addToIgnoreList); },
+    (messageId: string, addToIgnoreList?: boolean) => { void handlers.resumeMcpFlow(messageId, addToIgnoreList); },
     [handlers],
   );
 

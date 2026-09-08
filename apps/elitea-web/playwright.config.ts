@@ -190,25 +190,32 @@ const SUPPORT_JOURNEY = /journeys\/support\/support\.spec\.ts/;
 const EMPTY_TOOLKIT_LIST_JOURNEY = /journeys\/toolkits\/toolkits\.emptyList\.spec\.ts/;
 
 /*
- * The fixture self-tests (API-FX1..4), and why they need their own project.
+ * The fixture self-tests (API-FX1..4), and why they run as a TEARDOWN.
  *
- * API-FX3 calls `sweepAutotestEntities`, which deletes EVERY `autotest_`
- * conversation and agent in the shared project. That is the claim it is
- * about — a cleanup that reports success and deletes nothing is the failure
- * `admin.app-requests.spec.ts` (#544) and `toolkits.emptyList.spec.ts` were
- * both eventually rewritten for — and it is also, run at the wrong moment, a
- * way to destroy every sibling journey's rows mid-flight.
+ * API-FX3 calls `sweepAutotestEntities`, which deletes every `autotest_`
+ * conversation, agent and pipeline in the shared project. That is the claim
+ * it is about — a cleanup that reports success and deletes nothing is the
+ * failure `admin.app-requests.spec.ts` (#544) and `toolkits.emptyList.spec.ts`
+ * were both eventually rewritten for — and it is also, run at the wrong
+ * moment, a way to destroy every sibling journey's rows mid-flight.
  *
- * So the sweep runs where it can only ever find its own: after `setup`, before
- * the first journey that can create an agent or a conversation, exactly the
- * slot `toolkits-empty` occupies for its own precondition. Both engine
- * projects depend on it and both ignore it, so it runs ONCE and never again.
- * The two projects can run together: this one touches conversations and
- * agents, that one asserts the toolkit count.
+ * It first ran in an ordering project that both engines DEPENDED on, before
+ * the first journey that can create a row. That gave the isolation and cost
+ * far too much: a dependency's failure SKIPS its dependents, so one failing
+ * assertion in this file reported `308 did not run` and the whole browser
+ * suite went unmeasured (measured on b705c058). A self-test that can take the
+ * suite down with it is a worse trade than the leftovers it cleans up.
  *
- * A run of this project also clears whatever an earlier, killed run left in
- * the shared project — which is a second reason to want it first rather than
- * a reason to want it at all.
+ * So it is `setup`'s `teardown` instead. Playwright runs a teardown project
+ * after its parent AND after every project that depends on the parent has
+ * finished — which is every browser project here — so the isolation is
+ * stronger than before (nothing is still running, rather than nothing has
+ * started yet) and NOTHING depends on it, so its failure reports itself and
+ * skips nobody. Running last also means the sweep meets the rows the whole
+ * run left behind, which is the state a cleanup is actually for.
+ *
+ * It therefore carries no `dependencies` of its own: naming `setup` there
+ * while being `setup`'s teardown is a cycle.
  */
 const FIXTURE_ISOLATION_JOURNEY = /journeys\/api\/api\.fixture-isolation\.spec\.ts/;
 /*
@@ -353,6 +360,10 @@ export default defineConfig({
       name: 'setup',
       testMatch: /auth\.setup\.ts/,
       fullyParallel: false,
+      // The fixture self-tests, AFTER every project that depends on this one.
+      // See `FIXTURE_ISOLATION_JOURNEY` above for why they are a teardown and
+      // not a dependency.
+      teardown: 'fixtures-sweep',
       use: { ...devices['Desktop Chrome'], launchOptions: CHROMIUM_LAUNCH_OPTIONS },
     },
 
@@ -382,11 +393,17 @@ export default defineConfig({
     },
 
     /*
-     * ── fixtures-sweep — the fixture self-tests, before anything seeds ─────
+     * ── fixtures-sweep — the fixture self-tests, after everything else ─────
      *
-     * See `FIXTURE_ISOLATION_JOURNEY` above. Serial, because API-FX3's sweep
-     * would otherwise take the rows API-FX1/2/4 are holding; chromium only,
-     * because none of the four opens a page.
+     * `setup`'s teardown; see `FIXTURE_ISOLATION_JOURNEY` above. Serial,
+     * because API-FX3's sweep would otherwise take the rows API-FX1/2/4 are
+     * holding; chromium only, because none of the four opens a page. No
+     * `dependencies`: it is the teardown OF `setup`, and naming it there
+     * would be a cycle.
+     *
+     * `retries: 0` on purpose. A retried sweep would run the destructive half
+     * three times and report the third attempt, which is not what a cleanup
+     * self-test should say — it either did the work or it did not.
      */
     {
       name: 'fixtures-sweep',
@@ -395,9 +412,9 @@ export default defineConfig({
         storageState: STORAGE_STATE.admin,
         launchOptions: CHROMIUM_LAUNCH_OPTIONS,
       },
-      dependencies: ['setup'],
       testMatch: FIXTURE_ISOLATION_JOURNEY,
       fullyParallel: false,
+      retries: 0,
     },
 
     // ── chromium ──────────────────────────────────────────────────────────
@@ -416,7 +433,7 @@ export default defineConfig({
         storageState: STORAGE_STATE.member,
         launchOptions: CHROMIUM_LAUNCH_OPTIONS,
       },
-      dependencies: ['setup', 'toolkits-empty', 'fixtures-sweep'],
+      dependencies: ['setup', 'toolkits-empty'],
       testMatch: /journeys\/.+\.spec\.ts/,
     },
 
@@ -435,7 +452,7 @@ export default defineConfig({
         ...devices['Desktop Safari'],
         storageState: STORAGE_STATE.member,
       },
-      dependencies: ['setup', 'toolkits-empty', 'fixtures-sweep'],
+      dependencies: ['setup', 'toolkits-empty'],
       testMatch: /journeys\/.+\.spec\.ts/,
     },
 

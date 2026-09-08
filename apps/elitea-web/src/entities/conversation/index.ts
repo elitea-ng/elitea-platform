@@ -29,6 +29,7 @@
  * documented precedent for the identical trade-off.
  */
 import {
+  AGENT_CONTINUE_AUTHORIZATION_CONTRACT,
   AGENT_CONTINUE_HITL_CONTRACT,
   AGENT_CONTINUE_OUTPUT_LIMIT_CONTRACT,
   AGENT_EXECUTE_ADHOC_CONTRACT,
@@ -135,6 +136,7 @@ export const conversationApi = {
     adhoc: AGENT_EXECUTE_ADHOC_CONTRACT,
     regenerate: AGENT_REGENERATE_CONTRACT,
     continueHitl: AGENT_CONTINUE_HITL_CONTRACT,
+    continueAuthorization: AGENT_CONTINUE_AUTHORIZATION_CONTRACT,
     continueOutputLimit: AGENT_CONTINUE_OUTPUT_LIMIT_CONTRACT,
   },
   continueAgentExecution,

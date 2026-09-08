@@ -35,11 +35,11 @@ function ProbeComponent(props: { options?: ProgressHistoryOptions | null }) {
   const result = useIndexHistory(props.options ?? null);
   return (
     <div>
-      <span data-testid="isHistoryMode">{String(result.isHistoryMode)}</span>
-      <span data-testid="isHistoryLoading">{String(result.isHistoryLoading)}</span>
-      <span data-testid="messageCount">{result.historyMessages.length}</span>
-      <span data-testid="needGenerateProgressingIndexHistory">{String(result.needGenerateProgressingIndexHistory)}</span>
-      <span data-testid="firstMessageContent">{result.historyMessages[0]?.content ?? ''}</span>
+      <span data-testid="index-history-mode">{String(result.isHistoryMode)}</span>
+      <span data-testid="index-history-loading">{String(result.isHistoryLoading)}</span>
+      <span data-testid="index-history-message-count">{result.historyMessages.length}</span>
+      <span data-testid="index-history-need-generate">{String(result.needGenerateProgressingIndexHistory)}</span>
+      <span data-testid="index-history-first-message">{result.historyMessages[0]?.content ?? ''}</span>
     </div>
   );
 }
@@ -64,8 +64,8 @@ function renderProbe(props: { options?: ProgressHistoryOptions | null } = {}) {
 describe('useIndexHistory', () => {
   it('is not in history mode and has no messages when no history item is selected', async () => {
     renderProbe();
-    expect(await screen.findByTestId('isHistoryMode')).toHaveTextContent('false');
-    expect(screen.getByTestId('messageCount')).toHaveTextContent('0');
+    expect(await screen.findByTestId('index-history-mode')).toHaveTextContent('false');
+    expect(screen.getByTestId('index-history-message-count')).toHaveTextContent('0');
   });
 
   it('enters history mode and fetches the conversation once a history item with a conversation_id is selected', async () => {
@@ -90,8 +90,8 @@ describe('useIndexHistory', () => {
     useIndexesStore.getState().selectHistoryItem({ conversation_id: 'conv-1', state: 'completed' });
     renderProbe();
 
-    expect(await screen.findByTestId('isHistoryMode')).toHaveTextContent('true');
-    await waitFor(() => expect(screen.getByTestId('messageCount')).toHaveTextContent('1'));
+    expect(await screen.findByTestId('index-history-mode')).toHaveTextContent('true');
+    await waitFor(() => expect(screen.getByTestId('index-history-message-count')).toHaveTextContent('1'));
   });
 
   it('falls back to a mock message when the selected history item has no conversation (scheduled reindex, conversation_id explicitly null)', async () => {
@@ -99,20 +99,20 @@ describe('useIndexHistory', () => {
       .getState()
       .selectHistoryItem({ conversation_id: null, state: 'completed', updated: 3, indexed: 10, updated_on: 1_700_000_000 });
     renderProbe();
-    await waitFor(() => expect(screen.getByTestId('messageCount')).toHaveTextContent('1'));
+    await waitFor(() => expect(screen.getByTestId('index-history-message-count')).toHaveTextContent('1'));
   });
 
   it('shows no messages when a history item is selected with conversation_id simply absent (not null) and no error', async () => {
     useIndexesStore.getState().selectHistoryItem({ state: 'completed' });
     renderProbe();
-    expect(await screen.findByTestId('isHistoryMode')).toHaveTextContent('true');
-    expect(screen.getByTestId('messageCount')).toHaveTextContent('0');
+    expect(await screen.findByTestId('index-history-mode')).toHaveTextContent('true');
+    expect(screen.getByTestId('index-history-message-count')).toHaveTextContent('0');
   });
 
   it('falls back to a mock failure message (with exception) when the selected history item errored', async () => {
     useIndexesStore.getState().selectHistoryItem({ conversation_id: null, state: 'failed', error: 'boom' });
     renderProbe();
-    await waitFor(() => expect(screen.getByTestId('messageCount')).toHaveTextContent('1'));
+    await waitFor(() => expect(screen.getByTestId('index-history-message-count')).toHaveTextContent('1'));
   });
 
   /**
@@ -153,9 +153,9 @@ describe('useIndexHistory', () => {
 
     renderProbe({ options: { shouldRecover: true, conversationId: 'conv-recovery' } });
 
-    expect(await screen.findByTestId('isHistoryMode')).toHaveTextContent('false');
-    await waitFor(() => expect(screen.getByTestId('needGenerateProgressingIndexHistory')).toHaveTextContent('true'));
-    expect(screen.getByTestId('messageCount')).toHaveTextContent('1');
-    expect(screen.getByTestId('firstMessageContent')).toHaveTextContent('recovered in-progress message');
+    expect(await screen.findByTestId('index-history-mode')).toHaveTextContent('false');
+    await waitFor(() => expect(screen.getByTestId('index-history-need-generate')).toHaveTextContent('true'));
+    expect(screen.getByTestId('index-history-message-count')).toHaveTextContent('1');
+    expect(screen.getByTestId('index-history-first-message')).toHaveTextContent('recovered in-progress message');
   });
 });

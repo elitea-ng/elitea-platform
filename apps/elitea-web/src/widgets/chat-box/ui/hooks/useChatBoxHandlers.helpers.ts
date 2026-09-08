@@ -196,7 +196,8 @@ export interface UseChatBoxHandlersResult {
   readonly deleteAnswer: (messageId: string) => Promise<void>;
   readonly clearChat: () => Promise<void>;
   readonly continueHitl: (action: HitlInterruptAction) => Promise<void>;
-  readonly resumeMcpFlow: (messageId: string, addToIgnoreList?: boolean) => void;
+  /** Resumes an MCP-authorization pause: REST first (`agent.continue.authorization.v1`), socket second. `addToIgnoreList` is the user pressing "Skip Auth". */
+  readonly resumeMcpFlow: (messageId: string, addToIgnoreList?: boolean) => Promise<void>;
   readonly continueTokenLimit: (messageId: string) => Promise<void>;
 }
 export interface ToolActionLike {
