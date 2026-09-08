@@ -44,8 +44,8 @@ func NewCurrentModelCatalogRoute(
 	authConfig apimw.AuthConfig,
 	permissions auth.PermissionResolver,
 ) (*CurrentModelCatalogRoute, error) {
-	if reader == nil || publicProjectID <= 0 || authConfig.PrincipalValidator == nil ||
-		authConfig.ForwardedIdentityVerifier == nil || permissions == nil {
+	if reader == nil || publicProjectID <= 0 ||
+		!authConfig.CredentialPlaneComposed() || permissions == nil {
 		return nil, ErrInvalidCurrentModelCatalogRoute
 	}
 
