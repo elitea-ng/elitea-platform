@@ -175,6 +175,14 @@ test.beforeEach(async ({ page }) => {
 test('V1: the voice list is offered and the chosen voice persists (legacy test_voice_selection_from_chat)', async ({
   page,
 }) => {
+  /*
+   * THE BUDGET IS THE SUM OF THE WAITS BELOW. `openVoicePanel` loads the page
+   * and reloads it, then waits up to 30 s for the section; the voice list gets
+   * another 30 s, and three more waits follow. The default 30 s is smaller
+   * than the first wait alone, so the test clock — not any assertion — ended
+   * this run (webkit).
+   */
+  test.setTimeout(150_000);
   const section = await openVoicePanel(page);
 
   /*

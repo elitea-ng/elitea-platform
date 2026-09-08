@@ -171,7 +171,29 @@ func (h *Handler) loadConversations(ctx context.Context, r *http.Request, projec
 		sortOrder = "desc"
 	}
 
-	orderCol := "c.updated_at"
+	// COALESCE, and a tie-break on the primary key.
+	//
+	// `updated_at` IS NULLABLE and carries no default (tenant migration 0123),
+	// so every conversation that has never been revised holds NULL there. Two
+	// consequences, both of which reached the screen:
+	//
+	//  1. `ORDER BY c.updated_at DESC` puts NULLs FIRST in PostgreSQL. A
+	//     conversation nobody has touched since it was created therefore
+	//     sorted ABOVE one that was edited a minute ago.
+	//  2. Every one of those NULLs compares equal, so the relative order of
+	//     the whole never-revised set was whatever the scan happened to
+	//     return — different on every request. The rail re-sorts what it
+	//     receives by `updated_at ?? created_at` descending
+	//     (`features/chat-conversation-list/lib/helpers/conversationList.helpers.ts`),
+	//     so the answer and the screen disagreed at random, and a reader
+	//     comparing the two saw rows "move" between two identical listings.
+	//
+	// `groupByDate` below already reads `created_at` when `updated_at` is
+	// absent; the sort now reads the same value the grouping does, which is
+	// what makes "newest first" one statement rather than two. The `c.id`
+	// tie-break, in the same direction, makes the answer total: two rows that
+	// share a timestamp to the microsecond still come back in a fixed order.
+	orderCol := "COALESCE(c.updated_at, c.created_at)"
 	switch sortBy {
 	case "created_at":
 		orderCol = "c.created_at"
@@ -220,7 +242,7 @@ func (h *Handler) loadConversations(ctx context.Context, r *http.Request, projec
 		       c.created_at, c.updated_at
 		FROM %s.chat_conversations c
 		WHERE (c.meta->>'is_hidden' IS NULL OR c.meta->>'is_hidden' = 'false')
-		ORDER BY %s %s`, schema, schema, orderCol, orderDir)
+		ORDER BY %s %s, c.id %s`, schema, schema, orderCol, orderDir, orderDir)
 
 	rows, err := h.pool.Query(ctx, q, pinnedBy)
 	if err != nil {

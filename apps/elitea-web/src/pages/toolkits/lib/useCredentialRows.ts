@@ -21,7 +21,7 @@
  */
 import { useCallback, useMemo } from 'react';
 
-import type { Credential } from '@/entities/credential';
+import { credentialUrl, type Credential } from '@/entities/credential';
 import { normalizeCredentialPage, useConfigurationsList } from '@/features/credentials';
 
 import { usePersonalProjectId } from './usePersonalProjectId';
@@ -55,6 +55,19 @@ export interface CredentialPickerRow {
   /** The project the row itself belongs to — the test-connection call needs it, not the selected project. */
   readonly ownerProjectId: string | undefined;
   readonly data: Readonly<Record<string, unknown>>;
+  /**
+   * The provider address this credential names (`data.base_url`, else
+   * `data.url`), and `undefined` when it names none.
+   *
+   * `CredentialOptionLabel` renders its "open in a new tab" action ONLY when
+   * this is set — that action is how a user goes and fixes the credential a
+   * row has just told them is refused. This field was missing here, so the
+   * property was `undefined` for every row the toolkit form offers and the
+   * control never rendered anywhere in the application: the selector existed
+   * (`entities/credential`), `CredentialsSelect` forwarded the prop, and
+   * nothing in between ever computed it.
+   */
+  readonly credentialUrl?: string;
 }
 
 export interface UseCredentialRowsParams {
@@ -101,6 +114,10 @@ function toRows(items: readonly Credential[], isPrivate: boolean, accepted: Read
       type: item.type,
       ownerProjectId: item.projectId,
       data: item.data ?? {},
+      // Omitted rather than set to '' when the credential names no address:
+      // the label renders the action on a truthy value, and an empty string
+      // would open a new tab on nothing.
+      ...(credentialUrl(item) !== '' ? { credentialUrl: credentialUrl(item) } : {}),
     });
   }
   return rows;

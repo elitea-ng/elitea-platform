@@ -179,6 +179,15 @@ async function removeConversation(request: APIRequestContext, id: string): Promi
 // legacy use case: a conversation's visibility — private → public
 // ─────────────────────────────────────────────────────────────────────────────
 test('S1: "Make public" publishes the conversation on the server, and the menu stops offering it', async ({ page }) => {
+  /*
+   * THE BUDGET IS THE SUM OF THE WAITS BELOW, not a round number: two full
+   * loads of the chat page at 20 s each, a 20 s server poll between them, and
+   * the menu waits either side. The default 30 s is smaller than that sum, so
+   * the clock — not any assertion — decided the outcome, and the report named
+   * the cleanup call that happened to be running when it ran out
+   * (`apiRequestContext.delete`, measured on chromium).
+   */
+  test.setTimeout(120_000);
   const conversationId = await createConversation(page.request, uniqueName('public'));
   try {
     expect(await readIsPrivate(page, conversationId), 'a new conversation must start private').toBe(true);
@@ -222,6 +231,10 @@ test('S1: "Make public" publishes the conversation on the server, and the menu s
 // legacy use case: share a conversation by link, and revoke the link
 // ─────────────────────────────────────────────────────────────────────────────
 test('S2: a share link opens for a reader with no session, and dies when it is revoked', async ({ page, browser }) => {
+  // Same arithmetic as S1's, over more waits: the owner's chat page, the
+  // dialog, the reader's own context and its two page loads, and two 20 s
+  // server polls.
+  test.setTimeout(150_000);
   const name = uniqueName('link');
   const conversationId = await createConversation(page.request, name);
   try {

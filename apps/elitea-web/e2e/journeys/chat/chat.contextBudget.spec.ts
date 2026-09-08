@@ -134,6 +134,15 @@ async function tokensLine(page: Page): Promise<string> {
 }
 
 test('the Context Budget panel reports the budget the profile sets, and follows it when it changes', async ({ page }) => {
+  /*
+   * THE BUDGET IS THE SUM OF THE WAITS BELOW. This test loads the chat page
+   * TWICE (20 s each), runs an accessibility sweep, and holds four polls of
+   * 20 s. The default 30 s cannot contain that, so the second poll was cut
+   * short by the test clock rather than by its own timeout: the report read
+   * "a changed profile budget must reach the panel" — a product claim — for
+   * what was a budget that had already run out (webkit).
+   */
+  test.setTimeout(180_000);
   const author = await readAuthor(page.request);
   const original = author.default_context_management;
 

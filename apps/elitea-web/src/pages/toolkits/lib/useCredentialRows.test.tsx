@@ -234,6 +234,37 @@ describe('useCredentialRows', () => {
     expect(state.current?.rows.map((row) => row.eliteaTitle)).toEqual(['title', 'title-2']);
   });
 
+  /*
+   * The address a row names, which is what decides whether the option carries
+   * its "open in a new tab" action.
+   *
+   * `CredentialOptionLabel` renders that control on a truthy `credentialUrl`
+   * and on nothing else. The hook never set the field, so the control was
+   * absent from every credential picker in the application while its selector,
+   * its prop and its own unit test all went on passing.
+   */
+  it('carries the provider address a row names, and none where the row names one', async () => {
+    servePages({
+      '1': {
+        ...EMPTY,
+        items: [
+          { id: 1, type: 'github', elitea_title: 'has-base-url', data: { base_url: 'https://github.example/api' } },
+          { id: 2, type: 'jira', elitea_title: 'has-url', data: { url: 'https://jira.example' } },
+          { id: 3, type: 'github', elitea_title: 'has-neither', data: { access_token: '{{secret.x}}' } },
+        ],
+      },
+    });
+
+    const state = renderCredentialRows(params({ onlyPublic: true }), undefined);
+    await waitFor(() => expect(state.current?.hasFetchedData).toBe(true));
+
+    expect(state.current?.rows.map((row) => row.credentialUrl)).toEqual([
+      'https://github.example/api',
+      'https://jira.example',
+      undefined,
+    ]);
+  });
+
   it('reports no data at all, and issues no request, without a project', async () => {
     servePages({});
     const state = renderCredentialRows(params({ projectId: undefined }), '42');
