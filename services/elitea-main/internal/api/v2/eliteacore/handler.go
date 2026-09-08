@@ -917,6 +917,30 @@ func (h *Handler) Author(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// publishActorID names the user a published version is attributed to, and
+// reports whether there is one to name.
+//
+// The acting principal first, the draft's own author as the fallback — the
+// same rule the skill publish path applies (internal/api/v2/skillpublish's
+// actingUserID). A token principal that carries no owner resolves to no
+// principal at all, and then the author is the honest answer: somebody
+// published this version, and the only identity the request carries is the one
+// stored on the row.
+//
+// The `false` return matters. A version whose author column holds nothing
+// leaves the key OUT of the meta bag, so the dashboard reports `null` — "this
+// platform does not know who published it" — rather than user 0, which reads
+// as a real account and belongs to nobody.
+func publishActorID(ctx context.Context, fallbackAuthorID int) (int64, bool) {
+	if actor, ok := importPrincipalUserID(ctx); ok {
+		return actor.Int64(), true
+	}
+	if fallbackAuthorID > 0 {
+		return int64(fallbackAuthorID), true
+	}
+	return 0, false
+}
+
 func (h *Handler) Publish(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectID")
 	versionID := chi.URLParam(r, "versionID")
@@ -985,10 +1009,16 @@ func (h *Handler) Publish(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Verify version exists and is not 'base'
+	//
+	// `author_id` rides along for the attribution the published row carries.
+	// It is the FALLBACK, not the answer: the person who publishes an agent
+	// need not be the person who wrote the draft, so the acting principal wins
+	// where there is one (publishActorID below).
 	var appID int
 	var vName, vStatus, agentType string
+	var vAuthorID int
 	err := h.pool.QueryRow(ctx, fmt.Sprintf(
-		`SELECT application_id, name, status, COALESCE(agent_type, '') FROM %s.application_versions WHERE id = $1`, s), versionID).Scan(&appID, &vName, &vStatus, &agentType)
+		`SELECT application_id, name, status, COALESCE(agent_type, ''), COALESCE(author_id, 0) FROM %s.application_versions WHERE id = $1`, s), versionID).Scan(&appID, &vName, &vStatus, &agentType, &vAuthorID)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": "version not found"})
 		return
@@ -1100,11 +1130,34 @@ func (h *Handler) Publish(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Clone: insert a new version with status 'published' using same application_id
+	//
+	// The overlay is MARSHALLED rather than formatted. It used to be built with
+	// fmt.Sprintf, which put a caller-supplied category straight inside a JSON
+	// string literal; the category is whitelisted above, so nothing could reach
+	// it, but a second key added later would not have been.
+	//
+	// `published_by` is the key the operator's published-agents dashboard reads
+	// (admin_published_agents.go). The SKILL publish path has always written it
+	// (internal/api/v2/skillpublish/publish.go); this path wrote only
+	// `source_version_id` and `category`, so the dashboard's "published by"
+	// column was null for every agent on every deployment, permanently, and an
+	// operator could not tell an unattributed publish from an unmeasured one.
+	// It rides into the catalogue twin as well, because the twin copies this
+	// row's meta (catalog_mirror.go).
 	var cloneID int
-	metaOverlay := fmt.Sprintf(`{"source_version_id": "%s"}`, versionID)
-	if body.Category != "" {
-		metaOverlay = fmt.Sprintf(`{"source_version_id": "%s", "category": "%s"}`, versionID, body.Category)
+	overlay := map[string]any{"source_version_id": versionID}
+	if publishedBy, ok := publishActorID(ctx, vAuthorID); ok {
+		overlay["published_by"] = publishedBy
 	}
+	if body.Category != "" {
+		overlay["category"] = body.Category
+	}
+	metaOverlayJSON, overlayErr := json.Marshal(overlay)
+	if overlayErr != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to publish agent"})
+		return
+	}
+	metaOverlay := string(metaOverlayJSON)
 	cloneQ := fmt.Sprintf(`
 		INSERT INTO %s.application_versions
 			(application_id, name, status, author_id, llm_settings, instructions,
@@ -1223,11 +1276,18 @@ func (h *Handler) Publish(w http.ResponseWriter, r *http.Request) {
 	// The catalogue keys are OMITTED when there is no twin — that is, when the
 	// author already stands in the public project and the clone above IS the
 	// catalogue row. A zero would read as "the catalogue has row 0".
+	// `source_version_id` names the DRAFT this publish was made from, and it
+	// agrees with the key of the same name in the published row's own stored
+	// meta (the overlay above). It used to repeat `public_version_id` — the id
+	// of the row this request had just created — so a client following the
+	// response back to the version the author keeps editing arrived at the
+	// published copy instead, and the two answers to "where did this come
+	// from?" disagreed inside one response.
 	response := map[string]any{
 		"public_agent_id":   strconv.Itoa(appID),
 		"public_version_id": strconv.Itoa(cloneID),
 		"version_name":      body.VersionName,
-		"source_version_id": strconv.Itoa(cloneID),
+		"source_version_id": versionID,
 	}
 	if twin.VersionID != 0 {
 		response["catalog_agent_id"] = strconv.Itoa(twin.ApplicationID)
