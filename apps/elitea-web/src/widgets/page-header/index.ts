@@ -12,3 +12,12 @@
  */
 export { PageHeader } from './ui/PageHeader';
 export type { PageHeaderProps, PageHeaderSlots, PageHeaderTab, PageHeaderTabsConfig } from './ui/PageHeader';
+
+/** The header's search box and the `query` search param it owns (`ui/ListSearchField.tsx`). */
+export { ListSearchField, useListSearchQuery } from './ui/ListSearchField';
+export type { ListSearchFieldProps } from './ui/ListSearchField';
+
+/** The header's table/card switch (`ui/ListViewToggle.tsx`). */
+export { ListViewToggle } from './ui/ListViewToggle';
+export type { ListViewToggleProps } from './ui/ListViewToggle';
+export { readPersistedListView, writePersistedListView } from './lib/listViewPersistence';

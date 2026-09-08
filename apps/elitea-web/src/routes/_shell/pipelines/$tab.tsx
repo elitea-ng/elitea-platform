@@ -13,7 +13,7 @@ import { RouteError, RoutePending } from '../../-ui/RouteStatus';
 import { pickParams } from '../../-search/params';
 
 export const Route = createFileRoute('/_shell/pipelines/$tab')({
-  validateSearch: pickParams('isFromCreation', 'sort_by', 'sort_order', 'view'),
+  validateSearch: pickParams('isFromCreation', 'query', 'sort_by', 'sort_order', 'view'),
   pendingComponent: RoutePending,
   errorComponent: RouteError,
   component: PipelinesRoute,

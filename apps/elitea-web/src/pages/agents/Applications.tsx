@@ -8,7 +8,7 @@ import { useNavigate, useParams } from '@tanstack/react-router';
 import { EntityImportButton, useEntityImport } from '@/features/agent-lifecycle';
 import { t } from '@/shared/i18n';
 import { EntityListRail } from '@/shared/ui/EntityRail';
-import { PageHeader } from '@/widgets/page-header';
+import { ListSearchField, ListViewToggle, PageHeader } from '@/widgets/page-header';
 import { useSidebarCollapsedStore } from '@/widgets/sidebar';
 
 import { isPublicAgentsProject } from './lib/isPublicAgentsProject';
@@ -54,14 +54,24 @@ interface AgentsRouteParams {
  *    would be both a broken import and, even once it lands, this page
  *    would need updating anyway to pass the real props, so nothing is
  *    faked here in the meantime.
- *  - `ToolbarImportButton` (`@/[fsd]/entities/import-wizard/ui`) and
- *    `ViewToggle` (`@/components/ViewToggle`) have no confirmed port
- *    anywhere in `shared/ui`/`widgets` (grepped both trees for both names —
- *    zero hits) and are out of this unit's ownership fence to add.
+ *  - `ToolbarImportButton` (`@/[fsd]/entities/import-wizard/ui`) is mounted
+ *    now, as `EntityImportButton` in the header's `actions` slot.
  *  - `DateRangeSelect`/`useTrendRange` (baseline's Trending-tab-only date
  *    picker) — see `Trending.tsx`'s own doc comment: the backing
  *    `trend_start_period` filter has no server-side support at all, so
  *    there is nothing for a working date picker to control.
+ *
+ * **Search and the view switch are real now.** `ViewToggle`
+ * (`@/components/ViewToggle` in the baseline) and the rail's search box
+ * (`components/RightPanel.jsx:67-86`) were both disclosed here as having no
+ * port. They are `widgets/page-header`'s `ListViewToggle` and
+ * `ListSearchField`, mounted in this header's own `viewToggle`/`search`
+ * slots. The search text is the route's `query` param and reaches the
+ * selected tab from there; the applications list endpoint reads the same
+ * name server-side (`ListApplicationsParams.query`), so the filter is not
+ * limited to the first fetched page. The view choice is the `view` param
+ * `shared/ui/EntityCardList` already obeyed, additionally remembered per page
+ * in `localStorage`.
  *
  * **The rail and its tag filter are both real (issue 841).** The "Tags"
  * panel lists this project's real tags and writes the selection into the
@@ -98,6 +108,13 @@ export function Applications(): ReactNode {
     void navigate({ to: '/agents/$tab', params: { tab: firstTab.value }, replace: true });
   }, [selectedIndex, visibleTabs, navigate]);
 
+  /**
+   * The tabs whose body is a real list. `MyLiked`/`Trending` are disclosed
+   * empty states (their own module comments record the absent server filters),
+   * so the header's search box and view switch have nothing to act on there.
+   */
+  const searchableTab = params.tab !== 'my-liked' && params.tab !== 'trending';
+
   const handleChangeTab = (_event: SyntheticEvent, nextIndex: number): void => {
     const nextTab = visibleTabs[nextIndex];
     if (nextTab === undefined) return;
@@ -126,6 +143,29 @@ export function Applications(): ReactNode {
          * are read-only catalogues, matching the create button's own rule.
          */
         slots={{
+          /*
+           * The search box and the table/card switch, both restored from the
+           * reference (`pages/agents/…Applications.jsx`/`Pipelines.jsx` mount
+           * `ViewToggle` in the header's middle slot; `components/
+           * RightPanel.jsx` mounts the search box in the rail). Both were
+           * disclosed as unported by this file's own module comment.
+           *
+           * Rendered only for the tabs that HAVE a list — `MyLiked` and
+           * `Trending` render a "not available yet" notice with no rows, so a
+           * search box and a view switch over them would be two controls that
+           * change nothing.
+           */
+          ...(searchableTab
+            ? {
+                search: <ListSearchField data-testid="agent-search-input" />,
+                viewToggle: (
+                  <ListViewToggle
+                    pageKey="agents"
+                    testIdPrefix="agent"
+                  />
+                ),
+              }
+            : {}),
           actions: isPublicProject ? undefined : (
             <EntityImportButton
               testIdPrefix="agents"

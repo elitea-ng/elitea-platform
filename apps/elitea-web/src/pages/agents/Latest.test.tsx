@@ -52,25 +52,24 @@ describe('Latest', () => {
     expect(screen.getByText('Agent Two')).toBeInTheDocument();
   });
 
-  it('filters rows client-side by the search box', async () => {
+  /*
+   * The search box moved to the page HEADER (`widgets/page-header`'s
+   * `ListSearchField`, mounted by `Applications.tsx`/`Pipelines.tsx`), so this
+   * tab body no longer renders one. Its contract is now "read the route's
+   * `query` param", which is what these tests drive. The typing interaction
+   * itself is covered by `widgets/page-header/ui/ListSearchField.test.tsx`.
+   */
+  it('filters rows client-side by the header search box\'s `query` param', async () => {
     server.use(getListPublicApplicationsMockHandler(apps(['Agent One', 'Other Agent'])));
-    const user = userEvent.setup();
-    renderAgentsRoute(<Latest />);
+    renderAgentsRoute(<Latest />, '/agents/latest?query=One');
 
-    await screen.findByText('Agent One');
-    await user.type(screen.getByPlaceholderText('Search'), 'One');
-
+    expect(await screen.findByText('Agent One')).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByText('Other Agent')).not.toBeInTheDocument());
-    expect(screen.getByText('Agent One')).toBeInTheDocument();
   });
 
   it('shows the "found nothing" empty state when a search matches no rows', async () => {
     server.use(getListPublicApplicationsMockHandler(apps(['Agent One'])));
-    const user = userEvent.setup();
-    renderAgentsRoute(<Latest />);
-
-    await screen.findByText('Agent One');
-    await user.type(screen.getByPlaceholderText('Search'), 'zzz');
+    renderAgentsRoute(<Latest />, '/agents/latest?query=zzz');
 
     expect(await screen.findByText('No agents found.')).toBeInTheDocument();
   });

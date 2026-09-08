@@ -18,21 +18,13 @@
  *    — the toolkit grid and its attach/detach round trip are J17's
  *    (`e2e/journeys/toolkits/`), driven through the real toolkit routes.
  *
- * And three legacy use cases have NO port target in this app, which is a
- * disclosed product gap rather than a missing test — `pages/agents/
- * Applications.tsx`'s own module comment records both:
- *
- *  - `test_agents_dashboard_loads` (the list's search box),
- *    `test_agent_search`, `test_agent_search_no_results` — the agents list
- *    carries no search control. The baseline's `StatusFilterSelect` and the
- *    search field beside it were never ported.
- *  - `test_view_toggle_table_and_card` — `ViewToggle` (`@/components/
- *    ViewToggle` in the baseline) has no port anywhere in `shared/ui` or
- *    `widgets`, so there is no table view to switch to.
- *
- * A journey for any of those would have to assert on a control that does not
- * exist, which is the `if (await x.isVisible())` shape this suite exists to
- * refuse.
+ *  - `test_agents_dashboard_loads`, `test_agent_search`,
+ *    `test_agent_search_no_results` and `test_view_toggle_table_and_card` —
+ *    all four are `agents.list.spec.ts` (J14e). This file used to record them
+ *    as product gaps: the list carried no search control and `ViewToggle` had
+ *    no port. Both are real now (`widgets/page-header`'s `ListSearchField` and
+ *    `ListViewToggle`, mounted by `pages/agents/Applications.tsx`), so the use
+ *    cases are journeys rather than disclosures.
  */
 import { test, expect } from '@playwright/test';
 

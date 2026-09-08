@@ -4015,5 +4015,9 @@
   "routes.settings.notifications.toastRead": "Notifications marked as read",
   "routes.settings.notifications.toastUnread": "Notifications marked as unread",
   "entities.projectContext.content.copyTitle": "Copy to clipboard",
-  "analytics.tools.notRecorded": "This deployment did not record tool calls for the selected period."
+  "analytics.tools.notRecorded": "This deployment did not record tool calls for the selected period.",
+  "widgets.pageHeader.search.placeholder": "Search",
+  "widgets.pageHeader.viewToggle.cards": "Card list view",
+  "widgets.pageHeader.viewToggle.label": "List view",
+  "widgets.pageHeader.viewToggle.table": "Table view"
 }

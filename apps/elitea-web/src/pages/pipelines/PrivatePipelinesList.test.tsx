@@ -69,26 +69,33 @@ describe('PrivatePipelinesList', () => {
     expect(await screen.findByText('No pipelines yet')).toBeInTheDocument();
   });
 
-  it('filters client-side by the search box', async () => {
+  /*
+   * The search box moved to the page HEADER (`widgets/page-header`'s
+   * `ListSearchField`, mounted by `Pipelines.tsx`), so this tab body no longer
+   * renders one. Its contract is now "read the route's `query` param".
+   */
+  it('narrows the list by the header search box\'s `query` param, and sends it to the server', async () => {
+    const seenQueryValues: (string | null)[] = [];
     server.use(
-      getListApplicationsMockHandler(
-        applications([
+      getListApplicationsMockHandler((info) => {
+        seenQueryValues.push(new URL(info.request.url).searchParams.get('query'));
+        return applications([
           { id: '1', name: 'Alpha Pipeline', status: 'draft' },
           { id: '2', name: 'Beta Pipeline', status: 'draft' },
-        ]),
-      ),
+        ]);
+      }),
     );
-    const user = userEvent.setup();
     renderPipelinesRoute(
       <PrivatePipelinesList cardContentType="all" />,
-      '/pipelines/all',
+      '/pipelines/all?query=Alpha',
       { projectId: 'proj-1' },
     );
 
-    await screen.findByText('Alpha Pipeline');
-    await user.type(screen.getByPlaceholderText('Search'), 'Alpha');
-
+    expect(await screen.findByText('Alpha Pipeline')).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByText('Beta Pipeline')).not.toBeInTheDocument());
+    // The list is capped at the handler's first page, so the filter has to
+    // reach the SERVER; a client-only filter would narrow one page.
+    await waitFor(() => expect(seenQueryValues).toContain('Alpha'));
   });
 
   it('navigates to the pipeline detail route when a row is clicked, using the current :tab param', async () => {

@@ -8,7 +8,7 @@ import { useNavigate, useParams } from '@tanstack/react-router';
 import { EntityImportButton, useEntityImport } from '@/features/agent-lifecycle';
 import { t } from '@/shared/i18n';
 import { EntityListRail } from '@/shared/ui/EntityRail';
-import { PageHeader } from '@/widgets/page-header';
+import { ListSearchField, ListViewToggle, PageHeader } from '@/widgets/page-header';
 import { useSidebarCollapsedStore } from '@/widgets/sidebar';
 
 import { isPublicPipelinesProject } from './lib/isPublicPipelinesProject';
@@ -57,10 +57,13 @@ interface PipelinesRouteParams {
  *    confirmed port in this unit's ownership fence; `BaseTabs` already
  *    provides equivalent tab selection via click, so this page does not
  *    duplicate it.
- *  - `ToolbarImportButton` (`@/[fsd]/entities/import-wizard/ui`) and
- *    `ViewToggle` (`@/components/ViewToggle`) have no confirmed port
- *    anywhere in `shared/ui`/`widgets` (grepped both trees for both names —
- *    zero hits), same gap `pages/agents/Applications.tsx` documents.
+ *  - `ToolbarImportButton` (`@/[fsd]/entities/import-wizard/ui`) is mounted
+ *    now, as `EntityImportButton` in the header's `actions` slot.
+ *
+ * **Search and the view switch are real now** — `widgets/page-header`'s
+ * `ListSearchField` and `ListViewToggle`, in this header's own slots. See
+ * `pages/agents/Applications.tsx`'s module comment for the full contract;
+ * this page mounts the identical pair against `pageKey="pipelines"`.
  *  - `DateRangeSelect`/`useTrendRange` — see `Trending.tsx`'s own doc
  *    comment: the backing `trend_start_period` filter has no server-side
  *    support at all, so there is nothing for a working date picker to
@@ -101,6 +104,13 @@ export function Pipelines(): ReactNode {
     void navigate({ to: '/pipelines/$tab', params: { tab: firstTab.value }, replace: true });
   }, [selectedIndex, visibleTabs, navigate]);
 
+  /**
+   * The tabs whose body is a real list. `MyLiked`/`Trending` are disclosed
+   * empty states (their own module comments record the absent server filters),
+   * so the header's search box and view switch have nothing to act on there.
+   */
+  const searchableTab = params.tab !== 'my-liked' && params.tab !== 'trending';
+
   const handleChangeTab = (_event: SyntheticEvent, nextIndex: number): void => {
     const nextTab = visibleTabs[nextIndex];
     if (nextTab === undefined) return;
@@ -130,6 +140,29 @@ export function Pipelines(): ReactNode {
          * are read-only catalogues, matching the create button's own rule.
          */
         slots={{
+          /*
+           * The search box and the table/card switch, both restored from the
+           * reference (`pages/pipelines/…Applications.jsx`/`Pipelines.jsx` mount
+           * `ViewToggle` in the header's middle slot; `components/
+           * RightPanel.jsx` mounts the search box in the rail). Both were
+           * disclosed as unported by this file's own module comment.
+           *
+           * Rendered only for the tabs that HAVE a list — `MyLiked` and
+           * `Trending` render a "not available yet" notice with no rows, so a
+           * search box and a view switch over them would be two controls that
+           * change nothing.
+           */
+          ...(searchableTab
+            ? {
+                search: <ListSearchField data-testid="pipeline-search-input" />,
+                viewToggle: (
+                  <ListViewToggle
+                    pageKey="pipelines"
+                    testIdPrefix="pipeline"
+                  />
+                ),
+              }
+            : {}),
           actions: isPublicProject ? undefined : (
             <EntityImportButton
               testIdPrefix="pipelines"
