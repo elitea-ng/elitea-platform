@@ -518,10 +518,24 @@ export interface CatalogueRow extends Record<string, unknown> {
  * name one agent, and every caller here asks "is this name in it", which a
  * first page cannot answer once the table outgrows it. The route's own default
  * page is what the page renders, so this is the same set a reader sees.
+ *
+ * `category` narrows it to one tab of the Catalog page, which is the only
+ * filter the route offers that a journey can state an expectation about.
  */
-export async function readCatalogue(request: APIRequestContext): Promise<readonly CatalogueRow[]> {
+export async function readCatalogue(
+  request: APIRequestContext,
+  category?: string,
+): Promise<readonly CatalogueRow[]> {
   const url = `${API_BASE}/elitea_core/public_applications/prompt_lib`;
-  const response = await request.get(url);
+  // `category` is the ONE filter the catalogue offers that a journey can name
+  // its own row through, and it is the subject of its own cases: `Other` is a
+  // catch-all that also matches a row carrying no category at all, so "is my
+  // agent in this bucket" is a different question from "is my agent in the
+  // catalogue" and both are asked here.
+  const response = await request.get(
+    url,
+    category === undefined ? {} : { params: { category } },
+  );
   if (!response.ok()) {
     throw new Error(
       `readCatalogue: GET ${url} -> ${response.status()}` +
@@ -579,12 +593,17 @@ export async function createAgentWithVersion(
   name: string,
   version: AgentVersionInput,
   projectId: string = DEFAULT_PROJECT_ID,
+  description?: string,
 ): Promise<CreatedAgent> {
   const path = `/elitea_core/applications/prompt_lib/${projectId}`;
   const response = await request.post(`${API_BASE}${path}`, {
     data: {
       name,
-      description: `${AUTOTEST_PREFIX}version contract fixture`,
+      // The DESCRIPTION is a parameter because the pre-publish check reads it:
+      // a description under 20 characters raises a warning attributed to the
+      // agent it belongs to, and a fixture that always sent a long one could
+      // not build the sub-agent a quality journey needs to be warned about.
+      description: description ?? `${AUTOTEST_PREFIX}version contract fixture`,
       type: 'agent',
       versions: [agentVersionBody({ name: 'base', agentType: 'openai', ...version })],
     },
@@ -1944,22 +1963,30 @@ export interface GithubToolkitFixture {
 const GITHUB_PLACEHOLDER_BASE_URL = 'https://autotest.invalid/api';
 
 /**
- * @param accessToken when given, the credential also carries a SEALED
- * `access_token`. The type declares it hidden, so the create seals it into the
- * project vault and stores a `{{secret.…}}` reference — which is what the
- * expanded version read has to resolve back for the runtime. Omitted by
- * default, because every other caller only needs the credential to exist and a
- * secret it does not use is a secret it would have to clean up.
+ * A token-shaped value to store on the credential the toolkit points at.
+ *
+ * It exists for the two journeys whose subject IS the sealing: the export
+ * journey, which asserts that a sealed value never reaches the export
+ * document, and the expanded-version journey, which asserts that the runtime
+ * read resolves it back. Every other caller leaves it off and gets the
+ * base-URL-only row this fixture has always made. The value is a fixture
+ * string, never a real token — the credential
+ * write seals it into the project vault and stores a `{{secret.<uuid>}}`
+ * reference in its place, so the plain value exists nowhere the API can serve
+ * it back.
  */
+export interface GithubToolkitOptions {
+  /** Extra `data` keys for the credential row, merged over the base URL. */
+  readonly credentialData?: Readonly<Record<string, unknown>>;
+}
+
 export async function createGithubToolkit(
   request: APIRequestContext,
   projectId: string,
   toolkitName: string,
-  accessToken?: string,
+  options: GithubToolkitOptions = {},
 ): Promise<GithubToolkitFixture> {
   const credentialTitle = `${toolkitName}_cred`;
-  const credentialData: Record<string, unknown> = { base_url: GITHUB_PLACEHOLDER_BASE_URL };
-  if (accessToken !== undefined) credentialData['access_token'] = accessToken;
   const credential = await request.post(
     `${BASE_URL}/api/v2/configurations/configurations/${projectId}`,
     {
@@ -1968,7 +1995,7 @@ export async function createGithubToolkit(
         elitea_title: credentialTitle,
         label: credentialTitle,
         shared: false,
-        data: credentialData,
+        data: { base_url: GITHUB_PLACEHOLDER_BASE_URL, ...options.credentialData },
       },
     },
   );

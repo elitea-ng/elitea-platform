@@ -71,6 +71,7 @@ type importLinkResponse struct {
 		Toolkits []struct {
 			ID   string `json:"id"`
 			Name string `json:"name"`
+			Type string `json:"type"`
 		} `json:"toolkits"`
 	} `json:"result"`
 	Errors struct {
@@ -91,6 +92,11 @@ type importLinkVerD struct {
 	ID    string `json:"id"`
 	Tools []struct {
 		ID string `json:"id"`
+		// The two keys the answer used to fill with a literal `"custom"` and a
+		// literal `""`. They are decoded here so the case below can read what
+		// the import says the version now carries.
+		Name string `json:"name"`
+		Type string `json:"type"`
 	} `json:"tools"`
 }
 
@@ -224,6 +230,95 @@ CROSS JOIN p_1.elitea_tools t`).Scan(&applicationOwner, &versionAuthor, &toolkit
 	}
 	if applicationOwner == importLinkPrincipal {
 		t.Error("applications.owner_id holds the caller; the fixture picks a principal that is not project 1 precisely so this is visible")
+	}
+}
+
+// TestImportNamesTheLinkedToolkit is the acceptance test for the import answer
+// that could not say WHICH toolkit it had attached.
+//
+// The link phase wrote `{"id": <row>, "type": "custom", "name": ""}` into the
+// version's tool summary, whatever the toolkit was. `result.toolkits` — built
+// one phase earlier from the same two values — named it correctly, so one
+// response carried both the true name and a placeholder for it, and the wizard
+// shows the version summary. An import of a `github` toolkit reported an
+// unnamed `custom` one on the agent it had just attached it to.
+//
+// Both channels are read, and they are compared with each other: an answer
+// that named the toolkit in only one of them is the defect itself.
+func TestImportNamesTheLinkedToolkit(t *testing.T) {
+	pool := newImportLinkPool(t)
+	router := importLinkRouter(eliteacore.NewHandler(pool))
+
+	recorder := importLinkDo(t, router, importLinkBody([]map[string]any{importLinkToolRef()}, "latest"))
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("import status = %d, want %d, body = %s", recorder.Code, http.StatusCreated, recorder.Body.String())
+	}
+	answer := decodeImportLink(t, recorder)
+	if len(answer.Result.Toolkits) != 1 {
+		t.Fatalf("result.toolkits = %+v, want the imported toolkit", answer.Result.Toolkits)
+	}
+	imported := answer.Result.Toolkits[0]
+	details := answer.Result.Agents[0].VersionDetails
+	if details == nil || len(details.Tools) != 1 {
+		t.Fatalf("version_details.tools = %+v, want the one link that was written", details)
+	}
+	attached := details.Tools[0]
+	if attached.Name != "fixture toolkit" {
+		t.Errorf("version_details.tools[0].name = %q, want the toolkit's own name %q",
+			attached.Name, "fixture toolkit")
+	}
+	if attached.Type != "github" {
+		t.Errorf("version_details.tools[0].type = %q, want the toolkit's own type %q", attached.Type, "github")
+	}
+	if attached.Name != imported.Name || attached.Type != imported.Type || attached.ID != imported.ID {
+		t.Errorf("version_details.tools[0] = %+v, want the same toolkit result.toolkits reports (%+v)",
+			attached, imported)
+	}
+
+	// The stored row is the authority on both values, so a summary built from
+	// anything else — the request, a default — is visible here.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var storedName, storedType string
+	if err := pool.QueryRow(ctx, `
+SELECT t.name, t.type FROM p_1.elitea_tools t
+JOIN p_1.entity_tool_mapping m ON m.tool_id = t.id`).Scan(&storedName, &storedType); err != nil {
+		t.Fatalf("read the linked toolkit row: %v", err)
+	}
+	if attached.Name != storedName || attached.Type != storedType {
+		t.Errorf("version_details.tools[0] = {name %q, type %q}, want the stored row {%q, %q}",
+			attached.Name, attached.Type, storedName, storedType)
+	}
+}
+
+// TestImportNamesAToolkitWithNoDeclaredType guards the other half of the same
+// answer. `custom` is a real value here: it is what phase 2 STORES for an entry
+// that declares no type. The summary must report that stored default, and it
+// must report the entry's name beside it — which is what tells this case apart
+// from the literal it replaces.
+func TestImportNamesAToolkitWithNoDeclaredType(t *testing.T) {
+	pool := newImportLinkPool(t)
+	router := importLinkRouter(eliteacore.NewHandler(pool))
+
+	body := importLinkBody([]map[string]any{importLinkToolRef()}, "latest")
+	delete(body[0], "type")
+	body[0]["name"] = "untyped fixture toolkit"
+
+	recorder := importLinkDo(t, router, body)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("import status = %d, want %d, body = %s", recorder.Code, http.StatusCreated, recorder.Body.String())
+	}
+	answer := decodeImportLink(t, recorder)
+	details := answer.Result.Agents[0].VersionDetails
+	if details == nil || len(details.Tools) != 1 {
+		t.Fatalf("version_details.tools = %+v, want the one link that was written", details)
+	}
+	attached := details.Tools[0]
+	if attached.Type != "custom" {
+		t.Errorf("version_details.tools[0].type = %q, want the stored default %q", attached.Type, "custom")
+	}
+	if attached.Name != "untyped fixture toolkit" {
+		t.Errorf("version_details.tools[0].name = %q, want the entry's own name", attached.Name)
 	}
 }
 

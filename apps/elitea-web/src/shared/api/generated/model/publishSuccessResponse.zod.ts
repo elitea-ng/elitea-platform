@@ -49,10 +49,12 @@ export const PublishSuccessResponse = zod
     source_version_id: zod
       .string()
       .describe(
-        "NOTE(W2) quirk preserved bug-for-bug — set to the CLONE id, not the source (handler.go:637).\n",
+        "The DRAFT this publish was made from — the same id the published row's own `meta.source_version_id` carries, so the two answers to \"where did this come from?\" agree inside one response. It used to repeat `public_version_id`, the row the request had just created, and a client following it back to the author's editable version arrived at the published copy.\n",
       ),
   })
-  .describe("NOTE(W2): internal\/api\/v2\/eliteacore\/handler.go:633-638.\n");
+  .describe(
+    "NOTE(W2): internal\/api\/v2\/eliteacore\/handler.go, Handler.Publish.\n",
+  );
 
 export type PublishSuccessResponse = zod.input<typeof PublishSuccessResponse>;
 export type PublishSuccessResponseOutput = zod.output<

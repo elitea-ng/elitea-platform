@@ -112,7 +112,9 @@ test('the expanded read resolves a toolkit credential in full, where the editor 
   let toolkit: Awaited<ReturnType<typeof createGithubToolkit>> | undefined;
 
   try {
-    toolkit = await createGithubToolkit(request, DEFAULT_PROJECT_ID, name, accessToken);
+    toolkit = await createGithubToolkit(request, DEFAULT_PROJECT_ID, name, {
+      credentialData: { access_token: accessToken },
+    });
 
     // Attach the toolkit to the version, which is what puts the credential
     // reference on the row the two reads then project differently.
