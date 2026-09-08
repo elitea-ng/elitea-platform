@@ -37,6 +37,21 @@ type Conversation struct {
 	CreatedBy    string    `json:"created_by"`
 	MessageCount int       `json:"message_count"`
 	FolderID     *string   `json:"folder_id,omitempty"`
+	// The conversation's own settings document (`chat_conversations.meta`).
+	//
+	// Pylon's PUT accepted it and its GET returned it
+	// (legacy/plugins/elitea_core/api/v2/conversation.py:123), and the web
+	// client is written against that contract on both sides: the chat page
+	// reads `detailsQuery.data.meta` (apps/elitea-web/src/pages/chat/
+	// useChatPageData.ts:142) and the composer's Modules switch PUTs
+	// `meta.internal_tools` (widgets/chat-box/ui/hooks/
+	// useChatBoxInternalTools.ts:59-62). This server read neither, so every
+	// module a user switched on answered 200 and stored nothing.
+	//
+	// A nil map is "the caller states no meta" — Update writes the column
+	// only when the body carried the key, so a rename cannot silently blank
+	// a conversation's settings.
+	Meta map[string]any `json:"meta,omitempty"`
 }
 
 type Message struct {
@@ -475,6 +490,11 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 		// entirely before #128, so a client could not tell which folder a
 		// conversation belonged to from its own details response.
 		"folder_id": conv.FolderID,
+		// Always an object, never absent: the client reads
+		// `meta.internal_tools` off this response to decide which module
+		// switches are on, and an absent key is indistinguishable there from
+		// a conversation whose modules are all off.
+		"meta": metaOrEmpty(conv.Meta),
 	}
 
 	// UI passes messages_limit to embed message_groups in the conversation response
@@ -503,6 +523,13 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	var conv Conversation
 	if name, ok := body["name"].(string); ok {
 		conv.Name = name
+	}
+	// The create path carries settings too: the composer sends
+	// `meta.steps_limit` with the very first send (apps/elitea-web/src/
+	// widgets/chat-box/ui/hooks/useChatBoxSend.ts:310-313), and pylon stored
+	// it (legacy/plugins/elitea_core/api/v2/conversations.py:153-164).
+	if meta, ok := body["meta"].(map[string]any); ok {
+		conv.Meta = meta
 	}
 	if authorID, ok := body["author_id"]; ok {
 		conv.CreatedBy = fmt.Sprintf("%v", authorID)
@@ -543,6 +570,12 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 			fid := fmt.Sprintf("%v", folderID)
 			conv.FolderID = &fid
 		}
+	}
+	// Present-and-an-object only. `"meta": null` and a body with no `meta`
+	// key both leave the stored document alone, so the rename path (which
+	// sends `name` alone) cannot erase the conversation's settings.
+	if meta, ok := body["meta"].(map[string]any); ok {
+		conv.Meta = meta
 	}
 
 	updated, err := h.repo.Update(r.Context(), projectID, conversationID, conv)
@@ -1453,6 +1486,18 @@ func writeContextFieldError(w http.ResponseWriter, fieldErr *contextsettings.Fie
 		Error string `json:"error"`
 		Field string `json:"field"`
 	}{Error: fieldErr.Message, Field: fieldErr.Field})
+}
+
+// metaOrEmpty keeps a details response's `meta` an object even for a
+// conversation that has none. `null` there would reach the web client as
+// `undefined`, and its own reader (`useChatPageData.ts`) only forwards the key
+// when it is present — so the composer would fall back to "no modules" for a
+// conversation it could not read rather than for one that has none.
+func metaOrEmpty(meta map[string]any) map[string]any {
+	if meta == nil {
+		return map[string]any{}
+	}
+	return meta
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
