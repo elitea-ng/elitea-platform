@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -95,30 +96,44 @@ func TestCreateEchoesTheStoredLabel(t *testing.T) {
 	}
 }
 
-// TestCreateWithoutALabelOmitsTheKey pins the other side of `omitempty`.
+// TestCreateWithoutALabelIsRefused pins the other side of `omitempty`.
 //
-// A row with no label must not answer `"label": ""`. The column is nullable
-// and the read routes distinguish the two, so the create's echo has to as
-// well — otherwise a client cannot tell "not set" from "set to nothing".
-func TestCreateWithoutALabelOmitsTheKey(t *testing.T) {
+// A row with no label used to be created and to answer no `label` key, so a
+// client could not tell "not set" from "set to nothing". That row can no
+// longer exist: `label` is required by every type's own schema, and the create
+// refuses a body that omits it (required_fields.go). The distinction the
+// assertion below used to draw is therefore settled at the door instead, which
+// is the only place it can be settled without inventing a value.
+//
+// The refusal is asserted THROUGH THE DATABASE — the project holds no row
+// afterwards — because a 400 that still wrote is the failure this pair of
+// tests exists to tell apart.
+func TestCreateWithoutALabelIsRefused(t *testing.T) {
 	pool := newCreateEchoPool(t)
 	router := createEchoRouter(pool)
 
+	const title = "autotest_no_label_cfg"
 	created := createEchoDo(t, router, map[string]any{
-		"elitea_title": "autotest_no_label_cfg",
+		"elitea_title": title,
 		"type":         "pgvector",
 		"section":      "vectorstorage",
 		"data":         map[string]any{"host": "127.0.0.1"},
 	})
-	if created.Code != http.StatusCreated {
+	if created.Code != http.StatusBadRequest {
 		t.Fatalf("create status = %d, body = %s", created.Code, created.Body.String())
 	}
-	var echo map[string]any
-	if err := json.Unmarshal(created.Body.Bytes(), &echo); err != nil {
-		t.Fatalf("decode create response %q: %v", created.Body.String(), err)
+	if !strings.Contains(created.Body.String(), "label") {
+		t.Errorf("the refusal must name the missing field: %s", created.Body.String())
 	}
-	if raw, present := echo["label"]; present {
-		t.Errorf("a row with no label answered label = %#v", raw)
+
+	var rows int
+	if err := pool.QueryRow(context.Background(),
+		fmt.Sprintf("SELECT count(*) FROM p_%d.configuration WHERE elitea_title = $1", globalScopeProject),
+		title).Scan(&rows); err != nil {
+		t.Fatalf("count the rows the refusal must not have written: %v", err)
+	}
+	if rows != 0 {
+		t.Errorf("a refused create wrote %d row(s)", rows)
 	}
 }
 

@@ -12,26 +12,26 @@
  * hermetic stack.
  *
  * ─────────────────────────────────────────────────────────────────────────────
- * WHY NO 401 STUB, AND WHY THAT COSTS THIS JOURNEY NOTHING
+ * WHY THE VERDICT IS READ OFF THE WIRE AND NOT WRITTEN DOWN HERE
  * ─────────────────────────────────────────────────────────────────────────────
- * The obvious way to make the check REFUSE would be to point
- * `ELITEA_TOOLKIT_CHECK_ALLOWLIST` at a service inside the stack that answers
- * 401. It does not work here, and the reason is upstream of the allowlist: the
- * picker checks a SAVED row, so the request goes to
+ * The picker checks a SAVED row, so the request goes to
  * `POST /configurations/check_stored_connections/{projectId}`, and
  * `checkStoredToolkitRow` (`services/elitea-main/internal/api/v2/
- * configurations/stored_check.go`) refuses before it dials anything unless a
- * `StoredConfigurationResolver` is composed. That resolver composes only under
- * `ELITEA_CONFIGURATIONS_ENABLED`, which `deploy/docker-compose.e2e-standalone.yml`
- * deliberately does not set (`e2e/fixtures/api.ts`'s `createGithubToolkit`
- * records the same fact for the settings-validation route). A stub would sit
- * there unvisited: the probe in `toolkit_check.go` is never reached, so no
- * allowlist entry can change the answer. Turning the whole Configurations
- * runtime on for this one journey means a vault master key and a public
- * project id on the e2e stack — a stack change with its own failure modes, far
- * outside this journey's subject.
+ * configurations/stored_check.go`) needs a `StoredConfigurationResolver`
+ * before it will dial anything. This stack composes one —
+ * `deploy/docker-compose.e2e-standalone.yml` sets
+ * `ELITEA_CONFIGURATIONS_ENABLED` — so the probe in `toolkit_check.go` really
+ * runs for a github credential.
  *
- * So the verdict is NOT hardcoded here, exactly as `credentials.stored-check.
+ * What it answers here is decided by the egress allowlist rather than by the
+ * token: that compose file points `ELITEA_TOOLKIT_CHECK_ALLOWLIST` at a name
+ * inside the compose network, so a tenant-authored endpoint is refused BEFORE
+ * the dial and the row comes back `reason: "unreachable"` with no socket
+ * opened. That is deliberate — a CI run must not depend on a vendor being up
+ * — and it is still a verdict ABOUT THE CREDENTIAL, which is what this journey
+ * is about.
+ *
+ * The verdict is NOT hardcoded even so, exactly as `credentials.stored-check.
  * spec.ts` does not hardcode its own. Everything below is derived from the
  * SERVER'S OWN ANSWER for this row, captured off the wire:
  *
@@ -44,12 +44,10 @@
  *   - the row on screen must carry THE SERVER'S OWN MESSAGE, not wording the
  *     browser invented for it.
  *
- * On the stack this runs against today that message is the honest
- * "not composed" refusal; on a stack that composes the resolver and gets a 401
- * it is "Authentication failed…". Every line below holds unchanged in both,
- * which is the point: this journey measures the SURFACE — does a credential
- * the platform will not certify reach the user, and does the form act on it —
- * not one deployment's reason string.
+ * A deployment whose allowlist admits the endpoint gets `auth_failed` from the
+ * provider instead, and every line below holds unchanged: this journey
+ * measures the SURFACE — does a credential the platform will not certify reach
+ * the user, and does the form act on it — not one deployment's reason string.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * WHY THE ROW IS FOUND BY NAME AND NOT BY POSITION
@@ -336,14 +334,14 @@ test('a toolkit credential the platform will not certify carries the failure on 
  * it are inverted here rather than deleted: the control must exist, and the
  * gate must act on the SERVER'S OWN verdict.
  *
- * THE GATE IS KEYED ON THE PROBE'S REASON, NOT ON "the check failed". The
- * header comment above explains why this stack answers every stored check
- * with the honest "not composed" refusal: `success: false` and NO `reason`.
- * That is the deployment saying it could not ask, and it must never cost a
- * user their edit — so on THIS stack the correct behaviour is Save ENABLED.
- * On a stack that composes the resolver and gets a 401 the same row comes
- * back `reason: "auth_failed"` and the correct behaviour is Save REFUSED with
- * the reason on screen. Both are asserted below, chosen by what the wire
+ * THE GATE IS KEYED ON THE PROBE'S REASON, NOT ON "the check failed", and the
+ * difference is the whole rule. A verdict ABOUT THE CREDENTIAL —
+ * `auth_failed` or `unreachable` — refuses the save and says why. A refusal
+ * with NO reason is the deployment saying it could not ask, which is a fact
+ * about the deployment and must never cost a user their edit: Save stays
+ * enabled. This stack answers the first kind (the header explains why the
+ * reason is `unreachable` here); a deployment that composes no resolver at all
+ * answers the second. Both are asserted below, chosen by what the wire
  * actually said, exactly as the first test chooses its expected message.
  */
 test('the toolkit form gates Save on the server’s own verdict about the credential', async ({

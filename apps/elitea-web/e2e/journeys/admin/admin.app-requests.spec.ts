@@ -669,17 +669,24 @@ interface ConfigurationSnapshot {
 async function readConfigurations(api: APIRequestContext): Promise<ConfigurationSnapshot> {
   const response = await api.get('/api/v2/configurations/configurations/1?limit=100&offset=0'); // #544: unfiltered ON PURPOSE — the clerical pin must see EVERY row (an entity_id filter would hide the very row a provisioning bug would create); reads are id-intersected below
   expect(response.status(), 'the clerical pin needs a readable configuration list').toBe(200);
+  // `name` and `label` are BOTH nullable on the wire, and which of them is
+  // absent depends on which of the two read implementations is composed: the
+  // compatibility one omits an empty label, the reviewed one serves it as
+  // JSON `null` and does not publish `name` at all. So each is taken only
+  // when it is really a string — a `null` pushed into this list makes the
+  // `.includes()` below throw, and a run that dies in a helper reads as a
+  // broken provisioning assertion.
   const body = (await response.json()) as {
-    items?: { id?: number | string; name?: string; label?: string; status_ok?: boolean }[];
-    shared?: { items?: { id?: number | string; name?: string; label?: string; status_ok?: boolean }[] };
+    items?: { id?: number | string; name?: unknown; label?: unknown; status_ok?: boolean }[];
+    shared?: { items?: { id?: number | string; name?: unknown; label?: unknown; status_ok?: boolean }[] };
   };
   const rows = [...(body.items ?? []), ...(body.shared?.items ?? [])];
   const statusById = new Map<string, boolean>();
   const names: string[] = [];
   for (const row of rows) {
     if (row.id !== undefined) statusById.set(String(row.id), row.status_ok === true);
-    if (row.name !== undefined) names.push(row.name);
-    if (row.label !== undefined) names.push(row.label);
+    if (typeof row.name === 'string') names.push(row.name);
+    if (typeof row.label === 'string') names.push(row.label);
   }
   return { statusById, names };
 }
