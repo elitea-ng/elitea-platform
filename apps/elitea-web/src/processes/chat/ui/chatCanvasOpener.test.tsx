@@ -51,7 +51,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppProviders } from '@/app/providers/AppProviders';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { installTestEventSource } from '@/shared/api/sse/testing';
+import { useEditorStateStore } from '@/shared/lib/editorState';
 import { PERMISSIONS } from '@/shared/lib/permissions';
+import { installCodeMirrorTestPolyfills } from '@/shared/ui/lib/field/codeMirrorTestPolyfills';
 import { server } from '@/test/setup';
 import { useSelectedProjectStore } from '@/widgets/app-shell';
 
@@ -62,6 +64,9 @@ import { ChatWithEditors } from './ChatWithEditors';
 configure({ asyncUtilTimeout: 5_000 });
 vi.setConfig({ testTimeout: 30_000 });
 
+// The editor mounts a real CodeMirror, and jsdom lacks the DOM APIs it needs.
+installCodeMirrorTestPolyfills();
+
 const BASE = '/api/v2';
 const PROJECT = '77';
 const CONVERSATION = 41;
@@ -70,6 +75,8 @@ const CONVERSATION = 41;
 const CANVAS_UUID = 'b2a1f0de-0000-4000-8000-000000000001';
 const CANVAS_NAME = 'Edit code';
 const CANVAS_DOCUMENT = "print('autotest canvas opener')";
+/** The signed-in principal, as both the router context and the roster name it. */
+const VIEWER_ID = 'u1';
 const HEAD_TEXT = 'AUTOTESTHEAD before the block';
 const TAIL_TEXT = 'AUTOTESTTAIL after the block';
 
@@ -159,8 +166,15 @@ function chatHandlers() {
   ];
 }
 
-/** The real `/chat/$conversationId` route, rendering the real composition root. */
-function renderChatRoute(): void {
+/**
+ * The real `/chat/$conversationId` route, rendering the real composition root.
+ *
+ * `context` is the router ROOT context the app itself supplies from its
+ * session store (`App.tsx` passes `sessionAuthContext`). It is a parameter
+ * here because one thing the composition root has to do with it — telling the
+ * canvas editor WHO IS LOOKING — is invisible to any test that leaves it out.
+ */
+function renderChatRoute(context: Record<string, unknown> = {}): void {
   const rootRoute = createRootRoute({ component: (): ReactNode => <Outlet /> });
   const chatRoute = createRoute({ getParentRoute: () => rootRoute, path: '/chat', component: () => <ChatWithEditors /> });
   const conversationRoute = createRoute({
@@ -171,11 +185,30 @@ function renderChatRoute(): void {
   const router = createRouter({
     routeTree: rootRoute.addChildren([chatRoute, conversationRoute]),
     history: createMemoryHistory({ initialEntries: [`/chat/${String(CONVERSATION)}`] }),
+    context,
   });
   render(
     <AppProviders>
       <RouterProvider router={router as never} />
     </AppProviders>,
+  );
+}
+
+/** The roster the server answers this tab's presence beat with. */
+function installPresenceRoster(editors: readonly { user_id: string; user_name: string; state: string }[]): void {
+  server.use(
+    http.post(`${BASE}/elitea_core/canvas/prompt_lib/:projectId/:canvasId/presence`, () =>
+      HttpResponse.json({
+        project_id: PROJECT,
+        entity_id: CANVAS_UUID,
+        entity_type: 'canvas',
+        action: 'editors',
+        canvas_uuid: CANVAS_UUID,
+        message_group_uuid: 'group-answer-1',
+        editors,
+        ttl_seconds: 120,
+      }),
+    ),
   );
 }
 
@@ -195,6 +228,13 @@ beforeEach(() => {
 
 afterEach(() => {
   restoreScrollIntoView?.();
+  /*
+   * `useEditorStateStore` is a module singleton, so a test that leaves the
+   * canvas OPEN hands the next one an editor mutex that already believes an
+   * editor is up — the next click then raises the "another editor is open"
+   * confirm instead of opening anything.
+   */
+  useEditorStateStore.getState().setEditingCanvas(false);
   useSelectedProjectStore.setState({ project: null });
   resetGeneratedClient();
 });
@@ -252,6 +292,86 @@ describe('the chat route: a stored canvas has an opener', () => {
         expect(screen.getByTestId('editing-placeholder')).toBeInTheDocument();
       });
       expect(screen.queryByTestId('canvas-block-content')).not.toBeInTheDocument();
+    } finally {
+      eventSources.restore();
+    }
+  });
+
+  /*
+   * THE EDITOR OPENED BY THIS ROUTE IS EDITABLE.
+   *
+   * The canvas editor goes read-only while somebody ELSE holds the canvas, and
+   * it learns who is on it by announcing itself and reading the roster back —
+   * a roster that therefore always contains this very tab. The composition
+   * root passed no viewer identity, so the editor read its own entry as a
+   * stranger's and mounted read-only: CodeMirror with `aria-readonly`, and
+   * every cell of a table canvas disabled. One user, one tab, no second
+   * editor anywhere, and the canvas could not be typed in.
+   *
+   * Both halves were correct in isolation and both had passing tests — the
+   * editor's own presence suite supplied the identity the app never did — so
+   * the claim can only be made HERE, against the real route.
+   */
+  it('opens an EDITABLE editor: the roster carrying this viewer is not somebody else', async () => {
+    const eventSources = installTestEventSource();
+    try {
+      // The roster the server answers this tab's own beat with: one entry,
+      // this viewer, named the way the SERVER names it (from the principal) —
+      // which is not a string this client holds anywhere.
+      installPresenceRoster([{ user_id: VIEWER_ID, user_name: 'ada@corp.internal', state: 'editing' }]);
+      renderChatRoute({ auth: { getUser: () => ({ id: VIEWER_ID }) } });
+
+      const block = await screen.findByTestId('canvas-block', {}, { timeout: 15_000 });
+      const user = userEvent.setup();
+      await user.click(within(block).getByTestId('canvas-block-open'));
+
+      const drawer = await screen.findByTestId('chat-canvas-editor', {}, { timeout: 15_000 });
+      await waitFor(() => {
+        expect(drawer.textContent ?? '').toContain(CANVAS_DOCUMENT);
+      });
+
+      // Asserted by TYPING, not by an attribute: a read-only CodeMirror keeps
+      // `contenteditable="true"` and refuses the edit in its state.
+      const content = drawer.querySelector('.cm-content');
+      if (!(content instanceof HTMLElement)) throw new Error('the canvas editor mounted no code pane');
+      await user.click(content);
+      await user.keyboard('X');
+      await waitFor(() => {
+        expect(content.textContent ?? '').toContain(`X${CANVAS_DOCUMENT}`);
+      });
+    } finally {
+      eventSources.restore();
+    }
+  });
+
+  /*
+   * The other half of the same wiring, and the one that PINS it. The case
+   * above stays green if the composition root passes no viewer at all — an
+   * editor that cannot identify itself deliberately fails open. Only a roster
+   * held by SOMEBODY ELSE tells the two apart: going read-only for a stranger
+   * is possible only if the app knows which entry would have been its own.
+   */
+  it('opens read-only when the roster is held by somebody else', async () => {
+    const eventSources = installTestEventSource();
+    try {
+      installPresenceRoster([{ user_id: 'u9', user_name: 'grace@corp.internal', state: 'editing' }]);
+      renderChatRoute({ auth: { getUser: () => ({ id: VIEWER_ID }) } });
+
+      const block = await screen.findByTestId('canvas-block', {}, { timeout: 15_000 });
+      const user = userEvent.setup();
+      await user.click(within(block).getByTestId('canvas-block-open'));
+
+      const drawer = await screen.findByTestId('chat-canvas-editor', {}, { timeout: 15_000 });
+      await waitFor(() => {
+        expect(within(drawer).getByTestId('canvas-presence')).toHaveTextContent('grace@corp.internal is editing');
+      });
+
+      const content = drawer.querySelector('.cm-content');
+      if (!(content instanceof HTMLElement)) throw new Error('the canvas editor mounted no code pane');
+      await user.click(content);
+      await user.keyboard('X');
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      expect(content.textContent ?? '').not.toContain(`X${CANVAS_DOCUMENT}`);
     } finally {
       eventSources.restore();
     }

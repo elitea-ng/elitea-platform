@@ -43,6 +43,15 @@
  *     `item_details` at all, and the transcript route aggregates `text_message`
  *     items alone by design. So the moment a canvas was created, its text was
  *     invisible to every reader of that conversation.
+ *  3. The editor OPENED READ-ONLY, for everyone, always. It goes read-only
+ *     while somebody else holds the canvas, and it learns who is on it by
+ *     announcing itself and reading the roster back — a roster that therefore
+ *     always contains this very tab. Nothing told the editor whose entry was
+ *     its own, so one user with one tab read their own presence as a stranger
+ *     holding the canvas: CodeMirror carried `aria-readonly`, and a table
+ *     canvas disabled every cell. Both halves had passing unit tests; only the
+ *     composition root was empty, which is why the journeys below are where it
+ *     surfaced.
  *
  * CREATING a canvas is still an API call in every journey here, and that is a
  * statement about the product, not a shortcut: the gesture that carves one out
@@ -387,10 +396,26 @@ function canvasBlockNamed(page: Page, name: string) {
   return page.getByTestId('canvas-block').filter({ has: page.getByTestId('canvas-block-title').getByText(name, { exact: true }) });
 }
 
-/** Replaces the open code editor's whole document in one insertion — CM6 ignores `fill()`. */
+/**
+ * Replaces the open code editor's whole document in one insertion — CM6 ignores
+ * `fill()`, so the document is driven through the keyboard: select all, delete,
+ * insert.
+ *
+ * The read-only guard first, and it is not decoration. A CodeMirror mounted
+ * read-only keeps `contenteditable="true"` and refuses every edit in its state,
+ * so without this the failure reads as "the text was typed and vanished" and
+ * says nothing about why. CM6 writes `aria-readonly` only when the state is
+ * read-only, which is what a canvas held by SOMEBODY ELSE looks like — and
+ * what this app looked like to the only person in the canvas until the editor
+ * was told who was looking.
+ */
 async function replaceEditorDocument(page: Page, text: string): Promise<void> {
   const content = page.getByTestId('chat-canvas-editor').locator('.cm-content').first();
   await expect(content, 'the canvas editor must offer a code pane').toBeVisible({ timeout: 20_000 });
+  await expect(
+    content,
+    'the canvas opened READ-ONLY for its only reader, so nothing typed into it can land',
+  ).not.toHaveAttribute('aria-readonly', 'true', { timeout: 20_000 });
   await content.click();
   await page.keyboard.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A');
   await page.keyboard.press('Backspace');
@@ -531,12 +556,17 @@ test('a table canvas and a diagram canvas live side by side, and each opens its 
 
     // A cell edit: double click to enter the cell editor, replace it, commit
     // with Enter — the editor's own keyboard contract.
+    //
+    // The cell editor is addressed by its OWN accessible name. Every column
+    // header of this grid is a text box too, and the first text box in the
+    // grid is a header, not a cell — a bare `getByRole('textbox').first()`
+    // renames the column and calls it a cell edit, and while the grid was
+    // read-only it waited five minutes on a disabled header input instead.
     const cell = grid.getByRole('gridcell').filter({ hasText: 'alpha' }).first();
     await expect(cell).toBeVisible({ timeout: 20_000 });
     await cell.dblclick();
-    const cellInput = grid.getByRole('textbox').first();
-    await expect(cellInput, 'a double click must open the cell editor').toBeVisible({ timeout: 10_000 });
-    await cellInput.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A');
+    const cellInput = grid.getByRole('textbox', { name: 'Cell content' }).first();
+    await expect(cellInput, 'a double click must open the cell editor').toBeEditable({ timeout: 10_000 });
     await cellInput.fill(`gamma${token}`);
     await cellInput.press('Enter');
     await expect(grid.getByRole('gridcell').filter({ hasText: `gamma${token}` }).first()).toBeVisible({ timeout: 10_000 });

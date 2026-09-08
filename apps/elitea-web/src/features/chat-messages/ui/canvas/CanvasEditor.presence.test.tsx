@@ -145,7 +145,7 @@ describe('CanvasEditor — presence composition (#622)', () => {
         <CanvasEditor
           selectedCodeBlockInfo={BLOCK}
           projectId="7"
-          userName="ada@example.com"
+          viewer={{ id: '1', name: 'ada@example.com' }}
           onCloseCanvasEditor={vi.fn()}
         />,
       ),
@@ -175,7 +175,7 @@ describe('CanvasEditor — presence composition (#622)', () => {
         <CanvasEditor
           selectedCodeBlockInfo={BLOCK}
           projectId="7"
-          userName="ada@example.com"
+          viewer={{ id: '1', name: 'ada@example.com' }}
           onCloseCanvasEditor={vi.fn()}
         />,
       ),
@@ -187,6 +187,60 @@ describe('CanvasEditor — presence composition (#622)', () => {
     expect(screen.queryByTestId('canvas-presence')).toBeNull();
     // Still editable — the "unchanged with no second editor" acceptance
     // criterion, asserted by typing rather than by an attribute.
+    const user = userEvent.setup();
+    await user.click(getContent(container));
+    await user.keyboard('X');
+    await waitFor(() => {
+      expect(getContent(container)).toHaveTextContent('Xhello');
+    });
+  });
+
+  /*
+   * The defect the chat-stream canvas journey caught. The roster the server
+   * answers a beat with ALWAYS holds the caller, so an editor that cannot
+   * recognise its own entry reads it as a stranger and locks the only person
+   * editing out of their own canvas. The composition root passed no identity
+   * at all, and every unit test above supplied one, so nothing here saw it.
+   */
+  it('stays editable when the roster holds only THIS viewer, matched by id', async () => {
+    // A display name the client does not hold — the server names the entry
+    // from the principal, which is not what this app renders anywhere.
+    const { beats } = installPresenceRoute([{ user_id: '1', user_name: 'ada@corp.internal' }]);
+    const { container } = renderWithTheme(
+      withSocket(
+        <CanvasEditor
+          selectedCodeBlockInfo={BLOCK}
+          projectId="7"
+          viewer={{ id: '1' }}
+          onCloseCanvasEditor={vi.fn()}
+        />,
+      ),
+    );
+
+    await waitFor(() => {
+      expect(beats).toHaveLength(1);
+    });
+    expect(screen.queryByTestId('canvas-presence')).toBeNull();
+    const user = userEvent.setup();
+    await user.click(getContent(container));
+    await user.keyboard('X');
+    await waitFor(() => {
+      expect(getContent(container)).toHaveTextContent('Xhello');
+    });
+  });
+
+  it('stays editable when the viewer cannot be identified at all', async () => {
+    // Fail OPEN. This is not a lock the server enforces, so a client that
+    // cannot tell its own entry from a stranger's must not refuse the edit —
+    // refusing is how one tab locked itself out.
+    const { beats } = installPresenceRoute([{ user_id: '9', user_name: 'someone@example.com' }]);
+    const { container } = renderWithTheme(
+      withSocket(<CanvasEditor selectedCodeBlockInfo={BLOCK} projectId="7" onCloseCanvasEditor={vi.fn()} />),
+    );
+
+    await waitFor(() => {
+      expect(beats).toHaveLength(1);
+    });
     const user = userEvent.setup();
     await user.click(getContent(container));
     await user.keyboard('X');
