@@ -314,10 +314,18 @@ test('a pipeline answers in the editor’s test chat, and each send appends the 
 
   const second = marker('second');
   await sendTurn(page, `Reply to this: ${second}`);
+  // `contains: second` — NOT "an answer arrived" — and the difference is what
+  // this journey found: the native runtime used to finalise a real, non-error
+  // assistant row for this turn carrying the FIRST turn's answer verbatim,
+  // because the graph's checkpoint thread is the conversation and ADK's
+  // executor restores a finished run's checkpoint (empty `pending_nodes`) and
+  // executes no node. `EliteaGraphAgent::starting_a_fresh_run` is the fix; the
+  // helper prints the received string, so a regression reads as "expected the
+  // second marker, got the first".
   await expectStoredAssistantAnswer(page, pipeline.projectId, conversationId, {
     timeout: 180_000,
     contains: second,
-    message: 'the second turn stored no answer of its own',
+    message: 'the second turn stored no answer of its own — a row carrying the FIRST answer means the run was not re-run',
   });
 
   const afterSecond = await readStoredTranscript(page, pipeline.projectId, conversationId);
