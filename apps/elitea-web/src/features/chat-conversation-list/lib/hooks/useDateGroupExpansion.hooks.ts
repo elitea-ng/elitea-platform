@@ -55,11 +55,25 @@ export function useDateGroupExpansion(): UseDateGroupExpansionResult {
 
   const isGroupExpanded = useCallback((groupName: string): boolean => expandedGroups.has(groupName), [expandedGroups]);
 
+  /**
+   * Expands exactly the groups that hold a result.
+   *
+   * The SAVE of the pre-search expansion happens once, on the way in — that is
+   * the baseline's own semantics and what `exitSearchMode` restores. Applying
+   * the new set, however, must happen on every call: a search result arrives
+   * after the query is typed, so the caller has to be able to say "these are
+   * the groups that hold matches now". The previous version returned early
+   * whenever it was already in search mode, so the FIRST answer decided the
+   * expansion for the whole search — and a call made before any result had
+   * arrived (which is what a listing that unmounts while it refetches
+   * produces) left every group collapsed with the results inside them.
+   */
   const enterSearchMode = useCallback(
     (groupsWithResults: readonly string[]): void => {
-      if (searchModeRef.current) return;
-      searchModeRef.current = true;
-      savedNormalExpansionRef.current = new Set(expandedGroups);
+      if (!searchModeRef.current) {
+        searchModeRef.current = true;
+        savedNormalExpansionRef.current = new Set(expandedGroups);
+      }
       setExpandedGroups(new Set(groupsWithResults));
     },
     [expandedGroups],
