@@ -158,7 +158,7 @@ export function ShareLinkDialog(props: ShareLinkDialogProps): React.JSX.Element 
 
       {createdUrl !== null && (
         <Box sx={createdSx} data-testid="share-link-created">
-          <Typography variant="body2" color="text.secondary" sx={urlSx}>
+          <Typography variant="body2" color="text.secondary" sx={urlSx} data-testid="share-link-created-url">
             {createdUrl}
           </Typography>
           <Typography variant="caption" color="text.disabled">
@@ -229,6 +229,19 @@ function ShareLinkRow(props: { readonly link: SharedChatLink; readonly onRevoke:
 
 const contentSx = { display: 'flex', flexDirection: 'column', gap: '1rem', minWidth: '24rem' } as const;
 const createdSx = { display: 'flex', flexDirection: 'column', gap: '0.25rem' } as const;
-const urlSx = { wordBreak: 'break-all' } as const;
+/**
+ * The link, and nothing else, on its own line.
+ *
+ * `userSelect: 'all'` makes one click select the WHOLE address and only the
+ * address. The block it sits in also carries the "shown once" sentence, and
+ * the two are adjacent text nodes with no separator between them: a reader
+ * who drags across the box, and every reader of `share-link-created`'s
+ * `textContent`, gets `…/shared/chat/<token>Copied to your clipboard…` —
+ * the token with the next sentence's first word welded onto its end. That is
+ * a broken link, and it is broken in the one place this app cannot show
+ * again. `share-link-created-url` is therefore the element to read the URL
+ * off, and the box around it is only the layout.
+ */
+const urlSx = { wordBreak: 'break-all', userSelect: 'all' } as const;
 const rowSx = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' } as const;
 const rowMetaSx = { display: 'flex', flexDirection: 'column' } as const;

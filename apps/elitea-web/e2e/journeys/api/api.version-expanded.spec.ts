@@ -210,6 +210,21 @@ test('a wrong or missing secret header is refused and discloses nothing about th
   try {
     const url = versionURL(agent.id, agent.versionId);
 
+    /*
+     * THE PROJECT'S OWN HEADER IS RESOLVED FIRST, and the order is the case.
+     *
+     * `resolveProjectSecretHeader` mints the value when the project has none,
+     * so a project only HAS one once something has asked for it. This case
+     * ran before any other did on webkit's shard, and the route then refused
+     * the wrong header with 403 `This project has no secrets_header_value
+     * secret` — a refusal about the DEPLOYMENT, not about what the caller
+     * sent, so the 400 asserted below never came. Reading the real value up
+     * front makes the refusals under test the ones this case is named for:
+     * a header that is wrong, and a header that is absent, against a project
+     * that has a right one.
+     */
+    const secret = await resolveProjectSecretHeader(request, DEFAULT_PROJECT_ID);
+
     // A header that is not the project's. The refusal names the header rather
     // than the version, and it is a 400 rather than a 404: the caller's problem
     // is what they sent, and telling them the version is missing would send
@@ -234,7 +249,6 @@ test('a wrong or missing secret header is refused and discloses nothing about th
 
     // The project's own value still passes, so the refusals above are the
     // header's doing and not a route that refuses everyone.
-    const secret = await resolveProjectSecretHeader(request, DEFAULT_PROJECT_ID);
     const accepted = await request.patch(url, { headers: { 'X-SECRET': secret } });
     expect(accepted.status(), await accepted.text()).toBe(200);
     expect(((await accepted.json()) as Record<string, unknown>)['instructions']).toBe(

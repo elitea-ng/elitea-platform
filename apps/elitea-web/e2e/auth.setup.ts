@@ -18,6 +18,7 @@ import * as path from 'path';
 import { test as setup, expect } from '@playwright/test';
 
 import { BASE_URL, STORAGE_STATE } from '../playwright.config';
+import { resolveProjectSecretHeader } from './fixtures/api';
 import {
   DEFAULT_PROJECT_ID,
   DEFAULT_PROJECT_NAME,
@@ -51,6 +52,7 @@ setup.describe('Auth setup', () => {
   setup('authenticate as admin persona', async ({ page }) => {
     setup.setTimeout(PERSONA_TIMEOUT_MS);
     await performOidcLogin(page, 'e2e-admin@autotest.local', STORAGE_STATE.admin, 'seeded');
+    await ensureRuntimeSecretHeader(page);
   });
 
   // The #284 chat driver. Its personal project is what the /llm hop resolves
@@ -273,4 +275,30 @@ async function readPersonalProjectId(
     )
     .not.toBe('');
   return id;
+}
+
+/**
+ * Puts the seeded project's runtime secret header in its vault, once, before
+ * any journey runs.
+ *
+ * `secrets_header_value` is what the SDK's expanded-version read authenticates
+ * with. elitea-main seals one into every project it PROVISIONS; the seeded
+ * project of this stack was not provisioned that way, so the value exists only
+ * once something has asked for it — `resolveProjectSecretHeader` mints it on a
+ * 404. That made the vault's state depend on WHICH journey ran first: the case
+ * that asserts "a wrong header is refused with 400" ran first on one shard and
+ * was answered 403 `This project has no secrets_header_value secret`, a
+ * refusal about the deployment rather than about what it sent.
+ *
+ * BEST EFFORT, on purpose. This is an ordering convenience, not a
+ * precondition: every reader still resolves the value for itself, so a mint
+ * that cannot be made here must not take the whole run down with it.
+ */
+async function ensureRuntimeSecretHeader(page: import('@playwright/test').Page): Promise<void> {
+  try {
+    await resolveProjectSecretHeader(page.request, DEFAULT_PROJECT_ID);
+  } catch (error) {
+    // Reported, not thrown: the journeys that need it mint it themselves.
+    console.warn(`[auth.setup] could not pre-mint the project secret header: ${String(error)}`);
+  }
 }

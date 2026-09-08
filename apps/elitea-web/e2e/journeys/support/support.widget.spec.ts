@@ -84,6 +84,35 @@ import { disableSupportAssistant, enableSupportAssistant } from './helpers';
 // jobs (the same reasoning `support.spec.ts` states).
 test.use({ storageState: STORAGE_STATE.admin });
 
+/*
+ * ─────────────────────────────────────────────────────────────────────────────
+ * ONE WORKER, IN ORDER — the documented waiver of the journey-shape rule
+ * against file-level serial mode (`scripts/e2e-journey-shape.test.mjs`, rule 1)
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * That rule exists because a serial file turns ONE failure into eight results
+ * that neither passed nor failed. It is waived here, and the waiver is named
+ * in the gate itself so it stays a decision rather than a drift.
+ *
+ * WHY. `support_assistant_enabled` is one row for the whole deployment, and
+ * `fullyParallel: true` puts these four tests on four worker processes at
+ * once. Every one of them then has to take the same platform-wide flag
+ * window, and the queue is the failure: measured on the run before this
+ * change, three of the four hooks exceeded the 120 s `afterAll` budget and
+ * SUP-W2 spent its whole 210 s test budget queueing, dying inside
+ * `page.goto`. Two harness corrections (a heartbeat on the writer, a shared
+ * group window, the teardown moved inside that window) each removed a real
+ * defect and neither removed the queue, because the queue is not a defect —
+ * it is what four processes competing for one exclusive resource DO.
+ *
+ * A serial file has no queue at all: the four tests run in one worker, one
+ * after another, and each takes the window uncontended. The cost is the one
+ * the rule names — a failure hides the tests after it — and four tests over
+ * one flag is the trade the rule was never written about. A deterministic
+ * four-test file beats a flaky one.
+ */
+test.describe.configure({ mode: 'serial' });
+
 const SUPPORT_PROJECT_ID = Number(DEFAULT_PROJECT_ID);
 const RUN_ID = Date.now();
 const AGENT_NAME = `${AUTOTEST_PREFIX}sup_w_${String(RUN_ID).slice(-6)}`;

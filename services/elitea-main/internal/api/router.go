@@ -1273,6 +1273,13 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		r.Use(apimw.Audit(auditRecorder))
 
 		r.Route("/api/v2", func(r chi.Router) {
+			// A browser must not keep a copy of an API answer. Nothing here
+			// said so, and WebKit reads "nothing" as "decide for yourself" —
+			// it served a reloaded page the previous answer for seconds. The
+			// middleware's own doc carries the measurement. Handlers that
+			// serve something genuinely cacheable still set their own value.
+			r.Use(apimw.NoStore)
+
 			// THE GROUP'S OWN "no such route" ANSWER (F3).
 			//
 			// Auth runs ABOVE this subrouter, so a path nobody registered is

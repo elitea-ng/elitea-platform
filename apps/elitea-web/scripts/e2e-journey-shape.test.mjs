@@ -16,7 +16,11 @@
  *     failed test then made Playwright report the eight tests after it as "did
  *     not run" — neither a pass nor a failure. Three runs of `E2E (webkit)`
  *     reported the same eight. `serial` is kept for the three tests that really
- *     do run in an order, inside their own describe.
+ *     do run in an order, inside their own describe. The rule is swept over
+ *     EVERY journey, not only that file, and it admits one documented waiver
+ *     (`SERIAL_WAIVERS`): a file whose tests all compete for the same
+ *     platform-wide flag has a queue rather than a schedule, and one worker
+ *     removes the queue. A waiver has to be really serial and has to say why.
  *  2. `admin.app-requests.spec.ts` reads the moderation queue by NAME. It used
  *     to ask for `?limit=100&offset=0` and search the answer, and the queue
  *     sorts oldest-first — so its own newest row fell off the end once the
@@ -61,6 +65,26 @@ const REDIRECT_SPEC = 'e2e/journeys/shell/shell.redirect.spec.ts';
 const FEATURES_SPEC = 'e2e/journeys/admin/admin.features.spec.ts';
 const APP_REQUESTS_SPEC = 'e2e/journeys/admin/admin.app-requests.spec.ts';
 const SEED_SCRIPT = 'scripts/e2e-stack.sh';
+const WIDGET_SPEC = 'e2e/journeys/support/support.widget.spec.ts';
+
+/**
+ * The ONE journey allowed to run its whole file in serial mode, and the words
+ * its waiver has to say.
+ *
+ * Rule 1 forbids file-level serial because one failure then reports every
+ * later test as "did not run". `support.widget.spec.ts` is exempt: its four
+ * tests all take the SAME platform-wide flag (`support_assistant_enabled`),
+ * and `fullyParallel` puts them on four workers that then queue for it — three
+ * `afterAll` hooks over their 120 s budget and one test dead inside `page.goto`
+ * after 210 s, on the run that made this waiver. One worker has no queue.
+ *
+ * The waiver is DATA here rather than an exception someone can add by editing
+ * a spec: a second file that turns itself serial fails this gate, and so does
+ * this one if the sentence explaining why ever leaves it.
+ */
+const SERIAL_WAIVERS = [
+  { path: WIDGET_SPEC, mustSay: /journey-shape rule against file-level serial/i },
+];
 
 /* ── rule 1 ─────────────────────────────────────────────────────────────── */
 
@@ -214,6 +238,25 @@ describe('#539 — one failure must not hide eight journeys', () => {
       "adminTest.describe.configure({ mode: 'serial' });",
     ].join('\n');
     expect(fileLevelSerialLines(before)).toEqual([3]);
+  });
+
+  it('only the documented waiver runs a whole file in serial mode', () => {
+    const waived = new Map(SERIAL_WAIVERS.map((entry) => [entry.path, entry]));
+    const offenders = journeySpecs()
+      .filter(([path, source]) => fileLevelSerialLines(source).length > 0 && !waived.has(path))
+      .map(([path]) => path);
+    expect(offenders).toEqual([]);
+  });
+
+  it('each waiver is really serial and says why it is exempt', () => {
+    for (const { path, mustSay } of SERIAL_WAIVERS) {
+      const source = read(path);
+      // Really serial: a waiver for a file that is not serial is a stale
+      // exemption, and the next file to need one would inherit it silently.
+      expect(fileLevelSerialLines(source), `${path} carries a waiver but is not serial`).toHaveLength(1);
+      // …and the reason is IN the file, where the reader of the spec meets it.
+      expect(source, `${path} must state why rule 1 is waived`).toMatch(mustSay);
+    }
   });
 
   it('does not mistake a scoped group for a file-level one', () => {

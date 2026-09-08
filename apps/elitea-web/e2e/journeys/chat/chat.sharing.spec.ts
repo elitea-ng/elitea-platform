@@ -251,10 +251,21 @@ test('S2: a share link opens for a reader with no session, and dies when it is r
     // The URL is shown exactly once — the server stores only a hash of the
     // token — so it is read off the screen here rather than from any listing,
     // which is the whole point of that design.
-    const created = page.getByTestId('share-link-created');
+    //
+    // OFF THE ADDRESS ITSELF, not off the box around it. The box also holds
+    // the "shown once" sentence, and adjacent text nodes concatenate with no
+    // separator: reading the box yielded `…/shared/chat/<token>Copied`, a
+    // token with the next sentence's first word on its end, which the reader
+    // below then opened and was told the link did not exist. The whole
+    // address is asserted rather than matched loosely, so a box that ever
+    // welds prose onto the link again fails here rather than in the recipient
+    // half thirty seconds later.
+    const created = page.getByTestId('share-link-created-url');
     await expect(created).toBeVisible({ timeout: 15_000 });
-    const shareUrl = ((await created.textContent()) ?? '').match(/https?:\/\/\S*\/shared\/chat\/[A-Za-z0-9_-]+/)?.[0] ?? '';
-    expect(shareUrl, 'the dialog must show the one-shot link it just created').not.toBe('');
+    const shareUrl = ((await created.textContent()) ?? '').trim();
+    expect(shareUrl, 'the dialog must show the one-shot link it just created, and nothing else').toMatch(
+      /^https?:\/\/[^\s/]+\/(?:app\/)?shared\/chat\/[A-Za-z0-9_-]+$/,
+    );
 
     const links = await readShareLinks(page, conversationId);
     expect(links, 'the server must hold exactly the one link the dialog created').toHaveLength(1);
