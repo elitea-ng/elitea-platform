@@ -3897,10 +3897,14 @@ components:
         source_version_id:
           type: string
           description: >
-            NOTE(W2) quirk preserved bug-for-bug — set to the CLONE id, not
-            the source (handler.go:637).
+            The DRAFT this publish was made from — the same id the published
+            row's own `meta.source_version_id` carries, so the two answers to
+            "where did this come from?" agree inside one response. It used to
+            repeat `public_version_id`, the row the request had just created,
+            and a client following it back to the author's editable version
+            arrived at the published copy.
       description: >
-        NOTE(W2): internal/api/v2/eliteacore/handler.go:633-638.
+        NOTE(W2): internal/api/v2/eliteacore/handler.go, Handler.Publish.
 
     UnpublishRequest:
       type: object
