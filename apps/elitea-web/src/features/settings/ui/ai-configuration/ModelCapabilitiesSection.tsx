@@ -28,7 +28,15 @@ export default memo(function ModelCapabilitiesSection({ capabilities }: ModelCap
 
   return (
     <Box sx={styles.capabilitiesSection}>
-      <Typography variant="h6" sx={styles.sectionTitle}>
+      {/* `component="h4"` is load-bearing, not decoration. The row sits after
+          the configuration accordions, whose titles render at level 3, so a
+          bare `variant="h6"` emitted an <h6> straight after an <h3> and axe's
+          `heading-order` rule failed the whole AI-Configuration screen. The
+          row only appears once a model with declared capabilities resolves,
+          so the violation stayed hidden until the configurations runtime
+          started serving one. `variant` keeps the type scale; `component`
+          fixes the document outline. */}
+      <Typography variant="h6" component="h4" sx={styles.sectionTitle}>
         {t('ai-configuration.modelCapabilities.title', 'Model Capabilities')}
       </Typography>
       <Box sx={styles.capabilitiesContainer}>
