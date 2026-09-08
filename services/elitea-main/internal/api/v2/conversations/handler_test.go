@@ -1157,14 +1157,23 @@ func TestGetCanvas_Error(t *testing.T) {
 // UpdateCanvas
 // ---------------------------------------------------------------------------
 
+// A save answers the STORED canvas, not `{"ok": true}`.
+//
+// The acknowledgement was indistinguishable from a save that wrote nothing:
+// the client normalises this response into its canvas cache, so with no
+// document in it the editor went on showing the text it had sent whether or
+// not the server kept it.
 func TestUpdateCanvas_Success(t *testing.T) {
 	repo := &mockRepo{
 		updateCanvasFn: func(_ context.Context, _, _ string, _ map[string]any) error { return nil },
+		getCanvasFn: func(_ context.Context, _, canvasID string) (map[string]any, error) {
+			return map[string]any{"uuid": canvasID, "canvas_content": "print(2)"}, nil
+		},
 	}
 	h := conversations.NewHandler(repo)
 	router := newRouter(h)
 
-	body, _ := json.Marshal(map[string]any{"title": "Updated"})
+	body, _ := json.Marshal(map[string]any{"canvas_content": "print(2)"})
 	req := httptest.NewRequest(http.MethodPut, "/projects/proj-1/conversations/canvas/canvas-1", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -1172,6 +1181,13 @@ func TestUpdateCanvas_Success(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var result map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+	if result["canvas_content"] != "print(2)" {
+		t.Errorf("expected the saved document back, got %v", result)
 	}
 }
 

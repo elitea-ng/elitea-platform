@@ -780,6 +780,15 @@ export async function readStoredAssistantAnswer(
 
 /** One `chat_message_items` row as the conversation-details route serves it. */
 export interface StoredMessageItem {
+  /**
+   * `chat_message_items.id` — the numeric key.
+   *
+   * Carried because it is the only handle on ONE item of a message: the canvas
+   * create route takes `message_item_id` and splits exactly that row, and a
+   * caller that could only name the group would have to guess which of its
+   * items it meant.
+   */
+  readonly id: string;
   /** `chat_message_items.item_type` — `text_message`, `attachment_message`, … */
   readonly itemType: string;
   /**
@@ -855,7 +864,7 @@ export async function readStoredMessageGroups(
       id?: unknown;
       uuid?: unknown;
       content?: unknown;
-      message_items?: readonly { item_type?: unknown; item_details?: unknown }[];
+      message_items?: readonly { id?: unknown; item_type?: unknown; item_details?: unknown }[];
     }[];
   };
   return (body.message_groups ?? []).map((group) => ({
@@ -863,6 +872,7 @@ export async function readStoredMessageGroups(
     uuid: String(group.uuid ?? ''),
     content: typeof group.content === 'string' ? group.content : '',
     items: (group.message_items ?? []).map((item) => ({
+      id: item.id === undefined || item.id === null ? '' : String(item.id),
       itemType: typeof item.item_type === 'string' ? item.item_type : '',
       details:
         typeof item.item_details === 'object' && item.item_details !== null

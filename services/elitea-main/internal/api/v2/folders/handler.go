@@ -113,12 +113,19 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 }
 
 type conversationItem struct {
-	ID        int        `json:"id"`
-	Name      string     `json:"name"`
-	UUID      string     `json:"uuid,omitempty"`
-	AuthorID  int        `json:"author_id"`
-	FolderID  *int       `json:"folder_id"`
-	IsPinned  bool       `json:"is_pinned,omitempty"`
+	ID       int    `json:"id"`
+	Name     string `json:"name"`
+	UUID     string `json:"uuid,omitempty"`
+	AuthorID int    `json:"author_id"`
+	FolderID *int   `json:"folder_id"`
+	IsPinned bool   `json:"is_pinned,omitempty"`
+	// `chat_conversations.is_private`. The row menu offers "Make public" only
+	// while a conversation is private, and this listing is where the sidebar
+	// learns each row's state — the client normaliser already reads the key
+	// (`entities/folder/api/foldersApi.ts`, `is_private` → `isPrivate`) and
+	// defaults an absent one to private, so the control never withdrew after
+	// a conversation was published.
+	IsPrivate bool       `json:"is_private"`
 	CreatedAt time.Time  `json:"created_at"`
 	UpdatedAt *time.Time `json:"updated_at"`
 }
@@ -176,16 +183,46 @@ func (h *Handler) loadConversations(ctx context.Context, r *http.Request, projec
 		orderDir = "ASC"
 	}
 
+	// Who is asking. The pin is PER READER — `social_pins` is keyed by
+	// (entity_name, entity_id, user_id) — so a listing that ignored the
+	// caller would show one member the rows another member pinned.
+	pinnedBy := ""
+	if user, ok := auth.UserFromContext(ctx); ok {
+		pinnedBy = user.ID
+	}
+
 	// Query conversations (indexes on conversation_id ensure fast joins elsewhere)
+	//
+	// THE PINNED SET COMES FROM `social_pins`, which is where the pin routes
+	// write it (`POST`/`DELETE /social/pin/prompt_lib/{p}/conversation/{id}`,
+	// and the `elitea_core/pin` pair beside them). It used to be read from
+	// `c.meta->>'is_pinned'`, a key NOTHING in this service or its client ever
+	// writes for a conversation — so "Pin on top" answered `{"ok": true}`, the
+	// sidebar moved the row optimistically, and the next listing put it back
+	// where it was. Legacy reads the same table (elitea_core/api/v2/
+	// folder.py:374-380 queries the social Pin model for
+	// `entity == 'conversation'`), so this restores the contract rather than
+	// inventing one. The `meta` key is kept as a fallback: a row that carries
+	// it stays pinned, which costs nothing and cannot unpin anybody.
+	//
+	// An unknown caller (`$1 = ''`) matches any owner rather than none: this
+	// route is permission-gated, so the case is a handler built without auth
+	// in a test, and answering "no conversation is pinned" there would hide a
+	// broken join behind a plausible empty set.
 	q := fmt.Sprintf(`
 		SELECT c.id, c.name, COALESCE(c.uuid::text, ''), c.author_id, c.folder_id,
-		       COALESCE((c.meta->>'is_pinned')::boolean, false) as is_pinned,
+		       (COALESCE((c.meta->>'is_pinned')::boolean, false)
+		            OR EXISTS (SELECT 1 FROM %s.social_pins p
+		                       WHERE p.entity_name = 'conversation'
+		                         AND p.entity_id = c.id
+		                         AND ($1 = '' OR p.user_id::text = $1))) AS is_pinned,
+		       c.is_private,
 		       c.created_at, c.updated_at
 		FROM %s.chat_conversations c
 		WHERE (c.meta->>'is_hidden' IS NULL OR c.meta->>'is_hidden' = 'false')
-		ORDER BY %s %s`, schema, orderCol, orderDir)
+		ORDER BY %s %s`, schema, schema, orderCol, orderDir)
 
-	rows, err := h.pool.Query(ctx, q)
+	rows, err := h.pool.Query(ctx, q, pinnedBy)
 	if err != nil {
 		return nil, fmt.Errorf("folders: list conversations: %w", err)
 	}
@@ -193,7 +230,7 @@ func (h *Handler) loadConversations(ctx context.Context, r *http.Request, projec
 	for rows.Next() {
 		var c conversationItem
 		var updatedAt *time.Time
-		if err := rows.Scan(&c.ID, &c.Name, &c.UUID, &c.AuthorID, &c.FolderID, &c.IsPinned, &c.CreatedAt, &updatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.Name, &c.UUID, &c.AuthorID, &c.FolderID, &c.IsPinned, &c.IsPrivate, &c.CreatedAt, &updatedAt); err != nil {
 			return nil, fmt.Errorf("folders: scan conversation: %w", err)
 		}
 		c.UpdatedAt = updatedAt
