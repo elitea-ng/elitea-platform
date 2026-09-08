@@ -93,3 +93,15 @@ It does not authorize old wire bytes under the merged protocol.
 Repeat pending-work inspection and take a quiescent backup before deployment cutover.
 
 See [the integration record](../../services/elitea-worker-rust/docs/source-mapping/main-sync-20260908.md) for protocol and deployment gates.
+
+## Completed rehearsal deployment
+
+The later cutover takes fresh dumps after stopping the four rehearsal application services.
+It migrates new product and agent-state copies before replacing those services with merged images.
+The active product ledger reaches canonical shared version 123.
+Both original databases retain their previous data and receipts.
+The reconciliation restores all 14 runtime tables, including 1,051 executions and 16,342 claims.
+The normal migrator accepts the copies. Browser history, public DCR, refresh, and regeneration checks pass afterward.
+
+This result applies to the rehearsal deployment only.
+It does not prove production cutover, cold Redis restoration, or general migration-collision repair.

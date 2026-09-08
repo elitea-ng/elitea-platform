@@ -887,10 +887,28 @@ at 2. No new authorization was performed. Main reports healthy with deployed
 image `sha256:3d85a6997df216be4951de1488f7fdac034cf66ce23c0a16579e3b529a95e453`.
 This is a same-document refresh proof, not confidential-client reload recovery.
 
+## Merged-stack verification: 2026-09-08
+
+Main, web, gateway, and Rust now deploy source `0f789b57` together on migrated rehearsal database copies.
+See [the integration record](main-sync-20260908.md#browser-proof-on-the-merged-deployment) for image identities, migration preservation, and execution correlation.
+
+Playwright verifies public DCR registration, consent, code exchange, durable resume, and a real MCP result in the Private project.
+After reload and access-token expiry, another turn refreshes the token without registration or consent.
+Regeneration executes the tool again. A further reload preserves the regenerated result.
+Emulator counters and committed execution settlements confirm these results.
+This refreshes the public-client proof on the merged stack. It does not close confidential-client reload recovery or real-provider gates.
+
+The merged UI hides an attached MCP despite enabled visibility settings.
+The conversation API and Rust execution retain the attachment.
+The chat page omits the participant panel's `isMcpVisible` prop, whose default is false.
+This is a UI integration gap, not missing runtime toolkit binding.
+
 ## Remaining gates
 
 ### Open verification
 
+- Wire the chat participant panel to the existing MCP visibility hook.
+  Cover both enabled and disabled settings through the mounted page. Verify the saved MCP in the deployed browser.
 - Repeat DCR against a real provider.
   Both variants now pass the local emulator grant, durable resume, tool call, and between-turn refresh proof.
   Editor discovery and toolkit authorization before operation names are known
