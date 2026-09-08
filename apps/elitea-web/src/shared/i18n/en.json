@@ -4090,5 +4090,11 @@
   "pages.admin.platformModels.field.tiersHelp": "A tier decides which of a project’s default model slots may select this model. A model in no tier is still addressable by name.",
   "pages.admin.platformModels.field.lowTier": "Offer as a low-tier default",
   "pages.admin.platformModels.field.highTier": "Offer as a high-tier default",
+  "pages.admin.platformModels.field.capabilitiesHelp": "What callers may ask of this model. A capability the model does not have fails at the provider, not here.",
+  "pages.admin.platformModels.field.contextWindow": "Context window (tokens)",
+  "pages.admin.platformModels.field.contextWindowHelp": "How much of a conversation this model can read at once. Leave it empty to keep what the model already has.",
+  "pages.admin.platformModels.field.openaiCompatible": "Speaks the OpenAI wire format",
+  "pages.admin.platformModels.field.supportsReasoning": "Supports reasoning",
+  "pages.admin.platformModels.field.supportsVision": "Accepts images",
   "pages.admin.platformModels.noProvider": "no provider linked"
 }

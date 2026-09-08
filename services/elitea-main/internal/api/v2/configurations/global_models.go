@@ -133,10 +133,31 @@ type GlobalModel struct {
 	// configuration filters its tier defaults on. They are reported because the
 	// edit dialog rewrites `data` whole: a form that could not read them back
 	// would clear the flag of every model it saved.
-	LowTier   bool   `json:"low_tier"`
-	HighTier  bool   `json:"high_tier"`
-	CreatedAt string `json:"created_at"`
-	UpdatedAt string `json:"updated_at"`
+	LowTier  bool `json:"low_tier"`
+	HighTier bool `json:"high_tier"`
+	// Data is the row's stored `data` object, ENTIRE.
+	//
+	// The fields above name what this listing interprets. They are not what the
+	// row holds. An `llm_model` also declares `context_window`,
+	// `max_output_tokens`, `openai_compatible`, `supports_reasoning` and
+	// `supports_vision`, and the update replaces the `data` column whole — so an
+	// edit dialog that could only read back the interpreted fields rebuilt
+	// `data` from them and DROPPED every other one. Renaming a model, or ticking
+	// a tier, silently reset its context window and its capabilities.
+	//
+	// Naming each new field on this struct would fix the five that exist today
+	// and lose the next one the registry adds, because the failure is the
+	// listing being a projection at all. So the object is reported as stored and
+	// the dialog merges its own fields over it.
+	//
+	// Disclosure: this query reads the five MODEL sections and cannot reach the
+	// `ai_credentials` section, so no provider row is in scope; no model type in
+	// the pinned registry snapshot declares a secret field; and a model's link
+	// to its provider is a TITLE, with the secret held in the provider row.
+	// There is nothing here the interpreted fields were protecting.
+	Data      map[string]any `json:"data"`
+	CreatedAt string         `json:"created_at"`
+	UpdatedAt string         `json:"updated_at"`
 }
 
 // listGlobalModelsSQL reads the public project's shared model rows.
@@ -289,6 +310,14 @@ func scanGlobalModel(
 	item.CredentialName = credentialTitleOf(decoded)
 	item.LowTier = globalModelFlag(decoded, "low_tier")
 	item.HighTier = globalModelFlag(decoded, "high_tier")
+	// An EMPTY object, never a null, when the column would not decode. The
+	// dialog merges its edited fields over this one, and `null` there would make
+	// the merge itself the thing that fails — a corrupt row would stop being
+	// editable instead of being reported as a model with no settings.
+	item.Data = decoded
+	if item.Data == nil {
+		item.Data = map[string]any{}
+	}
 	// A row that names NO credential is reported as unresolved, and the absence
 	// of the link is the whole reason. `ai_credentials` is required on all five
 	// model types, so admission refuses such a row and every reader selects it

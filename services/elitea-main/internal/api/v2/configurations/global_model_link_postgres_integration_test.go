@@ -95,6 +95,10 @@ type listedPlatformModel struct {
 	CredentialResolves bool   `json:"credential_resolves"`
 	LowTier            bool   `json:"low_tier"`
 	HighTier           bool   `json:"high_tier"`
+	// Data is the stored `data` object as the listing reports it. It is what
+	// the edit form merges its own fields over, so the fields the form does not
+	// show have to survive the round trip through here.
+	Data map[string]any `json:"data"`
 }
 
 // readPlatformModel reads the listing and returns the row with this title.
@@ -356,6 +360,99 @@ func TestARenameStillNeedsNoProviderRestated(t *testing.T) {
 			update.Code, update.Body.String())
 	}
 	link, _ := storedModelData(t, pool, renamed)["ai_credentials"].(map[string]any)
+	if link == nil || link["elitea_title"] != provider {
+		t.Errorf("the rename changed the stored link to %#v", link)
+	}
+}
+
+// TestAnEditKeepsTheModelFieldsTheFormDoesNotShow.
+//
+// The DATA-LOSS shape, end to end. An `llm_model` declares nine `data` fields;
+// the edit form shows four of them. The `data` column is replaced whole, so a
+// form that REBUILT `data` from its own fields erased `context_window`,
+// `max_output_tokens`, `openai_compatible`, `supports_reasoning` and
+// `supports_vision` every time an operator renamed a model or ticked a tier —
+// with a 200, and with nothing on the screen to read the loss back from.
+//
+// Two halves, and they fail separately:
+//
+//  1. the LISTING has to report the stored object entire, or the form has
+//     nothing to merge over and the loss is unavoidable at the client;
+//  2. an update carrying the merged object has to store it, so the fields the
+//     form never showed come back on the next read.
+//
+// The body sent below is exactly what the merged form sends: the listing's own
+// `data`, with the edited fields written over it.
+func TestAnEditKeepsTheModelFieldsTheFormDoesNotShow(t *testing.T) {
+	pool := newCreateEchoPool(t)
+	router := platformLinkRouter(pool)
+	provider := platformLinkProvider(t, router, "autotest_merge_provider")
+
+	const title = "autotest_merge_model"
+	created := platformLinkSend(t, router, http.MethodPost, "/gateway/platform_models",
+		map[string]any{
+			"elitea_title": title,
+			"type":         "llm_model",
+			"data": map[string]any{
+				"name":              "autotest-merge",
+				"ai_credentials":    map[string]any{"elitea_title": provider},
+				"context_window":    400000,
+				"max_output_tokens": 128000,
+				"supports_vision":   true,
+			},
+		})
+	if created.Code != http.StatusCreated {
+		t.Fatalf("POST /gateway/platform_models = %d, want 201; body = %s",
+			created.Code, created.Body.String())
+	}
+	var stored struct {
+		ID int `json:"id"`
+	}
+	if err := json.Unmarshal(created.Body.Bytes(), &stored); err != nil {
+		t.Fatalf("decode the created model %q: %v", created.Body.String(), err)
+	}
+
+	// (1) The listing reports what the row holds, not only what it interprets.
+	listed := readPlatformModel(t, router, title)
+	if listed.Data["context_window"] == nil || listed.Data["supports_vision"] != true {
+		t.Fatalf("the listing reported data = %#v; the form cannot merge over what it cannot see",
+			listed.Data)
+	}
+	if listed.Data["max_output_tokens"] == nil {
+		t.Errorf("the listing dropped max_output_tokens: %#v", listed.Data)
+	}
+
+	// (2) The edit the form now sends: the listing's object, with the one
+	// edited field over it. Only the LABEL changes.
+	const renamed = "autotest_merged_model"
+	edited := map[string]any{}
+	for key, value := range listed.Data {
+		edited[key] = value
+	}
+	edited["name"] = "autotest-merge"
+	edited["ai_credentials"] = map[string]any{"elitea_title": provider}
+	update := platformLinkSend(t, router, http.MethodPut,
+		fmt.Sprintf("/gateway/platform_models/%d", stored.ID),
+		map[string]any{"elitea_title": renamed, "data": edited})
+	if update.Code != http.StatusOK {
+		t.Fatalf("renaming a platform model = %d, want 200; body = %s",
+			update.Code, update.Body.String())
+	}
+
+	after := storedModelData(t, pool, renamed)
+	if fmt.Sprintf("%v", after["context_window"]) != "400000" {
+		t.Errorf("the rename left context_window = %#v, want the stored 400000",
+			after["context_window"])
+	}
+	if after["supports_vision"] != true {
+		t.Errorf("the rename left supports_vision = %#v, want the stored true",
+			after["supports_vision"])
+	}
+	if fmt.Sprintf("%v", after["max_output_tokens"]) != "128000" {
+		t.Errorf("the rename left max_output_tokens = %#v, want the stored 128000",
+			after["max_output_tokens"])
+	}
+	link, _ := after["ai_credentials"].(map[string]any)
 	if link == nil || link["elitea_title"] != provider {
 		t.Errorf("the rename changed the stored link to %#v", link)
 	}

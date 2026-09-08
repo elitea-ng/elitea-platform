@@ -84,6 +84,22 @@ export interface PlatformModel {
    */
   readonly low_tier?: boolean;
   readonly high_tier?: boolean;
+  /**
+   * The row's stored `data` object, ENTIRE — the merge base the edit dialog
+   * writes its own fields over.
+   *
+   * The fields above name what the listing interprets, and that is not what the
+   * row holds: an `llm_model` also declares `context_window`,
+   * `max_output_tokens`, `openai_compatible`, `supports_reasoning` and
+   * `supports_vision`. The update replaces `data` whole, so a dialog that could
+   * only read the interpreted fields REBUILT the object from them and dropped
+   * the rest on every save. Naming five more fields here would fix the five that
+   * exist and lose the next one the registry adds.
+   *
+   * Optional because a server that predates the field sends none. The dialog
+   * then merges over nothing, which is what it used to do in every case.
+   */
+  readonly data?: Readonly<Record<string, unknown>>;
   readonly created_at: string;
   readonly updated_at: string;
 }
@@ -120,12 +136,27 @@ export interface PlatformModelList {
 export interface PlatformModelDraft {
   readonly elitea_title: string;
   readonly type: string;
-  readonly data: {
-    readonly name: string;
-    readonly ai_credentials: { readonly elitea_title: string };
-    readonly low_tier?: boolean;
-    readonly high_tier?: boolean;
-  };
+  readonly data: PlatformModelData;
+}
+
+/**
+ * The `data` object a save writes, whole.
+ *
+ * The index signature is the point rather than a loosening: the dialog sends the
+ * stored object with its edited fields written over it, so a field neither this
+ * type nor the form has heard of is carried through instead of erased. The named
+ * fields are the ones the form actually authors.
+ */
+export interface PlatformModelData {
+  readonly name: string;
+  readonly ai_credentials: { readonly elitea_title: string };
+  readonly low_tier?: boolean;
+  readonly high_tier?: boolean;
+  readonly context_window?: number;
+  readonly openai_compatible?: boolean;
+  readonly supports_reasoning?: boolean;
+  readonly supports_vision?: boolean;
+  readonly [field: string]: unknown;
 }
 
 /**

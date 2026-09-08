@@ -1,6 +1,19 @@
 /**
  * Create / edit one platform-wide model.
  *
+ * ## An edit MERGES over the stored row
+ *
+ * The update replaces the `data` column whole. This dialog used to build that
+ * column out of the fields it shows, so every field it did not show was erased
+ * by any save at all — an `llm_model` declares nine, and a rename reset the
+ * model's context window, its output limit and its three capability flags to the
+ * registry defaults, with a 200 and nothing on the screen that read the loss
+ * back.
+ *
+ * The listing now carries the stored object and the submit writes the edited
+ * fields OVER it (`platformModelForm.ts`), so a field this dialog has never
+ * heard of survives an edit it was not part of.
+ *
  * ## The credential is a required select, not a text field and not optional
  *
  * A model names its credential by TITLE, and the server refuses a title that is
@@ -26,62 +39,42 @@
  * rewritten together; the partial update writes what it is sent, so the honest
  * path is to delete and re-create.
  *
- * ## The tier flags are only offered where the schema has them
+ * ## The chat fields are only offered where the schema has them
  *
- * `low_tier` and `high_tier` are `llm_model` fields. The other four model types
- * decode their `data` with unknown fields REFUSED, so sending a flag they do not
- * declare would turn a valid model into an invalid binding.
+ * The tiers, the context window and the capabilities are `llm_model` fields. The
+ * other four model types decode their `data` with unknown fields REFUSED, so
+ * sending one they do not declare would turn a valid model into an invalid
+ * binding — see PlatformModelChatFields.tsx.
  */
 import type { ReactNode } from 'react';
 import { useEffect, useState } from 'react';
 
 import Alert from '@mui/material/Alert';
 import Button from '@mui/material/Button';
-import Checkbox from '@mui/material/Checkbox';
 import Dialog from '@mui/material/Dialog';
 import DialogActions from '@mui/material/DialogActions';
 import DialogContent from '@mui/material/DialogContent';
 import DialogTitle from '@mui/material/DialogTitle';
-import FormControlLabel from '@mui/material/FormControlLabel';
 import MenuItem from '@mui/material/MenuItem';
 import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 
 import { t } from '@/shared/i18n';
 
+import { PlatformModelChatFields } from './PlatformModelChatFields';
 import {
   platformModelTypeLabel,
   type PlatformModel,
   type PlatformModelDraft,
 } from './api/adminLlmPlatformModelsApi';
-
-/** The value of the provider select before one has been chosen. */
-const NO_CREDENTIAL_CHOSEN = '';
-
-/** The one model type whose schema declares the tier flags. */
-const TIERED_MODEL_TYPE = 'llm_model';
-
-/**
- * The Kind a NEW platform model opens on.
- *
- * The dialog took `modelTypes[0]`, and `model_types` arrives in the server's
- * own order, not in an order this screen chose. On this deployment the first
- * entry is `asr_model`, so "Add a platform model" opened on "Speech to text" —
- * an operator adding a chat model had to notice the wrong Kind and change it,
- * and one who did not published a model the gateway dispatches to the ASR
- * section. Chat is what almost every platform model is.
- *
- * The server still decides what is OFFERED: this default is used only when the
- * deployment actually dispatches it, and a deployment that does not falls back
- * to the first type it does.
- */
-const DEFAULT_MODEL_TYPE = 'llm_model';
-
-/** The Kind to open on: chat when this deployment dispatches it, else whatever it does. */
-function defaultModelType(modelTypes: readonly string[]): string {
-  if (modelTypes.includes(DEFAULT_MODEL_TYPE)) return DEFAULT_MODEL_TYPE;
-  return modelTypes[0] ?? DEFAULT_MODEL_TYPE;
-}
+import {
+  formIsComplete,
+  formOf,
+  modelDraftOf,
+  NO_CREDENTIAL_CHOSEN,
+  TIERED_MODEL_TYPE,
+  type ModelForm,
+} from './platformModelForm';
 
 /**
  * What the provider select says when nothing is chosen.
@@ -108,132 +101,6 @@ function credentialHelp(credentialNames: readonly string[], chosen: string): str
     'pages.admin.platformModels.field.credentialRequired',
     'Required. A model with no provider fails admission, so it would be listed here and served to nobody.',
   );
-}
-
-/** The tier flags, offered for the one type whose schema declares them. */
-function TierFlags({
-  low,
-  high,
-  onLow,
-  onHigh,
-}: {
-  readonly low: boolean;
-  readonly high: boolean;
-  readonly onLow: (value: boolean) => void;
-  readonly onHigh: (value: boolean) => void;
-}): ReactNode {
-  return (
-    <>
-      <Typography variant="bodySmall" color="text.secondary">
-        {t(
-          'pages.admin.platformModels.field.tiersHelp',
-          'A tier decides which of a project’s default model slots may select this model. A model in no tier is still addressable by name.',
-        )}
-      </Typography>
-      <FormControlLabel
-        control={
-          <Checkbox
-            data-testid="platform-model-low-tier"
-            checked={low}
-            onChange={(event) => {
-              onLow(event.target.checked);
-            }}
-          />
-        }
-        label={t('pages.admin.platformModels.field.lowTier', 'Offer as a low-tier default')}
-      />
-      <FormControlLabel
-        control={
-          <Checkbox
-            data-testid="platform-model-high-tier"
-            checked={high}
-            onChange={(event) => {
-              onHigh(event.target.checked);
-            }}
-          />
-        }
-        label={t('pages.admin.platformModels.field.highTier', 'Offer as a high-tier default')}
-      />
-    </>
-  );
-}
-
-/** Everything the form holds, so one reset statement can restate all of it. */
-interface ModelForm {
-  readonly name: string;
-  readonly type: string;
-  readonly modelName: string;
-  readonly credential: string;
-  readonly lowTier: boolean;
-  readonly highTier: boolean;
-}
-
-/**
- * The form a dialog OPENS on: the stored row's own values, or the blanks a new
- * model starts from.
- *
- * The tier flags are read back from the row rather than defaulted, for the
- * reason the credential is: the update replaces `data` whole, so a form that
- * opened with both boxes clear would clear the tier of every model it saved.
- */
-function formOf(editing: PlatformModel | undefined, modelTypes: readonly string[]): ModelForm {
-  // Split rather than six optional chains, so the create case reads as the
-  // blanks it is — the same split `normalisePlatformModels` makes.
-  if (editing === undefined) {
-    return {
-      name: '',
-      type: defaultModelType(modelTypes),
-      modelName: '',
-      credential: NO_CREDENTIAL_CHOSEN,
-      lowTier: false,
-      highTier: false,
-    };
-  }
-  // `credential_name` is empty on a row written before the link was required.
-  // It opens the form with the provider unchosen and Save disabled, which is
-  // the state that row is in.
-  return {
-    name: editing.elitea_title,
-    type: editing.type,
-    modelName: editing.model_name,
-    credential: editing.credential_name,
-    lowTier: editing.low_tier ?? false,
-    highTier: editing.high_tier ?? false,
-  };
-}
-
-/**
- * Whether Save may act. The provider is one of the three, and it is the one
- * that used to have a value meaning "none".
- */
-function formIsComplete(form: ModelForm): boolean {
-  return (
-    form.name.trim() !== '' &&
-    form.modelName.trim() !== '' &&
-    form.credential !== NO_CREDENTIAL_CHOSEN
-  );
-}
-
-/**
- * The body the form sends.
- *
- * The tier flags go out for the chat type ALONE. The other four decode their
- * `data` with unknown fields refused, so a flag they do not declare would make
- * the row an invalid binding rather than a model with an ignored extra.
- */
-function modelDraftOf(form: ModelForm): PlatformModelDraft {
-  const tiers = form.type === TIERED_MODEL_TYPE
-    ? { low_tier: form.lowTier, high_tier: form.highTier }
-    : {};
-  return {
-    elitea_title: form.name.trim(),
-    type: form.type,
-    data: {
-      name: form.modelName.trim(),
-      ai_credentials: { elitea_title: form.credential },
-      ...tiers,
-    },
-  };
 }
 
 export interface PlatformModelDialogProps {
@@ -369,14 +236,7 @@ export function PlatformModelDialog({
           ))}
         </TextField>
 
-        {tiered ? (
-          <TierFlags
-            low={form.lowTier}
-            high={form.highTier}
-            onLow={(value) => update('lowTier', value)}
-            onHigh={(value) => update('highTier', value)}
-          />
-        ) : null}
+        {tiered ? <PlatformModelChatFields form={form} onChange={update} /> : null}
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose} disabled={isSaving}>
@@ -387,7 +247,8 @@ export function PlatformModelDialog({
           disabled={!canSubmit}
           data-testid="platform-model-save"
           onClick={() => {
-            onSubmit(modelDraftOf(form));
+            // The stored object is the merge base — see platformModelForm.ts.
+            onSubmit(modelDraftOf(form, editing?.data));
           }}
         >
           {isSaving

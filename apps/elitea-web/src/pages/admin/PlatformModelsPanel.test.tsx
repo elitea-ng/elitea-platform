@@ -282,6 +282,94 @@ describe('PlatformModelsPanel', () => {
     expect(sent.data.ai_credentials).toEqual({ elitea_title: 'platform-openai' });
   });
 
+  /*
+   * DEFECT this pins. The dialog REBUILT `data` from the fields it shows, and
+   * the update replaces the column whole — so every field it does not show was
+   * erased by any save at all. An `llm_model` declares nine: a rename reset the
+   * model's `context_window`, its `max_output_tokens` and its three capability
+   * flags to the registry defaults, answered 200, and said nothing.
+   *
+   * The listing now carries the stored object and the submit merges over it, so
+   * a field this dialog has never heard of survives an edit it was not part of.
+   * `a_field_added_later` stands for the next one the registry adds.
+   */
+  it('keeps the stored fields the form does not show when only the label changes', async () => {
+    useModels([
+      {
+        ...GPT4O,
+        data: {
+          name: 'gpt-4o',
+          ai_credentials: { elitea_title: 'platform-openai' },
+          context_window: 400000,
+          max_output_tokens: 128000,
+          supports_vision: true,
+          supports_reasoning: true,
+          openai_compatible: true,
+          a_field_added_later: 'kept',
+        },
+      },
+    ]);
+    const bodies: unknown[] = [];
+    server.use(
+      http.put('*/admin/gateway/platform_models/:id', async ({ request }) => {
+        bodies.push(await request.json());
+        return HttpResponse.json({ id: 11 });
+      }),
+    );
+    renderAdminRoute(<PlatformModelsPanel />);
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    // The stored values are what the form opens on — a form that opened on the
+    // registry defaults would write those defaults over the row.
+    expect(await screen.findByTestId('platform-model-context-window')).toHaveValue(400000);
+    expect(screen.getByRole('checkbox', { name: /reasoning/i })).toBeChecked();
+
+    await userEvent.clear(screen.getByTestId('platform-model-name'));
+    await userEvent.type(screen.getByTestId('platform-model-name'), 'gpt-4o-renamed');
+    await userEvent.click(screen.getByTestId('platform-model-save'));
+
+    await waitFor(() => expect(bodies).toHaveLength(1));
+    const sent = bodies[0] as { elitea_title: string; data: Record<string, unknown> };
+    expect(sent.elitea_title).toBe('gpt-4o-renamed');
+    expect(sent.data.context_window).toBe(400000);
+    expect(sent.data.supports_vision).toBe(true);
+    expect(sent.data.supports_reasoning).toBe(true);
+    expect(sent.data.openai_compatible).toBe(true);
+    // Neither the form nor its types know this field. It survives because the
+    // stored object is the merge BASE rather than a set of fields to re-read.
+    expect(sent.data.max_output_tokens).toBe(128000);
+    expect(sent.data.a_field_added_later).toBe('kept');
+  });
+
+  /* The capabilities are editable, and a change to one is what the save sends. */
+  it('sends a capability the operator turned off', async () => {
+    useModels([
+      {
+        ...GPT4O,
+        data: {
+          name: 'gpt-4o',
+          ai_credentials: { elitea_title: 'platform-openai' },
+          supports_vision: true,
+        },
+      },
+    ]);
+    const bodies: unknown[] = [];
+    server.use(
+      http.put('*/admin/gateway/platform_models/:id', async ({ request }) => {
+        bodies.push(await request.json());
+        return HttpResponse.json({ id: 11 });
+      }),
+    );
+    renderAdminRoute(<PlatformModelsPanel />);
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    await userEvent.click(await screen.findByTestId('platform-model-supports-vision'));
+    await userEvent.click(screen.getByTestId('platform-model-save'));
+
+    await waitFor(() => expect(bodies).toHaveLength(1));
+    expect((bodies[0] as { data: Record<string, unknown> }).data.supports_vision).toBe(false);
+  });
+
   it("renders the server's own refusal of a bad credential link", async () => {
     useModels([]);
     server.use(

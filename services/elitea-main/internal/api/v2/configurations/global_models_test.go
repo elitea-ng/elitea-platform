@@ -14,6 +14,7 @@ package configurations
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -229,6 +230,48 @@ func TestTheTierFlagsAreReportedForTheEditForm(t *testing.T) {
 	}
 	if plain.HighTier || plain.LowTier {
 		t.Errorf("a row carrying no flags reported high=%v low=%v", plain.HighTier, plain.LowTier)
+	}
+}
+
+// TestTheStoredDataObjectIsReportedEntire.
+//
+// The DATA-LOSS half of the same shape. The listing reported the fields it
+// interprets — wire name, link, the two tiers — and the edit dialog rebuilt
+// `data` from exactly those. Every other field an `llm_model` declares
+// (`context_window`, `max_output_tokens`, `openai_compatible`,
+// `supports_reasoning`, `supports_vision`) was therefore erased by a rename or
+// a tier tick, and nothing on the screen said so.
+//
+// Reporting the object as stored is what lets the dialog MERGE instead of
+// rebuild, and it holds for a field the registry adds after this test is
+// written — which naming five more struct fields would not.
+func TestTheStoredDataObjectIsReportedEntire(t *testing.T) {
+	row := `{"name":"gpt-4o","ai_credentials":{"elitea_title":"platform-openai"},` +
+		`"context_window":400000,"max_output_tokens":128000,"supports_vision":true,` +
+		`"supports_reasoning":false,"openai_compatible":true,"a_field_added_later":"kept"}`
+	item, err := scanGlobalModel(modelRowScan(row), []string{"platform-openai"}, true)
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	var want map[string]any
+	if err := json.Unmarshal([]byte(row), &want); err != nil {
+		t.Fatalf("decode the row under test: %v", err)
+	}
+	for key, value := range want {
+		if fmt.Sprintf("%v", item.Data[key]) != fmt.Sprintf("%v", value) {
+			t.Errorf("data[%q] = %#v, want %#v", key, item.Data[key], value)
+		}
+	}
+
+	// A corrupt column reports an EMPTY object rather than a null: the dialog
+	// merges over this, and a null would make the merge fail instead of
+	// reporting a model with no settings.
+	corrupt, err := scanGlobalModel(modelRowScan(`not json`), nil, true)
+	if err != nil {
+		t.Fatalf("scan refused a corrupt data column: %v", err)
+	}
+	if corrupt.Data == nil {
+		t.Error("a corrupt data column reported a null `data`, which the edit form cannot merge over")
 	}
 }
 
