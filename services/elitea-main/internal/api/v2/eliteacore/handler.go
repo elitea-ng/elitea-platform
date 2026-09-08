@@ -2498,6 +2498,37 @@ func (h *Handler) DeleteIcon(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// storedAgentType maps the `agent_type` an IMPORTED document carries onto the
+// value `application_versions.agent_type` stores, and reports whether the
+// import accepts it at all.
+//
+// The mapping exists because the platform's own markdown export does not write
+// the stored spelling. `markdownAgentType` (export_markdown.go) writes `agent`
+// for a stored `openai` agent, faithfully mirroring pylon's
+// `_application_to_md`. The import's allow-list never had an `agent` member —
+// pylon's `AgentTypes` enum has none either — so exporting an agent as markdown
+// and posting its frontmatter back answered
+// `Import function has been failed: invalid agent_type` (#845). The round trip
+// closed only in a browser: both web clients rename `agent` to `openai` in
+// their own file parser, and nothing in the API contract said they had to.
+//
+// The rename is done HERE rather than by changing the exporter, so that every
+// `.agent.md` file already written — by this platform, by pylon, or by hand
+// from the documented format — keeps importing.
+//
+// The empty string maps to `openai` as well: that is the column default this
+// path applied before, and an entry that names no type is a plain agent.
+func storedAgentType(raw string) (string, bool) {
+	switch raw {
+	case "", "agent", "openai":
+		return "openai", true
+	case "react", "dial", "pipeline":
+		return raw, true
+	default:
+		return "", false
+	}
+}
+
 func (h *Handler) ExportImportPost(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -2635,8 +2666,6 @@ func (h *Handler) ExportImportPost(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	validAgentTypes := map[string]bool{"openai": true, "react": true, "dial": true, "pipeline": true, "": true}
-
 	// Phase 0: Import the skills, so the per-version references the agents carry
 	// have something to resolve against. `owner_id` on this table is the
 	// DESTINATION PROJECT (#533), which is the same value the toolkit import
@@ -2714,7 +2743,7 @@ func (h *Handler) ExportImportPost(w http.ResponseWriter, r *http.Request) {
 
 		if firstVer, ok := versions[0].(map[string]any); ok {
 			at, _ := firstVer["agent_type"].(string)
-			if !validAgentTypes[at] {
+			if _, ok := storedAgentType(at); !ok {
 				errorAgents = append(errorAgents, map[string]any{"index": ae.entityIdx, "name": name, "msg": "Import function has been failed: invalid agent_type"})
 				importedAgents = append(importedAgents, importedAgentInfo{appID: -1})
 				continue
@@ -2767,8 +2796,8 @@ func (h *Handler) ExportImportPost(w http.ResponseWriter, r *http.Request) {
 				vName = "latest"
 			}
 			agentType, _ := v["agent_type"].(string)
-			if agentType == "" {
-				agentType = "openai"
+			if stored, ok := storedAgentType(agentType); ok {
+				agentType = stored
 			}
 			instructions, _ := v["instructions"].(string)
 			welcomeMsg, _ := v["welcome_message"].(string)
