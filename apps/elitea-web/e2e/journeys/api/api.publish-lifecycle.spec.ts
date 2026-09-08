@@ -212,13 +212,16 @@ test('publishing a draft adds a published clone and leaves the draft alone', asy
     // The clone records which draft it came from, in its own stored meta. That
     // is the link a reader follows from a catalogue entry back to its source.
     //
-    // The publish RESPONSE carries a `source_version_id` key of its own and it
-    // repeats the clone's id rather than the draft's. The stored value is the
-    // correct one and is what is asserted here; the response key is a known
-    // defect owned by the immutability package, so nothing here pins it — an
-    // assertion on today's wrong value would have to be deleted to fix it.
+    // The RESPONSE says the same thing, and the two are asserted together: the
+    // response key used to repeat the clone's id, so one publish answered
+    // "where did this come from?" two ways and a client that followed the
+    // response arrived at the published copy instead of the draft.
     const cloneDetails = await readVersion(request, agent.id, cloneId, projectId);
     expect(cloneDetails.meta['source_version_id']).toBe(agent.versionId);
+    expect(body['source_version_id']).toBe(agent.versionId);
+    expect(body['source_version_id'], 'the response names the clone as its own source').not.toBe(
+      cloneId,
+    );
 
     // ELITEA Catalog serves it. Polled, because the twin is written in the
     // publish transaction but the catalogue read is a separate connection.

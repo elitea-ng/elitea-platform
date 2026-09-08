@@ -1094,6 +1094,16 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	title := firstStrVal(body, "elitea_title", "name")
+	// The display label, read once and used TWICE — stored in the INSERT below
+	// and echoed on the created row.
+	//
+	// It used to be read for the INSERT alone. The field is `omitempty`, so the
+	// stored value simply vanished from the 201 while both read routes served
+	// it, and a client that rendered its list from the create's own answer
+	// showed a credential with no label until something else reloaded the row.
+	// This is the same class as the `elitea_title`/`name` gap one field over in
+	// the same struct.
+	label := strVal(body, "label")
 	section := h.sectionFor(configType, strVal(body, "section"))
 
 	var id int
@@ -1102,7 +1112,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	err = h.withConfigurationSecretTx(ctx, pID, secretMutations, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx, q,
 			pID,
-			strVal(body, "label"),
+			label,
 			title,
 			configType,
 			section,
@@ -1121,6 +1131,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		ID:        id,
 		UUID:      uuid,
 		ProjectID: pID,
+		Label:     label,
 		Name:      title,
 		Type:      configType,
 		Section:   section,

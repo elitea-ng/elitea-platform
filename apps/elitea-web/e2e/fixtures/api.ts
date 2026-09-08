@@ -518,10 +518,24 @@ export interface CatalogueRow extends Record<string, unknown> {
  * name one agent, and every caller here asks "is this name in it", which a
  * first page cannot answer once the table outgrows it. The route's own default
  * page is what the page renders, so this is the same set a reader sees.
+ *
+ * `category` narrows it to one tab of the Catalog page, which is the only
+ * filter the route offers that a journey can state an expectation about.
  */
-export async function readCatalogue(request: APIRequestContext): Promise<readonly CatalogueRow[]> {
+export async function readCatalogue(
+  request: APIRequestContext,
+  category?: string,
+): Promise<readonly CatalogueRow[]> {
   const url = `${API_BASE}/elitea_core/public_applications/prompt_lib`;
-  const response = await request.get(url);
+  // `category` is the ONE filter the catalogue offers that a journey can name
+  // its own row through, and it is the subject of its own cases: `Other` is a
+  // catch-all that also matches a row carrying no category at all, so "is my
+  // agent in this bucket" is a different question from "is my agent in the
+  // catalogue" and both are asked here.
+  const response = await request.get(
+    url,
+    category === undefined ? {} : { params: { category } },
+  );
   if (!response.ok()) {
     throw new Error(
       `readCatalogue: GET ${url} -> ${response.status()}` +
@@ -579,12 +593,17 @@ export async function createAgentWithVersion(
   name: string,
   version: AgentVersionInput,
   projectId: string = DEFAULT_PROJECT_ID,
+  description?: string,
 ): Promise<CreatedAgent> {
   const path = `/elitea_core/applications/prompt_lib/${projectId}`;
   const response = await request.post(`${API_BASE}${path}`, {
     data: {
       name,
-      description: `${AUTOTEST_PREFIX}version contract fixture`,
+      // The DESCRIPTION is a parameter because the pre-publish check reads it:
+      // a description under 20 characters raises a warning attributed to the
+      // agent it belongs to, and a fixture that always sent a long one could
+      // not build the sub-agent a quality journey needs to be warned about.
+      description: description ?? `${AUTOTEST_PREFIX}version contract fixture`,
       type: 'agent',
       versions: [agentVersionBody({ name: 'base', agentType: 'openai', ...version })],
     },
