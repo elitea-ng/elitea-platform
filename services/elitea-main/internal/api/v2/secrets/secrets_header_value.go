@@ -68,31 +68,35 @@ func NewSecretsHeaderValue() (string, error) {
 //
 // An UNREADABLE vault is an error and is never overwritten, exactly as every
 // other write path in this package treats one.
+//
+// The check and the write are ONE locked read-modify-write (mutateVaultByID).
+// The backfill's advisory lock serialises the pass against other replicas of
+// the pass; it is the row lock here that serialises this write against a
+// secret being written through the secrets API in the same instant, which used
+// to be clobbered entirely (#858).
 func (h *Handler) EnsureProjectSecretsHeaderValue(ctx context.Context, projectID string) (bool, error) {
 	vaultID := dbKey(projectID)
-	vault, err := h.readVaultCtx(ctx, projectID)
+	written := false
+	err := h.mutateVaultCtx(ctx, projectID, false, func(vault *vaultData) (bool, error) {
+		// Both maps are consulted because ResolveSecretValue reads both, in
+		// this order. A value hidden by the Hide route still answers the
+		// `X-SECRET` check, so it counts as set.
+		if strings.TrimSpace(vault.Secrets[SecretsHeaderValueName]) != "" ||
+			strings.TrimSpace(vault.HiddenSecrets[SecretsHeaderValueName]) != "" {
+			return false, nil
+		}
+		value, err := NewSecretsHeaderValue()
+		if err != nil {
+			return false, err
+		}
+		vault.Secrets[SecretsHeaderValueName] = value
+		written = true
+		return true, nil
+	})
 	if err != nil {
 		return false, fmt.Errorf("ensure the %s secrets header value: %w", vaultID, err)
 	}
-	if vault.Secrets == nil {
-		vault.Secrets = map[string]string{}
-	}
-	// Both maps are consulted because ResolveSecretValue reads both, in this
-	// order. A value hidden by the Hide route still answers the `X-SECRET`
-	// check, so it counts as set.
-	if strings.TrimSpace(vault.Secrets[SecretsHeaderValueName]) != "" ||
-		strings.TrimSpace(vault.HiddenSecrets[SecretsHeaderValueName]) != "" {
-		return false, nil
-	}
-	value, err := NewSecretsHeaderValue()
-	if err != nil {
-		return false, err
-	}
-	vault.Secrets[SecretsHeaderValueName] = value
-	if err := h.writeVaultCtx(ctx, projectID, vault); err != nil {
-		return false, fmt.Errorf("ensure the %s secrets header value: %w", vaultID, err)
-	}
-	return true, nil
+	return written, nil
 }
 
 // ResolveProjectSecretsHeaderValue reads one project's `X-SECRET` value by its
