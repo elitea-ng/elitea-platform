@@ -178,8 +178,8 @@ func TestBackfillGivesAnExistingProjectAHeaderValue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("backfill: %v", err)
 	}
-	if report.Vaults == 0 {
-		t.Fatal("the backfill examined no vault, so it cannot have corrected one")
+	if report.Projects == 0 {
+		t.Fatal("the backfill examined no project, so it cannot have corrected one")
 	}
 	if report.Written == 0 {
 		t.Fatalf("the backfill wrote nothing while a project had no value: %+v", report)

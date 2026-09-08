@@ -108,7 +108,7 @@ func TestOnlyOneReplicaRunsTheBackfill(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	// Hold project 1's vault row. projectVaultProjectIDs orders by id, so the
+	// Hold project 1's vault row. backfillProjectIDs orders by id, so the
 	// winner meets this row first, and its write waits here.
 	barrier := poolBesideTheTestPool(t, ctx, pool)
 	held, err := barrier.Begin(ctx)
@@ -169,7 +169,7 @@ func TestOnlyOneReplicaRunsTheBackfill(t *testing.T) {
 	if !loser.SkippedLocked {
 		t.Fatalf("two replicas ran the pass at the same time; exactly one must run: %+v", loser)
 	}
-	if loser.Written != 0 || loser.Vaults != 0 {
+	if loser.Written != 0 || loser.Projects != 0 {
 		t.Fatalf("the locked-out replica did work: %+v", loser)
 	}
 
@@ -227,7 +227,7 @@ func TestASkippedReplicaReportsWhyRatherThanReportingNothing(t *testing.T) {
 	if !report.SkippedLocked {
 		t.Fatal("a locked-out replica did not report that it skipped")
 	}
-	if report.Written != 0 || report.Vaults != 0 {
+	if report.Written != 0 || report.Projects != 0 {
 		t.Fatalf("a locked-out replica did work: %+v", report)
 	}
 }
@@ -303,5 +303,79 @@ func TestTheBackfillDoesNotClobberOtherSecretsInTheVault(t *testing.T) {
 	}
 	if vault.Secrets[SecretsHeaderValueName] == "" {
 		t.Fatal("the backfill wrote no header value")
+	}
+}
+
+// seedProjectsWithoutVaults creates project rows and NO vault for any of them.
+//
+// It is the state a project row reaches whenever something other than
+// projectprovisioning created it: a database restored from a dump that carried
+// centry.project and not centry.secrets_key, an import, or a test stack that
+// inserts its fixture projects directly.
+func seedProjectsWithoutVaults(t *testing.T, pool *pgxpool.Pool, projectIDs ...string) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `
+CREATE TABLE IF NOT EXISTS centry.project (id INTEGER PRIMARY KEY)`); err != nil {
+		t.Fatalf("create centry.project: %v", err)
+	}
+	for _, projectID := range projectIDs {
+		if _, err := pool.Exec(ctx,
+			`INSERT INTO centry.project (id) VALUES ($1::integer) ON CONFLICT DO NOTHING`,
+			projectID); err != nil {
+			t.Fatalf("seed project %s: %v", projectID, err)
+		}
+	}
+}
+
+// TestTheBackfillReachesAProjectThatHasNoVaultYet is the case the pass used to
+// pass over silently.
+//
+// The value only ever lives in a vault, and nothing but this pass and
+// projectprovisioning creates one — so a project row without a vault used to
+// have no X-SECRET value on this start, on the next one, and for ever. Every
+// version-details read in it was then refused, which is the SDK call that
+// materializes a nested agent, so an agent attached to another agent
+// contributed no tool at all and the turn answered as if it had none.
+func TestTheBackfillReachesAProjectThatHasNoVaultYet(t *testing.T) {
+	pool := newSecretsPool(t)
+	seedProjectsWithoutVaults(t, pool, "11")
+	ctx := context.Background()
+
+	handler := NewHandler(pool)
+	report, err := handler.BackfillProjectSecretsHeaderValues(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Projects != 1 {
+		t.Fatalf("the pass examined %d projects, want the one with no vault: %+v", report.Projects, report)
+	}
+	if report.VaultsCreated != 1 {
+		t.Fatalf("the pass created %d vaults, want 1: %+v", report.VaultsCreated, report)
+	}
+	if report.Written != 1 || report.Skipped != 0 {
+		t.Fatalf("the pass wrote no value into the vault it made: %+v", report)
+	}
+
+	value, err := handler.LookupProjectSecret(ctx, "11", SecretsHeaderValueName)
+	if err != nil {
+		t.Fatalf("the created vault holds no %s: %v", SecretsHeaderValueName, err)
+	}
+	if value == "" || value == "secret" {
+		t.Fatalf("the created vault holds the guessable value: %q", value)
+	}
+
+	// A second start finds the vault it made and leaves the value alone: a
+	// rewritten value would refuse every SDK call already carrying the first.
+	second, err := handler.BackfillProjectSecretsHeaderValues(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.VaultsCreated != 0 || second.Written != 0 || second.AlreadySet != 1 {
+		t.Fatalf("the second pass did not leave the value alone: %+v", second)
+	}
+	again, err := handler.LookupProjectSecret(ctx, "11", SecretsHeaderValueName)
+	if err != nil || again != value {
+		t.Fatalf("the second pass replaced the value: %q -> %q (%v)", value, again, err)
 	}
 }

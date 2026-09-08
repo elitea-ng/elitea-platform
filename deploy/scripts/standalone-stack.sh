@@ -251,6 +251,32 @@ raise SystemExit(1 if unsettled else 0)
 '
 }
 
+# service_is_healthy reports whether ONE service of this project is running and
+# healthy. It is narrower than stack_is_settled on purpose: a caller that waits
+# on one restarted service must not fail because an unrelated optional service
+# of this large compose file is absent or still starting.
+service_is_healthy() {
+  $COMPOSE_BIN $COMPOSE_F ps --all --format json "$1" 2>/dev/null | python3 -c '
+import json, sys
+
+raw = sys.stdin.read().strip()
+if not raw:
+    raise SystemExit(1)
+try:
+    parsed = json.loads(raw)
+    containers = parsed if isinstance(parsed, list) else [parsed]
+except json.JSONDecodeError:
+    containers = [json.loads(line) for line in raw.splitlines() if line.strip()]
+
+for container in containers:
+    if (container.get("State") or "").lower() != "running":
+        continue
+    if (container.get("Health") or "").lower() in ("", "healthy"):
+        raise SystemExit(0)
+raise SystemExit(1)
+'
+}
+
 # reject_retired_embedding_var stops a run that still sets the retired variable.
 # A silent no-op would hide the reason the value stopped taking effect.
 reject_retired_embedding_var() {
@@ -818,6 +844,17 @@ case "${1:-}" in
     $COMPOSE_BIN $COMPOSE_F build "${@:2}"
     ;;
 
+  logs)
+    # The stack's own account of a failed run, and the ONLY one for the
+    # services no browser artefact can see: what the agent worker did with a
+    # turn, what the mock model was asked for, what elitea-main refused.
+    #
+    # Bounded per service, because a failed chat journey leaves tens of
+    # megabytes of streaming frames behind and an unbounded dump buries the
+    # twenty lines that name the cause.
+    $COMPOSE_BIN $COMPOSE_F logs --no-color --tail "${STANDALONE_LOG_TAIL:-400}" "${@:2}"
+    ;;
+
   down)
     $COMPOSE_BIN $COMPOSE_F down --remove-orphans "${@:2}"
     ;;
@@ -848,6 +885,32 @@ case "${1:-}" in
     # service's own comment already anticipates.
     echo "→ Applying tenant migrations for newly seeded projects…"
     $COMPOSE_BIN $COMPOSE_F run --rm --no-deps elitea-migrate -all-tenants
+    # The seeded projects also need the X-SECRET value every project gets from
+    # projectprovisioning, and the seeder cannot write one: the value is sealed
+    # with the project's Fernet key, so only elitea-main can mint it
+    # (internal/api/v2/secrets, the one-minter rule). elitea-main runs
+    # `BackfillProjectSecretsHeaderValues` before its listeners bind — but it
+    # bound BEFORE this seed step ran, so the pass it already did saw none of
+    # these projects. Restarting it runs the pass again over the rows the seed
+    # just wrote.
+    #
+    # WITHOUT THIS the projects are complete in every way a journey can see and
+    # broken in one it cannot: `PATCH /elitea_core/version/prompt_lib/...` — the
+    # call the SDK worker materializes a NESTED AGENT with — refuses every
+    # caller in a project that has no value, so an agent attached to another
+    # agent, or standing in a conversation as a participant, contributes no
+    # callable tool and the turn answers as though it were alone.
+    echo "→ Restarting elitea-main so the X-SECRET backfill reaches the seeded projects…"
+    $COMPOSE_BIN $COMPOSE_F restart elitea-main
+    restart_deadline=$(( $(date +%s) + 120 ))
+    until service_is_healthy elitea-main; do
+      if [ "$(date +%s)" -ge "$restart_deadline" ]; then
+        echo "ERROR: elitea-main did not become healthy after the seed restart." >&2
+        $COMPOSE_BIN $COMPOSE_F ps --all >&2 || true
+        exit 1
+      fi
+      sleep 2
+    done
     ;;
 
   seed-runtime)

@@ -119,8 +119,22 @@ func (h *Handler) ResolveProjectSecretsHeaderValue(ctx context.Context, projectI
 // SecretsHeaderBackfillReport counts what one backfill pass did. The caller
 // logs it, so an operator can state how many projects the pass touched.
 type SecretsHeaderBackfillReport struct {
-	// Vaults is how many project vaults the pass examined.
-	Vaults int
+	// Projects is how many projects the pass examined.
+	//
+	// It counts PROJECTS and not vaults, because a project with no vault is
+	// the state this pass repairs rather than a project it may pass over. See
+	// VaultsCreated.
+	Projects int
+	// VaultsCreated is how many of them had no vault and were given an empty
+	// one before the value was sealed into it.
+	//
+	// A project row can exist with no vault whenever something other than
+	// projectprovisioning created it — a database restored from a dump that
+	// carried centry.project and not centry.secrets_key, an import, or a test
+	// stack that inserts its fixture projects directly. Such a project used to
+	// be invisible to this pass, so it never got an X-SECRET value and every
+	// sub-agent call inside it was refused for the life of the deployment.
+	VaultsCreated int
 	// Written is how many of them received a new value.
 	Written int
 	// AlreadySet is how many of them held one already.
@@ -137,7 +151,17 @@ type SecretsHeaderBackfillReport struct {
 }
 
 // BackfillProjectSecretsHeaderValues gives a `secrets_header_value` to every
-// project that has a vault and no value (#408 step 2).
+// project that has no value (#408 step 2), CREATING the vault when the project
+// has none.
+//
+// THE VAULT IS PART OF THE WORK, not a precondition. The pass used to enumerate
+// vaults, so a project row created by anything other than projectprovisioning —
+// a restored dump, an import, a test stack that inserts its fixture projects
+// directly — was never reached, and no later start could reach it either: the
+// value is only ever written into a vault, and nothing else was going to make
+// one. That project then refused every version-details read for ever, which is
+// the SDK call a nested agent is materialized by, so an agent attached to
+// another agent silently contributed no tool at all.
 //
 // IT IS GO AND NOT A MIGRATION, and it cannot be a migration. The value is
 // sealed with the project's Fernet key, which is itself wrapped with
@@ -249,14 +273,36 @@ func (h *Handler) BackfillProjectSecretsHeaderValues(ctx context.Context) (Secre
 		}
 	}()
 
-	projectIDs, err := h.projectVaultProjectIDs(ctx)
+	projectIDs, err := h.backfillProjectIDs(ctx)
 	if err != nil {
 		return report, err
 	}
-	report.Vaults = len(projectIDs)
+	report.Projects = len(projectIDs)
 	for _, projectID := range projectIDs {
 		if err := ctx.Err(); err != nil {
 			return report, fmt.Errorf("backfill the secrets header values: %w", err)
+		}
+		// The vault first, because EnsureProjectSecretsHeaderValue writes into
+		// one and never creates one. A project that already has a vault is
+		// read and left alone, so this costs one vault read on the ordinary
+		// path and is the whole repair on the other.
+		created, vaultErr := h.ensureBackfillVault(ctx, projectID)
+		if vaultErr != nil {
+			if pingErr := h.pool.Ping(ctx); pingErr != nil {
+				return report, fmt.Errorf(
+					"backfill the secrets header values: the database stopped answering: %w", vaultErr)
+			}
+			report.Skipped++
+			slog.WarnContext(ctx,
+				"the project vault could not be created, so the project gets no X-SECRET value "+
+					"and the version details route refuses every caller for it",
+				"project_id", projectID,
+				"variable", MasterKeyEnvVar,
+				"error", vaultErr)
+			continue
+		}
+		if created {
+			report.VaultsCreated++
 		}
 		written, ensureErr := h.EnsureProjectSecretsHeaderValue(ctx, projectID)
 		switch {
@@ -281,17 +327,44 @@ func (h *Handler) BackfillProjectSecretsHeaderValues(ctx context.Context) (Secre
 	return report, nil
 }
 
-// projectVaultProjectIDs lists the projects that have a vault.
+// ensureBackfillVault gives one project an empty vault when it has none, and
+// reports whether it made one.
 //
-// It joins centry.project so an ORPHAN vault — rows left by a project that is
-// gone — is not written to. RemoveProjectVault deletes those rows, and a vault
-// that outlived its project is adopted by the next project that draws the same
-// id, so writing a value into one would seal material into a vault the next
-// owner inherits.
+// The "already there" answer is read from the vault rather than assumed from
+// the enumeration: two replicas that both lost the advisory-lock race are not
+// the only writers of centry.secrets_key, and EnsureProjectVault is the one
+// minter (#399/#411), so the decision is left to it and only the COUNT is made
+// here.
+func (h *Handler) ensureBackfillVault(ctx context.Context, projectID string) (bool, error) {
+	_, err := h.readVaultCtx(ctx, projectID)
+	switch {
+	case err == nil:
+		return false, nil
+	case errors.Is(err, ErrVaultAbsent):
+		if err := h.EnsureProjectVault(ctx, projectID); err != nil {
+			return false, err
+		}
+		return true, nil
+	default:
+		// A vault that exists and will not open. EnsureProjectSecretsHeaderValue
+		// refuses it too, and it is counted as skipped there — so it is passed
+		// through rather than reported as a vault fault here.
+		return false, nil
+	}
+}
+
+// backfillProjectIDs lists the projects the pass must reach.
+//
+// It reads centry.project and not centry.secrets_key, so a project with no
+// vault is included; an ORPHAN vault — rows left by a project that is gone — is
+// excluded by construction, because it names no project. RemoveProjectVault
+// deletes those rows, and a vault that outlived its project is adopted by the
+// next project that draws the same id, so writing a value into one would seal
+// material into a vault the next owner inherits.
 //
 // The three tables are checked with to_regclass first. An empty database has
 // none of them, and the service must start against one.
-func (h *Handler) projectVaultProjectIDs(ctx context.Context) ([]string, error) {
+func (h *Handler) backfillProjectIDs(ctx context.Context) ([]string, error) {
 	var present bool
 	if err := h.pool.QueryRow(ctx,
 		`SELECT to_regclass('centry.secrets_key') IS NOT NULL
@@ -306,10 +379,9 @@ func (h *Handler) projectVaultProjectIDs(ctx context.Context) ([]string, error) 
 	rows, err := h.pool.Query(ctx,
 		`SELECT p.id::text
 		   FROM centry.project AS p
-		   JOIN centry.secrets_key AS k ON k.id = 'project-' || p.id::text
 		  ORDER BY p.id`)
 	if err != nil {
-		return nil, fmt.Errorf("list the project vaults: %w", err)
+		return nil, fmt.Errorf("list the projects: %w", err)
 	}
 	defer rows.Close()
 
@@ -317,12 +389,12 @@ func (h *Handler) projectVaultProjectIDs(ctx context.Context) ([]string, error) 
 	for rows.Next() {
 		var projectID string
 		if err := rows.Scan(&projectID); err != nil {
-			return nil, fmt.Errorf("read a project vault row: %w", err)
+			return nil, fmt.Errorf("read a project row: %w", err)
 		}
 		projectIDs = append(projectIDs, projectID)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("read the project vault rows: %w", err)
+		return nil, fmt.Errorf("read the project rows: %w", err)
 	}
 	return projectIDs, nil
 }
