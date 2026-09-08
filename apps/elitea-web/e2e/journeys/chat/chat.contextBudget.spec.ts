@@ -190,6 +190,26 @@ test('the Context Budget panel reports the budget the profile sets, and follows 
       enabled: true,
       max_context_tokens: SECOND_BUDGET,
     });
+
+    // THE SERVER FIRST, exactly as the first half does — and polled, because a
+    // profile write and the resolution that reads it are two requests. Without
+    // this the assertion below reports "the panel cached the old budget" for
+    // two unrelated findings, the other being "the server had not resolved the
+    // new one yet", and the report keeps neither. This is where the webkit
+    // flake landed.
+    await expect
+      .poll(
+        async () => {
+          const resolved = await page.request.get(
+            `${API_BASE}/elitea_core/context_analytics/prompt_lib/${DEFAULT_PROJECT_ID}/${conversationId}`,
+          );
+          if (!resolved.ok()) return 0;
+          return ((await resolved.json()) as { max_tokens?: number }).max_tokens ?? 0;
+        },
+        { timeout: 20_000, message: 'the changed profile budget never reached the server’s own resolution' },
+      )
+      .toBe(SECOND_BUDGET);
+
     await page.reload();
     await expect(page.getByTestId('chat-message-input')).toBeEditable({ timeout: 20_000 });
     await page.getByRole('button', { name: 'Expand participants' }).click();

@@ -236,6 +236,16 @@ describe('the chat surface: the rail beside the page', () => {
       await user.type(input, 'First turn{Enter}');
 
       expect(await screen.findByTestId(`conversation-item-${CREATED}`, {}, { timeout: 10_000 })).toBeInTheDocument();
+
+      // …AND the question is still on screen. Announcing the row routes the
+      // reader to `/chat/{id}`, which re-seeds the live history from a server
+      // answer that has no messages in it; the refused turn's own question and
+      // failure bubble were erased by that re-seed until `useChatBoxData`
+      // stopped letting an EMPTY seed overwrite a live transcript. Both halves
+      // are asserted together because a fix for either one alone breaks the
+      // other.
+      await waitFor(() => { expect(screen.getAllByTestId('user-message')).toHaveLength(1); }, { timeout: 5_000 });
+      expect(screen.getByTestId('user-message')).toHaveTextContent('First turn');
     } finally {
       eventSources.restore();
     }

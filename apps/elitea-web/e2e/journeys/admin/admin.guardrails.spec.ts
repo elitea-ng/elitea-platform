@@ -169,7 +169,7 @@ async function publishedBlocks(request: APIRequestContext, toolkitType: string):
   );
 }
 
-test.afterEach(async () => {
+test.afterEach(async (_fixtures, testInfo) => {
   /*
    * A NET, not the restore. Every test puts the policy back inside its own
    * `finally`, within the lock, so the window is as short as the assertions
@@ -181,7 +181,16 @@ test.afterEach(async () => {
    * The lock is deliberately NOT taken here: the run is already in the state
    * the lock exists to avoid, and leaving the platform blocked is the worse
    * of the two outcomes.
+   *
+   * ONLY FOR A TEST THAT DID NOT FINISH. `fullyParallel: true` puts the three
+   * tests below in three workers, so this hook used to run — unlocked, on a
+   * green test — while a SIBLING was inside its own flag window, and wiped the
+   * block that sibling was about to assert. GR-1 failed exactly that way: the
+   * card's banner was gone because another worker's net had just cleared the
+   * flags. A test that ended normally has already restored them in its
+   * `finally`, so the net has nothing to do for it and every reason not to.
    */
+  if (testInfo.status === testInfo.expectedStatus) return;
   await setToolkitGuardrails(EMPTY_TOOLKIT_GUARDRAILS).catch(() => {});
 });
 
@@ -329,29 +338,39 @@ test('GR-2: blocking one tool removes just that tool from its type, whatever cas
 }) => {
   test.setTimeout(210_000);
 
-  const before = await readCatalogue(page.request);
-  const tools = toolsOf(before, BLOCKED_TYPE);
-  expect(
-    tools.length,
-    `the ${BLOCKED_TYPE} type schema offers no tools, so there is nothing to block`,
-  ).toBeGreaterThan(1);
-
-  /*
-   * DERIVED from the served catalogue, then RE-CASED.
-   *
-   * The legacy case names `get_ISSUE` — a real tool written in a case nobody
-   * stores it in, which is the whole point. Naming a literal here would make
-   * this test fail the day the SDK renames a tool, and it would fail as
-   * "guardrails are broken". Taking the first tool the deployment actually
-   * serves and shouting it keeps the case-insensitivity and drops the
-   * coupling.
-   */
-  const target = tools[0] as string;
-  const survivor = tools[1] as string;
-  const targetAsTyped = target.toUpperCase();
-  expect(targetAsTyped, 'the point of this test is a DIFFERENT case').not.toBe(target);
-
   await withPlatformFlagLock(async () => {
+    /*
+     * THE PRECONDITION IS READ INSIDE THE WINDOW.
+     *
+     * It used to be read before the lock was taken, and the catalogue it reads
+     * is exactly what a SIBLING test blocks: while GR-1 holds `github` blocked,
+     * this read answers a schema with no tools in it, and this test failed as
+     * "the github type schema offers no tools, so there is nothing to block" —
+     * a report about another test's window, not about guardrails. Inside the
+     * lock the catalogue is the deployment's own.
+     */
+    const before = await readCatalogue(page.request);
+    const tools = toolsOf(before, BLOCKED_TYPE);
+    expect(
+      tools.length,
+      `the ${BLOCKED_TYPE} type schema offers no tools, so there is nothing to block`,
+    ).toBeGreaterThan(1);
+
+    /*
+     * DERIVED from the served catalogue, then RE-CASED.
+     *
+     * The legacy case names `get_ISSUE` — a real tool written in a case nobody
+     * stores it in, which is the whole point. Naming a literal here would make
+     * this test fail the day the SDK renames a tool, and it would fail as
+     * "guardrails are broken". Taking the first tool the deployment actually
+     * serves and shouting it keeps the case-insensitivity and drops the
+     * coupling.
+     */
+    const target = tools[0] as string;
+    const survivor = tools[1] as string;
+    const targetAsTyped = target.toUpperCase();
+    expect(targetAsTyped, 'the point of this test is a DIFFERENT case').not.toBe(target);
+
     try {
       await setToolkitGuardrails({
         ...EMPTY_TOOLKIT_GUARDRAILS,
@@ -393,12 +412,6 @@ test('GR-3: a sensitive tool is stored and applied as sensitive, not as blocked 
 }) => {
   test.setTimeout(210_000);
 
-  const before = await readCatalogue(page.request);
-  const tools = toolsOf(before, BLOCKED_TYPE);
-  expect(tools.length).toBeGreaterThan(0);
-  const target = tools[0] as string;
-  const targetAsTyped = target.toUpperCase();
-
   /*
    * THE HALF THIS STACK CAN ANSWER.
    *
@@ -417,6 +430,14 @@ test('GR-3: a sensitive tool is stored and applied as sensitive, not as blocked 
    * wrong one is a mistake this catches.
    */
   await withPlatformFlagLock(async () => {
+    // Read inside the window, for the reason GR-2 states in full: a sibling's
+    // block makes this same read answer an empty schema.
+    const before = await readCatalogue(page.request);
+    const tools = toolsOf(before, BLOCKED_TYPE);
+    expect(tools.length).toBeGreaterThan(0);
+    const target = tools[0] as string;
+    const targetAsTyped = target.toUpperCase();
+
     try {
       await setToolkitGuardrails({
         ...EMPTY_TOOLKIT_GUARDRAILS,

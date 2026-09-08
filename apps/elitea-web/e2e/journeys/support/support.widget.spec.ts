@@ -87,7 +87,22 @@ test.use({ storageState: STORAGE_STATE.admin });
 const SUPPORT_PROJECT_ID = Number(DEFAULT_PROJECT_ID);
 const RUN_ID = Date.now();
 const AGENT_NAME = `${AUTOTEST_PREFIX}sup_w_${String(RUN_ID).slice(-6)}`;
-const ASSISTANT_NAME = `${AUTOTEST_PREFIX}Widget ${RUN_ID}`;
+/*
+ * WORKER-INDEPENDENT, and that is the whole point of the constant.
+ *
+ * `RUN_ID` is `Date.now()` at MODULE LOAD, and `fullyParallel: true` loads this
+ * module once per worker process — so the four tests below each had their own
+ * `RUN_ID`. They share one flag window (`SUPPORT_FLAG_GROUP`) on the claim that
+ * every member writes the same section values; with the name carrying a
+ * per-worker stamp that claim was false, each member overwrote the operator
+ * name mid-window, and SUP-W3 read the header as a sibling's name
+ * (`autotest_Widget …7466` where it wrote `…6768`).
+ *
+ * Anything a sibling can overwrite inside the shared window must therefore be a
+ * constant. `AGENT_NAME` stays stamped: it is never asserted, and each worker
+ * deletes the agent it created.
+ */
+const ASSISTANT_NAME = `${AUTOTEST_PREFIX}Widget`;
 const WELCOME_MESSAGE = `${AUTOTEST_PREFIX}Welcome to the widget journey.`;
 const PLACEHOLDER = `${AUTOTEST_PREFIX}Ask the widget...`;
 
@@ -152,9 +167,11 @@ async function withAssistantOn(page: Page, body: () => Promise<void>): Promise<v
   test.setTimeout(210_000);
   await withPlatformFlagLock(
     async () => {
-      // Written by every member. The values are identical, so a sibling
-      // joining the window mid-test rewrites the section to what it already
-      // says and nothing on screen moves.
+      // Written by every member. Every value a test ASSERTS is a module
+      // constant (see `ASSISTANT_NAME`), so a sibling joining the window
+      // mid-test rewrites the section to what it already says and nothing on
+      // screen moves. `agentId` is the one field that differs per worker, and
+      // it names an equivalent agent that nothing on screen reports.
       await enableSupportAssistant(page.request, {
         projectId: SUPPORT_PROJECT_ID,
         agentId: Number(agentId),

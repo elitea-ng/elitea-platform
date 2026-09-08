@@ -433,6 +433,23 @@ async function projectMemberEmails(page: Page, projectId: number): Promise<strin
   return rows.map((row) => row.email);
 }
 
+/**
+ * Close whichever Autocomplete list is open.
+ *
+ * Both bulk-invite pickers are `multiple` with `disableCloseOnSelect`
+ * (`AdminBulkInviteDialog.tsx`), which is the right behaviour for a batch —
+ * and it leaves the popper covering the next control. Escape is what MUI binds
+ * for this, and it is what the reader presses.
+ */
+async function dismissOptionList(page: Page): Promise<void> {
+  // Guarded: with no list open, Escape reaches the Dialog and closes the whole
+  // form instead.
+  if ((await page.getByRole('option').count()) === 0) return;
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('option')).toHaveCount(0);
+  await expect(page.getByTestId('bulk-invite-submit'), 'Escape must close the list, not the dialog').toBeVisible();
+}
+
 async function postBulkInvite(
   page: Page,
   payload: { users: number[]; projects: number[]; role: string },
@@ -463,11 +480,18 @@ adminTest('J39: a bulk invite writes every pair and the second run reports them 
   await page.getByRole('option').filter({ hasText: BULK_INVITEE_A }).first().click();
   await usersField.fill(BULK_INVITEE_B);
   await page.getByRole('option').filter({ hasText: BULK_INVITEE_B }).first().click();
+  // Both pickers are `multiple` + `disableCloseOnSelect`, so the option list
+  // stays open on purpose after a pick and is drawn OVER the field below it.
+  // A reader dismisses it before moving on, and so does this journey: without
+  // it the next click lands on `Dev User (dev@elitea.ai)` in the still-open
+  // users list instead of on the projects field.
+  await dismissOptionList(page);
 
   const projectsField = page.getByTestId('bulk-invite-projects').getByRole('combobox');
   await projectsField.click();
   await projectsField.fill(projectName);
   await page.getByRole('option').filter({ hasText: projectName }).first().click();
+  await dismissOptionList(page);
 
   await page.getByTestId('bulk-invite-role').getByRole('combobox').click();
   await page.getByRole('option', { name: 'editor' }).click();
