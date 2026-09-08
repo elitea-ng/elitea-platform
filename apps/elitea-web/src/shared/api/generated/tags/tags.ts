@@ -52,7 +52,16 @@ import type {
   UseQueryResult,
 } from "@tanstack/react-query";
 
-import type { N401Response, N403Response, TagsList } from "../model";
+import type {
+  ListTagsParams,
+  N400Response,
+  N401Response,
+  N403Response,
+  N404Response,
+  Tag,
+  TagWriteRequest,
+  TagsList,
+} from "../model";
 
 import { eliteaFetch } from ".././mutator";
 
@@ -81,6 +90,11 @@ export type listTagsResponse200 = {
   status: 200;
 };
 
+export type listTagsResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
 export type listTagsResponse401 = {
   data: N401Response;
   status: 401;
@@ -95,41 +109,61 @@ export type listTagsResponseSuccess = listTagsResponse200 & {
   headers: Headers;
 };
 export type listTagsResponseError = (
-  listTagsResponse401 | listTagsResponse403
+  listTagsResponse400 | listTagsResponse401 | listTagsResponse403
 ) & {
   headers: Headers;
 };
 
 export type listTagsResponse = listTagsResponseSuccess | listTagsResponseError;
 
-export const getListTagsUrl = (projectId: string) => {
-  return `/elitea_core/tags/prompt_lib/${projectId}`;
+export const getListTagsUrl = (projectId: string, params?: ListTagsParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/elitea_core/tags/prompt_lib/${projectId}?${stringifiedParams}`
+    : `/elitea_core/tags/prompt_lib/${projectId}`;
 };
 
 /**
  * NOTE(W2): {rows, total} envelope (NOT a bare array),
- * internal/api/v2/tags/handler.go:37-49.
+ * internal/api/v2/tags/handler.go.
  * @summary Get all tags for a project
  */
 export const listTags = async (
   projectId: string,
+  params?: ListTagsParams,
   options?: Parameters<typeof eliteaFetch>[1],
 ): Promise<listTagsResponse> => {
-  return eliteaFetch<listTagsResponse>(getListTagsUrl(projectId), {
+  return eliteaFetch<listTagsResponse>(getListTagsUrl(projectId, params), {
     ...options,
     method: "GET",
   });
 };
 
-export const getListTagsQueryKey = (projectId: string) => {
-  return [`/elitea_core/tags/prompt_lib/${projectId}`] as const;
+export const getListTagsQueryKey = (
+  projectId: string,
+  params?: ListTagsParams,
+) => {
+  return [
+    `/elitea_core/tags/prompt_lib/${projectId}`,
+    ...(params ? [params] : []),
+  ] as const;
 };
 
 export const getListTagsQueryOptions = <
   TData = Awaited<ReturnType<typeof listTags>>,
-  TError = N401Response | N403Response,
+  TError = N400Response | N401Response | N403Response,
 >(
   projectId: string,
+  params?: ListTagsParams,
   options?: {
     query?: Partial<
       UseQueryOptions<Awaited<ReturnType<typeof listTags>>, TError, TData>
@@ -139,11 +173,12 @@ export const getListTagsQueryOptions = <
 ) => {
   const { query: queryOptions, request: requestOptions } = options ?? {};
 
-  const queryKey = queryOptions?.queryKey ?? getListTagsQueryKey(projectId);
+  const queryKey =
+    queryOptions?.queryKey ?? getListTagsQueryKey(projectId, params);
 
   const queryFn: QueryFunction<Awaited<ReturnType<typeof listTags>>> = ({
     signal,
-  }) => listTags(projectId, { signal, ...requestOptions });
+  }) => listTags(projectId, params, { signal, ...requestOptions });
 
   return {
     queryKey,
@@ -158,13 +193,14 @@ export const getListTagsQueryOptions = <
 export type ListTagsQueryResult = NonNullable<
   Awaited<ReturnType<typeof listTags>>
 >;
-export type ListTagsQueryError = N401Response | N403Response;
+export type ListTagsQueryError = N400Response | N401Response | N403Response;
 
 export function useListTags<
   TData = Awaited<ReturnType<typeof listTags>>,
-  TError = N401Response | N403Response,
+  TError = N400Response | N401Response | N403Response,
 >(
   projectId: string,
+  params: undefined | ListTagsParams,
   options: {
     query: Partial<
       UseQueryOptions<Awaited<ReturnType<typeof listTags>>, TError, TData>
@@ -185,9 +221,10 @@ export function useListTags<
 };
 export function useListTags<
   TData = Awaited<ReturnType<typeof listTags>>,
-  TError = N401Response | N403Response,
+  TError = N400Response | N401Response | N403Response,
 >(
   projectId: string,
+  params?: ListTagsParams,
   options?: {
     query?: Partial<
       UseQueryOptions<Awaited<ReturnType<typeof listTags>>, TError, TData>
@@ -208,9 +245,10 @@ export function useListTags<
 };
 export function useListTags<
   TData = Awaited<ReturnType<typeof listTags>>,
-  TError = N401Response | N403Response,
+  TError = N400Response | N401Response | N403Response,
 >(
   projectId: string,
+  params?: ListTagsParams,
   options?: {
     query?: Partial<
       UseQueryOptions<Awaited<ReturnType<typeof listTags>>, TError, TData>
@@ -227,9 +265,10 @@ export function useListTags<
 
 export function useListTags<
   TData = Awaited<ReturnType<typeof listTags>>,
-  TError = N401Response | N403Response,
+  TError = N400Response | N401Response | N403Response,
 >(
   projectId: string,
+  params?: ListTagsParams,
   options?: {
     query?: Partial<
       UseQueryOptions<Awaited<ReturnType<typeof listTags>>, TError, TData>
@@ -240,7 +279,426 @@ export function useListTags<
 ): UseQueryResult<TData, TError> & {
   queryKey: DataTag<QueryKey, TData, TError>;
 } {
-  const queryOptions = getListTagsQueryOptions(projectId, options);
+  const queryOptions = getListTagsQueryOptions(projectId, params, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type createTagResponse201 = {
+  data: Tag;
+  status: 201;
+};
+
+export type createTagResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type createTagResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type createTagResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type createTagResponseSuccess = createTagResponse201 & {
+  headers: Headers;
+};
+export type createTagResponseError = (
+  createTagResponse400 | createTagResponse401 | createTagResponse403
+) & {
+  headers: Headers;
+};
+
+export type createTagResponse =
+  createTagResponseSuccess | createTagResponseError;
+
+export const getCreateTagUrl = (projectId: string) => {
+  return `/elitea_core/tags/prompt_lib/${projectId}`;
+};
+
+/**
+ * Answers the STORED row, with the id the database chose.
+ *
+ * It is idempotent on the NAME: `tags.name` is unique per tenant schema
+ * and one name is one row shared by every version that carries it, so a
+ * second create of the same name answers the row that already exists
+ * rather than a second row or a conflict. `data` is written when the row
+ * is new and left alone when it is not — the blob belongs to every
+ * entity using the tag.
+ *
+ * This verb used to echo the request back with 201 and an `id` of 0,
+ * touching no table: a tag created here was in no list and its id
+ * addressed nothing.
+ * @summary Create a tag in the project
+ */
+export const createTag = async (
+  projectId: string,
+  tagWriteRequest: TagWriteRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<createTagResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+  return eliteaFetch<createTagResponse>(getCreateTagUrl(projectId), {
+    ...options,
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...getHeaders(options?.headers),
+    },
+    body: JSON.stringify(tagWriteRequest),
+  });
+};
+
+export const getCreateTagQueryKey = (
+  projectId: string,
+  tagWriteRequest?: TagWriteRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/tags/prompt_lib/${projectId}`,
+    tagWriteRequest,
+  ] as const;
+};
+
+export const getCreateTagQueryOptions = <
+  TData = Awaited<ReturnType<typeof createTag>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  tagWriteRequest: TagWriteRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof createTag>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getCreateTagQueryKey(projectId, tagWriteRequest);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof createTag>>> = ({
+    signal,
+  }) => createTag(projectId, tagWriteRequest, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<Awaited<ReturnType<typeof createTag>>, TError, TData> & {
+    queryKey: DataTag<QueryKey, TData, TError>;
+  };
+};
+
+export type CreateTagQueryResult = NonNullable<
+  Awaited<ReturnType<typeof createTag>>
+>;
+export type CreateTagQueryError = N400Response | N401Response | N403Response;
+
+export function useCreateTag<
+  TData = Awaited<ReturnType<typeof createTag>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  tagWriteRequest: TagWriteRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof createTag>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof createTag>>,
+          TError,
+          Awaited<ReturnType<typeof createTag>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCreateTag<
+  TData = Awaited<ReturnType<typeof createTag>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  tagWriteRequest: TagWriteRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof createTag>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof createTag>>,
+          TError,
+          Awaited<ReturnType<typeof createTag>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCreateTag<
+  TData = Awaited<ReturnType<typeof createTag>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  tagWriteRequest: TagWriteRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof createTag>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Create a tag in the project
+ */
+
+export function useCreateTag<
+  TData = Awaited<ReturnType<typeof createTag>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  tagWriteRequest: TagWriteRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof createTag>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getCreateTagQueryOptions(
+    projectId,
+    tagWriteRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type deleteTagResponse204 = {
+  data: void;
+  status: 204;
+};
+
+export type deleteTagResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type deleteTagResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type deleteTagResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type deleteTagResponseSuccess = deleteTagResponse204 & {
+  headers: Headers;
+};
+export type deleteTagResponseError = (
+  deleteTagResponse401 | deleteTagResponse403 | deleteTagResponse404
+) & {
+  headers: Headers;
+};
+
+export type deleteTagResponse =
+  deleteTagResponseSuccess | deleteTagResponseError;
+
+export const getDeleteTagUrl = (projectId: string, tagId: number) => {
+  return `/elitea_core/tags/prompt_lib/${projectId}/${tagId}`;
+};
+
+/**
+ * Removes the tag row and every association pointing at it, so the tag
+ * leaves the project's list and every entity that carried it.
+ *
+ * A tag the project does not hold answers 404 rather than the 204 a real
+ * delete answers: this verb used to write 204 and return, so a caller
+ * could not remove a tag at all and could not tell that it had not.
+ * @summary Remove a tag from the project
+ */
+export const deleteTag = async (
+  projectId: string,
+  tagId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<deleteTagResponse> => {
+  return eliteaFetch<deleteTagResponse>(getDeleteTagUrl(projectId, tagId), {
+    ...options,
+    method: "DELETE",
+  });
+};
+
+export const getDeleteTagQueryKey = (projectId: string, tagId: number) => {
+  return [
+    "DELETE",
+    `/elitea_core/tags/prompt_lib/${projectId}/${tagId}`,
+  ] as const;
+};
+
+export const getDeleteTagQueryOptions = <
+  TData = Awaited<ReturnType<typeof deleteTag>>,
+  TError = N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  tagId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof deleteTag>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getDeleteTagQueryKey(projectId, tagId);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof deleteTag>>> = ({
+    signal,
+  }) => deleteTag(projectId, tagId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      tagId !== null &&
+      tagId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<Awaited<ReturnType<typeof deleteTag>>, TError, TData> & {
+    queryKey: DataTag<QueryKey, TData, TError>;
+  };
+};
+
+export type DeleteTagQueryResult = NonNullable<
+  Awaited<ReturnType<typeof deleteTag>>
+>;
+export type DeleteTagQueryError = N401Response | N403Response | N404Response;
+
+export function useDeleteTag<
+  TData = Awaited<ReturnType<typeof deleteTag>>,
+  TError = N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  tagId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof deleteTag>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof deleteTag>>,
+          TError,
+          Awaited<ReturnType<typeof deleteTag>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDeleteTag<
+  TData = Awaited<ReturnType<typeof deleteTag>>,
+  TError = N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  tagId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof deleteTag>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof deleteTag>>,
+          TError,
+          Awaited<ReturnType<typeof deleteTag>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDeleteTag<
+  TData = Awaited<ReturnType<typeof deleteTag>>,
+  TError = N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  tagId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof deleteTag>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Remove a tag from the project
+ */
+
+export function useDeleteTag<
+  TData = Awaited<ReturnType<typeof deleteTag>>,
+  TError = N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  tagId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof deleteTag>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getDeleteTagQueryOptions(projectId, tagId, options);
 
   const query = useQuery(queryOptions, queryClient) as UseQueryResult<
     TData,

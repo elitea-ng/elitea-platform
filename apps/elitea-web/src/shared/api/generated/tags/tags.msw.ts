@@ -44,7 +44,7 @@ import { faker } from "@faker-js/faker";
 import { HttpResponse, delay, http } from "msw";
 import type { RequestHandlerOptions } from "msw";
 
-import type { TagsList } from "../model";
+import type { Tag, TagsList } from "../model";
 
 export const getListTagsResponseMock = (
   overrideResponse: Partial<Extract<TagsList, object>> = {},
@@ -58,6 +58,15 @@ export const getListTagsResponseMock = (
     data: faker.helpers.arrayElement([{}, null]),
   })),
   total: faker.number.int(),
+  ...overrideResponse,
+});
+
+export const getCreateTagResponseMock = (
+  overrideResponse: Partial<Extract<Tag, object>> = {},
+): Tag => ({
+  id: faker.number.int(),
+  name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  data: faker.helpers.arrayElement([{}, null]),
   ...overrideResponse,
 });
 
@@ -86,4 +95,56 @@ export const getListTagsMockHandler = (
     options,
   );
 };
-export const getTagsMock = () => [getListTagsMockHandler()];
+
+export const getCreateTagMockHandler = (
+  overrideResponse?:
+    | Tag
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<Tag> | Tag),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/tags/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getCreateTagResponseMock(),
+        { status: 201 },
+      );
+    },
+    options,
+  );
+};
+
+export const getDeleteTagMockHandler = (
+  overrideResponse?:
+    | void
+    | ((
+        info: Parameters<Parameters<typeof http.delete>[1]>[0],
+      ) => Promise<void> | void),
+  options?: RequestHandlerOptions,
+) => {
+  return http.delete(
+    "*/elitea_core/tags/prompt_lib/:projectId/:tagId",
+    async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
+      await delay(0);
+      if (typeof overrideResponse === "function") {
+        await overrideResponse(info);
+      }
+
+      return new HttpResponse(null, { status: 204 });
+    },
+    options,
+  );
+};
+export const getTagsMock = () => [
+  getListTagsMockHandler(),
+  getCreateTagMockHandler(),
+  getDeleteTagMockHandler(),
+];

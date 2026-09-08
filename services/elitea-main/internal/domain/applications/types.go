@@ -32,7 +32,13 @@ type Application struct {
 	Status    string         `json:"status,omitempty"`
 	Metadata  map[string]any `json:"metadata,omitempty"`
 	CreatedAt time.Time      `json:"created_at"`
-	UpdatedAt time.Time      `json:"updated_at,omitempty"`
+	// UpdatedAt is `applications.updated_at`, stamped by every write that
+	// changes the agent or one of its versions (repos/applications.go). The
+	// `omitempty` is deliberate but INERT — encoding/json never omits a
+	// struct — so the key is always on the wire; it used to be on the wire
+	// as the zero sentinel "0001-01-01T00:00:00Z", because there was no
+	// column to scan and nothing scanned one (tenant/0134 adds it).
+	UpdatedAt time.Time `json:"updated_at,omitempty"`
 	// CreatedBy stays empty for an application. The table has no creator
 	// column: `owner_id` is the project. The list path leaves it empty as
 	// well, so an empty value is what every read of this type answers with.

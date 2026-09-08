@@ -55,7 +55,13 @@ export interface AgentTagEditorProps {
  * reaches the database and never has to be reconciled.
  */
 export function AgentTagEditor({ projectId, value, onChange }: AgentTagEditorProps): ReactNode {
-  const tagsQuery = useListTags(projectId ?? '', { query: { enabled: projectId !== undefined } });
+  // `undefined` is the tag-list QUERY parameters, not an omission: the
+  // second argument became `ListTagsParams` when `entity_coverage` was
+  // described. This control offers every tag the project holds, including one
+  // nothing carries yet, which is what the unnarrowed list answers.
+  const tagsQuery = useListTags(projectId ?? '', undefined, {
+    query: { enabled: projectId !== undefined },
+  });
   const availableTags = useMemo<Tag[]>(() => {
     // Unwrapped through the one helper (R-A6, #132) rather than a per-call-site
     // cast: this endpoint answers `{rows,total}` today, but the cast made that

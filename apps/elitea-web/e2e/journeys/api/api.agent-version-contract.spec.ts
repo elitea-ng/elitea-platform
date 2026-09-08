@@ -30,18 +30,16 @@
  * ─────────────────────────────────────────────────────────────────────────────
  * WHAT THIS RUN LEAVES BEHIND
  * ─────────────────────────────────────────────────────────────────────────────
- * Nothing, with ONE disclosed exception. Every journey creates its own
- * `autotest_*` agents through the API and deletes them in a `finally`, and no
- * journey reads another's rows or depends on the order they run in, so both
- * engines can run the file at once.
+ * Nothing. Every journey creates its own `autotest_*` agents through the API
+ * and deletes them in a `finally`, and no journey reads another's rows or
+ * depends on the order they run in, so both engines can run the file at once.
  *
- * The exception is the tag the meta round trip saves beside its variables.
- * Deleting the agent removes the ASSOCIATION, and the `tags` row itself
- * stays: the tag write API has no working delete to call — `DELETE
- * /elitea_core/tags/prompt_lib/{project}/{tag}` answers 204 and removes
- * nothing. That gap is a subject of its own package; here it is named so the
- * one `autotest_`-prefixed row this file leaves is a known row and not a
- * surprise.
+ * That once had an exception: the tag the meta round trip saves beside its
+ * variables. Deleting the agent removes the ASSOCIATION and leaves the `tags`
+ * row, and `DELETE /elitea_core/tags/prompt_lib/{project}/{tag}` answered 204
+ * and removed nothing, so the row had to stay. The delete works now
+ * (`api.tags-authors.spec.ts` is where it is pinned), so that journey removes
+ * its own tag and this file leaves no row at all.
  */
 import { test, expect, type APIRequestContext } from '@playwright/test';
 
@@ -52,6 +50,7 @@ import {
   agentVersionBody,
   createAgentWithVersion,
   deleteAgent,
+  deleteAutotestTags,
   readTags,
   readVersion,
   readVersionExpanded,
@@ -557,5 +556,8 @@ test("saving a version's variables keeps the rest of its meta", async ({ request
     expect(runtimeMeta['step_limit']).toBe(7);
   } finally {
     await deleteAgent(request, agent.id);
+    // The agent delete takes the ASSOCIATION and leaves the `tags` row, so
+    // the row is removed here — the only way to remove it used to be SQL.
+    await deleteAutotestTags(request, [tagName]);
   }
 });
