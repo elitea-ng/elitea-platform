@@ -10,7 +10,11 @@
  * ─────────────────────────────────────────────────────────────────────────────
  * Deleting a message is a server operation on a row, not a screen state:
  * `ChatMessageList` offers Delete on the LAST message only, `createDeleteAnswer`
- * issues `DELETE /elitea_core/messages/prompt_lib/{p}/{c}/{groupUID}`, and
+ * issues `DELETE /elitea_core/message/prompt_lib/{projectID}/{messageID}`
+ * (`entities/conversation/api/messageApi.ts:110-114`, the route the server
+ * serves at `internal/api/router.go:2787` — singular `message`, and the
+ * message id alone; the plural `messages/{projectID}/{conversationID}` route
+ * beside it is the clear-the-whole-chat one), and
  * `ConversationsRepo.DeleteMessage` refuses a uuid with no `chat_message_group`
  * row with a 404. `docker-compose.e2e-standalone.yml` — where every other chat
  * journey runs — persists no message group at all: it has no runtime plane, so
@@ -45,8 +49,15 @@ import { expectStoredAssistantAnswer, readStoredMessageGroups } from '../fixture
 /** The create and turn-start routes, matched on the pathname so a query string cannot break them. */
 const CONVERSATIONS_RE = /\/elitea_core\/conversations\/prompt_lib\/(\d+)$/;
 const START_RE = /\/elitea_core\/messages\/prompt_lib\/(\d+)\/[0-9a-f-]+/;
-/** The per-message delete route this journey exists to reach. */
-const DELETE_RE = /\/elitea_core\/messages\/prompt_lib\/(\d+)\/[0-9a-f-]+\/[0-9a-f-]+/;
+/**
+ * The per-message delete route this journey exists to reach: one project and
+ * one message group, on the SINGULAR `message` path — which is what makes it
+ * unsatisfiable by the plural clear-chat route
+ * (`/messages/prompt_lib/{projectID}/{conversationID}`), so a "Clear chat"
+ * can never pass for a message delete. Ends anchored: the message id is the
+ * last segment.
+ */
+const DELETE_RE = /\/elitea_core\/message\/prompt_lib\/\d+\/[0-9a-f-]+$/;
 
 /** The model the standalone stack seeds; overridable for the real-model lane. */
 const MODEL_NAME = process.env['E2E_CHAT_MODEL'] || 'E2E-MOCK-MODEL';
