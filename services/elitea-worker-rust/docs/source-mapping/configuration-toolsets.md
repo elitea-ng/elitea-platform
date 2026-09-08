@@ -167,7 +167,7 @@ Indexing tools are recorded as a later overlay in `indexing.md`.
 | `carrier` | `CarrierConfiguration` | `EliteACarrierToolkit` | 18 | No | corresponding family paths | Planned; source has no focused family tests |
 | `report_portal` | `configurations/report_portal.py::ReportPortalConfiguration` | `tools/report_portal::ReportPortalToolkit` | 9 | Yes | `toolkits/families/report_portal/{config,client,tools}.rs` | Capability-disabled complete read family: nine bounded project/report reads, including explicit UTF-8 HTML and base64 PDF export projections; authorized materialization, egress policy and live provider proof remain gates |
 | `testio` | `TestIOConfiguration` | `TestIOToolkit` | 15 | Yes | corresponding family paths | Deferred as an incoherent source contract: the check and official API require `Authorization: Token`, while runtime tools send `Bearer`; exploratory-test retrieval cannot receive its implementation-required product ID; and the two SDK write payloads do not map to the current provider create/confirmation operations without inventing product behavior |
-| `openapi` | `configurations/openapi.py::OpenApiConfiguration` | `tools/openapi::{EliteAOpenAPIToolkit,OpenApiAction}`, `tools/openapi/{api_wrapper,response_selection}.py` | Dynamic | Yes | `toolkits/families/openapi/{config,spec,client,response_selection,tools}.rs` | Partial capability-disabled family: bounded inline OpenAPI 3.x JSON/YAML parsing, selected dynamic operations, exact request schemas, fixed-origin JSON calls, static secret headers, anonymous/API-key/client-credentials/delegated OAuth and bounded schema-aware response search are implemented. A Private-project UI rehearsal proved selected `echo_marker` materialization, provider dispatch, same-call result, second model turn, persistence and retirement. Remote specifications, legacy auth objects, rich OAuth discovery/DCR, runtime 401 re-authorization, non-JSON request bodies, binary/artifact routing and production egress remain gates |
+| `openapi` | `configurations/openapi.py::OpenApiConfiguration` | `tools/openapi::{EliteAOpenAPIToolkit,OpenApiAction}`, `tools/openapi/{api_wrapper,response_selection}.py` | Dynamic | Yes | `toolkits/families/openapi/{config,spec,client,response_selection,tools}.rs` | Partial capability-disabled family: bounded inline OpenAPI 3.x JSON/YAML parsing, selected dynamic operations, exact request schemas, fixed-origin JSON calls, static secret headers, anonymous/API-key/client-credentials/delegated OAuth and bounded schema-aware response search are implemented. A Private-project UI rehearsal proved selected `echo_marker` materialization, provider dispatch, same-call result, second model turn, persistence and retirement. Direct-node delegated 401 recovery has component proof in `delegated-auth-expiry.md`. Remote specifications, legacy auth objects, rich OAuth discovery/DCR, model-loop 401 re-authorization, non-JSON request bodies, binary/artifact routing and production egress remain gates |
 | `langfuse` | `LangfuseConfiguration` | No standard toolkit | 0 | Yes | `configurations/families/langfuse.rs` | Planned; observability support configuration |
 | `aha` | `configurations/aha.py::AhaConfiguration` | `tools/aha::AhaToolkit` | 33 | Yes | `toolkits/families/aha/` | Capability-disabled complete family; all 25 reads, 6 writes, 1 delete and the effectful combined execute surface are retained, with artifact-backed attachment upload behind a claim-scoped verified temp-spool resolver |
 | `pgvector` | `PgVectorConfiguration` | No standalone toolkit | 0 | No | `configurations/families/pgvector.rs` | Planned; shared indexing/runtime dependency |
@@ -225,12 +225,16 @@ This is intentionally `partial`, not `ported`. Specifications must already be
 sealed inline and are capped at 1 MiB; URL-based loading is rejected until a
 claim-scoped egress grant exists. The initial client accepts JSON request bodies
 and bounded UTF-8 output only. The SDK's discovery/resource-metadata and DCR
-program, legacy nested auth shapes, post-materialization 401 token refresh,
+program, legacy nested auth shapes, model-loop 401 token recovery,
 multipart/form/binary bodies, binary or artifact results and production network
 admission remain explicit gaps. `src/toolkits/openapi_tests.rs` owns parser,
 selection, dynamic schema, RFC query construction, auth precedence, guarded-tool,
 exact-token rematerialization, secret-header precedence, array/map response
 selection, block-policy and redacted-failure proof.
+
+Direct-node OpenAPI 401 recovery now uses the shared delegated authorization signal.
+The [active-run ledger](delegated-auth-expiry.md) records exact-node resume, Skip, and bounded repeated-rejection tests.
+The worker does not exchange refresh tokens itself. Deployed active-run verification remains open.
 
 The SharePoint slice is intentionally smaller than the current 28-tool SDK
 catalog. `elitea_sdk/configurations/sharepoint.py` and the token/site-path logic

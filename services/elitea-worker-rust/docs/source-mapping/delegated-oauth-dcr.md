@@ -901,6 +901,8 @@ This is a same-document refresh proof, not confidential-client reload recovery.
   Local tests cover operation unlocking and repeated parallel Skip calls. Browser proofs cover Skip and the emulator's stored-client grant.
 - Extend token-removal recovery to expiry or revocation during an active tool-calling run.
   The existing-conversation, between-turn removal path passes the deployed proof above.
+  [OpenAPI direct-node recovery](delegated-auth-expiry.md) now has component proof.
+  Agent loops, remote MCP, and deployed active-run recovery remain open.
 - Prove logout and concurrent-tab behavior against the replatform stack.
   A second tab on conversation 533 temporarily retained active guard controls after the deciding tab completed.
   The controls later cleared; immediate collaborator synchronization is not proven.

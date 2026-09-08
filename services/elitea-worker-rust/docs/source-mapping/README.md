@@ -66,6 +66,7 @@ Detailed ledgers:
   clients and the durable direct execution path.
 - `delegated-oauth-dcr.md` maps the shared UI, Main, and Rust ownership for
   delegated OAuth, DCR, token refresh, and durable authorization resume.
+- `delegated-auth-expiry.md` maps active-run token rejection and direct-node recovery.
 - `runtime-limits.md` separates event, request, loop, nesting, and session limits.
   It records the fragment-count fix and the remaining long-running execution gates.
 - `indexing.md` maps indexing behavior and its later Rust capability.
@@ -238,8 +239,10 @@ Maintained Rust runtime ownership registry:
   HTTP URI; API-key, invocation-scoped expiring client-credentials and
   delegated OAuth modes produce schema-complete guarded tools for native
   same-call pause/resume. Remote specifications, legacy auth
-  objects, rich OAuth discovery/DCR, runtime 401 re-authorization, non-JSON
-  bodies and artifact/binary routing remain closed;
+  objects, rich OAuth discovery/DCR, model-loop 401 re-authorization, non-JSON
+  bodies and artifact/binary routing remain closed. Direct Toolkit nodes now
+  preserve delegated 401 guards and exact-node resume; `delegated-auth-expiry.md`
+  records the component proof and remaining deployed gates;
 - `src/toolkits/families/sharepoint/{config,client,tools}.rs`: delegated Azure
   token resolution and eight explicitly selected Microsoft Graph reads for
   lists, columns, metadata-only recursive file discovery and raw bounded
