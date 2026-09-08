@@ -169,7 +169,8 @@ async function publishedBlocks(request: APIRequestContext, toolkitType: string):
   );
 }
 
-test.afterEach(async ({}, testInfo) => {
+test.afterEach(async () => {
+  const testInfo = test.info();
   /*
    * A NET, not the restore. Every test puts the policy back inside its own
    * `finally`, within the lock, so the window is as short as the assertions
