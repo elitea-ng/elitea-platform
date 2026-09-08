@@ -31,7 +31,7 @@ export function useConfigurationTabSlots({ renderCredentialPicker, mcpLoadTools 
       // delegated-login UI a REAL `McpAuthModal` — see `./sharepointAuthModals.tsx`.
       sharepointAuth: SHAREPOINT_AUTH_MODALS,
       renderCredentialPicker,
-      ...(mcpLoadTools !== undefined && { toolActionsExtra: mcpLoadTools }),
+      ...(mcpLoadTools !== undefined && { toolActionsExtra: mcpLoadTools, mcpAuthStatus: mcpLoadTools.mcpAuthStatus }),
       // `renderTestPane` is NOT supplied, and that is the fix rather than an
       // omission. It used to be supplied as an empty `<Box>` — the disclosed
       // composition gap that left the right-hand half of the toolkit editor

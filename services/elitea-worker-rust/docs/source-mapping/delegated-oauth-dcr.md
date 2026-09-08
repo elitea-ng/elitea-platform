@@ -943,7 +943,7 @@ The temporary databases are removed after verification.
 TLS component tests cover both grants with the Main reference and preserve provider PKCE rejection.
 The complete MCP UI and mounted-page selection passes 320 tests across 31 files.
 Type checking and focused lint pass.
-Deployed confidential-client reload verification remains pending for this slice.
+The deployed verification below closes the local confidential-client reload boundary.
 
 ### Chat visibility and consent defaults: 2026-09-08
 
@@ -952,12 +952,47 @@ Mounted-page tests cover enabled settings and both disabling settings.
 The authorization dialog preserves configured consent scopes before resource-advertised fallback scopes.
 A popup test retains `offline_access` in the authorization request.
 Refresh still cannot expand the original grant.
-Deployed browser verification remains pending.
+The deployed browser shows the saved MCP in conversation 537's participant panel.
+The authorization dialog retains `records.read offline_access` without manual scope changes.
+
+### Deployed confidential-client recovery: 2026-09-08
+
+Main and web use commit `1e3114ae`. The merged Rust worker and gateway images remain unchanged.
+Shared migration 124 applies through the normal migrator on the isolated rehearsal product copy.
+The original databases and their migration receipts remain unchanged.
+
+The existing confidential fixture has an expired legacy grant without a client reference.
+Its refresh fails safely. Editor discovery then opens a fresh consent flow.
+Registration returns a Main reference without a client secret or registration access token.
+The protected-call counter remains unchanged before consent.
+Code exchange succeeds using the reference. Discovery exposes `echo_marker`.
+
+| Browser operation | Execution | Durable result |
+| --- | --- | --- |
+| Navigate to conversation 537 after consent and token expiry. Call the attached MCP. | `9d06ffad77054cbe7c5f85cd712ca532` | `SUCCEEDED`; marker `RUST_DCR_CONFIDENTIAL_RELOAD_20260908`, generation 2. |
+| Reload the document and select Regenerate. | `4fa2dc0eacabd32156e11970760cc0b3` | `SUCCEEDED`; the same marker, generation 3. |
+| Restart Main, reload, and send another turn after token expiry. | `28de1a257fd59414235dc46c103aca32` | The browser returns `RUST_DCR_MAIN_RESTART_20260908`, generation 4. |
+
+All three refresh requests use the Main reference and omit the client secret.
+No additional registration or consent occurs for those requests.
+The database contains one encrypted client record. The browser contains its reference but no client secret.
+An unrelated expired public-fixture grant still produces refresh failures during token collection.
+Those failures do not prevent these confidential-fixture runs. Unrelated-grant collection remains a separate follow-up.
+
+### Editor logout composition: 2026-09-08
+
+The current UI mounts `McpAuthStatus` in `features/toolkits/ui/form/ToolBase/ToolBase.jsx`.
+The new UI already has `McpAuthStatusBadge`, but its editor slot has no producer.
+The page now supplies that component through `ConfigurationTab` and `ToolBase` slots for saved MCPs.
+Login uses the existing REST discovery and consent flow. Logout uses the existing credential-scoped invalidation marker.
+No separate token store or socket-only login path is added.
+
+Mounted-page tests cover Login, consent cancellation, and confirmed Logout without clearing another toolkit's grant.
+The MCP, discovery, and configuration-tab selection passes 320 tests across 31 files.
+Type checking and focused lint pass. Deployed multi-tab logout verification remains pending.
 
 ### Open verification
 
-- Wire the chat participant panel to the existing MCP visibility hook.
-  Cover both enabled and disabled settings through the mounted page. Verify the saved MCP in the deployed browser.
 - Repeat DCR against a real provider.
   Both variants now pass the local emulator grant, durable resume, tool call, and between-turn refresh proof.
   Editor discovery and toolkit authorization before operation names are known
@@ -973,15 +1008,6 @@ Deployed browser verification remains pending.
 - Prove logout and concurrent-tab behavior against the replatform stack.
   A second tab on conversation 533 temporarily retained active guard controls after the deciding tab completed.
   The controls later cleared; immediate collaborator synchronization is not proven.
-- Close confidential DCR credential ownership across a document reload.
-  `clientSecretVault.ts` intentionally retains issued client secrets only in
-  memory. The same-document refresh proof does not demonstrate reload recovery;
-  any durable solution must keep client secrets server-side, not put them back
-  into browser storage or reuse an unrelated toolkit OAuth client.
-- Review consent scope defaults: the editor currently prefers resource-advertised
-  scopes over configured scopes. A configured `offline_access` scope is therefore
-  not automatically selected when only `records.read` is advertised. The emulator
-  issues refresh tokens in this case; that does not prove a real provider will.
 - Repeat the earlier conversation 529 scenario if it recurs with complete child results.
   The latest direct-agent and pipeline proofs complete after one Skip without a repeated guard.
 - Add load and Kubernetes evidence before production capability registration.

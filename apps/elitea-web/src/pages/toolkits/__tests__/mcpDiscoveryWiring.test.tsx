@@ -1,4 +1,4 @@
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -32,9 +32,47 @@ beforeEach(() => {
 afterEach(() => {
   resetGeneratedClient();
   window.sessionStorage.clear();
+  window.localStorage.clear();
 });
 
 describe('real MCP editor discovery composition', () => {
+  it('connects saved MCP Login to REST discovery and its consent dialog', async () => {
+    let requests = 0;
+    server.use(http.post('/api/v2/elitea_core/mcp_sync_tools/prompt_lib/5', () => {
+      requests++;
+      return HttpResponse.json({ success: false, requires_authorization: true, response_metadata: {
+        server_url: 'https://resource.example.com/mcp', resource_metadata: {
+          authorization_servers: ['https://issuer.example.com'], oauth_authorization_server: {
+            registration_endpoint: 'https://issuer.example.com/register',
+            authorization_endpoint: 'https://issuer.example.com/authorize', token_endpoint: 'https://issuer.example.com/token',
+          },
+        },
+      } });
+    }));
+    renderToolkitsRoute(<EditToolkit isMCP />, '/toolkits/latest/tk-1', { projectId: '5' });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Login' }));
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    expect(requests).toBe(1);
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' }));
+    expect(await screen.findByRole('button', { name: 'Login' })).toBeEnabled();
+  });
+
+  it('clears only the selected toolkit grant after Logout confirmation', async () => {
+    const resource = 'https://resource.example.com/mcp';
+    const token = { access_token: 'fixture-token', refresh_token: 'fixture-refresh', expires_at: Date.now() + 3600000, granted_at: Date.now(), client_reference: 'fixture-reference' };
+    window.sessionStorage.setItem('el.mcp.tokens', JSON.stringify({ [resource]: token, 'https://other.example.com/mcp': token }));
+    renderToolkitsRoute(<EditToolkit isMCP />, '/toolkits/latest/tk-1', { projectId: '5' });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Logout' }));
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Log out' }));
+    expect(await screen.findByText('Not Connected')).toBeInTheDocument();
+    const tokens = JSON.parse(window.sessionStorage.getItem('el.mcp.tokens') ?? '{}') as Record<string, unknown>;
+    expect(tokens[resource]).toBeUndefined();
+    expect(tokens['https://other.example.com/mcp']).toEqual(token);
+    expect(Object.keys(window.localStorage).some(key => key.includes(resource))).toBe(true);
+  });
+
   it.each(['edit', 'create'] as const)('connects Load Tools in the %s page to the request and selection', async (mode) => {
     let requests = 0;
     server.use(http.post('/api/v2/elitea_core/mcp_sync_tools/prompt_lib/5', () => {

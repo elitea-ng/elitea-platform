@@ -86,7 +86,7 @@ does not prove exact-node resume or absence of duplicate protected calls.
 
 A read-only Playwright readiness check on 2026-09-08 reached the authenticated
 Private-project chat page. It did not start an execution or exercise this fix.
-The running worker predates this commit, and the migration conflict below remains.
+At that check, the running worker predates this commit, and the migration conflict remains.
 The check also observed HTTP 429 responses from the notification event endpoint
 with existing browser tabs open. Track this separately from execution failures;
 the check does not establish the cause of a worker or authorization failure.
@@ -100,7 +100,8 @@ The temporary inspection tab was closed. Existing tabs and chats were retained.
 - Verify browser refresh and reauthorization without reusing rejected credentials.
 - Repeat the scenarios after process replacement with PostgreSQL checkpoints.
 
-The rehearsal database still has conflicting shared migrations 111 and 112.
-The read-only ledger check confirms this state on 2026-09-08.
-This slice changes no deployment, migration ledger, chat, or emulator state.
-Complete the documented data-preserving cutover before merged-service browser verification.
+The earlier rehearsal database has conflicting shared migrations 111 and 112.
+The later data-preserving cutover creates isolated product and agent-state copies.
+The merged services now use those copies. Original databases and migration receipts remain unchanged.
+The active product copy reaches shared migration 124 during the confidential DCR deployment.
+See [the DCR verification record](delegated-oauth-dcr.md) for deployed proof and the remaining active-run checks.

@@ -2,7 +2,7 @@ import { useCallback, useMemo, useState, type ReactNode } from 'react';
 
 import Typography from '@mui/material/Typography';
 
-import { McpAuthModal, useGetRemoteMcpTools } from '@/features/mcps';
+import { McpAuthModal, McpAuthStatusBadge, useGetRemoteMcpTools } from '@/features/mcps';
 import { t } from '@/shared/i18n';
 
 import type { EditToolDetail } from './toolkitFormTypes';
@@ -49,6 +49,7 @@ import type { EditToolDetail } from './toolkitFormTypes';
 
 /** The four props `ToolBaseSlots.toolActionsExtra` accepts. */
 export interface McpLoadToolsSlot {
+  readonly mcpAuthStatus?: ReactNode;
   readonly onLoadTools: () => void;
   readonly isLoadingTools: boolean;
   readonly canLoadTools: boolean;
@@ -95,11 +96,17 @@ function stringValue(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined;
 }
 
+function timeoutValue(value: unknown): number | undefined {
+  if (typeof value === 'number') return value;
+  if (typeof value === 'string' && value.trim() !== '' && Number.isFinite(Number(value))) return Number(value);
+  return undefined;
+}
+
 function toRemoteMcpValues(editToolDetail: EditToolDetail | null | undefined): RemoteMcpValues {
   const settings = editToolDetail?.settings ?? {};
   const url = settings['url'];
   const headers = settings['headers'];
-  const timeout = settings['timeout'];
+  const timeout = timeoutValue(settings['timeout']);
   return {
     id: editToolDetail?.id === undefined ? undefined : String(editToolDetail.id),
     type: editToolDetail?.type,
@@ -111,8 +118,7 @@ function toRemoteMcpValues(editToolDetail: EditToolDetail | null | undefined): R
       ...(typeof headers === 'object' && headers !== null ? { headers: Object.fromEntries(Object.entries(headers).filter((entry): entry is [string, string] => typeof entry[1] === 'string')) } : {}),
       // The form stores a number, but the baseline's own schema types this
       // field as `int | str` because the UI has been known to send a string.
-      ...(typeof timeout === 'number' ? { timeout } : {}),
-      ...(typeof timeout === 'string' && timeout.trim() !== '' && Number.isFinite(Number(timeout)) ? { timeout: Number(timeout) } : {}),
+      ...(timeout !== undefined ? { timeout } : {}),
       ...(typeof settings['ssl_verify'] === 'boolean' ? { ssl_verify: settings['ssl_verify'] } : {}),
     },
   };
@@ -194,5 +200,8 @@ export function useMcpLoadTools({ projectId, editToolDetail, onChangeToolDetail 
   );
 
   if (!isMcpToolkitType(toolkitType)) return undefined;
-  return { onLoadTools: fetchTools, isLoadingTools: isLoading, canLoadTools, mcpAuthModal };
+  // Saved MCPs use the same REST discovery and consent flow for Login.
+  // The status component owns logout and cross-tab grant invalidation.
+  const mcpAuthStatus = values.id ? <McpAuthStatusBadge values={values} projectId={projectId} authConfig={{ onLogin: fetchTools, isRunning: isLoading }} /> : undefined;
+  return { onLoadTools: fetchTools, isLoadingTools: isLoading, canLoadTools, mcpAuthModal, mcpAuthStatus };
 }
