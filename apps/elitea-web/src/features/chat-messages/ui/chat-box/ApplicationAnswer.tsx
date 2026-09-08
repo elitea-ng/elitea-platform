@@ -47,7 +47,9 @@ import { ChatHitlActions } from '../chat-hitl-actions/ChatHitlActions';
 import type { HitlInterrupt, HitlResumePayload } from '../chat-hitl-actions/ChatHitlActions';
 import { ErrorTrace } from '../error-trace/ErrorTrace';
 
-import { AnswerMessageItems, readAnswerItems } from './AnswerMessageItems';
+import { AnswerContent } from './AnswerContent';
+import type { AnswerCanvasSelection } from './AnswerContent';
+import { readAnswerItems } from './AnswerMessageItems';
 import type { CanvasEditPayload, CodeBlockInfo } from '../canvas/Canvas';
 
 import { t } from '@/shared/i18n';
@@ -80,6 +82,8 @@ export interface ApplicationAnswerActionHandlers {
   readonly onEditCanvas?: ((payload: CanvasEditPayload) => void) | undefined;
   /** The canvas block currently open in the editor, so this answer's copy of it shows a placeholder instead. */
   readonly selectedCodeBlockInfo?: CodeBlockInfo | undefined;
+  /** Carves a canvas out of a range the reader HIGHLIGHTED in this answer — see `./AnswerContent`, which stamps this row's group onto it. */
+  readonly onCreateCanvasFromSelection?: ((payload: AnswerCanvasSelection) => void) | undefined;
 }
 
 /** Read-aloud (TTS) props, grouped to stay under the component-props budget. */
@@ -163,7 +167,7 @@ export function ApplicationAnswer({
   isLastMessage = false,
   author: { participantName, isSwarmChild = false, swarmAgentName = '' } = {},
   status: { isLoading = false, isStreaming = false, isRegenerating = false } = {},
-  actions: { onCopy, onDelete, onRegenerate, shouldDisableRegenerate = false, onEditCanvas, selectedCodeBlockInfo } = {},
+  actions: { onCopy, onDelete, onRegenerate, shouldDisableRegenerate = false, onEditCanvas, selectedCodeBlockInfo, onCreateCanvasFromSelection } = {},
   tts: { onAutoSpeak, speakingMessageId, spokenRange } = {},
   continuation: { onContinueMcpExecution, onContinueTokenLimitExecution, hideContinueButton = false } = {},
   hitl: { hitlInterrupt, hitlInterrupts, onHitlResume } = {},
@@ -179,17 +183,9 @@ export function ApplicationAnswer({
   const requiresConfirmationSignal = getRequiresConfirmation(answer);
 
   const items = useMemo(() => readAnswerItems(answer.messageItems), [answer.messageItems]);
-  /*
-   * `answer.content` and the TEXT items are two spellings of the same words,
-   * and which arrives depends on the read: the paginated messages route
-   * collapses a group's text into `content` and serves no text item, the
-   * details read serves the items. So `content` is rendered only when no TEXT
-   * item states it — gating that on `items.length` (canvases included) drops
-   * the words of an answer whose only item on that route is its canvas. The
-   * canvas itself still counts as content, or an answer that is nothing but a
-   * canvas would render as an empty bubble.
-   */
-  const hasTextItems = useMemo(() => items.some((item) => item.kind === 'text'), [items]);
+  // A canvas counts as content: an answer that is nothing but a canvas would
+  // otherwise render as an empty bubble. Which of `content` and the text items
+  // actually carries the words is `./AnswerContent`'s subject.
   const hasTextContent = !!answer.content || items.length > 0;
 
   const { swarmChildActions, nonSwarmChildActions } = useMemo(() => {
@@ -313,17 +309,16 @@ export function ApplicationAnswer({
             marginTop: nonSwarmChildActions.length > 0 || !!exception ? '0.5rem' : 0,
           })}
         >
-          {canRenderContent && !!answer.content && !hasTextItems && (
-            <Markdown spokenRange={currentSpokenRange}>{answer.content}</Markdown>
-          )}
-
-          {canRenderContent && items.length > 0 && (
-            <AnswerMessageItems
+          {canRenderContent && (
+            <AnswerContent
+              content={answer.content}
               items={items}
+              messageGroupUuid={answer.id}
               isStreaming={isStreaming}
+              spokenRange={currentSpokenRange}
               onEditCanvas={onEditCanvas}
               selectedCodeBlockInfo={selectedCodeBlockInfo}
-              spokenRange={currentSpokenRange}
+              onCreateCanvasFromSelection={onCreateCanvasFromSelection}
             />
           )}
 

@@ -22,6 +22,7 @@ import { toCreatedResult } from './ChatWithEditors.helpers';
 import { usePlusMenuEntities } from '../model/usePlusMenuEntities';
 import { useChatWithEditors } from './ChatWithEditors.hooks';
 import { renderAgentEditorShell, renderPipelineEditorShell, renderToolkitEditorShell } from './EditorShell';
+import { useCanvasCreation } from './useCanvasCreation';
 import { useCreateChatReset } from './useCreateChatReset';
 
 /**
@@ -124,6 +125,20 @@ export function ChatWithEditors(): ReactNode {
   } = useChatWithEditors();
 
   /*
+   * The canvas CREATE. Called HERE and not inside `useChatWithEditors`, for
+   * the same reason `viewerId` is read here: it needs the route — the
+   * conversation the selection belongs to — and `useChatWithEditors` is
+   * mounted by a plain `renderHook` in its own tests, where `useParams` has no
+   * router to read and throws.
+   *
+   * It is deliberately NOT routed through the editor mutex either: making a
+   * canvas opens no editor, so there is no second editor to queue behind. It
+   * writes the canvas and re-reads the transcript; the reader then opens the
+   * new block with the control every stored canvas already has.
+   */
+  const canvasCreation = useCanvasCreation();
+
+  /*
    * `strict: false` reads the ROOT's merged context from any component under
    * `<RouterProvider>`, the same call `useRouterAuth.ts` makes.
    */
@@ -192,6 +207,8 @@ export function ChatWithEditors(): ReactNode {
                 */
               onShowCanvasEditor: handleShowCanvasEditor,
               selectedCanvasBlock: canvas.selectedCodeBlockInfo,
+              /* And the gesture that MAKES one: a range highlighted in an answer. */
+              onCreateCanvasFromSelection: canvasCreation.onCreateCanvasFromSelection,
             }}
           />
           )}

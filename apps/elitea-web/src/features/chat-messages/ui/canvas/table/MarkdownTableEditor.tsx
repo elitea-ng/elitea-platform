@@ -13,14 +13,15 @@
  * uses in this slice.
  *
  * **DEVIATIONS (disclosed):**
- *  1. No download SplitButton. The baseline's footer rendered
- *     `useDownloadTable` + `SplitButton` (xlsx/csv export via a hidden
- *     `Markdown tableId=…` DOM node). Neither `useDownloadTable` nor
- *     `SplitButton` has a port in this app, and `tableId` existed only to
- *     hand that hidden node to the exporter. Both are left out rather than
- *     stubbed; `tracking.interaction_uuid`/`conversation_uuid` are carried on
- *     the props (the canvas editor already threads them) so the download
- *     port lands without a signature change. See the TODO below.
+ *  1. The download lives in the HEADER, not in a footer. The baseline
+ *     rendered `useDownloadTable` + `SplitButton` under the grid, and the
+ *     exporter read a hidden `Markdown tableId=…` DOM node — which is why
+ *     `tableId` existed at all. Both files are written from the table MODEL
+ *     now (`../../../lib/tableExport`), so there is no hidden node and no DOM
+ *     scrape, and the control sits with the grid's other actions in
+ *     `../CanvasEditHeader`. `tracking.interaction_uuid`/`conversation_uuid`
+ *     are still carried and still unread — they belonged to the baseline's GA
+ *     telemetry, which this app has none of.
  *  2. Delete asks for confirmation through `shared/ui`'s `DeleteEntityModal`
  *     rather than the baseline's own `AlertDialog` component.
  *  3. `GRID_CHECKBOX_SELECTION_COL_DEF` is not spread into the column list.
@@ -68,8 +69,8 @@ export interface MarkdownTableEditorProps {
   };
   readonly onRowsColumnsSelected?: ((selection: MarkdownTableSelection) => void) | undefined;
   readonly readOnly?: boolean | undefined;
-  // TODO(deviation 1): carried for the not-yet-ported download/export footer
-  // (`useDownloadTable` + `SplitButton`); nothing reads them today.
+  // Deviation 1: carried for the baseline's GA telemetry, which this app does
+  // not have; nothing reads them today.
   readonly tracking?: {
     readonly interaction_uuid?: string | undefined;
     readonly conversation_uuid?: string | undefined;

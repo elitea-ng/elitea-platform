@@ -15,6 +15,8 @@ const IconButtonAny = IconButton as React.ComponentType<
 
 import Tooltip from '@mui/material/Tooltip';
 
+import { t } from '@/shared/i18n';
+
 
 import { CANVAS_LANGUAGE_OPTIONS } from './canvasLanguageOptions';
 import { CanvasTableControls } from './table/CanvasTableControls';
@@ -30,6 +32,10 @@ export interface CanvasEditHeaderActions {
   readonly onCopy?: (() => void) | undefined;
   readonly onRegenerate?: (() => void) | undefined;
   readonly onDelete?: (() => void) | undefined;
+  /** Expands the editor to the whole viewport, or brings it back. Omitted, no control is rendered. */
+  readonly onToggleFullScreen?: (() => void) | undefined;
+  /** Which way the toggle above currently points — it is a two-state control, not a one-way expand. */
+  readonly isFullScreen?: boolean | undefined;
 }
 
 /** Table-editing actions grouped to stay within §3.5 prop budget. */
@@ -88,6 +94,8 @@ export function CanvasEditHeader({
     onCopy,
     onRegenerate,
     onDelete,
+    onToggleFullScreen,
+    isFullScreen = false,
   } = actions ?? {};
 
   const onClose = topLevelOnClose ?? actionsOnClose;
@@ -209,6 +217,41 @@ export function CanvasEditHeader({
                 aria-label="Redo"
               >
                 ↪
+              </IconButtonAny>
+            </span>
+          </Tooltip>
+        )}
+
+        {/*
+          Full screen. It sits with the other always-available controls rather
+          than with the table cluster: a diagram and a long code document need
+          the room as much as a wide table does.
+
+          NOT disabled by `disabledAll`. That flag means "this document cannot
+          be EDITED" — a read-only canvas, or one still being created — and a
+          reader who cannot type still has to be able to see the whole of what
+          somebody else is writing.
+        */}
+        {onToggleFullScreen && (
+          <Tooltip
+            title={isFullScreen
+              ? t('features.chatMessages.canvas.editor.exitFullScreen', 'Exit full screen')
+              : t('features.chatMessages.canvas.editor.fullScreen', 'Full screen')}
+            placement="top"
+          >
+            <span>
+              <IconButtonAny
+                variant="elitea"
+                color="tertiary"
+                size="small"
+                onClick={onToggleFullScreen}
+                data-testid="canvas-edit-fullscreen"
+                aria-pressed={isFullScreen}
+                aria-label={isFullScreen
+                  ? t('features.chatMessages.canvas.editor.exitFullScreen', 'Exit full screen')
+                  : t('features.chatMessages.canvas.editor.fullScreen', 'Full screen')}
+              >
+                {isFullScreen ? '⤡' : '⤢'}
               </IconButtonAny>
             </span>
           </Tooltip>

@@ -53,29 +53,36 @@
  *     composition root was empty, which is why the journeys below are where it
  *     surfaced.
  *
- * CREATING a canvas is still an API call in every journey here, and that is a
- * statement about the product, not a shortcut: the gesture that carves one out
- * — selecting a range of an answer and choosing to edit it — has no control in
- * this app yet. Only the OPEN, EDIT and SAVE half exists in the UI, and that
- * half is what these journeys click.
+ * CREATING a canvas is now a CLICK too, and the last journey in this file is
+ * the one that makes it: a range highlighted in an answer offers "Create
+ * canvas", and the request that follows carries the byte range the server
+ * splits the stored message on. The three journeys ABOVE it still create
+ * through `page.request`, deliberately — they are about opening and editing a
+ * canvas that already exists, and seeding one through the UI would make every
+ * one of them fail for the create's reasons as well as their own.
  *
  * ─────────────────────────────────────────────────────────────────────────────
- * WHAT COULD NOT BE MADE DETERMINISTIC, STATED RATHER THAN ASSERTED AROUND
+ * THE FOUR GESTURES THAT USED TO BE DISCLOSED GAPS HERE
  * ─────────────────────────────────────────────────────────────────────────────
- * Three legacy canvas cases have no control to drive on this app, and are
- * disclosed here rather than skipped in a way that reads as coverage:
+ * This header listed four legacy canvas cases with no control to drive. All
+ * four have one now, and each is driven below rather than described:
  *
- *  * FULL SCREEN. The editor is a right-hand drawer and its header carries
- *    close / undo / redo / copy / language / table controls and no expand
- *    control at all; the reference's resizable split pane was deliberately not
- *    ported (`CanvasEditor.tsx`'s own deviation 4).
- *  * TABLE EXPORT (xlsx / csv). The reference's download footer needs
- *    `useDownloadTable` and a split button, neither of which has a port in
- *    this app — `MarkdownTableEditor.tsx`'s deviation 1 records it, and the
- *    editor renders no export control.
- *  * KEYBOARD SHORTCUTS for undo and redo. The header buttons are wired; no
- *    key handler is bound at the editor level, so a key press would prove the
- *    browser's own behaviour rather than this app's.
+ *  * CREATE FROM A SELECTION — the last journey in this file. The range is the
+ *    claim: the offsets are BYTES into the stored message (the server slices a
+ *    Go string with them), and a client sending character indexes would carve
+ *    a range the route accepts and the reader did not choose. The multibyte
+ *    case is pinned in the composition-root suite, where the offsets can be
+ *    read off the request; here the claim is that the whole gesture reaches
+ *    the server and comes back as a block in the transcript.
+ *  * FULL SCREEN — the editor's header carries an expand control, and Escape
+ *    collapses it without closing the drawer (closing the drawer SAVES, so one
+ *    press must not do both). Driven inside the opener journey.
+ *  * TABLE EXPORT — CSV and XLSX, written from the table's own model rather
+ *    than from a DOM scrape, and saved through the app's own download
+ *    primitive. Driven inside the table journey, on the real download event.
+ *  * KEYBOARD UNDO / REDO — bound at the editor level, which is what the TABLE
+ *    pane needed: it has no keymap of its own, so `Mod-z` in a table canvas
+ *    used to do nothing at all. Driven inside the table journey.
  *
  * Every conversation is deleted on the way out, and each run's own token makes
  * the rows it creates attributable.
@@ -479,6 +486,26 @@ test('the transcript opens a canvas, and what is typed in it is what the server 
     await redo.click();
     await expect(editor.locator('.cm-content').first()).toContainText(edited, { timeout: 10_000 });
 
+    // ── full screen, and back ───────────────────────────────────────────
+    // The editor is a right-hand drawer; the expand control re-anchors it to
+    // the viewport. Escape is the half worth driving: this drawer closes on
+    // Escape by default and its close is the canvas SAVE, so a press that did
+    // both would end an edit the reader was only resizing.
+    const editorRoot = page.getByTestId('canvas-editor-root');
+    await expect(editorRoot).toHaveAttribute('data-fullscreen', 'false', { timeout: 10_000 });
+    await page.getByTestId('canvas-edit-fullscreen').click();
+    await expect(editorRoot, 'the expand control must reach a full-viewport mode').toHaveAttribute(
+      'data-fullscreen',
+      'true',
+      { timeout: 10_000 },
+    );
+    await page.keyboard.press('Escape');
+    await expect(editorRoot, 'Escape must collapse full screen').toHaveAttribute('data-fullscreen', 'false', {
+      timeout: 10_000,
+    });
+    await expect(editor, 'and it must NOT have closed the editor, which would have saved it').toBeVisible();
+    await expect(editor.locator('.cm-content').first()).toContainText(edited, { timeout: 10_000 });
+
     // ── the close, which is this editor's save ──────────────────────────
     await page.getByTestId('canvas-edit-close').click();
     await expect(editor).toBeHidden({ timeout: 20_000 });
@@ -578,6 +605,32 @@ test('a table canvas and a diagram canvas live side by side, and each opens its 
       .poll(async () => grid.getByRole('row').count(), { timeout: 10_000, message: 'the add-row control added no row' })
       .toBeGreaterThan(rowsBefore);
 
+    // ── the keyboard, on the pane that has no keymap of its own ─────────
+    // The table's history is a snapshot list, not a CodeMirror document, so
+    // `Mod-z` here reached nothing at all until the editor bound it. Undo and
+    // then redo, so the rest of this journey sees the table it expects.
+    const mod = process.platform === 'darwin' ? 'Meta' : 'Control';
+    await page.keyboard.press(`${mod}+z`);
+    await expect
+      .poll(async () => grid.getByRole('row').count(), { timeout: 10_000, message: 'the keyboard undo reached nothing' })
+      .toBe(rowsBefore);
+    await page.keyboard.press(`${mod}+Shift+z`);
+    await expect
+      .poll(async () => grid.getByRole('row').count(), { timeout: 10_000, message: 'the keyboard redo reached nothing' })
+      .toBeGreaterThan(rowsBefore);
+
+    // ── the export ──────────────────────────────────────────────────────
+    // Waited on the browser's own download event, not on the menu closing: a
+    // control that opens a menu and saves nothing looks identical otherwise.
+    await page.getByTestId('canvas-table-export').click();
+    await expect(page.getByTestId('canvas-table-export-xlsx'), 'both formats must be offered').toBeVisible({
+      timeout: 10_000,
+    });
+    const downloadStarted = page.waitForEvent('download', { timeout: 20_000 });
+    await page.getByTestId('canvas-table-export-csv').click();
+    const download = await downloadStarted;
+    expect(download.suggestedFilename()).toBe('table.csv');
+
     await page.getByTestId('canvas-edit-close').click();
     await expect(editor).toBeHidden({ timeout: 20_000 });
 
@@ -620,6 +673,86 @@ test('a table canvas and a diagram canvas live side by side, and each opens its 
       await storedCanvasContent(page, seed, tableUuid),
       'saving one canvas must not rewrite the other',
     ).toContain(`gamma${token}`);
+  } finally {
+    await page.request.delete(
+      `${BASE_URL}/api/v2/elitea_core/conversation/prompt_lib/${seed.projectId}/${seed.conversationId}`,
+    );
+  }
+});
+
+/**
+ * The gesture that MAKES a canvas: a range of an answer is highlighted, and
+ * the reader asks for it as a document.
+ *
+ * Until this landed the create was reachable only from a test's own HTTP
+ * client — every journey above still opens one that way — and this file's
+ * header said so. What it could not say is whether the whole gesture WORKS:
+ * the create takes a message-group row id, a text-item row id and two byte
+ * offsets, and the transcript the reader clicks in holds none of the three.
+ * The page has to resolve them, and the only way to see that it does is to
+ * make the gesture and read the server back.
+ *
+ * The selection is made with a DOUBLE CLICK rather than a drag. It selects
+ * exactly one word, which is what makes the assertion below possible: the
+ * canvas the server stores must hold that word and nothing else, so a resolver
+ * that carved the neighbouring range would fail here rather than pass with a
+ * canvas that merely exists.
+ */
+test('a range selected in an answer becomes a canvas the server keeps', async ({ page }) => {
+  test.setTimeout(300_000);
+
+  const token = uniqueToken('CANVASSEL');
+  // The token on a line of its own: the paragraph it renders as is then
+  // exactly one word, so a double click at its centre selects the token and
+  // the assertion on the stored canvas can be an equality.
+  const seed = await seedAnswer(page, token, `autotest ${token}\n\n${token}`);
+
+  try {
+    await page.goto(`${BASE_URL}/app/chat/${seed.conversationId}`);
+    await expect(page.getByTestId('chat-message-input')).toBeEditable({ timeout: 30_000 });
+
+    const answer = page.getByTestId('application-answer').last();
+    await expect(answer).toContainText(token, { timeout: 30_000 });
+    // Nothing offers to carve anything until something is highlighted.
+    await expect(page.getByTestId('canvas-create-from-selection')).toHaveCount(0);
+
+    await answer.getByText(token, { exact: true }).last().dblclick();
+
+    const create = page.getByTestId('canvas-create-from-selection').first();
+    await expect(create, 'highlighting part of an answer must offer to carve it out').toBeVisible({ timeout: 20_000 });
+    await create.click();
+
+    // THE STORE, not the screen. The create rewrites one text item into text /
+    // canvas / text, and a client that only painted a block would look
+    // identical here.
+    await expect
+      .poll(
+        async () => {
+          const groups = await readStoredMessageGroups(page, seed.projectId, seed.conversationId);
+          for (const group of groups) {
+            for (const item of group.items) {
+              if (item.itemType !== 'canvas_message') continue;
+              const version = item.details['latest_version'];
+              const content =
+                typeof version === 'object' && version !== null
+                  ? (version as { canvas_content?: unknown }).canvas_content
+                  : undefined;
+              if (typeof content === 'string') return content;
+            }
+          }
+          return '';
+        },
+        { timeout: 60_000, message: 'the selection never reached the create route, or it carved nothing' },
+      )
+      .toBe(token);
+
+    // …and the transcript shows it without a reload: the create invalidates
+    // the conversation reads, so the block is rendered from what the server
+    // wrote rather than from a client-side guess at the split.
+    await expect(page.getByTestId('canvas-block'), 'the carved canvas must appear in the transcript').toHaveCount(1, {
+      timeout: 30_000,
+    });
+    await expect(page.getByTestId('canvas-block-content')).toContainText(token, { timeout: 30_000 });
   } finally {
     await page.request.delete(
       `${BASE_URL}/api/v2/elitea_core/conversation/prompt_lib/${seed.projectId}/${seed.conversationId}`,
