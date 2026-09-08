@@ -12,14 +12,14 @@
  *
  * **DEVIATION (disclosed):** `toastError`/`toastSuccess` -> `onError`/
  * `onSuccess` injected callbacks, the same established "caller's seam for
- * toast" substitution as `useChatCopyToClipboard.ts`/`useLoadMoreMessages.ts`
+ * toast" substitution as `useChatCopyToClipboard.ts`
  * (no shared toast infra exists in this app yet).
  */
 import { useCallback } from 'react';
 
 import { conversationApi } from '@/entities/conversation';
 
-/** Loose — matches `useLoadMoreMessages.ts`'s `LoadMoreMessagesConversation` convention (no wire schema for raw client-held conversation state). */
+/** Loose — matches `useChatCopyToClipboard.ts`'s `CopyableChatMessage` convention (no wire schema for raw client-held conversation state). */
 export interface InternalToolsConversation {
   readonly id: string | number;
   readonly meta?: Readonly<Record<string, unknown>> & { readonly internal_tools?: readonly string[] };

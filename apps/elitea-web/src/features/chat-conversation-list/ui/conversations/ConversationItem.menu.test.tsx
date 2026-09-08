@@ -96,3 +96,53 @@ describe('buildActiveMenuItems — author-only guard', () => {
     expect(disabledByKey(items, 'delete')).toBe(false);
   });
 });
+
+/**
+ * ISSUE 851 — the Export entry was a named control that did nothing.
+ *
+ * It was built with `disabled: true` hardcoded and two children labelled
+ * `Option1`/`Option2` that wired an `onClick` only when an optional `onExport`
+ * happened to be supplied. Nothing supplied one, and there was no server route
+ * either, so the row read as "coming very soon" in every build there has ever
+ * been.
+ */
+describe('buildActiveMenuItems — the Export entry', () => {
+  function exportItem(items: readonly ControlsDropdownItem[]): ControlsDropdownItem | undefined {
+    return items.find((item) => item.key === 'export');
+  }
+
+  it('offers one entry per format, each carrying a handler, when an exporter is wired', () => {
+    const onExport = vi.fn();
+    const items = buildActiveMenuItems({ ...params({ ...conversation, authorId: 'user-1' }, 'user-1'), onExport });
+
+    const item = exportItem(items);
+    expect(item?.disabled, 'a wired Export entry must be reachable').toBe(false);
+    expect(item?.items?.map((child) => child.key)).toEqual(['export-markdown', 'export-json']);
+    // The labels name a real format, not a placeholder.
+    expect(item?.items?.map((child) => child.label)).toEqual(['Markdown (.md)', 'JSON (.json)']);
+  });
+
+  it('asks the exporter for the format the clicked entry names', () => {
+    const onExport = vi.fn();
+    const items = buildActiveMenuItems({ ...params({ ...conversation, authorId: 'user-1' }, 'user-1'), onExport });
+    const children = exportItem(items)?.items ?? [];
+
+    children.find((child) => child.key === 'export-markdown')?.onClick?.();
+    expect(onExport).toHaveBeenCalledWith('md');
+
+    children.find((child) => child.key === 'export-json')?.onClick?.();
+    expect(onExport).toHaveBeenCalledWith('json');
+    expect(onExport).toHaveBeenCalledTimes(2);
+  });
+
+  // The honest state for a surface that offers no exporter: disabled, rather
+  // than open onto options wired to nothing.
+  it('disables the entry when no exporter is wired', () => {
+    const items = buildActiveMenuItems(params({ ...conversation, authorId: 'user-1' }, 'user-1'));
+    const item = exportItem(items);
+    expect(item?.disabled).toBe(true);
+    for (const child of item?.items ?? []) {
+      expect(child.onClick, `${child.key} must not pretend to do something`).toBeUndefined();
+    }
+  });
+});

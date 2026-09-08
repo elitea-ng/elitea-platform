@@ -21,6 +21,7 @@ import {
   isPersonalProject,
   isPublicOrPersonalProject,
 } from './ConversationItem.menu';
+import type { ConversationExportFormat } from './ConversationItem.menu';
 import { ConversationItemEditor } from './ConversationItem.editor';
 import { ConversationItemRow } from './ConversationItem.row';
 import type { ConversationWithOwnerMeta } from './ConversationItem.types';
@@ -46,11 +47,13 @@ export interface ConversationItemProps {
   readonly isActive?: boolean | undefined;
   readonly onDelete: (conversation: ConversationWithOwnerMeta) => void;
   /**
-   * Optional (baseline: required, but `Conversations.jsx`'s own
-   * `renderConversationItem` — `:398-419` — never actually passes it either,
-   * consistent with the Export menu row staying permanently `disabled`).
+   * Downloads this conversation's transcript in the named format (issue 851).
+   * Still optional, and still what decides whether the Export row is live:
+   * the row is disabled when no exporter is supplied, so a surface that does
+   * not offer export shows a disabled entry rather than live options wired to
+   * nothing.
    */
-  readonly onExport?: (() => void) | undefined;
+  readonly onExport?: ((format: ConversationExportFormat) => void) | undefined;
   readonly onEdit: (conversation: ConversationWithOwnerMeta) => void;
   readonly onPlayback: (conversation: ConversationWithOwnerMeta) => void;
   readonly onPin: (conversation: ConversationWithOwnerMeta, shouldPin: boolean) => void;

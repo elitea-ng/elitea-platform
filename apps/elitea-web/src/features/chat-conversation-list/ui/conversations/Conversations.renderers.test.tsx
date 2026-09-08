@@ -61,6 +61,7 @@ function baseConversationItemParams(overrides: Partial<UseRenderConversationItem
     publicProjectId: undefined,
     basename: '',
     onShareLinkCopied: undefined,
+    onExportConversation: vi.fn(),
     ...overrides,
   };
 }
