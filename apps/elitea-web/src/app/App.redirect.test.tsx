@@ -114,6 +114,41 @@ describe('App boot redirect', () => {
   });
 
   /*
+   * The share link's RECIPIENT.
+   *
+   * `/shared/chat/<token>` is served to a browser with no session on purpose:
+   * its API read is mounted outside every auth middleware, and the page is the
+   * only thing a link holder was ever given. The boot redirect took it away
+   * from them — the page rendered, the probe came back empty, and the browser
+   * left for the identity provider's login screen. Measured as an E2E failure
+   * whose call log ends "navigated to .../oauth2/authorize".
+   *
+   * The path carries the `/app/` basename here, exactly as
+   * `window.location.pathname` does in a deployed build, because that is what
+   * the predicate must cope with.
+   */
+  it('does not redirect the shared conversation page, which its reader opens with no account', async () => {
+    configureEnv();
+
+    window.history.pushState({}, '', '/app/shared/chat/autotest-share-token');
+    const assigned: string[] = [];
+    vi.stubGlobal('open', () => null);
+    server.use(
+      // 200 `authenticated: false` is what the server really answers a browser
+      // that presents no cookie at all — see internal/api/v2/auth/session.go.
+      http.get('/forward-auth/info', () => HttpResponse.json({ authenticated: false })),
+      http.all('*', () => new HttpResponse(null, { status: 401 })),
+    );
+    stubLocationAssign(assigned);
+
+    render(<App />);
+    await waitFor(() => expect(useSessionStore.getState().loaded).toBe(true));
+
+    expect(assigned).toEqual([]);
+    window.history.pushState({}, '', '/');
+  });
+
+  /*
    * J20c (webkit). A probe that never answered is not a probe that said
    * "no session".
    *

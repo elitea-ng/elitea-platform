@@ -885,16 +885,98 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Clean up application_tools entries on other versions that reference this deleted app
+	// Detach the deleted agent from every parent that used it as a sub-agent.
 	if h.pool != nil {
-		// best-effort cleanup; ignore error so the 204 response is still sent
-		_, _ = h.pool.Exec(r.Context(), fmt.Sprintf(`
-			DELETE FROM %s.application_tools
-			WHERE type = 'application'
-			AND settings->>'application_id' = $1`, s), applicationID)
+		h.detachSubAgentReferences(r.Context(), s, applicationID)
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// detachSubAgentReferences removes every sub-agent reference that points at a
+// deleted application, so no parent version goes on offering a tool whose agent
+// is gone.
+//
+// It used to be one statement against `%s.application_tools`, discarded with
+// `_, _ =`. No migration in this repository creates that table — it exists only
+// in pylon-migrated tenants — so on every schema this service builds the
+// statement failed with 42P01 and the discard hid it. Nothing was ever
+// detached: the parent's version kept listing the child, the chat resolver kept
+// reading the row, and the only way to notice was to open the parent and find a
+// tool whose agent no longer existed.
+//
+// The canonical pair is the same one internal/api/v2/eliteacore/application_relation.go
+// writes and reads: an `elitea_tools` row of type `application` carrying the
+// child pair in `settings`, plus an `entity_tool_mapping` row binding it to the
+// parent version. The mapping goes first and the tool row goes only when
+// nothing references it any more — publish CLONES mappings onto the published
+// version reusing the same tool_id, so deleting the tool row first would strip
+// the child from rows this delete was never asked to touch.
+//
+// Failures are logged rather than returned: the agent itself is already gone,
+// and re-reporting the delete as a failure would tell the caller to retry a
+// deletion that has happened.
+func (h *Handler) detachSubAgentReferences(ctx context.Context, schema, applicationID string) {
+	rows, err := h.pool.Query(ctx, fmt.Sprintf(`
+		DELETE FROM %s.entity_tool_mapping AS mapping
+		USING %s.elitea_tools AS tool
+		WHERE mapping.tool_id = tool.id
+		  AND tool.type = 'application'
+		  AND tool.settings->>'application_id' = $1
+		RETURNING mapping.tool_id`, schema, schema), applicationID)
+	if err != nil {
+		slog.ErrorContext(ctx, "delete agent: sub-agent detach failed",
+			"schema", schema, "application_id", applicationID, "error", err)
+		return
+	}
+	toolIDs := []int64{}
+	for rows.Next() {
+		var toolID int64
+		if err := rows.Scan(&toolID); err != nil {
+			rows.Close()
+			slog.ErrorContext(ctx, "delete agent: sub-agent detach read failed",
+				"schema", schema, "application_id", applicationID, "error", err)
+			return
+		}
+		toolIDs = append(toolIDs, toolID)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		slog.ErrorContext(ctx, "delete agent: sub-agent detach read failed",
+			"schema", schema, "application_id", applicationID, "error", err)
+		return
+	}
+	if len(toolIDs) > 0 {
+		// A second statement, not a data-modifying CTE: the outer query of a
+		// CTE reads the pre-delete snapshot, so it would still see the mappings
+		// removed above and never collect the now-orphaned tool rows.
+		if _, err := h.pool.Exec(ctx, fmt.Sprintf(`
+			DELETE FROM %s.elitea_tools AS tool
+			WHERE tool.id = ANY($1)
+			  AND NOT EXISTS (
+				SELECT 1 FROM %s.entity_tool_mapping AS other
+				WHERE other.tool_id = tool.id)`, schema, schema), toolIDs); err != nil {
+			slog.ErrorContext(ctx, "delete agent: orphaned sub-agent tool rows survived",
+				"schema", schema, "application_id", applicationID, "error", err)
+		}
+	}
+
+	// The legacy leg, probe-guarded exactly as the repository's own delete is
+	// (internal/infra/db/repos/applications.go): a pylon-migrated tenant can
+	// hold the same reference in `application_tools`, and leaving it there
+	// resurrects the relation through the union read.
+	var legacyTable *string
+	if err := h.pool.QueryRow(ctx, `SELECT to_regclass($1)::text`,
+		schema+".application_tools").Scan(&legacyTable); err != nil || legacyTable == nil {
+		return
+	}
+	if _, err := h.pool.Exec(ctx, fmt.Sprintf(`
+		DELETE FROM %s.application_tools
+		WHERE type = 'application'
+		  AND settings->>'application_id' = $1`, schema), applicationID); err != nil {
+		slog.ErrorContext(ctx, "delete agent: legacy sub-agent detach failed",
+			"schema", schema, "application_id", applicationID, "error", err)
+	}
 }
 
 func (h *Handler) ListVersions(w http.ResponseWriter, r *http.Request) {
@@ -1584,6 +1666,20 @@ func (h *Handler) GetVersionExpanded(w http.ResponseWriter, r *http.Request) {
 		welcomeVal = *welcomeMsg
 	}
 
+	// The project every tool below belongs to.
+	//
+	// Read BEFORE the tool loops, because both of them stamp it. Pylon's
+	// expanded projection types this key on the tool model itself
+	// (ToolValidatedDetails.project_id is required, and
+	// get_application_version_details_expanded forwards the caller's project
+	// into every entry), so the SDK reads it on each tool and a sub-agent tool
+	// without it names an application the runtime cannot then locate: the
+	// child lives in a tenant schema, and the id alone does not say which.
+	// Only the pylon-era `application_tools` branch below used to carry it, and
+	// no schema this service builds has that table — so on every deployment of
+	// this branch the key was absent from every tool.
+	projIDInt, _ := strconv.Atoi(projectID)
+
 	// Fetch tools from entity_tool_mapping
 	tools := make([]map[string]any, 0)
 	toolRows, err := h.pool.Query(ctx, fmt.Sprintf(`
@@ -1623,6 +1719,7 @@ func (h *Handler) GetVersionExpanded(w http.ResponseWriter, r *http.Request) {
 				"entity_type":    entityType,
 				"selected_tools": selectedTools,
 				"settings":       expandedSettings,
+				"project_id":     projIDInt,
 			}
 			if tName != nil {
 				tool["name"] = *tName
@@ -1639,8 +1736,7 @@ func (h *Handler) GetVersionExpanded(w http.ResponseWriter, r *http.Request) {
 		authorIDStr = strconv.Itoa(*authorID)
 	}
 
-	// Also fetch from application_tools (sub-agent references)
-	projIDInt, _ := strconv.Atoi(projectID)
+	// Also fetch from application_tools (pylon-migrated tenants only)
 	appToolRows, err := h.pool.Query(ctx, fmt.Sprintf(`
 		SELECT id, name, type, settings::text
 		FROM %s.application_tools

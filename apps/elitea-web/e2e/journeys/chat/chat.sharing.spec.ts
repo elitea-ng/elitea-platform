@@ -179,6 +179,15 @@ async function removeConversation(request: APIRequestContext, id: string): Promi
 // legacy use case: a conversation's visibility — private → public
 // ─────────────────────────────────────────────────────────────────────────────
 test('S1: "Make public" publishes the conversation on the server, and the menu stops offering it', async ({ page }) => {
+  /*
+   * THE BUDGET IS THE SUM OF THE WAITS BELOW, not a round number: two full
+   * loads of the chat page at 20 s each, a 20 s server poll between them, and
+   * the menu waits either side. The default 30 s is smaller than that sum, so
+   * the clock — not any assertion — decided the outcome, and the report named
+   * the cleanup call that happened to be running when it ran out
+   * (`apiRequestContext.delete`, measured on chromium).
+   */
+  test.setTimeout(120_000);
   const conversationId = await createConversation(page.request, uniqueName('public'));
   try {
     expect(await readIsPrivate(page, conversationId), 'a new conversation must start private').toBe(true);
@@ -222,6 +231,10 @@ test('S1: "Make public" publishes the conversation on the server, and the menu s
 // legacy use case: share a conversation by link, and revoke the link
 // ─────────────────────────────────────────────────────────────────────────────
 test('S2: a share link opens for a reader with no session, and dies when it is revoked', async ({ page, browser }) => {
+  // Same arithmetic as S1's, over more waits: the owner's chat page, the
+  // dialog, the reader's own context and its two page loads, and two 20 s
+  // server polls.
+  test.setTimeout(150_000);
   const name = uniqueName('link');
   const conversationId = await createConversation(page.request, name);
   try {
@@ -301,6 +314,9 @@ test('S2: a share link opens for a reader with no session, and dies when it is r
 // legacy use case: pin a conversation to the top of the rail, and unpin it
 // ─────────────────────────────────────────────────────────────────────────────
 test('S3: pin moves the conversation into the sidebar\'s pinned group on the server, and unpin takes it out', async ({ page }) => {
+  // The same arithmetic S1 states: a chat page load and two 20 s server polls
+  // do not fit in the 30 s default.
+  test.setTimeout(120_000);
   const conversationId = await createConversation(page.request, uniqueName('pin'));
   try {
     expect(await readPinnedIds(page)).not.toContain(conversationId);
@@ -341,6 +357,9 @@ test('S3: pin moves the conversation into the sidebar\'s pinned group on the ser
 // the only way a missing feature stops reading like a passing suite.
 // ─────────────────────────────────────────────────────────────────────────────
 test('S4: the Export entry is present but does nothing — the port has no conversation export', async ({ page }) => {
+  // As S1: measured running out of the 30 s default in the cleanup call, which
+  // is a report about the clock rather than about the export entry.
+  test.setTimeout(120_000);
   const conversationId = await createConversation(page.request, uniqueName('export'));
   try {
     await openChat(page);
