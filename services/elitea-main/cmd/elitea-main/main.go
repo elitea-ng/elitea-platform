@@ -889,6 +889,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	var currentConfigurationMutation http.Handler
 	var currentModelCatalog http.Handler
 	var currentModelDefault http.Handler
+	var internalConfigurationTools *configurationapi.CurrentConfigurationToolHandler
 	var configProviderAdmission configurationapi.ProviderAdmission
 	// The resolve+unseal capability the STORED connection checks need
 	// (internal/api/v2/configurations/stored_check.go). It composes here, with
@@ -978,6 +979,12 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		// permissions through currentPermissions below.
 		currentAuth := apiGroupAuth
 		currentPermissions := legacyrbac.NewPostgresResolver(pool)
+		internalConfigurationTools = configurationapi.NewCurrentConfigurationToolHandler(
+			currentConfigurationsRoot.Types(),
+			currentConfigurationsRoot.ModelCatalog(),
+			currentConfigurationsRoot.VaultWriter(),
+			currentConfigurationsConfig.PublicProjectID,
+		)
 		currentConfigurationAvailable, err = configurationapi.NewCurrentAvailableRoute(
 			currentConfigurationsRoot.AvailableCatalog(),
 			currentAuth,
@@ -2061,6 +2068,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		CurrentConfigurationAvailable: currentConfigurationAvailable,
 		CurrentConfigurationRead:      currentConfigurationRead,
 		CurrentConfigurationTypes:     currentConfigurationTypes,
+		InternalConfigurationTools:    internalConfigurationTools,
 		CurrentConfigurationMutation:  currentConfigurationMutation,
 		CurrentIndexStart:             currentIndexStart,
 		DeepWiki:                      deepwikiRoute,

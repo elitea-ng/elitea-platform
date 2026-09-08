@@ -905,6 +905,10 @@ This is a UI integration gap, not missing runtime toolkit binding.
 
 ## Remaining gates
 
+Gate 2 is accepted for progression on 2026-09-08, with the user's explicit agreement.
+The [testing-gap register](../testing-gaps.md) retains unfinished verification and separate implementation gaps.
+This decision does not change production activation or claim complete parity.
+
 ### Confidential DCR ownership: 2026-09-08
 
 Main now stores registered client secrets in `elitea_auth.mcp_oauth_clients`.

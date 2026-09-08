@@ -46,8 +46,10 @@ authorization, failure behavior, and recovery boundary.
 
 Detailed ledgers:
 
+- `../testing-gaps.md` records accepted progression decisions, verification debt, observed warnings, and separate implementation gaps.
 - `main-sync-20260908.md` records the main integration and rehearsal cutover gate.
 - `toolkit-test.md` records required toolkit Test parity under `TKTEST-RUST-01`.
+- `toolkit-discovery.md` separates standalone discovery command parity from existing Rust runtime tool binding.
 - `toolkit-terminal-recovery.md` records direct-read terminal takeover and the open horizontal-recovery gates.
 - `agent-runtime.md` maps language-neutral worker delivery and agent execution.
 - `pipeline-nodes.md` maps every current Python pipeline node/edge branch and
@@ -61,8 +63,7 @@ Detailed ledgers:
 - `internal-elitea-mcp.md` separates internal builder categories from external
   Elitea-as-MCP publishing. It maps the Main-owned applications, skills,
   toolkit, configuration, notification, project-context, and project-secret
-  operations plus their deliberately closed live discovery, plaintext-secret,
-  and typed-model gates.
+  operations plus their deliberately closed live discovery and plaintext-secret gates.
 - `external-elitea-mcp.md` maps opt-in project capabilities for external MCP
   clients and the durable direct execution path.
 - `delegated-oauth-dcr.md` maps the shared UI, Main, and Rust ownership for

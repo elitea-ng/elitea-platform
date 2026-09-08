@@ -219,7 +219,8 @@ type Handler struct {
 	internalToolkits internalToolkitExecutor
 	// internalConfigurations executes the fixed internal configurations
 	// category through the same policy-complete handler as REST.
-	internalConfigurations internalConfigurationExecutor
+	internalConfigurations      internalConfigurationExecutor
+	internalTypedConfigurations *configurationsapi.CurrentConfigurationToolHandler
 	// internalNotifications executes the actor-scoped fixed notifications
 	// category through Main's current notification store.
 	internalNotifications internalNotificationExecutor
@@ -286,9 +287,10 @@ func WithInternalToolkitHandler(handler *toolkitsapi.Handler) Option {
 // configuration handler for internal MCP calls. Sharing it with REST keeps
 // registry lookup, provider admission, vault sealing and shared-project
 // behavior on one implementation path.
-func WithInternalConfigurationHandler(handler *configurationsapi.Handler) Option {
+func WithInternalConfigurationHandler(handler *configurationsapi.Handler, typed *configurationsapi.CurrentConfigurationToolHandler) Option {
 	return func(mcpHandler *Handler) {
-		mcpHandler.internalConfigurations = newHandlerInternalConfigurationExecutor(handler)
+		mcpHandler.internalConfigurations = newHandlerInternalConfigurationExecutor(handler, typed)
+		mcpHandler.internalTypedConfigurations = typed
 	}
 }
 

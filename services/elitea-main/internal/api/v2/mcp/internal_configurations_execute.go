@@ -34,13 +34,14 @@ type internalConfigurationExecutor interface {
 
 type handlerInternalConfigurationExecutor struct {
 	handler *configurationsapi.Handler
+	typed   *configurationsapi.CurrentConfigurationToolHandler
 }
 
-func newHandlerInternalConfigurationExecutor(handler *configurationsapi.Handler) internalConfigurationExecutor {
+func newHandlerInternalConfigurationExecutor(handler *configurationsapi.Handler, typed *configurationsapi.CurrentConfigurationToolHandler) internalConfigurationExecutor {
 	if handler == nil {
 		return nil
 	}
-	return &handlerInternalConfigurationExecutor{handler: handler}
+	return &handlerInternalConfigurationExecutor{handler: handler, typed: typed}
 }
 
 func (executor *handlerInternalConfigurationExecutor) Execute(
@@ -65,6 +66,8 @@ func (executor *handlerInternalConfigurationExecutor) Execute(
 	params := map[string]string{"projectID": strconv.FormatInt(projectID, 10)}
 
 	switch operation {
+	case internalListStoredConfigurationTypes, internalListConfigurationModels, internalSetDefaultConfigurationModel:
+		return executor.executeTyped(ctx, operation, arguments, params)
 	case internalListConfigurationTypesAvailable:
 		query, result := internalConfigurationAvailableQuery(arguments)
 		if result != nil {

@@ -2,10 +2,8 @@ package mcp
 
 // The internal configurations category is a fixed Main-owned surface.
 //
-// The current Python platform marks eight operations with mcp_tool=True. Five
-// are published here. Types, models, and default-model mutation remain closed
-// until this executor can reuse Main's typed catalogue/default services; the
-// compatibility handlers do not implement their current semantics.
+// The current Python platform marks eight operations with mcp_tool=True.
+// Types, models, and default-model mutation require the composed typed services.
 const internalConfigurationsCategory = "configurations"
 
 type internalConfigurationOperation string
@@ -16,6 +14,9 @@ const (
 	internalCreateConfiguration             internalConfigurationOperation = "create_configuration"
 	internalGetConfiguration                internalConfigurationOperation = "get_configuration"
 	internalUpdateConfiguration             internalConfigurationOperation = "update_configuration"
+	internalListStoredConfigurationTypes    internalConfigurationOperation = "list_stored_configuration_types"
+	internalListConfigurationModels         internalConfigurationOperation = "list_configuration_models"
+	internalSetDefaultConfigurationModel    internalConfigurationOperation = "set_default_configuration_model"
 )
 
 type internalConfigurationToolDefinition struct {
@@ -112,9 +113,51 @@ var internalConfigurationToolDefinitions = []internalConfigurationToolDefinition
 	},
 }
 
-func internalConfigurationTools() []Tool {
+var internalTypedConfigurationToolDefinitions = []internalConfigurationToolDefinition{
+	{
+		name:        "get_configurations_types",
+		description: "List distinct configuration types already used in the project. This is not the configuration schema catalogue.",
+		permission:  "configurations.configurations.list",
+		operation:   internalListStoredConfigurationTypes,
+		schema: objectSchema(map[string]any{
+			"project_id": intProperty("Current project ID. The server verifies this value."),
+			"section":    boundedStringProperty("Configuration section. Defaults to credentials; an empty string includes all sections.", 0, 128),
+		}, "project_id"),
+	},
+	{
+		name:        "get_configurations_models",
+		description: "List selectable models and the current default for one section, optionally including shared models.",
+		permission:  "configurations.configurations.list",
+		operation:   internalListConfigurationModels,
+		schema: objectSchema(map[string]any{
+			"project_id":     intProperty("Current project ID. The server verifies this value."),
+			"section":        boundedStringProperty("Model section. Defaults to llm. Unknown sections return an empty catalogue.", 0, 128),
+			"include_shared": map[string]any{"type": "boolean", "description": "Include models shared by the public project. Defaults to false."},
+		}, "project_id"),
+	},
+	{
+		name:        "post_configurations_models",
+		description: "Set the project's default model for a section. This does not create a model configuration.",
+		permission:  "configurations.configuration.update",
+		operation:   internalSetDefaultConfigurationModel,
+		schema: objectSchema(map[string]any{
+			"project_id":        intProperty("Current project ID. The server verifies this value."),
+			"name":              boundedStringProperty("Existing model name.", 1, 1024),
+			"target_project_id": intProperty("Project that supplies the model. This does not change the project whose default is updated."),
+			"section": map[string]any{"anyOf": []any{
+				boundedStringProperty("Model section. Defaults to llm.", 0, 128), map[string]any{"type": "null"},
+			}},
+		}, "project_id", "name", "target_project_id"),
+	},
+}
+
+func internalConfigurationTools(typedAvailable bool) []Tool {
 	tools := make([]Tool, 0, len(internalConfigurationToolDefinitions))
-	for _, definition := range internalConfigurationToolDefinitions {
+	definitions := internalConfigurationToolDefinitions
+	if typedAvailable {
+		definitions = append(append([]internalConfigurationToolDefinition{}, definitions...), internalTypedConfigurationToolDefinitions...)
+	}
+	for _, definition := range definitions {
 		tools = append(tools, Tool{
 			Name:                           definition.name,
 			Description:                    definition.description,

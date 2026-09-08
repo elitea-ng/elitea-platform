@@ -323,6 +323,7 @@ type RouterConfig struct {
 	CurrentConfigurationAvailable http.Handler
 	CurrentConfigurationRead      http.Handler
 	CurrentConfigurationTypes     http.Handler
+	InternalConfigurationTools    *v2configs.CurrentConfigurationToolHandler
 	CurrentConfigurationMutation  http.Handler
 	CurrentIndexStart             http.Handler
 	// DeepWiki is the facade in front of the DeepWiki provider service
@@ -815,6 +816,7 @@ func mountMCPServerRoutes(
 	toolkitArgumentSchemas v2mcp.ToolkitArgumentSchemaSource,
 	toolkitRun v2mcp.ToolkitRunUseCase,
 	personalProjects personalproject.AsyncEnsurer,
+	typedConfigurations *v2configs.CurrentConfigurationToolHandler,
 ) {
 	// The resolver ASKS for the personal project it could not find, for the
 	// reason stated at `withPersonalProjects`: an MCP client authenticates
@@ -828,7 +830,7 @@ func mountMCPServerRoutes(
 		pool, resolver, agentStart, toolkitRun,
 		legacyrbac.NewPostgresResolver(pool),
 		v2mcp.WithInternalToolkitHandler(toolkitHandler),
-		v2mcp.WithInternalConfigurationHandler(configurationsHandler),
+		v2mcp.WithInternalConfigurationHandler(configurationsHandler, typedConfigurations),
 		v2mcp.WithInternalProjectContextHandler(coreHandler),
 		v2mcp.WithInternalSecretHandler(secretsHandler),
 		v2mcp.WithInternalNotificationStore(notificationStore),
@@ -1319,6 +1321,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		r, cfg.Pool, authenticate, cfg.MCPAgentStart, cfg.MCPToolkitExecute,
 		toolkitHandler, configurationsHandler, coreHandler, prebuiltMCPVault, cfg.CurrentNotificationStore,
 		cfg.ToolkitArgumentSchemas, cfg.MCPToolkitRun, personalProjects,
+		cfg.InternalConfigurationTools,
 	)
 
 	// This group holds the whole JSON API — the `/api/v2` route below is its

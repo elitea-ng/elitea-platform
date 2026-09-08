@@ -13,7 +13,7 @@ import (
 
 func TestInternalConfigurationLifecyclePersistsWithActorAndPartialUpdate(t *testing.T) {
 	pool := newInternalApplicationsPool(t)
-	executor := newHandlerInternalConfigurationExecutor(configurationsapi.NewHandler(pool))
+	executor := newHandlerInternalConfigurationExecutor(configurationsapi.NewHandler(pool), nil)
 	ctx := context.Background()
 
 	created, err := executor.Execute(ctx, 1, 73, internalCreateConfiguration, map[string]any{
@@ -97,7 +97,7 @@ func TestInternalConfigurationTracingContainmentMatchesCurrentPlatform(t *testin
 	}
 	assignConfigurationRole(t, pool, 73, "editor")
 
-	executor := newHandlerInternalConfigurationExecutor(configurationsapi.NewHandler(pool))
+	executor := newHandlerInternalConfigurationExecutor(configurationsapi.NewHandler(pool), nil)
 	createArguments := map[string]any{
 		"elitea_title": "internal_tracing",
 		"label":        "Internal tracing",

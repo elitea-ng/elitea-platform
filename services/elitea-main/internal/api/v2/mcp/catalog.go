@@ -162,7 +162,7 @@ func (p postgresToolSource) tools(ctx context.Context, schema string, s scope) (
 			return internalToolkitTools(), nil
 		}
 		if s.category == internalConfigurationsCategory {
-			return internalConfigurationTools(), nil
+			return internalConfigurationTools(p.handler != nil && p.handler.internalConfigurations != nil && p.handler.internalTypedConfigurations != nil), nil
 		}
 		if s.category == internalNotificationsCategory {
 			return internalNotificationTools(), nil

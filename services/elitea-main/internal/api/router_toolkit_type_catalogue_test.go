@@ -170,7 +170,8 @@ func TestInternalMCPConfigurationsReuseTheComposedRESTHandler(t *testing.T) {
 	for description, pattern := range map[string]string{
 		"single composed handler":    `configurationsHandler := v2configs\.NewHandler\(`,
 		"MCP mount receives handler": `mountMCPServerRoutes\([\s\S]*toolkitHandler, configurationsHandler, coreHandler, prebuiltMCPVault, cfg\.CurrentNotificationStore`,
-		"MCP handler option":         `v2mcp\.WithInternalConfigurationHandler\(configurationsHandler\)`,
+		"MCP handler option":         `v2mcp\.WithInternalConfigurationHandler\(configurationsHandler, typedConfigurations\)`,
+		"typed services reach MCP":   `cfg\.ToolkitArgumentSchemas, cfg\.MCPToolkitRun, personalProjects,\s*cfg\.InternalConfigurationTools`,
 	} {
 		if !regexp.MustCompile(pattern).MatchString(source) {
 			t.Errorf("router.go is missing %s; Internal MCP and REST configuration behavior can diverge", description)

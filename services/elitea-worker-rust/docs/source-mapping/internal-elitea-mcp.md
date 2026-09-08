@@ -1,11 +1,11 @@
 # Internal Elitea MCP source mapping
 
 Status: the applications and skills categories, five Main-owned toolkit
-builder operations, five Main-owned configuration operations, three
+builder operations, eight Main-owned configuration operations, three
 Main-owned notification operations, and the complete three-operation project
 context builder category, plus the three-operation project-secret category are
-implemented. Live per-instance toolkit discovery, typed model configuration
-operations, model-backed draft generation, discovery, chat, analytics, and
+implemented. The three typed configuration operations require Main's current configuration composition.
+Live per-instance toolkit discovery, model-backed draft generation, discovery, chat, analytics, and
 artifacts remain gated by their owning Main capabilities.
 
 This ledger keeps three MCP products separate:
@@ -32,6 +32,10 @@ The optional folder-access table and index contract is from social revision
 `a1ca98e6248291cf40a5696dea12217c8ee24f62`. That revision is not yet on the
 checked social main branch, so Main preserves the older no-override behavior
 when the table is absent.
+
+The typed configuration slice was rechecked on 2026-09-08 against
+`configurations` revision `0f64774af6809b2b14b17f2c027fdd648e1e4556`.
+Its sources are `api/v2/types.py` and `api/v2/models.py`.
 
 ## Applications category
 
@@ -139,14 +143,15 @@ present `AvailableTools` repository query instead reads toolkit attachments
 from `entity_tool_mapping`; `DiscoverTools` reads stored rows by type. Neither
 is live per-instance discovery, so exposing either through this name would
 return plausible but incorrect data. The operation remains closed until Main
-composes built-in pinned schemas, OpenAPI operation parsing, and remote MCP
-discovery with claim-scoped settings expansion.
+composes live discovery with claim-scoped settings expansion.
+The separate [toolkit discovery ledger](toolkit-discovery.md) records the existing shared command and missing Rust dispatcher support.
+Rust runtime tool enumeration and binding already work. They do not require this standalone discovery command.
 
 ## Configurations category
 
 The configurations category is available at
-`/app/{projectID}/mcp/configurations`. Main currently publishes five of the
-eight operations marked `mcp_tool=True` by the current platform.
+`/app/{projectID}/mcp/configurations`. Main publishes all eight current operations when its typed configuration services are composed.
+Without those services, it publishes only the original five operations.
 
 | Current platform evidence | Permission | Main tool |
 | --- | --- | --- |
@@ -155,6 +160,9 @@ eight operations marked `mcp_tool=True` by the current platform.
 | `configurations/api/v2/configurations.py::API.post` | `configurations.configuration.create` | `post_configurations_configurations` |
 | `configurations/api/v2/configuration.py::API.get` | `configurations.configuration.details` | `get_configurations_configuration` |
 | `configurations/api/v2/configuration.py::API.put` | `configurations.configuration.update` | `put_configurations_configuration` |
+| `configurations/api/v2/types.py::API.get` | `configurations.configurations.list` | `get_configurations_types` |
+| `configurations/api/v2/models.py::API.get` | `configurations.configurations.list` | `get_configurations_models` |
+| `configurations/api/v2/models.py::API.post` | `configurations.configuration.update` | `post_configurations_models` |
 
 The current source paths above are relative to
 `pylon_main/plugins/configurations`. The available catalogue REST endpoint is
@@ -191,13 +199,22 @@ current registry and accepts the current OpenAPI create fields. Update is
 partial and publishes only `elitea_title`, `label`, `data`, `meta`, and
 `shared`; it cannot replace configuration type or section.
 
-`get_configurations_types`, `get_configurations_models`, and
-`post_configurations_models` remain deliberately closed. Main's compatibility
-types handler ignores the requested section, its compatibility model list does
-not implement section/shared/default semantics, and its compatibility default
-mutation is an explicit 503. Production REST uses separate typed services for
-those paths. Internal MCP must reuse those same services before it can publish
-the names; returning the compatibility answers would be plausible but wrong.
+The three typed operations reuse `configurations/tool_handler.go`.
+This adapter invokes the existing typed REST handlers with the same readers and vault writer.
+It does not invoke Main's reduced compatibility handlers or add SQL.
+`cmd/elitea-main/main.go` supplies the current configuration composition to REST and MCP through `internal/api/router.go`.
+
+Types preserve the default `credentials` section and explicit empty-section selection.
+Models preserve section normalization, shared-model selection, and default-model metadata.
+Main supplies the public project identity, not the tool arguments.
+Default-model updates write only to the endpoint project's vault.
+`target_project_id` identifies the model's source project, not the vault to update.
+The shared writer preserves omitted, empty, and null section behavior.
+MCP bounds strings and requires a non-empty model name and positive source project ID.
+
+MCP uses the same list and update permissions as Main's typed REST routes.
+The legacy Python endpoints lack these explicit project checks.
+Preserving that weaker authorization is not a compatibility requirement.
 
 ## Notifications category
 
@@ -446,7 +463,7 @@ lifecycle test proves create, partial update, attach, explicit empty selection,
 list, and detach. Router composition tests pin that REST and Internal MCP share
 one policy-complete toolkit handler.
 
-Configuration tests pin the five-operation catalogue, private wire fields,
+Configuration tests pin the five-operation base catalogue, private wire fields,
 permissions, project clamping, redacted failures, bounded repeated filters,
 sort and pagination translation, title normalization, create/update field
 allowlists, and refusal before handler invocation. Its isolated PostgreSQL
@@ -455,6 +472,27 @@ actor, derives the correct section, partially updates it without erasing data,
 and reads and lists the persisted row. A second PostgreSQL proof pins tracing
 containment for ordinary project members, project admins, and the actor's own
 personal project.
+
+`internal_configurations_typed_test.go` pins the composed eight-operation catalogue and refuses incomplete composition.
+Tests exercise all three operations through MCP permission and project checks.
+They preserve types, model defaults, shared selection, and endpoint-owned vault writes.
+They also cover cancellation, safe failures, invalid input refusal, and section fuzzing.
+The isolated PostgreSQL test composes real configuration repositories, model services, and the encrypted vault reader and writer.
+It proves shared-model filtering, absent-vault refusal, persisted defaults, and endpoint-owned vault writes.
+Project provisioning remains responsible for creating a missing vault.
+These tests do not prove deployed chat-driven entity creation.
+
+The 2026-09-08 checks pass:
+
+- Seventeen focused configuration tests, including three PostgreSQL integration tests, with zero skips.
+- MCP, configuration, router, and Main command package tests without database credentials.
+  Database-dependent cases skip in that broader run.
+  Only the three focused database cases receive new PostgreSQL proof in this slice.
+- Focused MCP and typed-handler race tests, plus bounded section fuzzing.
+- `go vet` for the four changed package groups and `git diff --check`.
+
+The database tests use isolated fixture databases on the rehearsal PostgreSQL service.
+They remove only those fixture databases. They do not change deployed chats or credentials.
 
 Notification tests pin the three-operation catalogue, omission of bulk and
 delete operations, exact permissions, project clamping, authenticated actor
@@ -517,9 +555,9 @@ Default-secret metadata and conditional default-name suppression remain a
 shared Main secrets parity gate. The current MCP category cannot fix them in
 isolation because REST and MCP deliberately share the same vault handler.
 
-The three typed configuration operations and the Python list `ids` filter
-remain explicit Main parity gates. They must reuse the production typed model
-catalogue/default services rather than the reduced compatibility handlers.
+The Python configuration-list `ids` filter remains a Main parity gate.
+The three typed configuration operations now reuse the production services.
+Deployed chat-driven use remains a verification gap in [the test register](../testing-gaps.md).
 
 The extended application-list filters and version-copy skill option remain
 explicit parity gates. Main must own their durable data and validation before
