@@ -2227,9 +2227,17 @@ export function callToolPrompt(operation: string, tail: string): string {
  * invalid configuration that kills the turn before the child ever runs. So a
  * delegation journey names the tool AND the task it delegates.
  *
- * The arguments travel inside the marker, which the mock closes on `]]` — a
- * value carrying that sequence would truncate it, so it is refused here rather
- * than silently producing a call the runtime cannot parse.
+ * The arguments travel inside the marker, which the mock closes on the `]]`
+ * that BALANCES its opening `[[` (`_marker_body`), and that nesting rule is
+ * what a two-level delegation needs: the task a parent hands its child is
+ * itself a whole marker, so the child's `]]` closes before the parent's.
+ *
+ * So a `]]` is refused here only when it would close the marker EARLY — an
+ * unbalanced one. The check mirrors the mock's own scan rather than banning the
+ * sequence, because banning it made the nested form unwritable while the mock
+ * has parsed it since the day it was written. An unclosed `[[` is refused for
+ * the same reason from the other side: it would swallow the marker's own `]]`
+ * and the arguments would then be truncated at the tail.
  */
 export function callToolWithArgumentsPrompt(
   toolName: string,
@@ -2238,10 +2246,39 @@ export function callToolWithArgumentsPrompt(
 ): string {
   const encoded = JSON.stringify(args);
   expect(
-    encoded.includes(']]'),
-    'the marker closes on `]]`, so a scripted argument may not contain that sequence',
-  ).toBe(false);
+    markerNestingDepth(encoded),
+    'the marker closes on the `]]` that balances its `[[`, so a scripted argument may ' +
+      'not carry an unbalanced one — it would close the marker early or swallow its close',
+  ).toBe(0);
   return `[[mock:call_tool ${toolName} ${encoded}]] ${tail}`;
+}
+
+/**
+ * The nesting depth `text` leaves behind, or `-1` if it ever closes past zero.
+ *
+ * The same two-character scan `_marker_body` makes in `deploy/mock-llm/server.py`:
+ * `[[` opens, `]]` closes, and everything else is one character of content. A
+ * result of `0` is the only value that leaves the enclosing marker intact.
+ */
+function markerNestingDepth(text: string): number {
+  let depth = 0;
+  let index = 0;
+  while (index < text.length - 1) {
+    const pair = text.slice(index, index + 2);
+    if (pair === '[[') {
+      depth += 1;
+      index += 2;
+      continue;
+    }
+    if (pair === ']]') {
+      depth -= 1;
+      if (depth < 0) return -1;
+      index += 2;
+      continue;
+    }
+    index += 1;
+  }
+  return depth;
 }
 
 /**
