@@ -471,3 +471,171 @@ test('M3: a cold deep link resolves a foreign participant server-side and captio
   await deleteConversation(page.request, conversationId);
   await deleteAgent(page.request, agent.id);
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// M1b: cancelling the delete confirmation keeps the conversation
+//
+// Ported from the legacy public suite:
+//   `tests/ui/chat/test_conversation_management.py::TestConversationActions::
+//    test_delete_conversation_cancel` (TC-CONV-007b)
+//
+// M1 above proves the CONFIRM path. Nothing proved the other one, and the two
+// share every step but the last click — which is exactly the shape in which a
+// destructive control goes wrong: `ControlsDropdown` replaces the menu row in
+// place with a Cancel/Delete pair, so "Cancel" is a sibling of the button that
+// deletes, one row apart. A Cancel wired to the same handler, or a first
+// "Delete" click that already deleted, both look correct until someone cancels.
+//
+// The server read at the end is what discriminates. A conversation whose row
+// stayed on the rail because the rail never refreshed reads exactly like one
+// that was not deleted, and only the store can tell the two apart.
+// ─────────────────────────────────────────────────────────────────────────────
+test('M1b: cancelling the delete confirmation leaves the conversation on the rail and in the store', async ({ page }) => {
+  const name = uniqueName('m1b');
+  const conversationId = await createConversation(page.request, name);
+
+  await page.goto(BASE_URL + '/app/chat');
+  await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 20_000 });
+  await openTodayGroup(page);
+
+  const row = page.getByTestId(`conversation-item-${conversationId}`);
+  await expect(row).toBeVisible({ timeout: 15_000 });
+  await expect(row).toContainText(name);
+
+  // The kebab is `display: none` until the row is hovered (`ConversationItem.styles.ts`).
+  const trigger = page.locator(`#conversation-menu-${conversationId}-trigger`);
+  await row.hover();
+  await expect(trigger).toBeVisible({ timeout: 5_000 });
+  await trigger.click();
+
+  const menu = page.locator(`#conversation-menu-${conversationId}-menu`);
+  await expect(menu).toBeVisible({ timeout: 5_000 });
+  await menu.getByRole('menuitem', { name: 'Delete' }).click();
+  await expect(menu).toContainText("Are you sure to delete conversation? It can't be restored.");
+
+  // No DELETE may leave the browser at all — not before the confirmation, and
+  // not because of the Cancel. Registered here so a request the arming click
+  // itself issued would already have been counted.
+  const deletes: string[] = [];
+  page.on('request', (request) => {
+    if (request.method() === 'DELETE' && request.url().includes(`${CONVERSATION_PATH}/${conversationId}`)) {
+      deletes.push(request.url());
+    }
+  });
+
+  await menu.getByRole('menuitem', { name: 'Cancel' }).click();
+
+  // The confirmation closed and the menu went back to its ordinary rows — the
+  // Delete entry is offerable again, which is what "cancelled" means here.
+  await expect(menu).not.toContainText("Are you sure to delete conversation?");
+
+  // The row is still on the rail, in the same page lifetime.
+  await expect(row).toBeVisible();
+  await expect(row).toContainText(name);
+
+  // …and the conversation is still in the store. Read after a round-trip so a
+  // DELETE the Cancel click issued has been sent by the time it is counted.
+  await page.evaluate(() => undefined);
+  expect(deletes, 'Cancel must not reach the delete route').toEqual([]);
+  const read = await page.request.get(`${API_BASE}${CONVERSATION_PATH}/${conversationId}`);
+  expect(read.status(), 'a cancelled delete must leave the conversation resolvable').toBe(200);
+  expect(((await read.json()) as { name?: string }).name).toBe(name);
+
+  await deleteConversation(page.request, conversationId);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// M2b: adding a participant through the composer's own picker
+//
+// Ported from the legacy public suite:
+//   `tests/ui/chat/test_chat_interface.py::TestHashSearch::test_hash_search_participants`
+//   `tests/ui/chat/test_chat_interface.py::TestHashSearch::test_add_participant_via_hash_search`
+//   (TC-CHAT-017 / TC-CHAT-018)
+//
+// THE TRIGGER IS DIFFERENT HERE, AND THAT IS THE PORT'S WHOLE POINT. The legacy
+// UI opened a participant search by typing "#". elitea-web has no "#" trigger:
+// `useSlashMention` and its siblings own "/", "@" and "~" only, and "#" appears
+// in this codebase solely as the toolkit/tool SEPARATOR inside an already
+// committed mention (`instructionsMention.utils.ts`). The affordance that does
+// the legacy test's job is the composer's "+" menu, whose Agents submenu is a
+// searchable list of the project's agents wired to
+// `useAddEntityParticipant.onSelectParticipant`. So the use case — "find a
+// participant from the composer and add it to this conversation" — is ported
+// onto the control that has it, rather than onto a keystroke this app does not
+// implement.
+//
+// M2 above attaches its agent over the REST API and then removes it through the
+// rail. This is the other direction, and it is the one a user takes.
+// ─────────────────────────────────────────────────────────────────────────────
+test('M2b: the composer’s picker finds an agent by name and attaches it to the conversation', async ({ page }) => {
+  const conversationId = await createConversation(page.request, uniqueName('m2b'));
+  const agentName = uniqueName('m2bag');
+  const agent = await createAgent(page.request, agentName);
+
+  // Nothing is attached yet, so what the picker does below is the only thing
+  // that could have attached anything.
+  expect(await readParticipants(page.request, conversationId)).toEqual([]);
+
+  await page.goto(`${BASE_URL}/app/chat/${conversationId}`);
+  await expect(page.getByTestId('chat-message-input')).toBeEditable({ timeout: 20_000 });
+
+  // The "+" menu's four entity queries are deferred until the menu is opened
+  // for the first time (`usePlusMenuEntities`'s `onOpen` gate), so the agents
+  // list does not exist before this click.
+  const plus = page.getByTestId('plus-menu-button');
+  await expect(plus).toBeEnabled({ timeout: 20_000 });
+  await plus.click();
+  const agentsRow = page.getByTestId('plus-menu-agents');
+  await expect(agentsRow).toBeVisible({ timeout: 10_000 });
+  await agentsRow.click();
+
+  // The submenu is a real, populated list — the legacy "typing the trigger
+  // opens a participant search" assertion, on this app's trigger.
+  const options = page.getByTestId('plus-submenu-item');
+  await expect(options.first()).toBeVisible({ timeout: 15_000 });
+
+  // Its search narrows that list. `exact: true` matters: the conversation
+  // rail's own search bar reads "Search conversations..." and a substring
+  // placeholder match would find whichever of the two happened to be mounted.
+  const search = page.getByPlaceholder('Search...', { exact: true });
+  await expect(search).toBeVisible();
+  await search.fill(agentName);
+
+  // `toEntityItems` keys each row `agent-<applications.id>`, which is the only
+  // identity that survives two agents sharing a display name.
+  const target = page.locator(`[data-testid="plus-submenu-item"][data-item-key="agent-${agent.id}"]`);
+  await expect(target, 'the agent created for this journey must be findable in the picker').toHaveCount(1);
+  await expect(options, 'the search must narrow the list, not merely accept text').toHaveCount(1);
+  await expect(target).toContainText(agentName);
+
+  await target.click();
+
+  // The attach is a SERVER-side mapping, and that is what is asserted: the
+  // picker's row could close the menu and change nothing (its own
+  // `applyParticipantSelection` resolves without attaching on several paths),
+  // which no screen assertion can tell apart from a working one.
+  await expect
+    .poll(async () => (await readParticipants(page.request, conversationId)).map((p) => p.entity_name), {
+      timeout: 20_000,
+      message: 'selecting an agent in the "+" picker must attach it to the conversation',
+    })
+    .toEqual(['application']);
+
+  const attached = await readParticipants(page.request, conversationId);
+  // The agent that was picked, and the version the agent resolver joins on —
+  // a participant row without `entity_settings.version_id` is one the product
+  // never produces (see M2).
+  expect(String(attached[0]?.entity_meta?.id)).toBe(String(agent.id));
+  expect(attached[0]?.entity_settings?.version_id).toBeDefined();
+
+  // …and it reaches the rail the user reads it from.
+  await openParticipantsRail(page);
+  const agents = page.getByTestId('participants-section-Agents');
+  await expect(agents).toBeVisible({ timeout: 15_000 });
+  await expect(agents).toContainText(agentName);
+
+  await checkA11y(page);
+
+  await deleteConversation(page.request, conversationId);
+  await deleteAgent(page.request, agent.id);
+});
