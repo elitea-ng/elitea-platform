@@ -273,10 +273,16 @@ test('J14c: the welcome message and chat starters count down to 768 and refuse t
      *   the ~24px-tall button, so no click event is ever produced. Clicking a
      *   SECOND time, with the field already blurred, adds the row normally.
      *
-     * Filed as #848. This journey routes around it instead of
-     * asserting the broken order, because its subject is the 768-character
-     * contract, not the add button; `ConversationStartersEditor.test.tsx` and
-     * `CreateApplication.test.tsx` already cover adding a row.
+     * Filed as #848, fixed there by reserving the counter's line
+     * (`visibility: hidden` instead of unmounting) in both
+     * `WelcomeMessageInput.tsx` and `ConversationStartersEditor.tsx`, so
+     * blur no longer shifts a control sitting below either counter. This
+     * journey still seeds the starter through the API rather than clicking
+     * `+ Starter` into existence: its subject is the 768-character contract,
+     * not the add button, and `ConversationStartersEditor.test.tsx` /
+     * `CreateAgentForm.test.tsx` already cover a single click on `+ Starter`
+     * while the welcome field is focused. A dedicated journey for the add
+     * interaction itself is still open work (see #848's own "Test impact" note).
      */
     const starter = panel.getByTestId('agent-conversation-starter-input').first();
     await expect(starter).toBeVisible({ timeout: 20_000 });

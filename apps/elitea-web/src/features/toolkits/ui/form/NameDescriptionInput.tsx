@@ -8,6 +8,7 @@ import type { SxProps, Theme } from '@mui/material/styles';
 import { t } from '@/shared/i18n';
 import { MAX_DESCRIPTION_LENGTH, MAX_NAME_LENGTH } from '@/shared/lib/limits';
 import { PROMPT_PAYLOAD_KEY } from '@/shared/lib/prompt-payload';
+import { combineSx } from '@/shared/ui/lib/combineSx';
 import { StyledInputEnhancer } from '@/shared/ui/StyledInputEnhancer';
 
 import { useFieldFocus } from '../../lib/hooks/useFieldFocus';
@@ -149,14 +150,18 @@ function DescriptionField({ visible, value, disabled, showValidation, hasError, 
         onFocus={onFocus}
         onBlur={onBlur}
       />
-      {isFocused && value.length > 0 && (
-        <Typography
-          variant="bodySmall"
-          sx={descriptionLengthMessageSx}
-        >
-          {t('features.toolkits.nameDescriptionInput.charactersLeft', '{{count}} characters left', { count: MAX_DESCRIPTION_LENGTH - value.length })}
-        </Typography>
-      )}
+      {/* #848 — never unmount: unlike `nameLengthMessageSx` above (absolutely
+        * positioned, so it overlays rather than pushes), this counter sits
+        * in normal flow — `ToolBase.render.tsx` renders real property
+        * fields directly after this component, and unmounting on blur
+        * shifts them up, swallowing a click already headed for one of
+        * them. `visibility: hidden` keeps the line's height reserved. */}
+      <Typography
+        variant="bodySmall"
+        sx={combineSx(descriptionLengthMessageSx, { visibility: isFocused && value.length > 0 ? 'visible' : 'hidden' })}
+      >
+        {t('features.toolkits.nameDescriptionInput.charactersLeft', '{{count}} characters left', { count: MAX_DESCRIPTION_LENGTH - value.length })}
+      </Typography>
     </Box>
   );
 }

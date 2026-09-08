@@ -10,6 +10,7 @@ import { t } from '@/shared/i18n';
 import { MAX_DESCRIPTION_LENGTH, MAX_NAME_LENGTH } from '@/shared/lib/limits';
 import { PROMPT_PAYLOAD_KEY } from '@/shared/lib/prompt-payload';
 import { BasicAccordion } from '@/shared/ui/BasicAccordion';
+import { combineSx } from '@/shared/ui/lib/combineSx';
 import { StyledInputEnhancer } from '@/shared/ui/StyledInputEnhancer';
 
 import { useFieldFocus } from '../lib/useFieldFocus';
@@ -196,16 +197,21 @@ export function ApplicationEditForm({
                   helperText={descriptionError}
                   slotProps={{ htmlInput: { maxLength: MAX_DESCRIPTION_LENGTH, 'data-testid': 'agent-description-input' } }}
                 />
-                {isFocused(PROMPT_PAYLOAD_KEY.description) && description.length > 0 && (
-                  <Typography
-                    variant="labelTiny"
-                    sx={descriptionCharactersLabelSx}
-                  >
-                    {t('agents.applicationEditForm.charactersLeft', '{{count}} characters left', {
-                      count: MAX_DESCRIPTION_LENGTH - description.length,
-                    })}
-                  </Typography>
-                )}
+                {/* #848 — never unmount: this counter sits in normal flow
+                  * directly above `AgentTagEditor` below, and unmounting on
+                  * blur shifts that control up, swallowing a click already
+                  * headed for it. `visibility: hidden` keeps the line's
+                  * height reserved. */}
+                <Typography
+                  variant="labelTiny"
+                  sx={combineSx(descriptionCharactersLabelSx, {
+                    visibility: isFocused(PROMPT_PAYLOAD_KEY.description) && description.length > 0 ? 'visible' : 'hidden',
+                  })}
+                >
+                  {t('agents.applicationEditForm.charactersLeft', '{{count}} characters left', {
+                    count: MAX_DESCRIPTION_LENGTH - description.length,
+                  })}
+                </Typography>
               </Box>
 
               <AgentTagEditor
