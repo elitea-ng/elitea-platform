@@ -20,10 +20,11 @@
  *    Run, read the outcome. That file is where the missing half of JRNY-017
  *    lives now.
  *
- * 2. Edit-and-save on the detail page — no save affordance is mounted.
- *    ToolkitsOperationButtons draws no persistent button; its update path
- *    fires only on eventEmitter ToolEvents.ToolkitsUpdateToolkit, and the only
- *    emitter (ToolkitsTabBar) has no caller. Needs its own journey once wired.
+ * 2. CLOSED. Edit-and-save on the detail page used to have no save affordance
+ *    at all: ToolkitsOperationButtons draws no persistent button, its update
+ *    path fires only on eventEmitter ToolEvents.ToolkitsUpdateToolkit, and
+ *    nothing in the app emitted it. The page header emits it now, and J17.8
+ *    below is the journey this note asked for.
  *
  * ── FORMERLY KNOWN-FAILING — BOTH DEFECTS ARE FIXED (#129), re-measured on the
  *    real E2E stack on 2026-08-09. Kept as history because the assertions below
@@ -489,4 +490,77 @@ test('J17.7: a failed tool-catalogue read shows an error with a retry, not an em
   await error.getByRole('button', { name: 'Retry' }).click();
   await expect(error).toHaveCount(0, { timeout: 20_000 });
   expect(catalogueReads).toBeGreaterThan(readsBeforeRetry);
+});
+
+/**
+ * J17.8 — edit a saved toolkit from its own page and persist the change.
+ *
+ * The half of JRNY-017 that note 2 above recorded as impossible. It is the
+ * whole point of an edit route, and it went unasserted for as long as the
+ * route had no Save control: every field on the page was editable and no edit
+ * could ever leave the browser.
+ *
+ * The proof is a SERVER read, not the screen: the form is what would keep
+ * showing the typed text whether or not the write happened.
+ */
+test('J17.8: editing a toolkit’s description and pressing Save persists it', async ({ page }) => {
+  test.setTimeout(90_000);
+
+  const name = toolkitName();
+  const created = await page.request.post(`${API_BASE}/elitea_core/tools/prompt_lib/${DEFAULT_PROJECT_ID}`, {
+    data: { name, type: 'custom', description: 'JRNY-017 edit-and-save fixture', settings: { selected_tools: [] } },
+  });
+  expect(created.status(), await created.text()).toBe(201);
+  const { id } = (await created.json()) as { id: string };
+  createdIds.push(id);
+
+  const edited = `${AUTOTEST_PREFIX}edited_${Date.now()}`;
+
+  await page.goto(`${BASE_URL}/app/toolkits/all/${id}`, { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('edit-toolkit-test-pane-slot')).toBeAttached({ timeout: 20_000 });
+
+  const saveButton = page.getByTestId('toolkit-save-button');
+  // Dirty-gated, exactly like the agent editor: nothing has changed yet, so
+  // there is nothing to save.
+  await expect(saveButton, 'the toolkit edit page must offer a Save control').toBeVisible({ timeout: 20_000 });
+  await expect(saveButton, 'an untouched toolkit has nothing to save').toBeDisabled();
+
+  // `custom` declares no `toolkit_name`-flagged property, which is what makes
+  // `NameDescriptionInput` draw the Name/Description pair (its own
+  // `resolveDescriptionVisibility`). The same reasoning J17.3 relies on for the
+  // Toolkit Name field it already asserts on this route.
+  const description = page.getByRole('textbox', { name: 'Description' });
+  await expect(description, 'the toolkit editor must offer the Description field this journey edits').toBeVisible({ timeout: 20_000 });
+  await description.fill(edited);
+
+  await expect(saveButton, 'an edit must make the toolkit saveable').toBeEnabled({ timeout: 20_000 });
+
+  const [saveResponse] = await Promise.all([
+    page.waitForResponse(
+      (r) => r.request().method() === 'PUT' && /\/elitea_core\/tool\/prompt_lib\//.test(r.url()),
+      { timeout: 30_000 },
+    ),
+    saveButton.click(),
+  ]);
+  expect(saveResponse.status(), await saveResponse.text()).toBeLessThan(300);
+
+  // THE SERVER's own copy, read back through its own route. Polled, because
+  // the write and this read are two round trips.
+  await expect
+    .poll(
+      async () => {
+        const read = await page.request.get(`${API_BASE}/elitea_core/tool/prompt_lib/${DEFAULT_PROJECT_ID}/${id}`);
+        if (!read.ok()) return `read answered ${read.status()}`;
+        // Both shapes accepted on purpose: this route answers the row itself,
+        // and a reader that assumed the wrong one of the two would report a
+        // successful write as a lost one.
+        const body = (await read.json()) as { description?: string; data?: { description?: string } };
+        return body.description ?? body.data?.description ?? '';
+      },
+      { message: 'the edited description never reached the server', timeout: 30_000 },
+    )
+    .toBe(edited);
+
+  // And the control settles back: a saved toolkit has nothing left to save.
+  await expect(saveButton).toBeDisabled({ timeout: 20_000 });
 });

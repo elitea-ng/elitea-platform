@@ -92,6 +92,199 @@ export const API_BASE = (process.env['PLAYWRIGHT_BASE_URL'] ?? 'http://localhost
 /** Default public project ID (matches compose env VITE_PUBLIC_PROJECT_ID). */
 export const DEFAULT_PROJECT_ID = process.env['E2E_PROJECT_ID'] ?? '1';
 
+/* ── the tenancy the publish journeys need ───────────────────────────────── */
+
+/**
+ * The project the publish journeys AUTHOR in, by name (`scripts/e2e-stack.sh`).
+ *
+ * Publishing is cross-project: the clone stays in the author's schema and a
+ * twin is written into the public project's, which is the only schema the
+ * catalogue reads. Project 1 is the public project on this rig, so a publish
+ * issued from it never writes a twin and the two halves cannot be told apart.
+ * This project is the author side of that pair.
+ *
+ * NAMED, NOT NUMBERED, and resolved through the product's own project listing
+ * below. The seed picks the id out of a reserved range, and a journey that
+ * repeated the literal would keep passing against a project that had moved —
+ * or, worse, against whatever row later took that id.
+ */
+export const PUBLISH_AUTHOR_PROJECT_NAME = 'e2e-publish-author';
+
+/**
+ * The seeded model that is NOT shared: it lives in the author project, so
+ * `llm_settings.model_project_id` naming it is refused publication
+ * (`llm_not_shared`) and flagged critical by the pre-publish check.
+ *
+ * The name is the `data.name` the catalogue serves, which is the value a
+ * version's `llm_settings.model_name` carries.
+ */
+export const PRIVATE_MODEL_NAME = 'E2E-PRIVATE-MODEL';
+
+/**
+ * The route the project switcher itself calls.
+ *
+ * The trailing `1` is part of the reference URL, not a project id the caller
+ * chooses: `internal/api/v2/projects/handler.go` mounts this exact path and
+ * uses the segment for the `check_public_role` filter alone. The handler
+ * answers the CALLER's projects, whatever stands there.
+ */
+const PROJECT_LIST_PATH = '/projects/project/default/1';
+
+/** Resolved ids, memoised per worker process. Only successes are cached. */
+const resolvedProjectIds = new Map<string, string>();
+
+/**
+ * The id of a project the caller belongs to, found by its seeded NAME.
+ *
+ * Reads through `?search=`, then matches the name EXACTLY: `search` is an
+ * `ILIKE '%…%'` on the server, so asking for `e2e-publish-author` would also
+ * answer a project someone later names `e2e-publish-author-2`.
+ */
+export async function resolveProjectIdByName(
+  request: APIRequestContext,
+  name: string,
+): Promise<string> {
+  const cached = resolvedProjectIds.get(name);
+  if (cached !== undefined) return cached;
+  const url = `${API_BASE}${PROJECT_LIST_PATH}?search=${encodeURIComponent(name)}`;
+  const response = await request.get(url);
+  if (!response.ok()) {
+    throw new Error(
+      `resolveProjectIdByName(${name}): GET ${url} -> ${response.status()}` +
+        `${await describeRefusal(response)}\n${(await response.text()).slice(0, 300)}`,
+    );
+  }
+  const rows = (await response.json()) as readonly { readonly id?: unknown; readonly name?: unknown }[];
+  const found = (Array.isArray(rows) ? rows : []).find((row) => row.name === name);
+  if (found === undefined) {
+    throw new Error(
+      `resolveProjectIdByName(${name}): the caller is a member of no project of that name. ` +
+        `scripts/e2e-stack.sh seeds it and grants both personas the admin role in it; a stack ` +
+        `seeded before that change has the row missing. Answer was ` +
+        `${JSON.stringify(rows).slice(0, 300)}`,
+    );
+  }
+  const id = String(found.id);
+  resolvedProjectIds.set(name, id);
+  return id;
+}
+
+/** The seeded author project's id — the project a publish is issued FROM. */
+export async function resolvePublishAuthorProjectId(
+  request: APIRequestContext,
+): Promise<string> {
+  return resolveProjectIdByName(request, PUBLISH_AUTHOR_PROJECT_NAME);
+}
+
+/**
+ * The CATALOGUE project's id, as the server itself reports it.
+ *
+ * The deployment decides this (`ELITEA_AI_PROJECT_ID`, `internal/publicproject`),
+ * and the browser learns it from `platform_settings` — so a journey reads it
+ * from the same place rather than repeating a default that is only true while
+ * nobody sets the variable.
+ */
+export async function resolveCatalogueProjectId(request: APIRequestContext): Promise<string> {
+  const cached = resolvedProjectIds.get('#catalogue');
+  if (cached !== undefined) return cached;
+  const url = `${API_BASE}/elitea_core/platform_settings/prompt_lib`;
+  const response = await request.get(url);
+  if (!response.ok()) {
+    throw new Error(
+      `resolveCatalogueProjectId: GET ${url} -> ${response.status()}` +
+        `${await describeRefusal(response)}`,
+    );
+  }
+  const body = (await response.json()) as { public_project_id?: unknown };
+  const id = body.public_project_id;
+  if (typeof id !== 'number' && typeof id !== 'string') {
+    throw new Error(
+      `resolveCatalogueProjectId: platform_settings named no public_project_id: ` +
+        `${JSON.stringify(body).slice(0, 300)}`,
+    );
+  }
+  const value = String(id);
+  resolvedProjectIds.set('#catalogue', value);
+  return value;
+}
+
+/** One row of the model catalogue, as the picker reads it. */
+export interface CatalogueModel {
+  /** The model NAME a version carries in `llm_settings.model_name`. */
+  readonly name: string;
+  /** The configuration row's own title, for a message that names the row. */
+  readonly title: string;
+  /** The project the row lives in — what the publish guard compares. */
+  readonly projectId: string;
+}
+
+/**
+ * The models a project may name, through the route the picker itself calls.
+ *
+ * TWO SHAPES, one route. When the Configurations plane is composed
+ * (`ELITEA_CONFIGURATIONS_ENABLED` + `ELITEA_AI_PROJECT_ID`) the production
+ * route answers items whose `name` is already the model name; without it the
+ * legacy handler answers the configuration ROW, whose `name` is the row's
+ * title and whose `data.name` is the model. The e2e rig runs the second, a
+ * full deployment the first, and a helper that read only one of them would
+ * resolve a title as a model name on one of the two and fail to match at all.
+ */
+export async function readProjectModels(
+  request: APIRequestContext,
+  projectId: string,
+): Promise<readonly CatalogueModel[]> {
+  const url = `${API_BASE}/configurations/models/${projectId}`;
+  const response = await request.get(url);
+  if (!response.ok()) {
+    throw new Error(
+      `readProjectModels(${projectId}): GET ${url} -> ${response.status()}` +
+        `${await describeRefusal(response)}\n${(await response.text()).slice(0, 300)}`,
+    );
+  }
+  const body = (await response.json()) as { items?: readonly Record<string, unknown>[] };
+  return (body.items ?? []).map((row) => {
+    const title = String(row['name'] ?? '');
+    const data = (row['data'] as Record<string, unknown> | undefined) ?? {};
+    const modelName = typeof data['name'] === 'string' && data['name'] !== '' ? data['name'] : title;
+    return { name: modelName, title, projectId: String(row['project_id'] ?? '') };
+  });
+}
+
+/**
+ * The seeded NON-shared model: its name and the project that owns it.
+ *
+ * Resolved rather than assumed. The refusal it exists for is decided on
+ * `llm_settings.model_project_id` against the ONE public project, so a journey
+ * that invented an id would prove the guard refuses an id naming nothing —
+ * which a guard comparing against "any project the caller can see" also passes.
+ * This one names a model that really exists, in a project the caller really
+ * belongs to, and is private for the only reason that matters here: its project
+ * is not the catalogue's.
+ */
+export async function resolvePrivateModel(
+  request: APIRequestContext,
+): Promise<{ readonly modelName: string; readonly projectId: string }> {
+  const projectId = await resolvePublishAuthorProjectId(request);
+  const catalogueProjectId = await resolveCatalogueProjectId(request);
+  if (projectId === catalogueProjectId) {
+    throw new Error(
+      `resolvePrivateModel: the author project IS the catalogue project (${projectId}), so no ` +
+        `model in it can be private. The deployment resolved a different public project than ` +
+        `the seed assumes.`,
+    );
+  }
+  const models = await readProjectModels(request, projectId);
+  const found = models.find((model) => model.name === PRIVATE_MODEL_NAME);
+  if (found === undefined) {
+    throw new Error(
+      `resolvePrivateModel: project ${projectId} serves no model named ${PRIVATE_MODEL_NAME}. ` +
+        `scripts/e2e-stack.sh seeds it with shared = false; it answered ` +
+        `${JSON.stringify(models).slice(0, 300)}`,
+    );
+  }
+  return { modelName: found.name, projectId };
+}
+
 /**
  * Create a conversation via API.
  * Returns the new conversation id.
@@ -199,9 +392,10 @@ export async function createAgent(
 export async function deleteAgent(
   request: APIRequestContext,
   id: string,
+  projectId: string = DEFAULT_PROJECT_ID,
 ): Promise<void> {
   await request.delete(
-    `${API_BASE}/elitea_core/application/prompt_lib/${DEFAULT_PROJECT_ID}/${id}`,
+    `${API_BASE}/elitea_core/application/prompt_lib/${projectId}/${id}`,
   );
 }
 
@@ -270,6 +464,72 @@ export interface AgentVersionInput {
   /** Ids the id-guard cases send. Only a refusal journey needs them. */
   readonly id?: string;
   readonly applicationId?: string;
+}
+
+
+/** One row of `GET /elitea_core/application/prompt_lib/{project}/{id}`. */
+export interface StoredApplicationVersion {
+  readonly id: string;
+  readonly name: string;
+  readonly status: string;
+}
+
+/**
+ * Every version an agent owns, as the Published tab and the version selector
+ * read them.
+ *
+ * This is the read that tells a publish from a MOVE: publishing clones the
+ * source version and leaves the original alone, so after one publish this
+ * answers two rows — the untouched draft and the published clone. A handler
+ * that flipped the source row's status instead would answer one, and the
+ * publish response alone cannot tell the difference.
+ */
+export async function readApplicationVersions(
+  request: APIRequestContext,
+  applicationId: string,
+  projectId: string = DEFAULT_PROJECT_ID,
+): Promise<readonly StoredApplicationVersion[]> {
+  const url = `${API_BASE}/elitea_core/application/prompt_lib/${projectId}/${applicationId}`;
+  const response = await request.get(url);
+  if (!response.ok()) {
+    throw new Error(
+      `readApplicationVersions: GET ${url} -> ${response.status()}` +
+        `${await describeRefusal(response)}\n${(await response.text()).slice(0, 300)}`,
+    );
+  }
+  const body = (await response.json()) as { versions?: readonly Record<string, unknown>[] };
+  return (body.versions ?? []).map((row) => ({
+    id: String(row['id'] ?? ''),
+    name: String(row['name'] ?? ''),
+    status: String(row['status'] ?? ''),
+  }));
+}
+
+/** One row of the public catalogue. */
+export interface CatalogueRow extends Record<string, unknown> {
+  readonly name?: string;
+  readonly meta?: Record<string, unknown>;
+}
+
+/**
+ * ELITEA Catalog, through the route the catalogue page itself calls.
+ *
+ * Read WITHOUT a page size: the catalogue offers no filter narrow enough to
+ * name one agent, and every caller here asks "is this name in it", which a
+ * first page cannot answer once the table outgrows it. The route's own default
+ * page is what the page renders, so this is the same set a reader sees.
+ */
+export async function readCatalogue(request: APIRequestContext): Promise<readonly CatalogueRow[]> {
+  const url = `${API_BASE}/elitea_core/public_applications/prompt_lib`;
+  const response = await request.get(url);
+  if (!response.ok()) {
+    throw new Error(
+      `readCatalogue: GET ${url} -> ${response.status()}` +
+        `${await describeRefusal(response)}\n${(await response.text()).slice(0, 300)}`,
+    );
+  }
+  const body = (await response.json()) as { rows?: readonly CatalogueRow[] };
+  return body.rows ?? [];
 }
 
 /** The version write body, carrying only the keys the caller named. */

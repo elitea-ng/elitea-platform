@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { ToolEvents } from '@/entities/toolkit';
 
 import { renderWithProviders } from '../../../__tests__/testUtils';
-import { eventEmitter } from '../../../lib/eventEmitter';
+import { eventEmitter } from '@/shared/lib/eventEmitter';
 
 import type { SaveToolkitPayload, ToolkitsOperationButtonsProps } from './ToolkitsOperationButtons';
 import { ToolkitsOperationButtons } from './ToolkitsOperationButtons';
