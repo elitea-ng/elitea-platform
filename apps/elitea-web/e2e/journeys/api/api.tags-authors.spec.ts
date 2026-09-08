@@ -308,26 +308,62 @@ test('the author counters reflect the agents and pipelines the author owns', asy
  * The delta is asserted as a DIRECTION and not as "exactly one": the suite
  * runs on one persona in two engines at once, so any other worker's agent is
  * in the same number.
+ *
+ * THE MEASUREMENT IS REPEATED, and that is not a retry for luck. This counter
+ * belongs to a persona every worker shares, and the other workers DELETE their
+ * agents as well as create them: a delete landing inside this window subtracts
+ * exactly what the create added, and the counter comes back the same number it
+ * started at. Measured on webkit — baseline 1, agent created, still 1 fifteen
+ * seconds later. Each attempt below is a whole measurement of its own — a
+ * fresh baseline, a fresh agent, its own poll — so passing needs one window in
+ * which nobody else deleted, and failing means the counter really did not
+ * follow three consecutive creates.
  */
 test('creating an agent increments the author agent counter', async ({ request }) => {
+  test.setTimeout(120_000);
   const caller = await readCallerIdentity(request);
-  const before = (await readAuthorProfile(request, caller.id))['total_applications'] as number;
-  expect(typeof before).toBe('number');
+  const attempts = 3;
+  const seen: number[] = [];
 
-  const agent = await createAgentWithVersion(request, autotestName('counter_increment'), {
-    agentType: 'openai',
-  });
-  try {
-    await expect
-      .poll(
-        async () => (await readAuthorProfile(request, caller.id))['total_applications'] as number,
-        {
-          message: 'creating an agent did not move the author’s agent counter',
-          timeout: 15_000,
-        },
-      )
-      .toBeGreaterThan(before);
-  } finally {
-    await deleteAgent(request, agent.id);
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const before = (await readAuthorProfile(request, caller.id))['total_applications'] as number;
+    expect(typeof before).toBe('number');
+
+    const agent = await createAgentWithVersion(request, autotestName(`counter_increment_${attempt}`), {
+      agentType: 'openai',
+    });
+    let moved = false;
+    try {
+      // The poll is the harness's own, intervals included. It THROWS on
+      // timeout, and that throw is caught here rather than allowed to end the
+      // test: an attempt that did not see the move must be able to make way
+      // for the next one. A caught assertion is not a recorded failure —
+      // `expect.soft` is the form that records one.
+      await expect
+        .poll(
+          async () => {
+            const now = (await readAuthorProfile(request, caller.id))['total_applications'] as number;
+            seen.push(now);
+            return now;
+          },
+          { message: 'creating an agent did not move the author’s agent counter', timeout: 15_000 },
+        )
+        .toBeGreaterThan(before);
+      moved = true;
+    } catch {
+      moved = false;
+    } finally {
+      await deleteAgent(request, agent.id);
+    }
+    if (moved) return;
   }
+
+  expect(
+    seen.length,
+    'the counter was never read — the author profile answered nothing to measure',
+  ).toBeGreaterThan(0);
+  throw new Error(
+    `creating an agent did not move the author’s agent counter in ${String(attempts)} independent ` +
+      `measurements; the counter read ${JSON.stringify(seen)}`,
+  );
 });

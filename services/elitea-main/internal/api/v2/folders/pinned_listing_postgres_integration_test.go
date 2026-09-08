@@ -254,3 +254,83 @@ func TestGroupedListingCarriesEachConversationsVisibility(t *testing.T) {
 		t.Error("the published conversation came back as private")
 	}
 }
+
+// seedPinnedListingConversationAt seeds one conversation with the two
+// timestamps the listing sorts and groups on. `updatedAt` is nil for a
+// conversation nobody has revised — which is the state EVERY freshly created
+// conversation is in, because the column is nullable and carries no default.
+func seedPinnedListingConversationAt(t *testing.T, pool *pgxpool.Pool, name string, createdAt time.Time, updatedAt *time.Time) int {
+	t.Helper()
+	var id int
+	if err := pool.QueryRow(context.Background(),
+		`INSERT INTO p_1.chat_conversations (name, author_id, is_private, created_at, updated_at)
+		 VALUES ($1, 1, TRUE, $2, $3) RETURNING id`,
+		name, createdAt, updatedAt).Scan(&id); err != nil {
+		t.Fatalf("seed %q: %v", name, err)
+	}
+	return id
+}
+
+// namesInDateGroups flattens the listing the sidebar renders: buckets in the
+// order the answer lists them, rows in the order inside each bucket.
+func namesInDateGroups(listing groupedListing) []string {
+	names := make([]string, 0)
+	for _, group := range listing.DateGroups {
+		for _, conversation := range group.Conversations {
+			names = append(names, conversation.Name)
+		}
+	}
+	return names
+}
+
+// A conversation nobody has revised must still sort by WHEN IT WAS MADE.
+//
+// `updated_at` is nullable with no default, so every conversation starts life
+// with NULL there. `ORDER BY c.updated_at DESC` made all of them compare equal
+// AND sort above every revised row (PostgreSQL orders NULLs first descending),
+// so the rail's order came back different on every request for the same data.
+// The client re-sorts by `updated_at ?? created_at`, so the answer and the
+// screen disagreed at random.
+func TestGroupedListingOrdersNeverRevisedConversationsByCreationTime(t *testing.T) {
+	pool := newPinnedListingPool(t)
+	base := time.Now().UTC().Add(-2 * time.Hour)
+	// Seeded oldest-first, so an answer that merely echoed insertion order
+	// would fail: the listing must return them newest-first.
+	seedPinnedListingConversationAt(t, pool, "autotest_order_oldest", base, nil)
+	seedPinnedListingConversationAt(t, pool, "autotest_order_middle", base.Add(time.Minute), nil)
+	seedPinnedListingConversationAt(t, pool, "autotest_order_newest", base.Add(2*time.Minute), nil)
+
+	want := []string{"autotest_order_newest", "autotest_order_middle", "autotest_order_oldest"}
+	// Read twice: the defect this covers was an UNSTABLE order, which one
+	// reading can pass by luck.
+	for attempt := 1; attempt <= 3; attempt++ {
+		got := namesInDateGroups(readGroupedListing(t, pool, "7"))
+		if len(got) != len(want) {
+			t.Fatalf("reading %d carried %d conversations, want %d", attempt, len(got), len(want))
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("reading %d ordered the rail %v, want %v", attempt, got, want)
+			}
+		}
+	}
+}
+
+// A revised conversation is newer than one created after it but never touched.
+//
+// The grouping already reads `created_at` when `updated_at` is absent
+// (`groupByDate`); the sort must read the same value, or the two halves of one
+// answer describe two different orders.
+func TestGroupedListingSortsARevisedConversationAboveANeverRevisedOne(t *testing.T) {
+	pool := newPinnedListingPool(t)
+	base := time.Now().UTC().Add(-2 * time.Hour)
+	revisedAt := base.Add(30 * time.Minute)
+	seedPinnedListingConversationAt(t, pool, "autotest_order_revised", base, &revisedAt)
+	seedPinnedListingConversationAt(t, pool, "autotest_order_untouched", base.Add(10*time.Minute), nil)
+
+	got := namesInDateGroups(readGroupedListing(t, pool, "7"))
+	want := []string{"autotest_order_revised", "autotest_order_untouched"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("the rail order is %v, want %v — the revised conversation is the more recent one", got, want)
+	}
+}

@@ -4,11 +4,11 @@ import { useEffect, useState } from 'react';
 import { getConfig, MissingEnvPage } from '@/shared/config';
 import { configureGeneratedClient } from '@/shared/api/generated/mutator';
 import { createAuthPopupController } from '@/shared/api/auth';
-import { AUTH_CALLBACK_PATH } from '@/shared/api/auth/constants';
 import { authPlaneFromProbeStatus, buildLoginUrl, loginPathForPlane } from '@/shared/api/auth/login-redirect';
 
 import { useSelectedProjectStore } from '@/widgets/app-shell';
 
+import { isPublicRoutePath } from './public-routes';
 import { AppProviders, getAppBasename } from './providers';
 import { createAppRouter } from './router';
 import { sessionAuthContext, useSessionStore } from './session-store';
@@ -168,12 +168,16 @@ export function App() {
       // A full-page assign rather than the router: the login form is served by
       // elitea-main and is outside this SPA's route tree.
       //
-      // The callback path is exempt. It is where the OIDC popup lands to hand
-      // its result back, and it runs while the opener is still unauthenticated
-      // by definition — redirecting it would cancel the flight it completes.
+      // The PUBLIC routes are exempt — see `./public-routes.ts` for the list
+      // and for what each one is. The callback path is one of them: it is
+      // where the OIDC popup lands to hand its result back, and it runs while
+      // the opener is still unauthenticated by definition, so redirecting it
+      // would cancel the flight it completes. The shared conversation page is
+      // the other: its whole audience is a link holder with no account, and
+      // this redirect used to throw every one of them at a login screen.
       const { user, probeStatus } = useSessionStore.getState();
       if (user !== undefined) return;
-      if (window.location.pathname.endsWith(AUTH_CALLBACK_PATH)) return;
+      if (isPublicRoutePath(window.location.pathname)) return;
 
       /*
        * A probe that never ANSWERED is not a probe that said "no session".

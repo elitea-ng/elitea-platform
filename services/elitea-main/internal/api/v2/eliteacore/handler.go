@@ -1296,7 +1296,23 @@ func (h *Handler) Publish(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
-// deleteEmbeddedSubAgents removes embedded sub-agent applications referenced by application_tools on versionID.
+// deleteEmbeddedSubAgents removes the EMBEDDED COPIES a publish made under
+// versionID. It does not touch the author's own agents.
+//
+// THE DISTINCTION IS THE WHOLE FUNCTION. A published version carries TWO
+// sub-agent references for each sub-agent its draft had: the mapping the
+// publish copied, which still names the AUTHOR'S OWN child agent, and the link
+// to the private copy `embedSubAgents` then made. This walked both and deleted
+// every application either of them named — so unpublishing a parent, or
+// deleting it, destroyed the child agent the author still had open in the
+// list. Nothing reported it: the deletes are best-effort by design, and the
+// author's next read of that agent was a plain 404.
+//
+// `status = 'embedded'` is the marker `embedSubAgentsRecursive` writes on the
+// copy it creates, and the same marker the recursion below already reads, so
+// the two halves of this function now agree on what an embedded copy is. A
+// reference whose version cannot be read leaves the application alone: an
+// orphaned copy costs storage, and the alternative costs somebody their agent.
 func (h *Handler) deleteEmbeddedSubAgents(ctx context.Context, schema string, versionID string) {
 	refs, err := listApplicationToolReferences(ctx, h.pool, schema, versionID)
 	if err != nil {
@@ -1304,19 +1320,47 @@ func (h *Handler) deleteEmbeddedSubAgents(ctx context.Context, schema string, ve
 	}
 	var embeddedAppIDs []string
 	for _, ref := range refs {
-		if ref.ApplicationID != "" {
-			embeddedAppIDs = append(embeddedAppIDs, ref.ApplicationID)
+		if ref.ApplicationID == "" || ref.VersionID == "" {
+			continue
 		}
+		var refStatus string
+		if statusErr := h.pool.QueryRow(ctx, fmt.Sprintf(
+			`SELECT COALESCE(status, '') FROM %s.application_versions WHERE id = $1`, schema),
+			ref.VersionID).Scan(&refStatus); statusErr != nil {
+			continue
+		}
+		if refStatus != "embedded" {
+			continue
+		}
+		embeddedAppIDs = append(embeddedAppIDs, ref.ApplicationID)
 	}
 
 	for _, eAppID := range embeddedAppIDs {
-		// Recursively delete sub-agents of this embedded agent
+		// ONLY an application that really holds an embedded version may be
+		// deleted here, and the read below is the proof — not a lookup for the
+		// recursion alone.
+		//
+		// A published version carries TWO application references per sub-agent,
+		// not one. Publish copies the source version's entity_tool_mapping rows
+		// onto the clone verbatim, which brings the author's own reference
+		// across, and embedSubAgents then links the embedded copy beside it. So
+		// the list above holds the author's private sub-agent as well as the
+		// embedded snapshot, and the unguarded delete that used to follow
+		// removed the author's agent — every version of it — the moment they
+		// withdrew the parent. The agent simply vanished from their project,
+		// with a 200 on the withdrawal and nothing in the log.
+		//
+		// `status = 'embedded'` is the discriminator because embedSubAgents
+		// writes exactly that status on every copy it makes, at every level, and
+		// nothing else does.
 		var eVerID string
 		_ = h.pool.QueryRow(ctx, fmt.Sprintf(
 			`SELECT id FROM %s.application_versions WHERE application_id = $1 AND status = 'embedded' LIMIT 1`, schema), eAppID).Scan(&eVerID) // failure leaves eVerID empty, safe
-		if eVerID != "" {
-			h.deleteEmbeddedSubAgents(ctx, schema, eVerID)
+		if eVerID == "" {
+			continue
 		}
+		// Recursively delete sub-agents of this embedded agent
+		h.deleteEmbeddedSubAgents(ctx, schema, eVerID)
 		// Delete in FK-safe order: tool references → versions → application.
 		// The reference cleanup walks the embedded app's versions so each
 		// mapping is removed before its tool row is considered orphaned.

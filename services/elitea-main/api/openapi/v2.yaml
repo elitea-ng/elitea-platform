@@ -2430,9 +2430,13 @@ components:
         `settings` in GetVersionExpanded (:1101-1114) and
         publicApplicationDetail (eliteacore/handler.go:1411-1425);
         application_tools rows carry id/name/type/settings plus author_id in
-        fetchVersionDetails (:295-301), author_id+project_id in
-        GetVersionExpanded (:1140-1147), and project_id WITHOUT author_id in
-        publicApplicationDetail (:1445-1451). Only `id` is common to all.
+        fetchVersionDetails and author_id in GetVersionExpanded, and
+        publicApplicationDetail emits the sub-agent references as their own
+        entries. `project_id` names the project the tool belongs to and is
+        emitted by GetVersionExpanded on EVERY tool and by
+        publicApplicationDetail on the sub-agent entries; it is what lets the
+        runtime say which tenant schema an `application`-type tool refers to.
+        Only `id` is common to all.
         The IMPORT and the FORK echoes carry a third shape: the import names
         each link it wrote with `id`, `name` and `type` taken from the toolkit
         it imported (eliteacore/handler.go, the link phase of
