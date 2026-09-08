@@ -129,6 +129,46 @@ async function publishedBlockedToolkits(request: APIRequestContext): Promise<rea
   return body.blocked_toolkits ?? [];
 }
 
+/**
+ * The canonical comparison key both ends of this field derive —
+ * `guardrails.CanonicalKey` in Go and `canonToolkitKey` in
+ * `features/agents/lib/toolkitBlocklist.ts`: lowercase, then drop every
+ * character that is not a letter or a digit.
+ */
+function canonicalToolkitKey(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+/**
+ * Whether the published document blocks this type, whatever spelling either
+ * end wrote it in.
+ *
+ * BY CANONICAL KEY, and not by the operator's own spelling, because those are
+ * two different documents and only one of them is this one. The STORE keeps
+ * what was typed — the admin section GET reads `GitHub` back, and
+ * `services/elitea-main/internal/api/v2/admin/guardrails_postgres_integration_test.go`
+ * asserts the row survives unmangled — while `blocked_toolkits` here is a
+ * projection of the MATCHER: `blockedToolkits` marshals
+ * `Policy.BlockedToolkits()`
+ * (`services/elitea-main/internal/api/v2/eliteacore/platform_flags.go:266-278`),
+ * and `api/openapi/v2.yaml`'s own description states the contract — canonical
+ * comparison keys, "for COMPARISON and never for display".
+ *
+ * Nothing displays this value: the card's banner labels itself from the
+ * toolkit's own `type` (`features/agents/ui/ToolCard.tsx`'s
+ * `getToolkitTypeLabel`), and `isToolkitTypeBlocked` canonicalises both sides
+ * before comparing — `AgentToolRow.test.tsx` publishes `Git-Hub` at it on
+ * purpose. So an assertion on the typed casing would pin a property no
+ * consumer has and the API contract denies, which is why this asks the
+ * question the product asks.
+ */
+async function publishedBlocks(request: APIRequestContext, toolkitType: string): Promise<boolean> {
+  const key = canonicalToolkitKey(toolkitType);
+  return (await publishedBlockedToolkits(request)).some(
+    (entry) => canonicalToolkitKey(entry) === key,
+  );
+}
+
 test.afterEach(async () => {
   /*
    * A NET, not the restore. Every test puts the policy back inside its own
@@ -240,8 +280,13 @@ test('GR-1: blocking a toolkit type takes effect on the next read, whatever case
         // a fix to one has been shipped without the other before.
         expect(Object.keys(await readCatalogue(page.request))).not.toContain(BLOCKED_TYPE);
 
-        // The platform-settings document the PRODUCT UI reads carries it too.
-        expect(await publishedBlockedToolkits(page.request)).toContain(BLOCKED_TYPE_AS_TYPED);
+        // The platform-settings document the PRODUCT UI reads carries it too —
+        // as the canonical key, which is the contract `publishedBlocks`
+        // documents above.
+        expect(
+          await publishedBlocks(page.request, BLOCKED_TYPE_AS_TYPED),
+          'the document the blocked-toolkit banner reads does not carry the block',
+        ).toBe(true);
 
         // ── the user-visible half: the agent's toolkit card says so ───────
         await page.reload({ waitUntil: 'domcontentloaded' });
@@ -388,7 +433,15 @@ test('GR-3: a sensitive tool is stored and applied as sensitive, not as blocked 
         toolsOf(after, BLOCKED_TYPE),
         'a sensitive tool must remain callable — it is gated, not removed',
       ).toContain(target);
-      expect(await publishedBlockedToolkits(page.request)).not.toContain(BLOCKED_TYPE_AS_TYPED);
+      // The same canonical question, asked in the negative. Spelt as a literal
+      // `not.toContain("GitHub")` this could not fail: the field publishes
+      // canonical keys, so `"GitHub"` is never in it whether the type is
+      // blocked or not, and a write that landed under `blocked_toolkits`
+      // instead of `sensitive_tools` would have passed.
+      expect(
+        await publishedBlocks(page.request, BLOCKED_TYPE_AS_TYPED),
+        'marking a tool sensitive must not publish its type as blocked',
+      ).toBe(false);
     } finally {
       await setToolkitGuardrails(EMPTY_TOOLKIT_GUARDRAILS);
     }

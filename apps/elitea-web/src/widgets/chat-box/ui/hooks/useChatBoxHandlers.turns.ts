@@ -129,7 +129,9 @@ export function createSendQuestion(
       attachments,
       uploadConversationId,
     );
-    if (attachmentList === UPLOAD_FAILED) return { success: false };
+    // The conversation is already committed on the server by this point, so it
+    // is announced even though this send is being abandoned (see `SendResult`).
+    if (attachmentList === UPLOAD_FAILED) return buildSendResult(createdConversation, false);
     const payload = (
       deps.generateMessagePayload ?? buildDefaultMessagePayload
     )({
@@ -164,7 +166,23 @@ export function createSendQuestion(
       deps.setChatHistory((prev) =>
         historyAfterFailedTurn(prev, questionId, question, failure),
       );
-      return { success: false };
+      /*
+       * DEFECT this closes. `createdConversation` used to be dropped here, and
+       * this branch is not rare: every deployment without a live transport
+       * lands in it (`historyAfterFailedTurn`'s own note — the E2E stack serves
+       * `VITE_SOCKET_SERVER: ""`), as does a turn the runtime plane refuses.
+       *
+       * The row is NOT hypothetical at that point. `resolveConversationForSend`
+       * has already POSTed it and the server answered 201. Dropping it meant
+       * the app forgot a conversation it had just created: `onConversationCreated`
+       * never ran, so the route stayed on `/chat` and the rail's cached listing
+       * was never invalidated. The conversation existed in the database and on
+       * no screen — a reload was the only way to find it.
+       *
+       * `success: false` still says the TURN failed, and the failure bubble is
+       * on screen; announcing the row does not contradict that.
+       */
+      return buildSendResult(createdConversation, false);
     }
     return buildSendResult(createdConversation);
   };

@@ -147,6 +147,56 @@ describe('ContextBudget — editing the budget', () => {
     await waitFor(() => expect(screen.queryByTestId('context-budget-edit-dialog')).not.toBeInTheDocument());
   });
 
+  /**
+   * DEFECT this closes. The save invalidated `['GET',
+   * '/elitea_core/context_analytics/prompt_lib']` — a URL-shaped key namespace
+   * no query in this app registers under — so `invalidateQueries` matched
+   * nothing, resolved successfully, and the panel went on reporting the OLD
+   * budget until a reload. Every existing test above passed throughout: they
+   * assert what the PUT carried, never that the panel followed it.
+   *
+   * The status route is served from the same mutable `budget` the PUT writes,
+   * so a panel that merely re-rendered its cached payload cannot pass this: the
+   * new number exists only in a SECOND GET.
+   */
+  it('refetches the status it reads, so the panel shows the budget the save just wrote', async () => {
+    const NBSP = '\u00a0';
+    let budget = 10_000;
+    const statusRequests: string[] = [];
+    server.use(
+      http.get(STATUS_URL, ({ request }) => {
+        statusRequests.push(request.url);
+        return HttpResponse.json({ ...STATUS_BODY, current_tokens: 0, max_tokens: budget });
+      }),
+      http.get(`${BASE}/social/author`, () =>
+        HttpResponse.json({ default_context_management: { max_context_tokens: budget } }),
+      ),
+      http.put(`${BASE}/social/author`, async ({ request }) => {
+        const body = (await request.json()) as { default_context_management?: { max_context_tokens?: number } };
+        budget = body.default_context_management?.max_context_tokens ?? budget;
+        return HttpResponse.json({ ok: true });
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithTheme(wrap(<ContextBudget conversationId="42" projectId="7" />));
+
+    expect((await screen.findByTestId('context-budget-tokens')).textContent).toBe(`0 / 10${NBSP}000 tokens`);
+    await waitFor(() => expect(statusRequests).toHaveLength(1));
+
+    await user.click(screen.getByTestId('context-budget-edit-button'));
+    const input = await screen.findByTestId('context-budget-max-tokens-input');
+    await user.clear(input);
+    await user.type(input, '32000');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(screen.queryByTestId('context-budget-edit-dialog')).not.toBeInTheDocument());
+    // The second GET is the invalidation; the number is what it answered with.
+    await waitFor(() => expect(statusRequests.length).toBeGreaterThan(1));
+    await waitFor(() =>
+      expect(screen.getByTestId('context-budget-tokens').textContent).toBe(`0 / 32${NBSP}000 tokens`),
+    );
+  });
+
   it('refuses a budget the server would refuse, before sending it', async () => {
     const sent: unknown[] = [];
     server.use(http.get(STATUS_URL, () => HttpResponse.json(STATUS_BODY)), ...authorHandlers({}, sent));

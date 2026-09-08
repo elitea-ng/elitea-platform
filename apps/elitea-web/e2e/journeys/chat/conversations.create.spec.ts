@@ -41,6 +41,8 @@ import {
 const SUFFIX = '-new';
 
 const CONVERSATIONS_PATH = `/elitea_core/conversations/prompt_lib/${DEFAULT_PROJECT_ID}`;
+/** The grouped listing the rail itself reads (`entities/folder`'s `foldersList`). */
+const FOLDERS_PATH = `/elitea_core/folder/prompt_lib/${DEFAULT_PROJECT_ID}`;
 const CONVERSATION_PATH = `/elitea_core/conversation/prompt_lib/${DEFAULT_PROJECT_ID}`;
 const MODEL_CATALOGUE = `${API_BASE}/configurations/models/${DEFAULT_PROJECT_ID}?include_shared=true`;
 
@@ -104,6 +106,28 @@ test('the Create control leaves the open conversation for a blank one, and the n
   expect(body.name).toBe(text);
   // A NEW conversation, not the one the user left — the whole point of Create.
   expect(body.id).not.toBe(existing);
+
+  // The SERVER first, on the rail's own endpoint. Without this the UI assert
+  // below reports "element not found" for two unrelated findings — the listing
+  // does not have the conversation yet, or it does and the rail was never told
+  // — and the report keeps neither. Polled, not read once: the create and the
+  // listing are two requests.
+  await expect
+    .poll(
+      async () => {
+        const listing = await page.request.get(
+          `${API_BASE}${FOLDERS_PATH}?grouped=true&sort_by=updated_at&sort_order=desc`,
+        );
+        if (!listing.ok()) return [];
+        const grouped = (await listing.json()) as {
+          date_groups?: readonly { name: string; conversations?: readonly { id: string | number }[] }[];
+        };
+        const today = grouped.date_groups?.find((group) => group.name === 'Today');
+        return (today?.conversations ?? []).map((conversation) => String(conversation.id));
+      },
+      { timeout: 20_000, message: 'the created conversation never reached the rail’s own listing endpoint' },
+    )
+    .toContain(String(body.id));
 
   // It reaches the rail beside the one it was created from.
   await openTodayGroup(page);

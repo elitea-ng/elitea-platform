@@ -243,9 +243,20 @@ test('J4: logout clears user state and el.* storage', async ({ browser }) => {
 
   await page.goto(BASE_URL + '/app/settings/profile', { waitUntil: 'domcontentloaded' });
 
-  // Wait for the logout control to be interactive before touching storage.
+  /*
+   * Wait for the logout control to be interactive before touching storage.
+   *
+   * The CARD first, then the button inside it. `Log out` sits under the
+   * identity rows, so a 20 s wait on the button alone was really a wait on the
+   * whole profile screen — the session read, the identity query and the render
+   * — and it reported a slow load as "element(s) not found", i.e. as a control
+   * that is not there at all (measured on webkit, retried green). Two waits
+   * name which half was slow, and the budget matches what this test's own
+   * 120 s allows after the provider round trip.
+   */
+  await expect(page.getByTestId('profile-identity')).toBeVisible({ timeout: 30_000 });
   const logoutItem = page.getByRole('button', { name: 'Log out', exact: true });
-  await expect(logoutItem).toBeVisible({ timeout: 20_000 });
+  await expect(logoutItem).toBeVisible({ timeout: 30_000 });
 
   // Precondition: the session this journey is about to destroy really exists.
   // Without this, every assertion below is also satisfied by a browser that

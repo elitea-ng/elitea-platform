@@ -358,6 +358,39 @@ type Configuration struct {
 	UpdatedAt  string         `json:"updated_at,omitempty"`
 }
 
+// MarshalJSON serves the stored title under BOTH `name` and `elitea_title`.
+//
+// `Name` holds the `elitea_title` COLUMN, and `elitea_title` is the name every
+// reader in the product resolves a credential by. A toolkit does not store the
+// secret, it stores `{"github_configuration": {"elitea_title": …}}`; the model
+// and toolkit forms build their credential picker from `row.elitea_title`
+// (apps/elitea-web/src/pages/credentials/CredentialFormFields.tsx); and the
+// credential editor seeds its stable lookup key from the same field
+// (useCredentialFormController.ts's `useFormSeeding`).
+//
+// This projection emitted the column as `name` alone, so against this handler
+// every one of those readers read an empty title. Two consequences, both
+// silent: the picker offered NO credential to link — the list of options is
+// built by filtering out the empty ones — and an edit-save re-derived the
+// stable key from the display label, so renaming a credential rewrote the key
+// that every toolkit referencing it holds.
+//
+// `name` stays. The two read routes are a documented union (v2.yaml's
+// ConfigurationRow), other clients already read `name`, and an extra key is
+// additive for all of them.
+//
+// A marshaller rather than a struct field: the column is scanned straight into
+// `Name` at five call sites (list, get, create, update, revalidate), and a
+// sixth added later would otherwise ship the same empty field again.
+func (c Configuration) MarshalJSON() ([]byte, error) {
+	// `projection` drops this method, so the call below cannot recurse.
+	type projection Configuration
+	return json.Marshal(struct {
+		projection
+		EliteaTitle string `json:"elitea_title"`
+	}{projection(c), c.Name})
+}
+
 type ListResponse struct {
 	Items  []Configuration `json:"items"`
 	Total  int             `json:"total"`

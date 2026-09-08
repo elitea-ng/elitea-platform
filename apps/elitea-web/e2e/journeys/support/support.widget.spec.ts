@@ -52,8 +52,22 @@
  * `fixed` element at the top of the stacking order is exactly the shape that
  * eats a neighbouring click — the failure `e2e/fixtures/platformFlags.ts` was
  * written for, on `mcp_enabled`. So the switch is only ever on inside
- * `withPlatformFlagLock`, the window is one test long, and the `finally`
- * turns it off again.
+ * `withPlatformFlagLock`.
+ *
+ * ## ONE window for the four tests, not four
+ *
+ * The four tests below write the SAME values, so they do not need to exclude
+ * each other — only everybody else. They used to take four separate windows,
+ * and `fullyParallel` puts them in four worker processes at once: the third
+ * and fourth to be scheduled queued past the lock's own wait bound, broke a
+ * LIVE window, entered, and then turned the assistant off in their own
+ * `finally` while a sibling still had the page open. The sibling's launcher
+ * vanished mid-test and it failed on "the launcher must render while the
+ * assistant is on" (SUP-W2 on chromium, SUP-W4 on webkit, one victim per run).
+ *
+ * They now share one window (`group`), and the assistant is switched off by
+ * the LAST member to leave (`onLastExit`) — inside the window, so no other
+ * journey ever sees the launcher.
  */
 import type { Page } from '@playwright/test';
 import { expect, test } from '@playwright/test';
@@ -123,8 +137,11 @@ test.afterAll(async ({ browser }) => {
   }
 });
 
+/** The window the four tests of this file share — see the file header. */
+const SUPPORT_FLAG_GROUP = 'support-assistant';
+
 /**
- * Run `body` with the assistant switched ON, exclusively.
+ * Run `body` with the assistant switched ON, in this file's shared window.
  *
  * 210 s is the arithmetic of the lock rather than a round number, and it is
  * the same sum `admin.features.spec.ts` states: up to STALE_MS (90 s) to take
@@ -133,20 +150,28 @@ test.afterAll(async ({ browser }) => {
  */
 async function withAssistantOn(page: Page, body: () => Promise<void>): Promise<void> {
   test.setTimeout(210_000);
-  await withPlatformFlagLock(async () => {
-    await enableSupportAssistant(page.request, {
-      projectId: SUPPORT_PROJECT_ID,
-      agentId: Number(agentId),
-      name: ASSISTANT_NAME,
-      welcomeMessage: WELCOME_MESSAGE,
-      placeholder: PLACEHOLDER,
-    });
-    try {
+  await withPlatformFlagLock(
+    async () => {
+      // Written by every member. The values are identical, so a sibling
+      // joining the window mid-test rewrites the section to what it already
+      // says and nothing on screen moves.
+      await enableSupportAssistant(page.request, {
+        projectId: SUPPORT_PROJECT_ID,
+        agentId: Number(agentId),
+        name: ASSISTANT_NAME,
+        welcomeMessage: WELCOME_MESSAGE,
+        placeholder: PLACEHOLDER,
+      });
       await body();
-    } finally {
-      await disableSupportAssistant(page.request).catch(() => {});
-    }
-  });
+    },
+    {
+      group: SUPPORT_FLAG_GROUP,
+      // The last member out, while the window is still held — see the header.
+      onLastExit: async () => {
+        await disableSupportAssistant(page.request).catch(() => {});
+      },
+    },
+  );
 }
 
 /** Land on an authenticated page and wait for the shell to be ready. */

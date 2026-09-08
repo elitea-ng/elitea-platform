@@ -176,7 +176,40 @@ test('TA-2: removing a toolkit from an agent takes it off the card and out of th
     // Scoped to THIS card: an agent may hold several toolkits and every card
     // carries the same testid, so an unscoped locator is ambiguous the moment
     // a second one exists.
-    await card.getByTestId('agent-toolkit-delete-button').click();
+    //
+    // HOVERED FIRST, which is what a mouse user does. `ToolCard`'s action
+    // cluster is reveal-on-row-hover: every button carries
+    // `agents-tool-card-action` and `actionButtonSx`'s `display: 'none'`, and
+    // the card header's `&:hover` rule (`ToolCard.styles.ts:68`) is the only
+    // thing that puts them back in flow — the same behaviour the baseline gave
+    // its `#DeleteButton`. Without the hover the button resolves in the DOM and
+    // is never visible, so the click waits out the whole test timeout.
+    //
+    // NOT `force: true`: forcing would skip the visibility wait and click a
+    // control a real user cannot see, which would pass whether or not the
+    // reveal still works. `hover()` is the user's own action, and the
+    // visibility assertion below states the reveal as part of the contract.
+    //
+    // The card is the header alone here (`showActions` is false until "Show
+    // tools" is clicked), so hovering its centre lands on the header that
+    // carries the rule.
+    //
+    // What this journey does NOT cover: `display: 'none'` also takes the
+    // button out of the tab order and the accessibility tree, so a keyboard or
+    // touch user has no way to reach it — a `:focus-within` rule cannot fire
+    // on a control that can never hold focus. That is the same defect
+    // `OpenAPISchemaInput` (`editorWrapperSx`), `BucketList` and
+    // `ImageAttachment` were each already fixed for, by revealing through
+    // opacity/visibility plus `:focus-within` instead of `display`. It is left
+    // open here because reserving the cluster's width changes the card's
+    // resting layout, which is a product decision rather than this journey's.
+    await card.hover();
+    const remove = card.getByTestId('agent-toolkit-delete-button');
+    await expect(
+      remove,
+      'hovering the toolkit card must reveal its remove button',
+    ).toBeVisible({ timeout: 15_000 });
+    await remove.click();
 
     // `ToolCard` opens `DeleteEntityModal` with `confirmText: 'Remove'` and
     // WITHOUT `shouldRequestInputName`, so there is no name to type — unlike

@@ -63,6 +63,7 @@ import {
   useMessageListQuery,
 } from './api/messageApi';
 import {
+  contextStatusQueryKey,
   deleteSummary,
   generateSummary,
   getContextAnalytics,
@@ -149,6 +150,8 @@ export const conversationApi = {
 /** The 8 context-management endpoints (`../api/contextManagementApi.ts`), same hooks + fetchers bundling as `conversationApi`. */
 export const contextManagementApi = {
   useGetStatus: useGetContextStatusQuery,
+  /** The READER's cache key, so a writer invalidates the query the panel actually holds. */
+  statusQueryKey: contextStatusQueryKey,
   useUpdateStrategy: useUpdateContextStrategyMutation,
   useOptimize: useOptimizeContextMutation,
   useGetAnalytics: useGetContextAnalyticsQuery,

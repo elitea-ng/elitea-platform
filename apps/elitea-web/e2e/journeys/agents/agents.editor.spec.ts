@@ -49,6 +49,19 @@ import type { APIRequestContext, Page } from '@playwright/test';
  */
 const MAX_TEXT_FIELD_CHARS = 768;
 
+/**
+ * The counter's rendered sentence AT the limit.
+ *
+ * `shared/ui/CharacterCounter` appends a second bundle key once `remaining`
+ * hits zero (`shared.ui.characterCounter.atLimit`, ". You have reached the
+ * MAXIMUM character limit") on top of the running
+ * `shared.ui.characterCounter.remaining` ("characters left") — the WCAG 1.4.1
+ * half of the legacy acceptance criteria, so the limit is not signalled by
+ * colour alone. Below the limit the element carries the count alone, which is
+ * why only the zero-remaining assertions use this constant.
+ */
+const AT_LIMIT_COUNTER_TEXT = '0 characters left. You have reached the MAXIMUM character limit';
+
 /** A name unique per run, so two runs on one stack cannot collide. */
 function uniqueName(stem: string): string {
   return `${AUTOTEST_PREFIX}${stem}-${String(Date.now()).slice(-7)}`;
@@ -218,7 +231,8 @@ test('J14c: the editor shows the instructions the agent was stored with', async 
  * ONE journey, not nine, and deliberately narrower than the legacy suite:
  *
  *  - COVERED — the counter appears while the field is focused, counts down as
- *    text is added, reaches "0 characters left" at the limit, and the field
+ *    text is added, reaches "0 characters left. You have reached the MAXIMUM
+ *    character limit" at the limit, and the field
  *    refuses the character after it. Both fields, since both carry their own
  *    counter.
  *  - COVERED NOW — the legacy acceptance criteria 2-4: the counter changes
@@ -284,7 +298,7 @@ test('J14c: the welcome message and chat starters count down to 768 and refuse t
     await starter.fill(atLimit);
     // The counter is focus-gated (`useFieldFocus`), so it shows only while the
     // field is being edited — `fill` leaves the field focused.
-    await expect(panel.getByTestId('agent-conversation-starter-counter').first()).toHaveText('0 characters left');
+    await expect(panel.getByTestId('agent-conversation-starter-counter').first()).toHaveText(AT_LIMIT_COUNTER_TEXT);
 
     // A REAL keystroke, not another `fill`: `fill` assigns the value and walks
     // straight past the `maxLength` the browser enforces on typed input, so it
@@ -304,12 +318,12 @@ test('J14c: the welcome message and chat starters count down to 768 and refuse t
     await expect(welcomeCounter).toHaveText(`${MAX_TEXT_FIELD_CHARS - 5} characters left`);
 
     await welcome.fill(atLimit);
-    await expect(welcomeCounter).toHaveText('0 characters left');
+    await expect(welcomeCounter).toHaveText(AT_LIMIT_COUNTER_TEXT);
 
     await welcome.press('End');
     await welcome.pressSequentially('Z');
     expect((await welcome.inputValue()).length).toBe(MAX_TEXT_FIELD_CHARS);
-    await expect(welcomeCounter).toHaveText('0 characters left. You have reached the MAXIMUM character limit');
+    await expect(welcomeCounter).toHaveText(AT_LIMIT_COUNTER_TEXT);
 
     /*
      * The colour, measured rather than assumed. `toHaveCSS` reads the computed

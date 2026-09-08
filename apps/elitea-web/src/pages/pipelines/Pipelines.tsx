@@ -7,7 +7,7 @@ import { useNavigate, useParams } from '@tanstack/react-router';
 
 import { EntityImportButton, useEntityImport } from '@/features/agent-lifecycle';
 import { t } from '@/shared/i18n';
-import { EntityListRail } from '@/shared/ui/EntityRail';
+import { EntityListRail, RAIL_CONTENT_WIDTH, useEntityRailVisible } from '@/shared/ui/EntityRail';
 import { ListSearchField, ListViewToggle, PageHeader } from '@/widgets/page-header';
 import { useSidebarCollapsedStore } from '@/widgets/sidebar';
 
@@ -17,11 +17,27 @@ import { useSelectedProjectId } from './lib/useSelectedProjectId';
 import { usePipelinesData } from './usePipelinesData';
 import { usePipelineTabs } from './usePipelineTabs';
 
-const pageSx: SxProps<Theme> = {
+/**
+ * The page's own column, narrowed while the rail is on screen.
+ *
+ * `EntityRail` is `position: fixed` at `right: 12px` with a `z-index` of
+ * 1000 and the full viewport height, so anything the page draws under it is
+ * unreachable — the pointer lands on the rail. The header's right-hand
+ * controls (the table/card switch, the Import button) sat exactly there:
+ * clicking the switch did nothing at all at any viewport wide enough to show
+ * the rail, which is every viewport at or above 800px.
+ *
+ * `CARD_LIST_WIDTH` (`apps/elitea-ui/src/common/constants.js:511`) is the
+ * baseline's answer, and `pages/skills/Skills.tsx` already applies it. The
+ * width goes on the page column rather than on the header alone, so the tab
+ * panel below it lines up with the header instead of running under the rail.
+ */
+const pageSx = (railVisible: boolean): SxProps<Theme> => ({
   height: '100%',
   display: 'flex',
   flexDirection: 'column',
-};
+  width: railVisible ? RAIL_CONTENT_WIDTH : '100%',
+});
 
 
 const tabPanelSx: SxProps<Theme> = {
@@ -29,8 +45,6 @@ const tabPanelSx: SxProps<Theme> = {
   minHeight: 0,
   overflowY: 'auto',
 };
-
-/** `CARD_LIST_WIDTH` (`apps/elitea-ui/src/common/constants.js:511`) — see `pages/agents/Applications.tsx` for the shared rationale. */
 
 /** The public feeds plus the Admin tab pin the rail to "Trending Authors" (`pages/Applications/PrivateAgentsList.jsx:141-151`, the same component the pipelines domain reuses). */
 const TRENDING_AUTHOR_TABS: readonly string[] = ['latest', 'my-liked', 'trending', 'admin'];
@@ -90,6 +104,9 @@ export function Pipelines(): ReactNode {
   const isPublicProject = isPublicPipelinesProject(projectId);
   const hasAdminPermission = useHasAdminPermission(isPublicProject ? projectId : undefined);
   const navRailCollapsed = useSidebarCollapsedStore((state) => state.collapsed);
+  // The same answer the rail itself gives, so the column and the rail can
+  // never disagree about whether the rail is on screen.
+  const railVisible = useEntityRailVisible(navRailCollapsed);
   const totals = usePipelinesData(projectId, hasAdminPermission);
   const entityImport = useEntityImport(projectId);
   const tabs = usePipelineTabs(isPublicProject, totals, hasAdminPermission);
@@ -119,7 +136,7 @@ export function Pipelines(): ReactNode {
 
 
   return (
-    <Box sx={pageSx}>
+    <Box sx={pageSx(railVisible)}>
       <PageHeader
         tabs={{
           items: visibleTabs.map((tab) => ({

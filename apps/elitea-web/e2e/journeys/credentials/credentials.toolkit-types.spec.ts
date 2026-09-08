@@ -200,7 +200,15 @@ async function createCredentialThroughForm(
     timeout: 20_000,
   });
 
-  const nameInput = page.getByRole('textbox', { name: 'Name' });
+  /*
+   * `exact`, because the accessible name is a SUBSTRING match by default and
+   * the schema-driven fields below are labelled by the served schema. The
+   * github/gitlab/bitbucket schemas carry a "Username" field, whose
+   * accessible name contains "Name", so the unanchored locator resolved to
+   * two elements and the strict-mode check failed before the form was ever
+   * filled.
+   */
+  const nameInput = page.getByRole('textbox', { name: 'Name', exact: true });
   await expect(nameInput).toBeVisible({ timeout: 20_000 });
   await nameInput.fill(name);
 

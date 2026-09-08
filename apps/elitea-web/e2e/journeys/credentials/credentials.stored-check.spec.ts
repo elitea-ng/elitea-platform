@@ -151,7 +151,9 @@ test('J19c: testing a SAVED credential sends no secret, and leaves the sealed ro
   await page.getByRole('button', { name: 'OpenAI', exact: true }).click();
   await expect(page).toHaveURL(/\/settings\/create-configuration\/open_ai/);
 
-  const nameInput = page.getByRole('textbox', { name: 'Name' });
+  // `exact`: see credentials.toolkit-types.spec.ts — a schema-declared
+  // "Username" field also matches the unanchored accessible name.
+  const nameInput = page.getByRole('textbox', { name: 'Name', exact: true });
   await expect(nameInput).toBeVisible({ timeout: 20_000 });
   await nameInput.fill(unique);
   await page.getByRole('textbox', { name: 'Api Base' }).fill('http://localhost/mock');

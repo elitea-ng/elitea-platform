@@ -144,6 +144,15 @@ interface ContextBudgetEdit {
  * The CONTEXT-STATUS query is invalidated too: the panel's number is what the
  * reader just changed, and without this it keeps showing the old budget until
  * something else happens to refetch.
+ *
+ * That invalidation is made BY THE READER'S OWN KEY FACTORY
+ * (`contextManagementApi.statusQueryKey()`), not by a key written out here.
+ * It used to be the URL-shaped `['GET', '/elitea_core/context_analytics/
+ * prompt_lib']`, a namespace no query in this app is registered under:
+ * `invalidateQueries` matches prefixes structurally, matched nothing, and
+ * resolved successfully, so the panel went on reporting the budget the reader
+ * had just replaced until the next reload — the "two query-key namespaces over
+ * one resource" defect, with the write side holding the namespace nobody reads.
  */
 function useContextBudgetEdit(): ContextBudgetEdit {
   const queryClient = useQueryClient();
@@ -161,7 +170,7 @@ function useContextBudgetEdit(): ContextBudgetEdit {
         try {
           await updateCurrentAuthor(buildContextBudgetUpdate(author, maxContextTokens));
           await queryClient.invalidateQueries({ queryKey: getGetCurrentAuthorQueryKey() });
-          await queryClient.invalidateQueries({ queryKey: ['GET', '/elitea_core/context_analytics/prompt_lib'] });
+          await queryClient.invalidateQueries({ queryKey: contextManagementApi.statusQueryKey() });
           setIsOpen(false);
         } catch {
           // Handled (§3.6): a refused save is reported inside the dialog, which

@@ -277,6 +277,19 @@ test('J17.3: create a toolkit, persist it, and reopen it from the list', async (
  * assertion fails loudly instead of silently testing nothing.
  */
 test('J17.5: a toolkit whose type supports indexing renders the real Indexes panel', async ({ page }) => {
+  /*
+   * THE DEFAULT 30 s BUDGET CANNOT HOLD THIS TEST — measured, not guessed.
+   *
+   * It reads the catalogue, creates a toolkit over the API, opens the editor,
+   * waits up to 20 s for the Indexes panel, waits for the panel's own list
+   * request, and only THEN runs `checkA11y`, which walks the whole rendered
+   * page in a separate axe pass. On a loaded runner that last pass is what
+   * ran out of budget, and the failure read as `frame.evaluate: Test timeout`
+   * inside `fixtures/axe.ts` — the shape of a budget exhausted earlier, not
+   * of a broken scan (webkit, retried green).
+   */
+  test.setTimeout(90_000);
+
   // ── Derive the type from the live catalogue rather than trusting a literal.
   const schemasResp = await page.request.get(
     `${API_BASE}/elitea_core/toolkits/prompt_lib/${DEFAULT_PROJECT_ID}`,

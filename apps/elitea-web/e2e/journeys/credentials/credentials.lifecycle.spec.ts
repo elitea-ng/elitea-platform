@@ -137,7 +137,9 @@ test('J19b: create a credential, verify it persisted, then delete it', async ({ 
   // when the FETCHED descriptor carries has_test_connection
   // (CredentialForm.tsx:131) — none of the three is reachable without the
   // catalog response.
-  const nameInput = page.getByRole('textbox', { name: 'Name' });
+  // `exact`: an accessible name matches as a substring, and a schema that
+  // carries a "Username" field would otherwise resolve two elements.
+  const nameInput = page.getByRole('textbox', { name: 'Name', exact: true });
   await expect(nameInput).toBeVisible({ timeout: 15_000 });
   const apiBase = page.getByRole('textbox', { name: 'Api Base' });
   await expect(apiBase).toBeVisible();
@@ -222,7 +224,7 @@ test('J19b: create a credential, verify it persisted, then delete it', async ({ 
     'the stored row must carry the name the create step sent',
   ).toBe(unique);
 
-  await expect(page.getByRole('textbox', { name: 'Name' })).toHaveValue(unique, { timeout: 20_000 });
+  await expect(page.getByRole('textbox', { name: 'Name', exact: true })).toHaveValue(unique, { timeout: 20_000 });
   await expect(page.getByRole('textbox', { name: 'Api Base' })).toHaveValue('http://localhost/mock');
 
   await checkA11y(page);
