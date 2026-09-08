@@ -376,3 +376,17 @@ export function resolveConversationStarters(
 ): readonly string[] | undefined {
   return hasStarterBeenSent || messageCount > 0 ? [] : conversationStarters;
 }
+
+/**
+ * Whether the conversation surface's clear-history control refuses.
+ *
+ * The baseline's own `shouldDisableClear` (`!chat_history.length ||
+ * isStreaming`): there is nothing to clear in an empty transcript, and
+ * clearing mid-turn would delete rows the running turn is still writing.
+ *
+ * A function rather than an expression at the call site because `ChatBox` is
+ * on its §3.5 complexity ceiling and this is one more branch there.
+ */
+export function shouldDisableClearChat(isStreaming: boolean, messageCount: number): boolean {
+  return isStreaming || messageCount === 0;
+}

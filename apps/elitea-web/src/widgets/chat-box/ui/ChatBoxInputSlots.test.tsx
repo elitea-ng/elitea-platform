@@ -18,7 +18,7 @@
  */
 import type { ReactElement } from 'react';
 
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -29,11 +29,17 @@ import { buildChatBoxInputSlots } from './ChatBoxInputSlots';
 
 type ToolRow = { key: string; label: string; enabled: boolean };
 
-function buildSlots(isAgentsPage: boolean, tools: ToolRow[] = [{ key: 'planner', label: 'Planner', enabled: true }], onToolChange = vi.fn()) {
+function buildSlots(
+  isAgentsPage: boolean,
+  tools: ToolRow[] | undefined = [{ key: 'planner', label: 'Planner', enabled: true }],
+  onToolChange: ((toolKey: string, enabled: boolean) => void) | undefined = vi.fn(),
+  clearChat: { disabled: boolean; onClear: () => void } = { disabled: false, onClear: vi.fn() },
+) {
   return buildChatBoxInputSlots({
     attachments: { attachments: [], onAttachFiles: vi.fn() },
     internalTools: { disabled: false, tools, onToolChange },
     model: { llmSettings: undefined, onSetLLMSettings: undefined, selectedModel: undefined, onSelectModel: undefined, models: [] },
+    clearChat,
     refs: { attachmentButtonRef: { current: null }, voiceButtonRef: { current: null }, voiceInputRef: { current: null } },
     isAgentsPage,
     entitySubmenus: undefined,
@@ -87,6 +93,7 @@ describe('buildChatBoxInputSlots — drop/paste attachment handle', () => {
       attachments: { attachments: [], onAttachFiles: vi.fn() },
       internalTools: { disabled: false, tools: [], onToolChange: vi.fn() },
       model: { llmSettings: undefined, onSetLLMSettings: undefined, selectedModel: undefined, onSelectModel: undefined, models: [] },
+      clearChat: { disabled: false, onClear: vi.fn() },
       refs: { attachmentButtonRef, voiceButtonRef: { current: null }, voiceInputRef: { current: null } },
       isAgentsPage: false,
       entitySubmenus: undefined,
@@ -152,5 +159,60 @@ describe('buildChatBoxInputSlots — internal-tools shape translation', () => {
 
     props.onInternalToolsConfigChange({ key: 'sandbox', value: true });
     expect(onToolChange).toHaveBeenCalledWith('sandbox', true);
+  });
+});
+
+describe('buildChatBoxInputSlots — the conversation-surface clear-history control (G1)', () => {
+  /*
+   * The defect this closes is a composition one, and only a test of the
+   * BUILDER can see it: `ChatBox` exposed `onClear` on its imperative handle,
+   * `useChatBoxActions.handleClear` opened the delete-all confirmation, and
+   * `useDeleteMessageAlert`'s `ALL_MESSAGES` sentinel routed the confirm to
+   * the DELETE. Every one of those had passing unit tests. The only caller of
+   * the handle was the pipeline editor's test-chat panel, so on `/chat` the
+   * whole mechanism was unreachable and a user could not empty a
+   * conversation at all. A test of any single piece stays green through that.
+   */
+  it('gives the chat surface a clear control wired to the delete-all handler', async () => {
+    const onClear = vi.fn();
+    const slots = buildSlots(false, undefined, undefined, { disabled: false, onClear });
+
+    render(<>{slots.clearChat}</>);
+
+    const control = screen.getByTestId('chat-clear-history');
+    // Named after what it destroys, so the accessible name is not the
+    // scratch-transcript "Clear chat" the test panels use.
+    expect(control).toHaveAccessibleName('Clear the chat history');
+    await userEvent.click(control);
+    expect(onClear).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses the click while the transcript is empty or a turn is running', () => {
+    // Baseline `shouldDisableClear` (`!chat_history.length || isStreaming`).
+    // `ChatBox` also guards `handleClear` itself, so a control that stayed
+    // enabled would still not delete anything — it would open nothing and
+    // look broken, which is why the disabled state is asserted here rather
+    // than assumed from the guard.
+    const onClear = vi.fn();
+    const slots = buildSlots(false, undefined, undefined, { disabled: true, onClear });
+
+    render(<>{slots.clearChat}</>);
+
+    const control = screen.getByTestId('chat-clear-history');
+    expect(control).toBeDisabled();
+    // Fired directly rather than through `userEvent`, which refuses to click
+    // an element whose `pointer-events` MUI has already turned off — the
+    // refusal proves the styling, not the handler. Dispatching the event the
+    // browser would deliver is what discriminates a control that is merely
+    // greyed out from one that is actually inert.
+    fireEvent.click(control);
+    expect(onClear).not.toHaveBeenCalled();
+  });
+
+  it('withholds it on the agent/pipeline editor surface, which renders its own', () => {
+    // `features/pipelines/ui/ChatPanel.tsx` fills `renderClearChatButton`
+    // beside the panel. Supplying one here too would put two clear controls
+    // on the same screen — the mirror of the modules-gear case above.
+    expect(buildSlots(true, undefined, undefined, { disabled: false, onClear: vi.fn() }).clearChat).toBeUndefined();
   });
 });

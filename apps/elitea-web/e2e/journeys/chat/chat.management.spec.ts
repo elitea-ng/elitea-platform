@@ -639,3 +639,132 @@ test('M2b: the composer’s picker finds an agent by name and attaches it to the
   await deleteConversation(page.request, conversationId);
   await deleteAgent(page.request, agent.id);
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// M2c: adding a PERSON to a conversation
+//
+// Ported by use case from the legacy private suite: "the Participants panel
+// offers an add control that opens a user picker — search users, add the
+// selected ones" (TC-CONV-012).
+//
+// EVERY OTHER PARTICIPANT ASSERTION IN THIS FILE IS ABOUT AN AGENT. M2 attaches
+// one over the REST API, M2b picks one from the composer. The human path was
+// covered by nothing, and it turned out to be wired to nothing:
+// `AddNewUserModal` — the picker, its search over the project's user listing
+// and its "Add Selected" action — had ZERO call sites anywhere in the app,
+// while `ParticipantsWrapper` had always computed a `disabledAdd` flag (the
+// playback state plus the caller's `configuration.users.users.view` grant) and
+// threaded it down to a control that did not exist. So the flag decided the
+// state of nothing, the rail rendered a Users section that only ever showed
+// people put there by some other route, and a conversation could gain an agent
+// and could not gain a colleague.
+//
+// The discriminating assertions are the SERVER-side ones, on both directions.
+// The picker can close without attaching (its own selection handler resolves
+// without a request on several paths) and the rail's remove control performs no
+// request of its own (M2's header), so a screen that changed proves nothing in
+// either direction; only the conversation's own participant list can.
+//
+// The person added is read out of the project's user listing rather than
+// hardcoded — the seed provisions its personas by email and their ids are
+// whatever the database assigned, and a hardcoded id attaches a participant
+// that resolves to nobody, which is the same payload shape as a working one.
+// ─────────────────────────────────────────────────────────────────────────────
+test('M2c: the participants panel adds a person by name and removes them again, server-side', async ({ page }) => {
+  const reader = await readAuthor(page.request);
+  const teammate = await readOtherUser(page.request, reader.id);
+
+  const conversationId = await createConversation(page.request, uniqueName('m2c'));
+  // Nothing is attached yet, so the picker below is the only thing that could
+  // have attached anything.
+  expect(await readParticipants(page.request, conversationId)).toEqual([]);
+
+  await page.goto(`${BASE_URL}/app/chat/${conversationId}`);
+  await expect(page.getByTestId('chat-message-input')).toBeEditable({ timeout: 20_000 });
+  await openParticipantsRail(page);
+
+  const add = page.getByTestId('participants-add-button');
+  await expect(add, 'the participants panel must offer an add control').toBeVisible({ timeout: 15_000 });
+  // Offerable, not merely present: `disabledAdd` gates it on the caller's
+  // `configuration.users.users.view` grant, which the member persona holds
+  // through its project `editor` role.
+  await expect(add).toBeEnabled();
+  await add.click();
+
+  const picker = page.getByTestId('add-participants-dialog');
+  await expect(picker).toBeVisible({ timeout: 10_000 });
+  // Nothing is selectable until something is chosen — the confirm is the only
+  // thing that attaches, so an always-enabled one would attach an empty list.
+  await expect(picker.getByTestId('add-participants-confirm')).toBeDisabled();
+
+  // The search narrows the directory. This stack's own database carries the
+  // seeded personas only, so the assertion is that the named row survives the
+  // filter and is the one that gets picked — keyed by id, the only identity
+  // that survives two people sharing a display name.
+  await picker.getByTestId('add-participants-search').fill(teammate.name);
+  const row = picker.getByTestId(`add-participant-option-${teammate.id}`);
+  await expect(row, 'the seeded teammate must be findable by name').toBeVisible({ timeout: 15_000 });
+  await row.click();
+
+  const confirm = picker.getByTestId('add-participants-confirm');
+  await expect(confirm).toBeEnabled();
+  const attachedResponse = page.waitForResponse(
+    (r) => r.url().includes(`${PARTICIPANTS_PATH}/${conversationId}`) && r.request().method() === 'POST',
+    { timeout: 20_000 },
+  );
+  await confirm.click();
+  expect((await attachedResponse).status(), 'the confirmed add must reach the server').toBe(200);
+
+  // The server-side list is what "added" means.
+  await expect
+    .poll(async () => (await readParticipants(page.request, conversationId)).map((p) => p.entity_name), {
+      timeout: 20_000,
+      message: 'the picker closed without attaching anybody',
+    })
+    .toEqual(['user']);
+
+  const attached = await readParticipants(page.request, conversationId);
+  expect(String(attached[0]?.entity_meta?.id), 'the participant is the person who was picked').toBe(teammate.id);
+  // The display name is the SERVER's, resolved from the directory into
+  // `meta.user_name`. The client posts an id alone, so a name here can only
+  // have come from the resolver.
+  expect(attached[0]?.meta?.user_name).toBe(teammate.name);
+  const participantId = String(attached[0]?.id);
+
+  // …and the person reaches the rail the conversation is read from.
+  const usersSection = page.getByTestId('users-section');
+  await expect(usersSection, 'the added person must reach the rail').toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId(`participant-item-${teammate.id}`)).toBeVisible({ timeout: 20_000 });
+  await checkA11y(page);
+
+  // ── and out again ─────────────────────────────────────────────────────────
+  // The remove control lives on the hovered row, exactly as the agent one in
+  // M2 does; the confirmation is required for the same reason.
+  await page.getByTestId(`participant-item-${teammate.id}`).hover();
+  const remove = usersSection.getByRole('button', { name: /Remove user/i });
+  await expect(remove).toBeVisible({ timeout: 10_000 });
+  await remove.click();
+
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible({ timeout: 10_000 });
+  const removed = page.waitForResponse(
+    (r) =>
+      r.url().includes(`${PARTICIPANT_PATH}/${conversationId}/${participantId}`) &&
+      r.request().method() === 'DELETE',
+    { timeout: 20_000 },
+  );
+  await dialog.getByRole('button', { name: 'Remove' }).click();
+  expect((await removed).status()).toBe(204);
+
+  await expect
+    .poll(async () => (await readParticipants(page.request, conversationId)).length, {
+      timeout: 20_000,
+      message: 'the confirmed removal left the participant mapping in place',
+    })
+    .toBe(0);
+  // The Users row must go with its last member — it renders only for real
+  // user participants, never as an empty section (module header, note 3).
+  await expect(page.getByTestId('users-section')).toHaveCount(0);
+
+  await deleteConversation(page.request, conversationId);
+});
