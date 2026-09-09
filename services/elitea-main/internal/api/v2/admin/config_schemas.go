@@ -263,6 +263,7 @@ const (
 func configSections() []map[string]any {
 	return []map[string]any{
 		guardrailsSection(),
+		defaultSecretsSection(),
 		mcpConfigurationSection(),
 		agentPublishingSection(),
 		skillPublishingSection(),
