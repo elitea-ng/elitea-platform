@@ -646,7 +646,7 @@ jobs:
   build:
     # `build` and the old `gate-bundle-secret` job both ran `npm run build` on
     # their own runner and then read `dist/`. One build now feeds both checks.
-    name: Build (three entries + bundle budget + bundle secrets)
+    name: Build (five entries + bundle budget + bundle secrets)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -657,8 +657,15 @@ jobs:
           cache-dependency-path: apps/elitea-web/package-lock.json
       - name: Install (locked)
         run: npm ci
-      - name: Build (app + admin + maintenance)
-        run: npm run build
+      - name: Build (app + admin + maintenance + brand-preview + docs)
+        # `npm run build`'s chain now includes `build:docs` (embedded-docs
+        # programme decision 7): the search-index generator then
+        # `vite build --mode docs`. DOCS_BASE is set explicitly rather than
+        # left to vite.config.ts's `/docs/` default — this build's dist/docs
+        # is what the Containerfile ships into the nginx image that serves
+        # it at that exact path, so a future default change should not be
+        # able to silently change what this job proves.
+        run: DOCS_BASE=/docs/ npm run build
       # Issue #426. This step used to ask whether lighthouserc.json existed and
       # print "lhci bundle budget pending" when it did not. Neither that file
       # nor .lighthouserc.json has ever been in the tree, so the step was a

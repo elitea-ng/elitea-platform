@@ -1,0 +1,71 @@
+name: Docs — GitHub Pages
+
+# Publishes the embedded docs SPA (apps/elitea-web, `vite build --mode docs`)
+# to GitHub Pages (embedded-docs programme decision 6). This is a SEPARATE
+# deployment target from the `/docs/` nginx location ci-web.yml's `build` job
+# proves — Pages has no server, so this build sets DOCS_BASE to the repo's
+# Pages subpath instead of `/docs/`, and the two are never the same artifact.
+#
+# One job, not two: this repo's org is on the GitHub free plan's 20-concurrent-
+# job cap (see ci-web.yml's own header), and the standard build/deploy split
+# exists for workflows that fan a build out to multiple deploy targets. This
+# has exactly one.
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "apps/elitea-web/src/entries/docs/**"
+      - "apps/elitea-web/vite.config.ts"
+      - "apps/elitea-web/package.json"
+      - "apps/elitea-web/package-lock.json"
+      - ".github/workflows/docs-pages.yml"
+  workflow_dispatch:
+
+# Pages deployments must not race each other — a slower run finishing after a
+# faster, more recent one would publish stale content. `cancel-in-progress`
+# on the SAME concurrency group as every other Pages deploy is GitHub's own
+# documented pattern for this job.
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build-and-deploy:
+    name: Build and deploy docs
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    defaults:
+      run:
+        working-directory: apps/elitea-web
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: apps/elitea-web/package-lock.json
+      - name: Install (locked)
+        run: npm ci
+      - name: Build docs (DOCS_BASE=/elitea-platform/)
+        # The repo's Pages site is served at https://<org>.github.io/elitea-platform/,
+        # so every asset URL the build emits must be rooted there — unlike the
+        # nginx deployment's /docs/, which ci-web.yml's build job proves
+        # separately with the default base.
+        run: DOCS_BASE=/elitea-platform/ npm run build:docs
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: apps/elitea-web/dist/docs
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
