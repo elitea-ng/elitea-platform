@@ -413,9 +413,42 @@ async function getOrCreateProject(
   name: string,
   adminEmail: string,
 ): Promise<string> {
-  const rows = await listRows(adminRequest, baseUrl, "/projects/project/default/1");
-  const existing = findByName(rows, name);
-  if (existing) return String((existing as { id: unknown }).id);
+  // Unit W4c: this USED to list `/projects/project/default/1` — the same
+  // route the app's own project switcher reads — which is scoped to
+  // projects the calling admin is a MEMBER of (`ListCurrentUserProjects`).
+  // `POST /projects/project/administration` makes `adminEmail` the new
+  // project's admin, NOT the identity behind `adminRequest`, so that admin
+  // is never a member of a project this function just created — every
+  // rerun against a long-lived stack therefore found nothing and created
+  // ANOTHER project of the same name. Measured live: three "docs-shots"
+  // projects (ids 8, 9, 10) exist on the shared `elitea-standalone` stack
+  // from three separate runs, none of them reused.
+  // `GET /admin/projects/{mode}?search=` (`internal/api/v2/admin/
+  // projects.go`) is unfiltered by membership — it is the admin Projects
+  // table's own backing route — so it sees a project this identity was
+  // never added to. `search` is a substring match server-side, so the
+  // filter below still requires an EXACT `name` match against the returned
+  // rows (not `findByName`, which only returns the first match — this needs
+  // every match, to pick deterministically among duplicates).
+  // Picking the LOWEST id keeps this deterministic if a stack already has
+  // duplicates (as this one now does) — it does not retroactively pick out
+  // any ONE of them as "the" project a caller cares about, so a unit that
+  // needs a SPECIFIC pre-existing project (not just "a project with this
+  // name") should still target it explicitly, the way this unit's own
+  // capture run does via `--project-id`.
+  const rows = await listRows(
+    adminRequest,
+    baseUrl,
+    `/admin/projects/administration?search=${encodeURIComponent(name)}`,
+  );
+  const matches = rows.filter((row) => (row as { name?: unknown }).name === name);
+  if (matches.length > 0) {
+    const lowestId = matches.reduce((min, row) => {
+      const id = Number((row as { id: unknown }).id);
+      return id < min ? id : min;
+    }, Number((matches[0] as { id: unknown }).id));
+    return String(lowestId);
+  }
   const created = requireOk(
     `create project ${name}`,
     await api(adminRequest, baseUrl, "POST", "/projects/project/administration", {

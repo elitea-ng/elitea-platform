@@ -165,10 +165,10 @@ export const shots: readonly Shot[] = [
     id: "chat-conversation-view",
     route: "/app/chat/:conversationId",
     viewport: DEFAULT_VIEWPORT,
-    mask: ["assistant-message-text"],
     persona: "member",
     notes:
-      "autotest_docs_conversation with 2-3 turns; mask assistant text unless the real-model lane is used.",
+      "autotest_docs_conversation with 2-3 real turns (unit W4c, project docs-shots/9, real vLLM " +
+      "model) — no mask needed now that the real-model lane landed real, non-secret text.",
   },
   {
     id: "chat-plus-menu-open",
@@ -185,14 +185,26 @@ export const shots: readonly Shot[] = [
     viewport: DEFAULT_VIEWPORT,
     persona: "member",
     notes:
-      "Attach a small file via page.setInputFiles to show the attachment chip before sending.",
+      "Attach a small file via page.setInputFiles to show the attachment chip before sending — " +
+      "no such action kind exists in docs-shots.ts yet (still true, unit W4c). Now shows the real " +
+      "autotest_docs_conversation (project docs-shots/9) instead of an empty composer, but without " +
+      "an attachment chip.",
   },
   {
     id: "chat-canvas-code",
     route: "/app/chat/:conversationId",
     viewport: DEFAULT_VIEWPORT,
     persona: "member",
-    notes: "Conversation containing a code-block message; open canvas on it.",
+    notes:
+      "autotest_docs_conversation now has a real fenced-Python-function turn (unit W4c, real " +
+      "vLLM lane), so the code block itself is real — but the canvas-from-selection gesture " +
+      "(SelectableAnswerText.tsx, testid answer-text-item/canvas-create-from-selection; " +
+      "docs-shots.ts's new 'select-text' action was added for it) never appears on the LAST " +
+      "message in a conversation: measured live, `ApplicationAnswer.tsx` renders that one row " +
+      "with `data-testid=\"skill-test-last-response\"` and its Markdown reaches the DOM with " +
+      "NO `answer-text-item`/`canvas-create-from-selection` anywhere on the page — a composition " +
+      "gap in the live app, not a driver bug (0 matches for either testid, confirmed via a raw " +
+      "DOM dump). Shows the real code block without the selection affordance until that's fixed.",
   },
   {
     id: "chat-agent-inline-editor",
@@ -200,7 +212,8 @@ export const shots: readonly Shot[] = [
     viewport: DEFAULT_VIEWPORT,
     persona: "member",
     notes:
-      "autotest_docs_agent as an existing participant; open its inline editor panel from chat.",
+      "autotest_docs_agent as an existing participant; open its inline editor panel from chat — " +
+      "no click action wired for it yet (unit W4c: same gap, now against the real conversation).",
   },
   {
     id: "agent-tools-menu-mcp-toggle",
@@ -220,7 +233,9 @@ export const shots: readonly Shot[] = [
     route: "/app/chat/:conversationId",
     viewport: DEFAULT_VIEWPORT,
     persona: "member",
-    notes: "Add-participant dialog with the admin persona available to add.",
+    notes:
+      "Add-participant dialog with the admin persona available to add — no click action wired " +
+      "for it yet (unit W4c: same gap, now against the real conversation).",
   },
   {
     id: "user-public-agents-list",
@@ -242,7 +257,10 @@ export const shots: readonly Shot[] = [
     viewport: DEFAULT_VIEWPORT,
     persona: "member",
     notes:
-      "Requires admin to set one github tool as sensitive first; scripted tool call or real-model lane to trigger the confirm card.",
+      "Requires admin to set one github tool as sensitive first; scripted tool call or real-model " +
+      "lane to trigger the confirm card. Unit W4c: the real-model lane now exists (project " +
+      "docs-shots/9), but no turn was scripted to trigger a sensitive-tool confirm specifically — " +
+      "still shows the plain real conversation, not the HITL card.",
   },
   {
     id: "indexes-tab-empty",
@@ -254,7 +272,17 @@ export const shots: readonly Shot[] = [
     // second `BaseTab` is literally labelled "Indexes".
     actions: [{ type: "click", selector: "role=tab[name='Indexes']" }],
     persona: "member",
-    notes: "autotest_docs_github toolkit, Indexes tab, no index created yet.",
+    notes:
+      "autotest_docs_github toolkit, Indexes tab, no index created yet. Unit W4c: this (and its 4 " +
+      "siblings below) previously FAILED outright (30s timeout on the tab click) — not a selector bug, " +
+      "but the same project-pinning bug `--project-id`/`--project-name` fixes: captured against " +
+      "\"Default Project\", whose toolkit id 1 is a different/nonexistent toolkit, so no \"Indexes\" " +
+      "tab ever rendered. Fixed by capturing against project docs-shots/9. Tried live to actually " +
+      "start an index (`POST test_toolkit_tool …tool_name=index_data`, unit W4c): the DEPLOYMENT has " +
+      "no public `elitea-pgvector` configuration at all (`runtimecomposition/project_vector_store.go`'s " +
+      "own log line: \"this deployment has no public elitea-pgvector configuration, so no project can " +
+      "index\") — a stack-wide bootstrap gap, not a per-project one, so indexing stays off regardless " +
+      "of which project is targeted. Stays limited to this real empty state.",
   },
   {
     id: "index-create-form",
@@ -265,7 +293,9 @@ export const shots: readonly Shot[] = [
     notes:
       "Indexes tab create-index dialog; needs pgvector + embedding configurations seeded — " +
       "this docs seed does not open the dialog itself (no confirmed 'Add index' selector), so " +
-      "this currently shows the Indexes tab's own empty/list state, not the dialog.",
+      "this currently shows the Indexes tab's own empty/list state, not the dialog. Unit W4c: now " +
+      "captured for real (see indexes-tab-empty's note on the project-pinning fix and the " +
+      "deployment-wide missing-pgvector-config root cause) instead of failing outright.",
   },
   {
     id: "index-details-panel",
@@ -275,8 +305,9 @@ export const shots: readonly Shot[] = [
     persona: "member",
     notes:
       "Index detail view with configuration and reindex/delete actions — needs an actual " +
-      "index run, which this stack cannot produce (no worker/index execution plane; see " +
-      "docs-seed.ts's module doc). Currently shows the same empty Indexes tab.",
+      "index run, which this stack cannot produce (see indexes-tab-empty's note: no public " +
+      "elitea-pgvector configuration on this deployment). Unit W4c: now captured for real (project " +
+      "docs-shots/9) instead of failing outright; still shows the same empty Indexes tab.",
   },
   {
     id: "index-history-list",
@@ -286,7 +317,8 @@ export const shots: readonly Shot[] = [
     persona: "member",
     notes:
       "Index history list; needs at least one prior indexing run, which this stack cannot " +
-      "produce. Currently shows the same empty Indexes tab.",
+      "produce (see indexes-tab-empty's note). Unit W4c: now captured for real instead of failing " +
+      "outright; still shows the same empty Indexes tab.",
   },
   {
     id: "toolkit-index-search-tools",
@@ -306,7 +338,8 @@ export const shots: readonly Shot[] = [
     persona: "member",
     notes:
       "Indexes tab schedule form with a cron expression — needs an actual index to attach a " +
-      "schedule to, which this stack cannot produce. Currently shows the same empty Indexes tab.",
+      "schedule to, which this stack cannot produce (see indexes-tab-empty's note). Unit W4c: now " +
+      "captured for real instead of failing outright; still shows the same empty Indexes tab.",
   },
   {
     id: "index-source-create-form",
@@ -530,9 +563,9 @@ export const shots: readonly Shot[] = [
     id: "chat-conversation",
     route: "/app/chat/:conversationId",
     viewport: DEFAULT_VIEWPORT,
-    mask: ["assistant-message-text"],
     persona: "member",
-    notes: "Mask assistant bubble text unless the real-model E2E lane is used.",
+    notes:
+      "Real-model E2E lane landed (unit W4c, project docs-shots/9) — no mask needed.",
     seed: "autotest_docs_conversation",
   },
   {
@@ -616,14 +649,30 @@ export const shots: readonly Shot[] = [
     persona: "member",
     placeholders: { toolkitId: "wikiToolkitId" },
     notes:
-      "docs-seed.ts's createWikiToolkit (unit W4b) seeds a real `wikis`-type toolkit over elitea-ng/elitea-platform, and generation starts for real on this stack's real-engine — but the DeepWiki host container's callback-CA bind mount (`/certs/ca.crt`) is broken on this run (source path from a since-removed worktree), so every invocation fails before any page lands. Recapture once that mount is fixed; this id and inventory-workspace/browser previously shared ONE `toolkitId` seed key (the github toolkit) — this placeholder override is the fix for that, independent of the cert issue.",
+      "docs-seed.ts's createWikiToolkit seeds a real `wikis`-type toolkit over elitea-ng/elitea-platform " +
+      "in project docs-shots/9. Unit W4c captured this correctly for the first time (project pinning " +
+      "fixed): the real, un-generated \"No wiki yet\" empty state with the Generate-wiki control — " +
+      "replacing an earlier committed webp that was an outright error (\"The wikis for this project " +
+      "could not be loaded\", captured against the wrong project). Generation itself was NOT retried " +
+      "this unit (per the coordinator's note: known-broken, do not retry) — unit W4b already reproduced " +
+      "the DeepWiki host container's callback-CA bind mount failure (`/certs/ca.crt`, pointing at a " +
+      "since-removed worktree), and fixing it needs a container recreate, out of scope for a docs-shots " +
+      "unit. Recapture with the generated wiki once that mount is fixed.",
   },
   {
     id: "inventory-workspace",
     route: "/app/inventory/:toolkitId",
     viewport: DEFAULT_VIEWPORT,
     persona: "member",
-    notes: "Needs an inventory toolkit with at least one ingested source.",
+    notes:
+      "Needs an inventory toolkit with at least one ingested source, AND the Inventory service " +
+      "composed at all. Confirmed absent on `elitea-standalone` (unit W4c): `podman ps` has no " +
+      "inventory container, elitea-main's own logs show a continuous provider-registration probe " +
+      "failure (`dial tcp: lookup elitea-inventory on … no such host`), and the route itself now " +
+      "answers the app's global 404 rather than any inventory UI. Webp intentionally not committed " +
+      "(a placeholder renders instead) — the previously committed one was a stale, wrong-project " +
+      "\"Reading the source status…\" spinner, less accurate than no image at all. Recapture on a " +
+      "stack that actually composes Inventory.",
   },
   {
     id: "help-center",
@@ -672,14 +721,28 @@ export const shots: readonly Shot[] = [
     viewport: DEFAULT_VIEWPORT,
     persona: "admin",
     notes:
-      "Requires admin flag analytics_enabled and some llm_usage_events rows (real-model lane or gateway mock).",
+      "Requires admin flag analytics_enabled and some llm_usage_events rows (real-model lane or " +
+      "gateway mock). Unit W4c: tried against project docs-shots/9 (which now has 3 real chat turns " +
+      "AND analytics_enabled written by docs-seed.ts) and got WORSE, not better — \"Failed to load " +
+      "analytics data.\" `--project-id`/`--project-name` only pins the client's OWN believed project " +
+      "(localStorage/sessionStorage); it does not make the ADMIN persona an actual member of a project " +
+      "docs-seed.ts created with `project_admin_email: e2e-member@autotest.local` as its admin — the " +
+      "sidebar's own project switcher (a real API read) showed \"No projects\" for this admin identity, " +
+      "so the analytics read 500s. Also: this deployment's `gateway.llm_usage_events` table has 0 rows " +
+      "project-wide even after 3 real vLLM turns — those turns did not go through whatever code path " +
+      "populates it. Reverted to the prior (still-limited, non-error) capture rather than commit an " +
+      "error page. Fixing this for real needs either adding the admin persona to the project or an " +
+      "admin-scoped analytics read that does not require project membership.",
   },
   {
     id: "settings-usage",
     route: "/app/settings/usage",
     viewport: DEFAULT_VIEWPORT,
     persona: "admin",
-    notes: "Requires admin flag cost_budgets_enabled.",
+    notes:
+      "Requires admin flag cost_budgets_enabled (compile-time only, see docs-seed.ts's own notes). " +
+      "Unit W4c: same admin-persona-not-a-project-member finding as settings-analytics (\"Failed to " +
+      "load usage for this project.\") — reverted, not committed.",
   },
   {
     id: "settings-profile",
@@ -822,7 +885,11 @@ export const shots: readonly Shot[] = [
     persona: "member",
     placeholders: { toolkitId: "wikiToolkitId" },
     notes:
-      "Same autotest_docs_wiki toolkit and same cert-mount blocker as deepwiki-workspace (unit W4b); recapture once generation can actually complete on this stack.",
+      "Same autotest_docs_wiki toolkit, same route, and (currently) the same real empty state as " +
+      "deepwiki-workspace — the two ids ask for different DeepWiki views (an entity browser vs. a " +
+      "workspace overview) that only diverge once a wiki has actually been generated. Recapture " +
+      "distinctly once generation can complete on this stack (cert-mount blocker, see " +
+      "deepwiki-workspace's own note).",
   },
   {
     id: "inventory-browser",
@@ -830,7 +897,9 @@ export const shots: readonly Shot[] = [
     viewport: DEFAULT_VIEWPORT,
     persona: "member",
     notes:
-      "Inventory entity browser with graph filters, on the seeded Inventory toolkit in project 90300 (E2E Inventory id 9101), ingestion completed.",
+      "Inventory entity browser with graph filters, on the seeded Inventory toolkit in project 90300 " +
+      "(E2E Inventory id 9101), ingestion completed. Same absent-service blocker as inventory-workspace " +
+      "on `elitea-standalone` (unit W4c) — webp intentionally not committed; see that id's own note.",
   },
   {
     id: "admin-overview-nav",

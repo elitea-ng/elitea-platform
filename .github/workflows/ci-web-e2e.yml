@@ -1319,24 +1319,67 @@ jobs:
           ./scripts/e2e-stack.sh seed
           wait "$pw_pull"
 
-      # The capture itself runs INSIDE the pinned container for the same
-      # reason the `e2e` and `visual` jobs' test runs do: it needs real
-      # Chromium plus the system libraries Playwright links against, which
-      # the image ships pre-installed. `docs-shots.ts` also shells out to
-      # `npx playwright test --project=setup` when a persona's storageState
-      # is missing (its own header explains why it reuses that project
-      # rather than re-implementing OIDC) — that nested invocation inherits
-      # this same container, so it never reaches for a browser that is not
-      # there.
+      # Both this step and the capture step below run INSIDE the pinned
+      # container for the same reason the `e2e` and `visual` jobs' test runs
+      # do: it needs real Chromium plus the system libraries Playwright links
+      # against, which the image ships pre-installed. Each script also shells
+      # out to `npx playwright test --project=setup` when a persona's
+      # storageState is missing (`docs-shots.ts`'s own header explains why it
+      # reuses that project rather than re-implementing OIDC) — that nested
+      # invocation inherits this same container, so it never reaches for a
+      # browser that is not there.
       #
+      # `-w /work` (not `/work/apps/elitea-web`): this job's steps default to
+      # `working-directory: apps/elitea-web` (the workflow-level `defaults:`
+      # block), so `$PWD` here IS ALREADY `.../apps/elitea-web` — mounting it
+      # at `/work` and then adding the same suffix again names a directory
+      # that does not exist. Measured live (dispatch run 34309710316): this
+      # exact double-suffix bug failed the capture step outright with
+      # `Cannot find module '/work/apps/elitea-web/scripts/docs-shots.ts'`
+      # before a single shot ran, and every other job's identical `docker
+      # run` (the `e2e`/`visual` jobs' snapshot steps) already gets this
+      # right — `-w /work`, no suffix. Same fix applies to both steps below.
+      #
+      # `--skip-platform-flags`: `writePlatformConfigFlags`/`createWikiToolkit`
+      # (docs-seed.ts) `docker exec`/`podman exec` into the stack's own
+      # postgres container by name, which only works if this pinned
+      # container can reach the host's container engine — it is not given
+      # the docker socket, so that exec would just fail with a harmless but
+      # confusing warning. Skipped outright here rather than let it fail
+      # quietly; `analytics_enabled`/`mcp_in_menu`/`voice_features`-gated
+      # shots stay in their documented "no data" state in CI either way.
+      # No `--vllm-api-base`/`--vllm-model`/`--wiki-repository`: this job's
+      # stack is `docker-compose.e2e-standalone.yml`, which composes no
+      # worker and no real model endpoint (see docs-seed.ts's own module
+      # doc) — omitting them skips `seedRealModel`/`sendRealChatTurns`/
+      # `createWikiToolkit` entirely rather than let them fail against a
+      # lane this stack cannot serve. No `--project-name`: the default
+      # project id ("1") already matches what `auth.setup.ts`'s stored
+      # storageState pins every persona to, so every existing manifest
+      # entry's route placeholder keeps resolving the way it always has.
+      - name: Seed docs fixtures (pinned container, host network)
+        run: |
+          docker run --rm --network host \
+            -v "$PWD":/work -w /work \
+            -e CI=true \
+            -e E2E_REUSE_STACK=1 \
+            -e E2E_PORT=8080 \
+            -e PLAYWRIGHT_BASE_URL=http://localhost:8080 \
+            mcr.microsoft.com/playwright:v1.62.1-noble \
+            npx tsx scripts/docs-seed.ts --base-url http://localhost:8080 \
+              --seed-map playwright-results/docs-seed.json \
+              --skip-platform-flags
+
       # `--fail-on-missing` only on a FILTERED run: an unfiltered run also
       # captures whatever a content writer has staged into shots.manifest.ts
       # whose route is not capturable yet (template placeholders like
       # `/chat/:conversationId`, seed data this stack does not create), and
       # failing the whole job on those would make every unfiltered dispatch
-      # red for a reason this job cannot fix. A run scoped with `only` is a
-      # deliberate request for specific, expected-good ids, so it fails loud
-      # if even one of them comes back empty.
+      # red for a reason this job cannot fix — an empty `only` therefore
+      # means "capture everything, report per-id failures in the printed
+      # table, but exit 0". A run scoped with `only` is a deliberate request
+      # for specific, expected-good ids, so it fails loud (`exit 1`) if even
+      # one of them comes back empty.
       - name: Capture screenshots (pinned container, host network)
         env:
           ONLY: ${{ inputs.only }}
@@ -1348,13 +1391,14 @@ jobs:
             fail_flag="--fail-on-missing"
           fi
           docker run --rm --network host \
-            -v "$PWD":/work -w /work/apps/elitea-web \
+            -v "$PWD":/work -w /work \
             -e CI=true \
             -e E2E_REUSE_STACK=1 \
             -e E2E_PORT=8080 \
             -e PLAYWRIGHT_BASE_URL=http://localhost:8080 \
             mcr.microsoft.com/playwright:v1.62.1-noble \
             npx tsx scripts/docs-shots.ts --base-url http://localhost:8080 \
+              --seed-map playwright-results/docs-seed.json \
               "${extra_args[@]}" $fail_flag
 
       - name: Give the report back to the runner user

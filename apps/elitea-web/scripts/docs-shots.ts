@@ -467,6 +467,37 @@ async function runAction(page: Page, action: ShotAction): Promise<void> {
         timeout: 20_000,
       });
       return;
+    case "select-text": {
+      // Unit W4c. The chat-canvas gesture (`SelectableAnswerText.tsx`'s own
+      // header) is a DOM text selection, not a click — the
+      // `canvas-create-from-selection` button only renders once
+      // `useTextSelectionWithin` sees a non-empty selection inside a
+      // `[data-testid='answer-text-item']`. Playwright has no built-in
+      // "select this element's text" gesture, so this drives the Selection
+      // API directly: `Range.selectNodeContents` + `Selection.addRange`,
+      // which fires a real `selectionchange` event in Chromium (the signal
+      // that hook actually listens for — see its own header on why
+      // `selectionchange` and not just `mouseup`). Matches the LAST element
+      // for `selector` (querySelectorAll), since a conversation with
+      // multiple answers has one `answer-text-item` per item and a shot
+      // usually wants the most recent one.
+      if (action.selector === "")
+        throw new Error("select-text action requires a selector");
+      await page.evaluate((selector) => {
+        const elements = document.querySelectorAll(selector);
+        const el = elements[elements.length - 1];
+        if (el === undefined) {
+          throw new Error(`select-text: no element matched "${selector}"`);
+        }
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        const selection = document.getSelection();
+        if (selection === null) throw new Error("select-text: document.getSelection() is null");
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }, action.selector);
+      return;
+    }
     default:
       throw new Error(`unknown action type: ${action.type}`);
   }
