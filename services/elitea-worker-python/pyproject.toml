@@ -68,7 +68,7 @@ agent-current = [
   # in langgraph-checkpoint 3.0.0, and 2.0.21 states langgraph-checkpoint<3.0.0.
   # The two versions must move together. langgraph 1.0.7 admits
   # langgraph-checkpoint>=2.1.0,<5.0.0, so it does not need to move.
-  "langgraph-checkpoint-postgres==3.0.0",
+  "langgraph-checkpoint-postgres==3.1.1",
   # The four third-party API clients elitea_sdk.tools imports for the
   # google_places, rally, service_now and slack toolkit types. The admitted
   # SDK 0.9.8 pins these exact versions in its own `tools` extra
@@ -107,18 +107,18 @@ indexing-current = [
   "html5lib==1.1",
   "isodate==0.7.2",
   "joblib==1.5.3",
-  "langchain==1.2.6",
+  "langchain==1.3.9",
   "langchain-anthropic==1.3.1",
   # Raised from 1.0.1 for CVE-2026-45134. 1.0.7 states langchain-core>=1.3.3
   # and langchain-text-splitters>=1.1.2, which is why those two move with it.
   "langchain-classic==1.0.7",
   "langchain-community==0.4.1",
-  "langchain-openai==1.1.7",
+  "langchain-openai==1.1.14",
   "langchain-postgres==0.0.16",
   "langchain-text-splitters==1.1.2",
   # Raised from 2.1.2 for CVE-2025-64439. It carries
   # langgraph-checkpoint-postgres to 3.0.0; see the note in agent-current.
-  "langgraph-checkpoint==3.0.0",
+  "langgraph-checkpoint==4.1.1",
   "langgraph-prebuilt==1.0.7",
   "langdetect==1.0.9",
   # Raised from 5.2.2 for CVE-2026-41066.
@@ -142,14 +142,14 @@ indexing-current = [
   # the largest part of what keeps elitea-worker-python in
   # .github/image-scan-exempt.txt, and they end with an elitea-sdk release,
   # not with a change here (#554).
-  "pillow==11.1.0",
+  "pillow==12.3.0",
   "psutil==7.1.3",
   "psycopg[binary]==3.3.4",
   "psycopg-pool==3.3.1",
   "pytesseract==0.3.13",
   "pymupdf==1.24.9",
   # Raised from 4.3.1 for CVE-2026-59935 and CVE-2026-59936.
-  "pypdf==6.14.2",
+  "pypdf==6.16.1",
   "pypdfium2==5.8.0",
   "PyGithub==2.3.0",
   "python-iso639==2026.7.23",
@@ -187,7 +187,7 @@ indexing-current = [
   # states beautifulsoup4>=4.14.3, psutil>=7.2.2 and charset-normalizer>=3.4.4.
   # Those three are shared by every current indexing family, so that step waits
   # for a parity run (#554).
-  "unstructured==0.18.18",
+  "unstructured==0.24.0",
   "unstructured-client==0.39.1",
   "xlrd==1.2.0",
 ]
