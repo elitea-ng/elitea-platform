@@ -10,11 +10,14 @@
  * about what pages exist.
  *
  * Generated from the writer batches' `nav.<batch>.json` files per product-map.md
- * section 6 (proposed navigation) — tab order Home, Getting started, Guides,
- * Integrations, Admin; group/subgroup order as listed there. Four legacy
- * fragment pages (buckets-and-files, evaluation, share-a-conversation, voice)
- * were folded into their menu pages during review and do not get their own
- * nav entries or files — see the embedded-docs W5 merge report.
+ * section 6 (proposed navigation) — tab order Home, Getting started,
+ * Development, Guides, Integrations, Deployment, Admin; group/subgroup order
+ * as listed there. Four legacy fragment pages (buckets-and-files, evaluation,
+ * share-a-conversation, voice) were folded into their menu pages during
+ * review and do not get their own nav entries or files — see the
+ * embedded-docs W5 merge report. Development and Deployment were added in a
+ * later docs wave (local development environment, production Kubernetes
+ * deployment) — see nav.L.json / nav.P.json in that wave's staging batch.
  */
 
 /** A single documentation page. `slug` is root-relative, no extension, no
@@ -150,6 +153,36 @@ export const nav: readonly NavTab[] = [
           { kind: 'page', slug: 'getting-started/create-secret', title: 'Create a secret' },
           { kind: 'page', slug: 'getting-started/create-credential', title: 'Create a credential' },
           { kind: 'page', slug: 'getting-started/create-artifact', title: 'Create an artifact bucket' },
+        ],
+      },
+    ],
+  },
+  {
+    kind: 'tab',
+    title: 'Development',
+    groups: [
+      {
+        kind: 'group',
+        title: 'Set up',
+        pages: [
+          { kind: 'page', slug: 'development/overview', title: 'Set up a development environment' },
+        ],
+      },
+      {
+        kind: 'group',
+        title: 'Run the platform',
+        pages: [
+          { kind: 'page', slug: 'development/standalone-stack', title: 'Run the standalone stack' },
+          { kind: 'page', slug: 'development/e2e-stack', title: 'Run the browser test stack' },
+          { kind: 'page', slug: 'development/kind', title: 'Run a local Kubernetes cluster' },
+        ],
+      },
+      {
+        kind: 'group',
+        title: 'Work on the code',
+        pages: [
+          { kind: 'page', slug: 'development/frontend', title: 'elitea-web development' },
+          { kind: 'page', slug: 'development/backend', title: 'Backend services and workers' },
         ],
       },
     ],
@@ -312,6 +345,35 @@ export const nav: readonly NavTab[] = [
         title: 'API',
         pages: [
           { kind: 'page', slug: 'integrations/third-party-integrations/api-usage', title: 'API usage' },
+        ],
+      },
+    ],
+  },
+  {
+    kind: 'tab',
+    title: 'Deployment',
+    groups: [
+      {
+        kind: 'group',
+        title: 'Plan',
+        pages: [
+          { kind: 'page', slug: 'deployment/overview', title: 'Production deployment overview' },
+        ],
+      },
+      {
+        kind: 'group',
+        title: 'Install',
+        pages: [
+          { kind: 'page', slug: 'deployment/helm-install', title: 'Install with Helm' },
+          { kind: 'page', slug: 'deployment/argocd', title: 'GitOps with ArgoCD' },
+        ],
+      },
+      {
+        kind: 'group',
+        title: 'Operate',
+        pages: [
+          { kind: 'page', slug: 'deployment/configuration', title: 'Post-install configuration' },
+          { kind: 'page', slug: 'deployment/operations', title: 'Day-2 operations' },
         ],
       },
     ],

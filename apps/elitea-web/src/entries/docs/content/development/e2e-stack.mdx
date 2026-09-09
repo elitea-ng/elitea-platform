@@ -1,0 +1,108 @@
+---
+title: "Run the browser test stack"
+description: "Bring up the self-contained E2E stack, seed its personas, and run Playwright projects against it."
+---
+
+`apps/elitea-web/scripts/e2e-stack.sh` drives a second, self-contained Compose stack (`deploy/docker-compose.e2e-standalone.yml`) sized for Playwright: no LLM gateway or worker service, non-default ports so it can coexist with other stacks on your machine, and a seed step built around two named personas. This is the stack `apps/elitea-web`'s own test suite and its documentation screenshot tooling both run against — use it instead of the [standalone stack](/development/standalone-stack) when you're working on `apps/elitea-web` itself.
+
+## Subcommands
+
+`apps/elitea-web/scripts/e2e-stack.sh` only understands four:
+
+```text
+Usage: e2e-stack.sh {up|down|seed|logs [outfile]}
+```
+
+<Steps>
+<Step title="up">
+
+```bash
+apps/elitea-web/scripts/e2e-stack.sh up
+```
+
+Generates the DeepWiki and Inventory provider mTLS material, then brings the stack up and waits for every healthcheck (`compose up -d --wait`). elitea-main runs its migrations on startup.
+
+</Step>
+<Step title="seed">
+
+```bash
+apps/elitea-web/scripts/e2e-stack.sh seed
+```
+
+Bootstraps the schema if needed, creates the `e2e-member@autotest.local` and `e2e-admin@autotest.local` oidc-mock users and their matching database rows and role grants, and writes the fixture rows most journeys depend on (an audit-trail day anchor among them).
+
+</Step>
+<Step title="logs [outfile]">
+
+Collects `compose ps` plus every service's logs into a file (default `playwright-results/stack-logs.txt`) — the only place to see what a failed run's server actually did, since a torn-down stack takes its logs with it.
+
+</Step>
+<Step title="down">
+
+Tears the stack down, including its volumes (`--remove-orphans -v`).
+
+</Step>
+</Steps>
+
+There is no separate `build` or `status` subcommand: `up` builds what it needs, and `podman compose -p elitea-e2e -f deploy/docker-compose.e2e-standalone.yml ps` covers status.
+
+## Ports
+
+`docker-compose.e2e-standalone.yml` is a complete stack, not an overlay, and deliberately uses non-default ports so it can run alongside other local stacks:
+
+| Port | Service | Override |
+|---|---|---|
+| 8082 | Traefik (E2E entry point) | `E2E_PORT` |
+| 9400 | oidc-provider-mock | fixed — see [the standalone stack's note](/development/standalone-stack#common-failures) |
+| 15432 | PostgreSQL | `E2E_PG_PORT` |
+| 16379 | Redis | `E2E_REDIS_PORT` |
+
+`E2E_PROJECT` (default `elitea-e2e`) names the Compose project; set it together with the port variables above to run a second, disposable E2E stack beside the first.
+
+## Personas and fixtures
+
+The seed step creates exactly two accounts through oidc-mock: `e2e-member@autotest.local` (a normal project member) and `e2e-admin@autotest.local` (holds the admin role). Playwright's own `auth.setup.ts` project signs each one in through a real OIDC round trip — filling the mock's "Subject" field with the persona's email — and saves the result as a storage-state file per persona (`member`, `admin`, and a third, `chat`, used by the streaming/chat specs, which owns its own personal project so it never contends with the other two).
+
+Individual specs and the docs screenshot tooling then create their own throwaway fixtures inside that seeded state, all prefixed `autotest_` (`apps/elitea-web/e2e/fixtures/api.ts`) — an agent, a toolkit, a pipeline, and so on — and a fixtures-sweep project removes every `autotest_`-named entity left over at the end of a run.
+
+## Running Playwright
+
+```bash
+npm run e2e                          # all default projects (from apps/elitea-web)
+npx playwright test --project=chromium
+npx playwright test --project=webkit
+npm run e2e:chat-stream              # chat-stream project, via scripts/chat-stream-e2e.sh
+npm run e2e:visual                   # visual project, in the pinned Playwright container
+```
+
+`playwright.config.ts` reads `PLAYWRIGHT_BASE_URL` (default `http://localhost:8082`, matching `E2E_PORT`'s default) for its `baseURL`. The main projects are `chromium` and `webkit` (the bulk of the journeys), `chat-stream` (streaming chat, mock model), `chat-stream-real`/`chat-stream-real-nightly` (against a real small model), and `visual` (screenshot-diff baselines) — plus setup/fixture/live-toolkit projects most local runs don't need directly.
+
+## Regenerating visual baselines
+
+Never regenerate `@visual` baselines locally. Use the `ci-web-e2e.yml` workflow's `workflow_dispatch` inputs instead: `update_visual_baselines` runs the suite inside the pinned Playwright container and uploads the results as the `visual-baselines` artifact for you to review and commit; `full_visual_refresh` (which requires `update_visual_baselines`) rewrites **every** baseline rather than only the ones that failed. A local run uses your machine's fonts and GPU rasterization, which do not match the pinned container the `visual` job asserts against in CI.
+
+## Documentation screenshots
+
+Two scripts (both under `apps/elitea-web/scripts/`, run from that directory) drive the embedded docs' own screenshots against a running, seeded E2E stack:
+
+```bash
+npx tsx scripts/docs-seed.ts     # creates one autotest_docs_*-named instance of every entity the shots need
+npm run docs:shots               # captures the manifest's routes to WebP under content/img/
+```
+
+`docs-seed.ts` looks every entity up by name first and reuses it if found, so re-running it is safe. Without `--vllm-api-base`/`--vllm-model` (which need the [standalone stack](/development/standalone-stack)'s worker, not this one) it still creates a conversation and its participant for empty-state and composer shots, but does not produce a real assistant turn — routes gated on agent execution answer `405` on this stack, since it composes no worker at all. `docs:shots` signs in with the same persona storage-state files Playwright's own specs use, applies a reduced-motion stylesheet and waits for DOM stability rather than a fixed sleep, and re-encodes each capture to WebP at 1440×900, light theme, capped at 250 KB.
+
+{/* source: apps/elitea-web/scripts/e2e-stack.sh:1-10 (usage header) */}
+{/* source: apps/elitea-web/scripts/e2e-stack.sh:56-79,2501-2578 (up/down/seed/logs bodies, usage line) */}
+{/* source: apps/elitea-web/scripts/e2e-stack.sh:30-37 (E2E_PROJECT, ports) */}
+{/* source: deploy/docker-compose.e2e-standalone.yml:1-16 (ports, non-overlay note) */}
+{/* source: apps/elitea-web/scripts/e2e-stack.sh:196-260 (persona emails and seed SQL) */}
+{/* source: apps/elitea-web/e2e/auth.setup.ts:6-108 (Subject field sign-in, storage-state files) */}
+{/* source: apps/elitea-web/playwright.config.ts:51,76-77 (STORAGE_STATE, BASE_URL) */}
+{/* source: apps/elitea-web/e2e/fixtures/api.ts:8-16,1265-1294 (AUTOTEST_PREFIX, sweepAutotestEntities) */}
+{/* source: apps/elitea-web/package.json:30-33 (e2e npm scripts) */}
+{/* source: apps/elitea-web/playwright.config.ts:326-780 (project names) */}
+{/* source: .github/workflows/ci-web-e2e.yml:38-75,1139-1255 (workflow_dispatch update_visual_baselines / full_visual_refresh) */}
+{/* source: apps/elitea-web/package.json:34-35 (docs:shots, docs:shots-merge) */}
+{/* source: apps/elitea-web/scripts/docs-seed.ts:1-60 (autotest_docs_ prefix, 405 without a worker, idempotent lookup) */}
+{/* source: apps/elitea-web/scripts/docs-shots.ts:1-40 (persona storage state, determinism, WebP output) */}

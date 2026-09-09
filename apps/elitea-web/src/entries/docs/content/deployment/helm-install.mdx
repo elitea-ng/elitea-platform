@@ -1,0 +1,192 @@
+---
+title: "Install with Helm"
+description: "Prerequisites, secrets to create beforehand, which values file to start from, and the install sequence from nats through the first admin."
+---
+
+This walks a Kubernetes install of the `elitea` chart end to end. Read [Production deployment overview](/deployment/overview) first for the topology and what the chart does not provision.
+
+## Prerequisites
+
+<CardGroup cols={2}>
+  <Card title="Cluster access" icon="server">A Kubernetes cluster with `helm` v3 and `kubectl` configured against it.</Card>
+  <Card title="PostgreSQL" icon="database">Reachable, with a superuser DSN available for the database-preparation Job (`CREATE DATABASE`, `CREATE EXTENSION vector`).</Card>
+  <Card title="Redis" icon="server">A general-purpose Redis reachable from the cluster; a second, mutually authenticated TLS Redis if you turn on the runtime plane.</Card>
+  <Card title="Object storage" icon="package">An S3-compatible bucket, created ahead of the first sync and named by `main.env.STORAGE_CONTAINER`.</Card>
+  <Card title="cert-manager" icon="shield-check">A `ClusterIssuer` for the internal mTLS hops (LLM gateway, DeepWiki/Inventory), if you enable those components.</Card>
+</CardGroup>
+
+## Secrets to create beforehand
+
+Nothing secret goes in a values file — a Helm parameter renders into a ConfigMap, readable by anyone with `get` on the namespace. Create these Kubernetes Secrets first; the chart only ever takes their **names**.
+
+<Accordion title="SECRETS_MASTER_KEY">
+Wraps each project's vault key (optional on the gateway, required on main). Generate: `python3 -c 'import base64, os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())'`
+</Accordion>
+
+<Accordion title="postgresql.existingSecret">
+The database DSN, one Secret + key pair that every component reading the database (elitea-main, its migration Job, the scheduler, the LLM gateway, the workload-session Job) derives its `DATABASE_URL` from. Default names: Secret `elitea-main-db`, key `database-url`.
+</Accordion>
+
+<Accordion title="runtime.material.secretName (runtime plane only)">
+Agent-execution signing keys and listener certificates (from `deploy/scripts/gen-runtime-certs.sh`). Required if `main.runtime.enabled: true`.
+</Accordion>
+
+<Accordion title="fileConfig.authConfig.material.secretName (production auth)">
+Auth Redis password, CA, browser-attempt key, PAT signing key, Form users JSON. Required if using Form or mixed authentication.
+</Accordion>
+
+<Accordion title="Gateway identity secret (GATEWAY_IDENTITY_SECRET)">
+Required on both main and gateway; must be identical. HMAC key for signing/verifying identity headers.
+</Accordion>
+
+## Two settings with no chart default
+
+The chart **refuses to render** while either of these is empty — there is no safe guess for either, and a guessed value would look armed while guarding nothing:
+
+| Setting | What it is |
+|---|---|
+| `llmGateway.env.GATEWAY_SELF_LLM_ORIGINS` | Every origin that reaches this deployment's `/llm` surface, public and in-cluster, comma-separated — e.g. `https://elitea.example.com/llm/v1,http://elitea-main:8080/llm/v1`. |
+| `llmGateway.egressPosture` | `"allowlist"` (only hosts in `GATEWAY_EGRESS_ALLOWLIST` / governance rows) or `"public-unrestricted"` (any public host, until the first governance row narrows it). Private-network reachability follows only from an entry that explicitly names a private address or block — never from the posture alone. |
+
+Also required: `platform.aiProjectId`, the id of the platform's public/shared project — it must name a project schema (`p_<id>`) that already exists. It fills `main.env.ELITEA_AI_PROJECT_ID`, `llmGateway.env.ELITEA_AI_PROJECT_ID` and `web.env.VITE_PUBLIC_PROJECT_ID` at once; `helm template` refuses a values file where the three copies disagree.
+
+## Choose a values file
+
+<Tabs>
+<Tab title="values.yaml (base)">
+The chart's own defaults: a **default install has no production authentication**, so `ELITEA_CONFIGURATIONS_ENABLED`, `ELITEA_PROJECT_INFO_ENABLED`, `ELITEA_INDEX_TYPES_ENABLED` and `ELITEA_APPLICATION_SKILLS_ENABLED` all render off, and `main.runtime.enabled` is off — no chat. Start here only if you are layering capabilities on by hand.
+</Tab>
+<Tab title="values-standalone.yaml">
+The full capability set, matching `docker-compose.standalone-full.yml` — every capability flag on, the runtime plane on (agent execution, index ingest), sized for `postgresql.maxConnections: 200` across up to `main.autoscaling.maxReplicas: 4`. Needs both the runtime material Secret and the auth material Secret. This is the reference production shape.
+</Tab>
+<Tab title="values-auth-minimal.yaml">
+The cheapest install that can seed an AI provider credential through the product's own API instead of hand-written SQL: production (Form) authentication plus `ELITEA_CONFIGURATIONS_ENABLED`, **no runtime plane** — no agent execution, no chat. Needs the auth material Secret and a TLS Redis (`runtimeRedis.enabled: true`), but no runtime material Secret and no worker.
+</Tab>
+<Tab title="values-staging.yaml">
+A minimal single-replica shape (image tag `shadow-v0.1`, `DATABASE_URL`/`REDIS_URL` inlined for a throwaway environment, autoscaling and the pod disruption budget both off). Use it for a disposable smoke/shadow environment, not as a production starting point.
+</Tab>
+</Tabs>
+
+## Install order: nats, nats-bootstrap, elitea
+
+Whether you install by hand or through ArgoCD (sync waves `-2`, `-1`, `0` — see [GitOps with ArgoCD](/deployment/argocd)), the order matters: the LLM gateway's budget counters and the scheduler both dial NATS, and its JetStream assets (KV buckets, the budget-deltas stream) must exist first.
+
+<Steps>
+<Step title="NATS">
+```bash
+helm install elitea-nats deploy/helm/nats \
+  -f deploy/helm/nats/values-scale1.yaml \
+  -n elitea-gateway --create-namespace
+```
+</Step>
+<Step title="NATS bootstrap">
+Idempotent hook Job that creates the KV buckets and stream:
+```bash
+helm install elitea-nats-bootstrap deploy/helm/nats-bootstrap \
+  --set natsUrl=nats://elitea-nats:4222 \
+  --set replicas=1 \
+  -n elitea-gateway
+```
+</Step>
+<Step title="elitea">
+```bash
+helm install elitea deploy/helm/elitea \
+  -f deploy/helm/elitea/values-standalone.yaml \
+  --set postgresql.existingSecret=elitea-main-db \
+  --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.example.com/llm/v1 \
+  --set-string llmGateway.egressPosture=public-unrestricted \
+  --set-string platform.aiProjectId=1 \
+  -n elitea --create-namespace
+```
+</Step>
+</Steps>
+
+<Check title="Prove it renders first">
+`helm template` catches missing prerequisites before any kubectl apply:
+```bash
+helm template deploy/helm/elitea -f deploy/helm/elitea/values-standalone.yaml \
+  --set postgresql.existingSecret=elitea-main-db \
+  --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.example.com/llm/v1
+```
+</Check>
+
+## The migration job and DB bootstrap
+
+`elitea-migrate` runs as a pre-install hook; the database may start empty. The `dbInit` Job (hook weight -20) handles `CREATE DATABASE` and `CREATE EXTENSION vector` before migrations run.
+
+## First-admin bootstrap
+
+A fresh database seeds exactly one administrator, `dev@elitea.ai`, with no password on a single-sign-on deployment — name your own account instead through `identity.initial_global_admins` (a YAML list, wins when the authentication document has one) or `main.env.ELITEA_INITIAL_GLOBAL_ADMINS` (comma-separated, the usual path for a single-sign-on-only install with no document).
+
+An entry is `oidc:<sub>`, `saml:<nameid>`, or `email:<verified address>` (matches only when the id_token asserts `email_verified: true`). The grant is one-shot: an account that already holds any administration role is left as is; one with none receives the grant on its next sign-in.
+
+```bash
+curl -s -H "Cookie: elitea_session=<your session>" \
+  https://elitea.example.com/api/v2/social/author | jq .provider_refs
+```
+
+`provider_refs` is the exact value the list accepts — read it after signing in once, instead of querying the database. See [Install Elitea](/getting-started/install#first-login-and-setup) for the browser-side walkthrough of this same step.
+
+## Capability flags this install serves
+
+<Accordion title="How to read this table">
+`cmd/elitea-main` gates whole route groups on these variables. `values.yaml` sets every one; `values-standalone.yaml` is the reference production set. `ELITEA_CONFIGURATIONS_ENABLED` ships **empty** in the base chart — `_helpers.tpl` derives `"true"` automatically once any authentication is configured and `ELITEA_AI_PROJECT_ID` is set; a stated value always overrides the derivation.
+</Accordion>
+
+| Flag | Default install | `values-standalone.yaml` | Needs |
+|---|---|---|---|
+| `ELITEA_ARTIFACTS_ENABLED` | on | on | object storage configured |
+| `ELITEA_CONFIGURATIONS_ENABLED` | derived | on | any authentication **and** `ELITEA_AI_PROJECT_ID` |
+| `ELITEA_PROJECT_INFO_ENABLED` | off | on | production authentication |
+| `ELITEA_CONFIGURATIONS_MUTATION_ENABLED` | off | off | `ELITEA_CONFIGURATIONS_ENABLED` **and** `runtime.enabled` |
+| `ELITEA_INDEX_TYPES_ENABLED` | off | on | production authentication |
+| `ELITEA_APPLICATION_SKILLS_ENABLED` | off | on | production authentication |
+| `ELITEA_RUNTIME_ENABLED` (`main.runtime.enabled`) | off | on | production authentication **and** runtime material |
+
+<Warning>
+`ELITEA_CONFIGURATIONS_MUTATION_ENABLED` stays off in every shipped values file. It composes a second, asynchronous write route that would win the path from the compatibility route every install currently serves — and the compatibility route already writes `status_ok` inline from the same admission decision, which is what makes a saved credential usable. Turning it on is a separate cutover with its own client-side work, not a fix for an invisible credential.
+</Warning>
+
+## Post-install checks
+
+<Steps>
+<Step title="Liveness and readiness">
+```bash
+curl -s https://elitea.example.com/healthz   # process is up
+curl -s https://elitea.example.com/readyz    # dependencies (e.g. the database) are reachable
+```
+Point your orchestrator's liveness/readiness probes here, not at an authenticated route.
+</Step>
+<Step title="Admin console">
+`/admin/app` — sign in as the account you named above.
+</Step>
+<Step title="Docs and API reference">
+`/docs/` (this site) and `/api/docs` (the OpenAPI UI) should both resolve once `main.ingress` (or your own edge rules) route them.
+</Step>
+</Steps>
+
+See [Troubleshooting](/support/troubleshooting#operator-checks) for what each endpoint answers and the application-level Health tab it complements.
+
+## What a Kubernetes install does NOT give you
+
+<AccordionGroup>
+<Accordion title="No PostgreSQL and no Redis">
+No chart provisions either. The migration hook fails against a cluster where they do not already exist or where the Secret/host settings have not been pointed at them.
+</Accordion>
+<Accordion title="No ingress by default">
+No Ingress renders until `main.ingress.enabled: true`. A cluster serving the web app needs per-route rules to avoid the SPA backend swallowing them.
+</Accordion>
+<Accordion title="Cross-namespace DNS">
+NATS and the gateway live in `elitea-gateway`; the rest live in `elitea`. `LLM_GATEWAY_URL` and `GATEWAY_NATS_URL` must be fully qualified (`....elitea-gateway.svc.cluster.local`) — short names do not resolve across namespaces.
+</Accordion>
+<Accordion title="Cross-namespace Secrets">
+Gateway cert issues into `elitea-gateway`; main runs in `elitea`. Either colocate or replicate via reflector or external-secrets.
+</Accordion>
+<Accordion title="No secrets">
+Every sensitive value is a Kubernetes Secret you provision out of band — see "Secrets to create beforehand" above.
+</Accordion>
+</AccordionGroup>
+
+Continue to [GitOps with ArgoCD](/deployment/argocd) to run this same install declaratively, or [Configuration](/deployment/configuration) for the operator-facing settings after the pods are Ready.
+
+{/* source: deploy/README.md:232-341 (values table, first admin), deploy/README.md:389-431 (distribution), deploy/README.md:433-605 (capability flags), deploy/README.md:607-730 (runtime + auth material), deploy/README.md:859-918 (what K8s does not give you); deploy/helm/elitea/values-standalone.yaml:1-30, 105-260; deploy/helm/elitea/values-auth-minimal.yaml:1-70; deploy/helm/elitea/values-staging.yaml:1-25; deploy/helm/elitea/values.yaml:344-360, 2306-2358 (secrets); deploy/argocd/applications/elitea.yaml:11-18 (hook ordering); deploy/helm/elitea/templates/main/migrate-job.yaml, templates/worker/runtime-session-job.yaml, templates/dbInit/job.yaml, templates/runtimeRedis/bootstrap-job.yaml (hook weights) */}
