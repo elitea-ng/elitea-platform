@@ -565,8 +565,25 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
  * all. Both halves ship together here, so MANIFEST_ENTRY_COUNT moves with it —
  * see the note beside that number for why the entry is `handwritten` even
  * though the operation is described.
+ *
+ * 235 -> 243, at the gap-fix merge (#876, #871, #868, #867, #881 cherry-
+ * picked together onto feat/embedded-docs). Eight new operations, from the
+ * three picks that each add v2.yaml routes and regenerate the client:
+ *
+ *   - Five webhook CRUD operations (#876): listWebhooks, createWebhook,
+ *     getWebhook, updateWebhook, deleteWebhook — orval's new
+ *     generated/webhooks/webhooks.ts tag file.
+ *   - One run-history operation (#868): listConversations — reused by the
+ *     new Run History tab (entities/run-history), not new to v2.yaml.
+ *   - Two project-request operations (#871): createProjectRequest,
+ *     listMyProjectRequests — the self-service "request a project" flow's
+ *     new admin.ts hooks, called directly (not through the `use*` hook) by
+ *     features/project-requests/ui/RequestProjectDialog.tsx.
+ *
+ * #867 (chat composer "Create new" wiring) adds no generated operation: it
+ * wires existing create routes to existing editors, described already.
  */
-const GENERATED_OPERATION_COUNT = 235;
+const GENERATED_OPERATION_COUNT = 243;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -674,8 +691,22 @@ const GENERATED_OPERATION_COUNT = 235;
  * and the fetcher still builds its URL with the generated
  * `getExportConversationUrl`. The reverse check is satisfied by PATH coverage
  * rather than by an operationId, so no allowlist line is added.
+ *
+ * 250 -> 251, at the same gap-fix merge as GENERATED_OPERATION_COUNT's
+ * 235 -> 243 note. Despite that note's eight new generated operations, only
+ * ONE manifest entry is added: `runHistory.listConversations`, called by the
+ * new Run History tab (entities/run-history) — see that note for the exact
+ * caller. The other seven (five webhook CRUD ops from #876, two
+ * project-request ops from #871) have no manifest entry yet even though
+ * both features have real UI callers (pages/settings/Webhooks.tsx,
+ * features/project-requests/ui/RequestProjectDialog.tsx) — the manifest is
+ * append-only and descriptive, not a completeness gate (see the parity
+ * cross-reference note this script prints: most P1 items have no entry
+ * either, "expected during Wave 1/2"), so this is a real but pre-existing
+ * gap in those two picks' own R-A5 bookkeeping, not something this merge
+ * regenerration step is asked to backfill.
  */
-const MANIFEST_ENTRY_COUNT = 250;
+const MANIFEST_ENTRY_COUNT = 251;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {
