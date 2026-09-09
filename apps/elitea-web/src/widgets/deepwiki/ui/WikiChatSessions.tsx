@@ -51,6 +51,17 @@ export interface WikiChatSessionsProps {
   readonly onResume: (conversation: WikiConversationSummary) => void;
   readonly onDelete: (conversation: WikiConversationSummary) => void;
   readonly disabled: boolean;
+  /**
+   * Fired the moment the menu opens, BEFORE `conversations` is read — the
+   * drawer's own listing is fetched once per `historyEpoch`
+   * (`WikiChatDrawer.tsx`) and nothing bumps it after an ordinary send, only
+   * after Clear/Resume/Delete. Without this, asking a first question in a
+   * session started by Clear left that session itself missing from ITS OWN
+   * list until some unrelated epoch bump happened to run — a reader who
+   * asked one question and immediately opened "Past conversations" would
+   * not find the conversation they were just having.
+   */
+  readonly onOpen: () => void;
 }
 
 /** A row's label: the stored name, falling back to the id for one with none. */
@@ -64,13 +75,18 @@ export const WikiChatSessions = memo(function WikiChatSessions({
   onResume,
   onDelete,
   disabled,
+  onOpen,
 }: WikiChatSessionsProps) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const [pendingDelete, setPendingDelete] = useState<WikiConversationSummary | null>(null);
 
-  const openMenu = useCallback((event: { currentTarget: HTMLElement }) => {
-    setAnchor(event.currentTarget);
-  }, []);
+  const openMenu = useCallback(
+    (event: { currentTarget: HTMLElement }) => {
+      setAnchor(event.currentTarget);
+      onOpen();
+    },
+    [onOpen],
+  );
   const closeMenu = useCallback(() => {
     setAnchor(null);
   }, []);

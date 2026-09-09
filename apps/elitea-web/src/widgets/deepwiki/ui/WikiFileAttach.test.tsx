@@ -85,7 +85,7 @@ describe('WikiFileAttach', () => {
 
     const chips = screen.getAllByTestId('wiki-chat-attach-chip');
     const chip = chips.find((candidate) => within(candidate).queryByText('a.md') !== null)!;
-    await user.click(within(chip).getByTestId('CancelIcon'));
+    await user.click(within(chip).getByTestId('wiki-chat-attach-chip-remove'));
 
     expect(onChange).toHaveBeenCalledWith([{ name: 'b.txt', content: 'y' }]);
   });

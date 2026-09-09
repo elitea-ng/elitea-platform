@@ -26,9 +26,31 @@ describe('WikiChatSessions', () => {
         onResume={vi.fn()}
         onDelete={vi.fn()}
         disabled={false}
+        onOpen={vi.fn()}
       />,
     );
     expect(screen.queryByTestId('wiki-chat-sessions-button')).toBeNull();
+  });
+
+  // #882: nothing else re-asks the listing after an ordinary send, only
+  // Clear/Resume/Delete — so the trigger itself is the last chance to catch
+  // a session the reader started and never told anything else about.
+  it('re-asks the listing every time the trigger opens the menu', async () => {
+    const user = userEvent.setup();
+    const onOpen = vi.fn();
+    renderWithTheme(
+      <WikiChatSessions
+        conversations={[conversation()]}
+        currentConversationId="1"
+        onResume={vi.fn()}
+        onDelete={vi.fn()}
+        disabled={false}
+        onOpen={onOpen}
+      />,
+    );
+
+    await user.click(screen.getByTestId('wiki-chat-sessions-button'));
+    expect(onOpen).toHaveBeenCalledTimes(1);
   });
 
   it('lists every stored conversation in the menu', async () => {
@@ -40,6 +62,7 @@ describe('WikiChatSessions', () => {
         onResume={vi.fn()}
         onDelete={vi.fn()}
         disabled={false}
+        onOpen={vi.fn()}
       />,
     );
 
@@ -61,6 +84,7 @@ describe('WikiChatSessions', () => {
         onResume={onResume}
         onDelete={vi.fn()}
         disabled={false}
+        onOpen={vi.fn()}
       />,
     );
 
@@ -83,6 +107,7 @@ describe('WikiChatSessions', () => {
         onResume={vi.fn()}
         onDelete={vi.fn()}
         disabled={false}
+        onOpen={vi.fn()}
       />,
     );
 
@@ -101,6 +126,7 @@ describe('WikiChatSessions', () => {
         onResume={onResume}
         onDelete={onDelete}
         disabled={false}
+        onOpen={vi.fn()}
       />,
     );
 
@@ -129,6 +155,7 @@ describe('WikiChatSessions', () => {
         onResume={vi.fn()}
         onDelete={onDelete}
         disabled={false}
+        onOpen={vi.fn()}
       />,
     );
 
@@ -153,6 +180,7 @@ describe('WikiChatSessions', () => {
         onResume={vi.fn()}
         onDelete={vi.fn()}
         disabled
+        onOpen={vi.fn()}
       />,
     );
     expect(screen.getByTestId('wiki-chat-sessions-button')).toBeDisabled();

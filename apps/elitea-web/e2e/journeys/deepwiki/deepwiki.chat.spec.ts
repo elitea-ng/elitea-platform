@@ -408,7 +408,12 @@ test.describe('DeepWiki chat file attachments', () => {
       buffer: Buffer.from('this must never reach the provider'),
     });
     await expect(drawer.getByTestId('wiki-chat-attach-chips')).toContainText('scratch.txt');
-    await drawer.getByTestId('wiki-chat-attach-chips').getByTestId('CancelIcon').click();
+    // NOT `getByTestId('CancelIcon')`: that's MUI's own auto-testid on the
+    // Chip's DEFAULT delete icon (`createSvgIcon.js`), gated on
+    // `NODE_ENV !== 'production'` — absent from the production build this
+    // stack serves. `WikiFileAttach` now gives the delete icon its own
+    // stable testid for exactly this reason.
+    await drawer.getByTestId('wiki-chat-attach-chips').getByTestId('wiki-chat-attach-chip-remove').click();
     await expect(drawer.getByTestId('wiki-chat-attach-chips')).toHaveCount(0);
 
     const question = 'A question with nothing attached';

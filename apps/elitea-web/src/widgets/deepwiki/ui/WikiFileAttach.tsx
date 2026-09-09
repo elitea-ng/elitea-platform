@@ -21,6 +21,7 @@ import { memo, useCallback, useRef, useState, type ChangeEvent } from 'react';
 import Alert from '@mui/material/Alert';
 import AttachFileIcon from '@mui/icons-material/AttachFile';
 import Badge from '@mui/material/Badge';
+import CancelIcon from '@mui/icons-material/Cancel';
 import Chip from '@mui/material/Chip';
 import IconButton from '@mui/material/IconButton';
 import Snackbar from '@mui/material/Snackbar';
@@ -146,6 +147,14 @@ export const WikiFileAttach = memo(function WikiFileAttach({
                       remove(attachment.name);
                     }
               }
+              // A stable, own testid — NOT MUI's default delete icon, whose
+              // auto `data-testid="CancelIcon"` (`createSvgIcon.js`) is
+              // `process.env.NODE_ENV !== 'production'` ONLY. The e2e stacks
+              // this drawer runs in serve a PRODUCTION build, where that
+              // condition is false and the attribute is never rendered at
+              // all — a chip a real reader can still click, that no
+              // `getByTestId('CancelIcon')` locator can ever find there.
+              deleteIcon={<CancelIcon fontSize="small" data-testid="wiki-chat-attach-chip-remove" />}
             />
           ))}
         </Stack>

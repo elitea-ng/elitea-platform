@@ -709,7 +709,7 @@ describe('the drawer’s file attachments (#873)', () => {
       new File(['x'], 'notes.md', { type: 'text/plain' }),
     );
     await screen.findByText('notes.md');
-    await user.click(within(screen.getByTestId('wiki-chat-attach-chip')).getByTestId('CancelIcon'));
+    await user.click(within(screen.getByTestId('wiki-chat-attach-chip')).getByTestId('wiki-chat-attach-chip-remove'));
     expect(screen.queryByText('notes.md')).toBeNull();
 
     await user.type(screen.getByPlaceholderText('Ask about this repository'), 'a question');
