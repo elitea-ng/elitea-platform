@@ -212,3 +212,54 @@ The editor shows the skill and reports one attached skill.
 The model settings remain empty in this test agent's database version.
 The editor displays its model fallback, which does not prove that model configuration is persisted.
 Executing this saved agent and testing model discovery remain open.
+
+### Saved agent runtime proof
+
+Chat 542 discovers four shared chat models with `include_shared=true`.
+The separate settings tool persists the selected Haiku model name and creates backup version 23.
+The editor's Chat button opens conversation 543 with the saved agent attached.
+The Rust run calls `load_skill` for `skill:5:version:5`.
+The tool returns the stored skill instructions and an authoritative revision.
+The agent returns one computer joke and its explanation.
+This verifies the binding during execution, beyond the database and editor checks.
+Credential and toolkit creation checks remain open.
+
+### Discovery result size failure
+
+Chat 542 cannot consume the complete toolkit catalog in one tool result.
+The MCP response contains approximately 743 KB of schema data.
+A subsequent discovery event fails with `agent_event.resource_exhausted`.
+Rust currently limits projected tool values to 40 KB and encoded node events to 60 KB.
+These byte limits differ from model output-token limits.
+
+The internal discovery tools now list type names before requesting one exact type schema.
+Go applies the existing catalog policies before this projection.
+The regular REST catalog response stays unchanged.
+Selected schemas retain their original contents, including nested definitions.
+Focused tests verify schema equality, complete type enumeration, and blocked-type exclusion.
+This change does not solve general large tool-result persistence and retrieval.
+That separate transport requirement remains open.
+
+### Discovery deployment and remaining transport failure
+
+The discovery image digest is `sha256:580c0c3e1b36162a81421a1b5bf8607c0c1f870fdefd71b104021f63e9370e1b`.
+The image tag is `elitea-main:gate3-discovery-20260909`.
+Thirty-five targeted internal configuration and toolkit tests pass without skips in disposable databases.
+Configuration type discovery now returns approximately 2.8 KB over MCP.
+Toolkit type discovery returns approximately 18.6 KB.
+The exact GitHub toolkit schema still returns approximately 42.4 KB over MCP.
+Its JSON text contains approximately 37.5 KB before envelope escaping.
+
+Fresh chat 544 retrieves the GitHub credential schema without user-supplied type parameters.
+The selected GitHub toolkit result still fails Rust event projection because JSON envelope escaping exceeds the tool-value bound.
+Therefore schema discovery is not yet accepted through chat.
+Chat 542 also receives a model-gateway rejection after its earlier interrupted tool-result turn.
+The provider rejection reason is not yet established.
+Do not treat a fresh chat as evidence that continuation after failure works.
+
+General tool results need a separate durable representation or bounded transport chunks.
+The Rust MCP adapter currently admits results up to 512 KB, while tool-event projection allows only 40 KB.
+Go and Rust node-event codecs and browser replay enforce approximately 64 KB frame bounds.
+Changing only the model output-token setting or Rust value constant cannot resolve all these limits.
+Reuse the existing claim-fenced output artifact path when implementing larger result delivery.
+Preserve complete result retrieval and separate bounded previews from the stored result.
