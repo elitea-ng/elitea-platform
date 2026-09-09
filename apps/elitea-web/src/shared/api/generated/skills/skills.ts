@@ -4887,9 +4887,9 @@ export const getGetSkillUrl = (projectId: string, skillId: number) => {
 };
 
 /**
- * NOTE(#874): internal/api/v2/skills/handler.go Get. `instructions`/
+ * NOTE(issue 874): internal/api/v2/skills/handler.go Get. `instructions`/
  * `tags`/`version_details` answer `base`'s content; `versions` carries
- * EVERY version of the skill (not just `base`, as before #874).
+ * EVERY version of the skill (not just `base`, as before issue 874).
  * @summary Retrieve a skill (its `base` version, plus every version)
  */
 export const getSkill = async (
@@ -5087,7 +5087,7 @@ export const getUpdateSkillUrl = (projectId: string, skillId: number) => {
 };
 
 /**
- * NOTE(#874): internal/api/v2/skills/handler.go Update, unversioned
+ * NOTE(issue 874): internal/api/v2/skills/handler.go Update, unversioned
  * branch (repo.Update). Always writes `base` — see updateSkillVersion
  * for editing a NAMED version.
  * @summary Update the skill's name/description and `base` version's content
@@ -5340,8 +5340,8 @@ export const getCreateSkillVersionUrl = (
 };
 
 /**
- * NOTE(#874): internal/api/v2/skills/handler.go CreateVersion. Before
- * #874 this exact URL was bound to createSkill, which ignores
+ * NOTE(issue 874): internal/api/v2/skills/handler.go CreateVersion. Before
+ * issue 874 this exact URL was bound to createSkill, which ignores
  * {skill_id} and creates an unrelated new skill — every "New version"
  * click quietly left the target skill's version set unchanged and
  * leaked a stray skill into the project's list.
@@ -5614,7 +5614,7 @@ export const getDeleteSkillUrl = (projectId: string, skillId: number) => {
 };
 
 /**
- * NOTE(#874): internal/api/v2/skills/handler.go Delete, unversioned
+ * NOTE(issue 874): internal/api/v2/skills/handler.go Delete, unversioned
  * branch. Refuses (400) while any version is published — see
  * skillpublish's unpublish operations.
  * @summary Delete the whole skill
@@ -6089,7 +6089,7 @@ export const getGetSkillVersionUrl = (
 };
 
 /**
- * NOTE(#874): internal/api/v2/skills/handler.go Get, versioned branch
+ * NOTE(issue 874): internal/api/v2/skills/handler.go Get, versioned branch
  * (repo.GetVersion). `instructions`/`tags`/`version_details` answer
  * THIS version's content; `versions` still carries every version — the
  * round trip the version selector and the client-side compare view
@@ -6353,7 +6353,7 @@ export const getUpdateSkillVersionUrl = (
 };
 
 /**
- * NOTE(#874): internal/api/v2/skills/handler.go Update, versioned
+ * NOTE(issue 874): internal/api/v2/skills/handler.go Update, versioned
  * branch (repo.UpdateVersion). name/description in the body still
  * update the SKILL row — those columns are shared across every
  * version. Refuses (409) a published version.
@@ -6648,7 +6648,7 @@ export const getDeleteSkillVersionUrl = (
 };
 
 /**
- * NOTE(#874): internal/api/v2/skills/handler.go Delete, versioned
+ * NOTE(issue 874): internal/api/v2/skills/handler.go Delete, versioned
  * branch (repo.DeleteVersion). Refuses (400) `base` and the current
  * default version; refuses (409) a published version.
  * @summary Delete one NAMED version
@@ -6909,7 +6909,7 @@ export const getRestoreSkillVersionUrl = (
 };
 
 /**
- * NOTE(#874): internal/api/v2/skills/handler.go RestoreVersion. The
+ * NOTE(issue 874): internal/api/v2/skills/handler.go RestoreVersion. The
  * capability the issue's title names: skills had no rollback at all
  * before this route. Unlike agents' "Set as default" (which repoints a
  * pointer and leaves every version's content untouched), skills have
@@ -7166,9 +7166,9 @@ export const getSetDefaultVersionUrl = (projectId: string, skillId: number) => {
 };
 
 /**
- * NOTE(#874): internal/api/v2/skills/handler.go SetDefaultVersion.
+ * NOTE(issue 874): internal/api/v2/skills/handler.go SetDefaultVersion.
  * Writes skills.meta.default_version_id — the version a NEW attachment
- * proposes. Before #874 this URL was bound to the generic skill-update
+ * proposes. Before issue 874 this URL was bound to the generic skill-update
  * handler, which read no `version_id` key and wrote the skill's own
  * name to "" on every call (see setSkillRelation's history on the
  * `patch` /skill/.../{skill_id} operation for the sibling defect the
@@ -7651,7 +7651,7 @@ export const getExportSkillUrl = (projectId: string, skillId: number) => {
 };
 
 /**
- * NOTE(#874): internal/api/v2/skills/handler.go Export, unversioned
+ * NOTE(issue 874): internal/api/v2/skills/handler.go Export, unversioned
  * branch. `text/markdown`, Content-Disposition names the file.
  * @summary Export `base` as a Markdown file
  */
@@ -7856,8 +7856,8 @@ export const getExportSkillVersionUrl = (
 };
 
 /**
- * NOTE(#874): internal/api/v2/skills/handler.go Export, versioned
- * branch. Before #874 this route accepted {version_id} but never read
+ * NOTE(issue 874): internal/api/v2/skills/handler.go Export, versioned
+ * branch. Before issue 874 this route accepted {version_id} but never read
  * it — every export answered `base`'s content regardless of the
  * version requested.
  * @summary Export one NAMED version as a Markdown file

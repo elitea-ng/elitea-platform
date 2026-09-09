@@ -145,4 +145,122 @@ describe('MessageInput attach control', () => {
 
     expect(screen.getByText('dropped.txt')).toBeInTheDocument();
   });
+
+  it('attaching a second batch validates against the files already held, not just the incoming ones', async () => {
+    const user = userEvent.setup();
+    setup();
+    const fileA = new File(['hello'], 'first.txt', { type: 'text/plain' });
+    const fileB = new File(['world'], 'second.txt', { type: 'text/plain' });
+
+    await user.upload(fileInput(), fileA);
+    expect(screen.getByText('first.txt')).toBeInTheDocument();
+
+    await user.upload(fileInput(), fileB);
+
+    expect(screen.getByText('first.txt')).toBeInTheDocument();
+    expect(screen.getByText('second.txt')).toBeInTheDocument();
+  });
+
+  it('ignores a file-input change that carries no files (a cancelled picker)', () => {
+    setup();
+    expect(screen.queryByText(/\.txt/)).not.toBeInTheDocument();
+
+    fireEvent.change(fileInput(), { target: { files: null } });
+
+    expect(screen.queryByText(/\.txt/)).not.toBeInTheDocument();
+  });
+
+  it('ignores a paste event with no clipboard items, falling through to normal text paste', () => {
+    setup();
+    const textarea = screen.getByPlaceholderText('Ask a question');
+
+    fireEvent.paste(textarea, { clipboardData: { items: undefined } });
+
+    expect(screen.queryByRole('button', { name: /^Remove/ })).not.toBeInTheDocument();
+  });
+
+  it('does nothing on Enter while the message is blank — content stays required', async () => {
+    const user = userEvent.setup();
+    const { onSend } = setup({ text: '' });
+    const textarea = screen.getByPlaceholderText('Ask a question');
+
+    textarea.focus();
+    await user.keyboard('{Enter}');
+
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it('shows the drop overlay while dragging over, and hides it once the pointer truly leaves', () => {
+    setup();
+    const dropZone = screen.getByPlaceholderText('Ask a question').closest('.elitea-assistant-input-area');
+    if (!dropZone) throw new Error('no drop zone rendered');
+
+    fireEvent.dragOver(dropZone, {});
+    expect(screen.getByText('Drop files here')).toBeInTheDocument();
+
+    // A second dragover while already flagged is a no-op re-set.
+    fireEvent.dragOver(dropZone, {});
+    expect(screen.getByText('Drop files here')).toBeInTheDocument();
+
+    // relatedTarget still inside the zone — dragleave is ignored. jsdom has
+    // no real DragEvent, so `fireEvent.dragLeave` cannot carry a genuine
+    // Node through `relatedTarget` (it silently drops the property); a
+    // manually-dispatched event with the property defined directly is the
+    // only way to exercise the "still inside" branch.
+    const insideLeave = new Event('dragleave', { bubbles: true, cancelable: false });
+    Object.defineProperty(insideLeave, 'relatedTarget', { value: dropZone });
+    fireEvent(dropZone, insideLeave);
+    expect(screen.getByText('Drop files here')).toBeInTheDocument();
+
+    // relatedTarget outside the zone — the overlay clears.
+    fireEvent.dragLeave(dropZone, {});
+    expect(screen.queryByText('Drop files here')).not.toBeInTheDocument();
+  });
+
+  it('ignores drag-over while disabled — no overlay, no state flip', () => {
+    setup({ disabled: true });
+    const dropZone = screen.getByPlaceholderText('Ask a question').closest('.elitea-assistant-input-area');
+    if (!dropZone) throw new Error('no drop zone rendered');
+
+    fireEvent.dragOver(dropZone, {});
+
+    expect(screen.queryByText('Drop files here')).not.toBeInTheDocument();
+  });
+
+  it('threads per-file status updates from onSend through to the attachment chips', async () => {
+    const user = userEvent.setup();
+    const fileA = new File(['hello'], 'notes.txt', { type: 'text/plain' });
+    const fileB = new File(['world'], 'diagram.png', { type: 'image/png' });
+    let reportStatus: ((file: File, status: 'pending' | 'uploading' | 'done' | 'error') => void) | undefined;
+    let resolveSend: () => void = () => {};
+    const onSend = vi.fn(
+      (_text: string, _files?: readonly File[], onFileStatus?: typeof reportStatus) =>
+        new Promise<void>((resolve) => {
+          reportStatus = onFileStatus;
+          resolveSend = resolve;
+        }),
+    );
+    render(
+      <MessageInput placeholder="Ask a question" text="What is this?" onTextChange={vi.fn()} onSend={onSend} />,
+    );
+    await user.upload(fileInput(), [fileA, fileB]);
+
+    await user.click(screen.getByRole('button', { name: 'Send message' }));
+    await waitFor(() => expect(reportStatus).toBeDefined());
+
+    // Only fileA's entry updates; fileB's chip is left as-is (the `entry.file
+    // === file ? … : entry` map touches both arms).
+    reportStatus?.(fileA, 'error');
+
+    await waitFor(() => {
+      const chip = screen.getByText('notes.txt').closest('.elitea-assistant-file-chip');
+      expect(chip).toHaveClass('elitea-assistant-file-chip--error');
+    });
+    expect(screen.getByText('diagram.png').closest('.elitea-assistant-file-chip')).not.toHaveClass(
+      'elitea-assistant-file-chip--error',
+    );
+
+    resolveSend();
+    await waitFor(() => expect(screen.queryByText('notes.txt')).not.toBeInTheDocument());
+  });
 });

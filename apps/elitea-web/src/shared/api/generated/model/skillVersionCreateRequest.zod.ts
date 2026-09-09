@@ -63,7 +63,7 @@ export const SkillVersionCreateRequest = zod
       ),
   })
   .describe(
-    'createSkillVersion\'s body (internal\/api\/v2\/skills\/handler.go createVersionRequest) — \"Save As Version\". Posted to the SAME path as getSkill\/updateSkill\/deleteSkill (skill_id in the URL, no version_id): before #874 this exact URL was bound to createSkill, which ignored skill_id and created an unrelated new skill.\n',
+    'createSkillVersion\'s body (internal\/api\/v2\/skills\/handler.go createVersionRequest) — \"Save As Version\". Posted to the SAME path as getSkill\/updateSkill\/deleteSkill (skill_id in the URL, no version_id): before issue 874 this exact URL was bound to createSkill, which ignored skill_id and created an unrelated new skill.\n',
   );
 
 export type SkillVersionCreateRequest = zod.input<

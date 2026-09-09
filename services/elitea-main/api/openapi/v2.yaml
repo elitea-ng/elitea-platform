@@ -1490,6 +1490,15 @@ components:
             Carries `single_participant` (the entity this conversation was
             filtered by, when entity_name/entity_meta_id were sent) among
             other conversation-level flags (`is_hidden`, etc).
+          x-elitea-passthrough: >-
+            NOTE(W2): internal/api/v2/conversations/handler.go:542 copies the
+            `chat_conversations.meta` jsonb column straight from the DB row
+            into the response with no field-level shape check — List
+            unmarshals whatever the column holds and re-serializes it
+            verbatim. Callers write into this column through several
+            unrelated code paths (single_participant filters, is_hidden,
+            steps_limit, internal_tools), so the object's key set is not
+            fixed by this endpoint.
 
     ConversationListing:
       type: object
@@ -5905,7 +5914,7 @@ components:
           description: >-
             "base" is the always-present working copy every skill has had
             since creation, and is reserved — it cannot be deleted or reused
-            as a NAMED version's name. Since #874 a skill may carry
+            as a NAMED version's name. Since issue 874 a skill may carry
             additional named versions alongside it, created by
             createSkillVersion.
         instructions: { type: string }
@@ -5935,7 +5944,7 @@ components:
       description: >
         A skill's content: the instructions an agent follows plus its topical
         tags. Persisted in skill_versions/skill_version_tag_association
-        (repos/skills.go). Since #874 one skill_versions row is no longer the
+        (repos/skills.go). Since issue 874 one skill_versions row is no longer the
         whole story — see Skill.versions.
 
     Skill:
@@ -5985,8 +5994,8 @@ components:
           type: array
           items: { $ref: '#/components/schemas/SkillVersion' }
           description: >-
-            EVERY version of the skill (#874), `base` first — not just
-            `base`, as before #874. getSkill/getSkillVersion both carry the
+            EVERY version of the skill (issue 874), `base` first — not just
+            `base`, as before issue 874. getSkill/getSkillVersion both carry the
             full set; there is no separate list-versions endpoint.
         version_details:
           allOf: [{ $ref: '#/components/schemas/SkillVersion' }]
@@ -5994,7 +6003,7 @@ components:
         default_version_id:
           type: string
           description: >-
-            skills.meta.default_version_id (#874), mirroring
+            skills.meta.default_version_id (issue 874), mirroring
             applications.meta.default_version_id. The version a NEW
             attachment proposes. Does NOT change which version an EXISTING
             agent attachment resolves at chat time — that stays keyed off
@@ -6141,7 +6150,7 @@ components:
         SkillVersionCreateRequest for the create-a-NAMED-version shape,
         which additionally requires `name` and accepts `source_version_id`.
 
-    # ---- Skill versions (#874) --------------------------------------------
+    # ---- Skill versions (issue 874) --------------------------------------------
 
     SkillVersionCreateRequest:
       type: object
@@ -6169,7 +6178,7 @@ components:
         createSkillVersion's body (internal/api/v2/skills/handler.go
         createVersionRequest) — "Save As Version". Posted to the SAME path
         as getSkill/updateSkill/deleteSkill (skill_id in the URL, no
-        version_id): before #874 this exact URL was bound to createSkill,
+        version_id): before issue 874 this exact URL was bound to createSkill,
         which ignored skill_id and created an unrelated new skill.
 
     SkillSetDefaultVersionRequest:
@@ -6177,10 +6186,11 @@ components:
       required: [version_id]
       properties:
         version_id:
+          oneOf: [{ type: string }, { type: integer }]
           description: The version to mark default. Numeric or string; must name a version of this skill.
       description: >
         setDefaultVersion's body (internal/api/v2/skills/handler.go
-        SetDefaultVersion). Before #874 this URL was bound to the generic
+        SetDefaultVersion). Before issue 874 this URL was bound to the generic
         skill-update handler, which read no `version_id` key and wrote the
         skill's own name to "" on every call.
 
@@ -8818,6 +8828,12 @@ components:
           description: Empty on a successful delivery.
         payload:
           description: The exact JSON body that was (or will be, on redeliver) signed and POSTed.
+          x-elitea-passthrough: >-
+            NOTE(W2): internal/api/webhook/dispatcher.go:117-121 stores
+            Payload as json.RawMessage — the exact bytes that were (or will
+            be) POSTed to the destination, verbatim. Its shape is whichever
+            event the delivery carried (conversation.created, etc.), not one
+            fixed schema, so it is not typed here.
         redelivery_of:
           type: string
           description: The id of the delivery this one resent, empty for an original, automatic delivery.
@@ -17103,9 +17119,9 @@ paths:
       operationId: getSkill
       summary: Retrieve a skill (its `base` version, plus every version)
       description: |
-        NOTE(#874): internal/api/v2/skills/handler.go Get. `instructions`/
+        NOTE(issue 874): internal/api/v2/skills/handler.go Get. `instructions`/
         `tags`/`version_details` answer `base`'s content; `versions` carries
-        EVERY version of the skill (not just `base`, as before #874).
+        EVERY version of the skill (not just `base`, as before issue 874).
       tags: [skills]
       responses:
         '200':
@@ -17122,7 +17138,7 @@ paths:
       operationId: updateSkill
       summary: Update the skill's name/description and `base` version's content
       description: |
-        NOTE(#874): internal/api/v2/skills/handler.go Update, unversioned
+        NOTE(issue 874): internal/api/v2/skills/handler.go Update, unversioned
         branch (repo.Update). Always writes `base` — see updateSkillVersion
         for editing a NAMED version.
       tags: [skills]
@@ -17148,8 +17164,8 @@ paths:
       operationId: createSkillVersion
       summary: Save the current content as a new NAMED version ("Save As Version")
       description: |
-        NOTE(#874): internal/api/v2/skills/handler.go CreateVersion. Before
-        #874 this exact URL was bound to createSkill, which ignores
+        NOTE(issue 874): internal/api/v2/skills/handler.go CreateVersion. Before
+        issue 874 this exact URL was bound to createSkill, which ignores
         {skill_id} and creates an unrelated new skill — every "New version"
         click quietly left the target skill's version set unchanged and
         leaked a stray skill into the project's list.
@@ -17177,7 +17193,7 @@ paths:
       operationId: deleteSkill
       summary: Delete the whole skill
       description: |
-        NOTE(#874): internal/api/v2/skills/handler.go Delete, unversioned
+        NOTE(issue 874): internal/api/v2/skills/handler.go Delete, unversioned
         branch. Refuses (400) while any version is published — see
         skillpublish's unpublish operations.
       tags: [skills]
@@ -17258,7 +17274,7 @@ paths:
       operationId: getSkillVersion
       summary: Retrieve one NAMED version's content
       description: |
-        NOTE(#874): internal/api/v2/skills/handler.go Get, versioned branch
+        NOTE(issue 874): internal/api/v2/skills/handler.go Get, versioned branch
         (repo.GetVersion). `instructions`/`tags`/`version_details` answer
         THIS version's content; `versions` still carries every version — the
         round trip the version selector and the client-side compare view
@@ -17280,7 +17296,7 @@ paths:
       operationId: updateSkillVersion
       summary: Edit one NAMED version's instructions/tags
       description: |
-        NOTE(#874): internal/api/v2/skills/handler.go Update, versioned
+        NOTE(issue 874): internal/api/v2/skills/handler.go Update, versioned
         branch (repo.UpdateVersion). name/description in the body still
         update the SKILL row — those columns are shared across every
         version. Refuses (409) a published version.
@@ -17308,7 +17324,7 @@ paths:
       operationId: deleteSkillVersion
       summary: Delete one NAMED version
       description: |
-        NOTE(#874): internal/api/v2/skills/handler.go Delete, versioned
+        NOTE(issue 874): internal/api/v2/skills/handler.go Delete, versioned
         branch (repo.DeleteVersion). Refuses (400) `base` and the current
         default version; refuses (409) a published version.
       tags: [skills]
@@ -17337,7 +17353,7 @@ paths:
       operationId: restoreSkillVersion
       summary: Rollback — copy a NAMED version's content back onto `base`
       description: |
-        NOTE(#874): internal/api/v2/skills/handler.go RestoreVersion. The
+        NOTE(issue 874): internal/api/v2/skills/handler.go RestoreVersion. The
         capability the issue's title names: skills had no rollback at all
         before this route. Unlike agents' "Set as default" (which repoints a
         pointer and leaves every version's content untouched), skills have
@@ -17371,9 +17387,9 @@ paths:
       operationId: setDefaultVersion
       summary: Mark a version as the skill's default
       description: |
-        NOTE(#874): internal/api/v2/skills/handler.go SetDefaultVersion.
+        NOTE(issue 874): internal/api/v2/skills/handler.go SetDefaultVersion.
         Writes skills.meta.default_version_id — the version a NEW attachment
-        proposes. Before #874 this URL was bound to the generic skill-update
+        proposes. Before issue 874 this URL was bound to the generic skill-update
         handler, which read no `version_id` key and wrote the skill's own
         name to "" on every call (see setSkillRelation's history on the
         `patch` /skill/.../{skill_id} operation for the sibling defect the
@@ -17457,7 +17473,7 @@ paths:
       operationId: exportSkill
       summary: Export `base` as a Markdown file
       description: |
-        NOTE(#874): internal/api/v2/skills/handler.go Export, unversioned
+        NOTE(issue 874): internal/api/v2/skills/handler.go Export, unversioned
         branch. `text/markdown`, Content-Disposition names the file.
       tags: [skills]
       responses:
@@ -17486,8 +17502,8 @@ paths:
       operationId: exportSkillVersion
       summary: Export one NAMED version as a Markdown file
       description: |
-        NOTE(#874): internal/api/v2/skills/handler.go Export, versioned
-        branch. Before #874 this route accepted {version_id} but never read
+        NOTE(issue 874): internal/api/v2/skills/handler.go Export, versioned
+        branch. Before issue 874 this route accepted {version_id} but never read
         it — every export answered `base`'s content regardless of the
         version requested.
       tags: [skills]

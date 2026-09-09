@@ -47,7 +47,7 @@ export const SkillVersion = zod
     name: zod
       .string()
       .describe(
-        '\"base\" is the always-present working copy every skill has had since creation, and is reserved — it cannot be deleted or reused as a NAMED version\'s name. Since #874 a skill may carry additional named versions alongside it, created by createSkillVersion.',
+        '\"base\" is the always-present working copy every skill has had since creation, and is reserved — it cannot be deleted or reused as a NAMED version\'s name. Since issue 874 a skill may carry additional named versions alongside it, created by createSkillVersion.',
       ),
     instructions: zod.string(),
     tags: zod.array(zod.string()),
@@ -72,7 +72,7 @@ export const SkillVersion = zod
       ),
   })
   .describe(
-    "A skill's content: the instructions an agent follows plus its topical tags. Persisted in skill_versions\/skill_version_tag_association (repos\/skills.go). Since #874 one skill_versions row is no longer the whole story — see Skill.versions.\n",
+    "A skill's content: the instructions an agent follows plus its topical tags. Persisted in skill_versions\/skill_version_tag_association (repos\/skills.go). Since issue 874 one skill_versions row is no longer the whole story — see Skill.versions.\n",
   );
 
 export type SkillVersion = zod.input<typeof SkillVersion>;

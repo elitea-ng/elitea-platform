@@ -50,7 +50,7 @@ export const SkillSetDefaultVersionRequest = zod
       ),
   })
   .describe(
-    "setDefaultVersion's body (internal\/api\/v2\/skills\/handler.go SetDefaultVersion). Before #874 this URL was bound to the generic skill-update handler, which read no `version_id` key and wrote the skill's own name to \"\" on every call.\n",
+    "setDefaultVersion's body (internal\/api\/v2\/skills\/handler.go SetDefaultVersion). Before issue 874 this URL was bound to the generic skill-update handler, which read no `version_id` key and wrote the skill's own name to \"\" on every call.\n",
   );
 
 export type SkillSetDefaultVersionRequest = zod.input<

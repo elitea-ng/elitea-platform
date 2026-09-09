@@ -66,6 +66,7 @@
   "/settings/tokens",
   "/settings/usage",
   "/settings/users",
+  "/settings/webhooks",
   "/shared/chat/:token",
   "/skills",
   "/skills/:tab",

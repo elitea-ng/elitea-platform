@@ -67,7 +67,7 @@ export const Skill = zod
       .array(SkillVersion)
       .optional()
       .describe(
-        "EVERY version of the skill (#874), `base` first — not just `base`, as before #874. getSkill\/getSkillVersion both carry the full set; there is no separate list-versions endpoint.",
+        "EVERY version of the skill (issue 874), `base` first — not just `base`, as before issue 874. getSkill\/getSkillVersion both carry the full set; there is no separate list-versions endpoint.",
       ),
     version_details: SkillVersion.optional().describe(
       "The CURRENT version (see `instructions`), not always versions[0].",
@@ -76,7 +76,7 @@ export const Skill = zod
       .string()
       .optional()
       .describe(
-        "skills.meta.default_version_id (#874), mirroring applications.meta.default_version_id. The version a NEW attachment proposes. Does NOT change which version an EXISTING agent attachment resolves at chat time — that stays keyed off entity_skill_mapping.skill_version_id, fixed at attach time.",
+        "skills.meta.default_version_id (issue 874), mirroring applications.meta.default_version_id. The version a NEW attachment proposes. Does NOT change which version an EXISTING agent attachment resolves at chat time — that stays keyed off entity_skill_mapping.skill_version_id, fixed at attach time.",
       ),
     created_at: zod.iso.datetime({ offset: true }),
     updated_at: zod.iso.datetime({ offset: true }),
