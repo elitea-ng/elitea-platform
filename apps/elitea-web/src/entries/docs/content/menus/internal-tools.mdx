@@ -26,6 +26,10 @@ Every internal tool on this page runs only when your deployment's worker is the 
 
 Generates images from a text prompt and shows them inline, using an image-generation model configured in **AI Providers**. Generated images are saved automatically to the project's `attachments` bucket, where you can also download or delete them later from [Artifacts](/menus/artifacts).
 
+<Tip>
+This toggle is a chat-conversation setting. To let an agent or pipeline generate or edit images as a step in its own logic — not just inline in chat — attach the [ImageGen toolkit](/integrations/toolkits/imagegen_toolkit) instead.
+</Tip>
+
 ## Data analysis
 
 Runs pandas-style analysis over a file you upload to the conversation — summaries, filtering, aggregation, and chart generation — driven entirely by natural-language requests. Upload the file first, then ask for the analysis; generated charts and exported files are saved back to the conversation.
