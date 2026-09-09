@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 
+import { t } from '@/shared/i18n';
 import { ToolTypes, toolkitTypeMenuEntries } from '@/entities/toolkit';
 import type { ToolkitTypeSchemaMap } from '@/entities/toolkit';
 
@@ -63,6 +64,9 @@ interface ToolMenuItem {
    */
   readonly category: string;
   readonly onClick: () => void;
+  /** The configured worker cannot build this type (#865) — the tile renders greyed, with `disabledReason` as its tooltip (the same field name `shared/ui/CategoryItemCard`'s `CategoryItem` declares, so no renaming step sits between this hook and the tile it feeds), instead of being omitted the way it was before #865/#866. */
+  readonly disabled?: boolean;
+  readonly disabledReason?: string;
 }
 
 /** `'code repositories'` -> `'Code Repositories'` (baseline: same word-wise Title Case). */
@@ -137,13 +141,32 @@ export function useToolMenuItems({ onAddTool, isMCP = false, isApplication = fal
   );
 
   const toolMenuItems = useMemo<readonly ToolMenuItem[]>(() => {
-    const entries = toolkitTypeMenuEntries(toolSchemas, { isApplication });
-    const items: ToolMenuItem[] = entries.map(({ key, label }) => ({
+    // includeHidden (#865, #866): this hook backs the TYPE PICKER GRID
+    // specifically (`ToolkitTypeSelector.tsx`) — the one surface named in
+    // #865/#866 as needing hidden types shown greyed with a reason instead
+    // of silently omitted. `features/agents/api/useToolMenuItems.ts`'s own
+    // "add tool" dropdown is a DIFFERENT caller of the same entity function
+    // and intentionally does NOT opt in, so it keeps offering only types
+    // that actually work — see that function's own doc comment.
+    const entries = toolkitTypeMenuEntries(toolSchemas, { isApplication, includeHidden: true });
+    const items: ToolMenuItem[] = entries.map(({ key, label, hidden, unavailableReason }) => ({
       key,
       label,
       iconKind: getToolkitIcon({ type: key }, toolSchemas, isMCP).iconKind,
       category: toolkitCategory(key, toolSchemas, isMCP),
-      onClick: onAddTool ? onAddTool(key, toolSchemas) : () => {},
+      // A hidden tile's click is a no-op even before CategoryItemCard's own
+      // `disabled` prop blocks the pointer event — belt and suspenders, since
+      // `onAddTool` fired here would still hand the caller an unusable type.
+      onClick: hidden ? () => {} : onAddTool ? onAddTool(key, toolSchemas) : () => {},
+      ...(hidden
+        ? {
+            disabled: true,
+            disabledReason:
+              unavailableReason !== undefined && unavailableReason !== ''
+                ? unavailableReason
+                : t('features.toolkits.toolMenu.notAvailableOnWorker', 'Not available on the configured worker'),
+          }
+        : {}),
     }));
 
     // Don't include "Custom" for applications (baseline: `useToolMenuItems.jsx:88-99`).

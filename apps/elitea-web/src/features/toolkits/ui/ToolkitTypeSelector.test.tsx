@@ -285,8 +285,24 @@ describe('ToolkitTypeSelector', () => {
       // Twice: once as a filter chip, once as a section heading.
       expect(screen.getAllByText(heading).length).toBeGreaterThanOrEqual(2);
     }
-    // Withheld by the worker capability projection, so no tile at all.
-    expect(screen.queryByRole('button', { name: /^Slack$/ })).not.toBeInTheDocument();
+    // Slack is NOT withheld in this fixture (#869 made the SDK dependency
+    // importable) — a real, enabled tile like any other. The previous
+    // version of this assertion claimed the opposite and was already stale
+    // by the time this test was touched for #865/#866; re-verified directly
+    // against the fixture rather than carried forward.
+    expect(screen.getByRole('button', { name: /^Slack$/ })).toBeInTheDocument();
+  });
+
+  // #865/#866: a type the configured worker genuinely cannot build (keycloak
+  // is hidden in this fixture — the only member of its own "Authentication"
+  // heading) renders as a disabled tile with a reason, not omitted.
+  it('renders a worker-hidden type as a disabled tile with its reason, not omitted', async () => {
+    server.use(http.get('/api/v2/elitea_core/toolkits/prompt_lib/:projectId', () => HttpResponse.json(servedCatalogue)));
+    renderSelector();
+
+    const tile = await screen.findByRole('button', { name: /^Keycloak$/ });
+    expect(tile).toBeInTheDocument();
+    expect(tile).toBeDisabled();
   });
 
   /* Added with the MCP / provider-hub projection unit. */

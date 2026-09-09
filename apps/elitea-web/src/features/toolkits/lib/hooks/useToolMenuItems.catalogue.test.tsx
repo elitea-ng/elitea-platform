@@ -84,8 +84,20 @@ describe('useToolMenuItems over the served catalogue', () => {
       byCategory.set(item.category, [...(byCategory.get(item.category) ?? []), item.key]);
     }
 
+    // #865/#866: this hook now opts INTO includeHidden (the type picker
+    // grid greys a hidden tile with a reason instead of omitting it), so the
+    // heading set includes categories whose only member the configured
+    // worker cannot build — Authentication (keycloak) and Cloud (aws) in
+    // this fixture — where the pre-#865 chooser rendered neither heading at
+    // all. `Communication` (slack) was ALREADY not hidden in this fixture
+    // (#869 made it importable) and belongs here independent of this fix;
+    // the previous version of this assertion asserting its absence was
+    // itself stale by the time this test was touched for #865/#866.
     expect([...byCategory.keys()].sort()).toEqual([
+      'Authentication',
+      'Cloud',
       'Code Repositories',
+      'Communication',
       'Development',
       'Documentation',
       'Integrations',
@@ -101,15 +113,28 @@ describe('useToolMenuItems over the served catalogue', () => {
     expect(byCategory.get('Storage')).toEqual(['artifact']);
     expect(byCategory.get('Integrations')).toEqual(['openapi']);
     expect(byCategory.get('Test Management')?.length).toBeGreaterThanOrEqual(6);
+  });
 
-    /*
-     * "Communication" is the one reference heading this deployment does not
-     * render, and its absence is deliberate rather than missing data: `slack`
-     * is the only type in it, and the admitted Python worker image cannot
-     * import the Slack SDK. The server serves the type hidden with that
-     * reason instead of offering a tile that fails at the first tool call.
-     */
-    expect([...byCategory.keys()]).not.toContain('Communication');
+  /*
+   * keycloak (Authentication) and aws (Cloud) are each their category's only
+   * member, and each is hidden — the configured worker cannot build either.
+   * Confirms they are TILES (disabled, with a reason), not just headings
+   * that happen to exist with nothing under them (split out of the test
+   * above to stay under the file's own complexity budget).
+   */
+  it('renders each worker-hidden type as a disabled tile with a reason', async () => {
+    serveTheRealCatalogue();
+
+    const { box } = renderToolMenuItems({});
+    await waitFor(() => expect(box.current?.isFetchingToolkitTypes).toBe(false));
+
+    const items = box.current?.toolMenuItems ?? [];
+    const keycloak = items.find((item) => item.key === 'keycloak');
+    expect(keycloak?.disabled).toBe(true);
+    expect(keycloak?.disabledReason).toBeTruthy();
+    const aws = items.find((item) => item.key === 'aws');
+    expect(aws?.disabled).toBe(true);
+    expect(aws?.disabledReason).toBeTruthy();
   });
 
   it('carries an icon kind for every tile', async () => {

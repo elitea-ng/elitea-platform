@@ -4677,6 +4677,46 @@ components:
         NOTE(W2): internal/api/v2/eliteacore/handler.go:2960-2991 — nine
         static defaults merged with publishing_guardrail extras.
 
+    RuntimeCapabilities:
+      type: object
+      required: [worker, internal_tools, hidden_toolkit_types]
+      properties:
+        worker:
+          type: string
+          enum: ['python', 'rust', '']
+          description: >
+            The worker image this deployment runs, or "" when it never said
+            (see the operation description).
+        internal_tools:
+          type: object
+          additionalProperties:
+            type: boolean
+          description: >
+            The six toggleable internal chat tools
+            (apps/elitea-web/src/features/agents/lib/internalTools.ts), true
+            when the configured worker runs the tool for real rather than
+            skipping it.
+          example:
+            image_generation: true
+            data_analysis: true
+            internal_mcp: true
+            planner: true
+            swarm: true
+            lazy_tools_mode: true
+        hidden_toolkit_types:
+          type: array
+          items: { type: string }
+          description: >
+            Catalogued toolkit type keys the configured worker cannot build —
+            the same set ToolkitTypeSchemas marks metadata.hidden for
+            capability reasons, restated flat.
+      description: >
+        NOTE(W2): internal/api/v2/toolkits/capabilities_handler.go
+        (RuntimeCapabilities). Restates, in one deployment-wide read, what
+        the worker-capability projection already decides per toolkit type
+        (ToolkitTypeSchemas' metadata.hidden) and adds the internal chat
+        tools that projection does not cover at all.
+
     PredictRequest:
       type: object
       properties:
@@ -17414,6 +17454,54 @@ paths:
   # ==========================================================================
   # TOOLKITS
   # ==========================================================================
+  /elitea_core/runtime_capabilities:
+    get:
+      operationId: getRuntimeCapabilities
+      summary: Which worker this deployment runs and what it cannot do (#865, #866)
+      description: |
+        Deliberately NOT project-scoped: the worker image is a deployment-wide
+        fact, not project data — the same reasoning getAgentCategories above
+        states for its own taxonomy.
+
+        Before this endpoint, a toolkit type the configured worker could not
+        build was still served but hidden from the type picker
+        (metadata.hidden on every /elitea_core/toolkits/prompt_lib/{project_id}
+        entry — see ToolkitTypeSchemas), and an internal chat tool the worker
+        could not run answered normally while silently skipping the
+        capability (services/elitea-worker-rust/src/agents/internal_tools.rs,
+        `agent_internal_tool_skipped`). Neither state was visible anywhere a
+        user or an administrator could read it. This endpoint is that read.
+
+        `hidden_toolkit_types` restates, as one flat list, exactly the set of
+        catalogued types whose metadata.hidden the toolkit-type endpoints
+        already set for capability reasons — this endpoint and that field
+        share one worker-capability projection
+        (internal/runtimecomposition/worker_toolkit_capability.go) and cannot
+        disagree.
+
+        `internal_tools` covers the six toggleable internal chat tools
+        (apps/elitea-web/src/features/agents/lib/internalTools.ts:
+        image_generation, data_analysis, internal_mcp, planner, swarm,
+        lazy_tools_mode), true when the CONFIGURED worker runs the tool for
+        real. `ask_user`, the Rust worker's one implemented internal tool, is
+        not a user-facing toggle and is not listed; `attachments` and
+        `pyodide` are tracked separately from #866's six and are not listed
+        either.
+
+        `worker` is empty when the deployment never stated
+        ELITEA_WORKER_IMPLEMENTATION AND no worker-capability snapshot was
+        composed — the honest "this deployment did not say" answer, not a
+        guessed default.
+      tags: [toolkits]
+      responses:
+        '200':
+          description: This deployment's worker and its capability gaps
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RuntimeCapabilities'
+        '401': { $ref: '#/components/responses/401' }
+
   /elitea_core/toolkits/prompt_lib/{project_id}:
     parameters:
       - $ref: '#/components/parameters/ProjectId'

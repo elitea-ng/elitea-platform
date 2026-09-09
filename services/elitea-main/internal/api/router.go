@@ -206,6 +206,13 @@ type RouterConfig struct {
 	// run. Unassigned, every catalogued type is offered — the honest answer
 	// when nothing has said which worker image is deployed.
 	ToolkitWorkerCapability v2toolkits.ToolkitCapabilitySource
+	// WorkerImplementation is the plain "python"/"rust" worker name (#865,
+	// #866) — the same value runtimecomposition.WorkerImplementationFromEnv
+	// derived to build ToolkitWorkerCapability above, restated here because
+	// this package cannot import runtimecomposition (see ToolkitArgumentSchemas'
+	// comment). It backs GET /elitea_core/runtime_capabilities. Empty leaves
+	// the endpoint reporting worker: "" rather than guessing.
+	WorkerImplementation string
 	// ToolkitSettingsDefinitions supplies the same endpoint with the "$defs"
 	// block each type's settings properties reference. It is injected for the
 	// same reason as ToolkitArgumentSchemas: the implementation joins two
@@ -2538,6 +2545,10 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					toolkitOptions = append(toolkitOptions,
 						v2toolkits.WithWorkerCapability(cfg.ToolkitWorkerCapability))
 				}
+				if cfg.WorkerImplementation != "" {
+					toolkitOptions = append(toolkitOptions,
+						v2toolkits.WithWorkerImplementation(cfg.WorkerImplementation))
+				}
 				// Guarded rather than appended unconditionally: an Option that
 				// stored a nil interface would still leave h.settingsValidator
 				// nil, but a caller that later boxes a typed nil pointer here
@@ -2556,6 +2567,15 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				toolkitOptions = append(toolkitOptions,
 					v2toolkits.WithTypePolicy(toolkitTypePolicyStore))
 				toolkitHandler := v2toolkits.NewHandler(cfg.Pool, toolkitOptions...)
+				// Runtime worker capabilities (#865, #866) — deliberately NOT
+				// project-scoped, the same reasoning agent_categories above
+				// states: which worker image this deployment runs, which
+				// toolkit types it hides and which internal chat tools it
+				// no-ops are deployment-wide facts, not project data. Ungated
+				// by permission for the same reason: the answer is "here is
+				// what this deployment can and cannot do", not project content
+				// a membership check would protect.
+				r.Get("/runtime_capabilities", toolkitHandler.RuntimeCapabilities)
 				// /tool(s)/ and /toolkits/ paths route to toolkitHandler (toolkit instances, not skills).
 				//
 				// NOTE the split, which was wrong until #129: /tools/ is the

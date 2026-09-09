@@ -15,6 +15,15 @@ export interface CategoryItem {
   label: ReactNode;
   icon?: ReactNode;
   onClick?: () => void;
+  /**
+   * Renders the tile disabled and dimmed instead of clickable — added for
+   * #865/#866's "greyed with a reason" tiles (a toolkit type the configured
+   * worker cannot build). `onClick` is still accepted when this is true, for
+   * caller convenience, but never fires: {@link CategoryItemCard} ignores it.
+   */
+  disabled?: boolean;
+  /** Shown as the tile's tooltip when `disabled` is true, replacing the overflow tooltip. */
+  disabledReason?: string;
 }
 
 /** @public shared/ui component API — consumed once a features/widgets/pages caller exists (none does yet in this pass). */
@@ -22,6 +31,8 @@ export interface CategoryItemCardProps {
   label: ReactNode;
   icon?: ReactNode | undefined;
   onClick?: (() => void) | undefined;
+  disabled?: boolean | undefined;
+  disabledReason?: string | undefined;
   sx?: SxProps<Theme>;
   'data-testid'?: string;
 }
@@ -64,6 +75,8 @@ export function CategoryItemCard({
   label,
   icon,
   onClick,
+  disabled = false,
+  disabledReason,
   sx,
   'data-testid': dataTestId,
 }: CategoryItemCardProps): ReactNode {
@@ -80,10 +93,11 @@ export function CategoryItemCard({
     [textRef],
   );
 
-  return (
+  const card = (
     <ButtonBase
       data-testid={dataTestId}
-      onClick={onClick}
+      onClick={disabled ? undefined : onClick}
+      disabled={disabled}
       sx={combineSx(
         (theme: Theme) => ({
           display: 'flex',
@@ -103,15 +117,24 @@ export function CategoryItemCard({
           border: `0.0625rem solid ${theme.vars.palette.border.cardsOutlines}`,
           backgroundColor: theme.vars.palette.background.secondary,
           transition: 'all 0.2s ease-in-out',
-          '&:hover': {
-            backgroundColor: theme.vars.palette.background.default,
-            boxShadow: theme.vars.palette.boxShadow.default,
-            border: `0.0625rem solid ${theme.vars.palette.border.lines}`,
-          },
+          // #865/#866's "greyed" half of "greyed with a reason": dimmed
+          // instead of the default hover-interactive look, and the hover
+          // style below is skipped entirely — a disabled tile inviting a
+          // hover interaction it will not honour is its own small lie.
+          ...(disabled ? { opacity: 0.5 } : {}),
+          ...(disabled
+            ? {}
+            : {
+                '&:hover': {
+                  backgroundColor: theme.vars.palette.background.default,
+                  boxShadow: theme.vars.palette.boxShadow.default,
+                  border: `0.0625rem solid ${theme.vars.palette.border.lines}`,
+                },
+              }),
         }),
         (theme: Theme) =>
           theme.applyStyles('dark', {
-            '&:hover': { backgroundColor: theme.vars.palette.background.tabPanel },
+            '&:hover': { backgroundColor: disabled ? undefined : theme.vars.palette.background.tabPanel },
           }),
         sx,
       )}
@@ -134,12 +157,8 @@ export function CategoryItemCard({
           {icon}
         </Box>
       )}
-      <Tooltip
-        title={isOverflowing ? label : ''}
-        placement="top"
-      >
+      {disabled ? (
         <Typography
-          ref={attachLabelRef}
           variant="bodyMedium"
           sx={(theme: Theme) => ({
             flex: 1,
@@ -152,7 +171,43 @@ export function CategoryItemCard({
         >
           {label}
         </Typography>
-      </Tooltip>
+      ) : (
+        <Tooltip
+          title={isOverflowing ? label : ''}
+          placement="top"
+        >
+          <Typography
+            ref={attachLabelRef}
+            variant="bodyMedium"
+            sx={(theme: Theme) => ({
+              flex: 1,
+              minWidth: 0,
+              color: theme.vars.palette.text.secondary,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            })}
+          >
+            {label}
+          </Typography>
+        </Tooltip>
+      )}
     </ButtonBase>
   );
+
+  // A disabled ButtonBase fires no pointer events, so — same reason
+  // AgentInternalToolSwitch.tsx's own disabled-tooltip wrap documents — the
+  // reason tooltip needs a non-disabled wrapper to anchor to, not the
+  // control itself.
+  if (disabled && disabledReason) {
+    return (
+      <Tooltip
+        title={disabledReason}
+        placement="top"
+      >
+        <span>{card}</span>
+      </Tooltip>
+    );
+  }
+  return card;
 }

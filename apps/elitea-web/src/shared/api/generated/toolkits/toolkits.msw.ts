@@ -47,6 +47,7 @@ import type { RequestHandlerOptions } from "msw";
 import type {
   InternalMcpPatStatus,
   McpRegisteredServer,
+  RuntimeCapabilities,
   ToolkitInstance,
   ToolkitInstanceListResponse,
   ToolkitToolRunResult,
@@ -79,6 +80,20 @@ export const getUpdateToolkitResponseMock = (
   meta: {},
   created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
   author_id: faker.number.int(),
+  ...overrideResponse,
+});
+
+export const getGetRuntimeCapabilitiesResponseMock = (
+  overrideResponse: Partial<Extract<RuntimeCapabilities, object>> = {},
+): RuntimeCapabilities => ({
+  worker: faker.helpers.arrayElement(["python", "rust", ""] as const),
+  internal_tools: {
+    [faker.string.alphanumeric(5)]: faker.datatype.boolean(),
+  },
+  hidden_toolkit_types: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
   ...overrideResponse,
 });
 
@@ -265,6 +280,32 @@ export const getUpdateToolkitMockHandler = (
             ? await overrideResponse(info)
             : overrideResponse
           : getUpdateToolkitResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getGetRuntimeCapabilitiesMockHandler = (
+  overrideResponse?:
+    | RuntimeCapabilities
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<RuntimeCapabilities> | RuntimeCapabilities),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/runtime_capabilities",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetRuntimeCapabilitiesResponseMock(),
         { status: 200 },
       );
     },
@@ -504,6 +545,7 @@ export const getGetInternalMcpPatStatusMockHandler = (
 export const getToolkitsMock = () => [
   getGetToolkitMockHandler(),
   getUpdateToolkitMockHandler(),
+  getGetRuntimeCapabilitiesMockHandler(),
   getListToolkitsMockHandler(),
   getListToolkitInstancesMockHandler(),
   getCreateToolkitMockHandler(),

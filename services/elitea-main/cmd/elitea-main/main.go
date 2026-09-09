@@ -2075,6 +2075,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		ToolkitArgumentSchemas:     toolkitArgumentSchemas,
 		ToolkitCatalogue:           toolkitCatalogue,
 		ToolkitWorkerCapability:    workerToolkitCapability,
+		WorkerImplementation:       workerImplementation,
 		ToolkitSettingsDefinitions: toolkitSettingsDefinitions,
 		ToolkitSettingsValidator:   toolkitSettingsValidator,
 		ToolkitRegistry:            toolkitArgumentSchemas,

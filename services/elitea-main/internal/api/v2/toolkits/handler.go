@@ -97,6 +97,10 @@ type Handler struct {
 	// workerCapability decides whether a catalogued type is offered as
 	// creatable. Nil offers every catalogued type.
 	workerCapability ToolkitCapabilitySource
+	// workerImplementation is the plain "python"/"rust" name of the worker
+	// image this deployment runs, served as-is by RuntimeCapabilities. See
+	// WithWorkerImplementation (capabilities_handler.go).
+	workerImplementation string
 	// settingsValidator resolves a credential reference before it is persisted.
 	// Nil restores the pre-#613 behaviour: every save accepted unresolved. See
 	// settings_validation.go.

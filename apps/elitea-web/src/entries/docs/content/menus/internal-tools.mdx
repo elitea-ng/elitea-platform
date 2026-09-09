@@ -6,7 +6,7 @@ description: "Built-in chat and agent capabilities — image creation, data anal
 Internal tools are capabilities you turn on from **Modules** in chat or an agent's Tools section, without configuring an external toolkit. They come from a fixed platform catalogue (`features/agents/lib/internalTools.ts`) and are turned on per conversation or saved as an agent's default.
 
 <Warning title="These modules need the Python worker">
-Every internal tool on this page runs only when your deployment's worker is the **Python** worker — Helm's default since #865/#866, matching the one-host compose stack. A deployment that opts into the **Rust** worker gets a visible in-conversation notice instead of the tool running (tracked in #866). Ask your administrator which worker your deployment runs before relying on these in production.
+Every internal tool on this page runs only when your deployment's worker is the **Python** worker — Helm's default since #865/#866, matching the one-host compose stack. On a deployment that opts into the **Rust** worker instead, each toggle below shows disabled with a "Not available on the Rust worker" note (agent Tools section) so you can see the gap before turning one on, and a run that still hits one anyway gets a visible in-conversation notice rather than the capability silently doing nothing (tracked in #866). Ask your administrator which worker your deployment runs before relying on these in production.
 </Warning>
 
 <Screenshot id="internal-tools-menu" alt="The Modules panel listing internal tools with toggles" />

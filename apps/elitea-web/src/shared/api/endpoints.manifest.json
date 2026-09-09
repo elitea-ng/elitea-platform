@@ -1007,6 +1007,19 @@
       "usedBy": []
     },
     {
+      "id": "toolkits.getRuntimeCapabilities",
+      "method": "GET",
+      "path": "/elitea_core/runtime_capabilities",
+      "operationId": "getRuntimeCapabilities",
+      "source": "generated",
+      "responseSchema": "RuntimeCapabilities",
+      "fixture": null,
+      "usedBy": [
+        "features/agents",
+        "features/toolkits"
+      ]
+    },
+    {
       "id": "notifications.list",
       "method": "GET",
       "path": "/notifications/notifications/prompt_lib/{projectId}",

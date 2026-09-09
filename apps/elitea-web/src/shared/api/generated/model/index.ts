@@ -360,6 +360,7 @@ export * from "./revalidateConfiguration200.zod";
 export * from "./role.zod";
 export * from "./roleListParams.zod";
 export * from "./runPipelineInboundTriggerParams.zod";
+export * from "./runtimeCapabilities.zod";
 export * from "./saveApplicationNewVersionBody.zod";
 export * from "./searchOptions.zod";
 export * from "./secretCreateRequest.zod";
