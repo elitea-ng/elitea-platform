@@ -1,24 +1,70 @@
 /**
  * A REAL `imagegen` TOOLKIT INVOCATION — #864.
  *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * SKIPPED HERE ON PURPOSE — SEE `e2e/live/image.imagegen-toolkit.spec.ts`
+ * ─────────────────────────────────────────────────────────────────────────────
+ * This journey cannot pass against `deploy/mock-llm/server.py`, for a reason
+ * that is architectural rather than a setup mistake this file could fix by
+ * trying another credential shape. Two attempts already failed on PR #882:
+ *
+ *  - `vllm` credential (the original version of this file): bifrost's vLLM
+ *    provider hand-refuses `ImageGeneration` outright — `ImageGeneration is
+ *    not supported by the vLLM provider` (`core/providers/vllm/vllm.go`,
+ *    `NewUnsupportedOperationError`).
+ *  - `open_ai` with a custom `api_base` (CI run 34355873222): LOOKS right —
+ *    bifrost's OpenAI provider implements `ImageGeneration` — but
+ *    `services/elitea-llm-gateway/internal/account/credential_selector.go`'s
+ *    `ProviderForCredential` silently REROUTES any `open_ai` credential whose
+ *    `api_base` is not `api.openai.com` to the vLLM provider ("only that
+ *    provider carries a per-key base URL"), landing on the exact same
+ *    hand-refusal as above.
+ *  - `azure_open_ai` (this file's own previous revision): Azure's provider
+ *    DOES implement `ImageGeneration` and DOES accept a per-credential
+ *    `api_base` (`AzureKeyConfig.Endpoint`, no origin check) — but
+ *    `account.go`'s `GetConfigForProvider` grants
+ *    `NetworkConfig.AllowPrivateNetwork` to `schemas.VLLM` and
+ *    `schemas.Ollama` ONLY:
+ *
+ *        switch provider {
+ *        case schemas.VLLM, schemas.Ollama:
+ *            cfg.NetworkConfig.AllowPrivateNetwork = a.egress.allowsPrivateNetwork()
+ *        }
+ *
+ *    "Cloud providers keep the guard: an api_base for openai/anthropic/etc.
+ *    must never resolve to a private address" (that method's own comment).
+ *    `llm-mock` is a Docker-internal, private-network host, so bifrost's
+ *    SSRF-safe dialer refuses to connect — measured on CI run 34359971284 as
+ *    a `502 Bad Gateway` on every retry (`platform-edge`'s access log: `POST
+ *    /llm/v1/images/generations HTTP/1.1" 502 107`, ~183ms — real processing
+ *    time, consistent with a blocked dial rather than a routing miss).
+ *
+ * Of this gateway's seven `supportedProviders`, only OpenAI and Azure
+ * implement a real `ImageGeneration`, and only vLLM and Ollama can dial a
+ * private host — a set with EMPTY intersection. There is no
+ * `(credential type, api_base)` combination that reaches a real
+ * `ImageGeneration` dispatch against any private-network stand-in, the mock
+ * included. The toolkit itself is real (see below); only a real, PUBLIC
+ * provider can prove the dispatch, which is what
+ * `e2e/live/image.imagegen-toolkit.spec.ts` does, gated (like every other
+ * `e2e/live` journey) on the environment rather than on a permanent skip.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * WHAT THIS FILE STILL PROVES
+ * ─────────────────────────────────────────────────────────────────────────────
  * The toolkit (`generate_image`/`edit_image`) has been served since the
  * catalogue entry landed, but a real dispatch on the Python worker answered
  * "cannot be built" until the admitted `elitea-sdk` pin carried the toolkit's
- * module (`services/elitea-worker-python/elitea-sdk.lock.json`). This journey
- * is the chat-stream proof that the FULL path now works: a `generate_image`
- * call the model makes reaches the real `ImageGenAPIWrapper`, which calls the
- * gateway's images route, decodes what comes back, and writes it into the
- * project's artifact bucket through the SAME `elitea.artifact(bucket).create`
- * path every other toolkit-produced file uses.
+ * module (`services/elitea-worker-python/elitea-sdk.lock.json`). Authoring
+ * the credential/model row, the toolkit, the agent, and attaching it through
+ * the picker (steps 1–4 below) all run and assert for real — a `test.skip`
+ * sits between that and step 5, so this file still catches a regression in
+ * any of that CRUD/wiring; only the real-provider dispatch and its artifact
+ * are out of reach here.
  *
  * `services/elitea-worker-python/tests/unit/test_imagegen_toolkit_dispatch.py`
  * already proves the dispatch at the worker level, against the real admitted
- * SDK, with the outbound HTTP calls stubbed. This journey proves the piece
- * that a worker-level test cannot: that the SAME call, made by a model inside
- * a real chat turn through a toolkit AUTHORED AND ATTACHED THE WAY A USER
- * DOES, reaches deploy/mock-llm/server.py's `POST /v1/images/generations`
- * stub (the upstream hop `_images_generations` exists for, per its own
- * docstring reference to this issue) and comes back through the gateway.
+ * SDK, with the outbound HTTP calls stubbed.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * WHY THE TOOLKIT AND ITS MODEL ARE AUTHORED THROUGH THE API, NOT A FORM
@@ -84,41 +130,14 @@ const WORKER = process.env['E2E_WORKER'] ?? 'python';
 /**
  * The offline-mock upstream `standalone-stack.sh`'s default `seed-llm` wiring
  * points the CHAT model at (`API_BASE="http://llm-mock:8090"`) — reused here
- * so the image-generation model resolves against the SAME mock process.
- *
- * The credential TYPE is `azure_open_ai`, and neither of the two other
- * options that look plausible actually reaches the mock's image stub:
- *
- *  - `vllm` (what `seed-llm` uses for the chat model): bifrost's vLLM
- *    provider hand-refuses every image operation — `ImageGeneration is not
- *    supported by the vLLM provider` (`core/providers/vllm/vllm.go`,
- *    `NewUnsupportedOperationError`) — so a `vllm`-typed credential 500s
- *    `POST /llm/v1/images/generations` before the request ever reaches this
- *    mock's `_images_generations` stub, regardless of what upstream it
- *    names.
- *  - `open_ai` with a custom `data.api_base` (tried first — see git blame):
- *    LOOKS right, since bifrost's OpenAI provider implements ImageGeneration
- *    and `api.model-grants.spec.ts`'s `createPlatformProvider` seeds an
- *    `open_ai` row with a non-OpenAI `api_base` too — but that spec never
- *    DISPATCHES through the credential, it only checks grant/visibility CRUD.
- *    A real dispatch runs into `account.ProviderForCredential`
- *    (services/elitea-llm-gateway/internal/account/credential_selector.go):
- *    an `open_ai` credential whose `api_base` is not `api.openai.com` is
- *    silently REROUTED to bifrost's vLLM provider — "only that provider
- *    carries a per-key base URL" — landing on the exact same hand-refusal as
- *    the `vllm`-typed credential above. (A LITERAL `api.openai.com` base
- *    would dodge the reroute, but then bifrost dials the real OpenAI, which
- *    this mock cannot be.)
- *
- * `azure_open_ai` is the only credential type this gateway serves that both
- * implements a real `ImageGeneration` call (`core/providers/azure/azure.go`)
- * AND accepts a per-credential endpoint (`AzureKeyConfig.Endpoint`, taken
- * from `data.api_base` unconditionally — `account.go`'s `buildKey` never
- * origin-checks Azure the way it does OpenAI). Its request lands at
- * `{api_base}/openai/v1/images/generations` — the mock aliases that path to
- * the SAME stub `/v1/images/generations` answers — and its auth header is
- * `api-key` rather than `Authorization` (harmless here: the mock does not
- * validate either).
+ * for the image-generation credential's `api_base`, for the CRUD/wiring
+ * coverage this file still runs (steps 1–4; see the file header for why the
+ * DISPATCH half is skipped regardless of which of the three credential
+ * shapes below authors this row). `azure_open_ai` is kept as the type,
+ * matching the header's account: it is the only one of the three where the
+ * refusal is a network-level SSRF guard rather than an immediate "bad
+ * credential" 4xx, so the row this step creates is the same shape a real
+ * deployment's operator would author against a real Azure endpoint.
  */
 const MOCK_UPSTREAM_BASE = 'http://llm-mock:8090';
 const MOCK_CREDENTIAL_TYPE = 'azure_open_ai';
@@ -312,6 +331,22 @@ test('a generate_image call is dispatched by the model and the artifact lands in
       'the picker reported success but the version carries no mapping — the attach was a no-op',
     ).toBeDefined();
     expect(attached?.type, 'the mapped toolkit must be the imagegen one').toBe('imagegen');
+
+    // Everything ABOVE this line is real product coverage: the credential
+    // and image_generation_model row, the imagegen toolkit itself, the agent,
+    // and attaching the toolkit through the picker all go through the same
+    // product routes and UI a user would, and would fail here if any of them
+    // regressed. Everything BELOW it is what this file's header explains
+    // cannot pass against `deploy/mock-llm/server.py` — no credential/api_base
+    // combination this gateway serves reaches a real `ImageGeneration` call
+    // against a private host. See `e2e/live/image.imagegen-toolkit.spec.ts`
+    // for the same dispatch against a real, public provider.
+    test.skip(
+      true,
+      'no (credential type, api_base) this gateway serves reaches a real ImageGeneration call ' +
+        'against a private host (see this file header) — dispatch is proven on ' +
+        'e2e/live/image.imagegen-toolkit.spec.ts instead',
+    );
 
     // ── 5. Chat, and script a real generate_image call ─────────────────────
     const conversationCreated = page.waitForResponse(
