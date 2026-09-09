@@ -165,3 +165,9 @@ The model-facing schemas omit endpoint project IDs; Main supplies the authentica
 The existing chat history contains earlier supplied project information.
 Therefore, a fresh chat without that information remains required to prove the complete automatic-project user flow.
 Other entity families and permission-negative cases remain open.
+
+Fresh chat 542 enables Elitea MCP Tools and asks to find the skill by name.
+The user supplies no project ID and no skill ID.
+The worker invokes internal lookup and detail tools, then returns skill 5 with the updated instructions.
+This independently verifies automatic project scope for a new conversation.
+The next acceptance work covers the remaining entity families and negative permission cases.
