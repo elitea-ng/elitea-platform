@@ -187,6 +187,21 @@ func NewHandlerWithRepo(repo Repository, opts ...Option) *Handler {
 	return h
 }
 
+// NewPostgresRepository exposes the same Postgres-backed Repository NewHandler
+// builds internally (`&pgRepo{pool: pool}`), for a caller that needs the
+// reader WITHOUT this package's Handler/catalogue/projections around it.
+//
+// Issue #881's draft-suggestion handler is exactly that caller: it needs
+// ListToolkits (the project's toolkit INSTANCES, for candidate suggestions)
+// but has no reason to depend on toolkit type schemas, MCP projections, or
+// any of this package's other HTTP-facing machinery. Before this, the only
+// way to reach a toolkit-instance reader from outside this package was
+// through Handler's own unexported repo field — this is the minimal,
+// intentional crack in that encapsulation.
+func NewPostgresRepository(pool *pgxpool.Pool) Repository {
+	return &pgRepo{pool: pool}
+}
+
 // knownToolkitTypes is the baseline list of toolkit types pylon_indexer supports.
 // DB types are merged in at runtime so newly-registered types appear automatically.
 var knownToolkitTypes = []string{

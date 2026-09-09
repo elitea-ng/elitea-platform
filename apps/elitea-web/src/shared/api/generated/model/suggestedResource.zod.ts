@@ -40,32 +40,26 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
-import { SuggestedResource } from "./suggestedResource.zod";
 
-export const ApplicationDraft = zod
+export const SuggestedResource = zod
   .object({
-    name: zod.string().describe("At most 32 characters."),
-    description: zod.string().describe("At most 2304 characters."),
-    instructions: zod
+    id: zod.string(),
+    name: zod.string(),
+    type: zod
       .string()
-      .describe("The agent's system prompt, in Markdown."),
-    welcome_message: zod
+      .optional()
+      .describe("Toolkit type (e.g. `github`) — toolkit\/MCP entries only."),
+    description: zod.string().optional(),
+    agent_type: zod
       .string()
-      .describe("At most 768 characters. Empty when the model suggested none."),
-    conversation_starters: zod
-      .array(zod.string())
+      .optional()
       .describe(
-        "At most four, each at most 768 characters. Blank entries are dropped rather than returned as empty chips.\n",
+        "`pipeline` marks a suggested_pipelines entry; absent on suggested_agents entries.",
       ),
-    suggested_toolkits: zod.array(SuggestedResource),
-    suggested_mcp: zod.array(SuggestedResource),
-    suggested_pipelines: zod.array(SuggestedResource),
-    suggested_agents: zod.array(SuggestedResource),
-    suggested_skills: zod.array(SuggestedResource),
   })
   .describe(
-    "The content half of legacy's draft, plus the five suggested_\* lists (issue #881) — always present, `[]` rather than absent\/null when nothing scored above zero or when a deployment composed no reader for that category.\n",
+    "One entry of ApplicationDraft's five suggested_\* lists (issue #881): a project toolkit\/MCP\/pipeline\/agent\/skill scored as relevant to the generated draft (internal\/api\/v2\/drafts\/suggestions.go's lexical overlap scorer — Go-side matching, not an LLM candidate pick; see that file's own doc comment for why).\n",
   );
 
-export type ApplicationDraft = zod.input<typeof ApplicationDraft>;
-export type ApplicationDraftOutput = zod.output<typeof ApplicationDraft>;
+export type SuggestedResource = zod.input<typeof SuggestedResource>;
+export type SuggestedResourceOutput = zod.output<typeof SuggestedResource>;

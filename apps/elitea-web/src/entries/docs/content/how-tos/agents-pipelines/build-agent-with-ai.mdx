@@ -28,7 +28,11 @@ Click **Create Agent**. The agent is created with the reviewed fields and the pr
 <Screenshot id="build-agent-with-ai-dialog" alt="Build with AI dialog showing the description input step" />
 
 <Note>
-Not available yet: AI-suggested toolkits, agents, pipelines, MCPs or skills to attach to the new agent — the draft only generates the text fields above; the review form shows no resource suggestions. (tracked in [#881](https://github.com/elitea-ng/elitea-platform/issues/881))
+The review form also shows **suggested toolkits, MCPs, pipelines, agents, and skills** below the text fields, when the project has any that plausibly relate to the description you gave — a name/description match against the new draft, not an exhaustive search. Check the ones you want; unchecked suggestions are simply not shown, not hidden-but-attached.
+</Note>
+
+<Note>
+Suggested **agents** and **pipelines** are attached to the new agent when you check them and create it. Suggested **toolkits**, **MCPs**, and **skills** can be checked in the review form, but attaching them is not wired yet — checking one has no effect once the agent is created (tracked in [#881](https://github.com/elitea-ng/elitea-platform/issues/881)). Attach a toolkit, MCP, or skill from the agent's own Configuration tab after creating it instead.
 </Note>
 
 The same generator is available for a skill (`/skills/create`) and for project context (Settings › public project context) — the underlying draft endpoint serves all three, so the same "describe it, review it, create it" flow applies there too. See [Create and share a skill](/menus/skills).

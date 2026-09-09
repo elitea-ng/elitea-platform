@@ -24,6 +24,11 @@ describe('mapApplicationDraft', () => {
     instructions: 'Sort by severity, then page the owner.',
     welcome_message: 'What broke?',
     conversation_starters: ['Triage this page', 'Summarise the last hour'],
+    suggested_toolkits: [],
+    suggested_mcp: [],
+    suggested_pipelines: [],
+    suggested_agents: [],
+    suggested_skills: [],
   };
 
   it('carries every served field into the draft the review form edits', () => {
@@ -42,7 +47,23 @@ describe('mapApplicationDraft', () => {
     expect(draft.conversation_starters).toEqual(['Keep me']);
   });
 
-  it('never fabricates suggested resources — the endpoint carries none', () => {
+  it('carries the served suggested_* lists straight through (#881)', () => {
+    const draft = mapApplicationDraft({
+      ...served,
+      suggested_toolkits: [{ id: '1', name: 'GitHub', type: 'github' }],
+      suggested_mcp: [{ id: '2', name: 'Jira MCP' }],
+      suggested_pipelines: [{ id: '3', name: 'Onboarding', agent_type: 'pipeline' }],
+      suggested_agents: [{ id: '4', name: 'Triager', description: 'Triages tickets' }],
+      suggested_skills: [{ id: '5', name: 'summariser' }],
+    });
+    expect(draft.suggested_toolkits).toEqual([{ id: '1', name: 'GitHub', type: 'github' }]);
+    expect(draft.suggested_mcp).toEqual([{ id: '2', name: 'Jira MCP' }]);
+    expect(draft.suggested_pipelines).toEqual([{ id: '3', name: 'Onboarding', agent_type: 'pipeline' }]);
+    expect(draft.suggested_agents).toEqual([{ id: '4', name: 'Triager', description: 'Triages tickets' }]);
+    expect(draft.suggested_skills).toEqual([{ id: '5', name: 'summariser' }]);
+  });
+
+  it('defaults every suggested_* list to [] when the served draft carries none', () => {
     const draft = mapApplicationDraft(served);
     expect(draft.suggested_toolkits).toEqual([]);
     expect(draft.suggested_mcp).toEqual([]);

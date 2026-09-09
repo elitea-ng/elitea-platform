@@ -396,6 +396,7 @@ export * from "./socialAuthorSummary.zod";
 export * from "./socialTrendingAuthor.zod";
 export * from "./statisticEntry.zod";
 export * from "./storedConnectionCheckRow.zod";
+export * from "./suggestedResource.zod";
 export * from "./supportAssistantConfig.zod";
 export * from "./supportAssistantContext.zod";
 export * from "./supportAssistantUser.zod";

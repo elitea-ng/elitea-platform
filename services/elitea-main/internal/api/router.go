@@ -3043,7 +3043,17 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// {version_id}, and creates no conversation. #254 carries the
 				// full finding and a bounded design for a real public chat
 				// surface, which is a NEW feature and not a restoration.
-				draftHandler := v2drafts.NewHandler(cfg.PredictCompleter)
+				// AppsRepo/SkillsRepo/the toolkit-instance reader back
+				// GenerateApplicationDraft's five suggested_* lists (#881).
+				// All three options are nil-safe (v2drafts.Handler degrades
+				// a missing one to an empty suggestion list, never a broken
+				// response), so this composes whichever of cfg.AppsRepo/
+				// cfg.SkillsRepo happen to be set in THIS deployment exactly
+				// as every other optional RouterConfig dependency does.
+				draftHandler := v2drafts.NewHandler(cfg.PredictCompleter,
+					v2drafts.WithAppsRepo(cfg.AppsRepo),
+					v2drafts.WithSkillsRepo(cfg.SkillsRepo),
+					v2drafts.WithToolkitsRepo(v2toolkits.NewPostgresRepository(cfg.Pool)))
 				r.With(projectPermission("models.applications.applications.create")).
 					Post("/generate_application_draft/prompt_lib/{projectID}", draftHandler.GenerateApplicationDraft)
 				r.With(projectPermission("models.applications.skills.create")).

@@ -49,17 +49,22 @@
 //     context's edit mode IS served, because it carries its own prior content
 //     in the body (current_project_background) and needs no repository.
 //
-//   - RESOURCE SUGGESTIONS. Legacy's application draft returns
-//     suggested_toolkits / suggested_mcp / suggested_agents /
-//     suggested_pipelines / suggested_skills, built by first reading the
-//     project's toolkit instances, agents, pipelines and skills and offering
-//     them to the model as candidates. RouterConfig composes no reader for
-//     toolkit INSTANCES (only the type registry and the argument schemas), so
-//     the candidate list cannot be assembled here, and a model asked for
-//     suggestions without candidates invents ids that resolve to nothing. The
-//     fields are therefore absent from this contract rather than present and
-//     always empty. apps/elitea-web's AgentDraft already defaults each of them
-//     to [], so the review form renders without them.
+//   - RESOURCE SUGGESTIONS ARE NOW REAL (issue #881; this note used to record
+//     why they weren't — kept as a correction, not deleted). Legacy's
+//     application draft returns suggested_toolkits/suggested_mcp/
+//     suggested_agents/suggested_pipelines/suggested_skills, built by first
+//     reading the project's toolkit instances, agents, pipelines and skills
+//     and offering them to the model as candidates. The claim that
+//     RouterConfig composed no reader for toolkit INSTANCES was true of
+//     AppsRepo/SkillsRepo's siblings but not of the toolkits package itself:
+//     v2toolkits.Repository.ListToolkits already existed, just not exposed
+//     outside that package — v2toolkits.NewPostgresRepository (added
+//     alongside this) is the minimal crack that exposes it. This port also
+//     does the candidate MATCHING in Go rather than the model (see
+//     suggestions.go's own doc comment for why). AppsRepo/SkillsRepo/the new
+//     toolkits reader are threaded in as WithAppsRepo/WithSkillsRepo/
+//     WithToolkitsRepo options, all optional: an omitted one degrades to an
+//     empty list for that category, never a broken response.
 package drafts
 
 import (
@@ -77,7 +82,9 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	v2predict "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/predict"
+	v2skills "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/skills"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
 )
 
 // maxDraftRequestBytes bounds the body. user_description and
@@ -113,17 +120,72 @@ const (
 	applicationInstructionsSanityLength = 32768
 )
 
+// AppsReader is the one applications.Repository method GenerateApplicationDraft
+// needs (suggested_agents/suggested_pipelines — one repository, filtered by
+// AgentsType, see suggestApplications). Narrowed deliberately: the real
+// applications.Repository satisfies this structurally with zero glue code,
+// and a test fake needs to implement only this one method instead of every
+// unrelated CRUD/version operation on the full interface.
+type AppsReader interface {
+	List(ctx context.Context, req applications.ListRequest) (applications.ListResponse, error)
+}
+
+// SkillsReader is the one v2skills.Repository method GenerateApplicationDraft
+// needs (suggested_skills) — same narrowing reason as AppsReader.
+type SkillsReader interface {
+	List(ctx context.Context, projectID string, params v2skills.ListParams) (v2skills.ListResponse, error)
+}
+
+// ToolkitsReader is the one v2toolkits.Repository method GenerateApplicationDraft
+// needs (suggested_toolkits/suggested_mcp, split by elitea_tools.type — see
+// suggestToolkits) — same narrowing reason as AppsReader.
+type ToolkitsReader interface {
+	ListToolkits(ctx context.Context, projectID string, page, pageSize int) ([]map[string]any, int, error)
+}
+
 // Handler serves the three draft routes.
 type Handler struct {
 	completer v2predict.Completer
+	// apps/skills/toolkits back GenerateApplicationDraft's five suggested_*
+	// lists (issue #881). All three are optional (nil-safe — see
+	// suggestions.go): a deployment that composes none of them still serves
+	// every draft route, just with empty suggestion lists.
+	apps     AppsReader
+	skills   SkillsReader
+	toolkits ToolkitsReader
+}
+
+// Option configures a Handler at construction — same pattern
+// internal/api/v2/secrets and internal/api/v2/toolkits already use for an
+// optional dependency.
+type Option func(*Handler)
+
+// WithAppsRepo supplies the reader GenerateApplicationDraft uses for
+// suggested_agents/suggested_pipelines.
+func WithAppsRepo(repo AppsReader) Option {
+	return func(h *Handler) { h.apps = repo }
+}
+
+// WithSkillsRepo supplies the reader for suggested_skills.
+func WithSkillsRepo(repo SkillsReader) Option {
+	return func(h *Handler) { h.skills = repo }
+}
+
+// WithToolkitsRepo supplies the reader for suggested_toolkits/suggested_mcp.
+func WithToolkitsRepo(repo ToolkitsReader) Option {
+	return func(h *Handler) { h.toolkits = repo }
 }
 
 // NewHandler builds the handler. completer may be nil — that is the
 // "LLM_GATEWAY_URL is unset" deployment, and every route then answers 503
 // naming the variable. It is NOT a reason to leave the routes unregistered:
 // #126 is the record of what an invisible 404 costs.
-func NewHandler(completer v2predict.Completer) *Handler {
-	return &Handler{completer: completer}
+func NewHandler(completer v2predict.Completer, opts ...Option) *Handler {
+	h := &Handler{completer: completer}
+	for _, opt := range opts {
+		opt(h)
+	}
+	return h
 }
 
 // llmSettings is the model override block every caller may send. It is the
@@ -179,15 +241,37 @@ type SkillDraft struct {
 	Tags         []string `json:"tags"`
 }
 
+// SuggestedResource is one entry of ApplicationDraft's five suggested_*
+// lists — matches apps/elitea-web's SuggestedResource
+// (features/agents/lib/agentDraft.ts) field for field. `Type` is toolkit-
+// only (the toolkit's elitea_tools.type, e.g. "github"); `AgentType` marks a
+// suggested_pipelines entry as `"pipeline"` (suggested_agents entries leave
+// it empty) — the same discriminant applications.Application.AgentType
+// already carries.
+type SuggestedResource struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Type        string `json:"type,omitempty"`
+	Description string `json:"description,omitempty"`
+	AgentType   string `json:"agent_type,omitempty"`
+}
+
 // ApplicationDraft is the content half of legacy's
-// GenerateApplicationDraftResponse. See the package doc for why the five
-// suggested_* lists are not part of it.
+// GenerateApplicationDraftResponse, now including the five suggested_* lists
+// (issue #881; see the package doc for how they're produced). Each list is
+// always present (never null) — [] when no repository was composed for that
+// category, or when nothing scored above zero.
 type ApplicationDraft struct {
-	Name                 string   `json:"name"`
-	Description          string   `json:"description"`
-	Instructions         string   `json:"instructions"`
-	WelcomeMessage       string   `json:"welcome_message"`
-	ConversationStarters []string `json:"conversation_starters"`
+	Name                 string              `json:"name"`
+	Description          string              `json:"description"`
+	Instructions         string              `json:"instructions"`
+	WelcomeMessage       string              `json:"welcome_message"`
+	ConversationStarters []string            `json:"conversation_starters"`
+	SuggestedToolkits    []SuggestedResource `json:"suggested_toolkits"`
+	SuggestedMCP         []SuggestedResource `json:"suggested_mcp"`
+	SuggestedPipelines   []SuggestedResource `json:"suggested_pipelines"`
+	SuggestedAgents      []SuggestedResource `json:"suggested_agents"`
+	SuggestedSkills      []SuggestedResource `json:"suggested_skills"`
 }
 
 // ProjectContextDraft is legacy's GenerateProjectContextDraftResponse.
@@ -302,12 +386,26 @@ func (h *Handler) GenerateApplicationDraft(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
+	// The query the five suggestion categories are scored against — the same
+	// text a human reviewer sees, not just body.UserDescription: a draft
+	// whose instructions elaborate on tools/domains the short user
+	// description didn't mention should still surface those matches.
+	suggestionQuery := name + " " + description + " " + instructions
+	projectID := chi.URLParam(r, "projectID")
+	ctx := r.Context()
+	suggestedToolkits, suggestedMCP := h.suggestToolkits(ctx, projectID, suggestionQuery)
+
 	writeJSON(w, http.StatusOK, ApplicationDraft{
 		Name:                 name,
 		Description:          description,
 		Instructions:         instructions,
 		WelcomeMessage:       strings.TrimSpace(truncate(raw.WelcomeMessage, applicationWelcomeMessageMaxLength)),
 		ConversationStarters: starters,
+		SuggestedToolkits:    suggestedToolkits,
+		SuggestedMCP:         suggestedMCP,
+		SuggestedPipelines:   h.suggestApplications(ctx, projectID, suggestionQuery, true),
+		SuggestedAgents:      h.suggestApplications(ctx, projectID, suggestionQuery, false),
+		SuggestedSkills:      h.suggestSkills(ctx, projectID, suggestionQuery),
 	})
 }
 
