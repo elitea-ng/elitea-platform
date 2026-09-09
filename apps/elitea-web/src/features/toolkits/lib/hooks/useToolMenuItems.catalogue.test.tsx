@@ -93,6 +93,9 @@ describe('useToolMenuItems over the served catalogue', () => {
     // (#869 made it importable) and belongs here independent of this fix;
     // the previous version of this assertion asserting its absence was
     // itself stale by the time this test was touched for #865/#866.
+    // 'Media' is new here too (#864): imagegen's served metadata carries
+    // categories: ["media"], and this hook derives the heading from that
+    // string the same way it derives every other one.
     expect([...byCategory.keys()].sort()).toEqual([
       'Authentication',
       'Cloud',
@@ -101,6 +104,7 @@ describe('useToolMenuItems over the served catalogue', () => {
       'Development',
       'Documentation',
       'Integrations',
+      'Media',
       'Office',
       'Other',
       'Project Management',

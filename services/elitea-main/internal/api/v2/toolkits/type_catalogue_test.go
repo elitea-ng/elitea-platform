@@ -23,9 +23,16 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/runtimecomposition"
 )
 
-// nativeToolkitTypes are the four types elitea_core owns. The SDK does not
-// define them, so no worker capability answer describes them.
-var nativeToolkitTypes = []string{"application", "custom", "database", "datasource"}
+// nativeToolkitTypes are the hand-written types elitea_core owns rather than
+// the pinned SDK catalogue. Four of them (application, custom, database,
+// datasource) are not SDK toolkits at all, so no worker capability answer
+// describes them. The fifth, imagegen, IS worker-implemented (elitea_sdk/
+// tools/imagegen, Python-only, #864) but is still hand-written here rather
+// than catalogued, because its credential is the project's own
+// image_generation model rather than a pinned-snapshot settings shape; see
+// nativeWorkerGatedToolkitTypes in type_catalogue.go for how it still gets a
+// real worker-capability verdict despite being hand-written.
+var nativeToolkitTypes = []string{"application", "custom", "database", "datasource", "imagegen"}
 
 // pythonUnsupportedTypes are the SDK types the admitted Python worker image
 // cannot build, expressed as TYPES rather than as the import keys the snapshot
@@ -125,7 +132,7 @@ func TestToolkitTypeCatalogueServesEverySDKTypeAndTheNativeFour(t *testing.T) {
 	// The number is stated so that a snapshot regeneration that silently drops
 	// half the registry fails here rather than shrinking the create page.
 	if len(body) < 52 {
-		t.Errorf("served %d types; the pinned SDK revision holds 52 plus four native ones", len(body))
+		t.Errorf("served %d types; the pinned SDK revision holds 52 plus five native ones", len(body))
 	}
 }
 
@@ -277,6 +284,43 @@ func TestRustWorkerCapabilityWithholdsTheFamiliesItCannotMaterialize(t *testing.
 	metadata := metadataOf(t, body, "kubernetes")
 	if unavailable, _ := metadata["unavailable"].(bool); !unavailable {
 		t.Error("kubernetes is offered under the native worker, whose match arm is \"k8s\"")
+	}
+}
+
+// imagegen is hand-written (its credential is the project's own
+// image_generation model, not a pinned-snapshot settings shape) but it IS a
+// real, worker-implemented toolkit (elitea_sdk/tools/imagegen, #864) — unlike
+// the other four hand-written types, it must still carry a genuine worker
+// verdict: buildable under Python, hidden under Rust (no Rust family exists
+// for it), and offered with no verdict when no capability source is wired.
+func TestImageGenIsHandWrittenButStillWorkerGated(t *testing.T) {
+	t.Parallel()
+
+	python := getToolkitTypeCatalogue(t, catalogueOptions(t, "python")...)
+	pythonMetadata := metadataOf(t, python, "imagegen")
+	if unavailable, _ := pythonMetadata["unavailable"].(bool); unavailable {
+		t.Errorf("imagegen is Python-buildable and is marked unavailable: %#v", pythonMetadata)
+	}
+
+	rust := getToolkitTypeCatalogue(t, catalogueOptions(t, "rust")...)
+	rustMetadata := metadataOf(t, rust, "imagegen")
+	hidden, _ := rustMetadata["hidden"].(bool)
+	unavailable, _ := rustMetadata["unavailable"].(bool)
+	reason, _ := rustMetadata["unavailable_reason"].(string)
+	if !hidden || !unavailable || reason == "" {
+		t.Errorf(
+			"imagegen has no Rust toolkit family and should be served hidden=true unavailable=true with a reason; got hidden=%v unavailable=%v reason=%q",
+			hidden, unavailable, reason,
+		)
+	}
+	if !contains(reason, "imagegen") {
+		t.Errorf("imagegen reason=%q, want it to name the imagegen type", reason)
+	}
+
+	unset := getToolkitTypeCatalogue(t, catalogueOptions(t, "")...)
+	unsetMetadata := metadataOf(t, unset, "imagegen")
+	if _, present := unsetMetadata["unavailable"]; present {
+		t.Errorf("imagegen is marked unavailable with no capability source configured: %#v", unsetMetadata)
 	}
 }
 

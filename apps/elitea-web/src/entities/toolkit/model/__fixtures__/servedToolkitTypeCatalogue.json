@@ -325,6 +325,14 @@
       "label": "Google Places"
     }
   },
+  "imagegen": {
+    "metadata": {
+      "label": "ImageGen",
+      "categories": [
+        "media"
+      ]
+    }
+  },
   "jira": {
     "metadata": {
       "categories": [

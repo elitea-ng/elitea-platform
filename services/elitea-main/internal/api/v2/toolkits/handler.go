@@ -491,6 +491,62 @@ var toolkitTypeSchemas = map[string]map[string]any{
 			},
 		},
 	},
+	// imagegen ports the TOOLKIT half of the legacy imagegen plugin
+	// (legacy/plugins/imagegen/methods/descriptor.py:43-88): generate_image and
+	// edit_image, calling the gateway's /llm/v1/images/{generations,edits} and
+	// landing every result in the project's artifact bucket. It is a
+	// hand-written entry, not a pinned-SDK-catalogue one, because its
+	// credential is the project's own image-generation MODEL — no new
+	// credential type — via the image_generation_model field's
+	// configuration_model annotation (apps/elitea-web's
+	// useCredentialLikeFieldSlot.tsx already renders that by field name).
+	//
+	// The plugin's OTHER half — its generic descriptor/health/invoke/
+	// invocations provider-hub route surface — is deliberately NOT ported
+	// here: it stays deferred to ADR-0012/P3, which is not yet Approved
+	// (elitea-platform #864).
+	"imagegen": {
+		"type": "object",
+		"properties": map[string]any{
+			"image_generation_model": map[string]any{
+				"type":                "string",
+				"description":         "The project's image-generation-capable model.",
+				"configuration_model": "image_generation",
+			},
+			"bucket": map[string]any{
+				"type":        "string",
+				"description": "Artifact bucket that generated and edited images are saved to.",
+			},
+			"name_prefix": map[string]any{
+				"type":        "string",
+				"description": "Filename prefix applied to every saved image.",
+				"default":     "generated-",
+			},
+			"selected_tools": map[string]any{
+				"type": "object",
+				"args_schemas": map[string]any{
+					"generate_image": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"prompt": map[string]any{"type": "string", "description": "Text prompt describing the image to generate."},
+							"size":   map[string]any{"type": "string", "description": "Image size, e.g. 1024x1024. Leave empty for the model's default."},
+							"n":      map[string]any{"type": "integer", "description": "Number of images to generate.", "default": 1},
+						},
+						"required": []any{"prompt"},
+					},
+					"edit_image": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"image":  map[string]any{"type": "string", "description": "Artifact filepath (/{bucket}/{filename}) of the source image to edit."},
+							"prompt": map[string]any{"type": "string", "description": "Text prompt describing the edit to apply."},
+							"mask":   map[string]any{"type": "string", "description": "Optional artifact filepath (/{bucket}/{filename}) of a mask image."},
+						},
+						"required": []any{"image", "prompt"},
+					},
+				},
+			},
+		},
+	},
 }
 
 // writeToolkitInternalError logs the cause and answers a fixed 500 body.

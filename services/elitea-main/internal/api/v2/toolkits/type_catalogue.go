@@ -87,6 +87,26 @@ var nativeToolkitTypeMetadata = map[string]map[string]any{
 	"database":    {metadataLabelKey: "Database"},
 	"datasource":  {metadataLabelKey: "Datasource"},
 	"application": {metadataLabelKey: "Agent"},
+	"imagegen": {
+		metadataLabelKey: "ImageGen",
+		"categories":     []any{"media"},
+	},
+}
+
+// nativeWorkerGatedToolkitTypes names hand-written (non-catalogued) types that
+// must still report the worker-capability verdict a catalogued type gets for
+// free in toolkitTypeMetadata's other branch. imagegen is Python-worker-only
+// by construction (elitea_sdk/tools/imagegen ships no Rust family, #864) and
+// has to render hidden on a deployment running the Rust worker the same way a
+// catalogued type would — not because it is unsafe to run, but because
+// nothing there would ever build it. The value is the import key passed to
+// ToolkitCapabilitySource.SupportsToolkitType: Python's answer is a deny list
+// keyed on import key (absence = supported), Rust's is an allow list keyed on
+// the toolkit type itself (absence = unsupported), so an import key that
+// exists in neither pinned snapshot answers exactly "Python yes, Rust no"
+// without either snapshot needing an imagegen entry.
+var nativeWorkerGatedToolkitTypes = map[string]string{
+	"imagegen": "imagegen",
 }
 
 // toolkitTypeCatalogue builds the served type catalogue.
@@ -211,10 +231,20 @@ func (h *Handler) toolkitTypeMetadata(
 		for key, value := range nativeToolkitTypeMetadata[toolkitType] {
 			metadata[key] = value
 		}
-		// The capability projection answers about SDK toolkits. The four
-		// native types are built by elitea-main and by the agent runtime, not
-		// by an SDK toolkit class, so neither worker's answer describes them
-		// and a verdict here would be an invention.
+		// The capability projection answers about SDK toolkits. Most native
+		// types are built by elitea-main and by the agent runtime, not by an
+		// SDK toolkit class, so neither worker's answer describes them and a
+		// verdict here would be an invention — except the ones named in
+		// nativeWorkerGatedToolkitTypes, which really are worker-implemented
+		// and do have a real verdict to report.
+		if importKey, gated := nativeWorkerGatedToolkitTypes[toolkitType]; gated {
+			supported, reason := h.supportsToolkitTypeByImportKey(toolkitType, importKey)
+			if !supported {
+				metadata[metadataHiddenKey] = true
+				metadata[metadataUnavailableKey] = true
+				metadata[metadataUnavailableReason] = reason
+			}
+		}
 		return metadata
 	}
 	if label, _ := metadata[metadataLabelKey].(string); label == "" {
@@ -246,6 +276,17 @@ func (h *Handler) supportsToolkitType(toolkitType string) (bool, string) {
 	}
 	importKey, found := h.catalogue.ToolkitImportKey(toolkitType)
 	if !found {
+		return true, ""
+	}
+	return h.workerCapability.SupportsToolkitType(toolkitType, importKey)
+}
+
+// supportsToolkitTypeByImportKey is supportsToolkitType for a hand-written
+// type in nativeWorkerGatedToolkitTypes: the import key is declared here, not
+// looked up in the SDK catalogue, because a native type has no catalogue
+// entry to look it up from.
+func (h *Handler) supportsToolkitTypeByImportKey(toolkitType, importKey string) (bool, string) {
+	if h == nil || h.workerCapability == nil {
 		return true, ""
 	}
 	return h.workerCapability.SupportsToolkitType(toolkitType, importKey)

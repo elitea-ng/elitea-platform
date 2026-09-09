@@ -1904,6 +1904,39 @@
     "title": "google_places",
     "type": "object"
   },
+  "imagegen": {
+    "metadata": {
+      "categories": [
+        "media"
+      ],
+      "label": "ImageGen"
+    },
+    "properties": {
+      "bucket": {
+        "type": "string"
+      },
+      "image_generation_model": {
+        "configuration_model": "image_generation",
+        "type": "string"
+      },
+      "name_prefix": {
+        "type": "string"
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "edit_image": {
+            "type": "object"
+          },
+          "generate_image": {
+            "type": "object"
+          }
+        },
+        "type": "array"
+      }
+    },
+    "title": "imagegen",
+    "type": "object"
+  },
   "jira": {
     "metadata": {
       "categories": [

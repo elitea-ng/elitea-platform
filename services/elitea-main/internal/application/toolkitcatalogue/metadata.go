@@ -148,6 +148,11 @@ var knownTypeMetadata = map[string]TypeMetadata{
 	"postman":       {Label: "Postman", Category: CategoryOther},
 	"salesforce":    {Label: "Salesforce", Category: CategoryOther},
 	"service_now":   {Label: "ServiceNow", Category: CategoryOther},
+	// imagegen (#864): the served catalogue groups it under "media", a
+	// category this admin table does not otherwise carry for one lone type;
+	// CategoryOther keeps the label correct without inventing a new heading
+	// production's own chooser has never shown.
+	"imagegen": {Label: "ImageGen", Category: CategoryOther},
 }
 
 // Lookup answers for any type, known or not.
