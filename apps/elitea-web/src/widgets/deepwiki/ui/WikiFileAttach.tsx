@@ -140,6 +140,15 @@ export const WikiFileAttach = memo(function WikiFileAttach({
               size="small"
               label={attachment.name}
               data-testid="wiki-chat-attach-chip"
+              // MUI's own delete icon carries `data-testid="CancelIcon"`
+              // ONLY when `NODE_ENV !== 'production'`
+              // (`@mui/material/SvgIcon/createSvgIcon`) — this app's E2E
+              // image is a production Vite build, so that attribute is
+              // stripped and a test targeting it hangs forever. Every other
+              // interactive element in this app carries an explicit
+              // `data-testid`; this one now does too, rather than relying on
+              // a dev-only MUI internal.
+              deleteIcon={<CancelIcon data-testid="wiki-chat-attach-chip-remove" />}
               onDelete={
                 disabled
                   ? undefined

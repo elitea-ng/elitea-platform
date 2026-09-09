@@ -241,6 +241,26 @@ export const WikiChatDrawer = memo(function WikiChatDrawer({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- see above
   }, [history.data, target.projectId, target.toolkitId]);
 
+  // Refresh the session list once a turn just finished IN A SESSION THE
+  // SERVER DOESN'T KNOW ABOUT YET. `currentId` stays undefined for a
+  // fresh/renewed key until its first question is answered, and the
+  // listing only refetches on `historyEpoch` bumps — without this, a
+  // SECOND question right after Clear left the sessions dropdown showing
+  // only the first session (DWIKI-019, #882 CI).
+  //
+  // Keyed on the isLoading FALLING EDGE, not on "messages exist": a browser
+  // showing a pre-existing LOCAL conversation (never sent through this
+  // session, `isLoading` never even turns true) has messages too, and
+  // bumping for those wastes a request the "keeps a local conversation on
+  // screen while the server has none" case does not expect.
+  const wasLoading = useRef(chat.state.isLoading);
+  useEffect(() => {
+    const finished = wasLoading.current && !chat.state.isLoading;
+    wasLoading.current = chat.state.isLoading;
+    if (!finished || history.data?.currentId !== undefined) return;
+    setHistoryEpoch((epoch) => epoch + 1);
+  }, [chat.state.isLoading, history.data?.currentId]);
+
   /*
    * "Clear" starts a NEW conversation; it does not erase the old one.
    *
