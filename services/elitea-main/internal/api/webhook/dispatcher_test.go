@@ -15,19 +15,28 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 )
 
 // mockDeliveryRepository is an in-memory DeliveryRepository — the delivery-
-// log equivalent of handler_test.go's mockWebhookRepo.
+// log equivalent of handler_test.go's mockWebhookRepo. HandleDomainEvent's
+// whole contract is that it does NOT block its caller: it delivers on its
+// own goroutine (dispatcher.go's HandleDomainEvent), which calls Create()
+// concurrently with the test goroutine's waitFor polls and post-wait
+// assertions. mu guards every access to created/nextID so -race sees
+// synchronized reads and writes instead of a bare shared slice.
 type mockDeliveryRepository struct {
+	mu      sync.Mutex
 	created []Delivery
 	nextID  int
 }
 
 func (m *mockDeliveryRepository) Create(_ context.Context, d Delivery) (Delivery, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.nextID++
 	d.ID = "del-" + strconv.Itoa(m.nextID)
 	d.CreatedAt = time.Now()
@@ -37,6 +46,8 @@ func (m *mockDeliveryRepository) Create(_ context.Context, d Delivery) (Delivery
 }
 
 func (m *mockDeliveryRepository) ListRecent(_ context.Context, projectID, webhookID string, limit int) ([]Delivery, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	var out []Delivery
 	for i := len(m.created) - 1; i >= 0 && len(out) < limit; i-- {
 		d := m.created[i]
@@ -48,12 +59,31 @@ func (m *mockDeliveryRepository) ListRecent(_ context.Context, projectID, webhoo
 }
 
 func (m *mockDeliveryRepository) Get(_ context.Context, projectID, webhookID, deliveryID string) (Delivery, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	for _, d := range m.created {
 		if d.ID == deliveryID && d.ProjectID == projectID && d.WebhookID == webhookID {
 			return d, nil
 		}
 	}
 	return Delivery{}, ErrDeliveryNotFound
+}
+
+// snapshotCreated returns a locked copy of the rows Create has logged so
+// far. Tests must use this (and count()) instead of reading m.created
+// directly — a direct read races the dispatcher's delivery goroutine.
+func (m *mockDeliveryRepository) snapshotCreated() []Delivery {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]Delivery, len(m.created))
+	copy(out, m.created)
+	return out
+}
+
+func (m *mockDeliveryRepository) count() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.created)
 }
 
 func referenceSignature(secret string, body []byte) string {
@@ -143,7 +173,7 @@ func TestDeliverySignsWithTheWebhooksSecretAndCarriesTheEventTypeHeader(t *testi
 
 	d.HandleDomainEvent(context.Background(), "proj-1", "conversation.created", map[string]any{"conversation_id": "c-1"})
 
-	waitFor(t, func() bool { return len(deliveries.created) == 1 })
+	waitFor(t, func() bool { return deliveries.count() == 1 })
 
 	want := "sha256=" + referenceSignature("topsecret", gotBody)
 	if gotSignature != want {
@@ -153,7 +183,7 @@ func TestDeliverySignsWithTheWebhooksSecretAndCarriesTheEventTypeHeader(t *testi
 		t.Errorf("event type header = %q", gotEventType)
 	}
 
-	logged := deliveries.created[0]
+	logged := deliveries.snapshotCreated()[0]
 	if logged.Status != DeliveryStatusSuccess {
 		t.Errorf("status = %s, want success", logged.Status)
 	}
@@ -192,9 +222,9 @@ func TestDispatcherRetriesAndSucceedsOnTheFinalAttempt(t *testing.T) {
 	d := NewDispatcher(repo, deliveries)
 
 	d.HandleDomainEvent(context.Background(), "proj-1", "conversation.created", map[string]any{})
-	waitFor(t, func() bool { return len(deliveries.created) == 1 })
+	waitFor(t, func() bool { return deliveries.count() == 1 })
 
-	logged := deliveries.created[0]
+	logged := deliveries.snapshotCreated()[0]
 	if logged.Status != DeliveryStatusSuccess {
 		t.Errorf("status = %s, want success", logged.Status)
 	}
@@ -222,9 +252,9 @@ func TestDispatcherLogsFailureAfterExhaustingAttempts(t *testing.T) {
 	d := NewDispatcher(repo, deliveries)
 
 	d.HandleDomainEvent(context.Background(), "proj-1", "conversation.created", map[string]any{})
-	waitFor(t, func() bool { return len(deliveries.created) == 1 })
+	waitFor(t, func() bool { return deliveries.count() == 1 })
 
-	logged := deliveries.created[0]
+	logged := deliveries.snapshotCreated()[0]
 	if logged.Status != DeliveryStatusFailed {
 		t.Errorf("status = %s, want failed", logged.Status)
 	}
@@ -259,9 +289,9 @@ func TestDispatcherBlocksAndDoesNotRetryASSRFRefusedDestination(t *testing.T) {
 	d := NewDispatcher(repo, deliveries, WithGuard(guard))
 
 	d.HandleDomainEvent(context.Background(), "proj-1", "conversation.created", map[string]any{})
-	waitFor(t, func() bool { return len(deliveries.created) == 1 })
+	waitFor(t, func() bool { return deliveries.count() == 1 })
 
-	logged := deliveries.created[0]
+	logged := deliveries.snapshotCreated()[0]
 	if logged.Status != DeliveryStatusBlocked {
 		t.Errorf("status = %s, want %s", logged.Status, DeliveryStatusBlocked)
 	}
@@ -295,10 +325,11 @@ func TestDispatcherWithoutAGuardDialsUnchecked(t *testing.T) {
 	d := NewDispatcher(repo, deliveries) // no WithGuard
 
 	d.HandleDomainEvent(context.Background(), "proj-1", "conversation.created", map[string]any{})
-	waitFor(t, func() bool { return len(deliveries.created) == 1 })
+	waitFor(t, func() bool { return deliveries.count() == 1 })
 
-	if deliveries.created[0].Status != DeliveryStatusSuccess {
-		t.Errorf("status = %s, want success (an unguarded Dispatcher does not block loopback)", deliveries.created[0].Status)
+	snap := deliveries.snapshotCreated()
+	if snap[0].Status != DeliveryStatusSuccess {
+		t.Errorf("status = %s, want success (an unguarded Dispatcher does not block loopback)", snap[0].Status)
 	}
 }
 
@@ -322,8 +353,8 @@ func TestDispatcherSkipsInactiveAndUnsubscribedWebhooks(t *testing.T) {
 	// Give the (should-be-absent) goroutine a moment to have run if the
 	// active check were missing, then assert nothing was logged.
 	time.Sleep(100 * time.Millisecond)
-	if len(deliveries.created) != 0 {
-		t.Errorf("an inactive webhook was delivered to: %+v", deliveries.created)
+	if got := deliveries.snapshotCreated(); len(got) != 0 {
+		t.Errorf("an inactive webhook was delivered to: %+v", got)
 	}
 }
 
@@ -346,8 +377,8 @@ func TestRedeliverResendsTheExactStoredPayloadAsANewRow(t *testing.T) {
 	d := NewDispatcher(repo, deliveries)
 
 	d.HandleDomainEvent(context.Background(), "proj-1", "conversation.created", map[string]any{"conversation_id": "c-1"})
-	waitFor(t, func() bool { return len(deliveries.created) == 1 })
-	original := deliveries.created[0]
+	waitFor(t, func() bool { return deliveries.count() == 1 })
+	original := deliveries.snapshotCreated()[0]
 
 	redelivered, err := d.Redeliver(context.Background(), "proj-1", "wh-1", original.ID)
 	if err != nil {
