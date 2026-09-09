@@ -45,7 +45,12 @@ export function useFileCanvas(projectId: string | undefined): UseFileCanvasResul
           setError(
             result.reason === 'too-large'
               ? t('processes.chat.fileCanvas.tooLarge', 'This file is too large to open in canvas.')
-              : t('processes.chat.fileCanvas.openFailed', 'Could not open this file in canvas.'),
+              : result.reason === 'unsupported-format'
+                ? t(
+                    'processes.chat.fileCanvas.unsupportedFormat',
+                    'This file format is not supported in canvas — download it instead.',
+                  )
+                : t('processes.chat.fileCanvas.openFailed', 'Could not open this file in canvas.'),
           );
           return;
         }

@@ -18,7 +18,12 @@ import { getConfig } from '@/shared/config';
 import { isSystemBucket, normaliseBuckets, sortBucketsPinnedFirst } from '@/entities/bucket';
 import type { BucketWire } from '@/entities/bucket';
 
-import { detectCanvasFileOpenKind, isCanvasFileOpenSizeOk } from '../lib/canvasFileSource';
+import {
+  CANVAS_FILE_OPEN_SIZE_LIMIT_BYTES,
+  detectCanvasFileOpenKind,
+  isCanvasFileOpenSizeOk,
+  isUnsupportedCanvasDocumentFormat,
+} from '../lib/canvasFileSource';
 import type { CanvasFileOpenKind, CanvasFileSource } from '../lib/canvasFileSource';
 
 /** The opened document, ready to hand to `CanvasEditor`'s `selectedCodeBlockInfo`. */
@@ -31,7 +36,17 @@ export interface OpenedCanvasFile {
 
 export type OpenArtifactFileResult =
   | { readonly ok: true; readonly file: OpenedCanvasFile }
-  | { readonly ok: false; readonly reason: 'unsupported-kind' | 'too-large' | 'config-unavailable' | 'fetch-failed' };
+  | {
+      readonly ok: false;
+      /**
+       * `unsupported-format` (issue #879) is a NAMED office format this app
+       * recognises but cannot open (`.docx` and siblings) — distinct from
+       * `unsupported-kind`, an extension it has never heard of at all. The
+       * two get different copy: the first says "download it instead", the
+       * second says it could not be opened.
+       */
+      readonly reason: 'unsupported-kind' | 'unsupported-format' | 'too-large' | 'config-unavailable' | 'fetch-failed';
+    };
 
 export interface OpenArtifactFileParams {
   readonly projectId: string;
@@ -46,7 +61,9 @@ export interface OpenArtifactFileParams {
 /** Opens a stored artifact object as a canvas document, or explains why it can't. */
 export async function openArtifactFileInCanvas(params: OpenArtifactFileParams): Promise<OpenArtifactFileResult> {
   const plan = detectCanvasFileOpenKind(params.name);
-  if (plan === undefined) return { ok: false, reason: 'unsupported-kind' };
+  if (plan === undefined) {
+    return { ok: false, reason: isUnsupportedCanvasDocumentFormat(params.name) ? 'unsupported-format' : 'unsupported-kind' };
+  }
   if (!isCanvasFileOpenSizeOk(params.size)) return { ok: false, reason: 'too-large' };
 
   const config = getConfig();

@@ -64,7 +64,7 @@
  * switching the language switches which pane is mounted, and the header must
  * then reflect THAT pane's depth, not the one that just unmounted.
  */
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
+import { forwardRef, lazy, Suspense, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 
 import { Avatar, Box, Tooltip, Typography } from '@mui/material';
 
@@ -95,6 +95,16 @@ import type { MarkdownTableEditorHandle } from './table/MarkdownTableEditor';
 import { MarkdownTableEditor } from './table/MarkdownTableEditor';
 
 import type { CanvasFileSource } from '../../lib/canvasFileSource';
+import type { DocumentEditorHandle } from './DocumentEditor';
+
+/**
+ * The `document` pane (issue #879), lazy-loaded — see `./DocumentEditor.tsx`'s
+ * own module doc for why: it pulls in ProseMirror's whole editing engine, and
+ * the code/table/mermaid path (still the common case) must not pay for that
+ * chunk. `import('./DocumentEditor')`'s default export is the component
+ * itself (that file exports both named and default for exactly this).
+ */
+const LazyDocumentEditor = lazy(() => import('./DocumentEditor'));
 
 /**
  * How long the editor coalesces keystrokes before broadcasting the document to
@@ -211,25 +221,31 @@ export const CanvasEditor = forwardRef<CanvasEditorHandle, CanvasEditorProps>(
 
     /**
      * Which pane is mounted. A `markdownTable` canvas renders the table
-     * editor; everything else (including `mermaid`, whose source pane is a
-     * code editor) renders CodeMirror.
+     * editor, a `document` canvas (issue #879) renders the rich-text pane,
+     * and everything else (including `mermaid`, whose source pane is a code
+     * editor) renders CodeMirror.
      */
     const isTableEditing = codeLanguage === 'markdownTable';
+    const isDocumentEditing = codeLanguage === 'document';
 
-    /** The CodeMirror host's imperative handle. Null while the table pane is mounted. */
+    /** The CodeMirror host's imperative handle. Null while another pane is mounted. */
     const editorRef = useRef<CodeMirrorEditorHandle>(null);
-    /** The table editor's imperative handle. Null while the code pane is mounted. */
+    /** The table editor's imperative handle. Null while another pane is mounted. */
     const tableRef = useRef<MarkdownTableEditorHandle>(null);
+    /** The document (rich-text) editor's imperative handle — issue #879. Null while another pane is mounted. */
+    const docRef = useRef<DocumentEditorHandle>(null);
 
     /*
-     * Two histories, not one. Each pane owns its own undo stack — CodeMirror's
-     * is the document's, the table's is a snapshot list — and only the mounted
-     * one can answer an undo. Keeping a single `canUndo` would leave the
-     * header enabled from the pane that just unmounted.
+     * Three histories, not one. Each pane owns its own undo stack —
+     * CodeMirror's and the document pane's are the document's own, the
+     * table's is a snapshot list — and only the mounted one can answer an
+     * undo. Keeping a single `canUndo` would leave the header enabled from a
+     * pane that just unmounted.
      */
     const [codeHistory, setCodeHistory] = useState({ canUndo: false, canRedo: false });
     const [tableHistory, setTableHistory] = useState({ canUndo: false, canRedo: false });
-    const { canUndo, canRedo } = isTableEditing ? tableHistory : codeHistory;
+    const [docHistory, setDocHistory] = useState({ canUndo: false, canRedo: false });
+    const { canUndo, canRedo } = isTableEditing ? tableHistory : isDocumentEditing ? docHistory : codeHistory;
 
     /*
      * Stable identity (each pane installs its depth listener keyed on this
@@ -263,6 +279,16 @@ export const CanvasEditor = forwardRef<CanvasEditorHandle, CanvasEditorProps>(
       }),
       [],
     );
+    /** Same, for the document pane (issue #879). */
+    const docHistoryCallbacks = useMemo(
+      () => ({
+        onCanUndo: (value: boolean) =>
+          setDocHistory((prev) => (prev.canUndo === value ? prev : { ...prev, canUndo: value })),
+        onCanRedo: (value: boolean) =>
+          setDocHistory((prev) => (prev.canRedo === value ? prev : { ...prev, canRedo: value })),
+      }),
+      [],
+    );
 
     /*
      * Memoised on the language, NOT rebuilt per render.
@@ -283,8 +309,8 @@ export const CanvasEditor = forwardRef<CanvasEditorHandle, CanvasEditorProps>(
      */
     const activeEditor = useCallback(
       (): Pick<CodeMirrorEditorHandle, 'undo' | 'redo' | 'getCode'> | null =>
-        isTableEditing ? tableRef.current : editorRef.current,
-      [isTableEditing],
+        isTableEditing ? tableRef.current : isDocumentEditing ? docRef.current : editorRef.current,
+      [isTableEditing, isDocumentEditing],
     );
 
     const [hasSelectedRowsColumns, setHasSelectedRowsColumns] = useState({
@@ -362,12 +388,14 @@ export const CanvasEditor = forwardRef<CanvasEditorHandle, CanvasEditorProps>(
           // state update alone would leave the visible content stale.
           if (isTableEditing) {
             onImportTableData(parseMarkdownTable(extracted));
+          } else if (isDocumentEditing) {
+            docRef.current?.setCode(extracted);
           } else {
             editorRef.current?.setCode(extracted);
           }
         }
       },
-      [code, isTableEditing, onImportTableData],
+      [code, isTableEditing, isDocumentEditing, onImportTableData],
     );
 
     const { listenCanvasSyncEvent, stopListenCanvasSyncEvent } = useCanvasSyncSocket({ onCanvasSync });
@@ -496,6 +524,7 @@ export const CanvasEditor = forwardRef<CanvasEditorHandle, CanvasEditorProps>(
         if (!selectedCodeBlockInfo?.isBlock) return 'Edit response';
         if (codeLanguage === 'markdownTable') return 'Edit table';
         if (codeLanguage === 'mermaid') return 'Edit diagram';
+        if (codeLanguage === 'document') return 'Edit document';
         return 'Edit code';
       },
       [selectedCodeBlockInfo?.isBlock, codeLanguage],
@@ -793,7 +822,11 @@ export const CanvasEditor = forwardRef<CanvasEditorHandle, CanvasEditorProps>(
             ...(saveToArtifacts ? { onSaveToArtifacts: () => setSaveDialogOpen(true) } : {}),
           }}
           langSelect={{
-            showLangSelect: codeLanguage !== 'markdownTable',
+            // `document` is not a CodeMirror language — like `markdownTable`,
+            // it is its own top-level canvas type (selection affordance,
+            // file open, or the answer's "Open as document" action), never
+            // reached by picking it out of this dropdown.
+            showLangSelect: codeLanguage !== 'markdownTable' && codeLanguage !== 'document',
             onChangeLanguage: onChangeLanguage,
             language: codeLanguage,
             disableLanguageSelect: codeLanguage === 'mermaid',
@@ -922,6 +955,37 @@ export const CanvasEditor = forwardRef<CanvasEditorHandle, CanvasEditorProps>(
               readOnly={effectiveReadOnly}
               tracking={{ interaction_uuid, conversation_uuid }}
             />
+          </Box>
+        ) : codeLanguage === 'document' ? (
+          /* Document (rich-text) editor — issue #879. Lazy-loaded: see `./DocumentEditor.tsx`'s module doc. */
+          <Box
+            sx={{
+              overflow: 'hidden',
+              minWidth: '100%',
+              width: '100%',
+              flex: 1,
+              borderRadius: '8px',
+              border: '1px solid',
+              borderColor: 'divider',
+              background: '#fafafa',
+              boxSizing: 'border-box',
+            }}
+          >
+            <Suspense
+              fallback={
+                <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
+                  <Typography variant="labelMedium">{t('features.chatMessages.canvas.document.loading', 'Loading the document editor…')}</Typography>
+                </Box>
+              }
+            >
+              <LazyDocumentEditor
+                ref={docRef}
+                content={{ initialMarkdown: code, onChange: notifyChange }}
+                history={docHistoryCallbacks}
+                readOnly={effectiveReadOnly}
+                aria-label={title}
+              />
+            </Suspense>
           </Box>
         ) : (
           /* Code editor */

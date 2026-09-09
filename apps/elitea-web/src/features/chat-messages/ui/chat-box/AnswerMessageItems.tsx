@@ -55,8 +55,8 @@ import type { ChatMessage } from '../../lib/convertMessagesToChatHistory';
 const TEXT_MESSAGE_ITEM_TYPE = 'text_message';
 const CANVAS_MESSAGE_ITEM_TYPE = 'canvas_message';
 
-/** The three canvas kinds `Canvas` renders; anything else the server invents falls back to `code`. */
-const CANVAS_TYPES = ['code', 'diagram', 'table'] as const;
+/** The four canvas kinds `Canvas` renders; anything else the server invents falls back to `code`. */
+const CANVAS_TYPES = ['code', 'diagram', 'table', 'document'] as const;
 type CanvasKind = (typeof CANVAS_TYPES)[number];
 
 /** One rendered entry of an answer: a paragraph of text, or a canvas document. */

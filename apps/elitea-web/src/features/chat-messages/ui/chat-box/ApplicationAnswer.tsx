@@ -123,6 +123,34 @@ export function ApplicationAnswer({
   // actually carries the words is `./AnswerContent`'s subject.
   const hasTextContent = !!answer.content || items.length > 0;
 
+  /*
+   * "Open as document" (issue #879) — the WHOLE answer carved into a
+   * `document` canvas, not a range the reader highlighted. Only offered
+   * before the answer has been split at all: once a canvas already exists
+   * inside it (`items.length > 1`, or the lone item is itself a canvas), the
+   * words for a create() are not one contiguous range any more, and this
+   * button would ask the create route to carve a "selection" that spans a
+   * canvas block it cannot serialise as text.
+   */
+  const soleItem = items.length === 1 ? items[0] : undefined;
+  const wholeAnswerText = useMemo(() => {
+    if (items.length > 1) return undefined;
+    if (soleItem !== undefined) return soleItem.kind === 'text' ? soleItem.content : undefined;
+    return answer.content;
+  }, [items.length, soleItem, answer.content]);
+  const wholeAnswerItemId = soleItem?.kind === 'text' ? soleItem.messageItemId : undefined;
+
+  const onOpenAsDocument = useCallback(() => {
+    const text = wholeAnswerText;
+    if (!onCreateCanvasFromSelection || !text || text.trim() === '') return;
+    onCreateCanvasFromSelection({
+      messageGroupUuid: answer.id,
+      selectedText: text,
+      messageItemId: wholeAnswerItemId,
+      kind: 'document',
+    });
+  }, [onCreateCanvasFromSelection, wholeAnswerText, wholeAnswerItemId, answer.id]);
+
   const { swarmChildActions, nonSwarmChildActions } = useMemo(() => {
     if (isProcessing) return { swarmChildActions: [] as readonly SubAgentGroupable[], nonSwarmChildActions: toolActions };
     const swarm = toolActions.filter((action) => asDraft(action).type === TOOL_ACTION_TYPES.SwarmChild);
@@ -345,6 +373,9 @@ export function ApplicationAnswer({
               onCopy={onCopy}
               onRegenerate={onRegenerate}
               onDelete={onDelete}
+              onOpenAsDocument={
+                onCreateCanvasFromSelection && wholeAnswerText && wholeAnswerText.trim() !== '' ? onOpenAsDocument : undefined
+              }
             />
           </Box>
         </Box>

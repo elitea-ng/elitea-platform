@@ -54,8 +54,8 @@ export interface CanvasProps {
   readonly isStreaming?: boolean;
   /** The programming language — `'markdown'`, `'javascript'`, `'python'`, etc. */
   readonly language?: string;
-  /** Canvas type: `'code'`, `'diagram'`, or `'table'`. */
-  readonly type?: 'code' | 'diagram' | 'table';
+  /** Canvas type: `'code'`, `'diagram'`, `'table'`, or `'document'` (issue #879: rich-text prose, round-tripped as Markdown). */
+  readonly type?: 'code' | 'diagram' | 'table' | 'document';
   /** List of editors currently working on this canvas. */
   readonly editors?: readonly CanvasEditorPresence[];
   /** Interaction UUID for canvas tracking. */
@@ -145,6 +145,7 @@ export function Canvas({
 
   const editingTitle = useMemo(
     () => {
+      if (type === 'document') return t('features.chatMessages.canvas.block.editingDocument', 'Document editing...');
       if (type === 'code' && language !== 'mermaid') return t('features.chatMessages.canvas.block.editingCode', 'Code editing...');
       if (type === 'diagram' || language === 'mermaid') return t('features.chatMessages.canvas.block.editingDiagram', 'Diagram editing...');
       return t('features.chatMessages.canvas.block.editingTable', 'Table editing...');
@@ -154,6 +155,7 @@ export function Canvas({
 
   const editButtonTitle = useMemo(
     () => {
+      if (type === 'document') return t('features.chatMessages.canvas.block.openDocument', 'Edit document');
       if (type === 'code' && language !== 'mermaid') return t('features.chatMessages.canvas.block.openCode', 'Edit code');
       if (type === 'diagram' || language === 'mermaid') return t('features.chatMessages.canvas.block.openDiagram', 'Edit diagram');
       return t('features.chatMessages.canvas.block.openTable', 'Edit table');
@@ -170,6 +172,12 @@ export function Canvas({
         case 'diagram':
           return `\`\`\`mermaid\n${content}\n\`\`\`\n`;
         case 'table':
+          return content;
+        // A document's stored content IS the Markdown source — rendered as
+        // prose here (the same `CanvasContent` markdown surface a table
+        // uses), never fenced: fencing it would show the reader raw
+        // Markdown syntax instead of the document they wrote.
+        case 'document':
           return content;
         default:
           return content;
@@ -191,7 +199,7 @@ export function Canvas({
     onEdit?.({
       rawData: content,
       codeBlock: extraCodeFromBlock(content),
-      language: type === 'table' ? 'markdownTable' : type === 'diagram' ? 'mermaid' : language,
+      language: type === 'table' ? 'markdownTable' : type === 'diagram' ? 'mermaid' : type === 'document' ? 'document' : language,
       isBlock: true,
       ...((canvasRef?.startPos ?? startPos) != null ? { startPos: canvasRef?.startPos ?? startPos } : {}),
       ...((canvasRef?.endPos ?? endPos) != null ? { endPos: canvasRef?.endPos ?? endPos } : {}),

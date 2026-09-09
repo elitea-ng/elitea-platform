@@ -90,7 +90,7 @@ export type { ActionViewProps } from './ui/ActionView';
 export { ApplicationAnswer } from './ui/chat-box/ApplicationAnswer';
 export type { ApplicationAnswerProps } from './ui/chat-box/ApplicationAnswer.types';
 export type { AnswerCanvasSelection } from './ui/chat-box/AnswerContent';
-export { canvasByteRange } from './lib/canvasSelection';
+export { canvasByteRange, canvasKindForSelection } from './lib/canvasSelection';
 export { ChatContinue } from './ui/chat-continue/ChatContinue';
 export type { ChatContinueProps } from './ui/chat-continue/ChatContinue';
 export { ChatHitlActions } from './ui/chat-hitl-actions/ChatHitlActions';
@@ -172,6 +172,7 @@ export {
   CANVAS_FILE_OPEN_SIZE_LIMIT_BYTES,
   detectCanvasFileOpenKind,
   isCanvasFileOpenSizeOk,
+  isUnsupportedCanvasDocumentFormat,
 } from './lib/canvasFileSource';
 export type {
   OpenArtifactFileParams,

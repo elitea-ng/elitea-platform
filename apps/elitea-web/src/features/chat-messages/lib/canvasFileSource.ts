@@ -16,8 +16,11 @@
  * `table` pane parses `markdownTable` syntax specifically, and forcing an
  * arbitrary `.md` file through it would silently mangle prose). `.csv`/
  * `.tsv` DO map to `table` — that pane already imports delimited data
- * (`./canvas/table/ImportTableButton.tsx`) — and `.md`/`.markdown` map to
- * `code` with the `markdown` language, the same as any other text file.
+ * (`./canvas/table/ImportTableButton.tsx`) — and `.md`/`.markdown`/`.txt`/
+ * `.text` map to `document` (issue #879): a prose file opens into the
+ * rich-text canvas rather than a plain code pane, the same distinction the
+ * "Open as document" answer action and the selection-to-canvas affordance
+ * make for prose carved out of the CURRENT turn.
  *
  * The extension lists mirror (deliberately duplicated, not imported)
  * `features/artifacts/lib/artifactParsers.ts`'s `artifactPreviewKind` — this
@@ -25,10 +28,20 @@
  * `.dependency-cruiser.cjs`; `chat-messages` carries only a TEMPORARY,
  * pre-existing waiver for that rule, recorded as such in the waiver's own
  * commit message, not a standing invitation to add new sideways imports).
+ *
+ * ── `.docx` (issue #879) ───────────────────────────────────────────────────
+ * No docx-to-text converter is in this app's bundle (checked: no `mammoth`,
+ * no `docx`, nothing under `features/artifacts` either) and the spec for
+ * this issue is explicit that one is added ONLY if it is already there. So
+ * `.docx` (and the other binary office formats already refused by the size/
+ * kind checks above it) is named explicitly rather than falling through the
+ * generic "unrecognised extension" branch, so a caller can show "this format
+ * isn't supported — download it instead" rather than the generic
+ * open-failed message a truly unknown extension gets.
  */
 
-/** The three kinds `Canvas`/`CanvasEditor` already render. */
-export type CanvasFileOpenKind = 'code' | 'diagram' | 'table';
+/** The four kinds `Canvas`/`CanvasEditor` render. `document` is issue #879's addition — prose, edited as rich text, round-tripped as Markdown. */
+export type CanvasFileOpenKind = 'code' | 'diagram' | 'table' | 'document';
 
 /** What opening a file in canvas needs to know before it fetches anything. */
 export interface CanvasFileOpenPlan {
@@ -58,16 +71,35 @@ const CODE_LANGUAGE_BY_EXTENSION: ReadonlyMap<string, string> = new Map([
   ['c', 'c'], ['h', 'c'],
   ['cpp', 'cpp'], ['cc', 'cpp'], ['hpp', 'cpp'],
   ['xml', 'xml'],
-  ['txt', 'markdown'], ['text', 'markdown'],
 ]);
+
+/** Extensions that open as a `document` (issue #879) — prose, not a fenced code block. */
+const DOCUMENT_EXTENSIONS = new Set(['md', 'markdown', 'txt', 'text']);
 
 /** A file this app can meaningfully preview as text — not exhaustive, but every extension a text editor is asked to open. Binary/office formats (images, docx, …) are refused rather than guessed at. */
 const OPENABLE_TEXT_EXTENSIONS = new Set<string>([
   ...CODE_LANGUAGE_BY_EXTENSION.keys(),
   ...DIAGRAM_EXTENSIONS,
   ...TABLE_EXTENSIONS,
+  ...DOCUMENT_EXTENSIONS,
   'log', 'ini', 'conf', 'toml', 'env', 'gitignore', 'dockerfile', 'makefile',
 ]);
+
+/**
+ * Office/binary formats this app recognises by name but refuses to open —
+ * distinct from an extension it has simply never heard of. `.docx` is the
+ * one issue #879 names explicitly; the rest are named for the same reason
+ * `features/artifacts/lib/artifactParsers.ts` already refuses them as a
+ * text preview (no converter for any of them is in this bundle).
+ */
+export const UNSUPPORTED_BINARY_DOCUMENT_EXTENSIONS = new Set([
+  'docx', 'doc', 'odt', 'rtf', 'pdf', 'xlsx', 'xls', 'pptx', 'ppt',
+]);
+
+/** Whether `filename` names a recognised-but-unopenable office format (issue #879: `.docx` and siblings) — distinct from an extension this app has never heard of, so the caller can say "unsupported, download instead" rather than a generic open-failed message. */
+export function isUnsupportedCanvasDocumentFormat(filename: string): boolean {
+  return UNSUPPORTED_BINARY_DOCUMENT_EXTENSIONS.has(extensionOf(filename));
+}
 
 function extensionOf(filename: string): string {
   const lower = filename.toLowerCase();
@@ -84,6 +116,7 @@ export function detectCanvasFileOpenKind(filename: string): CanvasFileOpenPlan |
   const extension = extensionOf(filename);
   if (DIAGRAM_EXTENSIONS.has(extension)) return { type: 'diagram', language: 'mermaid' };
   if (TABLE_EXTENSIONS.has(extension)) return { type: 'table', language: 'markdownTable' };
+  if (DOCUMENT_EXTENSIONS.has(extension)) return { type: 'document', language: 'document' };
   if (!OPENABLE_TEXT_EXTENSIONS.has(extension)) return undefined;
   return { type: 'code', language: CODE_LANGUAGE_BY_EXTENSION.get(extension) ?? extension };
 }

@@ -47,7 +47,13 @@ export function useArtifactCanvas(
           setError(
             result.reason === 'too-large'
               ? t('artifacts.canvas.tooLarge', '{{name}} is too large to open in canvas.', { name: item.name })
-              : t('artifacts.canvas.unsupportedOrFailed', 'Could not open {{name}} in canvas.', { name: item.name }),
+              : result.reason === 'unsupported-format'
+                ? t(
+                    'artifacts.canvas.unsupportedFormat',
+                    '{{name}} is not a supported canvas format — download it instead.',
+                    { name: item.name },
+                  )
+                : t('artifacts.canvas.unsupportedOrFailed', 'Could not open {{name}} in canvas.', { name: item.name }),
           );
           return;
         }
