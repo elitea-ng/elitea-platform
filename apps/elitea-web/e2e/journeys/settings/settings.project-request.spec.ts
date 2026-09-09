@@ -68,7 +68,12 @@ test('J-PR1: member requests a project, admin approves it from App Requests, mem
   const projectName = `${AUTOTEST_PREFIX}j_pr_${testInfo.project.name}_${Date.now()}`;
 
   /* ── 1. member: submit the request from the project switcher ────────── */
-  await page.goto(`${BASE_URL}/app`);
+  // `/app` (no trailing slash) is not a URI `nginx/spa.conf`'s
+  // `location /app/` prefix-matches — nginx has no bare `/` fallback, so a
+  // request for it 404s at the SERVER, before the SPA ever loads (every
+  // other journey in this suite already goes to `/app/...` with a path or
+  // the trailing slash).
+  await page.goto(`${BASE_URL}/app/`);
   await page.locator('[id^="project-switcher-trigger-"]').click({ timeout: 15_000 });
   await page.getByTestId('project-switcher-request-project').click({ timeout: 5_000 });
 
@@ -126,8 +131,18 @@ test('J-PR1: member requests a project, admin approves it from App Requests, mem
     expect(decidedBody.created_project_id).toBeGreaterThan(0);
     createdProjectIds.push(decidedBody.created_project_id);
 
+    // The decision INVALIDATES the queue query (useDecideAppRequest), and
+    // the page is still filtered to the "Pending" tab — the request this
+    // journey just approved is no longer pending, so the refetch this
+    // triggers drops its row from THAT view before "Project #N created" can
+    // ever render there. Switch to "Approved" first, the way an operator
+    // checking their own decision's outcome would.
+    await adminPage.getByRole('tab', { name: 'Approved' }).click();
+    const approvedRow = adminPage.getByRole('row').filter({ hasText: projectName });
+    await expect(approvedRow).toHaveCount(1, { timeout: 15_000 });
+
     // The queue itself shows the project id, not just the network response.
-    await expect(adminPage.getByText(`Project #${decidedBody.created_project_id} created`)).toBeVisible({
+    await expect(approvedRow.getByText(`Project #${decidedBody.created_project_id} created`)).toBeVisible({
       timeout: 10_000,
     });
   } finally {
