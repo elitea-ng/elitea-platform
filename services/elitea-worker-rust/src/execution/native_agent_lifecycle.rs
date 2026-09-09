@@ -1041,7 +1041,7 @@ where
     RC: RedisRetirementClient + 'static,
     K: UnixMillisClock,
 {
-    finish_after_stream(
+    Box::pin(finish_after_stream(
         run,
         Some(failure),
         FreshAgentTerminalSelection::Completed,
@@ -1049,7 +1049,7 @@ where
         retirer,
         clock,
         terminal_recovery,
-    )
+    ))
     .await
 }
 
