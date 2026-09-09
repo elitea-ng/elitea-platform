@@ -171,3 +171,44 @@ The user supplies no project ID and no skill ID.
 The worker invokes internal lookup and detail tools, then returns skill 5 with the updated instructions.
 This independently verifies automatic project scope for a new conversation.
 The next acceptance work covers the remaining entity families and negative permission cases.
+
+### Agent creation metadata and scope correction
+
+Chat 542 reaches `post_elitea_core_applications` through the Rust worker.
+PostgreSQL rejects creation because `applications.meta` is required and has no server default.
+The current platform supplies this value through `Application.meta` in `elitea_core/models/all.py`.
+The Go `ApplicationsRepo.Create` insert now supplies an empty JSON object explicitly.
+The existing database schema stays unchanged.
+The application repository tests pass against isolated databases with the restored metadata constraint.
+
+Current-platform instruction edits use `api/v2/version_instruction_patch.py`.
+They require a fresh instruction hash and create a backup before an atomic edit.
+Current-platform field updates use `utils/application_utils.py::applications_update_version` with `exclude_unset=True`.
+The new internal MCP version handlers implement these separate operations.
+Browser proof for instruction and conversation starter updates remains open.
+
+The user defers pipeline creation through chat until the model has the required YAML schema.
+This deferral does not establish pipeline creation or execution acceptance.
+
+### Agent create and separate update browser proof
+
+The repaired Main image is `elitea-main:gate3-app-defaults-20260909`.
+Its image digest is `sha256:da44d54b2a6d1566de4c8fae4e2cbe2b6daf4844f2a477aa84673201dd4b5db5`.
+All 62 application repository tests pass without skips.
+Chat 542 creates agent 19 and base version 20 through the internal MCP.
+The skill-link tool attaches skill 5, version 5.
+The instruction-patch tool updates version 20 and creates backup version 21.
+The separate version-settings tool saves two conversation starters and a welcome message.
+This second operation creates backup version 22 and preserves the updated instructions.
+Database reads confirm that versions 20, 21, and 22 retain the exact skill binding.
+The editor loads the saved instructions, starters, and welcome message with Save disabled.
+
+The editor initially cannot load attached skills because the running Main configuration lacks `ELITEA_APPLICATION_SKILLS_ENABLED`.
+The tracked standalone compose file already enables the reviewed route.
+The deployment now enables the same flag and retains its image, database, credentials, and mounts.
+The attached-skills endpoint returns HTTP 200 with skill 5.
+The editor shows the skill and reports one attached skill.
+
+The model settings remain empty in this test agent's database version.
+The editor displays its model fallback, which does not prove that model configuration is persisted.
+Executing this saved agent and testing model discovery remain open.
