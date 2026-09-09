@@ -29,9 +29,18 @@ If more than one person has the same conversation open, everyone sees who else i
 
 Closing the canvas panel doesn't discard your edits as long as you've saved — the block in the conversation updates with your latest saved version. Reopening the same block later (by clicking its edit icon again) picks up where you left off, since it's editing the message's content directly rather than a separate draft.
 
-<Note>
-Canvas edits the block that was just generated in the current turn. Opening or saving a previously stored file into canvas isn't supported — canvas has no "open file" action, and its content types are limited to code, tables and Mermaid diagrams. To work with a stored file, use [Artifacts](/menus/artifacts) instead.
-</Note>
+## Open a stored file in canvas
+
+Canvas isn't limited to blocks generated in the current turn — it can also open a previously stored text-like file (code, Markdown, CSV/TSV, or Mermaid), from two places:
+
+- **A message attachment.** Hover a text-like attachment card in the conversation and click its **Open in canvas** icon.
+- **An artifact bucket file.** In [Artifacts](/menus/artifacts), open a file's preview and click **Open in canvas** in its toolbar.
+
+Either way, the file's content loads into the same editor described above — code gets syntax highlighting, a `.csv`/`.tsv` file opens as a table, and a `.mmd`/`.mermaid` file opens as a diagram with a live preview. Files over 2 MB, and non-text kinds such as images or `.docx`, aren't opened in canvas.
+
+## Save to artifacts
+
+The canvas header's **Save to artifacts** button (the floppy-disk icon) writes the current document to the artifact store — this works whether the canvas was opened from a stored file or generated in the current turn. Choose a bucket, confirm or change the filename (a canvas opened from a file starts pre-filled with the same bucket and name), and save. If a file with that name already exists in the chosen bucket, you're asked to confirm the overwrite; saving back to the SAME file a canvas was opened from skips that confirmation, since that is the ordinary re-save. After saving, further saves from that canvas update the same object.
 
 ## Related
 

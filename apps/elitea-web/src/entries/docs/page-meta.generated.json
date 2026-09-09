@@ -161,8 +161,8 @@
   },
   {
     "slug": "how-tos/chat-conversations/create-entities-from-chat",
-    "title": "Edit agents, pipelines, toolkits and MCPs from chat",
-    "description": "Open the inline editor for an agent, pipeline, toolkit, or MCP connection that's already a participant in your conversation."
+    "title": "Create and edit agents, pipelines, toolkits and MCPs from chat",
+    "description": "Open the inline editor for an agent, pipeline, toolkit, or MCP connection — to create a new one from the composer's + menu, or edit one that's already a participant in your conversation."
   },
   {
     "slug": "how-tos/chat-conversations/elitea-mcp-tools",
@@ -542,7 +542,7 @@
   {
     "slug": "menus/internal-tools",
     "title": "Internal tools",
-    "description": "Built-in chat and agent capabilities — image creation, data analysis, planner, swarm mode, and smart tools selection."
+    "description": "Built-in chat and agent capabilities — image creation, data analysis, planner, Python sandbox, swarm mode, and smart tools selection."
   },
   {
     "slug": "menus/overview",

@@ -157,3 +157,32 @@ export type {
   MermaidQuickFixUnavailableReason,
   UseMermaidQuickFixResult,
 } from './model/useMermaidQuickFix';
+
+// ---------------------------------------------------------------------------
+// Canvas <-> artifact store (issue #878) — kind detection, the fetch/upload
+// wrappers behind "Open in canvas" and "Save to artifacts", and the `source`
+// reference a file-backed canvas carries. Consumed by `pages/artifacts` (the
+// bucket browser's own "Open in canvas") and `processes/chat` (a message
+// attachment's own opener) — both sit above this feature, so both must reach
+// it through this barrel (`no-deep-slice-import`/`no-deep-slice-import-cross-
+// slice`, `.dependency-cruiser.cjs`).
+// ---------------------------------------------------------------------------
+export type { CanvasFileOpenKind, CanvasFileOpenPlan, CanvasFileSource } from './lib/canvasFileSource';
+export {
+  CANVAS_FILE_OPEN_SIZE_LIMIT_BYTES,
+  detectCanvasFileOpenKind,
+  isCanvasFileOpenSizeOk,
+} from './lib/canvasFileSource';
+export type {
+  OpenArtifactFileParams,
+  OpenArtifactFileResult,
+  OpenedCanvasFile,
+  SaveCanvasToArtifactParams,
+  SaveCanvasToArtifactResult,
+} from './model/canvasFileTransfer';
+export {
+  artifactObjectExists,
+  listArtifactBucketNames,
+  openArtifactFileInCanvas,
+  saveCanvasToArtifact,
+} from './model/canvasFileTransfer';

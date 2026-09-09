@@ -25,6 +25,8 @@ import { useChatWithEditors } from './ChatWithEditors.hooks';
 import { renderAgentEditorShell, renderPipelineEditorShell, renderToolkitEditorShell } from './EditorShell';
 import { useCanvasCreation } from './useCanvasCreation';
 import { useCreateChatReset } from './useCreateChatReset';
+import { FileCanvasDrawer } from './FileCanvasDrawer';
+import { useFileCanvas } from './useFileCanvas';
 
 /**
  * Who is signed in, read off the router root context's `auth` seam — the same
@@ -151,6 +153,14 @@ export function ChatWithEditors(): ReactNode {
   const canvasCreation = useCanvasCreation();
 
   /*
+   * "Open in canvas" from a message ATTACHMENT (issue #878). Composed HERE
+   * for the same reason `canvasCreation` is: it needs `projectId`, and this
+   * is the layer that has it without re-deriving it inside a hook a plain
+   * `renderHook` mounts (`useFileCanvas`'s own tests do exactly that).
+   */
+  const fileCanvas = useFileCanvas(projectId);
+
+  /*
    * `strict: false` reads the ROOT's merged context from any component under
    * `<RouterProvider>`, the same call `useRouterAuth.ts` makes.
    */
@@ -231,6 +241,8 @@ export function ChatWithEditors(): ReactNode {
               selectedCanvasBlock: canvas.selectedCodeBlockInfo,
               /* And the gesture that MAKES one: a range highlighted in an answer. */
               onCreateCanvasFromSelection: canvasCreation.onCreateCanvasFromSelection,
+              /* A stored FILE, opened from a message attachment (issue #878). */
+              onOpenFileInCanvas: fileCanvas.onOpenFileInCanvas,
             }}
           />
           )}
@@ -306,9 +318,23 @@ export function ChatWithEditors(): ReactNode {
              * their own canvas.
              */
             {...(viewerId !== undefined ? { viewer: { id: viewerId } } : {})}
+            /*
+             * "Save to artifacts" (issue #878) — offered here too, not only
+             * on a file-opened canvas: a canvas MADE from a turn has no
+             * artifact identity yet, so every save here is a "save as" (no
+             * `source` to pre-fill), and — deliberately NOT threaded through
+             * `canvas`'s own save (`editCanvas`, the `elitea_core` PUT) — the
+             * two are independent actions: this one additionally publishes
+             * the document as a browsable file, it does not replace the
+             * canvas's own storage.
+             */
+            {...(canvas.projectId !== undefined ? { saveToArtifacts: { onSaved: () => undefined } } : {})}
           />
         </Drawer>
       )}
+
+      {/* The FILE canvas (issue #878) — a message attachment opened for editing. See `FileCanvasDrawer`'s own doc for why it is a second, independent drawer. */}
+      <FileCanvasDrawer fileCanvas={fileCanvas} projectId={projectId} viewerId={viewerId} />
 
       {isEditingToolkit && (
         <ToolkitEditor

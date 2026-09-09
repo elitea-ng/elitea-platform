@@ -90,8 +90,11 @@ import { getCanvasCodeExtensions } from './canvasCodeExtensions';
 import { extraCodeFromBlock } from './Canvas';
 import { CanvasEditHeader } from './CanvasEditHeader';
 import { MermaidQuickFixButton } from './MermaidQuickFixButton';
+import { SaveToArtifactsDialog } from './SaveToArtifactsDialog';
 import type { MarkdownTableEditorHandle } from './table/MarkdownTableEditor';
 import { MarkdownTableEditor } from './table/MarkdownTableEditor';
+
+import type { CanvasFileSource } from '../../lib/canvasFileSource';
 
 /**
  * How long the editor coalesces keystrokes before broadcasting the document to
@@ -151,6 +154,18 @@ export interface CanvasEditorProps {
   readonly editCanvas?: (params: { projectId: string | number; canvasUUID: string; name?: string; canvas_type?: string; code_language?: string }) => Promise<unknown>;
   /** Project ID for canvas edits. */
   readonly projectId?: string | number;
+  /**
+   * "Save to artifacts" (issue #878) — grouped to stay within the §3.5
+   * prop budget (recorded in `scripts/lib/budgets-core.mjs`'s waiver list
+   * alongside this file). Omitted, the header offers no such control.
+   */
+  readonly saveToArtifacts?: {
+    /** Where this canvas was opened from / last saved to, if either happened — pre-fills the dialog and lets a plain re-save skip the overwrite confirm. */
+    readonly source?: CanvasFileSource;
+    /** A filename to suggest when there is no `source` yet. */
+    readonly suggestedName?: string;
+    readonly onSaved: (source: CanvasFileSource) => void;
+  };
 }
 
 export interface CanvasEditorHandle {
@@ -184,12 +199,15 @@ export const CanvasEditor = forwardRef<CanvasEditorHandle, CanvasEditorProps>(
       onError,
       editCanvas,
       projectId,
+      saveToArtifacts,
     },
     ref,
   ) {
     const [code, setCode] = useState(selectedCodeBlockInfo?.codeBlock ?? '');
     const [readOnly, setReadOnly] = useState(viewOnly);
     const [codeLanguage, setCodeLanguage] = useState(selectedCodeBlockInfo?.language ?? 'markdown');
+    /** "Save to artifacts" dialog (issue #878) — a session-local UI flag, same rationale as `isFullScreen` below: it belongs to THIS reading, not to the canvas. */
+    const [saveDialogOpen, setSaveDialogOpen] = useState(false);
 
     /**
      * Which pane is mounted. A `markdownTable` canvas renders the table
@@ -772,6 +790,7 @@ export const CanvasEditor = forwardRef<CanvasEditorHandle, CanvasEditorProps>(
             onDelete,
             onToggleFullScreen,
             isFullScreen,
+            ...(saveToArtifacts ? { onSaveToArtifacts: () => setSaveDialogOpen(true) } : {}),
           }}
           langSelect={{
             showLangSelect: codeLanguage !== 'markdownTable',
@@ -792,6 +811,23 @@ export const CanvasEditor = forwardRef<CanvasEditorHandle, CanvasEditorProps>(
           }}
           disabledAll={effectiveReadOnly || selectedCodeBlockInfo?.isCreatingCanvas || !!selectedCodeBlockInfo?.createCanvasError}
         />
+        {saveToArtifacts && (
+          <SaveToArtifactsDialog
+            open={saveDialogOpen}
+            projectId={projectId !== undefined ? String(projectId) : ''}
+            // The LIVE document — the same read Copy and Save-close make, for
+            // the same reason: `code` only catches up after the editor's
+            // change debounce.
+            content={activeEditor()?.getCode() ?? code}
+            {...(saveToArtifacts.source !== undefined ? { source: saveToArtifacts.source } : {})}
+            {...(saveToArtifacts.suggestedName !== undefined ? { suggestedName: saveToArtifacts.suggestedName } : {})}
+            onClose={() => setSaveDialogOpen(false)}
+            onSaved={(source) => {
+              setSaveDialogOpen(false);
+              saveToArtifacts.onSaved(source);
+            }}
+          />
+        )}
         {presenceRow}
         {concurrentEditNotice}
         {codeLanguage === 'mermaid' ? (

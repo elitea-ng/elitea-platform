@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import CloseIcon from '@mui/icons-material/Close';
 import CloudDownloadOutlinedIcon from '@mui/icons-material/CloudDownloadOutlined';
 import DeleteOutlinedIcon from '@mui/icons-material/DeleteOutlined';
+import OpenInNewOutlinedIcon from '@mui/icons-material/OpenInNewOutlined';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import CircularProgress from '@mui/material/CircularProgress';
@@ -35,6 +36,14 @@ interface FilePreviewCanvasProps {
   readonly onDelete: (key: string) => Promise<unknown>;
   readonly onSaved: () => unknown;
   readonly onUnsavedChangesUpdate?: (hasChanges: boolean) => void;
+  /**
+   * Opens this file in the richer canvas editor (issue #878) — syntax
+   * highlighting, the mermaid split-view, the table grid — instead of the
+   * plain text area below. Omitted, no such control renders (the CALLER
+   * decides eligibility by filename, since this component's own `kind`
+   * mapping is narrower than canvas's and the two must not silently drift).
+   */
+  readonly onOpenInCanvas?: () => void;
 }
 
 // oxlint-disable-next-line complexity -- this is the preview state machine across text, image, unavailable, save, and delete modes.
@@ -199,6 +208,17 @@ export function FilePreviewCanvas(props: FilePreviewCanvasProps): ReactNode {
                 {saving ? t('common.saving', 'Saving…') : t('common.save', 'Save')}
               </Button>
             </>
+          )}
+          {props.onOpenInCanvas && (
+            <Tooltip title={t('artifacts.preview.openInCanvas', 'Open in canvas')}>
+              <IconButton
+                aria-label={t('artifacts.preview.openInCanvasAria', 'Open in canvas')}
+                onClick={props.onOpenInCanvas}
+                data-testid="artifacts-open-in-canvas"
+              >
+                <OpenInNewOutlinedIcon />
+              </IconButton>
+            </Tooltip>
           )}
           <Tooltip title={t('common.download', 'Download')}>
             <IconButton

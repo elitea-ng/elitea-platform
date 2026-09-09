@@ -10,7 +10,8 @@
  *   slice-public-api       ≤ 20 exported symbols from a slice index.ts
  *
  * File-level overrides (Wave 2 budget waivers — remove when refactoring lands):
- *   CanvasEditor.tsx: file-length waived (494/400), use-effects waived (4/3)
+ *   CanvasEditor.tsx: file-length waived (494/400), use-effects waived (4/3),
+ *     component-props waived (13/12 — issue #878's `saveToArtifacts` group)
  *   Canvas.tsx: component-props waived (13/12), hook-deps waived (10/8)
  *   CanvasEditHeader.tsx: component-props waived (21/12)
  *   PlaybackChatBox.tsx: use-effects waived (4/3)
@@ -42,7 +43,7 @@ import { parse } from '@babel/parser';
  * documented in the module JSDoc above. Remove waivers as refactoring lands.
  */
 export const BUDGET_WAIVERS = Object.freeze({
-  'src/features/chat-messages/ui/canvas/CanvasEditor.tsx': ['file-length', 'use-effects'],
+  'src/features/chat-messages/ui/canvas/CanvasEditor.tsx': ['file-length', 'use-effects', 'component-props'],
   'src/features/chat-messages/ui/canvas/Canvas.tsx': ['component-props', 'hook-deps'],
   'src/features/chat-messages/ui/canvas/CanvasEditHeader.tsx': ['component-props'],
   'src/features/chat-messages/ui/playback/PlaybackChatBox.tsx': ['use-effects'],

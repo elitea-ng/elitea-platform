@@ -145,6 +145,8 @@ export interface ChatEditorCallbacks {
   readonly selectedCanvasBlock?: CodeBlockInfo | undefined;
   /** Carves a canvas out of a range the reader highlighted in an answer. */
   readonly onCreateCanvasFromSelection?: (payload: AnswerCanvasSelection) => void;
+  /** Opens a text-like message attachment in the canvas editor (issue #878). Forwarded to `ChatBox` untouched, like every other member of this bag. */
+  readonly onOpenFileInCanvas?: (source: { readonly bucket: string; readonly name: string }) => void;
 }
 
 /** @public */
