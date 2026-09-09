@@ -835,6 +835,37 @@ func (r *ConversationsRepo) AddParticipant(ctx context.Context, projectID, conve
 	if _, err := transaction.Exec(ctx, mapping, id, participantID, entitySettings); err != nil {
 		return fmt.Errorf("conversations: add participant mapping: %w", err)
 	}
+
+	// Stamp `meta.single_participant` for the entity types run-history
+	// filters on (issue #868's own DoD: the agent/toolkit/pipeline editor's
+	// History tab reads this conversation back through
+	// `?entity_name=...&entity_meta_id=...`, and `Handler.List` (see its own
+	// comment) has ALWAYS matched only against this meta field — DeepWiki's
+	// `resolveConversation` is the one caller that ever wrote it. A
+	// conversation created the ordinary way (this method) never did, so the
+	// filter matched nothing and every run-history tab read back empty
+	// (agents.run-history.spec.ts / toolkits.run-history.spec.ts, #882 CI).
+	//
+	// `llm`/`dummy`/`user` participants are not "run history" subjects and
+	// are left out, matching participantDisplayMeta's own default-vs-special
+	// split above. Last write wins for a conversation carrying more than one
+	// trackable participant — no journey exercises that shape today.
+	if entityName == "application" || entityName == "toolkit" || entityName == "pipeline" {
+		singleParticipant, err := json.Marshal(map[string]any{
+			"entity_name": entityName,
+			"entity_meta": body["entity_meta"],
+		})
+		if err != nil {
+			return fmt.Errorf("conversations: encode single_participant: %w", err)
+		}
+		metaUpdate := fmt.Sprintf(`UPDATE %s.chat_conversations
+			SET meta = COALESCE(meta, '{}'::jsonb) || jsonb_build_object('single_participant', $1::jsonb)
+			WHERE id = $2`, s)
+		if _, err := transaction.Exec(ctx, metaUpdate, singleParticipant, id); err != nil {
+			return fmt.Errorf("conversations: stamp single_participant: %w", err)
+		}
+	}
+
 	if err := transaction.Commit(ctx); err != nil {
 		return fmt.Errorf("conversations: add participant commit: %w", err)
 	}
