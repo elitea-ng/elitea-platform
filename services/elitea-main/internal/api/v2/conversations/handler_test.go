@@ -63,6 +63,10 @@ type mockRepo struct {
 	deleteConversationAttachments []conversations.AttachmentRef
 	listMessageGroupsFn           func(ctx context.Context, projectID, conversationID string, limit int, sortOrder string) ([]map[string]any, error)
 	listParticipantsFn            func(ctx context.Context, projectID, conversationID string) ([]conversations.Participant, error)
+	getMessageFeedbackFn          func(ctx context.Context, projectID, messageUUID, userID string) (conversations.MessageFeedbackSummary, error)
+	setMessageFeedbackFn          func(ctx context.Context, projectID, messageUUID, userID string, rating int, comment string) (conversations.MessageFeedbackSummary, error)
+	deleteMessageFeedbackFn       func(ctx context.Context, projectID, messageUUID, userID string) (conversations.MessageFeedbackSummary, error)
+	listMessageFeedbackBatchFn    func(ctx context.Context, projectID string, messageUUIDs []string, userID string) (map[string]conversations.MessageFeedbackSummary, error)
 }
 
 func (m *mockRepo) List(ctx context.Context, projectID string, page, pageSize int) (conversations.ListResponse, error) {
@@ -207,6 +211,34 @@ func (m *mockRepo) DeleteMessage(ctx context.Context, projectID, groupUID, userI
 		return result, m.deleteMessageFn(ctx, projectID, groupUID)
 	}
 	return result, nil
+}
+
+func (m *mockRepo) GetMessageFeedback(ctx context.Context, projectID, messageUUID, userID string) (conversations.MessageFeedbackSummary, error) {
+	if m.getMessageFeedbackFn != nil {
+		return m.getMessageFeedbackFn(ctx, projectID, messageUUID, userID)
+	}
+	return conversations.MessageFeedbackSummary{}, nil
+}
+
+func (m *mockRepo) SetMessageFeedback(ctx context.Context, projectID, messageUUID, userID string, rating int, comment string) (conversations.MessageFeedbackSummary, error) {
+	if m.setMessageFeedbackFn != nil {
+		return m.setMessageFeedbackFn(ctx, projectID, messageUUID, userID, rating, comment)
+	}
+	return conversations.MessageFeedbackSummary{}, nil
+}
+
+func (m *mockRepo) DeleteMessageFeedback(ctx context.Context, projectID, messageUUID, userID string) (conversations.MessageFeedbackSummary, error) {
+	if m.deleteMessageFeedbackFn != nil {
+		return m.deleteMessageFeedbackFn(ctx, projectID, messageUUID, userID)
+	}
+	return conversations.MessageFeedbackSummary{}, nil
+}
+
+func (m *mockRepo) ListMessageFeedbackBatch(ctx context.Context, projectID string, messageUUIDs []string, userID string) (map[string]conversations.MessageFeedbackSummary, error) {
+	if m.listMessageFeedbackBatchFn != nil {
+		return m.listMessageFeedbackBatchFn(ctx, projectID, messageUUIDs, userID)
+	}
+	return map[string]conversations.MessageFeedbackSummary{}, nil
 }
 
 // newRouter mounts the handler under /projects/{projectID}/conversations to

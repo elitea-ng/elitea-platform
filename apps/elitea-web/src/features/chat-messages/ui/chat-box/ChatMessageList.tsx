@@ -385,6 +385,10 @@ export function ChatMessageList({
                     ...(speakingSegments && { speakingSegments }),
                     ...(spokenRange && { spokenRange }),
                   }}
+                  feedback={{
+                    projectId,
+                    enabled: message.id !== WELCOME_MESSAGE_ID && !message.isSummarized,
+                  }}
                 />
               )}
             </Box>

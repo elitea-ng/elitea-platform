@@ -39,6 +39,7 @@ import Typography from '@mui/material/Typography';
 
 import { ApplicationAnswerActions } from './ApplicationAnswerActions';
 import { AssistantAvatar } from './MessageAvatar';
+import { MessageFeedbackControl } from './MessageFeedbackControl';
 import { MessageHeaderRow } from './MessageHeaderRow';
 import { actionKey, asDraft, ApplicationAnswerThinking, swarmChildContent } from './ApplicationAnswerThinking';
 import { ChatContinue } from '../chat-continue/ChatContinue';
@@ -103,6 +104,19 @@ export interface ApplicationAnswerContinuation {
   readonly hideContinueButton?: boolean;
 }
 
+/** Message feedback (#880) props, grouped to stay under the component-props budget. */
+export interface ApplicationAnswerFeedback {
+  /**
+   * Absent (no thumbs control at all) when the caller has not resolved a
+   * project id — matches `MessageAttachmentList`'s own `projectId?:
+   * string` convention for the same reason: a control that needs a project
+   * scope to work has nothing legal to call without one.
+   */
+  readonly projectId?: string | undefined;
+  /** False for the welcome message and any message still loading/streaming — same gate `shouldDisableRegenerate` uses. */
+  readonly enabled?: boolean;
+}
+
 /** HITL interrupt/resume props, grouped to stay under the component-props budget. */
 export interface ApplicationAnswerHitl {
   /** HITL interrupt for resume (single-pause shape). */
@@ -146,6 +160,7 @@ export interface ApplicationAnswerProps {
   readonly tts?: ApplicationAnswerTts;
   readonly continuation?: ApplicationAnswerContinuation;
   readonly hitl?: ApplicationAnswerHitl;
+  readonly feedback?: ApplicationAnswerFeedback;
 }
 
 /** Defensive read of a message-level token-limit pause signal — not yet a typed `ChatMessage` field (see module doc). */
@@ -171,9 +186,11 @@ export function ApplicationAnswer({
   tts: { onAutoSpeak, speakingMessageId, spokenRange } = {},
   continuation: { onContinueMcpExecution, onContinueTokenLimitExecution, hideContinueButton = false } = {},
   hitl: { hitlInterrupt, hitlInterrupts, onHitlResume } = {},
+  feedback: { projectId: feedbackProjectId, enabled: feedbackEnabled = true } = {},
 }: ApplicationAnswerProps): ReactNode {
   const isProcessing = isLoading || isRegenerating || isStreaming;
   const isLoadingOrRegenerating = isLoading || isRegenerating;
+  const showFeedback = Boolean(feedbackProjectId) && feedbackEnabled && !isProcessing;
   const exception = answer.exception;
   const canRenderContent = !isLoadingOrRegenerating;
   // `spokenRange` is one global range, not scoped to a message id — it only
@@ -375,17 +392,33 @@ export function ApplicationAnswer({
               </Box>
             )}
 
-          <ApplicationAnswerActions
-            hasContent={hasTextContent || !!exception}
-            isProcessing={isProcessing}
-            shouldDisableRegenerate={shouldDisableRegenerate}
-            hasSpeakableText={hasTextContent}
-            isSpeaking={!!speakingMessageId}
-            onAutoSpeak={onAutoSpeak ? handleAutoSpeak : undefined}
-            onCopy={onCopy}
-            onRegenerate={onRegenerate}
-            onDelete={onDelete}
-          />
+          <Box
+            sx={{
+              display: 'flex',
+              // `space-between` needs TWO items to place one at each edge — a
+              // single flex child under it sits at flex-start, which would
+              // silently un-right-align the actions row on every message with
+              // no resolved project id. `flex-end` is the ORIGINAL single-row
+              // alignment (`ApplicationAnswerActions`'s own box), kept as the
+              // fallback rather than assumed to still hold once this became a
+              // two-item row.
+              justifyContent: showFeedback ? 'space-between' : 'flex-end',
+              alignItems: 'flex-start',
+            }}
+          >
+            {showFeedback && <MessageFeedbackControl projectId={feedbackProjectId as string} messageId={messageId} />}
+            <ApplicationAnswerActions
+              hasContent={hasTextContent || !!exception}
+              isProcessing={isProcessing}
+              shouldDisableRegenerate={shouldDisableRegenerate}
+              hasSpeakableText={hasTextContent}
+              isSpeaking={!!speakingMessageId}
+              onAutoSpeak={onAutoSpeak ? handleAutoSpeak : undefined}
+              onCopy={onCopy}
+              onRegenerate={onRegenerate}
+              onDelete={onDelete}
+            />
+          </Box>
         </Box>
       )}
     </Box>

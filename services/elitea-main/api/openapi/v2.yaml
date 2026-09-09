@@ -1402,6 +1402,50 @@ components:
             text: { type: string, nullable: true }
             thinking: { type: string, nullable: true }
 
+    MessageFeedback:
+      type: object
+      description: >
+        One user's like/dislike + optional comment on a message (#880).
+        `rating` is never `0` — the stored row's own CHECK constraint
+        refuses it (tenant/0135_chat_message_feedback.sql) — only its
+        ABSENCE (no `mine` on the summary) means "not rated".
+      required: [rating]
+      properties:
+        rating:
+          type: integer
+          enum: [-1, 1]
+          description: '-1 = dislike, 1 = like.'
+        comment: { type: string }
+
+    MessageFeedbackSummary:
+      type: object
+      description: >
+        What every message-feedback endpoint answers: the aggregate
+        like/dislike counts across every user who has rated this message,
+        plus the CALLING user's own feedback. The client's hover tooltip
+        reads the counts; the thumbs buttons' highlighted state reads
+        `mine`.
+      required: [likes, dislikes]
+      properties:
+        likes: { type: integer }
+        dislikes: { type: integer }
+        mine:
+          allOf:
+            - $ref: '#/components/schemas/MessageFeedback'
+          nullable: true
+
+    MessageFeedbackRequest:
+      type: object
+      required: [rating]
+      properties:
+        rating:
+          type: integer
+          enum: [-1, 1]
+          description: '-1 = dislike, 1 = like. Any other value is a 400.'
+        comment:
+          type: string
+          description: Optional. Refused with a 400 past 2000 characters (messageFeedbackCommentMaxLen).
+
     ProjectQuota:
       type: object
       description: |
@@ -11513,6 +11557,92 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/message_feedback/prompt_lib/{project_id}/{message_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: message_id
+        in: path
+        required: true
+        schema: { type: string }
+        description: >
+          The message-GROUP uuid — the same `{messageID}` GetMessage and
+          DeleteMessage share (internal/api/v2/conversations/handler.go).
+    get:
+      operationId: getMessageFeedback
+      summary: Aggregate like/dislike counts for one message, plus the caller's own vote
+      description: |
+        internal/api/v2/conversations/handler.go's GetMessageFeedback (#880).
+        Reads p_{project_id}.chat_message_feedback
+        (tenant/0135_chat_message_feedback.sql). `mine` is absent when the
+        caller has not rated this message.
+      tags: [chat]
+      responses:
+        '200':
+          description: Feedback summary for the message.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageFeedbackSummary'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500': { $ref: '#/components/responses/500' }
+    post:
+      operationId: setMessageFeedback
+      summary: Like or dislike a message, with an optional comment
+      description: |
+        internal/api/v2/conversations/handler.go's SetMessageFeedback (#880).
+        Upserts into p_{project_id}.chat_message_feedback — a second call
+        from the same user REPLACES their rating and comment rather than
+        adding a second row (UNIQUE(message_group_uuid, user_id)). Returns
+        the updated aggregate, same shape as the GET.
+      tags: [chat]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MessageFeedbackRequest'
+      responses:
+        '200':
+          description: Feedback recorded; the updated summary.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageFeedbackSummary'
+        '400':
+          description: rating was not 1 or -1, or the comment exceeded the length limit.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No such message in this project.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500': { $ref: '#/components/responses/500' }
+    delete:
+      operationId: deleteMessageFeedback
+      summary: Retract the caller's own like/dislike on a message
+      description: |
+        internal/api/v2/conversations/handler.go's DeleteMessageFeedback
+        (#880). Removes only the CALLER's own row; other users' feedback on
+        the same message is untouched. Returns the updated aggregate.
+      tags: [chat]
+      responses:
+        '200':
+          description: Feedback retracted; the updated summary.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageFeedbackSummary'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
         '500': { $ref: '#/components/responses/500' }
 
   # ==========================================================================

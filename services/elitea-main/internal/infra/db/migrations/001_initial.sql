@@ -781,6 +781,32 @@ BEGIN
             created_at TIMESTAMP NOT NULL DEFAULT now()
         )', schema_name);
 
+    -- Per-message like/dislike feedback with an optional comment (#880).
+    -- Not `social_feedbacks` above: that table has no unique constraint on
+    -- (entity_name, entity_id, user_id), a 1-5 `rating` shape rather than a
+    -- like/dislike one, and an `entity_id INTEGER` that cannot hold a
+    -- message's real identifier (chat_message_group.uuid). See
+    -- tenant/0135_chat_message_feedback.sql for the full account — this
+    -- block is the SAME shape, kept here because the journeys E2E stack
+    -- applies this file with psql and then runs `/elitea-migrate` with no
+    -- flags (Bootstrap plus ApplyShared, never the tenant history), the same
+    -- reason 0129''s chat_canvas_* tables are declared twice.
+    EXECUTE format('
+        CREATE TABLE IF NOT EXISTS %I.chat_message_feedback (
+            id BIGSERIAL PRIMARY KEY,
+            message_group_uuid UUID NOT NULL REFERENCES %I.chat_message_group(uuid) ON DELETE CASCADE,
+            user_id INTEGER NOT NULL,
+            rating SMALLINT NOT NULL,
+            comment TEXT,
+            created_at TIMESTAMP NOT NULL DEFAULT now(),
+            updated_at TIMESTAMP NOT NULL DEFAULT now(),
+            CONSTRAINT chat_message_feedback_message_user_uc UNIQUE (message_group_uuid, user_id),
+            CONSTRAINT chat_message_feedback_rating_check CHECK (rating IN (-1, 1))
+        )', schema_name, schema_name);
+    EXECUTE format('
+        CREATE INDEX IF NOT EXISTS ix_tenant_chat_message_feedback_message_group_uuid
+            ON %I.chat_message_feedback (message_group_uuid)', schema_name);
+
     -- Toolkit index metadata (the "Indexes" tab, issue #149).
     -- Columns match exactly what `internal/api/v2/toolkits/handler.go`'s
     -- `IndexMeta`/`IndexMetaGet` SELECT: id, name, status, progress,

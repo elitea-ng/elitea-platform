@@ -626,7 +626,22 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// every agent every client ever listed carried "0001-01-01T00:00:00Z" as
 	// its last-modified date. It introduces NO permission and no table, so it
 	// has no shared sibling.
-	require.EqualValues(t, 134, Head(tenant))
+	//
+	// 135: tenant/0135_chat_message_feedback.sql, the like/dislike +
+	// optional-comment control on a chat message (#880). A new table rather
+	// than a bent-shape reuse of `social_feedbacks`: that table has no
+	// unique constraint on (entity_name, entity_id, user_id) — a second
+	// CreateFeedback call inserts a duplicate row instead of replacing the
+	// first — a 1-5 `rating` shape rather than binary like/dislike, and an
+	// `entity_id INTEGER` that cannot hold chat_message_group's real
+	// identifier (its uuid). `chat_message_feedback` is one row per
+	// (message, user), UNIQUE-constrained so the route can upsert instead of
+	// de-duplicating on read, and CASCADE-deleted with its message. It
+	// introduces NO permission (the route reuses
+	// `models.chat.messages.details`, the same string GetMessage already
+	// declares — reading a message's feedback is not a wider claim than
+	// reading the message), so it has no shared sibling.
+	require.EqualValues(t, 135, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own

@@ -48,6 +48,7 @@ import type {
   CanvasPresence,
   ConversationExport,
   ConversationListing,
+  MessageFeedbackSummary,
   MessageTraceListing,
   MessageTraceStepDetail,
   SupportAssistantConfig,
@@ -487,6 +488,69 @@ export const getGetMessageTraceResponseMock = (): MessageTraceStepDetail => ({
   },
 });
 
+export const getGetMessageFeedbackResponseMock = (
+  overrideResponse: Partial<Extract<MessageFeedbackSummary, object>> = {},
+): MessageFeedbackSummary => ({
+  likes: faker.number.int(),
+  dislikes: faker.number.int(),
+  mine: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([
+      {
+        rating: faker.helpers.arrayElement([-1, 1] as const),
+        comment: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          undefined,
+        ]),
+      },
+      null,
+    ]),
+    undefined,
+  ]),
+  ...overrideResponse,
+});
+
+export const getSetMessageFeedbackResponseMock = (
+  overrideResponse: Partial<Extract<MessageFeedbackSummary, object>> = {},
+): MessageFeedbackSummary => ({
+  likes: faker.number.int(),
+  dislikes: faker.number.int(),
+  mine: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([
+      {
+        rating: faker.helpers.arrayElement([-1, 1] as const),
+        comment: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          undefined,
+        ]),
+      },
+      null,
+    ]),
+    undefined,
+  ]),
+  ...overrideResponse,
+});
+
+export const getDeleteMessageFeedbackResponseMock = (
+  overrideResponse: Partial<Extract<MessageFeedbackSummary, object>> = {},
+): MessageFeedbackSummary => ({
+  likes: faker.number.int(),
+  dislikes: faker.number.int(),
+  mine: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([
+      {
+        rating: faker.helpers.arrayElement([-1, 1] as const),
+        comment: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          undefined,
+        ]),
+      },
+      null,
+    ]),
+    undefined,
+  ]),
+  ...overrideResponse,
+});
+
 export const getGetSupportAssistantConfigMockHandler = (
   overrideResponse?:
     | SupportAssistantConfig
@@ -751,6 +815,84 @@ export const getGetMessageTraceMockHandler = (
     options,
   );
 };
+
+export const getGetMessageFeedbackMockHandler = (
+  overrideResponse?:
+    | MessageFeedbackSummary
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<MessageFeedbackSummary> | MessageFeedbackSummary),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/message_feedback/prompt_lib/:projectId/:messageId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetMessageFeedbackResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getSetMessageFeedbackMockHandler = (
+  overrideResponse?:
+    | MessageFeedbackSummary
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<MessageFeedbackSummary> | MessageFeedbackSummary),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/message_feedback/prompt_lib/:projectId/:messageId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getSetMessageFeedbackResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getDeleteMessageFeedbackMockHandler = (
+  overrideResponse?:
+    | MessageFeedbackSummary
+    | ((
+        info: Parameters<Parameters<typeof http.delete>[1]>[0],
+      ) => Promise<MessageFeedbackSummary> | MessageFeedbackSummary),
+  options?: RequestHandlerOptions,
+) => {
+  return http.delete(
+    "*/elitea_core/message_feedback/prompt_lib/:projectId/:messageId",
+    async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getDeleteMessageFeedbackResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
 export const getChatMock = () => [
   getGetSupportAssistantConfigMockHandler(),
   getListSupportConversationsMockHandler(),
@@ -762,4 +904,7 @@ export const getChatMock = () => [
   getListConversationsMockHandler(),
   getListMessageTracesMockHandler(),
   getGetMessageTraceMockHandler(),
+  getGetMessageFeedbackMockHandler(),
+  getSetMessageFeedbackMockHandler(),
+  getDeleteMessageFeedbackMockHandler(),
 ];

@@ -185,6 +185,26 @@ type DeleteMessageResult struct {
 	Attachments []AttachmentRef
 }
 
+// MessageFeedback is one user's like/dislike + optional comment on a chat
+// message (#880). `Rating` is `1` (like) or `-1` (dislike) — never `0`, which
+// is not a state a stored row can hold (tenant/0135's CHECK constraint
+// refuses it), only the absence of one (`MessageFeedbackSummary.Mine == nil`).
+type MessageFeedback struct {
+	Rating  int    `json:"rating"`
+	Comment string `json:"comment,omitempty"`
+}
+
+// MessageFeedbackSummary is what every feedback endpoint answers: the
+// aggregate like/dislike counts across every user who has rated this
+// message, plus the CALLING user's own feedback — `nil` when they have not
+// rated it. The client's hover tooltip reads the counts; the thumbs
+// buttons' highlighted state reads `Mine`.
+type MessageFeedbackSummary struct {
+	Likes    int              `json:"likes"`
+	Dislikes int              `json:"dislikes"`
+	Mine     *MessageFeedback `json:"mine,omitempty"`
+}
+
 type Participant struct {
 	ID             int            `json:"id"`
 	EntityName     string         `json:"entity_name"`
@@ -230,6 +250,21 @@ type Repository interface {
 	GetMessageByUUID(ctx context.Context, projectID, messageUUID string) (map[string]any, error)
 	DeleteMessages(ctx context.Context, projectID, conversationID string) error
 	DeleteMessage(ctx context.Context, projectID, groupUID, userID string) (DeleteMessageResult, error)
+	// GetMessageFeedback, SetMessageFeedback and DeleteMessageFeedback are
+	// #880's like/dislike/comment control (tenant/0135_chat_message_feedback.sql).
+	// SetMessageFeedback upserts: a second call from the same user on the
+	// same message REPLACES their rating and comment rather than adding a
+	// second row (the table's own UNIQUE(message_group_uuid, user_id)
+	// constraint is what makes that safe under a concurrent write).
+	GetMessageFeedback(ctx context.Context, projectID, messageUUID, userID string) (MessageFeedbackSummary, error)
+	SetMessageFeedback(ctx context.Context, projectID, messageUUID, userID string, rating int, comment string) (MessageFeedbackSummary, error)
+	DeleteMessageFeedback(ctx context.Context, projectID, messageUUID, userID string) (MessageFeedbackSummary, error)
+	// ListMessageFeedbackBatch answers every message's summary in ONE query
+	// rather than one per message — Export (export.go) is the caller, and a
+	// transcript export walking up to exportMessageCap messages one feedback
+	// read at a time would be an N+1 query the size of the conversation.
+	// Messages with no feedback at all are simply absent from the map.
+	ListMessageFeedbackBatch(ctx context.Context, projectID string, messageUUIDs []string, userID string) (map[string]MessageFeedbackSummary, error)
 }
 
 type Handler struct {
@@ -1009,6 +1044,92 @@ func (h *Handler) GetMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, msg)
+}
+
+// messageFeedbackCommentMaxLen bounds the optional comment a thumbs-down (or
+// thumbs-up) can carry — matching the popover's own limit
+// (features/chat-messages' MessageFeedbackPopover), so a body that passed the
+// client's own check never bounces off the server's.
+const messageFeedbackCommentMaxLen = 2000
+
+// GetMessageFeedback answers the aggregate like/dislike counts for one
+// message plus the caller's own rating, if any (#880). Read-only, so it sits
+// behind the same permission GetMessage does: reading a message's feedback is
+// not a wider claim than reading the message itself.
+func (h *Handler) GetMessageFeedback(w http.ResponseWriter, r *http.Request) {
+	projectID := chi.URLParam(r, "projectID")
+	messageUUID := chi.URLParam(r, "messageID")
+	user, _ := auth.UserFromContext(r.Context())
+	summary, err := h.repo.GetMessageFeedback(r.Context(), projectID, messageUUID, user.ID)
+	if err != nil {
+		apierr.Write(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, summary)
+}
+
+// SetMessageFeedback records the caller's like/dislike (+ optional comment)
+// on one message, replacing whatever they had recorded before (#880).
+//
+// An unauthenticated caller is refused outright rather than silently
+// recorded against an empty user id — the route sits behind
+// `models.chat.messages.details`, so this should be unreachable, and failing
+// closed is right if it ever is not (same reasoning DeleteMessage's own empty
+// userID guard states).
+func (h *Handler) SetMessageFeedback(w http.ResponseWriter, r *http.Request) {
+	projectID := chi.URLParam(r, "projectID")
+	messageUUID := chi.URLParam(r, "messageID")
+	user, ok := auth.UserFromContext(r.Context())
+	if !ok || user.ID == "" {
+		apierr.Write(w, apierr.Unauthorized("authentication required"))
+		return
+	}
+
+	var body struct {
+		Rating  int    `json:"rating"`
+		Comment string `json:"comment"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		apierr.Write(w, apierr.BadRequest("invalid request body"))
+		return
+	}
+	if body.Rating != 1 && body.Rating != -1 {
+		apierr.Write(w, apierr.BadRequest("rating must be 1 (like) or -1 (dislike)"))
+		return
+	}
+	if len(body.Comment) > messageFeedbackCommentMaxLen {
+		apierr.Write(w, apierr.BadRequest(fmt.Sprintf("comment exceeds %d characters", messageFeedbackCommentMaxLen)))
+		return
+	}
+
+	summary, err := h.repo.SetMessageFeedback(r.Context(), projectID, messageUUID, user.ID, body.Rating, body.Comment)
+	if err != nil {
+		apierr.Write(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, summary)
+}
+
+// DeleteMessageFeedback retracts the caller's own like/dislike on one
+// message (#880). Retracting is not "the same as never having voted" to
+// anybody but the caller — the aggregate the response carries reflects the
+// retraction immediately, same as SetMessageFeedback's response reflects the
+// new vote.
+func (h *Handler) DeleteMessageFeedback(w http.ResponseWriter, r *http.Request) {
+	projectID := chi.URLParam(r, "projectID")
+	messageUUID := chi.URLParam(r, "messageID")
+	user, ok := auth.UserFromContext(r.Context())
+	if !ok || user.ID == "" {
+		apierr.Write(w, apierr.Unauthorized("authentication required"))
+		return
+	}
+
+	summary, err := h.repo.DeleteMessageFeedback(r.Context(), projectID, messageUUID, user.ID)
+	if err != nil {
+		apierr.Write(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, summary)
 }
 
 // defaultEntityProjectID fills entity_meta.project_id from the request path

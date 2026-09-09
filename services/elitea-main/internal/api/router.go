@@ -2885,6 +2885,18 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						Get("/message/prompt_lib/{projectID}/{messageID}", convHandler.GetMessage)
 					r.With(requireMessageDelete).
 						Delete("/message/prompt_lib/{projectID}/{messageID}", convHandler.DeleteMessage)
+					// Message feedback — like/dislike + optional comment (#880).
+					// All three verbs declare `models.chat.messages.details`, the
+					// SAME string GetMessage above declares: reading or casting a
+					// vote on a message's feedback is not a wider claim than
+					// reading the message itself, so this needs no new permission
+					// and no migration to seed one (see tenant/0135's own header).
+					r.With(projectPermission("models.chat.messages.details")).
+						Get("/message_feedback/prompt_lib/{projectID}/{messageID}", convHandler.GetMessageFeedback)
+					r.With(projectPermission("models.chat.messages.details")).
+						Post("/message_feedback/prompt_lib/{projectID}/{messageID}", convHandler.SetMessageFeedback)
+					r.With(projectPermission("models.chat.messages.details")).
+						Delete("/message_feedback/prompt_lib/{projectID}/{messageID}", convHandler.DeleteMessageFeedback)
 					r.With(projectPermission("models.chat.participants.create")).
 						Post("/participants/prompt_lib/{projectID}/{conversationID}", convHandler.AddParticipant)
 					r.With(projectPermission("models.chat.participant.delete")).

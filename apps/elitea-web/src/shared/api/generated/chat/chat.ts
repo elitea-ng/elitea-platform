@@ -64,6 +64,8 @@ import type {
   ListConversationsParams,
   ListMessageTracesParams,
   ListSupportConversationsParams,
+  MessageFeedbackRequest,
+  MessageFeedbackSummary,
   MessageTraceListing,
   MessageTraceStepDetail,
   N400Response,
@@ -2611,6 +2613,753 @@ export function useGetMessageTrace<
     projectId,
     stepId,
     params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getMessageFeedbackResponse200 = {
+  data: MessageFeedbackSummary;
+  status: 200;
+};
+
+export type getMessageFeedbackResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getMessageFeedbackResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type getMessageFeedbackResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type getMessageFeedbackResponseSuccess =
+  getMessageFeedbackResponse200 & {
+    headers: Headers;
+  };
+export type getMessageFeedbackResponseError = (
+  | getMessageFeedbackResponse401
+  | getMessageFeedbackResponse403
+  | getMessageFeedbackResponse500
+) & {
+  headers: Headers;
+};
+
+export type getMessageFeedbackResponse =
+  getMessageFeedbackResponseSuccess | getMessageFeedbackResponseError;
+
+export const getGetMessageFeedbackUrl = (
+  projectId: string,
+  messageId: string,
+) => {
+  return `/elitea_core/message_feedback/prompt_lib/${projectId}/${messageId}`;
+};
+
+/**
+ * internal/api/v2/conversations/handler.go's GetMessageFeedback (#880).
+ * Reads p_{project_id}.chat_message_feedback
+ * (tenant/0135_chat_message_feedback.sql). `mine` is absent when the
+ * caller has not rated this message.
+ * @summary Aggregate like/dislike counts for one message, plus the caller's own vote
+ */
+export const getMessageFeedback = async (
+  projectId: string,
+  messageId: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getMessageFeedbackResponse> => {
+  return eliteaFetch<getMessageFeedbackResponse>(
+    getGetMessageFeedbackUrl(projectId, messageId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetMessageFeedbackQueryKey = (
+  projectId: string,
+  messageId: string,
+) => {
+  return [
+    `/elitea_core/message_feedback/prompt_lib/${projectId}/${messageId}`,
+  ] as const;
+};
+
+export const getGetMessageFeedbackQueryOptions = <
+  TData = Awaited<ReturnType<typeof getMessageFeedback>>,
+  TError = N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  messageId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getMessageFeedback>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGetMessageFeedbackQueryKey(projectId, messageId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getMessageFeedback>>
+  > = ({ signal }) =>
+    getMessageFeedback(projectId, messageId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      messageId !== null &&
+      messageId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getMessageFeedback>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetMessageFeedbackQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getMessageFeedback>>
+>;
+export type GetMessageFeedbackQueryError =
+  N401Response | N403Response | N500Response;
+
+export function useGetMessageFeedback<
+  TData = Awaited<ReturnType<typeof getMessageFeedback>>,
+  TError = N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  messageId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getMessageFeedback>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getMessageFeedback>>,
+          TError,
+          Awaited<ReturnType<typeof getMessageFeedback>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetMessageFeedback<
+  TData = Awaited<ReturnType<typeof getMessageFeedback>>,
+  TError = N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  messageId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getMessageFeedback>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getMessageFeedback>>,
+          TError,
+          Awaited<ReturnType<typeof getMessageFeedback>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetMessageFeedback<
+  TData = Awaited<ReturnType<typeof getMessageFeedback>>,
+  TError = N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  messageId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getMessageFeedback>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Aggregate like/dislike counts for one message, plus the caller's own vote
+ */
+
+export function useGetMessageFeedback<
+  TData = Awaited<ReturnType<typeof getMessageFeedback>>,
+  TError = N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  messageId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getMessageFeedback>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetMessageFeedbackQueryOptions(
+    projectId,
+    messageId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type setMessageFeedbackResponse200 = {
+  data: MessageFeedbackSummary;
+  status: 200;
+};
+
+export type setMessageFeedbackResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type setMessageFeedbackResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type setMessageFeedbackResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type setMessageFeedbackResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type setMessageFeedbackResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type setMessageFeedbackResponseSuccess =
+  setMessageFeedbackResponse200 & {
+    headers: Headers;
+  };
+export type setMessageFeedbackResponseError = (
+  | setMessageFeedbackResponse400
+  | setMessageFeedbackResponse401
+  | setMessageFeedbackResponse403
+  | setMessageFeedbackResponse404
+  | setMessageFeedbackResponse500
+) & {
+  headers: Headers;
+};
+
+export type setMessageFeedbackResponse =
+  setMessageFeedbackResponseSuccess | setMessageFeedbackResponseError;
+
+export const getSetMessageFeedbackUrl = (
+  projectId: string,
+  messageId: string,
+) => {
+  return `/elitea_core/message_feedback/prompt_lib/${projectId}/${messageId}`;
+};
+
+/**
+ * internal/api/v2/conversations/handler.go's SetMessageFeedback (#880).
+ * Upserts into p_{project_id}.chat_message_feedback — a second call
+ * from the same user REPLACES their rating and comment rather than
+ * adding a second row (UNIQUE(message_group_uuid, user_id)). Returns
+ * the updated aggregate, same shape as the GET.
+ * @summary Like or dislike a message, with an optional comment
+ */
+export const setMessageFeedback = async (
+  projectId: string,
+  messageId: string,
+  messageFeedbackRequest: MessageFeedbackRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<setMessageFeedbackResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+  return eliteaFetch<setMessageFeedbackResponse>(
+    getSetMessageFeedbackUrl(projectId, messageId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(messageFeedbackRequest),
+    },
+  );
+};
+
+export const getSetMessageFeedbackQueryKey = (
+  projectId: string,
+  messageId: string,
+  messageFeedbackRequest?: MessageFeedbackRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/message_feedback/prompt_lib/${projectId}/${messageId}`,
+    messageFeedbackRequest,
+  ] as const;
+};
+
+export const getSetMessageFeedbackQueryOptions = <
+  TData = Awaited<ReturnType<typeof setMessageFeedback>>,
+  TError = ErrorResponse | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  messageId: string,
+  messageFeedbackRequest: MessageFeedbackRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setMessageFeedback>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getSetMessageFeedbackQueryKey(projectId, messageId, messageFeedbackRequest);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof setMessageFeedback>>
+  > = ({ signal }) =>
+    setMessageFeedback(projectId, messageId, messageFeedbackRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      messageId !== null &&
+      messageId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof setMessageFeedback>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type SetMessageFeedbackQueryResult = NonNullable<
+  Awaited<ReturnType<typeof setMessageFeedback>>
+>;
+export type SetMessageFeedbackQueryError =
+  ErrorResponse | N401Response | N403Response | N500Response;
+
+export function useSetMessageFeedback<
+  TData = Awaited<ReturnType<typeof setMessageFeedback>>,
+  TError = ErrorResponse | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  messageId: string,
+  messageFeedbackRequest: MessageFeedbackRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setMessageFeedback>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof setMessageFeedback>>,
+          TError,
+          Awaited<ReturnType<typeof setMessageFeedback>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSetMessageFeedback<
+  TData = Awaited<ReturnType<typeof setMessageFeedback>>,
+  TError = ErrorResponse | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  messageId: string,
+  messageFeedbackRequest: MessageFeedbackRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setMessageFeedback>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof setMessageFeedback>>,
+          TError,
+          Awaited<ReturnType<typeof setMessageFeedback>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSetMessageFeedback<
+  TData = Awaited<ReturnType<typeof setMessageFeedback>>,
+  TError = ErrorResponse | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  messageId: string,
+  messageFeedbackRequest: MessageFeedbackRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setMessageFeedback>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Like or dislike a message, with an optional comment
+ */
+
+export function useSetMessageFeedback<
+  TData = Awaited<ReturnType<typeof setMessageFeedback>>,
+  TError = ErrorResponse | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  messageId: string,
+  messageFeedbackRequest: MessageFeedbackRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setMessageFeedback>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getSetMessageFeedbackQueryOptions(
+    projectId,
+    messageId,
+    messageFeedbackRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type deleteMessageFeedbackResponse200 = {
+  data: MessageFeedbackSummary;
+  status: 200;
+};
+
+export type deleteMessageFeedbackResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type deleteMessageFeedbackResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type deleteMessageFeedbackResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type deleteMessageFeedbackResponseSuccess =
+  deleteMessageFeedbackResponse200 & {
+    headers: Headers;
+  };
+export type deleteMessageFeedbackResponseError = (
+  | deleteMessageFeedbackResponse401
+  | deleteMessageFeedbackResponse403
+  | deleteMessageFeedbackResponse500
+) & {
+  headers: Headers;
+};
+
+export type deleteMessageFeedbackResponse =
+  deleteMessageFeedbackResponseSuccess | deleteMessageFeedbackResponseError;
+
+export const getDeleteMessageFeedbackUrl = (
+  projectId: string,
+  messageId: string,
+) => {
+  return `/elitea_core/message_feedback/prompt_lib/${projectId}/${messageId}`;
+};
+
+/**
+ * internal/api/v2/conversations/handler.go's DeleteMessageFeedback
+ * (#880). Removes only the CALLER's own row; other users' feedback on
+ * the same message is untouched. Returns the updated aggregate.
+ * @summary Retract the caller's own like/dislike on a message
+ */
+export const deleteMessageFeedback = async (
+  projectId: string,
+  messageId: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<deleteMessageFeedbackResponse> => {
+  return eliteaFetch<deleteMessageFeedbackResponse>(
+    getDeleteMessageFeedbackUrl(projectId, messageId),
+    {
+      ...options,
+      method: "DELETE",
+    },
+  );
+};
+
+export const getDeleteMessageFeedbackQueryKey = (
+  projectId: string,
+  messageId: string,
+) => {
+  return [
+    "DELETE",
+    `/elitea_core/message_feedback/prompt_lib/${projectId}/${messageId}`,
+  ] as const;
+};
+
+export const getDeleteMessageFeedbackQueryOptions = <
+  TData = Awaited<ReturnType<typeof deleteMessageFeedback>>,
+  TError = N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  messageId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteMessageFeedback>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getDeleteMessageFeedbackQueryKey(projectId, messageId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof deleteMessageFeedback>>
+  > = ({ signal }) =>
+    deleteMessageFeedback(projectId, messageId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      messageId !== null &&
+      messageId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof deleteMessageFeedback>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type DeleteMessageFeedbackQueryResult = NonNullable<
+  Awaited<ReturnType<typeof deleteMessageFeedback>>
+>;
+export type DeleteMessageFeedbackQueryError =
+  N401Response | N403Response | N500Response;
+
+export function useDeleteMessageFeedback<
+  TData = Awaited<ReturnType<typeof deleteMessageFeedback>>,
+  TError = N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  messageId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteMessageFeedback>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof deleteMessageFeedback>>,
+          TError,
+          Awaited<ReturnType<typeof deleteMessageFeedback>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDeleteMessageFeedback<
+  TData = Awaited<ReturnType<typeof deleteMessageFeedback>>,
+  TError = N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  messageId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteMessageFeedback>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof deleteMessageFeedback>>,
+          TError,
+          Awaited<ReturnType<typeof deleteMessageFeedback>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDeleteMessageFeedback<
+  TData = Awaited<ReturnType<typeof deleteMessageFeedback>>,
+  TError = N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  messageId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteMessageFeedback>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Retract the caller's own like/dislike on a message
+ */
+
+export function useDeleteMessageFeedback<
+  TData = Awaited<ReturnType<typeof deleteMessageFeedback>>,
+  TError = N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  messageId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteMessageFeedback>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getDeleteMessageFeedbackQueryOptions(
+    projectId,
+    messageId,
     options,
   );
 
