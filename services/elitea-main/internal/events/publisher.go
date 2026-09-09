@@ -46,23 +46,25 @@ const (
 	// graph has run. See EventPipelineRunSucceeded's comment for why this
 	// package does not also emit that fact yet.
 	EventPipelineRunStarted = "pipeline.run.started"
-	// EventPipelineRunSucceeded and EventPipelineRunFailed are DECLARED, not
-	// wired. A pipeline is an ordinary agent-execution turn (run.go's own
-	// package doc: "both halves end in the SAME call the chat composer
-	// makes"), and this platform's turn completion is settled deep inside
-	// the claim-fence/settlement machinery — internal/application/output
-	// .AgentExecutionService.IngestAgent, fed by a gRPC frame from a worker
-	// process minutes after admission, behind the fence-verification
-	// contract internal/application/execution/settlement.go owns — or, on
-	// the native runtime, the equivalent Rust-engine claim/settle path.
-	// Neither exposes a single safe, already-isolated hook that reports
-	// "this execution just finished, succeeded or failed" without editing
-	// that fencing logic itself, which chat's own history in this repository
-	// (turn-settlement races, claim-fence staleness, #133/#143) says is not
-	// a change to make as a side effect of an unrelated feature. These two
-	// constants exist so a future change that DOES find that safe hook is a
-	// one-line Emit call and a vocabulary the UI, the docs and the delivery
-	// log already agree on.
+	// EventPipelineRunSucceeded and EventPipelineRunFailed are now wired,
+	// without editing the claim-fence/settlement engine's own fencing logic
+	// — the isolated hook this constant's earlier comment said did not
+	// exist. execution.SettlementService gained an AfterSettleHook
+	// (WithAfterSettleHooks) that fires strictly AFTER
+	// PrepareSettlement's repository call has committed, on its own
+	// goroutine, with a recovered panic — see that type's own doc comment.
+	// internal/application/pipelineruns.NewSettlementHook is the hook: it
+	// looks the settled execution id up in public.pipeline_runs
+	// (migrations/shared/0124, written by pipelinetriggers.admit() the
+	// moment it emits EventPipelineRunStarted) and emits one of these two
+	// only when a row is found — an ordinary chat turn's settlement finds
+	// none and stays silent. EventPipelineRunFailed also covers a
+	// CANCELLED run (`status: "cancelled"` in the payload) — the catalogue
+	// has no third event for that outcome. See
+	// internal/application/pipelineruns' package doc for the full
+	// sequencing story, including how a FAILED run's error text
+	// (output.RuntimeFailureService's FailureObserver) reaches the payload
+	// before settlement completes.
 	EventPipelineRunSucceeded = "pipeline.run.succeeded"
 	EventPipelineRunFailed    = "pipeline.run.failed"
 	// EventScheduleFired fires from the SAME admit() call as
@@ -101,22 +103,23 @@ type EventCatalogueEntry struct {
 	Type        string
 	Description string
 	// Wired is false for an event this package has named but no producer in
-	// this repository emits yet (EventPipelineRunSucceeded and
-	// EventPipelineRunFailed, today). A webhook may still list a not-yet-
-	// wired event in its `events` array — the API enforces no fixed
-	// vocabulary — it simply never fires until a producer is.
+	// this repository emits. As of the SSRF-hardening wave, every declared
+	// event is wired — see EventPipelineRunSucceeded/EventPipelineRunFailed's
+	// own doc comment for the most recently closed gap. The field stays
+	// (rather than being deleted) because it is exactly what would need to
+	// flip back to false if a future event is declared ahead of its
+	// producer, the same way these two once were.
 	Wired bool
 }
 
 // Catalogue is every event type this package declares, in the stable order
 // the picker renders them. It is deliberately NOT every string a webhook's
 // `events` array may legally hold — the API is free text — but every value
-// here is one this repository's own producers can (or, for the two
-// EventPipelineRun* entries, will) actually emit.
+// here is one this repository's own producers actually emit.
 var Catalogue = []EventCatalogueEntry{
 	{Type: EventPipelineRunStarted, Description: "An unattended pipeline run was admitted (inbound trigger or schedule).", Wired: true},
-	{Type: EventPipelineRunSucceeded, Description: "A pipeline run finished successfully.", Wired: false},
-	{Type: EventPipelineRunFailed, Description: "A pipeline run finished with an error.", Wired: false},
+	{Type: EventPipelineRunSucceeded, Description: "An unattended pipeline run finished successfully.", Wired: true},
+	{Type: EventPipelineRunFailed, Description: "An unattended pipeline run finished with an error, or was cancelled.", Wired: true},
 	{Type: EventScheduleFired, Description: "A pipeline's cron schedule fired and admitted a run.", Wired: true},
 	{Type: EventAgentVersionPublished, Description: "An agent (or pipeline) version was published to the catalog.", Wired: true},
 	{Type: EventAgentVersionUnpublished, Description: "A published agent version was withdrawn.", Wired: true},

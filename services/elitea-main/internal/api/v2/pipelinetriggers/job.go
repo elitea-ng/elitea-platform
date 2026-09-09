@@ -118,6 +118,7 @@ func NewPlatformHandler(
 	recorder audit.Recorder,
 	logger *slog.Logger,
 	events EventEmitter,
+	runTracker RunTracker,
 ) *Handler {
 	options := []Option{
 		WithPermissions(permissions),
@@ -145,6 +146,11 @@ func NewPlatformHandler(
 	// same reason.
 	if present(events) {
 		options = append(options, WithEvents(events))
+	}
+	// pipeline.run.succeeded/failed's write half (the SSRF-hardening-wave
+	// follow-up to #876's second half) — see RunTracker's own doc comment.
+	if present(runTracker) {
+		options = append(options, WithRunTracker(runTracker))
 	}
 	return NewHandler(pool, options...)
 }

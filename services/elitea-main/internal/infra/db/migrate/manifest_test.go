@@ -538,7 +538,15 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// metadata) is logged 'blocked', distinct from 'failed' because it is
 	// never retried. DROP + ADD CONSTRAINT on 0122's CHECK, since 0122 is
 	// checksum-immutable.
-	require.EqualValues(t, 123, Head(shared))
+	//
+	// 124: shared/0124_pipeline_runs.sql, the tracking table that lets
+	// execution.SettlementService's new AfterSettle hook report
+	// pipeline.run.succeeded/failed once a pipeline run's claim-fence
+	// settlement commits — the two catalogue events #876 declared but left
+	// unwired because the settlement engine itself carries no notion of
+	// "this execution is a pipeline run". See the file's own header for why
+	// this lives outside elitea_runtime's claim-fence tables entirely.
+	require.EqualValues(t, 124, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

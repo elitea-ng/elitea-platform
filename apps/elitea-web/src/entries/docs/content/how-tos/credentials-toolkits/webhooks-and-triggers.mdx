@@ -63,16 +63,14 @@ A webhook's `events` field accepts any string — there's no fixed vocabulary en
 | Event | Fires when |
 | --- | --- |
 | `pipeline.run.started` | An unattended pipeline run is admitted, from an inbound trigger or a schedule. |
+| `pipeline.run.succeeded` | A pipeline run that started from an inbound trigger or a schedule finishes successfully. |
+| `pipeline.run.failed` | A pipeline run that started from an inbound trigger or a schedule finishes with an error, or is cancelled. |
 | `schedule.fired` | A pipeline's cron schedule fires and admits a run (a `pipeline.run.started` also fires for the same run). |
 | `agent.version.published` | An agent or pipeline version is published to the catalog. |
 | `agent.version.unpublished` | A published agent version is withdrawn. |
 | `conversation.created` | A new chat conversation is created. |
 | `artifact.uploaded` | A file is uploaded to a project artifact bucket. |
 | `moderation.request.decided` | A moderation or project-creation request is approved or rejected. |
-
-<Note>
-`pipeline.run.succeeded` and `pipeline.run.failed` are reserved names in the catalog for a pipeline's eventual outcome, but no producer emits them yet — that signal sits deep in the platform's turn-settlement machinery, and wiring it safely is tracked separately. You can still register a webhook for either; it simply won't fire until that wiring lands.
-</Note>
 
 Every delivery's JSON body has the same envelope, regardless of event:
 
@@ -84,6 +82,22 @@ Every delivery's JSON body has the same envelope, regardless of event:
   "timestamp": "2026-09-09T02:00:00Z"
 }
 ```
+
+### `pipeline.run.succeeded` and `pipeline.run.failed` payloads
+
+These two are only emitted for a run that started **unattended** — from the inbound trigger or a schedule, the same population `pipeline.run.started` fires for. An ordinary chat turn against a pipeline-type agent does not emit either, even on completion, since it never emitted `pipeline.run.started` to begin with. Both carry the same `payload` shape:
+
+| Field | Meaning |
+| --- | --- |
+| `execution_id` | The run's execution id — the same value `pipeline.run.started`'s payload carried for this run. |
+| `application_id` | The pipeline's application id. |
+| `version_id` | The pipeline version that ran. |
+| `conversation_uuid` | The transcript this run's turn appears under — the same one `pipeline.run.started` named. |
+| `status` | `succeeded`, `failed`, or `cancelled`. |
+| `duration_ms` | Milliseconds from admission (`pipeline.run.started`) to this outcome. |
+| `error_summary` | A short, safe description of what went wrong. Present only when `status` is `failed`; absent on success. |
+
+The event fires once the run's outcome is durably settled — after the platform's own claim-fence machinery has committed the result, not from inside that commit — so a webhook receiver never sees `pipeline.run.succeeded` for a run the platform itself would later decide didn't actually finish.
 
 ### Verifying the signature
 

@@ -318,6 +318,15 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	webhookDispatcher := webhook.NewDispatcher(webhooksRepository(pool), webhookDeliveries, webhook.WithGuard(webhookDestinationGuard))
 	domainEvents := events.NewPublisher(events.NoopBus{}, webhookDispatcher)
 
+	// public.pipeline_runs' repository (migrations/shared/0124) — the write
+	// half (pipelinetriggers.WithRunTracker, below) and the read half
+	// (execution.WithAfterSettleHooks / output.WithFailureObserver, in
+	// runtimeRoot's own composition further down) of
+	// pipeline.run.succeeded/failed. One instance, for the same "two halves
+	// must agree" reason webhookDispatcher and domainEvents are each built
+	// once here rather than per call site.
+	pipelineRunsRepo := pipelineRunsRepository(pool)
+
 	// Object store. Production remains fail-closed: when the capability is
 	// enabled, startup requires a working S3/Azure/GCS backend. The mixed
 	// migration deployment explicitly disables these still-incomplete Go
@@ -1558,6 +1567,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			ObjectStore:                      objectStore,
 			ToolkitCatalogue:                 toolkitCatalogue,
 			WorkerToolkitCapability:          workerToolkitCapability,
+			// pipeline.run.succeeded/failed — see
+			// runtimecomposition.Dependencies.PipelineRuns' own doc comment.
+			PipelineRuns: pipelineRunsRepo,
+			DomainEvents: domainEvents,
 		})
 		if err != nil {
 			return fmt.Errorf("compose optional runtime: %w", err)
@@ -1668,6 +1681,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 				auditRecorder,
 				logger,
 				domainEvents,
+				pipelineRunsRepo,
 			)
 			// The schedule TICK. It rides elitea-main's platform scheduler —
 			// the same framework `index.schedule.scan.v1` uses — so the clock,
@@ -2294,6 +2308,20 @@ func splitEnvList(raw string) []string {
 		}
 	}
 	return entries
+}
+
+// pipelineRunsRepository backs pipeline.run.succeeded/failed's tracking
+// table (migrations/shared/0124). Returns a typed nil, not the untyped
+// literal, on a nil pool: every consumer wires it through present()
+// (pipelinetriggers.WithRunTracker) or a plain interface field a nil pointer
+// satisfies harmlessly (pipelineruns.NewSettlementHook/NewFailureObserver,
+// both of which nil-check their tracker before every call), so a pool-less
+// deployment gets three no-ops rather than three panics.
+func pipelineRunsRepository(pool *pgxpool.Pool) *dbrepos.PipelineRunsRepo {
+	if pool == nil {
+		return nil
+	}
+	return dbrepos.NewPipelineRunsRepo(pool)
 }
 
 func webhooksRepository(pool *pgxpool.Pool) webhook.Repository {

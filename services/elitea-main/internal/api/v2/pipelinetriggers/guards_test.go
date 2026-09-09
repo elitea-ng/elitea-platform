@@ -206,7 +206,7 @@ func TestNewPlatformHandlerDoesNotBoxATypedNil(t *testing.T) {
 	var absentStart *fakeAbsentStart
 	var absentVault *fakeAbsentVault
 	var absentEvents *fakeAbsentEvents
-	handler := NewPlatformHandler(nil, absentStart, absentVault, nil, nil, nil, absentEvents)
+	handler := NewPlatformHandler(nil, absentStart, absentVault, nil, nil, nil, absentEvents, nil)
 	if handler.start != nil {
 		t.Fatal("a nil start use case was boxed into a non-nil interface; the inbound route " +
 			"would report a runtime it does not have and then dereference nil")

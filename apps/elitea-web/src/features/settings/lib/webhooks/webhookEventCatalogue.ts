@@ -21,18 +21,18 @@ export interface WebhookEventCatalogueEntry {
   readonly type: string;
   readonly description: string;
   /**
-   * False for an event this platform has named but no producer emits yet
-   * (a pipeline run's eventual success/failure — see the Go catalogue's own
-   * comment on EventPipelineRunSucceeded for why). Registering for one is
-   * not an error; it simply never fires today.
+   * False for an event this platform has named but no producer emits.
+   * Every entry below is wired as of the SSRF-hardening follow-up to #876
+   * (pipeline.run.succeeded/failed were the last two) — the field stays so
+   * a future declared-ahead-of-its-producer event has somewhere to say so.
    */
   readonly wired: boolean;
 }
 
 export const WEBHOOK_EVENT_CATALOGUE: readonly WebhookEventCatalogueEntry[] = [
   { type: 'pipeline.run.started', description: 'An unattended pipeline run was admitted (inbound trigger or schedule).', wired: true },
-  { type: 'pipeline.run.succeeded', description: 'A pipeline run finished successfully.', wired: false },
-  { type: 'pipeline.run.failed', description: 'A pipeline run finished with an error.', wired: false },
+  { type: 'pipeline.run.succeeded', description: 'An unattended pipeline run finished successfully.', wired: true },
+  { type: 'pipeline.run.failed', description: 'An unattended pipeline run finished with an error, or was cancelled.', wired: true },
   { type: 'schedule.fired', description: "A pipeline's cron schedule fired and admitted a run.", wired: true },
   { type: 'agent.version.published', description: 'An agent (or pipeline) version was published to the catalog.', wired: true },
   { type: 'agent.version.unpublished', description: 'A published agent version was withdrawn.', wired: true },

@@ -26,8 +26,10 @@ describe('WEBHOOK_EVENT_CATALOGUE', () => {
     }
   });
 
-  it('marks exactly the two not-yet-wired pipeline-outcome events as unwired', () => {
+  // pipeline.run.succeeded/failed were the last two unwired entries (the
+  // SSRF-hardening wave's second hardening item); every entry is wired now.
+  it('marks every entry as wired', () => {
     const unwired = WEBHOOK_EVENT_CATALOGUE.filter((entry) => !entry.wired).map((entry) => entry.type);
-    expect(unwired).toEqual(['pipeline.run.succeeded', 'pipeline.run.failed']);
+    expect(unwired).toEqual([]);
   });
 });

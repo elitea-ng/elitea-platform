@@ -25,6 +25,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"time"
 	"unicode/utf8"
@@ -33,6 +34,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/pipelineruns"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 )
 
@@ -233,6 +235,38 @@ func (h *Handler) admit(ctx context.Context, schema string, request runRequest) 
 				"application_id":    target.ApplicationID,
 				"version_id":        target.VersionID,
 			})
+		}
+	}
+
+	// The write half of pipeline.run.succeeded/failed (the SSRF-hardening
+	// wave's follow-up to #876's second half): a row this run's EVENTUAL
+	// settlement hook (internal/application/pipelineruns.NewSettlementHook)
+	// looks up by execution id once the claim-fence machinery decides this
+	// run's outcome, minutes from now on a worker's own schedule. Best
+	// effort and independent of h.events above: a webhook subscriber only
+	// needs THIS row to exist by the time settlement happens, not for the
+	// admission events to also be wired.
+	if h.runTracker != nil {
+		if err := h.runTracker.RecordRunStart(ctx, pipelineruns.Run{
+			ExecutionID:      outcome.ExecutionID,
+			ProjectID:        strconv.FormatInt(request.ProjectID, 10),
+			ApplicationID:    target.ApplicationID,
+			VersionID:        target.VersionID,
+			ConversationUUID: conversationUUID,
+			// request.Origin is already OriginWebhook or OriginSchedule
+			// (triggers.go) — the same value the conversation name and meta
+			// are stamped with, so a person reading either surface sees one
+			// vocabulary.
+			Origin: request.Origin,
+		}); err != nil {
+			// A failure here means the run's EVENTUAL outcome cannot be
+			// reported as a webhook event — not that the run itself is in
+			// any doubt. The run was already admitted (StartCurrentApplication
+			// above succeeded) and this is a secondary, best-effort signal;
+			// logging and continuing is the same "degraded, not wrong" choice
+			// webhook.NewDispatcher's own doc comment makes for its absent
+			// delivery log.
+			slog.Error("pipelinetriggers: record pipeline run start", "err", err, "execution_id", outcome.ExecutionID)
 		}
 	}
 
