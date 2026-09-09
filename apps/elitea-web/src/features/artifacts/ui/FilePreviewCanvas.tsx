@@ -118,7 +118,23 @@ export function FilePreviewCanvas(props: FilePreviewCanvasProps): ReactNode {
       active = false;
       controller.abort();
     };
-  }, [kind, needsContent, props.bucket, props.file.key, props.projectId, supportsRendered]);
+    // `props.file.size`/`.lastModified`, not just `.key`/`.bucket`: a save
+    // that overwrites this SAME object — the canvas editor's own "Save to
+    // artifacts" (issue #878) route, or this component's own inline Save —
+    // changes neither the key nor the bucket, so without one of these the
+    // effect never re-ran and the preview (and a canvas reopened from it)
+    // kept showing the bytes fetched when the file was first opened, not
+    // what was just saved (#882 CI).
+  }, [
+    kind,
+    needsContent,
+    props.bucket,
+    props.file.key,
+    props.file.size,
+    props.file.lastModified,
+    props.projectId,
+    supportsRendered,
+  ]);
 
   useEffect(() => () => {
     if (imageUrl !== undefined) URL.revokeObjectURL(imageUrl);

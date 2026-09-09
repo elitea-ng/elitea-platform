@@ -51,6 +51,13 @@ test('a stored file opens in the canvas editor, and saving it writes the edit ba
 
   try {
     await page.goto(`${BASE_URL}/app/artifacts?bucket=${bucket}&file=${FILE_NAME}`);
+    // A `.md` file's preview defaults to "Rendered" (FilePreviewCanvas's
+    // `supportsRendered` mode for markdown/csv/tsv/mermaid), so the raw
+    // `# Notes` source is not literal DOM text yet — it is an `<h1>`. Switch
+    // to "Code" first to assert the actual stored source, the same source
+    // the canvas editor below opens.
+    await expect(page.getByRole('heading', { name: 'Notes', level: 1 })).toBeVisible({ timeout: 20_000 });
+    await page.getByRole('button', { name: 'Code' }).click();
     await expect(page.getByText(ORIGINAL_BODY.split('\n')[0] ?? '')).toBeVisible({ timeout: 20_000 });
 
     // "Open in canvas" — the plain text preview's own header control
@@ -59,15 +66,20 @@ test('a stored file opens in the canvas editor, and saving it writes the edit ba
 
     const editorRoot = page.getByTestId('canvas-editor-root');
     await expect(editorRoot).toBeVisible({ timeout: 20_000 });
-    const content = editorRoot.locator('.cm-content');
-    await expect(content).toContainText('AUTOTEST original canvas content', { timeout: 20_000 });
+    // A `.md` file opens in the rich-text `document` pane (issue #879), not
+    // the CodeMirror `code` pane — `# Notes` renders as a real `<h1>`, the
+    // same ProseMirror shape `chat.canvasDocument.spec.ts`'s DWIKI-mode
+    // sibling drives, not a `.cm-content` source view.
+    const content = editorRoot.getByTestId('canvas-document-editor');
+    await expect(content.getByRole('heading', { level: 1 })).toHaveText('Notes', { timeout: 20_000 });
+    await expect(content).toContainText('AUTOTEST original canvas content');
 
     // Edit the document — append a token whose presence in the STORE, not the
     // screen, is the claim this journey makes.
     const editToken = `AUTOTEST-EDITED-${Date.now().toString(36)}`;
-    await content.click();
+    await content.getByText('AUTOTEST original canvas content').click();
     await page.keyboard.press('End');
-    await page.keyboard.type(`\n\n${editToken}`);
+    await page.keyboard.type(` ${editToken}`);
     await expect(content).toContainText(editToken, { timeout: 10_000 });
 
     // "Save to artifacts" — pre-filled from the SOURCE this canvas was opened
