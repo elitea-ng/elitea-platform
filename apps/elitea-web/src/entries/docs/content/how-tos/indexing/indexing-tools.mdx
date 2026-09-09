@@ -1,0 +1,44 @@
+---
+title: "Index and search data with tools"
+description: "Run search against a completed index from chat, an agent, or a pipeline, and understand which indexing tools run where."
+---
+
+Indexing tools aren't limited to the Indexes tab — once a toolkit has an index, an agent, a pipeline, or a chat conversation with that toolkit attached can call its search tools directly.
+
+## The tools
+
+| Tool | What it does | Where it can run |
+|---|---|---|
+| Index Data | Creates or updates an index | Indexes tab only |
+| Search Index | Direct semantic search over an index | Indexes tab, chat, agents, pipelines, Test tools |
+| Stepback Search Index | Rewrites the query before searching, for better recall on complex questions | Same as Search Index |
+| Stepback Summary Index | Runs a stepback search and returns a generated summary | Same as Search Index |
+| Remove Index | Deletes an index | Indexes tab only |
+| List Indexes | Lists a toolkit's indexes | Rarely needed — the Indexes tab already lists them |
+
+<Warning>
+**Index Data can't be tested from the Test tools pane.** The Go backend routes indexing through a separate, asynchronous endpoint owned by the Indexes tab. If you press Run on **Index Data** from a toolkit's Test tools pane, you get that route's own refusal rather than a result — use the [Indexes tab](/how-tos/indexing/using-indexes-tab-interface) to actually create or update an index.
+</Warning>
+
+## Search from chat or an agent
+
+<Steps>
+1. Add the indexed toolkit as a participant in a conversation, or attach it to an agent.
+2. Make sure the search tool you want (Search Index, Stepback Search Index, or Stepback Summary Index) is turned on in the toolkit's configuration.
+3. Ask a question in natural language. The toolkit runs the search tool against the index and returns matching content — or, with Stepback Summary Index, a generated summary of it.
+</Steps>
+
+<Screenshot id="toolkit-index-search-tools" alt="Toolkit tools list showing the index_data and search_data tool toggles" />
+
+## Search from the Indexes tab
+
+You can also run these search tools directly from an index's own page, without going through chat — useful for quickly checking what an index actually returns before wiring it into an agent.
+
+## Vector store and embeddings
+
+Search quality depends on the same two project-level configurations indexing itself needs: an embedding model (to turn your query into a vector) and a pgvector vector-store configuration (where the vectors are stored and compared). See [Index external data](/how-tos/indexing/indexing-overview) for how to set these up.
+
+## Next steps
+
+- [Use the Indexes tab](/how-tos/indexing/using-indexes-tab-interface) to create an index in the first place.
+- [Schedule re-indexing](/how-tos/indexing/schedule-indexing) to keep results current.

@@ -1,0 +1,40 @@
+---
+title: "Create a personal access token"
+description: "Generate a personal access token to authenticate API calls and IDE integrations against Elitea."
+---
+
+A personal access token authenticates you (or a script, or an IDE plugin) to Elitea's API without a browser session.
+
+<Steps>
+<Step title="Open Personal tokens">
+Go to Settings → Personal tokens (`/settings/tokens`). Use the project switcher at the top if you need a token scoped to a different project.
+</Step>
+<Step title="Create a token">
+Click the **+** icon, give the token a descriptive name, and set an expiration date.
+</Step>
+<Step title="Generate and copy it">
+Click **Generate**. Copy the token immediately.
+
+<Warning>
+The token value is shown only once, in the dialog right after you generate it. If you close the dialog without copying it, you cannot retrieve the value again — delete the token and generate a new one instead.
+</Warning>
+</Step>
+</Steps>
+
+## Use the token
+
+Send it as a bearer token against Elitea's API (see [API usage](/integrations/third-party-integrations/api-usage)). From the token list, you can also pick a model and download a ready-made settings file (VS Code JSON or JetBrains XML) pre-filled with your token, the model and your project id.
+
+<Note>
+This session could not confirm which current IDE extension or plugin reads that generated settings file — the legacy documentation pointed to an "Elitea Code" VS Code/JetBrains extension that has no trace in the current codebase or its integrations. The settings-download feature itself is real and working; what consumes the file downstream could not be verified. (tracked)
+</Note>
+
+## Good practice
+
+- Keep tokens confidential — never commit one to version control.
+- Name tokens by what uses them, so you know what breaks if you revoke one.
+- Set an expiration date and rotate tokens regularly.
+- Delete tokens you no longer use.
+- If you work across multiple projects, create a separate token per project.
+
+<Screenshot id="create-personal-token-generate" alt="Create personal token dialog with the generated token masked" />

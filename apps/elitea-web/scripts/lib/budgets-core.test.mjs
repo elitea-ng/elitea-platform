@@ -61,6 +61,7 @@ describe('file classification', () => {
     ['src/shared/api/socket/events.ts', true],
     ['src/shared/api/socket/messages.ts', true],
     ['src/shared/api/socket/client.ts', false], // hand-written — must stay linted/budgeted
+    ['src/entries/docs/shots.manifest.ts', true], // machine-regenerated data array
   ])('isGeneratedFile(%s) -> %s', (file, expected) => {
     expect(isGeneratedFile(file)).toBe(expected);
   });

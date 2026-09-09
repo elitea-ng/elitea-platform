@@ -56,7 +56,7 @@ func TestCurrentMainRoutePublicRulesMatchPinnedCatalog(t *testing.T) {
 		{"go.health.healthz", `^/healthz(\?.*)?$`, []string{"/healthz", "/healthz?t=1725600000"}, []string{"/healthz/", "/healthzz", "/readyz", "/startupz", "https://evil.example/healthz"}},
 		{"go.openapidocs.spec_yaml", `^/api/openapi\.yaml$`, []string{"/api/openapi.yaml"}, []string{"/api/openapi.yaml/extra", "https://evil.example/api/openapi.yaml"}},
 		{"go.openapidocs.spec_json", `^/api/openapi\.json$`, []string{"/api/openapi.json"}, []string{"/api/openapi.jsonx", "https://evil.example/api/openapi.json"}},
-		{"go.openapidocs.ui", `^/docs$`, []string{"/docs"}, []string{"/docs/extra", "https://evil.example/docs"}},
+		{"go.openapidocs.ui", `^/api/docs$`, []string{"/api/docs"}, []string{"/api/docs/extra", "https://evil.example/api/docs"}},
 	}
 	if len(rules) != len(want) {
 		t.Fatalf("route-owned public rule count = %d, want %d", len(rules), len(want))
@@ -199,7 +199,7 @@ func TestRouterPublicRoutesStayPublicInThePolicy(t *testing.T) {
 		{"/healthz", "/healthz"},
 		{"/api/openapi.yaml", "/api/openapi.yaml"},
 		{"/api/openapi.json", "/api/openapi.json"},
-		{"/docs", "/docs"},
+		{"/api/docs", "/api/docs"},
 	} {
 		t.Run(public.route, func(t *testing.T) {
 			if _, ok := registered[public.route]; !ok {

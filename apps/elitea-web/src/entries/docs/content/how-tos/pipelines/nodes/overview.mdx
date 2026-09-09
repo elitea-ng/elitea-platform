@@ -1,0 +1,32 @@
+---
+title: "Pipeline node types"
+description: "The nine node types the pipeline runtime executes, grouped by what they do, and which older node types are display-only now."
+---
+
+The flow editor lets you drop more node types onto the canvas than the runtime actually executes. Nine types are admitted by the compiler; the rest render for reference but do nothing when the pipeline runs.
+
+## The nine runtime-admitted types
+
+| Category | Node types | See |
+|---|---|---|
+| Interaction | Human-in-the-loop (HITL), Printer | [Interaction nodes](/how-tos/pipelines/nodes/interaction-nodes) |
+| Execution | LLM, Agent, Toolkit, MCP | [Execution nodes](/how-tos/pipelines/nodes/execution-nodes) |
+| Control flow | Decision, Router, State modifier | [Control flow nodes](/how-tos/pipelines/nodes/control-flow-nodes) |
+
+## Deprecated node types
+
+The Add-node menu only ever offers the nine types above — these older types can't be added to a new pipeline. If a pipeline built before this platform still has one, it renders read-only on the canvas, but the compiler has no execution arm for it, so it doesn't run:
+
+`Tool`, `Function`, `Pipeline`, `Condition`, `Loop`, `Loop from tool`.
+
+<Note>
+If you're rebuilding a pipeline that still has one of these, replace it with the closest supported type: a **Tool** node becomes a **Toolkit** node, a **Condition** node becomes a **Decision** or **Router** node, and a **Loop** is restructured as a **Router** cycling back to an earlier node with an exit condition. There is no automatic migration — each one is a manual edit.
+</Note>
+
+A couple of other node-shaped entries are sentinels rather than real node types: `END` marks where a path terminates (see [Pipeline structure](/how-tos/pipelines/structure#ending-a-run)), and `ghost`/the default type are placeholders the editor uses internally.
+
+## Two types that render but never run
+
+`code` and `custom` nodes can be added to a pipeline and configured in the flow editor, but the compiler has no execution arm for either one — they're accepted by the editor for future use, not by the runtime today. Don't build a pipeline that depends on one of these actually running; use an equivalent from the nine admitted types instead (a Toolkit node for custom logic that calls out to a service, for example).
+
+<Screenshot id="pipeline-nodes-add-menu" alt="Add-node menu showing the nine runtime-admitted node types" />

@@ -1,0 +1,47 @@
+---
+title: "Schedules and tasks"
+description: "Manage cron schedules and see what background work is currently running."
+---
+
+Two admin pages cover recurring and running work: **Schedules & Tasks** for cron schedules, and **Tasks** for a live view of background jobs.
+
+## Manage schedules
+
+Open **Schedules & Tasks**. Its Schedules tab lists cron-bound platform jobs (for example, indexing schedules) with a live read and write — the scheduler service polls this table every minute and dispatches whatever is due.
+
+<Steps>
+  <Step title="Find or create a schedule">
+    Each row pairs a cron expression with the platform operation it runs.
+  </Step>
+  <Step title="Enable or disable it">
+    Disabling a row stops it from being dispatched without deleting it.
+  </Step>
+  <Step title="Review history">
+    Open a schedule's history drawer for its past occurrences.
+  </Step>
+</Steps>
+
+<Screenshot id="admin-schedules-table" alt="Schedules & Tasks page, Schedules tab" />
+
+<Note>
+The page's own "Tasks" tab is a permanent notice, not a table: it describes maintenance operations from the legacy plugin runtime, which this platform does not have and has no plan to add. It answers as unavailable rather than as an empty list, so "nothing is running" and "this deployment cannot see what is running" are never shown identically.
+</Note>
+
+## See what is running
+
+Open the separate **Tasks** page for a live view of background work this platform actually tracks: index runs, agent turns, toolkit tool calls, scheduled occurrences, and evaluation runs.
+
+<Steps>
+  <Step title="Filter by kind">
+    Narrow the list to one kind of task.
+  </Step>
+  <Step title="Cancel a task">
+    The cancel control only appears on rows the server reports as cancellable — a task past that point does not offer it, rather than offering a control that would mostly answer with a conflict.
+  </Step>
+</Steps>
+
+<Screenshot id="admin-tasks-table" alt="Tasks page listing running background work" />
+
+<Note>
+There is no start control and no log tail here. Starting a task and reading its output are not modeled by this page — a task's output is its own artifact rather than a live log stream.
+</Note>

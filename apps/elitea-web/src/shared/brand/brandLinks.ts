@@ -24,8 +24,17 @@ import { resolveBrandPack } from './channelC';
 import type { BrandPack } from './schema';
 import { DEFAULT_BRAND_PACK } from './tokens';
 
-/** The pre-pack documentation origin. Fallback 3 for `docsLink`. */
-export const FALLBACK_DOCS_URL = 'https://docs.elitea.ai';
+/**
+ * The pre-pack documentation origin. Fallback 3 for `docsLink`, reachable
+ * only when BOTH the served pack and the compiled default omit
+ * `product.docsUrl` outright — the compiled default always states it
+ * (embedded-docs programme), so this is a defensive floor, not a path any
+ * shipped configuration takes today. Module-private: no test imports it
+ * directly any more (brandLinks.test.ts exercises this tier by constructing
+ * a pack object with no `docsUrl` field, not by asserting the literal), so
+ * an `export` here has no consumer to serve (knip's dead-code gate, #528).
+ */
+const FALLBACK_DOCS_URL = 'https://docs.elitea.ai';
 
 /**
  * The pre-pack support address (the baseline's

@@ -5,6 +5,7 @@ import { useEditPipeline, usePipelineCreation } from '@/features/pipelines';
 import { toolkitEditorHooks, useToolkitCreate, useToolkitEdit } from '@/features/toolkits';
 import type { CanvasEditPayload } from '@/features/chat-messages';
 import type { Participant } from '@/entities/participant';
+import { ChatParticipantType } from '@/shared/lib/chat';
 import { useEditorStateStore } from '@/shared/lib/editorState';
 import { t } from '@/shared/i18n';
 import { useNavBlockerStore } from '@/widgets/app-shell';
@@ -17,6 +18,7 @@ import {
   toPipelineParticipantSnapshot,
   toToolkitParticipantSnapshot,
 } from '../lib/editorParticipantAdapters';
+import { useAttachCreatedParticipant, toAddedParticipantLike, type AttachCreatedParticipant } from '../lib/useAttachCreatedParticipant';
 import { useEditorMutex, type EditorOpenInfo } from '../model/useEditorMutex';
 import { useCanvasEditing } from './useCanvasEditing';
 
@@ -32,6 +34,7 @@ const NAV_BLOCK_WARNING = t(
   'processes.chat.chatWithEditors.navBlockWarning',
   'You have unsaved changes in the editor. Are you sure you want to leave?',
 );
+
 
 /**
  * **DISCLOSED GAP — `activeParticipant`/`setActiveParticipant`/
@@ -61,7 +64,7 @@ const NAV_BLOCK_WARNING = t(
  * to this composition root — a `pages/chat` contract change bigger than
  * this unit's "wire the already-built editors" scope.
  */
-function useAgentEditing(isEditingAgent: boolean) {
+function useAgentEditing(isEditingAgent: boolean, attach: AttachCreatedParticipant) {
   const setAgentEditingBlockNav = useCallback((blocked: boolean) => {
     useEditorStateStore.getState().setEditingAgent(blocked);
     useNavBlockerStore.getState().setBlockNav(blocked, NAV_BLOCK_WARNING);
@@ -70,21 +73,13 @@ function useAgentEditing(isEditingAgent: boolean) {
   const editAgent = agentEditorHooks.useEditAgent({ navBlocker: { isEditingAgent, setAgentEditingBlockNav } });
 
   /**
-   * **DISCLOSED GAP — `addNewParticipants`/`onSetActiveParticipant` (both
-   * REQUIRED on `UseAgentCreationParams`, unlike the three above) are
-   * inert stubs.** Adding the freshly-created agent to the conversation's
-   * participant list, and activating it, are real chat-conversation
-   * operations owned deep inside `widgets/chat-box`'s own hooks (e.g.
-   * `useChatBoxParticipant`/the participant-mutation API `features/
-   * chat-participants` exposes) — this composition root has no reach into
-   * that state either, for the same reason given above. `onAgentEditorCreated`
-   * (the one field this hook can genuinely honour) still fires correctly —
-   * the editor switches from create to edit mode on the new agent — so
-   * creating an agent from chat works end-to-end EXCEPT that the new agent
-   * is not auto-added to / activated in the current conversation. A stub
-   * that resolves without calling its `onAdded` callback is safe (the
-   * baseline's own `try { await addNewParticipants(...) } catch {...}`
-   * around this call handles a no-op the same as a slow network op).
+   * **`addNewParticipants` is real now (issue #867)** — POSTs the
+   * freshly-created agent onto the current conversation via `attach`
+   * (`../lib/useAttachCreatedParticipant.ts`). **`onSetActiveParticipant`
+   * stays a disclosed no-op**: activating a participant is `ChatPage`'s own
+   * local `useState`, not exposed upward here (same gap
+   * `activeParticipant`/`setActiveParticipant` already discloses above) —
+   * a created agent is attached, not auto-selected as active.
    */
   const agentCreation = agentEditorHooks.useAgentCreation({
     // `useAgentCreation`'s own `CreatedAgentParticipant.entity_settings.variables`
@@ -104,25 +99,48 @@ function useAgentEditing(isEditingAgent: boolean) {
           : {}),
       });
     },
-    addNewParticipants: async () => {},
+    addNewParticipants: async (participants, onAdded) => {
+      const created = participants[0];
+      if (!created) return;
+      const added = await attach({
+        entity_name: ChatParticipantType.Applications,
+        entity_meta: { id: created.id },
+        ...(created.version_details?.id !== undefined ? { entity_settings: { version_id: created.version_details.id } } : {}),
+      });
+      if (added) onAdded(added.map(toAddedParticipantLike));
+    },
     onSetActiveParticipant: () => {},
   });
 
   return { editAgent, agentCreation };
 }
 
-function usePipelineEditing(isEditingPipeline: boolean) {
+function usePipelineEditing(isEditingPipeline: boolean, attach: AttachCreatedParticipant) {
   const setPipelineEditingBlockNav = useCallback((blocked: boolean) => {
     useEditorStateStore.getState().setEditingPipeline(blocked);
     useNavBlockerStore.getState().setBlockNav(blocked, NAV_BLOCK_WARNING);
   }, []);
 
   const editPipeline = useEditPipeline({ navBlocker: { isEditingPipeline, setPipelineEditingBlockNav } });
-  // `addNewParticipants`/`onSetActiveParticipant` are OPTIONAL on
-  // `UsePipelineCreationParams` (unlike the agent/toolkit equivalents) —
-  // omitted for the same disclosed reason `useAgentEditing` gives, but no
-  // stub is needed since the hook already no-ops their absence itself.
-  const pipelineCreation = usePipelineCreation({ onPipelineEditorCreated: editPipeline.onPipelineEditorCreated });
+  // `addNewParticipants` is real now (issue #867): `usePipelineCreation`
+  // already builds a fully wire-shaped `CreatedPipelineParticipant`
+  // (`entity_name`/`entity_meta`/`entity_settings` all present), so this
+  // just posts it through `attach` — no reshaping needed, unlike the agent/
+  // toolkit wrappers above. `onSetActiveParticipant` stays omitted: same
+  // disclosed "ChatPage owns the active participant, not reachable from
+  // here" gap `useAgentEditing` states.
+  const pipelineCreation = usePipelineCreation({
+    onPipelineEditorCreated: editPipeline.onPipelineEditorCreated,
+    addNewParticipants: (participants) => {
+      const created = participants[0];
+      if (!created) return;
+      void attach({
+        entity_name: created.entity_name,
+        entity_meta: created.entity_meta,
+        entity_settings: created.entity_settings,
+      });
+    },
+  });
 
   return { editPipeline, pipelineCreation };
 }
@@ -134,7 +152,7 @@ function usePipelineEditing(isEditingPipeline: boolean) {
  * participants use this path too because they are toolkit participants with
  * `meta.mcp` set.
  */
-function useToolkitEditing(isEditingToolkit: boolean) {
+function useToolkitEditing(isEditingToolkit: boolean, attach: AttachCreatedParticipant) {
   const setToolkitEditingBlockNav = useCallback((blocked: boolean) => {
     useEditorStateStore.getState().setEditingToolkit(blocked);
     useNavBlockerStore.getState().setBlockNav(blocked, NAV_BLOCK_WARNING);
@@ -150,12 +168,23 @@ function useToolkitEditing(isEditingToolkit: boolean) {
     navBlocker: { isEditingToolkit, setToolkitEditingBlockNav, setToolkitCreateMode },
   });
 
-  // Same disclosed "no reach into the conversation's participant list" gap
-  // as `useAgentEditing`'s `addNewParticipants` — required by
-  // `UseToolkitCreationParams`, stubbed inert.
+  // `addNewParticipants` is real now (issue #867) — posts the freshly
+  // created toolkit onto the current conversation via `attach`, the same
+  // path `useAgentEditing` uses. Toolkits are never activated (they are
+  // tools, not conversational entities — `useToolkitCreation`'s own doc
+  // comment), so there is no `onSetActiveParticipant`/`onAdded` callback to
+  // honour here at all, unlike the agent wrapper.
   const toolkitCreation = toolkitEditorHooks.useToolkitCreation({
     onToolkitEditorCreated: editToolkit.onToolkitEditorCreated,
-    addNewParticipants: async () => {},
+    addNewParticipants: async (participants) => {
+      const created = participants[0];
+      if (!created) return;
+      await attach({
+        entity_name: ChatParticipantType.Toolkits,
+        entity_meta: { id: created.id },
+        ...(created.version_details?.id !== undefined ? { entity_settings: { version_id: created.version_details.id } } : {}),
+      });
+    },
   });
 
   // The REAL create/save mutations for `<ToolkitEditor>`'s non-optional
@@ -237,14 +266,23 @@ export interface ChatWithEditorsWiring {
  * no `ArtifactEditor` component exists in this app at all — there is nothing
  * to mount. Both remain no-ops.
  */
-export function useChatWithEditors(): ChatWithEditorsWiring {
+export interface UseChatWithEditorsParams {
+  /** The project the current conversation belongs to — needed to POST a freshly-created entity as a participant (issue #867's `attach`). */
+  readonly projectId: string | undefined;
+  /** The current conversation's id, `undefined` for a still-draft (unsent) chat — see `useAttachCreatedParticipant`'s own doc comment for what that means for a create-from-chat attach. */
+  readonly conversationId: string | undefined;
+}
+
+export function useChatWithEditors({ projectId, conversationId }: UseChatWithEditorsParams): ChatWithEditorsWiring {
   const isEditingAgent = useEditorStateStore((s) => s.isEditingAgent);
   const isEditingPipeline = useEditorStateStore((s) => s.isEditingPipeline);
   const isEditingToolkit = useEditorStateStore((s) => s.isEditingToolkit);
 
-  const { editAgent, agentCreation } = useAgentEditing(isEditingAgent);
-  const { editPipeline, pipelineCreation } = usePipelineEditing(isEditingPipeline);
-  const { editToolkit, toolkitCreation, toolkitWriteDeps } = useToolkitEditing(isEditingToolkit);
+  const attach = useAttachCreatedParticipant(projectId, conversationId);
+
+  const { editAgent, agentCreation } = useAgentEditing(isEditingAgent, attach);
+  const { editPipeline, pipelineCreation } = usePipelineEditing(isEditingPipeline, attach);
+  const { editToolkit, toolkitCreation, toolkitWriteDeps } = useToolkitEditing(isEditingToolkit, attach);
 
   const canvas = useCanvasEditing();
   const { canvasEditorRef, onShowCanvasEditor } = canvas;

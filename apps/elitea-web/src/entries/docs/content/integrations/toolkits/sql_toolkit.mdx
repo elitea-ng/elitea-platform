@@ -1,0 +1,49 @@
+---
+title: "SQL"
+description: "Connect SQL to Elitea: prerequisites, credential setup and the tools it exposes."
+---
+
+Run queries against a connected SQL database. It's listed under the **development** category in the toolkit type picker.
+
+## Prerequisites
+
+- A connection string or host/port/database details for the target database, saved in Elitea as a **`sql`** credential (`/credentials/create-credential/sql`). The database must be reachable from the worker.
+
+## Connect the toolkit
+
+<Steps>
+<Step title="Open the toolkit type picker">
+In the left navigation, open **Toolkits**, then select **New**. Filter the type picker by the **development** category, or search for "SQL".
+</Step>
+
+<Step title="Pick or create a credential">
+Under the credential field, choose an existing **sql** credential, or select **Create credential** to add one without leaving the form.
+</Step>
+
+<Step title="Save">
+Name the toolkit and select **Create**. It's now available to attach to agents, pipelines and conversations in this project.
+</Step>
+</Steps>
+
+<Screenshot id="toolkit-new-generic" alt="New toolkit dialog with the SQL type selected" />
+
+## Available tools
+
+<Accordion title="Available tools (2)">
+
+| Tool |
+|---|
+| Execute sql |
+| List tables and columns |
+
+</Accordion>
+
+## Common issues
+
+<Note>
+Both the Rust and Python workers materialise `sql`; this toolkit works the same regardless of which worker your deployment runs.
+</Note>
+
+<Note>
+There's no connection check on this form. Save the toolkit, then run one read-only tool from the editor's Test tools pane to confirm the credential works before attaching SQL to an agent.
+</Note>

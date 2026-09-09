@@ -114,6 +114,14 @@ def test_worker_dependency_and_lock_share_one_sdk_identity() -> None:
         f"ARG ELITEA_SDK_MCP_HARD_TIMEOUT_PATCH={SDK_SOURCE_PATCH_REVISIONS[1]}"
         in containerfile
     )
+    assert (
+        f"ARG ELITEA_SDK_TOOL_GROUPS_PATCH={SDK_SOURCE_PATCH_REVISIONS[2]}"
+        in containerfile
+    )
+    assert (
+        f"ARG ELITEA_SDK_IMAGEGEN_PATCH={SDK_SOURCE_PATCH_REVISIONS[3]}"
+        in containerfile
+    )
     assert f"ARG ELITEA_SDK_VERSION={SDK_DISTRIBUTION_VERSION}" in containerfile
     assert "python -m pip wheel \\\n    --no-cache-dir" in containerfile
     assert 'test -f "/wheels/elitea_sdk-${ELITEA_SDK_VERSION}-py3-none-any.whl"' in containerfile
@@ -135,6 +143,8 @@ def test_worker_dependency_and_lock_share_one_sdk_identity() -> None:
     assert f"SDK_ARCHIVE_SHA256: {SDK_SOURCE_ARCHIVE_SHA256}" in worker_ci
     assert f"SDK_MCP_PREFLIGHT_PATCH: {SDK_SOURCE_PATCH_REVISIONS[0]}" in worker_ci
     assert f"SDK_MCP_HARD_TIMEOUT_PATCH: {SDK_SOURCE_PATCH_REVISIONS[1]}" in worker_ci
+    assert f"SDK_TOOL_GROUPS_PATCH: {SDK_SOURCE_PATCH_REVISIONS[2]}" in worker_ci
+    assert f"SDK_IMAGEGEN_PATCH: {SDK_SOURCE_PATCH_REVISIONS[3]}" in worker_ci
     assert "/tmp/elitea-sdk-current/tests/runtime/test_mcp_discovery_hang.py" in worker_ci
     assert '"elitea-sdk @ file:///tmp/elitea-sdk-current"' in worker_ci
     assert '"./services/elitea-worker-python[agent-current,indexing-current,test]"' in worker_ci

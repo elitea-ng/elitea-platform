@@ -1,0 +1,102 @@
+---
+title: "Chat"
+description: "Elitea Chat brings models, agents, pipelines, toolkits, MCP servers, and teammates together in one conversational interface."
+---
+
+Chat is the central place where Elitea's capabilities come together. Each conversation is an independent session — you can reference earlier messages in the same conversation, but context is not shared between separate conversations. Conversations are stored on the server and accessible from any device.
+
+<Screenshot id="chat-conversation" alt="An Elitea conversation with the participants panel open" />
+
+## Create a conversation
+
+1. Go to **Chat** in the sidebar.
+2. Select **+ Conversation**, or start typing in the welcome screen's input.
+3. Optionally add participants first — select **+** in the input toolbar, or type `#` to search.
+4. Type your message and send it. The conversation name is generated automatically from the message content.
+
+Conversations in the sidebar are grouped by **Today**, **Yesterday**, **This Week**, and **Older**; pinned conversations always sit at the top.
+
+### Folders
+
+Select the folder icon in the conversations header to create a folder, then drag conversations into it or use **Move to** from a conversation's context menu. In a personal project, folders and their contents are visible only to you. In a team project, folders can be shared with the whole project and cannot be converted back to private.
+
+## Participants
+
+Participants extend what a conversation can do:
+
+<CardGroup cols={2}>
+  <Card title="Models" icon="microchip-ai">A language model you talk to directly.</Card>
+  <Card title="Agents / Pipelines" icon="robot">Existing agents or pipelines from your project or the public catalog.</Card>
+  <Card title="Toolkits" icon="toolbox">Integrations already configured in the project, targetable directly with `/`.</Card>
+  <Card title="MCPs" icon="server">Connected MCP servers that expose additional tools.</Card>
+  <Card title="Users" icon="user">In team projects, teammates you can mention with `@username`.</Card>
+</CardGroup>
+
+To add a participant, select **+** in the input toolbar and browse by category, or type `#` followed by a name to search across agents, pipelines, toolkits, and MCPs. Added participants appear in the **Participants** panel on the right, grouped by type; select an agent or pipeline card to make it the active participant.
+
+Hovering an existing participant's card reveals an **edit** icon that opens its inline editor (the same form as its own menu page) without leaving the conversation.
+
+Each category (Agents, Pipelines, Toolkits, and the MCPs category's own view) also offers a **Create new** row above the existing-item list. Selecting it opens the same inline editor a participant's own edit icon opens, in create mode; saving creates the agent/pipeline/toolkit and attaches it to the current conversation as a participant, the same as picking an existing one. See [Edit agents, pipelines, toolkits and MCPs from chat](/how-tos/chat-conversations/create-entities-from-chat).
+
+### Mention a toolkit or tool
+
+Type `/` to search toolkits and MCPs already added to the conversation, then `/` again after a toolkit name to filter its individual tools. The result is inserted as `/ToolkitName/ToolName`, directing the AI to use that specific tool.
+
+## Modules
+
+Chat supports several built-in modules — image creation, data analysis, planner, smart tools selection, swarm mode, and the platform's own MCP tools — turned on from **+** → **Modules**. All of them require the Python worker; see [Internal tools](/menus/internal-tools) for what each one does and which worker runs it.
+
+## File attachments
+
+Select **+** → **Attach Files**, drag files onto the input, or paste from the clipboard. Images go straight to the model for visual analysis; other files are indexed and retrieved by semantic search. Files land in the project's default `attachments` artifact bucket automatically — no manual toolkit setup is required. Direct model chats always allow attachments; an agent or pipeline needs attachments turned on in its own configuration first.
+
+## Choose a model and settings
+
+Select the model chip at the bottom of the chat to pick a model, and the settings gear next to it to adjust generation parameters. Reasoning-capable models expose a **Reasoning** level (Low/Medium/High); standard models expose **Creativity** (1–5). All models let you set **Max Completion Tokens** (Auto or a custom value), and conversations additionally expose a **Steps Limit** capping how many tool calls a turn can make (default 25).
+
+## Voice
+
+<CardGroup cols={3}>
+  <Card title="Voice input" icon="microphone">Dictate into the input; transcribed text lands at the cursor.</Card>
+  <Card title="Text-to-speech" icon="volume-high">Have a response read aloud from a mini-player in the input area.</Card>
+  <Card title="Speaking mode" icon="waveform-lines">A hands-free loop: record, send, listen to the reply, record again.</Card>
+</CardGroup>
+
+Voice input uses a server-side speech-recognition model when your project has one configured (Settings › AI Providers), falling back to the browser's Web Speech API; text-to-speech works the same way with a server TTS model or the browser's speech synthesis as a fallback. Voice settings (voice, speed, volume) are saved per browser and can also be set as your default in Settings › Personal Settings.
+
+## Context budget
+
+When context management is turned on for the project (Settings › Memory), a **Context Budget** widget appears after your first message, showing token usage and letting you trigger manual pruning or review the active summarization settings.
+
+## Share a conversation
+
+Open a conversation's context menu and select **Share by link** to open the share dialog. Choose a link expiry (1 hour, 1 day, 7 days, or 30 days — there is no non-expiring option) and, optionally, a password of at least 8 characters. The link is shown once, at creation, and copied to your clipboard automatically; it cannot be retrieved again later — if you lose it, revoke it and create a new one. Anyone who opens the link sees the conversation as it stood at share time in a read-only, anonymous viewer — they can reply to nothing and add no participants — prompted for the password first if one was set. An invalid, revoked, or expired link all show the same "unavailable" message by design, so a visitor cannot tell which case applies.
+
+## Sensitive action authorization
+
+When an agent or pipeline is about to call a tool your administrator has marked sensitive, the conversation pauses and shows an authorization card with the action and its parameters (secrets masked) before anything executes. See [Sensitive action authorization guardrail](/how-tos/chat-conversations/sensitive-action-authorization-guardrail).
+
+## Canvas
+
+When a response contains code, a table, a Mermaid diagram, or prose, a pencil icon (or, for a whole prose reply, the **Open as document** icon in the answer's action row) opens it in Canvas for direct, real-time collaborative editing — prose opens in a rich-text document editor with headings, lists, bold/italic/code, links, and basic tables, backed by Markdown. Canvas can also open a previously stored text-like file — from a message attachment's own toolbar, or from a bucket file in Artifacts — and save its document back to the artifact store under a bucket and filename you choose. See [How to use Canvas](/how-tos/chat-conversations/how-to-canvas).
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Cannot add a participant">
+    Confirm the agent, pipeline, toolkit, or MCP exists and is accessible to you in the current project.
+  </Accordion>
+  <Accordion title="Attachments are greyed out">
+    Attachments are always on for a direct model chat, but need to be turned on in the agent's or pipeline's own configuration first.
+  </Accordion>
+  <Accordion title="Voice controls are missing">
+    No server-side voice model is configured and your browser does not support the Web Speech API. Ask your administrator to configure one in AI Providers.
+  </Accordion>
+  <Accordion title="Shared link says unavailable">
+    The link may be expired, revoked, or never valid — Elitea shows the same message in every case to avoid confirming which.
+  </Accordion>
+</AccordionGroup>
+
+<Info title="Related">
+[Attach files](/how-tos/chat-conversations/attach-files) · [Context management](/how-tos/chat-conversations/context-management) · [Add teammates to a conversation](/how-tos/chat-conversations/add-teammates-to-conversation)
+</Info>

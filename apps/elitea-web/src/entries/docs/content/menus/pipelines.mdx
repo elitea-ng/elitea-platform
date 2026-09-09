@@ -1,0 +1,57 @@
+---
+title: "Pipelines"
+description: "Design multi-step, node-based workflows that chain agents, toolkits, and control-flow logic together."
+---
+
+A pipeline is a visual, multi-step workflow. Where an agent handles one task end to end, a pipeline breaks a process into nodes — agent calls, toolkit actions, decisions, and state updates — and connects them into a repeatable sequence.
+
+<Screenshot id="pipelines-flow-editor" alt="The pipeline flow editor with connected nodes" />
+
+## Create a pipeline
+
+Creation is two phases. First, fill in **Name**, **Description**, and optionally tags, a welcome message, conversation starters, and a step limit (default 25), then select **Save** — this creates the pipeline's `base` version. Saving unlocks the second phase: a three-column editor with the configuration form on the left, the **Flow/YAML editor** in the center, and a live test chat on the right.
+
+## Attach toolkits, agents, MCPs, and nested pipelines
+
+In **Tools**, use **+Toolkit**, **+MCP**, **+Agent**, and **+Pipeline** to attach existing resources for the workflow to call. This section only appears after the first save.
+
+## State
+
+Every pipeline starts with two built-in state variables: `inputs` (the triggering input) and `messages` (the conversation history). Add your own under **State** with a name and optional default value, then reference them in any node as `{{state.variable_name}}`. State Modifier nodes read and write state during execution.
+
+## Design the workflow
+
+Toggle between **Flow** and **YAML** at the top of the center panel.
+
+<Tabs>
+  <Tab title="Flow editor">
+    Add a node with **+**, choose its type, and connect nodes by dragging between their connection points. See [Flow editor](/how-tos/pipelines/flow-editor) and the [pipeline node reference](/reference/pipeline-node-reference) for what each node type does and which ones the runtime actually executes.
+  </Tab>
+  <Tab title="YAML editor">
+    Edit the same workflow as YAML for advanced control, bulk changes, or replicating an existing pipeline. See [YAML editor](/how-tos/pipelines/yaml).
+  </Tab>
+</Tabs>
+
+## File attachments
+
+Turn on **Attachments** in Modules to let users upload files in a pipeline conversation. Elitea adds an `input_attachments` state variable automatically (and removes it if you turn attachments off) and injects a file-storage toolkit at execution time — no manual toolkit setup needed. Attachments require a default vector storage and embedding model configured for the project.
+
+## Test and execute
+
+The embedded chat panel lets you pick a model, adjust its settings, and run the pipeline interactively. Each execution is captured as a pipeline run with its inputs, outputs, and state changes; when context management is on, a Context Budget widget tracks token usage during the run. See [Pipeline runs](/how-tos/pipelines/pipeline-runs).
+
+## Versions, publishing, export, and fork
+
+Pipelines version, publish, export/import, and fork the same way agents do — select **Save As Version** to branch, use the version dropdown to switch, and reach **Export**, **Fork**, and **Publish** from the toolbar's overflow menu. See [Entity versioning](/how-tos/agents-pipelines/entity-versioning), [Import/export](/how-tos/agents-pipelines/import-export), and [Forking](/how-tos/agents-pipelines/forking).
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Pipeline does not execute">Check that every node has its required tools and credentials configured, and that connections between nodes are complete.</Accordion>
+  <Accordion title="Node fails or times out">Verify credentials and network access for the external service that node calls.</Accordion>
+  <Accordion title="Data does not flow between nodes">Confirm the receiving node's task field actually references the sending node's output variable — the input-space listing organizes variables but does not pass them automatically.</Accordion>
+</AccordionGroup>
+
+<Info title="Related">
+[Pipeline overview](/how-tos/pipelines/overview) · [Pipeline structure](/how-tos/pipelines/structure) · [Credentials](/menus/credentials) · [Toolkits](/menus/toolkits)
+</Info>

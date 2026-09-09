@@ -1,0 +1,32 @@
+---
+title: "Interaction nodes: human-in-the-loop and printer"
+description: "Pause a pipeline for a person to approve, edit or reject a step, or format a final message back to the conversation."
+---
+
+Interaction nodes are where a pipeline talks to a person, either to ask for a decision or to hand back a formatted result.
+
+## Human-in-the-loop (HITL)
+
+A HITL node pauses the pipeline and waits for a person to respond with one of three actions, each routable to a different next node:
+
+| Action | Typical use |
+|---|---|
+| **Approve** | Continue down the main path |
+| **Edit** | Send a modified value back into the pipeline before continuing — this needs a state key configured to receive the edit |
+| **Reject** | Stop or divert to a different path |
+
+Connect each action to whichever node should run next; an action with no route configured has nowhere to go. A HITL node is how you build an explicit approval step into a pipeline's own logic — distinct from the guardrail confirmation prompt that can appear in chat before a sensitive tool call, which is triggered by admin configuration rather than a node you place yourself. See [Require confirmation for sensitive actions](/how-tos/chat-conversations/sensitive-action-authorization-guardrail) for that related flow.
+
+## Printer
+
+A Printer node formats a final message and writes it to the pipeline's output — typically the last node before `END` in a path that should show something back to the user. It takes the content you want printed (which can reference earlier state) and stores it in the reserved `printer_output` state key.
+
+Because `printer_output` is a reserved state key, don't reuse it for anything else in the same pipeline — a later node that overwrites it silently replaces whatever the Printer node produced. See [Pipeline structure](/how-tos/pipelines/structure) for the full list of reserved keys.
+
+<Screenshot id="pipeline-hitl-node" alt="HITL node configuration showing the Approve, Edit and Reject routes" />
+
+## Guides and references
+
+- [Pipeline structure: entry point, states and connections](/how-tos/pipelines/structure)
+- [Execution nodes: LLM, agent, toolkit and MCP](/how-tos/pipelines/nodes/execution-nodes)
+- [Control-flow nodes: decision, router and state](/how-tos/pipelines/nodes/control-flow-nodes)

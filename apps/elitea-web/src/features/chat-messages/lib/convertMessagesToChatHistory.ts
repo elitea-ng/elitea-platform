@@ -94,6 +94,8 @@ export interface ChatMessage {
   readonly threadId?: string | undefined;
   readonly taskId?: string | undefined;
   readonly originalId?: string | number | undefined;
+  /** How many persistent memories (#870) this turn's recall used — see `AssistantMessage.memoriesUsed`'s own comment. */
+  readonly memoriesUsed?: number | undefined;
 }
 
 // ---------------------------------------------------------------------------

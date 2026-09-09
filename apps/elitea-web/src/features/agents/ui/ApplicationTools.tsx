@@ -11,7 +11,7 @@ import { BasicAccordion } from '@/shared/ui/BasicAccordion';
 
 import { useSelectedProjectId } from '../api/useSelectedProjectId';
 import { useToolkitTypeSchemas } from '../api/useToolkitTypeSchemas';
-import type { InternalToolDescriptor } from '../lib/internalTools';
+import type { AvailableInternalTool } from '../lib/internalTools';
 import { useAvailableInternalTools } from '../lib/internalTools';
 import { genToolkitName } from '../lib/toolkitLabel';
 import type { AgentToolAssociation } from '../lib/types';
@@ -117,7 +117,7 @@ export function ApplicationTools({
   isPipeline = false,
   sx,
 }: ApplicationToolsProps): ReactNode {
-  const sortedToolsRef = useRef<readonly InternalToolDescriptor[] | null>(null);
+  const sortedToolsRef = useRef<readonly AvailableInternalTool[] | null>(null);
   const projectId = useSelectedProjectId();
   const { toolkitTypeSchemas } = useToolkitTypeSchemas(projectId);
   const isMcpVisible = useIsMcpVisible();
@@ -218,8 +218,9 @@ export function ApplicationTools({
                         icon={tool.icon}
                         checked={internalTools.includes(tool.name)}
                         onCheckedChange={(checked) => onToggleInternalTool(tool.name, checked)}
-                        disabled={disabled}
+                        disabled={disabled || !tool.available}
                         infoTooltip={tool.infoTooltip}
+                        unavailableReason={tool.unavailableReason}
                       />
                     ))}
                   </Box>

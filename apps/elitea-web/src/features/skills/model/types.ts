@@ -6,6 +6,13 @@ export interface SkillVersion {
   readonly instructions: string;
   readonly tags: readonly string[];
   readonly meta?: Readonly<Record<string, unknown>>;
+  /** "draft" or "published" (#249) — a published version is frozen server-side. */
+  readonly status?: string;
+  readonly created_at?: string;
+  /** The version this one was cloned or restored from, if any (#874). */
+  readonly parent_version_id?: string;
+  /** Whether this is the version named by SkillRecord.default_version_id. */
+  readonly is_default?: boolean;
 }
 
 /**

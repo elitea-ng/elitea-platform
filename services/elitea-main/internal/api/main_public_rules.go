@@ -69,7 +69,7 @@ func CurrentMainRoutePublicRules() []forwardapp.PublicRule {
 		// API documentation predates any session.
 		uriRule("go.openapidocs.spec_yaml", `^/api/openapi\.yaml$`),
 		uriRule("go.openapidocs.spec_json", `^/api/openapi\.json$`),
-		uriRule("go.openapidocs.ui", `^/docs$`),
+		uriRule("go.openapidocs.ui", `^/api/docs$`),
 	}
 }
 

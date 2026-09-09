@@ -1,0 +1,39 @@
+---
+title: "Custom"
+description: "Configure any toolkit type by hand as raw JSON when the dedicated form doesn't cover a field you need."
+---
+
+Custom isn't a vendor integration — it's a fallback editor. Every toolkit type normally gets a typed form built from its schema, but Custom always appears at the bottom of the type picker as a generic JSON settings editor you can point at any type. Use it when a type has no typed form yet, or when you need to set a field the form doesn't expose.
+
+<Note>
+Custom is added by the web client itself and has no entry in the toolkit type catalogue — there's no fixed tool list or worker verdict to report, because it isn't a type on its own. It edits the settings of whatever underlying toolkit type you choose.
+</Note>
+
+## Prerequisites
+
+- The toolkit `type` key you want to configure (for example `github` or `jira`) and the field names its schema expects — check that type's own page in this catalogue, or the type's settings in the create form first.
+- Any credential the underlying type needs, created the normal way under Credentials.
+
+## Configure a toolkit as raw JSON
+
+<Steps>
+<Step title="Open the toolkit type picker">
+In the left navigation, open **Toolkits**, then select **New**. Custom is listed at the end of the type picker, outside the category filters.
+</Step>
+<Step title="Write the settings JSON">
+The editor is a JSON text area with syntax highlighting and linting. Enter the `type` and `settings` fields the underlying toolkit type expects.
+</Step>
+<Step title="Save">
+Name the toolkit and select **Create**. Elitea validates the JSON but does not re-check it against the target type's schema beyond basic parsing — a field name typo won't be caught here.
+</Step>
+</Steps>
+
+## Available tools
+
+There's no fixed tool list — the tools exposed are whatever the underlying toolkit type provides once its settings are valid.
+
+## Common issues
+
+<Note>
+A malformed or incomplete settings object saves without error but fails at call time, not at save time. Prefer the type's own dedicated form when one is available, and reach for Custom only for the fields it's missing.
+</Note>

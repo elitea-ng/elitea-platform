@@ -153,6 +153,7 @@ export const PlusChatSubmenu = memo(
             {showCreateNew && (
               <MenuItem
                 onClick={onCreateNew}
+                data-testid="plus-submenu-create-new"
                 sx={{
                   padding: '0.5rem 1.25rem',
                   height: '2.5rem',

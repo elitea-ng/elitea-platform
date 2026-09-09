@@ -1,0 +1,58 @@
+---
+title: "Index external data"
+description: "Understand what indexing does, which toolkit types support it, and what you need before you create your first index."
+---
+
+Indexing turns content from an external system — a repository, a wiki, a set of issues, or uploaded files — into a searchable store that agents, pipelines, and chat can query with natural language, instead of you browsing the source system by hand.
+
+## What indexing needs
+
+Before you can index anything, three things must be in place:
+
+- **A credential** for the target system, attached to the toolkit (not required for the built-in Artifact type, which indexes files you've already uploaded).
+- **An embedding model** configuration, selected at the project level (Settings › AI Providers).
+- **A vector store** configuration (PostgreSQL with the pgvector extension), also selected at the project level.
+
+<Note>
+The Indexes tab only appears on a toolkit whose type declares an indexing tool, and it renders the tab even when the currently running worker can't execute it — in that case it shows the server's own explanation instead of the create-index form, rather than hiding the tab.
+</Note>
+
+## Which toolkit types support indexing
+
+18 toolkit types carry an indexing tool: ADO Boards, ADO Plans, ADO Repos, ADO Wiki, Artifact, Bitbucket, Confluence, Figma, GitHub, GitLab, Jira, QTest, SharePoint, TestRail, XRAY cloud, Zephyr Enterprise, Zephyr Essential, and Zephyr Scale. Any other toolkit type has no Indexes tab at all.
+
+Whether an index-capable type actually appears as a tile in **Create toolkit** also depends on which worker your deployment runs — see [Use credentials in a toolkit](/how-tos/credentials-toolkits/how-to-use-credentials) and the [toolkit catalogue reference](/reference/toolkit-catalogue) for the worker split.
+
+## The indexing tools
+
+Six tools, available on the toolkit types listed above, do the actual work:
+
+- **Index Data** — creates or updates an index for a chosen scope (a repo, a space, a project, and so on).
+- **Search Index** — runs a semantic search query against a completed index.
+- **Stepback Search Index** — rewrites a complex query before searching, for better recall on multi-part questions.
+- **Stepback Summary Index** — runs a stepback search and returns a generated summary of the results.
+- **Remove Index** — deletes an index.
+- **List Indexes** — lists the indexes a toolkit already has (the Indexes tab shows this list itself, so you rarely need to run this as a tool).
+
+For the full setup walkthrough, see [Use the Indexes tab](/how-tos/indexing/using-indexes-tab-interface). For running search tools from chat or an agent, see [Index and search data with tools](/how-tos/indexing/indexing-tools).
+
+## Where indexing happens
+
+<Steps>
+1. Open a toolkit that supports indexing (for example a GitHub toolkit) and go to its **Indexes** tab.
+2. If no indexes exist yet, use the create-index entry point to configure the scope and start a run.
+3. Watch the run's status until it reaches **Completed** or **Partially Indexed**.
+4. Search, re-index, schedule, or delete the index from the same tab.
+</Steps>
+
+<Screenshot id="indexes-tab-empty" alt="Indexes tab on a toolkit with no indexes yet, showing the create-index entry point" />
+
+## Trigger indexing from chat
+
+You can also run search tools against an existing index directly from a conversation, by adding the toolkit as a chat participant and enabling its search tools. This is useful for one-off questions without opening the toolkit's configuration page — see [Use chat](/how-tos/chat-conversations/how-to-use-chat-functionality).
+
+## Next steps
+
+- [Use the Indexes tab](/how-tos/indexing/using-indexes-tab-interface) to create your first index.
+- [Index data from a source](/how-tos/indexing/index-sources) for source-specific setup fields.
+- [Schedule re-indexing](/how-tos/indexing/schedule-indexing) to keep an index current automatically.

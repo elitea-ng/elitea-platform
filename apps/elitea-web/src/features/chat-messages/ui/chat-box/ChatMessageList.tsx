@@ -21,13 +21,7 @@ import Box from '@mui/material/Box';
 import Skeleton from '@mui/material/Skeleton';
 
 import { ApplicationAnswer } from './ApplicationAnswer';
-import type { AnswerCanvasSelection } from './AnswerContent';
-import type { CanvasEditPayload, CodeBlockInfo } from '../canvas/Canvas';
 import { UserMessage } from './UserMessage';
-import type { UserMessageUpdatedItem } from './UserMessage';
-
-import type { HitlResumePayload } from '../chat-hitl-actions/ChatHitlActions';
-import type { ChatContinueProps } from '../chat-continue/ChatContinue';
 
 import { useChatSessionStore } from '@/entities/conversation';
 import { WELCOME_MESSAGE_ID } from '@/shared/lib/enums';
@@ -37,108 +31,26 @@ import type { SimpleBarInstance } from '@/shared/ui/ScrollableContainer';
 import type { ChatMessage } from '../../lib/convertMessagesToChatHistory';
 import { t } from '@/shared/i18n';
 
+import type { ChatMessageListProps } from './ChatMessageList.types';
+
+// `ChatMessageListProps` and the per-group prop interfaces it composes
+// (`ChatMessageListActions`/`Canvas`/`Tts`/`Continuation`/`Pagination`) live
+// in `./ChatMessageList.types` — split out purely to keep this file under
+// the §3.5 file-length budget, same rationale as `ApplicationAnswer.types.ts`.
+// `features/chat-messages/index.ts` imports `ChatMessageListCanvas`/
+// `ChatMessageListProps` directly from `./ChatMessageList.types`, not
+// through this re-export.
+export type {
+  ChatMessageListActions,
+  ChatMessageListCanvas,
+  ChatMessageListContinuation,
+  ChatMessageListPagination,
+  ChatMessageListProps,
+  ChatMessageListTts,
+} from './ChatMessageList.types';
+
 /** How close to the top (px) a scroll position must be to fire `onScrollToTop` — baseline: `ChatMessageList.jsx`'s own `scrollTop <= 20`. */
 const SCROLL_TOP_THRESHOLD = 20;
-
-/** Per-message action callbacks, grouped to stay under the component-props budget. */
-export interface ChatMessageListActions {
-  /** Called when a message is copied to clipboard. */
-  readonly onCopyToClipboard?: ((message: ChatMessage) => void) | undefined;
-  /** Called when an AI answer is deleted. */
-  readonly onDeleteAnswer?: ((messageId: string) => void) | undefined;
-  /** Called when an AI answer is regenerated. */
-  readonly onRegenerateAnswer?: ((messageId: string) => void) | undefined;
-  /**
-   * Called with `(messageId, updatedItems)` when the single eligible user
-   * message (see `getOnSubmit` gating below) is edited and resubmitted.
-   */
-  readonly onSubmitEditedMessage?:
-    | ((messageId: string, updatedItems: readonly UserMessageUpdatedItem[]) => void)
-    | undefined;
-}
-
-/** The canvas opener (issue 853), grouped to stay under the component-props budget: the handler that opens a stored canvas and the block already open. */
-export interface ChatMessageListCanvas {
-  readonly onEdit?: ((payload: CanvasEditPayload) => void) | undefined;
-  readonly selected?: CodeBlockInfo | undefined;
-  /** Carves a canvas out of a range the reader highlighted in an answer. */
-  readonly onCreateFromSelection?: ((payload: AnswerCanvasSelection) => void) | undefined;
-}
-
-/** Read-aloud (TTS) props, grouped to stay under the component-props budget. */
-export interface ChatMessageListTts {
-  /** Whether auto-speak mode is active. */
-  readonly autoSpeak?: boolean;
-  /** Called for auto-speak (TTS) — threaded straight to each `ApplicationAnswer`. */
-  readonly onAutoSpeak?: ((text: string, messageId: string) => void) | undefined;
-  /** Currently speaking message ID. */
-  readonly speakingMessageId?: string | undefined;
-  /** TTS speaking segments. */
-  readonly speakingSegments?: readonly unknown[] | undefined;
-  /** TTS spoken range. */
-  readonly spokenRange?: { readonly start: number; readonly end: number } | undefined;
-}
-
-/** MCP-auth / token-limit continue-execution and HITL props, grouped to stay under the component-props budget. */
-export interface ChatMessageListContinuation {
-  /** Called when the user continues a paused MCP-auth-required execution — only offered on the last message. */
-  readonly onContinueMcpExecution?: ((messageId: string, addToIgnoreList?: boolean, authorizationRequestId?: string) => void) | undefined;
-  readonly renderAuthModal?: ChatContinueProps['renderAuthModal'];
-  /** Called when the user continues a token-limit-paused execution — only offered on the last message. */
-  readonly onContinueTokenLimitExecution?: ((messageId: string) => void) | undefined;
-  /** Called when a HITL interrupt is resumed — only offered on the last message. */
-  readonly onHitlResume?: ((payload: HitlResumePayload) => void) | undefined;
-  /** Hides the token-limit continue prompt even when a message is paused for it. */
-  readonly hideContinueButton?: boolean;
-  /** Hides HITL approval cards even when a message carries a pending interrupt. */
-  readonly hideHitlActions?: boolean;
-}
-
-/** Older-messages pagination props, grouped to stay under the component-props budget. */
-export interface ChatMessageListPagination {
-  /** Whether older messages are being fetched (renders a loading skeleton above the list). */
-  readonly isLoadingMore?: boolean;
-  /** Called when the list is scrolled near the top — a future pagination consumer's trigger. */
-  readonly onScrollToTop?: (() => void) | undefined;
-}
-
-/** @public Props for `ChatMessageList`. */
-export interface ChatMessageListProps {
-  /** The list of messages to render. */
-  readonly chatHistory: readonly ChatMessage[];
-  /** Whether a message is currently streaming. */
-  readonly isStreaming?: boolean;
-  /** The user ID for identifying the current user. */
-  readonly userId?: string;
-  /**
-   * The project the conversation lives in — threaded to each `UserMessage`'s
-   * attachment cards, whose artifact-storage download path refuses without it
-   * (`NormalAttachment`'s own doc: "Required to download an
-   * artifact-storage-backed attachment").
-   */
-  readonly projectId?: string | undefined;
-  readonly messageActions?: ChatMessageListActions;
-  /** Opens a `canvas_message` block in this transcript — supplied by the layer that mounts the canvas editor. Omitted, canvas blocks render with no open control. */
-  readonly canvas?: ChatMessageListCanvas;
-  readonly tts?: ChatMessageListTts;
-  readonly continuation?: ChatMessageListContinuation;
-  readonly pagination?: ChatMessageListPagination;
-  /**
-   * What to render instead of the transcript when `chatHistory` is empty.
-   * The caller owns this because the empty branch is not just different
-   * copy — `ChatBox` centres the greeting and the composer together as one
-   * block (see `ChatBox.layout.ts`), and only the caller knows the user's
-   * name to greet. Omitted, the plain fallback line below is used.
-   */
-  readonly emptyState?: ReactNode;
-  /**
-   * The answering participant's display name, captioned on every assistant
-   * row (`<mark> Elitea to Message`). Supplied by `ChatBox`, which resolves
-   * it from the conversation's active participant — `entities/message`'s
-   * assistant normaliser keeps no participant, so the row cannot find it.
-   */
-  readonly assistantName?: string | undefined;
-}
 
 /**
  * The author id a value actually STATES, or `undefined` when it states none.
@@ -205,7 +117,7 @@ export function ChatMessageList({
   userId,
   projectId,
   messageActions: { onCopyToClipboard, onDeleteAnswer, onRegenerateAnswer, onSubmitEditedMessage } = {},
-  canvas: { onEdit: onEditCanvas, selected: selectedCodeBlockInfo, onCreateFromSelection: onCreateCanvasFromSelection } = {},
+  canvas: { onEdit: onEditCanvas, selected: selectedCodeBlockInfo, onCreateFromSelection: onCreateCanvasFromSelection, onOpenFile: onOpenFileInCanvas } = {},
   tts: { onAutoSpeak, speakingMessageId, speakingSegments, spokenRange } = {},
   continuation: {
     onContinueMcpExecution,
@@ -319,7 +231,29 @@ export function ChatMessageList({
           const isUser = message.role === 'user';
           const messageId = message.id;
           const isLastMessage = index === chatHistory.length - 1;
-          const messageIsStreaming = Boolean(message.isStreaming) || (isLastMessage && isStreaming);
+          /*
+           * `isLastMessage && isStreaming` is a FALLBACK for the few frames
+           * between a turn's optimistic append and the reducer's first
+           * `isStreaming` stamp on THIS message — a brand-new placeholder
+           * with no answer in it yet. It must not outlive that window: the
+           * page-level `isStreaming` this ORs in is itself an OR of three
+           * sources (composer Stop, persisted-history catch-up, the live
+           * transport — see `ChatBox.tsx`'s own comment on it), and none of
+           * them is guaranteed to settle back to `false` the instant THIS
+           * message's own turn ends — the persisted-history source in
+           * particular is read off a conversation-messages fetch that a
+           * finished turn does not itself invalidate. A last message that
+           * already carries an answer (text, or a stored canvas item) is
+           * proof the placeholder window is over, so its OWN state — not a
+           * page-level flag with three unrelated reasons to be `true` — must
+           * decide whether the reader can still act on it. Before this
+           * guard, a stuck/late page-level flag permanently hid the "Create
+           * canvas" selection control (and disabled regenerate) on the very
+           * last message of a conversation that had visibly finished
+           * answering.
+           */
+          const hasRenderedAnswer = Boolean(message.content) || (message.messageItems?.length ?? 0) > 0;
+          const messageIsStreaming = Boolean(message.isStreaming) || (isLastMessage && isStreaming && !hasRenderedAnswer);
           // Ownership goes through `isOwnMessage` on every branch, so the
           // String-normalisation and the unstated-reader/unstated-author rules
           // are decided in exactly one place (see its docblock).
@@ -347,6 +281,7 @@ export function ChatMessageList({
                   message={message}
                   messageId={messageId}
                   projectId={projectId}
+                  onOpenFileInCanvas={onOpenFileInCanvas}
                   onCopy={handleCopy}
                   onDelete={handleDelete}
                   onSubmit={isEligibleForEdit ? onSubmitEditedMessage : undefined}
@@ -385,6 +320,10 @@ export function ChatMessageList({
                     ...(speakingMessageId && { speakingMessageId }),
                     ...(speakingSegments && { speakingSegments }),
                     ...(spokenRange && { spokenRange }),
+                  }}
+                  feedback={{
+                    projectId,
+                    enabled: message.id !== WELCOME_MESSAGE_ID && !message.isSummarized,
                   }}
                 />
               )}

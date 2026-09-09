@@ -202,6 +202,62 @@ func TestGetAgentAnalytics_ResolvesTheAgentThroughExecutionJobs(t *testing.T) {
 	require.InDelta(t, 0.0, second.ErrorRate, 0.01)
 }
 
+// TestGetAgentAnalytics_PricesEachAgentsCallsAtTheCatalogueRate is issue #875's
+// acceptance case: cost attributable to an agent.
+//
+// The price is applied at the ROW's own rate before the per-agent sum — the
+// same order estimate.go's by_model and by_user reads already use — so an
+// agent whose calls addressed several models would still get the right total.
+// Here one model is enough to pin the arithmetic itself: 4 calls of 10 prompt
+// + 20 completion tokens at $5 / $10 per 1,000,000 tokens is
+// 4*(10*5 + 20*10)/1e6 = $0.001 exactly.
+func TestGetAgentAnalytics_PricesEachAgentsCallsAtTheCatalogueRate(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	repo := NewAnalyticsRepo(pool)
+
+	seedAgentExecution(t, pool, "exec-alpha", 4001, "Research Agent", 4, 0)
+	_, err := pool.Exec(context.Background(), `
+INSERT INTO gateway.gateway_models (provider, model_name, input_cost_per_1m_tokens, output_cost_per_1m_tokens)
+VALUES ('openai', 'gpt-4o', 5, 10)`)
+	require.NoError(t, err, "seed the price catalogue")
+
+	breakdown, err := repo.GetAgentAnalytics(context.Background(), agentAnalyticsWindow())
+	require.NoError(t, err)
+	require.Len(t, breakdown.Agents, 1)
+
+	agent := breakdown.Agents[0]
+	require.True(t, agent.Priced, "the catalogue prices this agent's only model")
+	require.NotNil(t, agent.TotalCost, "priced must publish money, not nil")
+	require.Equal(t, "0.000200000000", agent.InputCost.String())
+	require.Equal(t, "0.000800000000", agent.OutputCost.String())
+	require.Equal(t, "0.001000000000", agent.TotalCost.String())
+}
+
+// TestGetAgentAnalytics_AnUnpricedModelKeepsTokensAndOmitsMoney: the catalogue
+// carries no rate for the model this agent addressed, so the row keeps its
+// token counts (already asserted by
+// TestGetAgentAnalytics_ResolvesTheAgentThroughExecutionJobs) and Priced stays
+// false with the money fields nil — never a fabricated zero, for the reason
+// estimate.go's own by_model rows refuse one.
+func TestGetAgentAnalytics_AnUnpricedModelKeepsTokensAndOmitsMoney(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	repo := NewAnalyticsRepo(pool)
+
+	seedAgentExecution(t, pool, "exec-alpha", 4001, "Research Agent", 4, 0)
+	// Deliberately no gateway.gateway_models row for openai/gpt-4o.
+
+	breakdown, err := repo.GetAgentAnalytics(context.Background(), agentAnalyticsWindow())
+	require.NoError(t, err)
+	require.Len(t, breakdown.Agents, 1)
+
+	agent := breakdown.Agents[0]
+	require.False(t, agent.Priced)
+	require.Nil(t, agent.InputCost)
+	require.Nil(t, agent.OutputCost)
+	require.Nil(t, agent.TotalCost)
+	require.EqualValues(t, 4*30, agent.TotalTokens, "the tokens must survive the absence of a price")
+}
+
 // TestGetAgentAnalytics_ARetriedExecutionIsNotCountedTwice.
 //
 // elitea_runtime.execution_jobs is keyed (execution_id, generation), so a JOIN

@@ -316,6 +316,11 @@ describe('the chat route: a canvas can be MADE from a selection', () => {
       expect(ANSWER_TEXT.indexOf(SELECTED), 'the character index a naive client would send').toBeLessThan(EXPECTED_STARTS_AT);
       expect(body['canvas_content_starts_at']).toBe(EXPECTED_STARTS_AT);
       expect(body['canvas_content_ends_at']).toBe(EXPECTED_ENDS_AT);
+      // Issue #879: `SELECTED` ('carve me here') is prose, not a fenced code
+      // block — the create now asks for a `document` canvas, not `code`.
+      expect(body['canvas_type'], 'a prose selection creates a document canvas, not a code one (#879)').toBe('document');
+      expect(body['code_language']).toBe('document');
+      expect(body['name']).toBe('Edit document');
 
       // …and the transcript shows what the server wrote, without a reload.
       const block = await screen.findByTestId('canvas-block', {}, { timeout: 15_000 });

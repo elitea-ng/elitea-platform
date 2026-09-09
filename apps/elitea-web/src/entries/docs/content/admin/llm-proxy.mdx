@@ -1,0 +1,77 @@
+---
+title: "LLM proxy"
+description: "Publish platform-wide model providers, grant models to specific projects, and read gateway status, usage, and logs."
+---
+
+The LLM Proxy screen lives under **Configuration › LLM Proxy** in the admin console. It is the platform-wide control over the LLM gateway that sits in front of every model call, organized into six tabs.
+
+<CardGroup cols={2}>
+  <Card title="Status" icon="activity">Whether the gateway is reachable, and whether rate limits and budgets are actually enforceable right now.</Card>
+  <Card title="Models" icon="cpu">The platform model catalogue and its per-project grants.</Card>
+  <Card title="Usage" icon="chart-bar">Deployment-wide spend by provider and model.</Card>
+  <Card title="Logs" icon="list">A per-request log of every call the gateway served.</Card>
+  <Card title="Providers & models" icon="plug">Publish a provider credential once for the whole platform.</Card>
+  <Card title="Alerts" icon="bell">The default soft-alert threshold for budget warnings.</Card>
+</CardGroup>
+
+## Publish a provider platform-wide
+
+Normally an AI provider credential belongs to one project. **Providers & models** lets you publish one from the public project instead, so every project can use it without configuring its own copy.
+
+<Steps>
+  <Step title="Open Providers & models">
+    Existing platform providers are listed with a `status_ok` indicator — the gateway only ever dispatches to a provider whose endpoint and key resolve, so a row reporting `status_ok = false` is stored and listed but silently never used.
+  </Step>
+  <Step title="Add or edit a provider">
+    Same provider types as a project credential (OpenAI, Azure OpenAI, EPAM DIAL, Anthropic, Ollama, Amazon Bedrock, Vertex AI, vLLM).
+  </Step>
+</Steps>
+
+<Warning>
+A row imported from an older deployment can still hold its key as plain text rather than sealed in the vault. The panel flags this as `sealed: false` without ever displaying the value; re-saving the credential through this screen seals it.
+</Warning>
+
+## Grant a platform model to specific projects
+
+Under **Models**, each platform model carries a share scope:
+
+- **All projects** — every project on the deployment can use it (the default for any model saved before this control existed).
+- **No project** — stored and listed, but offered nowhere.
+- **Selected projects** — offered only to the team projects you pick. Personal projects are not offered here individually — granting to one would be a grant to a single person, which this screen does not do.
+
+<Screenshot id="admin-llm-proxy-models" alt="Platform model catalogue with share-scope column" />
+
+<Steps>
+  <Step title="Open a model's grant">
+    Choose the share scope, and for **Selected projects**, search and pick which team projects.
+  </Step>
+  <Step title="Save">
+    The model becomes available (or unavailable) to the chosen projects' model pickers.
+  </Step>
+</Steps>
+
+<Note>
+`credential_resolves = false` on a model means it names a provider this platform does not currently publish (or none). That, like `status_ok = false`, means the model is stored and listed but never actually served — this screen is where you see why.
+</Note>
+
+## Read status, usage, logs, and alerts
+
+<Accordion title="Status">
+Reports what the gateway currently holds, not what was last saved — a governance rule can be rejected at load, or load but match nothing, and neither looks different from the authoring side. If the gateway is unreachable, the panel says so rather than showing stale numbers as if they were live.
+</Accordion>
+
+<Accordion title="Usage">
+Reads the per-request billing ledger, deployment-wide, broken down by provider and model. This is a report, not a control — nothing here enforces a budget; that happens on [Budgets and governance](/admin/budgets-and-governance).
+</Accordion>
+
+<Accordion title="Logs">
+Reads every request the gateway served, including ones a billing-based Usage report would miss entirely — refused by a budget, rejected by policy, sent to an unresolvable model, or failed upstream. The log has no column for a prompt, completion, or upstream error text; the panel states that rather than showing an expandable row with nothing in it.
+</Accordion>
+
+<Accordion title="Alerts">
+One deployment-wide default soft-alert percentage for budget warnings. A project with its own alert threshold keeps using that value — changing the default here does not override it. Turning alerting off stops the warning only; the gateway still bills and still refuses a call that exceeds a budget.
+</Accordion>
+
+<Note>
+Retries, timeouts, fallback chains, key weighting, and semantic caching are not configurable from here or anywhere else in the product — the gateway runs its defaults for all of them.
+</Note>

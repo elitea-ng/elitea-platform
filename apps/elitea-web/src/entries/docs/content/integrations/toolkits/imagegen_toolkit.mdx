@@ -1,0 +1,63 @@
+---
+title: "ImageGen"
+description: "Generate and edit images from an agent or pipeline, saved straight to a project bucket."
+---
+
+Generate images from a text prompt, or edit an existing image, using the project's configured image-generation model. It's listed under the **media** category in the toolkit type picker.
+
+<Note title="Toolkit half only">
+This is the toolkit an agent or pipeline attaches directly (`generate_image`, `edit_image`). It's a separate surface from the chat composer's own **Image creation** module under [Internal tools](/menus/internal-tools#image-creation) — see that page for the conversation-level toggle.
+</Note>
+
+## Prerequisites
+
+- An image-generation-capable model configured under **AI Providers** for this project. There's no separate ImageGen credential — the toolkit form's model field resolves against the project's own image-generation models.
+- A bucket to write generated and edited images into, or permission to create one from the toolkit form.
+
+## Connect the toolkit
+
+<Steps>
+<Step title="Open the toolkit type picker">
+In the left navigation, open **Toolkits**, then select **New**. Filter the type picker by the **media** category, or search for "ImageGen".
+</Step>
+<Step title="Pick the model">
+Choose an image-generation model from the project's configured models.
+</Step>
+<Step title="Pick a bucket">
+Choose an existing artifact bucket, or create one from the form. Every image the toolkit generates or edits is saved there under the configured filename prefix.
+</Step>
+<Step title="Save">
+Name the toolkit and select **Create**. It's now available to attach to agents, pipelines and conversations in this project.
+</Step>
+</Steps>
+
+<Screenshot id="toolkit-new-generic" alt="New toolkit dialog with the ImageGen type selected" />
+
+## Available tools
+
+<Accordion title="Available tools (2)">
+
+| Tool |
+|---|
+| Generate image |
+| Edit image |
+
+</Accordion>
+
+## Common issues
+
+<Note title="Python worker only">
+ImageGen ships as a Python-worker toolkit only. On a deployment running the Rust worker, the type shows in the picker greyed out with a reason rather than being offered — see [Toolkit catalogue](/reference/toolkit-catalogue) for the current worker split.
+</Note>
+
+<Note>
+`edit_image` takes the source image (and an optional mask) as an artifact filepath — the `/{bucket}/{filename}` reference a prior `generate_image` call, a file upload, or another toolkit's file-write already returned. It doesn't accept raw image bytes directly.
+</Note>
+
+<Note title="What isn't ported">
+The legacy `imagegen` plugin also exposed a generic provider-hub `descriptor` / `health` / `invoke` / `invocations` route surface, shared with three other legacy provider plugins. That generic surface is deliberately not carried forward here — it stays deferred to ADR-0012 (provider catalog and runtime boundary), which is still `In Review`. Only the two tools above are served.
+</Note>
+
+<Info title="Related">
+[Internal tools: Image creation](/menus/internal-tools#image-creation) · [Toolkit catalogue](/reference/toolkit-catalogue) · [Artifacts](/menus/artifacts)
+</Info>

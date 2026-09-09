@@ -69,6 +69,17 @@ func (r *Runner) Invoke(ctx context.Context, call spi.Invoke, tc *spi.Context) (
 		return nil, err
 	}
 
+	// Reader-UPLOADED files (#873), resolved the same place and for the same
+	// reason as the wiki-page selection above: before the argument set is
+	// derived, so the key is spent here and nothing downstream can prepend it
+	// twice. See extracontext.go for why it runs second (files are the
+	// LEAST authoritative of the two attachment kinds, so their block sits
+	// furthest from the question).
+	params, err = ApplyExtraContext(call.Tool, params)
+	if err != nil {
+		return nil, err
+	}
+
 	if host, err := CheckEgress(r.Egress, params); err != nil {
 		return nil, err
 	} else if host != "" {

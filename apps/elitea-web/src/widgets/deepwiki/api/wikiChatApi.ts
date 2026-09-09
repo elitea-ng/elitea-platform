@@ -43,6 +43,13 @@ export interface WikiChatTarget {
    * keeps the browser from being able to choose what the server reads.
    */
   readonly contextPaths?: readonly string[] | undefined;
+  /**
+   * Small text files the reader attached to the next question (#873). The
+   * OPPOSITE of `contextPaths`: this carries CONTENT, already read off the
+   * reader's own machine by `WikiFileAttach` — there is nothing on the
+   * server for the client to name here, so there is no identifier to send.
+   */
+  readonly attachments?: readonly { readonly name: string; readonly content: string }[] | undefined;
 }
 
 /**
@@ -87,6 +94,12 @@ export function buildInvokeRequest(target: WikiChatTarget, input: ChatInvokeInpu
             context_paths: [...target.contextPaths],
             context_wiki_version_id: target.wikiVersionId,
           }
+        : {}),
+      // extra_context (#873): OMITTED, not sent empty, for the same reason
+      // as the overrides above — an empty list is a no-op on the engine
+      // side too, so sending it would only widen the envelope.
+      ...(target.attachments && target.attachments.length > 0
+        ? { extra_context: target.attachments.map((file) => ({ name: file.name, content: file.content })) }
         : {}),
       ...(input.capability === 'research'
         ? { research_type: 'general', enable_subagents: true }

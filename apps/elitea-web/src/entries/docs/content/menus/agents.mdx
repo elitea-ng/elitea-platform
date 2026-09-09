@@ -1,0 +1,106 @@
+---
+title: "Agents"
+description: "Create, configure, test, version, and publish agents — Elitea's configurable AI assistants."
+---
+
+An agent combines instructions, a model, and optional toolkits and skills into a reusable assistant. This page covers the Agents menu end to end; for the underlying concept, see [What is an agent](/home/key-concepts#agent).
+
+<Screenshot id="agents-list" alt="The Agents dashboard listing project agents" />
+
+## Create an agent
+
+<Steps>
+  <Step title="Open the form">
+    Select **+ Agent** in the sidebar.
+  </Step>
+  <Step title="Fill in General and Instructions">
+    **Name** and **Description** are required; **Instructions** define the agent's behavior. Tags, a welcome message, and up to four conversation starters are optional.
+  </Step>
+  <Step title="Save">
+    Saving creates the agent's first ("latest") version and opens its full configuration page: a form on the left, a live test chat on the right.
+  </Step>
+</Steps>
+
+<Tip title="Build or edit with AI">
+Select **Build with AI** on a new agent, or **Edit with AI** on a saved one, to describe what you want in plain language and review a generated draft — name, description, instructions, welcome message, starters, and suggested toolkits — before applying it.
+</Tip>
+
+## Attach toolkits, agents, MCPs, and pipelines
+
+In the **Tools** section, use the **+Toolkit**, **+MCP**, **+Agent**, and **+Pipeline** buttons to attach existing resources; each opens a searchable picker with a **Create new** option that takes you to that resource's own creation form. Changes save automatically.
+
+<Note>
+If an attached toolkit uses shared credentials that require your own private copy, a **Credential setup required** banner appears on its card — select **Create a credential** to add the matching private credential.
+</Note>
+
+### Skills
+
+Attach up to five [skills](/menus/skills) per agent version from the **Skills** section. Each attached skill uses its `base` version by default; select the version name on the card to switch to a different one. The Skills section is hidden when the Public project is selected.
+
+### Modules
+
+Built-in modules — attachments, image creation, data analysis, planner, smart tools selection, swarm mode, and the platform's own MCP tools — turn on in **Tools** › **Modules**. All except attachments require the Python worker; see [Internal tools](/menus/internal-tools).
+
+### Instructions, variables, and mentions
+
+Type `/` in Instructions to mention a toolkit, MCP, agent, or pipeline already attached to the agent, and `~` to mention an attached skill. A `{{variable_name}}` placeholder in Instructions automatically adds a matching input field to the **Variables** section.
+
+### Editor notes
+
+A free-text **Editor Notes** field records internal context about the current version — it is never sent to the model or used during execution.
+
+## Test the agent
+
+The embedded chat panel on the right lets you send messages, pick a model and its settings (Reasoning for reasoning models, Creativity for standard ones, Max Completion Tokens), and iterate without leaving the page. When context management is on for the project, a Context Budget widget appears above the panel after the first message.
+
+## Versions
+
+Selecting **Save** again updates the current version. Use **Save As Version** to branch off a named version instead — version names must be 48 characters or fewer, without spaces or underscores. From any version you can **Delete**, **Execute**, or switch versions from the version dropdown. See [Entity versioning](/how-tos/agents-pipelines/entity-versioning).
+
+### Publish, export, import, and fork
+
+- **Publish** a draft version through a guided wizard with automated AI validation, making it visible in [Catalog](/menus/catalog). See [Agent publishing](/how-tos/agents-pipelines/publishing).
+- **Export** downloads the selected version as a single `.md` file, or a `.zip` if it references nested agents.
+- **Import** an exported file from the Agents dashboard toolbar.
+- **Fork** copies the selected version into another project you choose.
+
+See [Import/export](/how-tos/agents-pipelines/import-export) and [Forking](/how-tos/agents-pipelines/forking) for full detail; toolkit credentials must be reconfigured manually after either operation.
+
+## Evaluation
+
+A saved agent's editor includes an **Evaluation** tab to define what "good" looks like for that agent, run it against test cases, and see how it scored.
+
+<Tabs>
+  <Tab title="Library">Define scoring dimensions — the criteria a run is judged against, such as accuracy or tone — building up a reusable set of judging criteria before running anything.</Tab>
+  <Tab title="Datasets">Create a dataset of test cases: inputs paired with what you expect the agent to do with them. A run executes against a dataset.</Tab>
+  <Tab title="Runs">Start a run against a dataset and your dimensions. Runs poll for progress while this tab stays open — leaving it pauses polling until you return — and produce a scorecard with one score per dimension per case when they finish.</Tab>
+</Tabs>
+
+## History
+
+A saved agent's editor also includes a **History** tab: every past conversation that used this agent, newest first, with its date, a derived duration, and its message count. Select a run to see its recorded trace — the tool calls and thinking steps the runtime logged for that conversation. An agent with no past conversations shows an empty state rather than a blank panel.
+
+<Note>
+Selecting a run in History does not currently reload that conversation into the Test panel above — there is no live restore path from this tab (issue #868, same disclosed gap as pipelines' equivalent History tab).
+</Note>
+
+## Best practices
+
+<AccordionGroup>
+  <Accordion title="Write clear instructions">Be specific about the agent's goal, scope, and constraints; give examples where useful.</Accordion>
+  <Accordion title="Keep toolkits minimal">Attach only the toolkits and tools the agent actually needs.</Accordion>
+  <Accordion title="Use named versions for real changes">Branch a version before a change you might need to roll back from.</Accordion>
+  <Accordion title="Test before publishing">Run the agent through its conversation starters and a few edge cases before you publish it.</Accordion>
+</AccordionGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Agent responds slowly or not at all">Check the selected model and its settings, and confirm any attached toolkits are configured correctly.</Accordion>
+  <Accordion title="Cannot publish">Confirm you have publishing permission and that all required fields are complete; review the AI validation result for blocking issues.</Accordion>
+  <Accordion title="Skills button is disabled">Save the agent first — Skills can only be attached to a saved version — or check whether the five-skill limit has been reached.</Accordion>
+</AccordionGroup>
+
+<Info title="Related">
+[Skills](/menus/skills) · [Toolkits](/menus/toolkits) · [Project Context](/menus/settings/project-settings#project-context) · [Sensitive action authorization guardrail](/how-tos/chat-conversations/sensitive-action-authorization-guardrail) · [Build agent with AI](/how-tos/agents-pipelines/build-agent-with-ai)
+</Info>

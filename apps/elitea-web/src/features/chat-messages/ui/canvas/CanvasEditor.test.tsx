@@ -125,4 +125,55 @@ describe('CanvasEditor', () => {
     await user.click(screen.getByTestId('canvas-edit-copy'));
     expect(writeText).toHaveBeenCalledWith('Zhello');
   });
+
+  describe('"Save to artifacts" (issue #878)', () => {
+    it('offers no such control without a `saveToArtifacts` prop', () => {
+      renderWithTheme(
+        withSocket(<CanvasEditor
+          selectedCodeBlockInfo={BLOCK}
+          onCloseCanvasEditor={vi.fn()}
+        />),
+      );
+      expect(screen.queryByTestId('canvas-edit-save-to-artifacts')).not.toBeInTheDocument();
+    });
+
+    it('opens pre-filled from the existing source, saves the LIVE document, and reports the (possibly new) source back', async () => {
+      const user = userEvent.setup();
+      const canvasFileTransfer = await import('../../model/canvasFileTransfer');
+      vi.spyOn(canvasFileTransfer, 'listArtifactBucketNames').mockResolvedValue(['docs']);
+      vi.spyOn(canvasFileTransfer, 'artifactObjectExists').mockResolvedValue(false);
+      vi.spyOn(canvasFileTransfer, 'saveCanvasToArtifact').mockResolvedValue({ ok: true });
+      const onSaved = vi.fn();
+
+      const { container } = renderWithTheme(
+        withSocket(<CanvasEditor
+          selectedCodeBlockInfo={BLOCK}
+          onCloseCanvasEditor={vi.fn()}
+          saveToArtifacts={{ source: { bucket: 'docs', name: 'notes.md' }, onSaved }}
+        />),
+      );
+
+      // Edit the document BEFORE saving — the dialog must see this, not the
+      // content the block opened with.
+      await user.click(getContent(container));
+      await user.keyboard('Z');
+
+      await user.click(screen.getByTestId('canvas-edit-save-to-artifacts'));
+      await screen.findByTestId('canvas-save-to-artifacts-dialog');
+      expect(screen.getByTestId('canvas-save-filename-input')).toHaveValue('notes.md');
+
+      await user.click(screen.getByTestId('canvas-save-submit'));
+
+      await vi.waitFor(() => {
+        expect(canvasFileTransfer.saveCanvasToArtifact).toHaveBeenCalledWith(
+          expect.objectContaining({ bucket: 'docs', name: 'notes.md', content: 'Zhello' }),
+        );
+      });
+      expect(onSaved).toHaveBeenCalledWith({ bucket: 'docs', name: 'notes.md' });
+      // The dialog closes itself once the write lands.
+      await vi.waitFor(() => {
+        expect(screen.queryByTestId('canvas-save-to-artifacts-dialog')).not.toBeInTheDocument();
+      });
+    });
+  });
 });

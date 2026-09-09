@@ -1,0 +1,80 @@
+---
+title: "SharePoint"
+description: "Connect SharePoint to Elitea: prerequisites, credential setup and the tools it exposes."
+---
+
+Read and update files and lists in a SharePoint site. It's listed under the **office** category in the toolkit type picker.
+
+## Prerequisites
+
+- An account at SharePoint with permission to issue an API token or credential, saved in Elitea as a **`sharepoint`** credential (`/credentials/create-credential/<type>`).
+- If you plan to index content for retrieval: a `pgvector` credential and an embedding model, configured under AI providers.
+
+## Connect the toolkit
+
+<Steps>
+<Step title="Open the toolkit type picker">
+In the left navigation, open **Toolkits**, then select **New**. Filter the type picker by the **office** category, or search for "SharePoint".
+</Step>
+
+<Step title="Pick or create a credential">
+Under the credential field, choose an existing **sharepoint** credential, or select **Create credential** to add one without leaving the form.
+</Step>
+
+<Step title="Add indexing settings (optional)">
+If you plan to index this source, set an **embedding model** and a **pgvector** credential. Leave both empty to use the toolkit without indexing.
+</Step>
+
+<Step title="Save">
+Name the toolkit and select **Create**. It's now available to attach to agents, pipelines and conversations in this project.
+</Step>
+</Steps>
+
+<Screenshot id="toolkit-new-generic" alt="New toolkit dialog with the SharePoint type selected" />
+
+## Available tools
+
+<Accordion title="Available tools (28)">
+
+| Tool |
+|---|
+| Create list item |
+| Get files list |
+| Get list columns |
+| Get lists |
+| Index data |
+| List indexes |
+| Onenote create notebook |
+| Onenote create page |
+| Onenote create section |
+| Onenote delete page |
+| Onenote get notebooks |
+| Onenote get page content |
+| Onenote get pages |
+| Onenote get sections |
+| Onenote list attachments |
+| Onenote read attachment |
+| Onenote read page |
+| Onenote read page items |
+| Onenote replace page content |
+| Onenote update page |
+| Read document |
+| Read file from sharing link |
+| Read list |
+| Remove index |
+| Search index |
+| Stepback search index |
+| Stepback summary index |
+| Upload file |
+
+</Accordion>
+
+## Common issues
+
+<Note>
+The Indexes tab only appears when the configured worker can run this type's `index_data` tool; if the worker can't, the tab is hidden and shows the worker's refusal message. `index_data` itself can't be run from the Test tools pane — use the Indexes tab.
+</Note>
+
+<Note>
+There's no connection check on this form. Save the toolkit, then run one read-only tool from the editor's Test tools pane to confirm the credential works before attaching SharePoint to an agent.
+</Note>

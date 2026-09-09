@@ -1,0 +1,40 @@
+---
+title: "Schedule re-indexing"
+description: "Configure an automated, recurring reindex for an index using a cron expression, so it stays current without manual reindexing."
+---
+
+Scheduled reindexing keeps an index synchronized with its source automatically, instead of you having to reindex by hand every time the underlying content changes.
+
+## Before you schedule
+
+- The index must already exist and be in a usable state — **Completed** or **Partially Indexed**. An index in **Failed** or **Stopped** state needs a successful reindex first.
+- If the toolkit requires credentials for the scheduled run, you'll need one available: private credentials in a personal project, project credentials in a team project.
+
+## Set a schedule
+
+<Steps>
+1. Open the index's page from the toolkit's Indexes tab.
+2. In the Schedule section, select **+ Schedule** if none exists yet, or the edit icon on an existing schedule.
+3. Choose a cron expression — either with the visual builder or by typing one directly (format: minute, hour, day of month, month, day of week).
+4. If the toolkit needs credentials for the scheduled run, pick one from the dropdown.
+5. Save. The schedule shows its next run time, and you can turn it on or off later without losing the configured expression.
+</Steps>
+
+<Screenshot id="index-schedule-form" alt="Schedule form on an index page with a cron expression and credential selector" />
+
+<Note>
+Each schedule belongs to one index. You can turn it off temporarily with the toggle, or delete it with the edit panel's delete icon, without affecting the index's data.
+</Note>
+
+## Notifications and history
+
+A scheduled reindex raises a notification when it completes, just like a manual one — see [Notifications](/menus/settings/notifications). Scheduled runs also appear in the index's history alongside manual reindexes, so you can confirm a schedule actually ran.
+
+## Next steps
+
+- [Use the Indexes tab](/how-tos/indexing/using-indexes-tab-interface) for the full index lifecycle.
+- [Index data from a source](/how-tos/indexing/index-sources) for source-specific setup.
+
+<Note>
+This page could not verify from source whether a scheduled reindex only pulls changes since the last run or reprocesses the source in full each time — check your deployment's behavior before relying on a tight schedule for a large, frequently-changing source.
+</Note>

@@ -9,7 +9,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { canvasByteRange, selectionTextWithin, utf8ByteLength } from './canvasSelection';
+import { canvasByteRange, canvasKindForSelection, selectionTextWithin, utf8ByteLength } from './canvasSelection';
 
 describe('utf8ByteLength', () => {
   it('counts bytes, not JavaScript characters', () => {
@@ -67,6 +67,22 @@ describe('canvasByteRange', () => {
   it('trims the selection: a drag that swept up the trailing newline still carves the words', () => {
     const stored = 'alpha\nbeta\ngamma';
     expect(canvasByteRange(stored, 'beta\n')).toEqual({ startsAt: 6, endsAt: 10 });
+  });
+});
+
+describe('canvasKindForSelection (issue #879)', () => {
+  it('reads a selection that is a single fenced block, start to end, as code', () => {
+    expect(canvasKindForSelection('```js\nconsole.log(1);\n```')).toBe('code');
+    // Leading/trailing whitespace from the drag is trimmed before judging the fence.
+    expect(canvasKindForSelection('  \n```python\nprint(1)\n```\n  ')).toBe('code');
+  });
+
+  it('reads a paragraph, a heading, or an inline snippet as document (prose)', () => {
+    expect(canvasKindForSelection('Just a paragraph of plain prose.')).toBe('document');
+    expect(canvasKindForSelection('# A heading\n\nSome body text.')).toBe('document');
+    // Mentions a snippet inline but is not ITSELF a fence start-to-end.
+    expect(canvasKindForSelection('Run `npm test` to check it.')).toBe('document');
+    expect(canvasKindForSelection('Before the fence ```code``` after it')).toBe('document');
   });
 });
 

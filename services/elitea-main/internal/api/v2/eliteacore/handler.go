@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -64,6 +65,45 @@ type Handler struct {
 	// PlatformSettings can publish `cost_budgets_enabled`. See
 	// WithCostBudgets for what it is derived from.
 	costBudgets bool
+	// events backs the agent.version.published / agent.version.unpublished
+	// producers (#876's second half). nil leaves Publish/Unpublish exactly
+	// as before.
+	events EventEmitter
+}
+
+// EventEmitter is the seam to internal/events.Publisher, declared locally so
+// this package does not import internal/events and close a cycle.
+// *events.Publisher satisfies this structurally.
+type EventEmitter interface {
+	Emit(ctx context.Context, projectID, eventType string, payload any)
+}
+
+// WithEvents wires the agent.version.published and agent.version.unpublished
+// producers.
+//
+// Guarded by eventEmitterPresent (see conversations.Handler.WithEvents'
+// identical comment in that package): a nil *events.Publisher boxed into
+// this interface parameter is non-nil, and unguarded would panic Publish's
+// or Unpublish's first Emit call.
+func WithEvents(emitter EventEmitter) Option {
+	return func(handler *Handler) {
+		if eventEmitterPresent(emitter) {
+			handler.events = emitter
+		}
+	}
+}
+
+func eventEmitterPresent(emitter EventEmitter) bool {
+	if emitter == nil {
+		return false
+	}
+	v := reflect.ValueOf(emitter)
+	switch v.Kind() {
+	case reflect.Ptr, reflect.Map, reflect.Slice, reflect.Chan, reflect.Func, reflect.Interface:
+		return !v.IsNil()
+	default:
+		return true
+	}
 }
 
 // WithCostBudgets declares that this deployment tracks LLM cost, which is what
@@ -1269,6 +1309,14 @@ func (h *Handler) Publish(w http.ResponseWriter, r *http.Request) {
 		response["catalog_agent_id"] = strconv.Itoa(twin.ApplicationID)
 		response["catalog_version_id"] = strconv.Itoa(twin.VersionID)
 	}
+	if h.events != nil {
+		h.events.Emit(ctx, projectID, "agent.version.published", map[string]any{
+			"application_id":     appID,
+			"published_agent_id": cloneID,
+			"source_version_id":  versionID,
+			"version_name":       body.VersionName,
+		})
+	}
 	writeJSON(w, http.StatusOK, response)
 }
 
@@ -1603,6 +1651,14 @@ func (h *Handler) Unpublish(w http.ResponseWriter, r *http.Request) {
 		slog.ErrorContext(ctx, "unpublish: catalog twin removal failed", "project_id", projectID, "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to remove the agent from the catalog"})
 		return
+	}
+
+	if h.events != nil {
+		h.events.Emit(ctx, projectID, "agent.version.unpublished", map[string]any{
+			"source_version_id":    versionID,
+			"reverted_version_ids": revertedVersionIDs,
+			"reason":               body.Reason,
+		})
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"status": "deleted"})

@@ -73,6 +73,8 @@ export function CategorySection({
             label={item.label}
             icon={item.icon}
             onClick={item.onClick}
+            disabled={item.disabled}
+            disabledReason={item.disabledReason}
           />
         ))}
         {items.length === 0 ? (emptyPlaceholder ?? null) : null}

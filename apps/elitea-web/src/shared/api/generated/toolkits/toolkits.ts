@@ -68,6 +68,7 @@ import type {
   N403Response,
   N404Response,
   N500Response,
+  RuntimeCapabilities,
   ToolkitCreateRequest,
   ToolkitInstance,
   ToolkitInstanceListResponse,
@@ -1074,6 +1075,220 @@ export function useUpdateToolkit<
     toolkitUpdateRequest,
     options,
   );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getRuntimeCapabilitiesResponse200 = {
+  data: RuntimeCapabilities;
+  status: 200;
+};
+
+export type getRuntimeCapabilitiesResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getRuntimeCapabilitiesResponseSuccess =
+  getRuntimeCapabilitiesResponse200 & {
+    headers: Headers;
+  };
+export type getRuntimeCapabilitiesResponseError =
+  getRuntimeCapabilitiesResponse401 & {
+    headers: Headers;
+  };
+
+export type getRuntimeCapabilitiesResponse =
+  getRuntimeCapabilitiesResponseSuccess | getRuntimeCapabilitiesResponseError;
+
+export const getGetRuntimeCapabilitiesUrl = () => {
+  return `/elitea_core/runtime_capabilities`;
+};
+
+/**
+ * Deliberately NOT project-scoped: the worker image is a deployment-wide
+ * fact, not project data — the same reasoning getAgentCategories above
+ * states for its own taxonomy.
+ *
+ * Before this endpoint, a toolkit type the configured worker could not
+ * build was still served but hidden from the type picker
+ * (metadata.hidden on every /elitea_core/toolkits/prompt_lib/{project_id}
+ * entry — see ToolkitTypeSchemas), and an internal chat tool the worker
+ * could not run answered normally while silently skipping the
+ * capability (services/elitea-worker-rust/src/agents/internal_tools.rs,
+ * `agent_internal_tool_skipped`). Neither state was visible anywhere a
+ * user or an administrator could read it. This endpoint is that read.
+ *
+ * `hidden_toolkit_types` restates, as one flat list, exactly the set of
+ * catalogued types whose metadata.hidden the toolkit-type endpoints
+ * already set for capability reasons — this endpoint and that field
+ * share one worker-capability projection
+ * (internal/runtimecomposition/worker_toolkit_capability.go) and cannot
+ * disagree.
+ *
+ * `internal_tools` covers the six toggleable internal chat tools
+ * (apps/elitea-web/src/features/agents/lib/internalTools.ts:
+ * image_generation, data_analysis, internal_mcp, planner, swarm,
+ * lazy_tools_mode), true when the CONFIGURED worker runs the tool for
+ * real. `ask_user`, the Rust worker's one implemented internal tool, is
+ * not a user-facing toggle and is not listed; `attachments` and
+ * `pyodide` are tracked separately from #866's six and are not listed
+ * either.
+ *
+ * `worker` is empty when the deployment never stated
+ * ELITEA_WORKER_IMPLEMENTATION AND no worker-capability snapshot was
+ * composed — the honest "this deployment did not say" answer, not a
+ * guessed default.
+ * @summary Which worker this deployment runs and what it cannot do (#865,
+ */
+export const getRuntimeCapabilities = async (
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getRuntimeCapabilitiesResponse> => {
+  return eliteaFetch<getRuntimeCapabilitiesResponse>(
+    getGetRuntimeCapabilitiesUrl(),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetRuntimeCapabilitiesQueryKey = () => {
+  return [`/elitea_core/runtime_capabilities`] as const;
+};
+
+export const getGetRuntimeCapabilitiesQueryOptions = <
+  TData = Awaited<ReturnType<typeof getRuntimeCapabilities>>,
+  TError = N401Response,
+>(options?: {
+  query?: Partial<
+    UseQueryOptions<
+      Awaited<ReturnType<typeof getRuntimeCapabilities>>,
+      TError,
+      TData
+    >
+  >;
+  request?: SecondParameter<typeof eliteaFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetRuntimeCapabilitiesQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getRuntimeCapabilities>>
+  > = ({ signal }) => getRuntimeCapabilities({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getRuntimeCapabilities>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetRuntimeCapabilitiesQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getRuntimeCapabilities>>
+>;
+export type GetRuntimeCapabilitiesQueryError = N401Response;
+
+export function useGetRuntimeCapabilities<
+  TData = Awaited<ReturnType<typeof getRuntimeCapabilities>>,
+  TError = N401Response,
+>(
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getRuntimeCapabilities>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getRuntimeCapabilities>>,
+          TError,
+          Awaited<ReturnType<typeof getRuntimeCapabilities>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetRuntimeCapabilities<
+  TData = Awaited<ReturnType<typeof getRuntimeCapabilities>>,
+  TError = N401Response,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getRuntimeCapabilities>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getRuntimeCapabilities>>,
+          TError,
+          Awaited<ReturnType<typeof getRuntimeCapabilities>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetRuntimeCapabilities<
+  TData = Awaited<ReturnType<typeof getRuntimeCapabilities>>,
+  TError = N401Response,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getRuntimeCapabilities>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Which worker this deployment runs and what it cannot do (#865,
+ */
+
+export function useGetRuntimeCapabilities<
+  TData = Awaited<ReturnType<typeof getRuntimeCapabilities>>,
+  TError = N401Response,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getRuntimeCapabilities>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetRuntimeCapabilitiesQueryOptions(options);
 
   const query = useQuery(queryOptions, queryClient) as UseQueryResult<
     TData,

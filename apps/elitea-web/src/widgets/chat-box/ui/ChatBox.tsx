@@ -35,7 +35,7 @@ import {
   buildUserParticipant,
   deriveChatBoxIds,
   deriveChatBoxInputState,
-  buildCanvasProps, flattenChatBoxProps,
+  buildCanvasProps, buildCreateHandlerProps, flattenChatBoxProps,
   resolveConversationStarters, shouldDisableClearChat,
 } from './ChatBox.helpers';
 import type { ChatBoxEditorCallbacks } from './ChatBox.helpers';
@@ -383,7 +383,7 @@ const ChatBoxInner = memo(function ChatBox({
             clearChat: { disabled: shouldDisableClearChat(isStreaming, messages.length), onClear: handleClear },
             refs: { attachmentButtonRef, voiceButtonRef, voiceInputRef: chatInputRef },
             isAgentsPage: !!isAgentsPage, participants: normalisedParticipants,
-            entitySubmenus: { ...entitySubmenus, onSelectParticipant: entityParticipantActions.onSelectParticipant, getParticipantMenuState: entityParticipantActions.getParticipantMenuState },
+            entitySubmenus: { ...entitySubmenus, onSelectParticipant: entityParticipantActions.onSelectParticipant, getParticipantMenuState: entityParticipantActions.getParticipantMenuState }, ...buildCreateHandlerProps(editorCallbacks),
           })}
           refs={{ attachmentButtonRef, voiceButtonRef }}
         />

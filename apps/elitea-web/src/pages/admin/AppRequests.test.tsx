@@ -53,6 +53,7 @@ interface AppRequestFixture {
   readonly rejection_comment: string | null;
   readonly created_at: string;
   readonly updated_at: string;
+  readonly created_project_id?: number;
 }
 
 let recorded: RecordedRequest[] = [];
@@ -98,6 +99,23 @@ const REQUESTS: AppRequestFixture[] = [
     rejection_comment: 'Not licensed for this tenant.',
     created_at: '2026-08-03 09:00:00',
     updated_at: '2026-08-03 11:00:00',
+  },
+  {
+    // #871: approving a "Project Request" row provisions a real project,
+    // unlike every issue type above — the queue is the only place an
+    // operator can see WHICH project one of their approvals created.
+    id: 504,
+    user_id: 4003,
+    user_email: 'alice@example.com',
+    project_id: 3,
+    issue_type: 'Project Request',
+    entity_id: 'Marketing Automation',
+    description: 'We need a project for the new campaign.',
+    status: 'approved',
+    rejection_comment: null,
+    created_at: '2026-08-04 09:00:00',
+    updated_at: '2026-08-04 09:05:00',
+    created_project_id: 42,
   },
 ];
 
@@ -193,6 +211,14 @@ describe('AdminAppRequests — the queue', () => {
     await waitForQueue();
 
     expect(screen.getByText(/Not licensed for this tenant\./)).toBeInTheDocument();
+  });
+
+  it('renders the created project id on an approved Project Request row (#871)', async () => {
+    renderAdminRoute(<AdminAppRequests />);
+    await waitForQueue();
+
+    expect(screen.getByText('Marketing Automation')).toBeInTheDocument();
+    expect(screen.getByText('Project #42 created')).toBeInTheDocument();
   });
 
   it('reads timestamps as UTC rather than as the viewer local time', async () => {
@@ -423,7 +449,7 @@ describe('AdminAppRequests — the decision', () => {
         <QueryClientProvider client={client}>{children}</QueryClientProvider>
       ),
     });
-    await waitFor(() => expect(result.current.rows).toHaveLength(3));
+    await waitFor(() => expect(result.current.rows).toHaveLength(REQUESTS.length));
 
     act(() => result.current.onOpenReject?.(result.current.rows[0]!));
     await waitFor(() => expect(result.current.rejecting).not.toBeNull());

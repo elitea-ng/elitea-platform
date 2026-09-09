@@ -15,8 +15,8 @@ func TestPinnedToolkitCatalogueSnapshotLoads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load pinned toolkit catalogue snapshot: %v", err)
 	}
-	if catalogue.EntryCount() != 52 {
-		t.Errorf("entry count=%d, want 52", catalogue.EntryCount())
+	if catalogue.EntryCount() != 53 {
+		t.Errorf("entry count=%d, want 53", catalogue.EntryCount())
 	}
 	if catalogue.SDKRevision() == "" {
 		t.Error("catalogue names no SDK revision")

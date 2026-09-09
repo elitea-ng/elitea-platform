@@ -4,6 +4,7 @@ import { useCallback } from 'react';
 import Box from '@mui/material/Box';
 import FormControlLabel from '@mui/material/FormControlLabel';
 import type { SxProps, Theme } from '@mui/material/styles';
+import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 
 import { BaseSwitch } from '@/shared/ui/BaseSwitch';
@@ -49,6 +50,16 @@ export interface AgentInternalToolSwitchProps {
   readonly onCheckedChange: (checked: boolean) => void;
   readonly disabled?: boolean | undefined;
   readonly infoTooltip?: InternalToolInfoTooltip | undefined;
+  /**
+   * Set when the CONFIGURED worker cannot run this tool (#865, #866;
+   * `features/agents/lib/internalTools.ts`'s `AvailableInternalTool`,
+   * `unavailableReason` — "Not available on the Rust worker"). The switch
+   * renders disabled the same as a caller-supplied `disabled=true` would,
+   * but wrapped in its own tooltip so the REASON is discoverable — a plain
+   * `disabled` switch gives no indication of why, and this one specifically
+   * is not a form-wide read-only state the user already understands.
+   */
+  readonly unavailableReason?: string | undefined;
 }
 
 export function AgentInternalToolSwitch({
@@ -59,6 +70,7 @@ export function AgentInternalToolSwitch({
   onCheckedChange,
   disabled,
   infoTooltip,
+  unavailableReason,
 }: AgentInternalToolSwitchProps): ReactNode {
   const onChange = useCallback(
     (_event: ChangeEvent<HTMLInputElement>, checkedValue: boolean) => {
@@ -81,7 +93,7 @@ export function AgentInternalToolSwitch({
     // string the switch writes into `meta.internal_tools`, so the testid and
     // the stored value cannot drift apart.
     <Box
-      sx={containerSx}
+      sx={unavailableReason ? unavailableContainerSx : containerSx}
       data-testid={`internal-tool-${name}`}
     >
       <Box sx={contentContainerSx}>
@@ -114,17 +126,41 @@ export function AgentInternalToolSwitch({
           />
         )}
       </Box>
-      <FormControlLabel
-        control={
-          <BaseSwitch
-            checked={checked}
-            onChange={onChange}
-            disabled={disabled}
-          />
-        }
-        label=""
-        sx={switchLabelSx}
-      />
+      {unavailableReason ? (
+        <Tooltip
+          title={unavailableReason}
+          placement="top"
+        >
+          {/* A disabled control fires no pointer events, so MUI's own
+              guidance is to give the tooltip a non-disabled wrapper — this
+              span — rather than anchor to the switch itself. */}
+          <span>
+            <FormControlLabel
+              control={
+                <BaseSwitch
+                  checked={checked}
+                  onChange={onChange}
+                  disabled
+                />
+              }
+              label=""
+              sx={switchLabelSx}
+            />
+          </span>
+        </Tooltip>
+      ) : (
+        <FormControlLabel
+          control={
+            <BaseSwitch
+              checked={checked}
+              onChange={onChange}
+              disabled={disabled}
+            />
+          }
+          label=""
+          sx={switchLabelSx}
+        />
+      )}
     </Box>
   );
 }
@@ -139,6 +175,20 @@ const containerSx: SxProps<Theme> = (theme: Theme) => ({
   justifyContent: 'space-between',
   gap: '0.5rem',
   width: '100%',
+});
+
+/** {@link containerSx}, dimmed — the "greyed" half of #865/#866's "greyed with a note" instead of the pre-existing silent-drop behaviour. */
+const unavailableContainerSx: SxProps<Theme> = (theme: Theme) => ({
+  backgroundColor: theme.vars.palette.background.userInputBackground,
+  borderRadius: theme.vars.shape.radiusMd,
+  height: '2.5rem',
+  padding: '0.75rem',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: '0.5rem',
+  width: '100%',
+  opacity: 0.5,
 });
 
 const contentContainerSx: SxProps<Theme> = {

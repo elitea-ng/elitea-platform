@@ -1,6 +1,6 @@
 # Rust worker remaining gates
 
-Updated: 2026-09-09. Main baseline: `f28189b5`.
+Updated: 2026-09-09. Main baseline: `1dee0c89`.
 
 This register orders implementation work. The [testing register](testing-gaps.md) owns detailed proof requirements.
 Source mappings remain the behavioral evidence for each capability.
@@ -42,6 +42,8 @@ Reuse Main's composed draft service instead of adding a second model execution p
 Verify source prompt ownership, permissions, edit-by-ID behavior, validation, and safe failures before publishing either internal MCP operation.
 Keep application drafting unpublished: its legacy operation has `mcp_tool=False`.
 Update source mappings, component tests, protocol tests, and deployed-proof requirements in the same slice.
+
+The [follow-up sync ledger](source-mapping/main-sync-20260909-followup.md) records the latest merge and migration boundary.
 
 ## New main changes already incorporated
 

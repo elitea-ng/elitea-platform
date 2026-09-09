@@ -42,6 +42,15 @@ export interface AnswerCanvasSelection {
   readonly selectedText: string;
   /** The stored text item the selection came from, when this row's read named one. */
   readonly messageItemId: number | undefined;
+  /**
+   * Issue #879: forces the created canvas's kind rather than letting
+   * `canvasKindForSelection` guess from the text shape. The "Open as
+   * document" answer action sets this to `'document'` unconditionally — it
+   * is carving out the WHOLE answer as prose, not asking the heuristic to
+   * look at it. The selection-drag affordance leaves this `undefined` and
+   * gets the heuristic's guess.
+   */
+  readonly kind?: 'code' | 'document' | undefined;
 }
 
 export interface AnswerContentProps {

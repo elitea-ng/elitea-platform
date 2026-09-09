@@ -1,0 +1,51 @@
+---
+title: "Rally"
+description: "Connect Rally to Elitea: prerequisites, credential setup and the tools it exposes."
+---
+
+Read and manage Rally (Broadcom Agile Central) user stories and iterations. It's listed under the **project management** category in the toolkit type picker.
+
+## Prerequisites
+
+- An account at Rally with permission to issue an API token or credential, saved in Elitea as a **`rally`** credential (`/credentials/create-credential/<type>`).
+
+## Connect the toolkit
+
+<Steps>
+<Step title="Open the toolkit type picker">
+In the left navigation, open **Toolkits**, then select **New**. Filter the type picker by the **project management** category, or search for "Rally".
+</Step>
+
+<Step title="Pick or create a credential">
+Under the credential field, choose an existing **rally** credential, or select **Create credential** to add one without leaving the form.
+</Step>
+
+<Step title="Save">
+Name the toolkit and select **Create**. It's now available to attach to agents, pipelines and conversations in this project.
+</Step>
+</Steps>
+
+<Screenshot id="toolkit-new-generic" alt="New toolkit dialog with the Rally type selected" />
+
+## Available tools
+
+<Accordion title="Available tools (8)">
+
+| Tool |
+|---|
+| Create artifact |
+| Get context |
+| Get entities |
+| Get project |
+| Get types |
+| Get user |
+| Get workspace |
+| Update artifact |
+
+</Accordion>
+
+## Common issues
+
+<Note>
+There's no connection check on this form. Save the toolkit, then run one read-only tool from the editor's Test tools pane to confirm the credential works before attaching Rally to an agent.
+</Note>

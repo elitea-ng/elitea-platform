@@ -4,6 +4,10 @@
     "src/entries/admin/main.tsx",
     "src/entries/maintenance/main.tsx",
     "src/entries/brand-preview/main.tsx",
+    // The docs SPA (embedded-docs programme decision 1): index.html AND
+    // 404.html both load this same main.tsx, so one entry covers both built
+    // HTML inputs (vite.config.ts's `docs` mode, rollupOptions.input).
+    "src/entries/docs/main.tsx",
     "scripts/*.mjs",
     // The DeepWiki oracle pipeline: operator-run, not imported. It regenerates
     // src/features/wiki-generation/lib/__fixtures__/generation-oracle.json
@@ -323,7 +327,25 @@
     // `createContextStrategyFormData` had the same status until this change
     // wired it up; this one has no call site to wire it into yet. REMOVE this
     // entry when the model selector lands.
-    "src/features/settings/lib/profile/profileUtils.ts"
+    "src/features/settings/lib/profile/profileUtils.ts",
+    // Issue #868's run-history panel, landed at the gap-fix merge: the
+    // "no `entities/run-history` exists in this worktree" gap the
+    // `ConfigurationTab.tsx` entries above record no longer applies — the
+    // entity is real now, and all three callers (`pages/agents`,
+    // `pages/pipelines`, `pages/toolkits`) pass its `RunHistoryPanelProps`
+    // (whose `entityName` field is `RunHistoryEntityName`) as an inline JSX
+    // prop object, checked structurally, with no explicit type import.
+    // Same "public component-Props-type surface, no current named import"
+    // shape as everything else in this list.
+    "src/entities/run-history/index.ts",
+    "src/entities/run-history/ui/RunHistoryPanel.tsx",
+    // Issue #867's chat composer "Create new" wiring: `ParticipantAttachInput`
+    // is only ever referenced through the exported `AttachCreatedParticipant`
+    // function-type alias (`(input: ParticipantAttachInput) => ...`), which
+    // IS imported by `ChatWithEditors.hooks.ts` — the same "reachable only
+    // through another exported alias, no direct import" situation the
+    // `ConfigurationTab.tsx` render-prop-parameter entries above cover.
+    "src/processes/chat/lib/useAttachCreatedParticipant.ts"
   ],
   "project": ["src/**/*.{ts,tsx}", "scripts/**/*.mjs", "tools/lint-rules/**/*.mjs"],
   "ignoreFiles": [

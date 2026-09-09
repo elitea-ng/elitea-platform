@@ -1,0 +1,33 @@
+---
+title: "Settings overview"
+description: "Where project and personal configuration live in Elitea, and who can see each section."
+---
+
+Select **Settings** in the sidebar to manage Elitea at two levels: **project** settings, which apply to everyone in the current project, and **personal** settings, which apply only to you across every project.
+
+<Screenshot id="settings-drawer" alt="The Settings drawer listing project and personal sections" />
+
+## Project settings
+
+<CardGroup cols={3}>
+  <Card title="Project settings" icon="briefcase" href="/menus/settings/project-settings">General info, project context, secrets, and users.</Card>
+  <Card title="AI Providers" icon="sliders" href="/menus/settings/ai-providers">Models, embeddings, vector storage, and AI credentials.</Card>
+  <Card title="Analytics & usage" icon="chart-line" href="/menus/settings/analytics-and-usage">Adoption, cost, and health metrics; budget consumption.</Card>
+</CardGroup>
+
+Some project sections only appear in specific contexts: **Project Context**, **Prompts**, and **Environment** are visible only in the Public project; **Users** is hidden in a personal project; **Analytics** requires the `analytics_enabled` admin flag and **Usage** requires `cost_budgets_enabled`.
+
+## Personal settings
+
+<CardGroup cols={3}>
+  <Card title="Personal settings" icon="user" href="/menus/settings/personal-settings">Profile, preferences, and AI personality.</Card>
+  <Card title="Memory" icon="brain" href="/menus/settings/memory">Context-window management for new conversations.</Card>
+  <Card title="Personal tokens" icon="key" href="/menus/settings/personal-tokens">API and IDE access tokens.</Card>
+  <Card title="Notifications" icon="bell" href="/menus/settings/notifications">Your notification history and preferences.</Card>
+</CardGroup>
+
+Your role and permissions determine what you can view or edit within each section — some, like Secrets and Users, are restricted to Admin, System, or Editor roles.
+
+<Info>
+For definitions of roles and permissions, see the [Glossary](/home/glossary).
+</Info>

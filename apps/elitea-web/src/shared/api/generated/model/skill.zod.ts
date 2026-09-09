@@ -55,28 +55,34 @@ export const Skill = zod
       .string()
       .optional()
       .describe(
-        "The base version's instructions (also available at version_details.instructions).",
+        "The CURRENT version's instructions — `base`'s, unless the request named another version (getSkillVersion, updateSkillVersion) — also available at version_details.instructions.",
       ),
     tags: zod
       .array(zod.string())
       .optional()
       .describe(
-        "The base version's tags (also available at version_details.tags).",
+        "The current version's tags (also available at version_details.tags).",
       ),
     versions: zod
       .array(SkillVersion)
       .optional()
       .describe(
-        "Always the single base version today — see SkillVersion.name.",
+        "EVERY version of the skill (issue 874), `base` first — not just `base`, as before issue 874. getSkill\/getSkillVersion both carry the full set; there is no separate list-versions endpoint.",
       ),
     version_details: SkillVersion.optional().describe(
-      "Convenience alias for versions[0].",
+      "The CURRENT version (see `instructions`), not always versions[0].",
     ),
+    default_version_id: zod
+      .string()
+      .optional()
+      .describe(
+        "skills.meta.default_version_id (issue 874), mirroring applications.meta.default_version_id. The version a NEW attachment proposes. Does NOT change which version an EXISTING agent attachment resolves at chat time — that stays keyed off entity_skill_mapping.skill_version_id, fixed at attach time.",
+      ),
     created_at: zod.iso.datetime({ offset: true }),
     updated_at: zod.iso.datetime({ offset: true }),
   })
   .describe(
-    'NOTE(W2): `config` is never populated in responses, `is_default` is always false, `type` is always the literal \"skill\", and `updated_at` is always the zero sentinel \"0001-01-01T00:00:00Z\" — the skills table itself has no updated_at\/is_default columns (migrations\/001_initial.sql). instructions\/tags\/versions\/ version_details, in contrast, DO round-trip: they\'re read from a joined skill_versions + skill_version_tag_association row (repos\/skills.go Get\/List), not discarded.\n',
+    'NOTE(W2): `config` is never populated in responses, `is_default` (the boolean property, unrelated to `default_version_id`) is always false, `type` is always the literal \"skill\", and `updated_at` is always the zero sentinel \"0001-01-01T00:00:00Z\" — the skills table itself has no updated_at\/is_default columns (migrations\/001_initial.sql). instructions\/tags\/versions\/ version_details\/default_version_id, in contrast, DO round-trip.\n',
   );
 
 export type Skill = zod.input<typeof Skill>;

@@ -1073,6 +1073,150 @@ async fn ask_user_pauses_and_resumes_as_the_original_correlated_tool_result() {
     );
 }
 
+/// #866: an agent configured with an internal tool this runtime does not
+/// implement gets a visible notice IN THE SESSION, not only the
+/// `agent_internal_tool_skipped` log line `InternalToolCatalog::from_values`
+/// already wrote. Assembly alone triggers it
+/// (`seed_skipped_internal_tools_notice` runs before the model's first
+/// turn), so this reads the session straight back rather than driving a
+/// full model turn.
+#[tokio::test]
+async fn a_fresh_session_is_seeded_with_a_notice_for_every_skipped_internal_tool() {
+    let mut request = ordinary_request(AgentExecutionKind::Adhoc);
+    // `swarm` and `planner`: two platform-catalogue names this runtime does
+    // not implement, plus `ask_user`, which IS implemented and must produce
+    // no notice of its own.
+    request.payload.internal_tools = vec![
+        "swarm".to_owned(),
+        ASK_USER_TOOL_NAME.to_owned(),
+        "planner".to_owned(),
+    ];
+    let profile = OrdinaryNoToolProfile::validate(&request).expect("skipped-tool profile");
+    let plan = OrdinaryNativeAgentPlan::from_authorized(
+        &request,
+        &profile,
+        &AuthorizedNativeCommandBinding::fixture(),
+        &request.payload.input_attachments,
+    )
+    .expect("skipped-tool native plan");
+    let user_id = plan.user_id().to_owned();
+    let session_id = plan.session_id().to_owned();
+    let internal_tools = InternalToolCatalog::from_names(&request.payload.internal_tools)
+        .expect("skipped-tool catalog");
+    let sessions = Arc::new(InMemorySessionService::new());
+    let injected_sessions: Arc<dyn SessionService> = sessions.clone();
+    let runtime = OrdinaryRuntimeBindings::new(
+        internal_tools.toolsets(),
+        SensitiveToolCatalog::default(),
+        DelegatedAuthorizationCatalog::default(),
+        ApplicationRuntimeProjection::default(),
+    )
+    .with_internal_tools(internal_tools);
+    let assembled = assemble_ordinary_native_with_sessions_and_runtime_catalogs(
+        bound_model("unused — assembly alone is under test"),
+        plan,
+        runtime,
+        NativeToolExecutionMode::Sequential,
+        injected_sessions,
+    )
+    .await
+    .expect("skipped-tool assembly");
+    drop(assembled);
+
+    let session = sessions
+        .get(GetRequest {
+            app_name: "elitea-agent-v1".to_owned(),
+            user_id,
+            session_id,
+            num_recent_events: None,
+            after: None,
+        })
+        .await
+        .expect("skipped-tool session");
+
+    let all_events = session.events().all();
+    let notice_texts = all_events
+        .iter()
+        .filter_map(|event| {
+            let content = event.content()?;
+            if content.role != "tool" {
+                return None;
+            }
+            content.parts.iter().find_map(|part| match part {
+                Part::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        notice_texts,
+        ["internal tool 'planner' is not available on this worker\n\
+             internal tool 'swarm' is not available on this worker"],
+        "expected exactly one role=\"tool\" notice event naming both skipped tools, \
+         in PLATFORM_INTERNAL_TOOLS order, and none for ask_user"
+    );
+}
+
+/// The companion negative case: nothing skipped (`ask_user` alone) means no
+/// notice event at all — the fix must not add noise to the common path.
+#[tokio::test]
+async fn a_fresh_session_with_no_skipped_internal_tools_gets_no_notice() {
+    let mut request = ordinary_request(AgentExecutionKind::Adhoc);
+    request.payload.internal_tools = vec![ASK_USER_TOOL_NAME.to_owned()];
+    let profile = OrdinaryNoToolProfile::validate(&request).expect("no-skip profile");
+    let plan = OrdinaryNativeAgentPlan::from_authorized(
+        &request,
+        &profile,
+        &AuthorizedNativeCommandBinding::fixture(),
+        &request.payload.input_attachments,
+    )
+    .expect("no-skip native plan");
+    let user_id = plan.user_id().to_owned();
+    let session_id = plan.session_id().to_owned();
+    let internal_tools =
+        InternalToolCatalog::from_names(&request.payload.internal_tools).expect("no-skip catalog");
+    let sessions = Arc::new(InMemorySessionService::new());
+    let injected_sessions: Arc<dyn SessionService> = sessions.clone();
+    let runtime = OrdinaryRuntimeBindings::new(
+        internal_tools.toolsets(),
+        SensitiveToolCatalog::default(),
+        DelegatedAuthorizationCatalog::default(),
+        ApplicationRuntimeProjection::default(),
+    )
+    .with_internal_tools(internal_tools);
+    let assembled = assemble_ordinary_native_with_sessions_and_runtime_catalogs(
+        bound_model("unused — assembly alone is under test"),
+        plan,
+        runtime,
+        NativeToolExecutionMode::Sequential,
+        injected_sessions,
+    )
+    .await
+    .expect("no-skip assembly");
+    drop(assembled);
+
+    let session = sessions
+        .get(GetRequest {
+            app_name: "elitea-agent-v1".to_owned(),
+            user_id,
+            session_id,
+            num_recent_events: None,
+            after: None,
+        })
+        .await
+        .expect("no-skip session");
+
+    assert!(
+        session
+            .events()
+            .all()
+            .iter()
+            .all(|event| event.content().is_none_or(|content| content.role != "tool")),
+        "no internal tool was skipped, so no role=\"tool\" notice event should exist"
+    );
+}
+
 #[tokio::test]
 async fn persisted_read_only_sensitive_call_replays_through_native_adk_without_model_replanning() {
     let fixture = pause_read_only_sensitive_call().await;

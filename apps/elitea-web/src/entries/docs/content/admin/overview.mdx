@@ -1,0 +1,45 @@
+---
+title: "Admin console overview"
+description: "What the admin console is, who can open it, and how its two navigation groups are organized."
+---
+
+The admin console is a separate application at `/admin/app`, distinct from the main Elitea app. It is where an administrator manages the deployment as a whole: users, projects, authentication, the LLM proxy, budgets, branding, and platform-wide configuration.
+
+## Open the admin console
+
+Sign in to Elitea normally, then navigate to `/admin/app`. The console renders only if your account holds at least one administration-mode permission — otherwise you see an access-denied screen instead of an empty shell. Every individual page still enforces its own permission on the server on every request; the console's own check only decides whether it is worth rendering the navigation at all.
+
+<Screenshot id="admin-overview-nav" alt="Admin console sidebar with the two navigation groups" />
+
+## Navigation groups
+
+The sidebar has two groups.
+
+<CardGroup cols={2}>
+  <Card title="Users" icon="users">Delete, promote, suspend, and review activity for any account.</Card>
+  <Card title="Roles" icon="shield">The permission matrix, across the central, public, and support scopes.</Card>
+  <Card title="Projects" icon="folder">Suspend, create, delete, and manage membership for every project.</Card>
+  <Card title="Secrets" icon="key">The global secret vault, merged into every project.</Card>
+  <Card title="App Requests" icon="inbox">Application access requests waiting on a decision.</Card>
+</CardGroup>
+
+<CardGroup cols={2}>
+  <Card title="Configuration" icon="settings">Authentication, LLM Proxy, MCP servers, banner, maintenance, e-mail, and more, as a set of schema-driven sections.</Card>
+  <Card title="Branding" icon="palette">The white-label pack — colors, assets, and fonts.</Card>
+  <Card title="E-mail" icon="mail">The outbound mail relay.</Card>
+  <Card title="Features" icon="toggle-left">Feature toggles: MCP exposure, publishing, analytics, Help Center, Support Assistant, Voice.</Card>
+  <Card title="Service Descriptors" icon="server">A read-only provider registry; most of it reports "not available" rather than data.</Card>
+  <Card title="Toolkits" icon="wrench">Which toolkit types this deployment offers, and to which projects.</Card>
+  <Card title="LLM Governance" icon="scale">Budgets, rate limits, allowlists, credential policy, and routing rules the LLM gateway enforces.</Card>
+  <Card title="Budgets" icon="wallet">Per-project and per-member spend limits.</Card>
+  <Card title="Audit Trail" icon="history">The deployment-wide record of what happened.</Card>
+  <Card title="Schedules & Tasks" icon="calendar-clock">Cron schedules and background job status.</Card>
+</CardGroup>
+
+<Note>
+There is no LiteLLM section. LiteLLM has been replaced by a standalone gateway service; its former admin screen is gone rather than kept as a dead link. A "Service Descriptors" entry is present even though the legacy admin UI never linked to it — it now answers honestly that this platform has no external provider hub, which is more useful than a page nothing could reach.
+</Note>
+
+## What each page can and cannot decide
+
+`window`-injected permission flags in the console are presentation only: they decide what the sidebar shows, never what a request is allowed to do. Every read and write is re-authorized on the server against the actual permission that route requires. A typed URL to a page your account cannot use still reaches it — and still gets refused there.

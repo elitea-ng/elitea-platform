@@ -20,6 +20,7 @@ import (
 	"net/url"
 	"os"
 	"sort"
+	"strings"
 )
 
 // SchemaURL is the exact $schema literal the brand-pack contract requires
@@ -393,7 +394,7 @@ func ParsePack(data []byte) (*Pack, error) {
 	if p.ID == "" {
 		return nil, fmt.Errorf("id must be a non-empty string")
 	}
-	if err := optionalURL(p.Product.DocsURL, "product.docsUrl"); err != nil {
+	if err := optionalRelativeOrAbsoluteURL(p.Product.DocsURL, "product.docsUrl"); err != nil {
 		return nil, err
 	}
 	if err := optionalURL(p.Product.SupportURL, "product.supportUrl"); err != nil {
@@ -545,4 +546,22 @@ func optionalURL(v *string, name string) error {
 		return fmt.Errorf("%s must be a valid absolute URL, got %q", name, *v)
 	}
 	return nil
+}
+
+// optionalRelativeOrAbsoluteURL validates product.docsUrl (unit W1b, the
+// embedded docs SPA): absent is fine; present must be either an absolute URL
+// (see optionalURL — a tenant may still point docs at an externally hosted
+// origin) or a root-relative path starting with exactly one "/", same
+// origin as the app itself. A protocol-relative "//host/..." is rejected —
+// it would resolve against whatever scheme the browser is currently on,
+// which a same-origin path must not depend on. Mirrors schema.ts's
+// `relativeOrAbsoluteUrl`.
+func optionalRelativeOrAbsoluteURL(v *string, name string) error {
+	if v == nil {
+		return nil
+	}
+	if strings.HasPrefix(*v, "/") && !strings.HasPrefix(*v, "//") {
+		return nil
+	}
+	return optionalURL(v, name)
 }

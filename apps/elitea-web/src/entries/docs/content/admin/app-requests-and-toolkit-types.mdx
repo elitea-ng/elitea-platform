@@ -1,0 +1,53 @@
+---
+title: "App requests and toolkit types"
+description: "Decide access requests from the application catalog, and control which toolkit types this deployment offers."
+---
+
+**App Requests** and **Toolkits** are two separate controls over what members can reach: which catalog applications a project is allowed to use, and which toolkit types exist on the deployment at all.
+
+## Decide an app request
+
+A member who opens the application catalog and requests access to something their project is not configured for creates a row here — separate from the agent/skill publishing review, which is a different mechanism entirely.
+
+<Steps>
+  <Step title="Open App Requests">
+    The queue lists pending requests with who asked and for what.
+  </Step>
+  <Step title="Approve or reject">
+    Both record your decision and notify the requester in the same transaction.
+  </Step>
+</Steps>
+
+<Screenshot id="admin-app-requests-queue" alt="App Requests queue with a pending row" />
+
+<Warning>
+Approving a request records the decision and tells the requester — it does not itself grant anything. Nothing in the platform reads an approved row and automatically unlocks a capability; whether the requested application actually becomes usable depends on whether its toolkit type is enabled for that project, below.
+</Warning>
+
+## Control which toolkit types are offered
+
+Open **Toolkits**. This decides, per toolkit type, whether it is enabled, disabled, or restricted to named projects — always with a reason and a recorded decider.
+
+<Steps>
+  <Step title="Find the type">
+    The table lists every catalogue type with its current availability and a worker-support indicator.
+  </Step>
+  <Step title="Change its availability">
+    Choose enabled, disabled, or restricted; a restricted type also lists which projects can use it. A reason is required for every choice except reverting to the default.
+  </Step>
+</Steps>
+
+<Screenshot id="admin-toolkit-types-table" alt="Toolkit types table with availability and worker column" />
+
+<Note>
+This page does not add a new toolkit type. A pre-built MCP server becomes a type through Configuration's MCP Servers section, and an external provider's toolkits would arrive through Service Descriptors — a third registration path here would be a third thing to keep synchronized.
+</Note>
+
+<Warning>
+The worker column is advisory: it reports whether the toolkit type is known to run on the deployment's configured worker, not whether the type is disallowed. Elitea can run its agent runtime on either a Python worker (the default for both Helm and compose, #865/#866) or a Rust worker (opt-in), and their toolkit coverage differs:
+
+- **Choosing the Rust worker** hides 18 toolkit types that only run on the Python worker (for example Jira, Confluence, TestRail, Bitbucket, and several others — GitHub itself is one of the Rust worker's 22 supported families, not one of the hidden ones) — tracked in [#865](https://github.com/elitea-ng/elitea-platform/issues/865).
+- **Python worker default** fails to import 9 toolkit types with no supported substitute on this worker (`aws`, `azure`, `azure_search`, `bigquery`, `delta_lake`, `gcp`, `k8s`, `localgit`, `yagmail`). Google Places, Rally, ServiceNow and Slack used to be on this list too; they import cleanly as of [#869](https://github.com/elitea-ng/elitea-platform/issues/869).
+
+Check which worker your deployment runs before assuming a type's tile will actually work.
+</Warning>

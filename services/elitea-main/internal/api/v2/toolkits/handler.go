@@ -104,6 +104,10 @@ type Handler struct {
 	// workerCapability decides whether a catalogued type is offered as
 	// creatable. Nil offers every catalogued type.
 	workerCapability ToolkitCapabilitySource
+	// workerImplementation is the plain "python"/"rust" name of the worker
+	// image this deployment runs, served as-is by RuntimeCapabilities. See
+	// WithWorkerImplementation (capabilities_handler.go).
+	workerImplementation string
 	// settingsValidator resolves a credential reference before it is persisted.
 	// Nil restores the pre-#613 behaviour: every save accepted unresolved. See
 	// settings_validation.go.
@@ -198,6 +202,21 @@ func NewHandlerWithRepo(repo Repository, opts ...Option) *Handler {
 		opt(h)
 	}
 	return h
+}
+
+// NewPostgresRepository exposes the same Postgres-backed Repository NewHandler
+// builds internally (`&pgRepo{pool: pool}`), for a caller that needs the
+// reader WITHOUT this package's Handler/catalogue/projections around it.
+//
+// Issue #881's draft-suggestion handler is exactly that caller: it needs
+// ListToolkits (the project's toolkit INSTANCES, for candidate suggestions)
+// but has no reason to depend on toolkit type schemas, MCP projections, or
+// any of this package's other HTTP-facing machinery. Before this, the only
+// way to reach a toolkit-instance reader from outside this package was
+// through Handler's own unexported repo field — this is the minimal,
+// intentional crack in that encapsulation.
+func NewPostgresRepository(pool *pgxpool.Pool) Repository {
+	return &pgRepo{pool: pool}
 }
 
 // knownToolkitTypes is the baseline list of toolkit types pylon_indexer supports.
@@ -535,6 +554,62 @@ var toolkitTypeSchemas = map[string]map[string]any{
 				"type": "object",
 				"args_schemas": map[string]any{
 					"ask_agent": map[string]any{"type": "object"},
+				},
+			},
+		},
+	},
+	// imagegen ports the TOOLKIT half of the legacy imagegen plugin
+	// (legacy/plugins/imagegen/methods/descriptor.py:43-88): generate_image and
+	// edit_image, calling the gateway's /llm/v1/images/{generations,edits} and
+	// landing every result in the project's artifact bucket. It is a
+	// hand-written entry, not a pinned-SDK-catalogue one, because its
+	// credential is the project's own image-generation MODEL — no new
+	// credential type — via the image_generation_model field's
+	// configuration_model annotation (apps/elitea-web's
+	// useCredentialLikeFieldSlot.tsx already renders that by field name).
+	//
+	// The plugin's OTHER half — its generic descriptor/health/invoke/
+	// invocations provider-hub route surface — is deliberately NOT ported
+	// here: it stays deferred to ADR-0012/P3, which is not yet Approved
+	// (elitea-platform #864).
+	"imagegen": {
+		"type": "object",
+		"properties": map[string]any{
+			"image_generation_model": map[string]any{
+				"type":                "string",
+				"description":         "The project's image-generation-capable model.",
+				"configuration_model": "image_generation",
+			},
+			"bucket": map[string]any{
+				"type":        "string",
+				"description": "Artifact bucket that generated and edited images are saved to.",
+			},
+			"name_prefix": map[string]any{
+				"type":        "string",
+				"description": "Filename prefix applied to every saved image.",
+				"default":     "generated-",
+			},
+			"selected_tools": map[string]any{
+				"type": "object",
+				"args_schemas": map[string]any{
+					"generate_image": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"prompt": map[string]any{"type": "string", "description": "Text prompt describing the image to generate."},
+							"size":   map[string]any{"type": "string", "description": "Image size, e.g. 1024x1024. Leave empty for the model's default."},
+							"n":      map[string]any{"type": "integer", "description": "Number of images to generate.", "default": 1},
+						},
+						"required": []any{"prompt"},
+					},
+					"edit_image": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"image":  map[string]any{"type": "string", "description": "Artifact filepath (/{bucket}/{filename}) of the source image to edit."},
+							"prompt": map[string]any{"type": "string", "description": "Text prompt describing the edit to apply."},
+							"mask":   map[string]any{"type": "string", "description": "Optional artifact filepath (/{bucket}/{filename}) of a mask image."},
+						},
+						"required": []any{"image", "prompt"},
+					},
 				},
 			},
 		},

@@ -211,15 +211,22 @@ building a clone URL, and two values that disagree mean an invocation that
 starts and then fails.
 
 Two images share one chart component. The `worker` component runs either
-`elitea-worker-rust` (the default) or `elitea-worker-python`, selected by
-`worker.implementation`. They are not drop-in for each other and the chart
-handles the difference rather than the operator: the Rust worker's argument
-parser matches an exact five-token command line and additionally requires
-`--toolkit-security-config`, so the Python argument list makes it exit
-immediately with `worker_cli.invalid_arguments`. `worker.runtime.sensitiveTools`
-is written once and carried to each as that implementation expects — an
-environment variable for Python, a second JSON file for Rust. `runtime.json`
-itself is byte-identical for both, and `deploy/helm/tests/render-worker.sh`
+`elitea-worker-python` (the default, matching `deploy/scripts/
+standalone-stack.sh`'s own default — #865, #866) or `elitea-worker-rust`,
+selected by `worker.implementation`. The Rust worker is a smaller, faster
+process but — as of this release — has no adapter for 18 of the 52 catalogued
+toolkit types and no implementation for 6 of the platform's internal chat-agent
+tools (`values.yaml`'s `worker.implementation` comment lists both sets); a
+deployment that chooses it still serves those tiles and toggles, greyed with
+the reason, rather than hiding them. They are not drop-in for each other and
+the chart handles the difference rather than the operator: the Rust worker's
+argument parser matches an exact five-token command line and additionally
+requires `--toolkit-security-config`, so the Python argument list makes it
+exit immediately with `worker_cli.invalid_arguments`.
+`worker.runtime.sensitiveTools` is written once and carried to each as that
+implementation expects — an environment variable for Python, a second JSON
+file for Rust. `runtime.json` itself is byte-identical for both, and
+`deploy/helm/tests/render-worker.sh`
 holds all of that.
 
 ## Values an operator supplies, and where each one goes (#475)

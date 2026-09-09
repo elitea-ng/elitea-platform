@@ -1,0 +1,62 @@
+---
+title: "TestIO"
+description: "Connect TestIO to Elitea: prerequisites, credential setup and the tools it exposes."
+---
+
+Read Test IO exploratory-testing bug reports and test cycles. It's listed under the **testing** category in the toolkit type picker.
+
+## Prerequisites
+
+- An account at TestIO with permission to issue an API token or credential, saved in Elitea as a **`testio`** credential (`/credentials/create-credential/<type>`).
+
+## Connect the toolkit
+
+<Steps>
+<Step title="Open the toolkit type picker">
+In the left navigation, open **Toolkits**, then select **New**. Filter the type picker by the **testing** category, or search for "TestIO".
+</Step>
+
+<Step title="Pick or create a credential">
+Under the credential field, choose an existing **testio** credential, or select **Create credential** to add one without leaving the form.
+</Step>
+
+<Step title="Save">
+Name the toolkit and select **Create**. It's now available to attach to agents, pipelines and conversations in this project.
+</Step>
+</Steps>
+
+<Screenshot id="toolkit-new-generic" alt="New toolkit dialog with the TestIO type selected" />
+
+## Available tools
+
+<Accordion title="Available tools (15)">
+
+| Tool |
+|---|
+| Confirm bug fix |
+| Create exploratory test |
+| Get exploratory test |
+| Get feature |
+| Get product |
+| Get test case |
+| Get test cases for test |
+| Get test cases statuses for test |
+| Get user story |
+| List bugs for test with filter |
+| List exploratory tests |
+| List features |
+| List products |
+| List test cases |
+| List user stories |
+
+</Accordion>
+
+## Common issues
+
+<Note>
+On the Rust worker, this tile shows greyed out with a reason — the Rust worker does not materialise `TestIO` (tracked in #865). Helm now defaults to the Python worker, matching compose (#865, #866); a deployment that opts into the Rust worker still needs the Python worker to connect TestIO.
+</Note>
+
+<Note>
+There's no connection check on this form. Save the toolkit, then run one read-only tool from the editor's Test tools pane to confirm the credential works before attaching TestIO to an agent.
+</Note>

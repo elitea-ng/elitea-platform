@@ -4,8 +4,8 @@ import { memo } from 'react';
 import MaintenanceTipsContainer from './MaintenanceTipsContainer';
 import { t } from '@/shared/i18n';
 
-const TIPS_LINK = 'https://elitea.ai/docs/home/onboarding-tips/';
-const DOCS_LINK = 'https://elitea.ai/docs/';
+const TIPS_LINK = '/docs/home/onboarding-tips/';
+const DOCS_LINK = '/docs/';
 
 const introText = t(
   'entries.maintenance.tips.intro',

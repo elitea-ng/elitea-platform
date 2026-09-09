@@ -836,7 +836,7 @@
       "id": "skills.getSkill",
       "method": "GET",
       "path": "/elitea_core/skill/prompt_lib/{projectId}/{skillId}",
-      "operationId": null,
+      "operationId": "getSkill",
       "source": "handwritten",
       "responseSchema": "SkillRecord",
       "fixture": null,
@@ -848,7 +848,7 @@
       "id": "skills.getSkillVersion",
       "method": "GET",
       "path": "/elitea_core/skill/prompt_lib/{projectId}/{skillId}/{versionId}",
-      "operationId": null,
+      "operationId": "getSkillVersion",
       "source": "handwritten",
       "responseSchema": "SkillRecord",
       "fixture": null,
@@ -860,7 +860,7 @@
       "id": "skills.updateSkill",
       "method": "PUT",
       "path": "/elitea_core/skill/prompt_lib/{projectId}/{skillId}",
-      "operationId": null,
+      "operationId": "updateSkill",
       "source": "handwritten",
       "responseSchema": "SkillRecord",
       "fixture": null,
@@ -872,7 +872,7 @@
       "id": "skills.updateSkillVersion",
       "method": "PUT",
       "path": "/elitea_core/skill/prompt_lib/{projectId}/{skillId}/{versionId}",
-      "operationId": null,
+      "operationId": "updateSkillVersion",
       "source": "handwritten",
       "responseSchema": "SkillRecord",
       "fixture": null,
@@ -884,7 +884,7 @@
       "id": "skills.createSkillVersion",
       "method": "POST",
       "path": "/elitea_core/skill/prompt_lib/{projectId}/{skillId}",
-      "operationId": null,
+      "operationId": "createSkillVersion",
       "source": "handwritten",
       "responseSchema": "SkillRecord",
       "fixture": null,
@@ -896,7 +896,7 @@
       "id": "skills.deleteSkill",
       "method": "DELETE",
       "path": "/elitea_core/skill/prompt_lib/{projectId}/{skillId}",
-      "operationId": null,
+      "operationId": "deleteSkill",
       "source": "handwritten",
       "responseSchema": "unknown",
       "fixture": null,
@@ -908,7 +908,7 @@
       "id": "skills.deleteSkillVersion",
       "method": "DELETE",
       "path": "/elitea_core/skill/prompt_lib/{projectId}/{skillId}/{versionId}",
-      "operationId": null,
+      "operationId": "deleteSkillVersion",
       "source": "handwritten",
       "responseSchema": "unknown",
       "fixture": null,
@@ -920,7 +920,19 @@
       "id": "skills.setDefaultVersion",
       "method": "PATCH",
       "path": "/elitea_core/skill_default_version/prompt_lib/{projectId}/{skillId}",
-      "operationId": null,
+      "operationId": "setDefaultVersion",
+      "source": "handwritten",
+      "responseSchema": "SkillRecord",
+      "fixture": null,
+      "usedBy": [
+        "features/skills"
+      ]
+    },
+    {
+      "id": "skills.restoreVersion",
+      "method": "POST",
+      "path": "/elitea_core/skill_version_restore/prompt_lib/{projectId}/{skillId}/{versionId}",
+      "operationId": "restoreSkillVersion",
       "source": "handwritten",
       "responseSchema": "SkillRecord",
       "fixture": null,
@@ -944,7 +956,7 @@
       "id": "skills.import",
       "method": "POST",
       "path": "/elitea_core/skill_import/prompt_lib/{projectId}",
-      "operationId": null,
+      "operationId": "importSkill",
       "source": "handwritten",
       "responseSchema": "SkillRecord",
       "fixture": null,
@@ -956,7 +968,7 @@
       "id": "skills.export",
       "method": "GET",
       "path": "/elitea_core/skill_export/prompt_lib/{projectId}/{skillId}",
-      "operationId": null,
+      "operationId": "exportSkill",
       "source": "handwritten",
       "responseSchema": "string",
       "fixture": null,
@@ -968,7 +980,7 @@
       "id": "skills.exportVersion",
       "method": "GET",
       "path": "/elitea_core/skill_export/prompt_lib/{projectId}/{skillId}/{versionId}",
-      "operationId": null,
+      "operationId": "exportSkillVersion",
       "source": "handwritten",
       "responseSchema": "string",
       "fixture": null,
@@ -1005,6 +1017,19 @@
       "responseSchema": "ToolkitTypeSchemas",
       "fixture": null,
       "usedBy": []
+    },
+    {
+      "id": "toolkits.getRuntimeCapabilities",
+      "method": "GET",
+      "path": "/elitea_core/runtime_capabilities",
+      "operationId": "getRuntimeCapabilities",
+      "source": "generated",
+      "responseSchema": "RuntimeCapabilities",
+      "fixture": null,
+      "usedBy": [
+        "features/agents",
+        "features/toolkits"
+      ]
     },
     {
       "id": "notifications.list",
@@ -1322,6 +1347,18 @@
       ]
     },
     {
+      "id": "runHistory.listConversations",
+      "method": "GET",
+      "path": "/elitea_core/conversations/prompt_lib/{project_id}",
+      "operationId": "listConversations",
+      "source": "generated",
+      "responseSchema": "ConversationListing",
+      "fixture": null,
+      "usedBy": [
+        "entities/run-history"
+      ]
+    },
+    {
       "id": "social.getCurrentAuthor",
       "method": "GET",
       "path": "/social/author",
@@ -1612,7 +1649,8 @@
       "responseSchema": "unknown",
       "fixture": null,
       "usedBy": [
-        "entities/conversation"
+        "entities/conversation",
+        "widgets/deepwiki"
       ]
     },
     {
@@ -2938,6 +2976,212 @@
       "fixture": null,
       "usedBy": [
         "widgets/app-shell"
+      ]
+    },
+    {
+      "id": "memories.listMemories",
+      "method": "GET",
+      "path": "/elitea_core/memories/prompt_lib/{projectID}",
+      "operationId": "listMemories",
+      "source": "generated",
+      "responseSchema": "MemoryEntryList",
+      "fixture": null,
+      "usedBy": [
+        "features/settings/ui/memory/LongTermMemoryManagement.tsx"
+      ]
+    },
+    {
+      "id": "memories.createMemory",
+      "method": "POST",
+      "path": "/elitea_core/memories/prompt_lib/{projectID}",
+      "operationId": "createMemory",
+      "source": "generated",
+      "responseSchema": "MemoryEntry",
+      "fixture": null,
+      "usedBy": [
+        "features/settings/ui/memory/LongTermMemoryManagement.tsx",
+        "features/chat-messages/ui/chat-box/RememberMemoryAction.tsx"
+      ]
+    },
+    {
+      "id": "memories.updateMemory",
+      "method": "PUT",
+      "path": "/elitea_core/memory/prompt_lib/{projectID}/{memoryID}",
+      "operationId": "updateMemory",
+      "source": "generated",
+      "responseSchema": "MemoryEntry",
+      "fixture": null,
+      "usedBy": [
+        "features/settings/ui/memory/LongTermMemoryManagement.tsx"
+      ]
+    },
+    {
+      "id": "memories.deleteMemory",
+      "method": "DELETE",
+      "path": "/elitea_core/memory/prompt_lib/{projectID}/{memoryID}",
+      "operationId": "deleteMemory",
+      "source": "generated",
+      "responseSchema": null,
+      "fixture": null,
+      "usedBy": [
+        "features/settings/ui/memory/LongTermMemoryManagement.tsx"
+      ]
+    },
+    {
+      "id": "memories.clearMemories",
+      "method": "DELETE",
+      "path": "/elitea_core/memories/prompt_lib/{projectID}",
+      "operationId": "clearMemories",
+      "source": "generated",
+      "responseSchema": "ClearMemories200",
+      "fixture": null,
+      "usedBy": [
+        "features/settings/ui/memory/LongTermMemoryManagement.tsx"
+      ]
+    },
+    {
+      "id": "webhooks.listWebhooks",
+      "method": "GET",
+      "path": "/webhooks/prompt_lib/{projectID}",
+      "operationId": "listWebhooks",
+      "source": "generated",
+      "responseSchema": "ListWebhooks200",
+      "fixture": null,
+      "usedBy": [
+        "pages/settings/Webhooks.tsx"
+      ]
+    },
+    {
+      "id": "webhooks.createWebhook",
+      "method": "POST",
+      "path": "/webhooks/prompt_lib/{projectID}",
+      "operationId": "createWebhook",
+      "source": "generated",
+      "responseSchema": "Webhook",
+      "fixture": null,
+      "usedBy": [
+        "pages/settings/Webhooks.tsx"
+      ]
+    },
+    {
+      "id": "webhooks.getWebhook",
+      "method": "GET",
+      "path": "/webhooks/prompt_lib/{projectID}/{webhookID}",
+      "operationId": "getWebhook",
+      "source": "generated",
+      "responseSchema": "Webhook",
+      "fixture": null,
+      "usedBy": []
+    },
+    {
+      "id": "webhooks.updateWebhook",
+      "method": "PUT",
+      "path": "/webhooks/prompt_lib/{projectID}/{webhookID}",
+      "operationId": "updateWebhook",
+      "source": "generated",
+      "responseSchema": "Webhook",
+      "fixture": null,
+      "usedBy": [
+        "pages/settings/Webhooks.tsx"
+      ]
+    },
+    {
+      "id": "webhooks.deleteWebhook",
+      "method": "DELETE",
+      "path": "/webhooks/prompt_lib/{projectID}/{webhookID}",
+      "operationId": "deleteWebhook",
+      "source": "generated",
+      "responseSchema": null,
+      "fixture": null,
+      "usedBy": [
+        "pages/settings/Webhooks.tsx"
+      ]
+    },
+    {
+      "id": "webhooks.listWebhookDeliveries",
+      "method": "GET",
+      "path": "/webhooks/prompt_lib/{projectID}/{webhookID}/deliveries",
+      "operationId": "listWebhookDeliveries",
+      "source": "generated",
+      "responseSchema": "ListWebhookDeliveries200",
+      "fixture": null,
+      "usedBy": [
+        "features/settings"
+      ]
+    },
+    {
+      "id": "webhooks.redeliverWebhookDelivery",
+      "method": "POST",
+      "path": "/webhooks/prompt_lib/{projectID}/{webhookID}/deliveries/{deliveryID}/redeliver",
+      "operationId": "redeliverWebhookDelivery",
+      "source": "generated",
+      "responseSchema": "WebhookDelivery",
+      "fixture": null,
+      "usedBy": [
+        "features/settings"
+      ]
+    },
+    {
+      "id": "admin.createProjectRequest",
+      "method": "POST",
+      "path": "/admin/moderation_status/project_request",
+      "operationId": "createProjectRequest",
+      "source": "generated",
+      "responseSchema": "ModerationRequestRow",
+      "fixture": null,
+      "usedBy": [
+        "features/project-requests"
+      ]
+    },
+    {
+      "id": "admin.listMyProjectRequests",
+      "method": "GET",
+      "path": "/admin/moderation_status/project_requests/mine",
+      "operationId": "listMyProjectRequests",
+      "source": "generated",
+      "responseSchema": "ModerationRequestList",
+      "fixture": null,
+      "usedBy": [
+        "features/project-requests"
+      ]
+    },
+    {
+      "$comment": "Issue #880 — thumbs up/down + optional comment on an assistant message. Described in v2.yaml as getMessageFeedback, but called through a HAND-WRITTEN wrapper (entities/conversation/api/messageFeedbackApi.ts): orval types the generated per-operation function's return as the union across every documented status code, and eliteaFetch already throws on non-2xx, so a caller reading `.data` off that union cannot narrow to MessageFeedbackSummary alone. The URL is still built with the GENERATED getGetMessageFeedbackUrl, so the path stays derived from the spec.",
+      "id": "chat.getMessageFeedback",
+      "method": "GET",
+      "path": "/elitea_core/message_feedback/prompt_lib/{projectID}/{messageID}",
+      "operationId": "getMessageFeedback",
+      "source": "handwritten",
+      "responseSchema": "MessageFeedbackSummary",
+      "fixture": null,
+      "usedBy": [
+        "features/chat-messages/ui/chat-box/MessageFeedbackControl.tsx"
+      ]
+    },
+    {
+      "$comment": "Issue #880, same reason as chat.getMessageFeedback above: `query.useQuery: true` is global in orval.config.ts with no per-operation mutation override, so useSetMessageFeedback generates as a useQuery hook rather than a useMutation — the wrong shape for a POST that upserts on click. messageFeedbackApi.ts's hand-written useMutation wraps eliteaFetch directly, reusing the GENERATED getSetMessageFeedbackUrl for the path.",
+      "id": "chat.setMessageFeedback",
+      "method": "POST",
+      "path": "/elitea_core/message_feedback/prompt_lib/{projectID}/{messageID}",
+      "operationId": "setMessageFeedback",
+      "source": "handwritten",
+      "responseSchema": "MessageFeedbackSummary",
+      "fixture": null,
+      "usedBy": [
+        "features/chat-messages/ui/chat-box/MessageFeedbackControl.tsx"
+      ]
+    },
+    {
+      "$comment": "Issue #880, same reason as chat.setMessageFeedback above: the DELETE (retracting one's own vote) needs a useMutation, not the generated useQuery shape. messageFeedbackApi.ts's hand-written useMutation wraps eliteaFetch directly, reusing the GENERATED getDeleteMessageFeedbackUrl for the path.",
+      "id": "chat.deleteMessageFeedback",
+      "method": "DELETE",
+      "path": "/elitea_core/message_feedback/prompt_lib/{projectID}/{messageID}",
+      "operationId": "deleteMessageFeedback",
+      "source": "handwritten",
+      "responseSchema": "MessageFeedbackSummary",
+      "fixture": null,
+      "usedBy": [
+        "features/chat-messages/ui/chat-box/MessageFeedbackControl.tsx"
       ]
     }
   ]

@@ -37,9 +37,10 @@ use tracing::Instrument as _;
 use zeroize::Zeroizing;
 
 use super::openai_compatible_facade::{
-    BoundedSseEvent, ModelFacadeError, ModelFacadeInvocation, ModelGatewayClient,
-    ModelReasoningEffort, SseParser, model_error, next_response_chunk, valid_tool_call_id,
-    valid_tool_name, validate_invocation, validate_llm_request, validate_response_head,
+    BoundedSseEvent, MAX_EXECUTION_ID_BYTES, ModelFacadeError, ModelFacadeInvocation,
+    ModelGatewayClient, ModelReasoningEffort, SseParser, bounded_header_text, model_error,
+    next_response_chunk, valid_tool_call_id, valid_tool_name, validate_invocation,
+    validate_llm_request, validate_response_head,
 };
 use super::runtime_context::ClaimScopedEliteaContext;
 use crate::agents::runtime::{NativeAgentAssemblyError, NativeAgentAssemblyErrorCode};
@@ -56,6 +57,16 @@ const X_API_KEY: HeaderName = HeaderName::from_static("x-api-key");
 // Billing/execution scope comes from the redeemed claim. The frozen model
 // owner may be the public project and must not be sent as this selector.
 const PROJECT_SELECTOR: HeaderName = HeaderName::from_static("x-project-id");
+// Tags this call with the execution it was made from so the gateway's
+// request log can attribute cost per execution (issue 875). Must match the
+// Python worker's `_EXECUTION_ID_HEADER` in
+// `elitea_worker/agents/sdk_adapter.py`, the gateway's own
+// `headerExecutionID` in `internal/llmproxy/identity.go` /
+// `internal/requestlog/middleware.go`, and this crate's own
+// `openai_compatible_facade::EXECUTION_ID_HEADER` (canonical form
+// `X-Elitea-Execution-Id` — HTTP header lookup is case-insensitive, so the
+// lowercase static name here is equivalent).
+const EXECUTION_ID_HEADER: HeaderName = HeaderName::from_static("x-elitea-execution-id");
 
 impl ModelGatewayClient {
     /// Consume one claim credential into the native Anthropic dialect while
@@ -74,7 +85,12 @@ impl ModelGatewayClient {
         }
         let token = context.model_facade_token();
         let billing_project_id = context.resource_project_id();
-        if model_owner_project_id == 0 || billing_project_id == 0 || token.is_empty() {
+        let execution_id = context.execution_id().to_owned();
+        if model_owner_project_id == 0
+            || billing_project_id == 0
+            || token.is_empty()
+            || !bounded_header_text(&execution_id, MAX_EXECUTION_ID_BYTES)
+        {
             return Err(ModelFacadeError::InvalidInvocation);
         }
         let completion = Arc::new(Mutex::new(AnthropicCompletionState::default()));
@@ -84,6 +100,7 @@ impl ModelGatewayClient {
             invocation,
             billing_project_id,
             token,
+            execution_id,
             completion: completion.clone(),
             calls: AtomicU32::new(0),
         });
@@ -188,6 +205,9 @@ struct EliteaAnthropicModel {
     invocation: ModelFacadeInvocation,
     billing_project_id: u64,
     token: Zeroizing<String>,
+    /// The execution this claim was redeemed for (issue 875), sent to the
+    /// gateway as `X-Elitea-Execution-Id` for per-execution cost attribution.
+    execution_id: String,
     completion: Arc<Mutex<AnthropicCompletionState>>,
     calls: AtomicU32,
 }
@@ -237,8 +257,12 @@ impl Llm for EliteaAnthropicModel {
             tracing::info!(event = "agent_model_request_started");
             let allowed_tools = request.tools.keys().cloned().collect();
             let body = build_anthropic_body(&request, stream, &self.invocation, &self.config)?;
-            let request =
-                build_anthropic_request(body, self.billing_project_id, self.token.as_str())?;
+            let request = build_anthropic_request(
+                body,
+                self.billing_project_id,
+                self.token.as_str(),
+                self.execution_id.as_str(),
+            )?;
             let response = timeout(
                 self.config.response_header_timeout,
                 self.transport.post(request),
@@ -543,6 +567,7 @@ fn build_anthropic_request(
     body: Bytes,
     billing_project_id: u64,
     token: &str,
+    execution_id: &str,
 ) -> Result<Request<Body>, AdkError> {
     let body_length = body.len();
     let mut request = Request::builder()
@@ -567,6 +592,10 @@ fn build_anthropic_request(
         PROJECT_SELECTOR,
         HeaderValue::from_str(&billing_project_id.to_string())
             .map_err(|_| invalid_anthropic_request())?,
+    );
+    headers.insert(
+        EXECUTION_ID_HEADER,
+        HeaderValue::from_str(execution_id).map_err(|_| invalid_anthropic_request())?,
     );
     let mut bearer = Zeroizing::new(String::with_capacity(7 + token.len()));
     bearer.push_str("Bearer ");

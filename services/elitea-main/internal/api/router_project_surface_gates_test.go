@@ -19,7 +19,10 @@ import (
 // package `Routes()` method.
 //
 //	/api/v2/configurations              22 routes, the per-project CREDENTIALS
-//	/api/v2/webhooks/prompt_lib/{id}     5 routes, url + rotating `secret`
+//	/api/v2/webhooks/prompt_lib/{id}     7 routes, url + rotating `secret`,
+//	                                     plus the delivery log (#876's second
+//	                                     half: GET .../deliveries and POST
+//	                                     .../deliveries/{id}/redeliver)
 //	/api/v2/events/prompt_lib/{id}       1 route,  the project SSE bus
 //
 // None of them carried a gate. They were invisible to the audits that read the
@@ -99,6 +102,8 @@ var projectSurfaceRoutes = []projectSurfaceRoute{
 	{http.MethodGet, "/api/v2/webhooks/prompt_lib/7/wh-1", "/api/v2/webhooks/prompt_lib/8/wh-1", configurationGetPermission},
 	{http.MethodPut, "/api/v2/webhooks/prompt_lib/7/wh-1", "/api/v2/webhooks/prompt_lib/8/wh-1", configurationUpdatePermission},
 	{http.MethodDelete, "/api/v2/webhooks/prompt_lib/7/wh-1", "/api/v2/webhooks/prompt_lib/8/wh-1", configurationDeletePermission},
+	{http.MethodGet, "/api/v2/webhooks/prompt_lib/7/wh-1/deliveries", "/api/v2/webhooks/prompt_lib/8/wh-1/deliveries", configurationGetPermission},
+	{http.MethodPost, "/api/v2/webhooks/prompt_lib/7/wh-1/deliveries/del-1/redeliver", "/api/v2/webhooks/prompt_lib/8/wh-1/deliveries/del-1/redeliver", configurationUpdatePermission},
 	// ── /events ────────────────────────────────────────────────────────────
 	{http.MethodGet, "/api/v2/events/prompt_lib/7/", "/api/v2/events/prompt_lib/8/", projectStreamPermission},
 }

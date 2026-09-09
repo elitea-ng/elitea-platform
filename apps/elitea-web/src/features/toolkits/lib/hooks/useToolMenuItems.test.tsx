@@ -55,7 +55,7 @@ function renderToolMenuItems(params: UseToolMenuItemsParams): { readonly box: { 
 }
 
 describe('useToolMenuItems', () => {
-  it('excludes mcp-shaped, hidden, and agent/application-labelled entries, and adds Custom for the non-MCP/non-application case', async () => {
+  it('excludes mcp-shaped and agent/application-labelled entries, and adds Custom for the non-MCP/non-application case', async () => {
     server.use(
       http.get('/api/v2/elitea_core/toolkits/prompt_lib/:projectId', () =>
         HttpResponse.json({
@@ -74,8 +74,52 @@ describe('useToolMenuItems', () => {
     expect(keys).toContain('github');
     expect(keys).toContain('custom');
     expect(keys).not.toContain('mcp');
-    expect(keys).not.toContain('hidden_tool');
     expect(keys).not.toContain('application');
+  });
+
+  // #865/#866: a hidden type is a REAL catalogued type the configured worker
+  // cannot build — this hook backs the type PICKER, so it keeps the tile
+  // (greyed by the caller) instead of making the type look like it never
+  // existed, which is what happened before this fix.
+  it('keeps a hidden entry, marked disabled with a reason, instead of dropping it', async () => {
+    server.use(
+      http.get('/api/v2/elitea_core/toolkits/prompt_lib/:projectId', () =>
+        HttpResponse.json({
+          github: { metadata: { label: 'GitHub' } },
+          hidden_tool: { metadata: { label: 'Hidden', hidden: true, unavailable_reason: 'the configured worker cannot build this type' } },
+        }),
+      ),
+    );
+
+    const { box } = renderToolMenuItems({});
+
+    await waitFor(() => expect(box.current?.isFetchingToolkitTypes).toBe(false));
+    const items = box.current?.toolMenuItems ?? [];
+    const hidden = items.find((item) => item.key === 'hidden_tool');
+    expect(hidden).toBeDefined();
+    expect(hidden?.disabled).toBe(true);
+    expect(hidden?.disabledReason).toBe('the configured worker cannot build this type');
+    // The click a keyboard user could still trigger on the underlying
+    // control must stay inert — belt and suspenders alongside the UI's own
+    // disabled control.
+    hidden?.onClick();
+  });
+
+  it('falls back to a generic reason when the backend names none', async () => {
+    server.use(
+      http.get('/api/v2/elitea_core/toolkits/prompt_lib/:projectId', () =>
+        HttpResponse.json({
+          hidden_tool: { metadata: { label: 'Hidden', hidden: true } },
+        }),
+      ),
+    );
+
+    const { box } = renderToolMenuItems({});
+
+    await waitFor(() => expect(box.current?.isFetchingToolkitTypes).toBe(false));
+    const hidden = box.current?.toolMenuItems.find((item) => item.key === 'hidden_tool');
+    expect(hidden?.disabled).toBe(true);
+    expect(hidden?.disabledReason).toBeTruthy();
   });
 
   it('limits the MCP-mode menu to mcp-flavoured schemas plus the synthesized Remote MCP entry, excluding ordinary toolkit types (R1 regression guard)', async () => {

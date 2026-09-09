@@ -20,6 +20,12 @@ COPY apps/elitea-web/src/ ./src/
 # Without this the SPA's history fallback answered those URLs with index.html
 # under a 200, so a "does the pack's logo resolve?" check passed on HTML.
 COPY apps/elitea-web/public/ ./public/
+# `npm run build` (below) runs `build:docs`, which runs
+# `node scripts/docs-build-search-index.mjs` before `vite build --mode docs`
+# (embedded-docs programme decision 2/6) — the one build target that needs a
+# script outside `src/`, so `scripts/` is copied only now, this late, rather
+# than widening the lockfile-first layer above.
+COPY apps/elitea-web/scripts/docs-build-search-index.mjs ./scripts/docs-build-search-index.mjs
 
 ENV NODE_OPTIONS="--max-old-space-size=4096"
 RUN npm run build
@@ -80,6 +86,11 @@ ADD https://dl-cdn.alpinelinux.org/alpine/latest-stable/main/x86_64/APKINDEX.tar
 RUN apk upgrade --no-cache
 
 COPY --from=builder /build/dist/app /usr/share/nginx/html/spa
+# Embedded docs SPA (embedded-docs programme decision 5): its own dist
+# directory, served by spa.conf's separate `/docs/` location block — never
+# merged into `spa/` above, so the two shells' `index.html`/`404.html`/
+# `assets/` never collide.
+COPY --from=builder /build/dist/docs /usr/share/nginx/html/docs
 COPY apps/elitea-web/nginx/spa.conf /etc/nginx/conf.d/default.conf
 # Included by every location block in spa.conf. nginx add_header does not merge
 # across levels, so the set must be included, not inherited.

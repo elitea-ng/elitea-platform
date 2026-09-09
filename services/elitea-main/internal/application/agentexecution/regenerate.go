@@ -242,7 +242,10 @@ func (service *CurrentApplicationStartService) currentRegenerationInput(
 		}
 		resolved.VersionDetails = frozen
 		start.QuestionID = request.RegenerationID
-		input, err := currentApplicationInput(start, resolved, suggestionPolicy, toolkitGuardrails, nil)
+		// #870: memory recall is wired on turn START only — see
+		// continue.go's call site for why regeneration deliberately does not
+		// re-run it. "" preserves this call site's pre-#870 behavior.
+		input, err := currentApplicationInput(start, resolved, suggestionPolicy, toolkitGuardrails, nil, "")
 		if err != nil {
 			return nil, nil, "", err
 		}
@@ -278,7 +281,7 @@ func (service *CurrentApplicationStartService) currentRegenerationInput(
 			return nil, nil, "", err
 		}
 		start.QuestionID = request.RegenerationID
-		input, err := currentAdhocInput(start, resolved, frozen, suggestionPolicy, toolkitGuardrails, nil)
+		input, err := currentAdhocInput(start, resolved, frozen, suggestionPolicy, toolkitGuardrails, nil, "") // #870: see currentApplicationInput's regeneration call site
 		if err != nil {
 			return nil, nil, "", err
 		}

@@ -1,0 +1,53 @@
+---
+title: "AI Providers"
+description: "Configure LLM, embedding, vector storage, image generation, speech recognition, and text-to-speech models for the project."
+---
+
+AI Providers is where a project registers the models and storage it uses, and picks defaults for each category. Settings here apply at the project level for every member.
+
+<Screenshot id="settings-ai-providers" alt="AI Providers configuration cards grouped by category" />
+
+## Categories
+
+<CardGroup cols={3}>
+  <Card title="LLMs" icon="brain">Language models, with Default, High-tier, and Low-tier selections.</Card>
+  <Card title="Embedding Models" icon="database">Used for indexing and semantic search.</Card>
+  <Card title="Vector Storage" icon="hard-drive">Where embeddings are stored (PGVector).</Card>
+  <Card title="Image Generation" icon="image">Powers the Image creation module in chat.</Card>
+  <Card title="Speech Recognition (ASR)" icon="microphone-lines">Server-side voice input.</Card>
+  <Card title="Text to Speech (TTS)" icon="volume-high">Server-side spoken playback.</Card>
+</CardGroup>
+
+Each category shows its configured models as cards with a provider icon, name, and a badge for Default, High-tier, or Low-tier. Select a card to edit it, if your role allows.
+
+## Add a model or credential
+
+<Steps>
+  <Step title="Create AI Credentials first">Choose a provider — OpenAI, Azure OpenAI, Anthropic, Amazon Bedrock, Google Vertex AI, Ollama, vLLM, or EPAM AI Dial — and provide its endpoint and key. One credential can back several models.</Step>
+  <Step title="Add the model">Select **+**, choose the model category, and fill in a display name, the exact provider model identifier, and — for LLMs — context window, max output tokens, and whether it supports reasoning or vision.</Step>
+  <Step title="Set as default">Use the category's dropdowns to make the new configuration the project default, or the high-tier / low-tier choice.</Step>
+</Steps>
+
+<Warning title="Model name must match the provider exactly">
+The **Name** field must be the provider's own model identifier (or Azure deployment name) — not a display label. Refer to your provider's model list if a connection or generation fails.
+</Warning>
+
+<Warning title="AI Dial and reasoning models">
+When an OpenAI or Anthropic model configuration uses AI Dial credentials, leave **Supports Reasoning** off — turning it on breaks connection validation for that combination.
+</Warning>
+
+## Speech recognition and text-to-speech fallbacks
+
+If no ASR model is configured, voice input falls back to the browser's Web Speech API; if no TTS model is configured, playback falls back to the browser's SpeechSynthesis API. Elitea determines ASR mode from the model name — `whisper` or `transcribe` selects batch transcription; anything else uses realtime streaming.
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="No access to LLM / model not found">Confirm the model name matches the provider's identifier exactly and that your credential has access to it.</Accordion>
+  <Accordion title="Authentication failed (401/403)">Recheck the API key or token for typos or expiry, and confirm the endpoint URL is correct for your provider.</Accordion>
+  <Accordion title="Voice falls back to the browser voice unexpectedly">Confirm a default ASR or TTS model is actually selected in this page, not just configured.</Accordion>
+</AccordionGroup>
+
+<Info title="Related">
+[Credentials](/menus/credentials) · [Project settings](/menus/settings/project-settings) · [Voice](/menus/chat#voice)
+</Info>

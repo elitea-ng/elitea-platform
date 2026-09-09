@@ -1,0 +1,117 @@
+---
+title: "Troubleshooting"
+description: "A quick health checklist plus fixes for common agent, pipeline, toolkit, and LLM provider errors."
+---
+
+Start with the health checklist for a fast overall check, then use the category sections below for a specific error message.
+
+## Quick health checklist
+
+<CardGroup cols={2}>
+  <Card title="Socket connection" icon="wifi">Green dot on the Elitea logo = connected. Red = check your network.</Card>
+  <Card title="Permissions" icon="user-check">You can create the entities your role should allow (agents, toolkits, credentials).</Card>
+  <Card title="Credentials" icon="key">**Test Connection** on a credential returns success.</Card>
+  <Card title="Indexes tab" icon="database">Visible on a toolkit only once PGVector, an embedding model, and the **Index data** tool are all configured.</Card>
+</CardGroup>
+
+If any of these fail, fix that first — most downstream errors trace back to one of them.
+
+## Agent and LLM issues
+
+<AccordionGroup>
+  <Accordion title="Agent stops or gives a truncated answer">
+    The model hit its **Max Completion Tokens** limit. Increase the value in the agent's model settings; check nested agents too if the issue appears mid-chain.
+  </Accordion>
+  <Accordion title="Content-policy or safety rejection (400 error)">
+    The message or instructions triggered the provider's safety mechanism. Avoid sensitive topics and phrasing that reads like a prompt-injection attempt (for example, "ignore user input"); state the purpose of any such instruction clearly.
+  </Accordion>
+  <Accordion title="Rate limit exceeded (429 error)">
+    Shared models on your deployment share per-second/minute/day limits across every user. Wait and retry, or switch models.
+  </Accordion>
+  <Accordion title="Context length exceeded">
+    Input plus history exceeded the model's context window. Reduce the input, turn on [context management](/menus/settings/memory), or index the source instead of pasting it directly.
+  </Accordion>
+  <Accordion title="Multiple output variables all get the same content">
+    Turn on Structured Output when an LLM node has more than one output variable, and instruct the model to return JSON keyed by your variable names.
+  </Accordion>
+</AccordionGroup>
+
+## Pipeline configuration issues
+
+<AccordionGroup>
+  <Accordion title="Entry point is not defined">
+    Every pipeline needs one designated starting node — open the node's three-dot menu and select **Entry Point**.
+  </Accordion>
+  <Accordion title="Task is required / empty task field">
+    A node (Agent, Decision, Router, and others) has an empty Task field — required fields must be filled before the pipeline can run.
+  </Accordion>
+  <Accordion title="Node ignores the provided input">
+    The task field must explicitly reference the variable, using an f-string or the variable picker — listing a variable under Input alone does not pass it to the node automatically.
+  </Accordion>
+  <Accordion title="Found edge starting at unknown node">
+    A node has no agent or toolkit selected in its dropdown — select one.
+  </Accordion>
+</AccordionGroup>
+
+## Toolkit and integration issues
+
+<AccordionGroup>
+  <Accordion title="Permission error during indexing">
+    The connected account's token cannot see one or more items. Narrow the source with a filter (JQL for Jira, CQL for Confluence) and retry — items deleted mid-run also surface this way.
+  </Accordion>
+  <Accordion title="Authentication fails (401/403)">
+    Recheck the credential's key or token for typos, extra whitespace, or expiry, and confirm the authentication method (basic vs. bearer) matches what the target service expects.
+  </Accordion>
+  <Accordion title="A toolkit returns far fewer results than expected">
+    Its configuration has a **Limit** field capping results per request — raise it in the toolkit's configuration.
+  </Accordion>
+  <Accordion title="Toolkit fails to save with a missing-field validation error">
+    A required field is empty after an import or an update to the toolkit's schema — review every configuration section, including advanced settings, and fill anything marked required.
+  </Accordion>
+</AccordionGroup>
+
+## MCP issues
+
+<AccordionGroup>
+  <Accordion title="MCP shows Disconnected">
+    For a Remote MCP, verify the server URL is reachable and its authentication has not expired. Elitea's MCP connections are HTTP-only — there is no local, STDIO-based server or client to run first.
+  </Accordion>
+  <Accordion title="No tools appear after connecting an MCP">
+    Reload the MCP's configuration page, and confirm the server actually exposes tools once connected.
+  </Accordion>
+</AccordionGroup>
+
+<Tip title="Reading an error message">
+Look at the end of the message for the real cause — one failure can cascade into another. For pipelines, the error usually names the node ("During task with name 'Agent1'"); open that node's configuration first.
+</Tip>
+
+## Operator checks
+
+Two different things answer "is the platform healthy," at two different levels.
+
+### Infrastructure liveness and readiness
+
+elitea-main exposes unauthenticated health endpoints for your load balancer, orchestrator, or uptime check:
+
+- `GET /healthz` — liveness. Answers once the process is up; it does not check dependencies.
+- `GET /readyz` — readiness. Checks the dependencies the service actually needs (for example, the database) and reports which one failed if it is not ready.
+
+Point your platform's health probe (Kubernetes liveness/readiness probe, or an external uptime monitor) at these rather than at an authenticated API route.
+
+### The Health tab (application-level)
+
+Inside the app, **Settings › Analytics › Health** (gated by the `analytics_enabled` admin flag — see [Features and configuration](/admin/features-and-configuration)) reports on the LLM gateway path specifically:
+
+- **Error codes** — a table of upstream and gateway error codes seen recently, by count. This reads the gateway's per-request log, not the billing ledger, so a call that was refused by a budget, rejected by policy, or failed upstream shows up here even though it never generated a billed event.
+- **Model health** — which configured models are currently returning errors, and how often.
+- **Activity trend** — a day-by-day chart of request volume.
+
+<Note>
+If nothing appears on this tab, check the `analytics_enabled` flag before assuming the platform is idle — the tab is gated off entirely rather than shown empty when the flag is off.
+</Note>
+
+Use the infrastructure endpoints to answer "is the service up," and the Health tab to answer "are calls through the LLM gateway succeeding."
+
+<Info title="Still stuck?">
+Check the [FAQs](/support/faqs), or reach your platform administrator through [Help and support](/menus/help-and-support).
+</Info>

@@ -109,8 +109,15 @@ func TestParsePack_Table(t *testing.T) {
 		// --- url format ---
 		{name: "docsUrl not a url", wantErr: "product.docsUrl must be a valid absolute URL",
 			mutate: func(m map[string]any) { section(m, "product")["docsUrl"] = "not a url" }},
-		{name: "docsUrl relative path", wantErr: "product.docsUrl must be a valid absolute URL",
+		// [W1b] docsUrl uniquely also accepts a root-relative path — the
+		// embedded docs SPA is same origin, so the compiled default pack
+		// states it this way (apps/elitea-web's default.pack.json). A
+		// protocol-relative "//host/..." is still rejected: it would
+		// resolve against whatever scheme the browser is currently on.
+		{name: "docsUrl root-relative path is valid",
 			mutate: func(m map[string]any) { section(m, "product")["docsUrl"] = "/docs/start" }},
+		{name: "docsUrl protocol-relative path rejected", wantErr: "product.docsUrl must be a valid absolute URL",
+			mutate: func(m map[string]any) { section(m, "product")["docsUrl"] = "//evil.example/docs" }},
 		{name: "supportUrl invalid", wantErr: "product.supportUrl must be a valid absolute URL",
 			mutate: func(m map[string]any) { section(m, "product")["supportUrl"] = "elitea.ai/support" }},
 		{name: "docsUrl absent is fine",

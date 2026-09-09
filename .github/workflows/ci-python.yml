@@ -250,12 +250,30 @@ jobs:
             poppler-utils \
             tesseract-ocr
 
+      # #872: the pyodide internal tool needs `deno` on PATH exactly as the
+      # admitted image will have it. One script (also run by the Containerfile)
+      # is the single source of the pinned version and per-arch digest, so this
+      # runner and the shipped image can never pin two different binaries.
+      - name: Install the pinned deno binary the sandbox internal tool needs
+        run: |
+          sudo python3 services/elitea-worker-python/scripts/install_pinned_deno.py \
+            --target-arch amd64 \
+            --dest /usr/local/bin/deno
+          deno --version
+
       - name: Check out the exact worker-locked SDK source
         env:
           SDK_REVISION: b5113a129329b85d23c2d5c2bf55f18e307414ec
           SDK_ARCHIVE_SHA256: df398b4a378e7b88ea3b72511e31de13a17a02159c69fbada6f0b948a0ecf2d7
           SDK_MCP_PREFLIGHT_PATCH: 5c9409779ac0a55f8bf74f6ef438977089187a14
           SDK_MCP_HARD_TIMEOUT_PATCH: 07ddc5cd67a0c747f83ca0e26421cde71bd97d9d
+          # #864: vendors elitea_sdk/runtime/utils/tool_groups.py (introduced
+          # upstream after this revision). See the matching comment in the
+          # Containerfile.
+          SDK_TOOL_GROUPS_PATCH: 4e631ed9e9523b33410a31bd2242c93fa9ec0b4b
+          # #864: imagegen toolkit, cherry-picked the same way as the two MCP
+          # patches above. See the matching comment in the Containerfile.
+          SDK_IMAGEGEN_PATCH: afff234904b6d5de551436b53c078722f13ff4de
         run: |
           git clone --filter=blob:none --no-checkout \
             https://github.com/EliteaAI/elitea-sdk.git \
@@ -265,8 +283,12 @@ jobs:
           test "$(git -C /tmp/elitea-sdk-current archive --format=tar HEAD | sha256sum | cut -d ' ' -f 1)" = "${SDK_ARCHIVE_SHA256}"
           git -C /tmp/elitea-sdk-current cat-file -e "${SDK_MCP_PREFLIGHT_PATCH}^{commit}"
           git -C /tmp/elitea-sdk-current cat-file -e "${SDK_MCP_HARD_TIMEOUT_PATCH}^{commit}"
+          git -C /tmp/elitea-sdk-current cat-file -e "${SDK_TOOL_GROUPS_PATCH}^{commit}"
+          git -C /tmp/elitea-sdk-current cat-file -e "${SDK_IMAGEGEN_PATCH}^{commit}"
           git -C /tmp/elitea-sdk-current cherry-pick --no-commit "${SDK_MCP_PREFLIGHT_PATCH}"
           git -C /tmp/elitea-sdk-current cherry-pick --no-commit "${SDK_MCP_HARD_TIMEOUT_PATCH}"
+          git -C /tmp/elitea-sdk-current cherry-pick --no-commit "${SDK_TOOL_GROUPS_PATCH}"
+          git -C /tmp/elitea-sdk-current cherry-pick --no-commit "${SDK_IMAGEGEN_PATCH}"
 
       - name: Install the pinned worker and protocol packages
         run: |
@@ -279,10 +301,29 @@ jobs:
             "./services/elitea-worker-python[agent-current,indexing-current,test]"
           python -m pip check
 
+      # #872: vendor the SDK's patched Pyodide sandbox entrypoint at the SAME
+      # path the Containerfile bakes it to, and pre-warm its module graph the
+      # same way the image build does, so the worker's own default
+      # (elitea_worker.agents.internal_tools._DEFAULT_PYODIDE_SANDBOX_PKG)
+      # resolves here with no extra test-only wiring and the unit suite
+      # exercises a REAL sandbox execution rather than a mock.
+      - name: Pre-warm the pyodide sandbox entrypoint for the worker tests
+        run: |
+          sudo mkdir -p /opt/elitea/sandbox
+          sudo cp /tmp/elitea-sdk-current/infra/data/sandbox/main.ts /opt/elitea/sandbox/main.ts
+          sudo DENO_DIR=/opt/elitea/sandbox/deno-cache \
+            deno cache --node-modules-dir=auto /opt/elitea/sandbox/main.ts
+          sudo chmod -R a+rwX /opt/elitea/sandbox
+
       - name: Unit and byte-conformance tests
         env:
           ELITEA_CONFORMANCE_ROOT: ${{ github.workspace }}/testdata/proto/runtime/v1
           ELITEA_SDK_SOURCE_ROOT: /tmp/elitea-sdk-current
+          # Matches the Containerfile's own ENV: without this, the sandbox
+          # test's DENO_DIR default would be an empty per-run /tmp directory,
+          # and it would need the network access the pre-warm step above
+          # exists to remove.
+          DENO_DIR: /opt/elitea/sandbox/deno-cache
         run: |
           # Every test_*.py under scripts/contract/ runs. A named list stops
           # covering a file the day somebody adds one, and two files had sat

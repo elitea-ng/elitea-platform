@@ -321,11 +321,17 @@
         "location",
         "geolocation"
       ],
-      "hidden": true,
       "icon_url": "gplaces-icon.svg",
-      "label": "Google Places",
-      "unavailable": true,
-      "unavailable_reason": "the admitted Python worker image does not carry the dependencies of the google_places toolkit"
+      "label": "Google Places"
+    }
+  },
+  "imagegen": {
+    "metadata": {
+      "label": "ImageGen",
+      "categories": [
+        "media"
+      ],
+      "hidden": false
     }
   },
   "jira": {
@@ -467,11 +473,8 @@
         "scrum",
         "kanban"
       ],
-      "hidden": true,
       "icon_url": "rally.svg",
-      "label": "Rally",
-      "unavailable": true,
-      "unavailable_reason": "the admitted Python worker image does not carry the dependencies of the rally toolkit"
+      "label": "Rally"
     }
   },
   "report_portal": {
@@ -531,11 +534,9 @@
         "change management",
         "service catalog"
       ],
-      "hidden": true,
+      "hidden": false,
       "icon_url": "service-now.svg",
-      "label": "ServiceNow",
-      "unavailable": true,
-      "unavailable_reason": "the admitted Python worker image does not carry the dependencies of the service_now toolkit"
+      "label": "ServiceNow"
     }
   },
   "sharepoint": {
@@ -564,11 +565,8 @@
         "messaging",
         "collaboration"
       ],
-      "hidden": true,
       "icon_url": "slack-icon.svg",
-      "label": "Slack",
-      "unavailable": true,
-      "unavailable_reason": "the admitted Python worker image does not carry the dependencies of the slack toolkit"
+      "label": "Slack"
     }
   },
   "sonar": {

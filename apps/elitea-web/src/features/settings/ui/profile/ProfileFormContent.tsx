@@ -44,7 +44,7 @@ export function ProfileFormContent({
       <Box sx={styles.container}>
         <ProfileUserInfo name={name} avatar={avatar} email={email} isFetching={isFetching} />
         <ProfilePersonalization onAutoSaveRequested={requestSubmit} />
-        <ProfileContextManagement modelList={modelList} onAutoSaveRequested={requestSubmit} />
+        <ProfileContextManagement modelList={modelList} onAutoSaveRequested={requestSubmit} projectId={projectId} />
         <VoicePersonalizationSection projectId={projectId} />
         <SoundNotificationSection />
       </Box>

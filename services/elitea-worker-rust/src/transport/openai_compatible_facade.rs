@@ -38,6 +38,7 @@ use crate::agents::session::{BoundOrdinaryAgentModel, DurableModelCompletion};
 const MODEL_ROUTE: &str = "/llm/v1/chat/completions";
 const MAX_ORIGIN_BYTES: usize = 2_048;
 const MAX_MODEL_NAME_BYTES: usize = 256;
+pub(super) const MAX_EXECUTION_ID_BYTES: usize = 256;
 const MAX_INSTRUCTION_BYTES: usize = 64 * 1_024;
 const MAX_REQUEST_BYTES: usize = 1_024 * 1_024;
 const MAX_SSE_EVENT_BYTES: usize = 256 * 1_024;
@@ -55,6 +56,15 @@ const MAX_TIMEOUT: Duration = Duration::from_mins(5);
 // It is deliberately NOT the frozen model owner: Bifrost resolves a shared
 // public model inside the caller project's signed scope.
 const PROJECT_SELECTOR: HeaderName = HeaderName::from_static("x-project-id");
+// Tags this call with the execution it was made from so the gateway's
+// request log can attribute cost per execution (issue 875). Must match the
+// Python worker's `_EXECUTION_ID_HEADER` in
+// `elitea_worker/agents/sdk_adapter.py` and the gateway's own
+// `headerExecutionID` in `internal/llmproxy/identity.go` /
+// `internal/requestlog/middleware.go` (canonical form `X-Elitea-Execution-Id`
+// — HTTP header lookup is case-insensitive, so the lowercase static name
+// here is equivalent).
+const EXECUTION_ID_HEADER: HeaderName = HeaderName::from_static("x-elitea-execution-id");
 
 /// Immutable deployment policy for the shared platform model channel.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -270,7 +280,12 @@ impl ModelGatewayClient {
         validate_invocation(&invocation)?;
         let token = context.model_facade_token();
         let billing_project_id = context.resource_project_id();
-        if model_owner_project_id == 0 || billing_project_id == 0 || token.is_empty() {
+        let execution_id = context.execution_id().to_owned();
+        if model_owner_project_id == 0
+            || billing_project_id == 0
+            || token.is_empty()
+            || !bounded_header_text(&execution_id, MAX_EXECUTION_ID_BYTES)
+        {
             return Err(ModelFacadeError::InvalidInvocation);
         }
         let completion = Arc::new(Mutex::new(CompletionState::default()));
@@ -280,6 +295,7 @@ impl ModelGatewayClient {
             invocation,
             billing_project_id,
             token,
+            execution_id,
             completion: completion.clone(),
             calls: AtomicU32::new(0),
         });
@@ -384,6 +400,9 @@ struct EliteaOpenAiCompatibleModel {
     invocation: ModelFacadeInvocation,
     billing_project_id: u64,
     token: Zeroizing<String>,
+    /// The execution this claim was redeemed for (issue 875), sent to the
+    /// gateway as `X-Elitea-Execution-Id` for per-execution cost attribution.
+    execution_id: String,
     completion: Arc<Mutex<CompletionState>>,
     calls: AtomicU32,
 }
@@ -428,7 +447,12 @@ impl Llm for EliteaOpenAiCompatibleModel {
             tracing::info!(event = "agent_model_request_started");
             let allowed_tools = request.tools.keys().cloned().collect();
             let body = build_request_body(&request, stream, &self.invocation, &self.config)?;
-            let request = build_http_request(body, self.billing_project_id, self.token.as_str())?;
+            let request = build_http_request(
+                body,
+                self.billing_project_id,
+                self.token.as_str(),
+                self.execution_id.as_str(),
+            )?;
             let response = timeout(
                 self.config.response_header_timeout,
                 self.transport.post(request),
@@ -660,6 +684,15 @@ fn validate_openai_content(content: &Content) -> Result<(), AdkError> {
             {
                 Ok(())
             }
+            // #866: `seed_skipped_internal_tools_notice` (agents/session.rs)
+            // seeds exactly this shape — role "tool", a single bounded
+            // `Part::Text`, no `FunctionResponse` to pair — for a tool the
+            // catalogue skipped, before the model's first turn. Without this
+            // arm every session carrying that notice failed HERE, on every
+            // turn, with an empty answer: `validate_llm_request` (this
+            // request's own caller) rejected the whole turn before a single
+            // byte reached the gateway.
+            Part::Text { text } if valid_part_text(text) => Ok(()),
             _ => Err(invalid_llm_request()),
         }),
         _ => Err(invalid_llm_request()),
@@ -731,21 +764,40 @@ fn append_openai_messages(
         "model" | "assistant" => messages.push(openai_assistant_message(content)?),
         "function" | "tool" => {
             for part in &content.parts {
-                let Part::FunctionResponse {
-                    function_response,
-                    id: Some(id),
-                    ..
-                } = part
-                else {
-                    return Err(invalid_llm_request());
-                };
-                let result = serde_json::to_string(&function_response.response)
-                    .map_err(|_| invalid_llm_request())?;
-                messages.push(serde_json::json!({
-                    "role": "tool",
-                    "tool_call_id": id,
-                    "content": result,
-                }));
+                match part {
+                    Part::FunctionResponse {
+                        function_response,
+                        id: Some(id),
+                        ..
+                    } => {
+                        let result = serde_json::to_string(&function_response.response)
+                            .map_err(|_| invalid_llm_request())?;
+                        messages.push(serde_json::json!({
+                            "role": "tool",
+                            "tool_call_id": id,
+                            "content": result,
+                        }));
+                    }
+                    // #866: the skipped-internal-tools notice — no real
+                    // function call to pair a `tool_call_id` with, so it
+                    // carries the event's own fixed id
+                    // (`seed_skipped_internal_tools_notice`,
+                    // agents/session.rs) instead of a per-call one. A
+                    // strict provider that cross-checks `tool_call_id`
+                    // against a preceding assistant `tool_calls` entry is
+                    // the SAME risk the FunctionResponse shape this fix
+                    // avoided would have carried too (see that function's
+                    // own doc comment); the mock and Bifrost's forwarding
+                    // path do not reject an orphaned one.
+                    Part::Text { text } => {
+                        messages.push(serde_json::json!({
+                            "role": "tool",
+                            "tool_call_id": "elitea-skipped-internal-tools",
+                            "content": text,
+                        }));
+                    }
+                    _ => return Err(invalid_llm_request()),
+                }
             }
         }
         _ => return Err(invalid_llm_request()),
@@ -887,6 +939,7 @@ fn build_http_request(
     body: Bytes,
     billing_project_id: u64,
     token: &str,
+    execution_id: &str,
 ) -> Result<Request<Body>, AdkError> {
     let body_length = body.len();
     let mut request = Request::builder()
@@ -906,6 +959,10 @@ fn build_http_request(
         PROJECT_SELECTOR,
         HeaderValue::from_str(&billing_project_id.to_string())
             .map_err(|_| invalid_llm_request())?,
+    );
+    headers.insert(
+        EXECUTION_ID_HEADER,
+        HeaderValue::from_str(execution_id).map_err(|_| invalid_llm_request())?,
     );
     let mut bearer = Zeroizing::new(String::with_capacity(7 + token.len()));
     bearer.push_str("Bearer ");
@@ -1761,7 +1818,7 @@ fn valid_timeout(value: Duration) -> bool {
     !value.is_zero() && value <= MAX_TIMEOUT && value.subsec_nanos().is_multiple_of(1_000_000)
 }
 
-fn bounded_header_text(value: &str, maximum: usize) -> bool {
+pub(super) fn bounded_header_text(value: &str, maximum: usize) -> bool {
     !value.is_empty()
         && value.len() <= maximum
         && value.is_ascii()

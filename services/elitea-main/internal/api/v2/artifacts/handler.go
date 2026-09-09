@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"reflect"
 	"regexp"
 	"strconv"
 	"time"
@@ -99,6 +100,15 @@ type Handler struct {
 	repo   Repository
 	store  storage.ObjectStore
 	logger *slog.Logger
+	events EventEmitter
+}
+
+// EventEmitter is the seam to internal/events.Publisher, declared locally to
+// avoid this package (which the composition root imports) importing
+// internal/events and closing a cycle. *events.Publisher satisfies this
+// structurally.
+type EventEmitter interface {
+	Emit(ctx context.Context, projectID, eventType string, payload any)
 }
 
 func NewHandler(repo Repository, store storage.ObjectStore) *Handler {
@@ -112,6 +122,33 @@ func (h *Handler) WithLogger(logger *slog.Logger) *Handler {
 		h.logger = logger
 	}
 	return h
+}
+
+// WithEvents wires the artifact.uploaded producer (#876's second half). Left
+// nil, UploadObject still works exactly as before.
+//
+// Guarded by eventEmitterPresent (see conversations.Handler.WithEvents'
+// identical comment): a nil *events.Publisher boxed into this interface
+// parameter is non-nil, and unguarded would panic UploadObject's first Emit
+// call.
+func (h *Handler) WithEvents(emitter EventEmitter) *Handler {
+	if eventEmitterPresent(emitter) {
+		h.events = emitter
+	}
+	return h
+}
+
+func eventEmitterPresent(emitter EventEmitter) bool {
+	if emitter == nil {
+		return false
+	}
+	v := reflect.ValueOf(emitter)
+	switch v.Kind() {
+	case reflect.Ptr, reflect.Map, reflect.Slice, reflect.Chan, reflect.Func, reflect.Interface:
+		return !v.IsNil()
+	default:
+		return true
+	}
 }
 
 func (h *Handler) log() *slog.Logger {

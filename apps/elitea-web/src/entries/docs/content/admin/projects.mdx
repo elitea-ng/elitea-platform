@@ -1,0 +1,53 @@
+---
+title: "Projects"
+description: "Create, suspend, delete, and manage membership for every project on the deployment."
+---
+
+The admin **Projects** page is the deployment-wide project list. Every project — team or personal — appears here, regardless of who owns it. This is the one place an administrator sees and acts on every project at once, rather than one project's own Settings page at a time.
+
+## Manage an existing project
+
+<Steps>
+  <Step title="Find the project">
+    Search the table by name.
+  </Step>
+  <Step title="Suspend or unsuspend it">
+    A suspended project's members lose access until it is unsuspended.
+  </Step>
+  <Step title="Add a project admin, or change a member's role">
+    Both are available from the project's row menu.
+  </Step>
+  <Step title="Export">
+    **Export to CSV** downloads the current list.
+  </Step>
+</Steps>
+
+<Screenshot id="admin-projects-table" alt="Admin Projects table with row actions" />
+
+## Create or delete a project
+
+Both actions run a multi-step process rather than a single database write: creating a project provisions its record, quota, dedicated schema, permission set, a system user and token, vault secrets, storage buckets, and vector store together; deleting one reverses the same steps, ending in dropping the project's schema. Each step's status is tracked individually, and a failed attempt is compensated rather than left half-applied.
+
+<Warning>
+Deleting a project destroys its data irreversibly. There is no undo.
+</Warning>
+
+## Approving a member's project request
+
+A member does not have to ask you directly. From the project switcher, **+ Request a project** opens a small form — a name and a justification — that files a request the same way the App Requests moderation pattern already handles application access (see [App requests and toolkit types](/admin/app-requests-and-toolkit-types)). It lands on **this same App Requests page**, under the "Project Request" issue type.
+
+<Steps>
+  <Step title="Filter the queue">
+    On [App Requests](/admin/app-requests-and-toolkit-types), set the Issue Type filter to **Project Request**.
+  </Step>
+  <Step title="Approve or reject">
+    **Approve** runs the same multi-step creation process described above — schema, permissions, vault, the lot — with the requester made the new project's admin. **Reject** requires a reason, exactly like any other app request, and creates nothing.
+  </Step>
+  <Step title="The requester is notified either way">
+    Approving names the new project's id in the queue and in the requester's notification; rejecting delivers your reason.
+  </Step>
+</Steps>
+
+<Note>
+Unlike every other request this queue handles, approving a "Project Request" is not clerical: it is the one decision on this page that creates something rather than only recording an answer.
+</Note>

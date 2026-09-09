@@ -73,6 +73,12 @@ export const ModerationRequestRow = zod
       .describe("Required when a moderator rejects, null otherwise."),
     created_at: zod.iso.datetime({ offset: true }),
     updated_at: zod.iso.datetime({ offset: true }),
+    created_project_id: zod
+      .int()
+      .optional()
+      .describe(
+        "Set ONLY on an APPROVED `Project Request` row (issue #871) — the id the project-creation pipeline assigned. Absent on every other row, and absent on a `Project Request` row that is still `pending` or was `rejected` (internal\/api\/v2\/moderation\/ project_requests.go's `decideProjectRequest`).\n",
+      ),
   })
   .describe(
     "NOTE(W2): one `centry.moderation_state` row as internal\/api\/v2\/moderation\/requests.go's `requestRow` marshals it (:163-175).\n",

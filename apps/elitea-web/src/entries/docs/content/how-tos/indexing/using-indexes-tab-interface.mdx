@@ -1,0 +1,50 @@
+---
+title: "Use the Indexes tab"
+description: "Create an index, watch it run, reindex it, schedule it, and review its history from a toolkit's Indexes tab."
+---
+
+Every toolkit type that supports indexing shows an **Indexes** tab next to its Configuration tab. This page walks through the full lifecycle: create, monitor, reindex, schedule, and review history.
+
+<Note>
+Before you start, confirm your project has an embedding model and a pgvector vector-store configuration (Settings › AI Providers), and that the toolkit's **Index Data** tool is turned on. Without these, the tab shows an explanation instead of the create-index form — see [Index external data](/how-tos/indexing/indexing-overview).
+</Note>
+
+## Create an index
+
+<Steps>
+1. Open a toolkit that supports indexing and switch to its **Indexes** tab.
+2. Start a new index. Give it a unique name (it can't be changed later) and set the toolkit-specific scope fields — for example a repository and branch for GitHub, or a space key for Confluence. See [Index data from a source](/how-tos/indexing/index-sources) for the fields each source needs.
+3. Optionally turn off "skip unsupported extensions" if you want files with uncommon extensions indexed as plain text instead of skipped.
+4. Start the run and watch its progress. The index reaches **Completed** when everything indexed cleanly, or **Partially Indexed** when some files were skipped (both states are fully searchable).
+</Steps>
+
+<Screenshot id="index-create-form" alt="Create-index form on a toolkit's Indexes tab" />
+
+<Note>
+An index in **Failed** or **Stopped** state did not complete and needs another run before it's usable.
+</Note>
+
+## Manage an existing index
+
+Opening an index from its card gives you a Configuration view (the index's own settings — everything except its name is editable) and a history view. From there you can:
+
+- **Reindex** — pick up new and changed content from the source. Unchanged files aren't reprocessed; the previous working index stays searchable until the new run finishes successfully.
+- **Schedule** — see [Schedule re-indexing](/how-tos/indexing/schedule-indexing).
+- **Delete** — permanently remove the index and its data. Only available when the toolkit's **Remove Index** tool is turned on.
+
+<Screenshot id="index-details-panel" alt="Index detail view showing configuration and reindex/delete actions" />
+
+## Review index history
+
+The index's history view lists every past run — the initial index, manual reindexes, and scheduled reindexes — in order, with status and file counts for each. Use it to confirm a scheduled reindex actually ran, or to see when an index last failed.
+
+<Screenshot id="index-history-list" alt="Index history list showing past indexing runs" />
+
+## Notifications
+
+Indexing operations (initial runs and reindexes) raise a notification when they finish, whether they succeed, partially succeed, or fail. See [Notifications](/menus/settings/notifications) for how to review these.
+
+## Next steps
+
+- [Index and search data with tools](/how-tos/indexing/indexing-tools) to run search against a completed index from chat or an agent.
+- [Schedule re-indexing](/how-tos/indexing/schedule-indexing) to keep an index current automatically.

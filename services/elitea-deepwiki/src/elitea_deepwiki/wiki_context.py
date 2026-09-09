@@ -349,11 +349,153 @@ def consume(parameters: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in parameters.items() if k not in CONSUMED_PARAMS}
 
 
+# --------------------------------------------------------------------------
+# extra_context — reader-UPLOADED text-file attachments (#873).
+#
+# A second, independent attachment kind from context_paths above: files the
+# reader picked from their own machine, with no relationship to the indexed
+# repository, so there is nothing to name with a `context_paths` identifier.
+# CONTENT travels here, not an identifier — the file never touches server
+# storage, so there is no SSRF/arbitrary-read door to close (see the module
+# docstring's "WHY IDENTIFIERS AND NOT TEXT" for the door context_paths DOES
+# have to close, which this is deliberately exempt from).
+#
+# The Go twin is run/extracontext.go — both are exercised by
+# tests/unit/test_wiki_context.py's own extra_context cases, table-driven
+# rather than fixture-driven like context_paths above: nothing here reads
+# from a transport, so there is no shared artifact-read behaviour a fixture
+# would be pinning.
+# --------------------------------------------------------------------------
+
+#: The whole attached-files block's ceiling, in characters. Smaller than
+#: context_paths' 32k: this is a chat aside, not the wiki's primary
+#: grounding.
+EXTRA_TOTAL_BUDGET_CHARS = 16_000
+
+#: One file's ceiling, in characters.
+EXTRA_PER_FILE_BUDGET_CHARS = 6_000
+
+#: Files per question. Bounds the COUNT before any budget math runs.
+MAX_EXTRA_CONTEXT_FILES = 5
+
+#: The parameter name.
+EXTRA_CONTEXT_PARAM = "extra_context"
+
+#: The lead-in. Deliberately carries no `QUESTION_LEAD_IN` trailer of its
+#: own — see `prepend_extra_context`.
+EXTRA_CONTEXT_LEAD_IN = "Given these attached files:"
+
+#: A file NAME's length cap — a reader's filename, not a budget-worthy
+#: document.
+_MAX_EXTRA_CONTEXT_NAME_CHARS = 200
+
+
+def _extra_context_selection(value: Any) -> list[tuple[str, str]]:
+    """Parse ``extra_context``: a list of ``{name, content}`` objects.
+
+    Anything else is refused rather than coerced — the same rule
+    ``_selection`` applies to ``context_paths``.
+    """
+    if not value:
+        return []
+    if not isinstance(value, list):
+        raise ContextRefused(f"{EXTRA_CONTEXT_PARAM} must be a list of {{name, content}} files")
+    files: list[tuple[str, str]] = []
+    for entry in value:
+        if not isinstance(entry, dict):
+            raise ContextRefused(
+                f"{EXTRA_CONTEXT_PARAM} entries must be objects with name and "
+                f"content; refused {entry!r}"
+            )
+        name = str(entry.get("name") or "").strip()
+        content = entry.get("content")
+        if not name or not isinstance(content, str):
+            raise ContextRefused(
+                f"{EXTRA_CONTEXT_PARAM} entries must carry a non-empty name "
+                f"and a string content"
+            )
+        if len(name) > _MAX_EXTRA_CONTEXT_NAME_CHARS:
+            name = name[:_MAX_EXTRA_CONTEXT_NAME_CHARS] + "…"
+        files.append((name, content))
+    return files
+
+
+def build_extra_context_block(files: list[tuple[str, str]]) -> str:
+    """Render an already-validated ``(name, content)`` list under the two
+    budgets — the same shape ``build_context_block`` renders for wiki pages,
+    minus the read: the content is already in hand.
+    """
+    sections: list[str] = []
+    omitted: list[str] = []
+    spent = 0
+    for name, content in files:
+        remaining = EXTRA_TOTAL_BUDGET_CHARS - spent
+        if remaining <= 0:
+            omitted.append(name)
+            continue
+        body, _ = _truncate(content, EXTRA_PER_FILE_BUDGET_CHARS)
+        if len(body) > remaining:
+            body, _ = _truncate(body, remaining)
+        spent += len(body)
+        sections.append(f"--- file: {name} ---\n{body}")
+    block = "\n\n".join(sections)
+    if omitted:
+        block += (
+            f"\n\n[… {len(omitted)} further attached file(s) omitted for the "
+            f"{EXTRA_TOTAL_BUDGET_CHARS} character context budget: "
+            + ", ".join(omitted)
+            + "]"
+        )
+    return block
+
+
+def prepend_extra_context(question: str, block: str) -> str:
+    """Put the attached-files block in front of ``question``.
+
+    No ``QUESTION_LEAD_IN`` trailer of its own, unlike ``prepend_context``:
+    stacking two "Current question:" markers when both attachment kinds are
+    used on the same turn would read as the model being asked twice. When
+    ``context_paths`` also ran, this wraps ITS output, so the files block
+    ends up furthest from the actual question — the least authoritative of
+    the two sources, since nothing here validates a reader's upload against
+    the indexed repository the way a wiki page is.
+    """
+    if not block:
+        return question
+    return f"{EXTRA_CONTEXT_LEAD_IN}\n{block}\n\n{question}"
+
+
+def resolve_extra_context(parameters: dict[str, Any]) -> str:
+    """The whole extra_context resolution: validate, budget, render.
+
+    Answers the rendered block, or ``""`` when nothing was attached.
+    """
+    files = _extra_context_selection(parameters.get(EXTRA_CONTEXT_PARAM))
+    if not files:
+        return ""
+    if len(files) > MAX_EXTRA_CONTEXT_FILES:
+        raise ContextRefused(
+            f"{EXTRA_CONTEXT_PARAM} carries {len(files)} files; the limit is "
+            f"{MAX_EXTRA_CONTEXT_FILES}"
+        )
+    return build_extra_context_block(files)
+
+
+def consume_extra_context(parameters: dict[str, Any]) -> dict[str, Any]:
+    """``parameters`` without the one key ``extra_context`` spends."""
+    return {k: v for k, v in parameters.items() if k != EXTRA_CONTEXT_PARAM}
+
+
 __all__ = [
     "CONSUMED_PARAMS",
     "CONTEXT_LEAD_IN",
     "ContextRefused",
     "DEFAULT_BUCKET",
+    "EXTRA_CONTEXT_LEAD_IN",
+    "EXTRA_CONTEXT_PARAM",
+    "EXTRA_PER_FILE_BUDGET_CHARS",
+    "EXTRA_TOTAL_BUDGET_CHARS",
+    "MAX_EXTRA_CONTEXT_FILES",
     "PATHS_PARAM",
     "PER_DOCUMENT_BUDGET_CHARS",
     "QUESTION_LEAD_IN",
@@ -361,10 +503,14 @@ __all__ = [
     "TRUNCATION_MARKER",
     "VERSION_PARAM",
     "build_context_block",
+    "build_extra_context_block",
     "consume",
+    "consume_extra_context",
     "manifest_key",
     "normalise_page_id",
     "prepend_context",
+    "prepend_extra_context",
     "resolve_context_paths",
+    "resolve_extra_context",
     "wiki_id_for",
 ]

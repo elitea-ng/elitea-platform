@@ -15,10 +15,20 @@ import (
 // record exists at all and why neither producer could stand in for the other.
 //
 // A producer fills what it KNOWS. ToolkitID is 0 for an agent turn, which
-// carries a toolkit name and type in its trace metadata and no id; ExecutionID
-// is empty for the same reason. Nothing here is resolved by guessing: an
-// unknown field is stored as NULL rather than looked up through a join whose
-// answer a later rename would change.
+// carries a toolkit name and type in its trace metadata and no id. Nothing
+// here is resolved by guessing: an unknown field is stored as NULL rather than
+// looked up through a join whose answer a later rename would change.
+//
+// ExecutionID is set by BOTH producers as of #875 (it was left empty for an
+// agent turn before that): agent_trace.go's recordAgentToolCalls now passes
+// the same frame.Fence.ExecutionID that lockCurrentAgentMessageGroup already
+// matches against message_group.task_id — the value gateway.llm_request_logs
+// carries under the same name (shared 0100). That correlation is what lets a
+// cost read (internal/api/v2/analytics/estimate.go) attribute an execution's
+// LLM spend to the tools it called, the way GetAgentAnalytics already
+// attributes it to an agent. A row projected before #875 shipped keeps
+// ExecutionID NULL; it still counts in the Tools tab's call totals, it is just
+// invisible to the cost-by-tool read.
 type ToolCallRecord struct {
 	ProjectID int64
 	// Source is "explicit_run" or "agent_turn". It is stored rather than

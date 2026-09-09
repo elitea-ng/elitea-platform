@@ -23,6 +23,20 @@ ARG ELITEA_SDK_REVISION=b5113a129329b85d23c2d5c2bf55f18e307414ec
 ARG ELITEA_SDK_ARCHIVE_SHA256=df398b4a378e7b88ea3b72511e31de13a17a02159c69fbada6f0b948a0ecf2d7
 ARG ELITEA_SDK_MCP_PREFLIGHT_PATCH=5c9409779ac0a55f8bf74f6ef438977089187a14
 ARG ELITEA_SDK_MCP_HARD_TIMEOUT_PATCH=07ddc5cd67a0c747f83ca0e26421cde71bd97d9d
+# #864: vendors elitea_sdk/runtime/utils/tool_groups.py (introduced upstream
+# in elitea-sdk#536/e1944e7, after this admitted revision), byte-identical to
+# that version, so the imagegen patch below can import it without backporting
+# the whole tool-groups rollout onto 0.9.8. Superseded with no source
+# difference once ELITEA_SDK_REVISION moves past e1944e7.
+ARG ELITEA_SDK_TOOL_GROUPS_PATCH=4e631ed9e9523b33410a31bd2242c93fa9ec0b4b
+# #864: the `imagegen` toolkit (generate_image/edit_image), cherry-picked onto
+# the admitted 0.9.8 revision the same way the two MCP patches above are.
+# Interim: elitea-sdk PR EliteaAI/elitea-sdk#607 carries this same commit for
+# review against the SDK's own main line; this patch lets the worker dispatch
+# the toolkit now instead of waiting on that PR and a subsequent version bump.
+# Drop this patch (and fold its content into ELITEA_SDK_REVISION) once #607
+# merges and the pin moves to a released SDK version that includes it.
+ARG ELITEA_SDK_IMAGEGEN_PATCH=afff234904b6d5de551436b53c078722f13ff4de
 ARG ELITEA_SDK_VERSION=0.9.8
 
 RUN apt-get update \
@@ -46,8 +60,12 @@ RUN git clone \
     && test "$(git -C ./elitea-sdk archive --format=tar HEAD | sha256sum | cut -d ' ' -f 1)" = "${ELITEA_SDK_ARCHIVE_SHA256}" \
     && git -C ./elitea-sdk cat-file -e "${ELITEA_SDK_MCP_PREFLIGHT_PATCH}^{commit}" \
     && git -C ./elitea-sdk cat-file -e "${ELITEA_SDK_MCP_HARD_TIMEOUT_PATCH}^{commit}" \
+    && git -C ./elitea-sdk cat-file -e "${ELITEA_SDK_TOOL_GROUPS_PATCH}^{commit}" \
+    && git -C ./elitea-sdk cat-file -e "${ELITEA_SDK_IMAGEGEN_PATCH}^{commit}" \
     && git -C ./elitea-sdk cherry-pick --no-commit "${ELITEA_SDK_MCP_PREFLIGHT_PATCH}" \
-    && git -C ./elitea-sdk cherry-pick --no-commit "${ELITEA_SDK_MCP_HARD_TIMEOUT_PATCH}"
+    && git -C ./elitea-sdk cherry-pick --no-commit "${ELITEA_SDK_MCP_HARD_TIMEOUT_PATCH}" \
+    && git -C ./elitea-sdk cherry-pick --no-commit "${ELITEA_SDK_TOOL_GROUPS_PATCH}" \
+    && git -C ./elitea-sdk cherry-pick --no-commit "${ELITEA_SDK_IMAGEGEN_PATCH}"
 RUN --mount=type=cache,target=/root/.cache/pip \
     python -m pip download \
       --dest /sources \
@@ -138,6 +156,56 @@ RUN python -m pip install \
     && python -c "from elitea_worker.indexing_runtime_capabilities import require_indexing_runtime_capabilities; print('indexing-runtime-profile=' + require_indexing_runtime_capabilities())" \
     && python -c "from elitea_worker.agent_current_runtime_capabilities import require_agent_current_runtime_capabilities; print('agent-current-runtime-profile=' + require_agent_current_runtime_capabilities())" \
     && rm -rf /wheels
+
+# The `pyodide` internal tool (#872): elitea_sdk's SandboxToolkit refuses to
+# construct unless it finds SANDBOX_SERVICE_URL, or BOTH a `deno` executable
+# on PATH and a PYODIDE_SANDBOX_PKG Deno entrypoint that exists. This image
+# shipped none of those, so every agent's "Python sandbox" toggle silently did
+# nothing on this worker. Install a pinned, digest verified `deno` binary —
+# see scripts/install_pinned_deno.py for why this is a direct GitHub release
+# download rather than an apt/pip package, and how the checksum gate keeps
+# that an admitted download rather than an unpinned one.
+ARG TARGETARCH=amd64
+COPY services/elitea-worker-python/scripts/install_pinned_deno.py /tmp/install_pinned_deno.py
+RUN python3 /tmp/install_pinned_deno.py --target-arch "${TARGETARCH}" --dest /usr/local/bin/deno \
+    && rm -f /tmp/install_pinned_deno.py \
+    && /usr/local/bin/deno --version
+
+# The second half of #872: `deno` alone is not enough. `PyodideSandboxTool`
+# also needs a Deno entrypoint script (PYODIDE_SANDBOX_PKG) that actually
+# implements the sandbox — the SDK ships one, patched, at
+# infra/data/sandbox/main.ts. Its content needs no separate pin: it is part of
+# the exact SDK checkout the build stage already verified against
+# ELITEA_SDK_ARCHIVE_SHA256, so copying it from that stage carries the same
+# guarantee.
+#
+# main.ts statically imports npm:pyodide@0.29.0 and two jsr:@std packages —
+# all three exact-versioned, never a bare `latest` — and `deno cache` resolves
+# and caches that whole graph right here, at build time, when network access
+# is expected and already used by every step above. That is what keeps every
+# later `deno run` of this exact script from touching the network at all: the
+# cache is content-addressed by exact URL+version, so a script that names
+# exact versions is fully served from it. MEASURED: this adds one 8 MiB WASM
+# runtime and a few hundred KB of TypeScript to the image, and nothing this
+# admits ever downloads elitea_sdk-selected Python packages (pandas, numpy…)
+# into the sandbox — the model's own code can `import` packages Pyodide does
+# not bundle, and doing THAT is a genuine runtime network call the toolkit's
+# own `allow_net` setting already gates; it is not something a build-time
+# cache could remove.
+#
+# DENO_DIR/PYODIDE_SANDBOX_PKG are set here, as image-wide ENV, rather than
+# left to elitea_worker.agents.internal_tools.ensure_sandbox_state_directories
+# to default at runtime: MEASURED, a `deno run` of main.ts against this fully
+# warmed, read-only cache needs no further write to DENO_DIR at all, so there
+# is nothing for the per-run private-directory treatment SANDBOX_BASE gets to
+# buy here — and baking the path means every deployment shape ships the same
+# warm cache instead of re-resolving it, network-free or not, on first use.
+ENV DENO_DIR=/opt/elitea/sandbox/deno-cache \
+    PYODIDE_SANDBOX_PKG=/opt/elitea/sandbox/main.ts
+COPY --from=build /build/elitea-sdk/infra/data/sandbox/main.ts /opt/elitea/sandbox/main.ts
+RUN /usr/local/bin/deno cache --node-modules-dir=auto /opt/elitea/sandbox/main.ts \
+    && chown -R 10001:10001 /opt/elitea/sandbox \
+    && chmod -R go-w /opt/elitea/sandbox
 
 USER 10001:10001
 ENTRYPOINT ["elitea-worker"]

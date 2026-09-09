@@ -17,12 +17,14 @@
  */
 import type { ReactElement } from 'react';
 
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Formik } from 'formik';
 import { screen } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { PROFILE_INITIAL_VALUES } from '@/features/settings/lib/profile/profileUtils';
 import { i18n } from '@/shared/i18n';
+import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 
 import { ProfileContextManagement } from './ProfileContextManagement';
@@ -45,20 +47,35 @@ const OVERRIDES: Record<string, string> = {
   'settings.profile.contextManagement.preserveRecentMessages': 'PRESERVE-XX',
 };
 
+// ProfileContextManagement renders `ProfileLongTermMemory` (#870), which is
+// a real, data-fetching component now (Settings > Memory's "Long-term
+// Memory" panel — see that component's own header for why this dead route,
+// `/settings/personalization`, still gets the real feature rather than the
+// old "Coming soon" placeholder). A QueryClient is therefore required to
+// mount this section at all, even though this suite's own assertions are
+// about UNRELATED context-management copy.
 function renderSection(): void {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   renderWithTheme(
     (
-      <Formik
-        initialValues={PROFILE_INITIAL_VALUES}
-        onSubmit={() => undefined}
-      >
-        <ProfileContextManagement modelList={[]} />
-      </Formik>
+      <QueryClientProvider client={queryClient}>
+        <Formik
+          initialValues={PROFILE_INITIAL_VALUES}
+          onSubmit={() => undefined}
+        >
+          <ProfileContextManagement modelList={[]} />
+        </Formik>
+      </QueryClientProvider>
     ) as ReactElement,
   );
 }
 
+beforeEach(() => {
+  configureGeneratedClient({ baseUrl: '/api/v2' });
+});
+
 afterEach(async () => {
+  resetGeneratedClient();
   await i18n.changeLanguage('en');
   i18n.removeResourceBundle(TEST_LOCALE, 'translation');
 });

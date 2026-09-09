@@ -107,6 +107,7 @@ tags:
   - name: toolkits
     description: Toolkit (integration) management
   - name: tracing
+  - name: webhooks
     description: OpenTelemetry trace ingest (collect/otlp proxy) and status
 
 # ---------------------------------------------------------------------------
@@ -1166,7 +1167,9 @@ components:
         [token_dimension_available, cost_dimension_available,
          cache_dimension_available, currency, priced_calls, unpriced_calls,
          totals, by_model, by_user, daily, by_model_truncated,
-         by_user_truncated]
+         by_user_truncated, agent_dimension_available, attributed_agent_calls,
+         unattributed_agent_calls, by_agent_truncated, tool_dimension_available,
+         attributed_tool_calls, unattributed_tool_calls, by_tool_truncated]
       properties:
         token_dimension_available:
           type: boolean
@@ -1221,6 +1224,156 @@ components:
           type: boolean
         by_user_truncated:
           type: boolean
+        agent_dimension_available:
+          type: boolean
+          description: >
+            True when this deployment can correlate a request to an agent at
+            all — the SAME capability GetAgentAnalytics reports as
+            AgentBreakdown.Available (issue #875). False for a database that
+            has not run shared migration 0100, or for a window with no
+            execution-tagged request. Money, not the volume that endpoint
+            already answers.
+        attributed_agent_calls:
+          type: integer
+          format: int64
+          description: >
+            Priceable requests correlated to an agent in the window.
+        unattributed_agent_calls:
+          type: integer
+          format: int64
+          description: >
+            Priceable requests NOT made from a runtime execution — most /llm
+            traffic. by_agent is never expected to sum to totals.calls.
+        by_agent:
+          type: array
+          description: >
+            One entry per agent, capped at 100 rows, ABSENT when
+            agent_dimension_available is false. Present and empty when the
+            window has attributable traffic but the tenant chat projection
+            cannot name any of it — a real and different state from absence.
+          items:
+            $ref: '#/components/schemas/AnalyticsEstimateAgent'
+        by_agent_truncated:
+          type: boolean
+        tool_dimension_available:
+          type: boolean
+          description: >
+            True when this deployment records tool calls
+            (elitea_runtime.tool_call_records, shared migration 0119) AND can
+            correlate the request log's execution id (0100). It says nothing
+            about whether any row in the window actually correlates — see
+            attributed_tool_calls.
+        attributed_tool_calls:
+          type: integer
+          format: int64
+          description: >
+            tool_call_records rows in the window that carry an execution id,
+            and so can be priced. An explicit run (toolkit.call_tool.v1) makes
+            no LLM call itself, so it is counted here but contributes no
+            money.
+        unattributed_tool_calls:
+          type: integer
+          format: int64
+        by_tool:
+          type: array
+          description: |
+            One entry per (toolkit, tool), capped at 100 rows, ABSENT when
+            tool_dimension_available is false.
+
+            There is no producer that ties one LLM request to one tool: a
+            completion decides whether to call a tool, but the token cost
+            belongs to the completion, not to any one tool it invoked. So each
+            row is an EXECUTION's total LLM cost attributed to every tool that
+            execution called — an execution that calls two tools counts its
+            cost under both, deliberately, and by_tool is never expected to
+            sum to totals.total_cost the way by_model already is not expected
+            to (one call has one model but can touch several tools). A tool
+            called more than once inside one execution is folded into ONE
+            attribution (see AnalyticsEstimateTool.attributed_runs), so a
+            repeated call cannot multiply the same execution's cost.
+          items:
+            $ref: '#/components/schemas/AnalyticsEstimateTool'
+        by_tool_truncated:
+          type: boolean
+
+    AnalyticsEstimateAgent:
+      type: object
+      required:
+        [application_id, name, calls, prompt_tokens, completion_tokens,
+         total_tokens, priced]
+      properties:
+        application_id: { type: string }
+        name: { type: string }
+        calls:
+          type: integer
+          format: int64
+        prompt_tokens:
+          type: integer
+          format: int64
+        completion_tokens:
+          type: integer
+          format: int64
+        total_tokens:
+          type: integer
+          format: int64
+        priced:
+          type: boolean
+          description: >
+            False when the catalogue prices none of this agent's calls. The
+            row keeps its token counts and omits its money.
+        input_cost:
+          type: number
+        output_cost:
+          type: number
+        total_cost:
+          type: number
+      description: >
+        One agent's LLM spend in the window (issue #875), from
+        gateway.llm_request_logs.execution_id resolved through
+        elitea_runtime.execution_jobs into the tenant chat projection — the
+        same correlation AgentAnalytics reports as counts, priced through
+        gateway.gateway_models.
+
+    AnalyticsEstimateTool:
+      type: object
+      required:
+        [toolkit_id, toolkit_name, tool_name, attributed_runs, prompt_tokens,
+         completion_tokens, total_tokens, priced]
+      properties:
+        toolkit_id:
+          type: string
+          description: Empty when the producer did not know one. See ToolAnalytics.
+        toolkit_name: { type: string }
+        tool_name: { type: string }
+        attributed_runs:
+          type: integer
+          format: int64
+          description: >
+            Distinct EXECUTIONS that called this tool and also correlate to at
+            least one priceable request — not a tool_call_records row count.
+            A tool called twice inside one execution and never elsewhere reads
+            attributed_runs: 1 here and run_count: 2 on the Tools tab; both are
+            correct measurements of different things.
+        prompt_tokens:
+          type: integer
+          format: int64
+        completion_tokens:
+          type: integer
+          format: int64
+        total_tokens:
+          type: integer
+          format: int64
+        priced:
+          type: boolean
+        input_cost:
+          type: number
+        output_cost:
+          type: number
+        total_cost:
+          type: number
+      description: >
+        One (toolkit, tool)'s attributed LLM spend in the window (issue #875).
+        See AnalyticsUsageEstimate.by_tool for the attribution rule.
 
     AnalyticsEstimateTotals:
       type: object
@@ -1420,6 +1573,53 @@ components:
           items:
             $ref: '#/components/schemas/MessageTraceStep'
 
+    ConversationSummary:
+      type: object
+      description: >
+        One row of listConversations — the run-history panel's (issue #868)
+        light projection of a conversation. `duration` is a placeholder:
+        internal/api/v2/conversations/handler.go's List always answers `-1`
+        for it (no per-conversation duration is computed server-side yet); a
+        caller wanting a displayed duration derives one from
+        created_at/updated_at instead of trusting this field.
+      required: [id, name, created_at, updated_at, duration, message_groups_count]
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        created_at: { type: string }
+        updated_at: { type: string }
+        duration:
+          type: integer
+          description: Always -1 today; see the schema description.
+        message_groups_count: { type: integer }
+        meta:
+          type: object
+          additionalProperties: true
+          nullable: true
+          description: >
+            Carries `single_participant` (the entity this conversation was
+            filtered by, when entity_name/entity_meta_id were sent) among
+            other conversation-level flags (`is_hidden`, etc).
+          x-elitea-passthrough: >-
+            NOTE(W2): internal/api/v2/conversations/handler.go:542 copies the
+            `chat_conversations.meta` jsonb column straight from the DB row
+            into the response with no field-level shape check — List
+            unmarshals whatever the column holds and re-serializes it
+            verbatim. Callers write into this column through several
+            unrelated code paths (single_participant filters, is_hidden,
+            steps_limit, internal_tools), so the object's key set is not
+            fixed by this endpoint.
+
+    ConversationListing:
+      type: object
+      required: [total, rows]
+      properties:
+        total: { type: integer }
+        rows:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConversationSummary'
+
     MessageTraceStep:
       type: object
       description: >
@@ -1472,6 +1672,114 @@ components:
             tool_output: { type: string, nullable: true }
             text: { type: string, nullable: true }
             thinking: { type: string, nullable: true }
+
+    MemoryEntry:
+      type: object
+      description: >
+        One persistent, cross-conversation personal memory (#870).
+        internal/api/v2/memories/handler.go. Scoped to (project, the
+        authenticated caller) — never readable or writable cross-user.
+        `enabled=false` keeps the entry without letting it reach a chat
+        turn's recall (internal/application/agentexecution's
+        CurrentMemoryRecallResolver). NOT the same feature as the `memory`
+        TOOLKIT type (integrations/toolkits/memory_toolkit) — that is an
+        agent-scoped key/value store the LLM calls as a tool mid-turn; this
+        is read passively, before a turn starts.
+      required: [id, project_id, content, tags, enabled, created_at, updated_at]
+      properties:
+        id: { type: string }
+        project_id: { type: string }
+        content:
+          type: string
+          description: The remembered fact's text. Refused past 4000 characters (memories.MaxContentBytes).
+        tags:
+          type: array
+          items: { type: string }
+          description: Free-form labels for the settings panel's own search/filter. Never more than 16 (memories.MaxTags).
+        source_conversation_id:
+          type: string
+          nullable: true
+          description: >
+            The conversation this memory was captured from, when it was saved
+            via the "Remember this" message action (chat_conversations.uuid).
+            Absent when typed directly into the settings panel. Informational
+            only — the source conversation may since have been deleted
+            (tenant/0137_personal_memory_entries.sql's own header explains
+            why this deliberately holds no foreign key).
+        enabled: { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    MemoryEntryList:
+      type: object
+      required: [items, total]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/MemoryEntry' }
+        total: { type: integer }
+
+    MemoryEntryWriteRequest:
+      type: object
+      required: [content]
+      description: >
+        The body for both `createMemory` and `updateMemory`. `updateMemory`
+        is a FULL-RECORD replace (matches the settings panel's edit dialog
+        and its per-row enable/disable Switch, which both send the whole
+        record), so `content` is required on both.
+      properties:
+        content: { type: string }
+        tags:
+          type: array
+          items: { type: string }
+        source_conversation_id: { type: string }
+        enabled:
+          type: boolean
+          description: Defaults to `true` when omitted on create; on update it is a full-record field like the rest.
+
+    MessageFeedback:
+      type: object
+      description: >
+        One user's like/dislike + optional comment on a message (#880).
+        `rating` is never `0` — the stored row's own CHECK constraint
+        refuses it (tenant/0135_chat_message_feedback.sql) — only its
+        ABSENCE (no `mine` on the summary) means "not rated".
+      required: [rating]
+      properties:
+        rating:
+          type: integer
+          enum: [-1, 1]
+          description: '-1 = dislike, 1 = like.'
+        comment: { type: string }
+
+    MessageFeedbackSummary:
+      type: object
+      description: >
+        What every message-feedback endpoint answers: the aggregate
+        like/dislike counts across every user who has rated this message,
+        plus the CALLING user's own feedback. The client's hover tooltip
+        reads the counts; the thumbs buttons' highlighted state reads
+        `mine`.
+      required: [likes, dislikes]
+      properties:
+        likes: { type: integer }
+        dislikes: { type: integer }
+        mine:
+          allOf:
+            - $ref: '#/components/schemas/MessageFeedback'
+          nullable: true
+
+    MessageFeedbackRequest:
+      type: object
+      required: [rating]
+      properties:
+        rating:
+          type: integer
+          enum: [-1, 1]
+          description: '-1 = dislike, 1 = like. Any other value is a 400.'
+        comment:
+          type: string
+          description: Optional. Refused with a 400 past 2000 characters (messageFeedbackCommentMaxLen).
 
     ProjectQuota:
       type: object
@@ -2157,18 +2465,34 @@ components:
           nullable: true
           description: NOT SERVED. See application_id.
 
+    SuggestedResource:
+      type: object
+      description: >
+        One entry of ApplicationDraft's five suggested_* lists (issue #881):
+        a project toolkit/MCP/pipeline/agent/skill scored as relevant to the
+        generated draft (internal/api/v2/drafts/suggestions.go's lexical
+        overlap scorer — Go-side matching, not an LLM candidate pick; see
+        that file's own doc comment for why).
+      required: [id, name]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        type:
+          type: string
+          description: Toolkit type (e.g. `github`) — toolkit/MCP entries only.
+        description: { type: string }
+        agent_type:
+          type: string
+          description: '`pipeline` marks a suggested_pipelines entry; absent on suggested_agents entries.'
+
     ApplicationDraft:
       type: object
-      required: [name, description, instructions, welcome_message, conversation_starters]
+      required: [name, description, instructions, welcome_message, conversation_starters, suggested_toolkits, suggested_mcp, suggested_pipelines, suggested_agents, suggested_skills]
       description: >
-        The content half of legacy's draft. It deliberately does NOT carry
-        suggested_toolkits / suggested_mcp / suggested_agents /
-        suggested_pipelines / suggested_skills: legacy builds those by first
-        reading the project's toolkit instances, agents, pipelines and skills
-        and offering them to the model as candidates, and elitea-main composes
-        no reader for toolkit instances. A model asked for suggestions with no
-        candidate list invents ids that resolve to nothing, so the fields are
-        absent rather than present and always empty.
+        The content half of legacy's draft, plus the five suggested_* lists
+        (issue #881) — always present, `[]` rather than absent/null when
+        nothing scored above zero or when a deployment composed no reader
+        for that category.
       properties:
         name:
           type: string
@@ -2188,6 +2512,21 @@ components:
             At most four, each at most 768 characters. Blank entries are
             dropped rather than returned as empty chips.
           items: { type: string }
+        suggested_toolkits:
+          type: array
+          items: { $ref: '#/components/schemas/SuggestedResource' }
+        suggested_mcp:
+          type: array
+          items: { $ref: '#/components/schemas/SuggestedResource' }
+        suggested_pipelines:
+          type: array
+          items: { $ref: '#/components/schemas/SuggestedResource' }
+        suggested_agents:
+          type: array
+          items: { $ref: '#/components/schemas/SuggestedResource' }
+        suggested_skills:
+          type: array
+          items: { $ref: '#/components/schemas/SuggestedResource' }
 
     GenerateProjectContextDraftRequest:
       type: object
@@ -3153,6 +3492,15 @@ components:
           description: Required when a moderator rejects, null otherwise.
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+        created_project_id:
+          type: integer
+          format: int64
+          description: >
+            Set ONLY on an APPROVED `Project Request` row (issue #871) — the
+            id the project-creation pipeline assigned. Absent on every other
+            row, and absent on a `Project Request` row that is still
+            `pending` or was `rejected` (internal/api/v2/moderation/
+            project_requests.go's `decideProjectRequest`).
       description: >
         NOTE(W2): one `centry.moderation_state` row as
         internal/api/v2/moderation/requests.go's `requestRow` marshals it
@@ -3207,6 +3555,22 @@ components:
         authenticated caller), and a non-empty `meta` is refused with 400 (an
         absent, null or empty one is tolerated for the two shipped clients).
         `project_id` and `entity_id` come from the path.
+
+    ProjectRequestCreate:
+      type: object
+      required: [name, description]
+      properties:
+        name:
+          type: string
+          description: The requested project's name. Stored as `entity_id`.
+        description:
+          type: string
+          description: The requester's justification for the new project.
+      description: >
+        internal/api/v2/moderation/project_requests.go's
+        `projectRequestCreateBody`. `project_id` (the caller's own personal
+        project) and `issue_type` ("Project Request") are never client
+        fields — the server fills both.
 
     PlatformSettings:
       type: object
@@ -3799,7 +4163,7 @@ components:
 
     AgentAnalytics:
       type: object
-      required: [application_id, name, run_count, avg_duration_ms, total_tokens, error_rate]
+      required: [application_id, name, run_count, avg_duration_ms, total_tokens, error_rate, priced]
       properties:
         application_id: { type: string }
         name: { type: string }
@@ -3807,6 +4171,22 @@ components:
         avg_duration_ms: { type: number }
         total_tokens: { type: integer }
         error_rate: { type: number }
+        priced:
+          type: boolean
+          description: >
+            False when the catalogue prices none of this agent's calls (issue
+            #875). The row keeps its token counts and omits its money.
+        input_cost:
+          type: number
+          description: >
+            This agent's calls priced at each call's OWN model rate, summed —
+            an ESTIMATE from gateway.gateway_models, never the accounted
+            figure /analytics_costs' kpis.total_cost reports. Absent when
+            priced is false.
+        output_cost:
+          type: number
+        total_cost:
+          type: number
       description: NOTE(W2) internal/domain/analytics/types.go:22-29.
 
     ToolAnalytics:
@@ -4643,6 +5023,46 @@ components:
       description: >
         NOTE(W2): internal/api/v2/eliteacore/handler.go:2960-2991 — nine
         static defaults merged with publishing_guardrail extras.
+
+    RuntimeCapabilities:
+      type: object
+      required: [worker, internal_tools, hidden_toolkit_types]
+      properties:
+        worker:
+          type: string
+          enum: ['python', 'rust', '']
+          description: >
+            The worker image this deployment runs, or "" when it never said
+            (see the operation description).
+        internal_tools:
+          type: object
+          additionalProperties:
+            type: boolean
+          description: >
+            The six toggleable internal chat tools
+            (apps/elitea-web/src/features/agents/lib/internalTools.ts), true
+            when the configured worker runs the tool for real rather than
+            skipping it.
+          example:
+            image_generation: true
+            data_analysis: true
+            internal_mcp: true
+            planner: true
+            swarm: true
+            lazy_tools_mode: true
+        hidden_toolkit_types:
+          type: array
+          items: { type: string }
+          description: >
+            Catalogued toolkit type keys the configured worker cannot build —
+            the same set ToolkitTypeSchemas marks metadata.hidden for
+            capability reasons, restated flat.
+      description: >
+        NOTE(W2): internal/api/v2/toolkits/capabilities_handler.go
+        (RuntimeCapabilities). Restates, in one deployment-wide read, what
+        the worker-capability projection already decides per toolkit type
+        (ToolkitTypeSchemas' metadata.hidden) and adds the internal chat
+        tools that projection does not cover at all.
 
     PredictRequest:
       type: object
@@ -5612,15 +6032,43 @@ components:
       required: [name, instructions, tags]
       properties:
         id: { type: string }
-        name: { type: string, description: 'The platform ships a single implicit "base" version today (issue #37); real multi-version support is a tracked fast-follow.' }
+        name:
+          type: string
+          description: >-
+            "base" is the always-present working copy every skill has had
+            since creation, and is reserved — it cannot be deleted or reused
+            as a NAMED version's name. Since issue 874 a skill may carry
+            additional named versions alongside it, created by
+            createSkillVersion.
         instructions: { type: string }
         tags:
           type: array
           items: { type: string }
+        status:
+          type: string
+          description: >-
+            "draft" or "published" (#249). A published version is frozen:
+            updateSkillVersion and deleteSkillVersion both refuse it with
+            409, mirroring application_versions' own guard.
+        created_at: { type: string, format: date-time }
+        parent_version_id:
+          type: string
+          description: >-
+            The version this one was cloned from (createSkillVersion) or
+            restored from (restoreSkillVersion). Absent when the row has no
+            recorded ancestor.
+        is_default:
+          type: boolean
+          description: >-
+            Whether this is the version named by Skill.default_version_id —
+            the version a NEW attachment proposes. Does not affect which
+            version an EXISTING agent attachment resolves at chat time; see
+            Skill.default_version_id.
       description: >
         A skill's content: the instructions an agent follows plus its topical
         tags. Persisted in skill_versions/skill_version_tag_association
-        (repos/skills.go upsertBaseSkillVersion).
+        (repos/skills.go). Since issue 874 one skill_versions row is no longer the
+        whole story — see Skill.versions.
 
     Skill:
       type: object
@@ -5657,29 +6105,42 @@ components:
         is_default: { type: boolean }
         instructions:
           type: string
-          description: The base version's instructions (also available at version_details.instructions).
+          description: >-
+            The CURRENT version's instructions — `base`'s, unless the
+            request named another version (getSkillVersion,
+            updateSkillVersion) — also available at version_details.instructions.
         tags:
           type: array
           items: { type: string }
-          description: The base version's tags (also available at version_details.tags).
+          description: The current version's tags (also available at version_details.tags).
         versions:
           type: array
           items: { $ref: '#/components/schemas/SkillVersion' }
-          description: Always the single base version today — see SkillVersion.name.
+          description: >-
+            EVERY version of the skill (issue 874), `base` first — not just
+            `base`, as before issue 874. getSkill/getSkillVersion both carry the
+            full set; there is no separate list-versions endpoint.
         version_details:
           allOf: [{ $ref: '#/components/schemas/SkillVersion' }]
-          description: Convenience alias for versions[0].
+          description: The CURRENT version (see `instructions`), not always versions[0].
+        default_version_id:
+          type: string
+          description: >-
+            skills.meta.default_version_id (issue 874), mirroring
+            applications.meta.default_version_id. The version a NEW
+            attachment proposes. Does NOT change which version an EXISTING
+            agent attachment resolves at chat time — that stays keyed off
+            entity_skill_mapping.skill_version_id, fixed at attach time.
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
       description: >
-        NOTE(W2): `config` is never populated in responses, `is_default` is
-        always false, `type` is always the literal "skill", and `updated_at`
-        is always the zero sentinel "0001-01-01T00:00:00Z" — the skills
-        table itself has no updated_at/is_default columns
+        NOTE(W2): `config` is never populated in responses, `is_default` (the
+        boolean property, unrelated to `default_version_id`) is always
+        false, `type` is always the literal "skill", and `updated_at` is
+        always the zero sentinel "0001-01-01T00:00:00Z" — the skills table
+        itself has no updated_at/is_default columns
         (migrations/001_initial.sql). instructions/tags/versions/
-        version_details, in contrast, DO round-trip: they're read from a
-        joined skill_versions + skill_version_tag_association row
-        (repos/skills.go Get/List), not discarded.
+        version_details/default_version_id, in contrast, DO round-trip.
 
     SkillsList:
       type: object
@@ -5807,6 +6268,54 @@ components:
         row and its tag associations in the same transaction
         (repos/skills.go Create/Update). type/config/is_default remain
         silently discarded, and the response Type is hardcoded "skill".
+
+        The SAME shape serves updateSkillVersion's body — see
+        SkillVersionCreateRequest for the create-a-NAMED-version shape,
+        which additionally requires `name` and accepts `source_version_id`.
+
+    # ---- Skill versions (issue 874) --------------------------------------------
+
+    SkillVersionCreateRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          description: >-
+            Must be non-empty and not "base" (400 otherwise); a duplicate
+            name for this skill is a 409.
+        instructions:
+          type: string
+          description: >-
+            When omitted (or empty), the new version clones
+            source_version_id's content instead of being created empty.
+        tags:
+          type: array
+          items: { type: string }
+        source_version_id:
+          type: string
+          description: >-
+            The version to clone instructions/tags from when `instructions`
+            is empty. Defaults to `base`.
+      description: >
+        createSkillVersion's body (internal/api/v2/skills/handler.go
+        createVersionRequest) — "Save As Version". Posted to the SAME path
+        as getSkill/updateSkill/deleteSkill (skill_id in the URL, no
+        version_id): before issue 874 this exact URL was bound to createSkill,
+        which ignored skill_id and created an unrelated new skill.
+
+    SkillSetDefaultVersionRequest:
+      type: object
+      required: [version_id]
+      properties:
+        version_id:
+          oneOf: [{ type: string }, { type: integer }]
+          description: The version to mark default. Numeric or string; must name a version of this skill.
+      description: >
+        setDefaultVersion's body (internal/api/v2/skills/handler.go
+        SetDefaultVersion). Before issue 874 this URL was bound to the generic
+        skill-update handler, which read no `version_id` key and wrote the
+        skill's own name to "" on every call.
 
     # ---- Skill publishing (#249) -----------------------------------------
 
@@ -8350,6 +8859,111 @@ components:
         response always includes all of them.
 
     # ---- Secrets (v2/secrets) ---------------------------------------------
+    Webhook:
+      type: object
+      description: >
+        NOTE(issue 876): internal/api/webhook/handler.go's `Webhook` — one row
+        of the outbound webhook registry. `secret` carries the live value on
+        every read; there is no separate reveal endpoint (see the /webhooks
+        path block's own note on why).
+      properties:
+        id: { type: string }
+        project_id: { type: string }
+        url:
+          type: string
+          description: The destination Elitea POSTs signed events to.
+        events:
+          type: array
+          items: { type: string }
+          description: >
+            The event types this webhook fires on. Free-text — the server
+            enforces no fixed vocabulary — matched against `ListByEvent`'s
+            `$2 = ANY(events)`.
+        secret:
+          type: string
+          description: >
+            HMAC-SHA256 signs the delivered body into the
+            `X-Webhook-Signature` header. Always present on a read (omitted
+            only when stored empty).
+        active:
+          type: boolean
+          description: An inactive webhook is registered but never dispatched to.
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+      required: [id, project_id, url, events, active, created_at, updated_at]
+
+    WebhookWriteRequest:
+      type: object
+      description: >
+        The create/update body (handler.go's Create/Update decode `Webhook`
+        directly; `id`/`project_id`/timestamps are server-assigned and
+        ignored if sent).
+      properties:
+        url:
+          type: string
+          description: >
+            NOTE(issue 876, SSRF hardening): resolved and checked before the
+            row is written. A destination that resolves to a loopback,
+            private, link-local or multicast address is refused with 400
+            unless ELITEA_WEBHOOK_EGRESS_ALLOWLIST explicitly permits
+            private-network egress (link-local and multicast are refused no
+            matter what that variable says).
+        events:
+          type: array
+          items: { type: string }
+        secret: { type: string }
+        active: { type: boolean }
+      required: [url, events, active]
+
+    WebhookDelivery:
+      type: object
+      description: >
+        NOTE(issue 876, second half): internal/api/webhook/dispatcher.go's
+        `Delivery` — one COMPLETED attempt sequence (not one row per HTTP
+        try; `attempts` counts how many tries the sequence made, 1 to 3).
+        `payload` is the exact signed body that was sent, so Redeliver can
+        resend it byte-identical.
+      properties:
+        id: { type: string }
+        webhook_id: { type: string }
+        project_id: { type: string }
+        event:
+          type: string
+          description: The event type this delivery carried, e.g. `conversation.created`.
+        status:
+          type: string
+          enum: [pending, success, failed, blocked]
+          description: >
+            NOTE(issue 876, SSRF hardening): `blocked` is a delivery the
+            platform's destination guard refused to dial — the destination
+            resolved to a loopback, private, link-local or metadata address
+            this deployment does not permit. It is never retried and cannot
+            be redelivered until the webhook's `url` is corrected.
+        attempts:
+          type: integer
+          description: How many HTTP attempts this sequence made (1-3).
+        response_code:
+          type: integer
+          nullable: true
+          description: The destination's HTTP status on the last attempt, absent on a transport-level failure (DNS, refused connection, timeout).
+        last_error:
+          type: string
+          description: Empty on a successful delivery.
+        payload:
+          description: The exact JSON body that was (or will be, on redeliver) signed and POSTed.
+          x-elitea-passthrough: >-
+            NOTE(W2): internal/api/webhook/dispatcher.go:117-121 stores
+            Payload as json.RawMessage — the exact bytes that were (or will
+            be) POSTed to the destination, verbatim. Its shape is whichever
+            event the delivery carried (conversation.created, etc.), not one
+            fixed schema, so it is not typed here.
+        redelivery_of:
+          type: string
+          description: The id of the delivery this one resent, empty for an original, automatic delivery.
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+      required: [id, webhook_id, project_id, event, status, attempts, created_at, updated_at]
+
     SecretListItem:
       type: object
       description: >
@@ -10048,6 +10662,69 @@ paths:
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
 
+  # ── Self-service "request a project" (issue #871) ───────────────────────
+  #
+  # internal/api/v2/moderation/project_requests.go. Reuses
+  # `centry.moderation_state` with `issue_type = "Project Request"` rather
+  # than a new table — see that file's header. Approving one (through the
+  # existing `PUT /admin/moderation_status/administration` above) runs the
+  # SAME project-creation pipeline `POST /projects/project/administration`
+  # uses, with the requester as the new project's admin.
+  /admin/moderation_status/project_request:
+    post:
+      operationId: createProjectRequest
+      summary: Request a new project
+      description: |
+        Any authenticated user may call this — there is no permission gate
+        beyond being signed in. The row's `project_id` is the caller's own
+        PERSONAL project (resolved, and provisioned if it does not exist
+        yet, via the same ensurer login-time provisioning uses); it is
+        bookkeeping only and never read back to decide anything.
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectRequestCreate'
+      responses:
+        '201':
+          description: 'The created project request, with `status` set to "pending"'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModerationRequestRow'
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '503':
+          description: >
+            The database, or the personal-project ensurer, is not wired on
+            this deployment.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/moderation_status/project_requests/mine:
+    get:
+      operationId: listMyProjectRequests
+      summary: List the caller's own project requests
+      description: |
+        Every `Project Request` row the caller has ever filed, across every
+        `project_id` it happens to carry (unlike the per-entity read above,
+        this is not scoped to one project — a project request has no home
+        project to scope it to). Newest first.
+      tags: [admin]
+      responses:
+        '200':
+          description: The caller's project requests, newest first
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModerationRequestList'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+
   # ==========================================================================
   # ADMIN — platform settings & support assistant
   # ==========================================================================
@@ -11260,6 +11937,73 @@ paths:
         '404': { $ref: '#/components/responses/404' }
         '500': { $ref: '#/components/responses/500' }
 
+  /elitea_core/conversations/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      operationId: listConversations
+      summary: List conversations, optionally scoped to one participant entity
+      description: |
+        Backs the run-history panel (issue #868): entity_name + entity_meta_id
+        narrow the listing to conversations whose `meta.single_participant`
+        is that one agent/pipeline (`entity_name=application`) or toolkit/MCP
+        (`entity_name=toolkit`) — internal/api/v2/conversations/handler.go's
+        List, registered at router.go's models.chat.conversations.list route.
+
+        Hidden (support/DeepWiki) conversations are excluded unless
+        hidden=only. mine=true narrows to the CALLER's own conversations;
+        with no resolvable caller it answers an empty page rather than
+        everybody's — see the handler's own comment on why that is a safety
+        property, not a convenience.
+
+        The route also serves POST (create a conversation), which is
+        handwritten in entities/conversation's own conversationApi and is not
+        documented here.
+      tags: [chat]
+      parameters:
+        - name: source
+          in: query
+          required: false
+          schema: { type: string }
+          description: Filter by `chat_conversations.source` (e.g. `deepwiki`).
+        - name: entity_name
+          in: query
+          required: false
+          schema: { type: string }
+          description: '`application` (agents and pipelines) or `toolkit` (toolkits and MCP connections).'
+        - name: entity_meta_id
+          in: query
+          required: false
+          schema: { type: string }
+          description: The participant entity's id, paired with entity_name.
+        - name: mine
+          in: query
+          required: false
+          schema: { type: boolean }
+        - name: hidden
+          in: query
+          required: false
+          schema: { type: string }
+          description: '`only` inverts the default hidden-conversation exclusion; any other value keeps the default.'
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 10, maximum: 100 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, default: 0 }
+      responses:
+        '200':
+          description: The matching conversations, newest first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationListing'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500': { $ref: '#/components/responses/500' }
+
   /elitea_core/message_traces/prompt_lib/{project_id}/{conversation_id}:
     parameters:
       - $ref: '#/components/parameters/ProjectId'
@@ -11384,6 +12128,237 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/memories/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      operationId: listMemories
+      summary: List the caller's own persistent, cross-conversation memories
+      description: |
+        internal/api/v2/memories/handler.go's List (#870). Answers only the
+        AUTHENTICATED caller's own entries in this project — never another
+        user's, and never gated by an "admin sees everyone's memories" mode.
+        Most recent first. `q`, when given, filters by a case-insensitive
+        substring match over content and tags.
+      tags: [chat]
+      parameters:
+        - name: q
+          in: query
+          required: false
+          schema: { type: string }
+          description: Case-insensitive substring filter over content and tags.
+      responses:
+        '200':
+          description: The caller's own memories in this project.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemoryEntryList'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500': { $ref: '#/components/responses/500' }
+    post:
+      operationId: createMemory
+      summary: Save a new persistent, cross-conversation memory
+      description: |
+        internal/api/v2/memories/handler.go's Create (#870). Used both by
+        Settings > Memory's "Add memory" control and by the chat message
+        "Remember this" action (which additionally sends
+        `source_conversation_id`).
+      tags: [chat]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MemoryEntryWriteRequest'
+      responses:
+        '201':
+          description: The created memory.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemoryEntry'
+        '400':
+          description: content was blank or exceeded the length limit, or tags exceeded their limits.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500': { $ref: '#/components/responses/500' }
+    delete:
+      operationId: clearMemories
+      summary: Delete every one of the caller's own memories in this project
+      description: |
+        internal/api/v2/memories/handler.go's ClearAll (#870). Settings >
+        Memory's "Clear all" control, after its own confirmation dialog.
+        Never touches another user's memories.
+      tags: [chat]
+      responses:
+        '200':
+          description: How many memories were removed.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [removed]
+                properties:
+                  removed: { type: integer }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/memory/prompt_lib/{project_id}/{memory_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: memory_id
+        in: path
+        required: true
+        schema: { type: string }
+    put:
+      operationId: updateMemory
+      summary: Replace one of the caller's own memories
+      description: |
+        internal/api/v2/memories/handler.go's Update (#870). A FULL-RECORD
+        replace — the settings panel's edit dialog and its per-row
+        enable/disable Switch both send the whole record, never a partial
+        patch. `memory_id` naming another user's entry, or no entry at all,
+        answers 404 — a caller never learns whether an id belongs to someone
+        else.
+      tags: [chat]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MemoryEntryWriteRequest'
+      responses:
+        '200':
+          description: The updated memory.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemoryEntry'
+        '400':
+          description: content was blank or exceeded the length limit, or tags exceeded their limits.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No such memory owned by the caller in this project.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500': { $ref: '#/components/responses/500' }
+    delete:
+      operationId: deleteMemory
+      summary: Delete one of the caller's own memories
+      description: |
+        internal/api/v2/memories/handler.go's Delete (#870). Idempotent: a
+        `memory_id` that never existed, or already belonged to someone else,
+        answers 204 the same as a successful delete — the same
+        DeleteMessageFeedback-style shape, matching MemoriesRepo.Delete's own
+        comment.
+      tags: [chat]
+      responses:
+        '204':
+          description: Deleted (or already absent).
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/message_feedback/prompt_lib/{project_id}/{message_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: message_id
+        in: path
+        required: true
+        schema: { type: string }
+        description: >
+          The message-GROUP uuid — the same `{messageID}` GetMessage and
+          DeleteMessage share (internal/api/v2/conversations/handler.go).
+    get:
+      operationId: getMessageFeedback
+      summary: Aggregate like/dislike counts for one message, plus the caller's own vote
+      description: |
+        internal/api/v2/conversations/handler.go's GetMessageFeedback (#880).
+        Reads p_{project_id}.chat_message_feedback
+        (tenant/0135_chat_message_feedback.sql). `mine` is absent when the
+        caller has not rated this message.
+      tags: [chat]
+      responses:
+        '200':
+          description: Feedback summary for the message.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageFeedbackSummary'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500': { $ref: '#/components/responses/500' }
+    post:
+      operationId: setMessageFeedback
+      summary: Like or dislike a message, with an optional comment
+      description: |
+        internal/api/v2/conversations/handler.go's SetMessageFeedback (#880).
+        Upserts into p_{project_id}.chat_message_feedback — a second call
+        from the same user REPLACES their rating and comment rather than
+        adding a second row (UNIQUE(message_group_uuid, user_id)). Returns
+        the updated aggregate, same shape as the GET.
+      tags: [chat]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MessageFeedbackRequest'
+      responses:
+        '200':
+          description: Feedback recorded; the updated summary.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageFeedbackSummary'
+        '400':
+          description: rating was not 1 or -1, or the comment exceeded the length limit.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No such message in this project.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500': { $ref: '#/components/responses/500' }
+    delete:
+      operationId: deleteMessageFeedback
+      summary: Retract the caller's own like/dislike on a message
+      description: |
+        internal/api/v2/conversations/handler.go's DeleteMessageFeedback
+        (#880). Removes only the CALLER's own row; other users' feedback on
+        the same message is untouched. Returns the updated aggregate.
+      tags: [chat]
+      responses:
+        '200':
+          description: Feedback retracted; the updated summary.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageFeedbackSummary'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
         '500': { $ref: '#/components/responses/500' }
 
   # ==========================================================================
@@ -16341,6 +17316,96 @@ paths:
         schema:
           type: integer
 
+    get:
+      operationId: getSkill
+      summary: Retrieve a skill (its `base` version, plus every version)
+      description: |
+        NOTE(issue 874): internal/api/v2/skills/handler.go Get. `instructions`/
+        `tags`/`version_details` answer `base`'s content; `versions` carries
+        EVERY version of the skill (not just `base`, as before issue 874).
+      tags: [skills]
+      responses:
+        '200':
+          description: The skill
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Skill'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+
+    put:
+      operationId: updateSkill
+      summary: Update the skill's name/description and `base` version's content
+      description: |
+        NOTE(issue 874): internal/api/v2/skills/handler.go Update, unversioned
+        branch (repo.Update). Always writes `base` — see updateSkillVersion
+        for editing a NAMED version.
+      tags: [skills]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SkillCreateRequest'
+      responses:
+        '200':
+          description: Updated skill
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Skill'
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+
+    post:
+      operationId: createSkillVersion
+      summary: Save the current content as a new NAMED version ("Save As Version")
+      description: |
+        NOTE(issue 874): internal/api/v2/skills/handler.go CreateVersion. Before
+        issue 874 this exact URL was bound to createSkill, which ignores
+        {skill_id} and creates an unrelated new skill — every "New version"
+        click quietly left the target skill's version set unchanged and
+        leaked a stray skill into the project's list.
+      tags: [skills]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SkillVersionCreateRequest'
+      responses:
+        '201':
+          description: Created version (the skill, with the new version as version_details)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Skill'
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '409': { $ref: '#/components/responses/409' }
+
+    delete:
+      operationId: deleteSkill
+      summary: Delete the whole skill
+      description: |
+        NOTE(issue 874): internal/api/v2/skills/handler.go Delete, unversioned
+        branch. Refuses (400) while any version is published — see
+        skillpublish's unpublish operations.
+      tags: [skills]
+      responses:
+        '204':
+          description: Deleted (no content)
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+
     patch:
       operationId: setSkillRelation
       summary: Attach or detach a skill on one agent version
@@ -16349,8 +17414,7 @@ paths:
         skill update, and the body selects the operation. A body that carries
         `has_relation` attaches (`true`, 201) or detaches (`false`, 200) the
         skill on the agent version named by `entity_version_id`; any other body
-        is the plain update, which this document does not describe
-        (`skills.updateSkill` stays on the reverse-check allowlist). This is the
+        is the plain update — see the `put` operation on this path. This is the
         convention apps/elitea-ui's `updateSkillRelation` already calls and the
         toolkit twin implements (internal/api/v2/skills/handler.go Update).
       tags: [skills]
@@ -16392,6 +17456,265 @@ paths:
                   it (internal/api/v2/skills/handler.go:395, AttachSkill) —
                   the writer owns the shape.
         '400': { $ref: '#/components/responses/400' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+
+  /elitea_core/skill/prompt_lib/{project_id}/{skill_id}/{version_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: skill_id
+        in: path
+        required: true
+        schema: { type: integer }
+      - name: version_id
+        in: path
+        required: true
+        schema: { type: integer }
+
+    get:
+      operationId: getSkillVersion
+      summary: Retrieve one NAMED version's content
+      description: |
+        NOTE(issue 874): internal/api/v2/skills/handler.go Get, versioned branch
+        (repo.GetVersion). `instructions`/`tags`/`version_details` answer
+        THIS version's content; `versions` still carries every version — the
+        round trip the version selector and the client-side compare view
+        (there is no server-side compare endpoint, matching agents'
+        CompareVersionsModal) both use.
+      tags: [skills]
+      responses:
+        '200':
+          description: The skill, scoped to this version
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Skill'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+
+    put:
+      operationId: updateSkillVersion
+      summary: Edit one NAMED version's instructions/tags
+      description: |
+        NOTE(issue 874): internal/api/v2/skills/handler.go Update, versioned
+        branch (repo.UpdateVersion). name/description in the body still
+        update the SKILL row — those columns are shared across every
+        version. Refuses (409) a published version.
+      tags: [skills]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SkillCreateRequest'
+      responses:
+        '200':
+          description: Updated version (the skill, with this version as version_details)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Skill'
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '409': { $ref: '#/components/responses/409' }
+
+    delete:
+      operationId: deleteSkillVersion
+      summary: Delete one NAMED version
+      description: |
+        NOTE(issue 874): internal/api/v2/skills/handler.go Delete, versioned
+        branch (repo.DeleteVersion). Refuses (400) `base` and the current
+        default version; refuses (409) a published version.
+      tags: [skills]
+      responses:
+        '204':
+          description: Deleted (no content)
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '409': { $ref: '#/components/responses/409' }
+
+  /elitea_core/skill_version_restore/prompt_lib/{project_id}/{skill_id}/{version_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: skill_id
+        in: path
+        required: true
+        schema: { type: integer }
+      - name: version_id
+        in: path
+        required: true
+        schema: { type: integer }
+
+    post:
+      operationId: restoreSkillVersion
+      summary: Rollback — copy a NAMED version's content back onto `base`
+      description: |
+        NOTE(issue 874): internal/api/v2/skills/handler.go RestoreVersion. The
+        capability the issue's title names: skills had no rollback at all
+        before this route. Unlike agents' "Set as default" (which repoints a
+        pointer and leaves every version's content untouched), skills have
+        no distinguished "currently active" row to repoint — the unversioned
+        GET/PUT/DELETE and every FRESH attachment's proposed version both
+        read `base` directly — so this OVERWRITES `base` with version_id's
+        content and records the lineage (parent_version_id). Refuses (409)
+        while `base` itself is published.
+      tags: [skills]
+      responses:
+        '200':
+          description: The skill, with `base` (now holding version_id's content) as version_details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Skill'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '409': { $ref: '#/components/responses/409' }
+
+  /elitea_core/skill_default_version/prompt_lib/{project_id}/{skill_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: skill_id
+        in: path
+        required: true
+        schema: { type: integer }
+
+    patch:
+      operationId: setDefaultVersion
+      summary: Mark a version as the skill's default
+      description: |
+        NOTE(issue 874): internal/api/v2/skills/handler.go SetDefaultVersion.
+        Writes skills.meta.default_version_id — the version a NEW attachment
+        proposes. Before issue 874 this URL was bound to the generic skill-update
+        handler, which read no `version_id` key and wrote the skill's own
+        name to "" on every call (see setSkillRelation's history on the
+        `patch` /skill/.../{skill_id} operation for the sibling defect the
+        same overloaded-URL convention produced).
+      tags: [skills]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SkillSetDefaultVersionRequest'
+      responses:
+        '200':
+          description: Updated skill
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Skill'
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+
+  /elitea_core/skill_import/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+
+    post:
+      operationId: importSkill
+      summary: Import a skill from a Markdown file (always as a new `base` version)
+      description: |
+        NOTE: internal/api/v2/skills/handler.go Import. The server also
+        accepts a JSON {content, filename} body (readImportPayload's second
+        branch), but the shipped UI's importSkill() always sends multipart —
+        the only shape documented here, matching every other upload
+        operation in this document (uploadApplicationIcon,
+        uploadCurrentSocialAvatar, etc. — a requestBody with both multipart
+        and application/json makes orval generate ImportSkillBodyOne/Two
+        model names that do not match the files its own model-file-splitter
+        writes). Only .md is accepted. A duplicate skill name reuses the
+        existing skill and returns a `notice` field instead of erroring.
+      tags: [skills]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        '200':
+          description: Reused an existing skill of the same name
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Skill'
+                  - type: object
+                    properties:
+                      notice: { type: string }
+        '201':
+          description: Imported skill
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Skill'
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+
+  /elitea_core/skill_export/prompt_lib/{project_id}/{skill_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: skill_id
+        in: path
+        required: true
+        schema: { type: integer }
+
+    get:
+      operationId: exportSkill
+      summary: Export `base` as a Markdown file
+      description: |
+        NOTE(issue 874): internal/api/v2/skills/handler.go Export, unversioned
+        branch. `text/markdown`, Content-Disposition names the file.
+      tags: [skills]
+      responses:
+        '200':
+          description: Markdown file
+          content:
+            text/markdown:
+              schema: { type: string }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+
+  /elitea_core/skill_export/prompt_lib/{project_id}/{skill_id}/{version_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: skill_id
+        in: path
+        required: true
+        schema: { type: integer }
+      - name: version_id
+        in: path
+        required: true
+        schema: { type: integer }
+
+    get:
+      operationId: exportSkillVersion
+      summary: Export one NAMED version as a Markdown file
+      description: |
+        NOTE(issue 874): internal/api/v2/skills/handler.go Export, versioned
+        branch. Before issue 874 this route accepted {version_id} but never read
+        it — every export answered `base`'s content regardless of the
+        version requested.
+      tags: [skills]
+      responses:
+        '200':
+          description: Markdown file
+          content:
+            text/markdown:
+              schema: { type: string }
+        '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '404': { $ref: '#/components/responses/404' }
 
@@ -17161,6 +18484,54 @@ paths:
   # ==========================================================================
   # TOOLKITS
   # ==========================================================================
+  /elitea_core/runtime_capabilities:
+    get:
+      operationId: getRuntimeCapabilities
+      summary: Which worker this deployment runs and what it cannot do (#865, #866)
+      description: |
+        Deliberately NOT project-scoped: the worker image is a deployment-wide
+        fact, not project data — the same reasoning getAgentCategories above
+        states for its own taxonomy.
+
+        Before this endpoint, a toolkit type the configured worker could not
+        build was still served but hidden from the type picker
+        (metadata.hidden on every /elitea_core/toolkits/prompt_lib/{project_id}
+        entry — see ToolkitTypeSchemas), and an internal chat tool the worker
+        could not run answered normally while silently skipping the
+        capability (services/elitea-worker-rust/src/agents/internal_tools.rs,
+        `agent_internal_tool_skipped`). Neither state was visible anywhere a
+        user or an administrator could read it. This endpoint is that read.
+
+        `hidden_toolkit_types` restates, as one flat list, exactly the set of
+        catalogued types whose metadata.hidden the toolkit-type endpoints
+        already set for capability reasons — this endpoint and that field
+        share one worker-capability projection
+        (internal/runtimecomposition/worker_toolkit_capability.go) and cannot
+        disagree.
+
+        `internal_tools` covers the six toggleable internal chat tools
+        (apps/elitea-web/src/features/agents/lib/internalTools.ts:
+        image_generation, data_analysis, internal_mcp, planner, swarm,
+        lazy_tools_mode), true when the CONFIGURED worker runs the tool for
+        real. `ask_user`, the Rust worker's one implemented internal tool, is
+        not a user-facing toggle and is not listed; `attachments` and
+        `pyodide` are tracked separately from #866's six and are not listed
+        either.
+
+        `worker` is empty when the deployment never stated
+        ELITEA_WORKER_IMPLEMENTATION AND no worker-capability snapshot was
+        composed — the honest "this deployment did not say" answer, not a
+        guessed default.
+      tags: [toolkits]
+      responses:
+        '200':
+          description: This deployment's worker and its capability gaps
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RuntimeCapabilities'
+        '401': { $ref: '#/components/responses/401' }
+
   /elitea_core/toolkits/prompt_lib/{project_id}:
     parameters:
       - $ref: '#/components/parameters/ProjectId'
@@ -17992,6 +19363,235 @@ paths:
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '404': { $ref: '#/components/responses/404' }
+
+  # ==========================================================================
+  # WEBHOOKS — the outbound project webhook registry (issue #876)
+  # ==========================================================================
+  #
+  # internal/api/webhook/handler.go's five routes, mounted at
+  # /webhooks/prompt_lib/{projectID}. This is NOT the pipeline's own inbound
+  # trigger (`/pipeline_triggers/…`, applications.getPipelineTrigger /
+  # updatePipelineTrigger above) — that resource lets an external system START
+  # one pipeline by POSTing to a per-pipeline secret URL. This one is the
+  # reverse direction: a project registers a destination URL, a list of event
+  # types, and a secret, and Elitea POSTs signed events TO it when they occur.
+  # The two share no schema, no table and no code.
+  #
+  # Every route gates on a `configurations.configuration*` permission string,
+  # reused rather than invented — see handler.go's file header for why. The
+  # response body always includes the live `secret` (redaction is tracked
+  # separately, issue #496): there is no server-side "reveal" endpoint, so the
+  # UI's reveal/hide control is purely a client-side toggle over data the read
+  # already carries.
+  /webhooks/prompt_lib/{projectID}:
+    parameters:
+      - name: projectID
+        in: path
+        required: true
+        schema: { type: string }
+
+    get:
+      operationId: listWebhooks
+      summary: List a project's outbound webhooks
+      description: >
+        handler.go's List. Returns `{"items": [...]}`, newest first
+        (repos/webhooks.go's `ORDER BY created_at DESC`). An empty registry is
+        `{"items": []}` with 200, not a 404.
+      tags: [webhooks]
+      responses:
+        '200':
+          description: The project's webhooks
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Webhook' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+
+    post:
+      operationId: createWebhook
+      summary: Register a new outbound webhook
+      description: >
+        handler.go's Create. The secret is whatever the caller sends —
+        there is no server-side generation — so the UI generates one
+        client-side (the same `crypto.getRandomValues` shape
+        `PipelineWebhookModal.tsx`'s `generateSecretToken` uses) before
+        calling this.
+      tags: [webhooks]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WebhookWriteRequest' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Webhook' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500': { $ref: '#/components/responses/500' }
+
+  /webhooks/prompt_lib/{projectID}/{webhookID}:
+    parameters:
+      - name: projectID
+        in: path
+        required: true
+        schema: { type: string }
+      - name: webhookID
+        in: path
+        required: true
+        schema: { type: string }
+
+    get:
+      operationId: getWebhook
+      summary: Read one webhook, including its live secret
+      description: handler.go's Get.
+      tags: [webhooks]
+      responses:
+        '200':
+          description: The webhook
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Webhook' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+
+    put:
+      operationId: updateWebhook
+      summary: Replace a webhook's URL, events, secret or active flag
+      description: >
+        handler.go's Update. Every field is replaced with what the body
+        sends — this is how the UI both "rotates" the secret (new random
+        value, same url/events/active) and toggles enable/disable (same
+        url/events/secret, flipped active).
+      tags: [webhooks]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WebhookWriteRequest' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Webhook' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+
+    delete:
+      operationId: deleteWebhook
+      summary: Delete a webhook
+      description: handler.go's Delete.
+      tags: [webhooks]
+      responses:
+        '204':
+          description: Deleted
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+
+  # ── The delivery log (issue #876's second half) ─────────────────────────
+  #
+  # Until this change webhook.Dispatcher (internal/api/webhook/dispatcher.go)
+  # was composed against NO event producer — every registered webhook was
+  # inert. These two routes are the visible half of the fix: the "Recent
+  # deliveries" panel reads GET .../deliveries, and its "Redeliver" row
+  # action calls POST .../deliveries/{deliveryID}/redeliver. Both answer 501
+  # (not 404 — see WithDispatcher's own comment) on a deployment composed
+  # with no Dispatcher, the same "named refusal instead of a 200 that quietly
+  # does nothing" shape #617's evidence bar asks for elsewhere in this
+  # document.
+  /webhooks/prompt_lib/{projectID}/{webhookID}/deliveries:
+    parameters:
+      - name: projectID
+        in: path
+        required: true
+        schema: { type: string }
+      - name: webhookID
+        in: path
+        required: true
+        schema: { type: string }
+
+    get:
+      operationId: listWebhookDeliveries
+      summary: This webhook's recent delivery attempts, newest first
+      description: >
+        handler.go's ListDeliveries. Up to 20 rows
+        (maxRecentDeliveries) — both automatic deliveries and manual
+        redeliveries, distinguished by `redelivery_of`.
+      tags: [webhooks]
+      responses:
+        '200':
+          description: The webhook's recent deliveries
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/WebhookDelivery' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '501':
+          description: This deployment composed no delivery log.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /webhooks/prompt_lib/{projectID}/{webhookID}/deliveries/{deliveryID}/redeliver:
+    parameters:
+      - name: projectID
+        in: path
+        required: true
+        schema: { type: string }
+      - name: webhookID
+        in: path
+        required: true
+        schema: { type: string }
+      - name: deliveryID
+        in: path
+        required: true
+        schema: { type: string }
+
+    post:
+      operationId: redeliverWebhookDelivery
+      summary: Resend a previously logged delivery's exact payload
+      description: >
+        handler.go's Redeliver, over Dispatcher.Redeliver. Runs
+        SYNCHRONOUSLY — the response IS the outcome, not an
+        acknowledgement that a retry was queued — and logs a NEW row
+        (`redelivery_of` set to the original delivery's id) rather than
+        mutating the one being resent.
+      tags: [webhooks]
+      responses:
+        '201':
+          description: The new delivery row, reflecting this attempt's outcome
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WebhookDelivery' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '501':
+          description: This deployment composed no delivery log or dispatcher.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
 
   # ── The stored-credential checks and the revalidation ──────────────────
   #

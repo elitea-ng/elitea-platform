@@ -1,13 +1,31 @@
-import type { ReactNode } from 'react';
+import type { ReactElement, ReactNode } from 'react';
 
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import * as artifactsFeature from '@/features/artifacts';
+import * as chatMessagesFeature from '@/features/chat-messages';
+import { SocketClientContext } from '@/shared/api/socket/client';
+import { createTestSocketClient } from '@/shared/api/socket/testing';
 import * as sharedArtifacts from '@/shared/api/artifacts';
 import * as runtimeConfig from '@/shared/config';
 import * as download from '@/shared/lib/download';
+import { installCodeMirrorTestPolyfills } from '@/shared/ui/lib/field/codeMirrorTestPolyfills';
+
+installCodeMirrorTestPolyfills();
+
+/**
+ * "Open in canvas" (issue #878) mounts the REAL `CanvasEditor` — R-M1 (§6.2)
+ * forbids `vi.mock`, and `CanvasEditor` is a `forwardRef` object `vi.spyOn`
+ * cannot substitute either way, so this suite renders it for real, exactly
+ * like `processes/chat/ui/chatCanvasGaps.test.tsx` does. It joins a canvas
+ * socket room on mount, which throws with no provider — `withSocket` is
+ * `CanvasEditor.test.tsx`'s own wrapper, reused here.
+ */
+function withSocket(ui: ReactElement): ReactElement {
+  return <SocketClientContext.Provider value={createTestSocketClient()}>{ui}</SocketClientContext.Provider>;
+}
 
 const mocks = {
   buckets: {
@@ -110,6 +128,7 @@ function MockFilePreviewCanvas(props: {
   readonly onDelete: (key: string) => Promise<unknown>;
   readonly onSaved: () => unknown;
   readonly onUnsavedChangesUpdate?: (hasChanges: boolean) => void;
+  readonly onOpenInCanvas?: () => void;
 }): ReactNode {
   return (
     <section>
@@ -118,6 +137,7 @@ function MockFilePreviewCanvas(props: {
       <button onClick={() => void props.onDelete('readme.md')}>preview-delete</button>
       <button onClick={() => void props.onSaved()}>preview-saved</button>
       <button onClick={() => props.onUnsavedChangesUpdate?.(true)}>mark-dirty</button>
+      {props.onOpenInCanvas && <button onClick={props.onOpenInCanvas}>open-in-canvas</button>}
     </section>
   );
 }
@@ -152,6 +172,10 @@ describe('Artifacts page', () => {
     vi.spyOn(artifactsFeature, 'BucketSidebar').mockImplementation(MockBucketSidebar as never);
     vi.spyOn(artifactsFeature, 'ArtifactTable').mockImplementation(MockArtifactTable as never);
     vi.spyOn(artifactsFeature, 'FilePreviewCanvas').mockImplementation(MockFilePreviewCanvas as never);
+    vi.spyOn(chatMessagesFeature, 'openArtifactFileInCanvas').mockResolvedValue({
+      ok: true,
+      file: { codeBlock: '# hello', language: 'markdown', type: 'code', source: { bucket: 'docs', name: 'readme.md' } },
+    });
     vi.spyOn(artifactsFeature, 'UploadPathDialog').mockReturnValue(null);
     vi.spyOn(artifactsFeature, 'DuplicateResolutionDialog').mockReturnValue(null);
     vi.spyOn(artifactsFeature, 'ZipDownloadProgressDialog').mockReturnValue(null);
@@ -244,6 +268,57 @@ describe('Artifacts page', () => {
     expect(mocks.refreshFiles).toHaveBeenCalledWith('docs');
     await user.click(screen.getByRole('button', { name: 'close-preview' }));
     await waitFor(() => expect(router.state.location.search).toMatchObject({ file: '' }));
+  });
+
+  it('opens a previewed file in the REAL canvas editor, saves it back, and refreshes the bucket (issue #878)', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(sharedArtifacts, 'listBuckets').mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      data: { buckets: [{ name: 'docs', is_pinned: false, created_at: '2026-01-01T00:00:00Z' }] },
+    });
+    vi.spyOn(sharedArtifacts, 'uploadArtifactObject').mockResolvedValue({ ok: true, status: 200, data: undefined, headers: new Headers() });
+
+    renderArtifactsRoute(withSocket(<Artifacts />), '/artifacts?bucket=docs');
+    await user.click(await screen.findByRole('button', { name: 'preview-file' }));
+    await user.click(await screen.findByRole('button', { name: 'open-in-canvas' }));
+
+    expect(chatMessagesFeature.openArtifactFileInCanvas).toHaveBeenCalledWith({ projectId: 'project-1', bucket: 'docs', name: 'readme.md', size: 12 });
+    const root = await screen.findByTestId('canvas-editor-root', {}, { timeout: 15_000 });
+    const content = root.querySelector('.cm-content');
+    if (!(content instanceof HTMLElement)) throw new Error('canvas editor mounted no code pane');
+    expect(content).toHaveTextContent('# hello');
+
+    // "Save to artifacts", pre-filled from the SOURCE this canvas was opened
+    // from — this is the ordinary re-save, no overwrite confirm.
+    await user.click(screen.getByTestId('canvas-edit-save-to-artifacts'));
+    await screen.findByTestId('canvas-save-to-artifacts-dialog');
+    expect(screen.getByTestId('canvas-save-filename-input')).toHaveValue('readme.md');
+    await user.click(screen.getByTestId('canvas-save-submit'));
+
+    await waitFor(() => {
+      expect(sharedArtifacts.uploadArtifactObject).toHaveBeenCalledWith(
+        expect.objectContaining({ projectId: 'project-1', bucket: 'docs', fileKey: 'readme.md' }),
+      );
+    });
+    await waitFor(() => expect(mocks.refreshFiles).toHaveBeenCalledWith('docs'));
+
+    await user.click(screen.getByTestId('canvas-edit-close'));
+    await waitFor(() => expect(screen.queryByTestId('canvas-editor-root')).not.toBeInTheDocument());
+    // Closing the canvas drawer leaves the plain preview untouched.
+    expect(screen.getByText('file-preview')).toBeInTheDocument();
+  });
+
+  it('reports a file too large or unsupported for canvas without opening the drawer', async () => {
+    const user = userEvent.setup();
+    vi.mocked(chatMessagesFeature.openArtifactFileInCanvas).mockResolvedValue({ ok: false, reason: 'too-large' });
+    renderArtifactsRoute(<Artifacts />, '/artifacts?bucket=docs');
+    await user.click(await screen.findByRole('button', { name: 'preview-file' }));
+    await user.click(await screen.findByRole('button', { name: 'open-in-canvas' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('too large');
+    expect(screen.queryByTestId('artifacts-canvas-editor')).not.toBeInTheDocument();
   });
 
   it('guards bucket navigation when the preview has unsaved edits', async () => {

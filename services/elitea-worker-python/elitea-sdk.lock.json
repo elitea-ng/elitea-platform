@@ -7,13 +7,15 @@
     "git_archive_sha256": "df398b4a378e7b88ea3b72511e31de13a17a02159c69fbada6f0b948a0ecf2d7",
     "patch_revisions": [
       "5c9409779ac0a55f8bf74f6ef438977089187a14",
-      "07ddc5cd67a0c747f83ca0e26421cde71bd97d9d"
+      "07ddc5cd67a0c747f83ca0e26421cde71bd97d9d",
+      "4e631ed9e9523b33410a31bd2242c93fa9ec0b4b",
+      "afff234904b6d5de551436b53c078722f13ff4de"
     ]
   },
   "installed_package_tree": {
     "algorithm": "sha256 over sorted elitea_sdk/**/*.py: uint32be path length, UTF-8 relative path, uint64be content length, content bytes",
-    "file_count": 478,
-    "sha256": "969b129405a279a95721ad7116c9c5cc82e1c7dd13df24207fbd5d9980488f72"
+    "file_count": 481,
+    "sha256": "28133c910d92f2710b70b2973765f4367da2f31ace80168c586c2cd7322c9c0d"
   },
   "validated_models": {
     "openapi": {

@@ -1,5 +1,9 @@
 # Delegated OAuth and DCR source mapping
 
+Current shared migration numbers and rehearsal upgrade requirements are recorded in
+[shared migration reconciliation](shared-migrations-20260909.md).
+Historical proof sections retain the version numbers used during those checks.
+
 Status: Main's OAuth and DCR proxies are implemented. The existing UI flow can
 use them. Local HTTPS grant tests pass. Live provider proof remains required.
 

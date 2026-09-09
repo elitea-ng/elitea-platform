@@ -195,3 +195,101 @@ def test_the_wiki_id_derivation_is_the_one_the_fixture_runner_uses(spec: dict) -
         wiki_context.wiki_id_for(repo_config, repo_config["branch"])
         == spec["wiki"]["wiki_id"]
     )
+
+
+# --------------------------------------------------------------------------
+# extra_context — reader-uploaded text-file attachments (#873).
+#
+# Table-driven rather than fixture-driven: nothing here reads from a
+# transport (the content already arrives in the request), so there is no
+# shared artifact-read behaviour a fixture would be pinning. The Go twin
+# (run/extracontext_test.go) asserts the SAME budgets and the SAME prepend
+# shape from its own table, which is what keeps the two languages from
+# drifting instead.
+# --------------------------------------------------------------------------
+
+
+def _extra_file(name: str, content: str) -> dict:
+    return {"name": name, "content": content}
+
+
+def test_resolve_extra_context_is_empty_with_no_selection() -> None:
+    assert wiki_context.resolve_extra_context({}) == ""
+    assert wiki_context.resolve_extra_context({wiki_context.EXTRA_CONTEXT_PARAM: []}) == ""
+
+
+def test_prepend_extra_context_carries_no_current_question_trailer() -> None:
+    block = wiki_context.build_extra_context_block([("notes.md", "the important bit")])
+    question = wiki_context.prepend_extra_context("What does this do?", block)
+
+    assert question.startswith(wiki_context.EXTRA_CONTEXT_LEAD_IN)
+    assert "--- file: notes.md ---\nthe important bit" in question
+    assert question.endswith("What does this do?")
+    # The whole point of the no-trailer design: stacking two of
+    # context_paths' own markers would read as the model being asked twice.
+    assert "Current question:" not in question
+
+
+def test_extra_context_wraps_in_front_of_an_already_prepended_wiki_block() -> None:
+    already_prepended = (
+        f"{wiki_context.CONTEXT_LEAD_IN}\n--- source: wiki_pages/a.md ---\nwiki text\n\n"
+        f"{wiki_context.QUESTION_LEAD_IN}What does this do?"
+    )
+    block = wiki_context.build_extra_context_block([("notes.md", "extra")])
+    question = wiki_context.prepend_extra_context(already_prepended, block)
+
+    assert question.count("Current question:") == 1
+    assert question.startswith(wiki_context.EXTRA_CONTEXT_LEAD_IN)
+
+
+def test_extra_context_truncates_each_file_at_its_own_budget() -> None:
+    long = "x" * (wiki_context.EXTRA_PER_FILE_BUDGET_CHARS + 500)
+    block = wiki_context.build_extra_context_block([("big.txt", long)])
+
+    assert "truncated to" in block
+    assert "x" * wiki_context.EXTRA_PER_FILE_BUDGET_CHARS in block
+    assert long not in block
+
+
+def test_extra_context_names_a_file_it_could_not_afford_at_all() -> None:
+    fill = "y" * wiki_context.EXTRA_PER_FILE_BUDGET_CHARS
+    files = []
+    spent = 0
+    while spent < wiki_context.EXTRA_TOTAL_BUDGET_CHARS:
+        files.append(("filler.txt", fill))
+        spent += wiki_context.EXTRA_PER_FILE_BUDGET_CHARS
+    files.append(("gets-nothing.txt", "leftover text"))
+
+    block = wiki_context.build_extra_context_block(files)
+
+    assert "gets-nothing.txt" in block
+    assert "leftover text" not in block
+
+
+def test_resolve_extra_context_refuses_more_files_than_the_cap() -> None:
+    files = [_extra_file("f.txt", "x") for _ in range(wiki_context.MAX_EXTRA_CONTEXT_FILES + 1)]
+    with pytest.raises(wiki_context.ContextRefused, match="the limit is"):
+        wiki_context.resolve_extra_context({wiki_context.EXTRA_CONTEXT_PARAM: files})
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "notes.md",
+        ["notes.md"],
+        [{"name": "a.txt"}],
+        [{"content": "x"}],
+        [{"name": "  ", "content": "x"}],
+        [{"name": "a.txt", "content": 5}],
+    ],
+)
+def test_resolve_extra_context_refuses_a_malformed_entry(value) -> None:
+    with pytest.raises(wiki_context.ContextRefused):
+        wiki_context.resolve_extra_context({wiki_context.EXTRA_CONTEXT_PARAM: value})
+
+
+def test_consume_extra_context_spends_only_its_own_key() -> None:
+    left = wiki_context.consume_extra_context(
+        {"question": "q", wiki_context.EXTRA_CONTEXT_PARAM: [_extra_file("a.txt", "x")]}
+    )
+    assert left == {"question": "q"}

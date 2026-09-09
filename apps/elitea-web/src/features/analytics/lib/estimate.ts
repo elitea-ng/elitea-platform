@@ -1,5 +1,7 @@
 import type {
+  AnalyticsEstimateAgent,
   AnalyticsEstimateModel,
+  AnalyticsEstimateTool,
   AnalyticsEstimateUser,
   AnalyticsUsageEstimate,
 } from '@/shared/api/generated/model';
@@ -49,6 +51,54 @@ export function userRow(user: AnalyticsEstimateUser): EstimateRow {
     inputCost: user.input_cost,
     outputCost: user.output_cost,
     totalCost: user.total_cost,
+  };
+}
+
+/**
+ * An agent row (issue #875).
+ *
+ * The label falls back to the numeric application id when the tenant chat
+ * projection carries no display name — a real state (agentUsage's own
+ * `nameSelect` falls back to `''` for a Go-bootstrapped database with no
+ * pylon-owned `applications` table), and a blank cell would read as a row
+ * with no owner.
+ */
+export function agentRow(agent: AnalyticsEstimateAgent): EstimateRow {
+  const label =
+    agent.name !== ''
+      ? agent.name
+      : t('analytics.estimate.unnamedAgent', 'Agent {{id}}', { id: agent.application_id });
+  return {
+    key: agent.application_id,
+    label,
+    promptTokens: agent.prompt_tokens,
+    completionTokens: agent.completion_tokens,
+    totalTokens: agent.total_tokens,
+    inputCost: agent.input_cost,
+    outputCost: agent.output_cost,
+    totalCost: agent.total_cost,
+  };
+}
+
+/**
+ * A tool row (issue #875).
+ *
+ * The key combines toolkit id and tool name: two toolkits can expose a tool of
+ * the same name, and a bare `tool_name` key would collapse two different rows
+ * into one in React's reconciliation. The label carries the toolkit name
+ * beside the tool name for the same reason ToolAnalytics reports both.
+ */
+export function toolRow(tool: AnalyticsEstimateTool): EstimateRow {
+  const label = tool.toolkit_name !== '' ? `${tool.toolkit_name} / ${tool.tool_name}` : tool.tool_name;
+  return {
+    key: `${tool.toolkit_id}/${tool.tool_name}`,
+    label,
+    promptTokens: tool.prompt_tokens,
+    completionTokens: tool.completion_tokens,
+    totalTokens: tool.total_tokens,
+    inputCost: tool.input_cost,
+    outputCost: tool.output_cost,
+    totalCost: tool.total_cost,
   };
 }
 

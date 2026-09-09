@@ -1,0 +1,36 @@
+---
+title: "Personal tokens"
+description: "Create and manage personal access tokens for API access and IDE integration."
+---
+
+A personal access token (PAT) authenticates API calls and IDE integrations as you, without using your password. Settings › Personal Tokens is where you create, inspect, and revoke them.
+
+<Screenshot id="settings-tokens" alt="The Personal Tokens table" />
+
+## Generate a token
+
+<Steps>
+  <Step title="Open the form">Select **+**.</Step>
+  <Step title="Name it and set an expiration">Give it a descriptive name and choose Never, or a number of days, weeks, hours, or minutes.</Step>
+  <Step title="Generate and copy">The full token is shown only once — copy it immediately. It cannot be retrieved again after you close the dialog.</Step>
+</Steps>
+
+<Warning title="Never expiring tokens are a risk">
+Use "Never" only for personal development — set an expiration for anything used in a shared or production context.
+</Warning>
+
+## Manage tokens
+
+The table shows each token's last-4-characters value and an expiration status (a warning icon appears within 7 days of expiry). Select the preview icon to see ready-made VS Code (`settings.json`) or JetBrains (`alita.xml`) configuration snippets for that token, copy or download them, or delete a token you no longer need.
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Lost the token value">It cannot be shown again — delete it and generate a new one.</Accordion>
+  <Accordion title="IDE download icons are missing">They only appear once a model configuration is selected and you are outside the Public project.</Accordion>
+  <Accordion title="An integration stopped working">Check whether its token expired; expired tokens stop authenticating immediately.</Accordion>
+</AccordionGroup>
+
+<Info title="Related">
+[Support Assistant](/menus/help-and-support) · [API and MCP endpoints](/integrations/third-party-integrations/api-usage)
+</Info>

@@ -381,7 +381,9 @@ func validateBrandingValues(values map[string]any) string {
 		switch key {
 		case platformconfig.KeyBrandingHue, platformconfig.KeyBrandingOnBrand:
 			reason = validateHexColour(key, values[key])
-		case platformconfig.KeyBrandingDocsURL, platformconfig.KeyBrandingSupportURL:
+		case platformconfig.KeyBrandingDocsURL:
+			reason = validateDocsURL(key, values[key])
+		case platformconfig.KeyBrandingSupportURL:
 			reason = validateAbsoluteHTTPURL(key, values[key])
 		case platformconfig.KeyBrandingLogoFull, platformconfig.KeyBrandingLogoMark,
 			platformconfig.KeyBrandingFavicon, platformconfig.KeyBrandingLoginArt,
@@ -458,6 +460,21 @@ func validateAbsoluteHTTPURL(key string, value any) string {
 		return fmt.Sprintf("%q must be an absolute http or https URL", key)
 	}
 	return ""
+}
+
+// validateDocsURL admits either an absolute http(s) URL (a tenant's
+// externally hosted documentation) or a root-relative same-origin path (the
+// platform's own embedded docs SPA, issue W1b) — unlike supportUrl, which
+// must always be absolute. `ProductDefault()` states docs_url as exactly the
+// latter shape, and a branding package export round-trips that value back
+// through this same validator on import, so both shapes must be accepted
+// here, not only in the brand-pack schema (schema.ts / pack.go's
+// optionalRelativeOrAbsoluteURL, which this mirrors).
+func validateDocsURL(key string, value any) string {
+	if validateSameOriginPath(key, value) == "" {
+		return ""
+	}
+	return validateAbsoluteHTTPURL(key, value)
 }
 
 // validateSameOriginPath admits only a root-relative path on this origin:

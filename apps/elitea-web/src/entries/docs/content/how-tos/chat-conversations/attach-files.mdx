@@ -1,0 +1,44 @@
+---
+title: "Attach files to a conversation"
+description: "Upload images and documents for a model to analyze, by clicking, dragging, or pasting."
+---
+
+Attaching a file gives the model something concrete to analyze — a screenshot, a spreadsheet, a log file — right inside a conversation.
+
+## Attach a file
+
+<Steps>
+<Step title="Open the attachment panel">
+Click the **+** button above the composer, then **Attach files**.
+</Step>
+<Step title="Add your file">
+Use any of three methods: click to browse and select, drag a file from your computer into the message area, or paste an image from your clipboard.
+</Step>
+<Step title="Add a prompt and send">
+Type a message describing what you want done with the file, then send.
+</Step>
+</Steps>
+
+## Limits
+
+<Note>
+The exact file-type allowlist and the maximum file size or count per message are configured per deployment rather than fixed in the client — this page does not state specific numbers because they could not be verified against a single value in source. If a file is rejected, the composer's error message names the limit that applies on your deployment.
+</Note>
+
+## Where attached files go
+
+Every file you attach uploads to a shared `attachments` bucket automatically — you don't configure a bucket yourself. You can browse, download or delete anything in it from the Artifacts menu; see [Artifacts](/menus/artifacts) for bucket management and retention. By default a bucket's files expire after 30 days, but this can be changed per bucket.
+
+## Turn attachments on for an agent
+
+Attaching files works in a plain conversation without any setup. If you want attachments available every time a specific agent is used, enable it on the agent itself:
+
+1. Open the agent's edit page and go to its Configuration tab.
+2. Find **Allow attachments** under Modules and turn it on.
+3. Save. **Attach files** now appears in the **+** menu whenever this agent is a participant.
+
+<Note>
+Enabling this toggle requires Editor or Admin permission on the project — anyone with access to a conversation can still attach files without touching the agent's configuration.
+</Note>
+
+<Screenshot id="attach-files-composer" alt="Composer with an attached file chip before sending" />

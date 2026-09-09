@@ -4,10 +4,12 @@ import {
   createSkill,
   createSkillVersion,
   deleteSkill,
+  deleteSkillVersion,
   fetchSkill,
   fetchSkills,
   generateSkillDraft,
   importSkill,
+  restoreSkillVersion,
   setDefaultSkillVersion,
   updateSkill,
 } from '../api/skillsApi';
@@ -72,6 +74,16 @@ export function useSkillMutations(projectId: string | undefined) {
     setDefault: useMutation({
       mutationFn: (args: { readonly skillId: string; readonly versionId: string | number }) =>
         setDefaultSkillVersion(projectId ?? '', args.skillId, args.versionId),
+      onSuccess: invalidate,
+    }),
+    restoreVersion: useMutation({
+      mutationFn: (args: { readonly skillId: string; readonly versionId: string | number }) =>
+        restoreSkillVersion(projectId ?? '', args.skillId, args.versionId),
+      onSuccess: invalidate,
+    }),
+    deleteVersion: useMutation({
+      mutationFn: (args: { readonly skillId: string; readonly versionId: string }) =>
+        deleteSkillVersion(projectId ?? '', args.skillId, args.versionId),
       onSuccess: invalidate,
     }),
     generate: useMutation({

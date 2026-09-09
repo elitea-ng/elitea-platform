@@ -1,0 +1,54 @@
+---
+title: "Create and edit agents, pipelines, toolkits and MCPs from chat"
+description: "Open the inline editor for an agent, pipeline, toolkit, or MCP connection — to create a new one from the composer's + menu, or edit one that's already a participant in your conversation."
+---
+
+Once an agent, pipeline, toolkit, or MCP connection (an MCP connection is a kind of toolkit) is a participant in your conversation, you can open its editor inline and adjust it without switching pages. The same inline editor also opens in **create** mode directly from the composer's `+` menu, so you never have to leave the conversation to start a new one.
+
+## Create a new one from the composer
+
+<Steps>
+<Step title="Open the + menu">
+Select **+** in the composer toolbar, then open the **Agents**, **Pipelines**, or **Toolkits** category (MCP connections are created from the Toolkits category too).
+</Step>
+<Step title="Select Create new">
+Above the category's list of existing items, select **Create new**. The same inline editor a participant's own edit icon opens appears, in create mode.
+</Step>
+<Step title="Fill it in and save">
+Enter the required fields (an agent needs a name and description; other entity types have their own minimums) and save.
+</Step>
+<Step title="It's attached automatically">
+Saving creates the entity and attaches it to the current conversation as a participant — the same as picking an existing one from the list. It shows up in the **Participants** panel right away.
+</Step>
+</Steps>
+
+<Note>
+The automatic attach needs a conversation that already exists. From a brand-new, not-yet-sent chat, the entity is still created, but it is only attached once that first message creates the conversation.
+</Note>
+
+## Edit an existing participant
+
+<Steps>
+<Step title="Attach the participant">
+If it isn't already in the conversation, attach it from the composer's **+** menu or by typing `#`. See [Use chat](/how-tos/chat-conversations/how-to-use-chat-functionality#attach-participants).
+</Step>
+<Step title="Open its editor">
+Click the participant in the **Participants** panel, then click its settings icon (or hover and click the edit icon that appears).
+</Step>
+<Step title="Make your changes and save">
+The inline editor opens for that entity type. Edit it and save — the change applies to that entity going forward, the same as editing it from its own page.
+</Step>
+</Steps>
+
+<Screenshot id="chat-agent-inline-editor" alt="Chat with an agent's inline editor panel open on an existing participant" />
+
+## What you can change per entity type
+
+- **Agent**: instructions, model and model settings, and attached toolkits. See [Build an agent with AI](/how-tos/agents-pipelines/build-agent-with-ai) for the underlying fields.
+- **Pipeline**: the flow and its nodes. See [Use the flow editor](/how-tos/pipelines/flow-editor).
+- **Toolkit or MCP connection**: configuration, credential, and which tools are enabled. See [Use credentials](/how-tos/credentials-toolkits/how-to-use-credentials).
+
+## Related
+
+- [Use chat](/how-tos/chat-conversations/how-to-use-chat-functionality)
+- [Use canvas](/how-tos/chat-conversations/how-to-canvas)

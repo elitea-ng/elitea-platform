@@ -5,6 +5,7 @@
  */
 import type { ReactNode } from 'react';
 
+import ArticleOutlinedIcon from '@mui/icons-material/ArticleOutlined';
 import AutorenewIcon from '@mui/icons-material/Autorenew';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import DeleteOutlinedIcon from '@mui/icons-material/DeleteOutlined';
@@ -12,6 +13,8 @@ import VolumeUpOutlinedIcon from '@mui/icons-material/VolumeUpOutlined';
 import Box from '@mui/material/Box';
 import IconButton from '@mui/material/IconButton';
 import Tooltip from '@mui/material/Tooltip';
+
+import { t } from '@/shared/i18n';
 
 /** @public Props for `ApplicationAnswerActions`. */
 export interface ApplicationAnswerActionsProps {
@@ -24,6 +27,14 @@ export interface ApplicationAnswerActionsProps {
   readonly onCopy?: (() => void) | undefined;
   readonly onRegenerate?: (() => void) | undefined;
   readonly onDelete?: (() => void) | undefined;
+  /**
+   * Carves the WHOLE answer out into a `document` canvas (issue #879) — the
+   * same underlying create route the selection-drag affordance calls, with
+   * `kind: 'document'` forced rather than guessed. Omitted — the answer has
+   * already been split into items, or the composition root wired no canvas
+   * creation at all — no such button renders.
+   */
+  readonly onOpenAsDocument?: (() => void) | undefined;
 }
 
 export function ApplicationAnswerActions({
@@ -36,6 +47,7 @@ export function ApplicationAnswerActions({
   onCopy,
   onRegenerate,
   onDelete,
+  onOpenAsDocument,
 }: ApplicationAnswerActionsProps): ReactNode {
   return (
     // Always visible, never hover-gated: the production row shows Read
@@ -56,6 +68,22 @@ export function ApplicationAnswerActions({
               aria-label="Read out"
             >
               <VolumeUpOutlinedIcon fontSize="small" />
+            </IconButton>
+          </span>
+        </Tooltip>
+      )}
+      {onOpenAsDocument && hasContent && (
+        <Tooltip title={t('features.chatMessages.canvas.document.openAsDocument', 'Open as document')} placement="top">
+          <span>
+            <IconButton
+              size="small"
+              color="tertiary"
+              disabled={isProcessing}
+              onClick={onOpenAsDocument}
+              data-testid="answer-open-as-document"
+              aria-label={t('features.chatMessages.canvas.document.openAsDocument', 'Open as document')}
+            >
+              <ArticleOutlinedIcon fontSize="small" />
             </IconButton>
           </span>
         </Tooltip>

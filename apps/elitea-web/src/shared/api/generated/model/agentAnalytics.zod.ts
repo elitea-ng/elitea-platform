@@ -49,6 +49,19 @@ export const AgentAnalytics = zod
     avg_duration_ms: zod.number(),
     total_tokens: zod.int(),
     error_rate: zod.number(),
+    priced: zod
+      .boolean()
+      .describe(
+        "False when the catalogue prices none of this agent's calls (issue #875). The row keeps its token counts and omits its money.\n",
+      ),
+    input_cost: zod
+      .number()
+      .optional()
+      .describe(
+        "This agent's calls priced at each call's OWN model rate, summed — an ESTIMATE from gateway.gateway_models, never the accounted figure \/analytics_costs' kpis.total_cost reports. Absent when priced is false.\n",
+      ),
+    output_cost: zod.number().optional(),
+    total_cost: zod.number().optional(),
   })
   .describe("NOTE(W2) internal\/domain\/analytics\/types.go:22-29.");
 

@@ -1,0 +1,78 @@
+---
+title: "Postman"
+description: "Connect Postman to Elitea: prerequisites, credential setup and the tools it exposes."
+---
+
+Run and inspect requests from a Postman collection. It's listed under the **other** category in the toolkit type picker.
+
+## Prerequisites
+
+- An account at Postman with permission to issue an API token or credential, saved in Elitea as a **`postman`** credential (`/credentials/create-credential/<type>`).
+
+## Connect the toolkit
+
+<Steps>
+<Step title="Open the toolkit type picker">
+In the left navigation, open **Toolkits**, then select **New**. Filter the type picker by the **other** category, or search for "Postman".
+</Step>
+
+<Step title="Pick or create a credential">
+Under the credential field, choose an existing **postman** credential, or select **Create credential** to add one without leaving the form.
+</Step>
+
+<Step title="Save">
+Name the toolkit and select **Create**. It's now available to attach to agents, pipelines and conversations in this project.
+</Step>
+</Steps>
+
+<Screenshot id="toolkit-new-generic" alt="New toolkit dialog with the Postman type selected" />
+
+## Available tools
+
+<Accordion title="Available tools (31)">
+
+| Tool |
+|---|
+| Analyze |
+| Create folder |
+| Create request |
+| Delete collection |
+| Delete folder |
+| Delete request |
+| Duplicate collection |
+| Duplicate request |
+| Execute request |
+| Get collection |
+| Get collections |
+| Get folder |
+| Get request by id |
+| Get request by path |
+| Get request script |
+| Move folder |
+| Move request |
+| Search requests |
+| Update collection auth |
+| Update collection description |
+| Update collection variables |
+| Update folder |
+| Update request auth |
+| Update request body |
+| Update request description |
+| Update request headers |
+| Update request method |
+| Update request name |
+| Update request pre script |
+| Update request tests |
+| Update request url |
+
+</Accordion>
+
+## Common issues
+
+<Note>
+Both the Rust and Python workers materialise `postman`; this toolkit works the same regardless of which worker your deployment runs.
+</Note>
+
+<Note>
+The credential form for Postman supports **Check connection** — use it before saving to confirm Elitea can reach Postman with these details, instead of discovering an auth problem from a failed tool call later.
+</Note>

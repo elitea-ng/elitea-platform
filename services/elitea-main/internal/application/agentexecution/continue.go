@@ -641,7 +641,15 @@ func (service *CurrentApplicationStartService) currentContinuationInput(
 			return nil, nil, "", err
 		}
 		resolved.VersionDetails = frozen
-		input, err = currentApplicationInput(start, resolved, suggestionPolicy, toolkitGuardrails, nil)
+		// #870: memory recall is wired on turn START only
+		// (StartCurrentApplication, StartCurrentAdhoc). ContinueCurrentAgent
+		// resumes an interrupted (e.g. HITL-paused) turn that already began
+		// with whatever recall its own start performed; re-running recall
+		// here would answer a DIFFERENT question ("what should the model
+		// have known") after the model has already partly answered, which
+		// is out of this issue's scope. "" is the same no-recall behavior
+		// this call site had before #870.
+		input, err = currentApplicationInput(start, resolved, suggestionPolicy, toolkitGuardrails, nil, "")
 		if err != nil {
 			return nil, nil, "", err
 		}
@@ -674,7 +682,7 @@ func (service *CurrentApplicationStartService) currentContinuationInput(
 		if err != nil {
 			return nil, nil, "", err
 		}
-		input, err = currentAdhocInput(start, resolved, frozen, suggestionPolicy, toolkitGuardrails, nil)
+		input, err = currentAdhocInput(start, resolved, frozen, suggestionPolicy, toolkitGuardrails, nil, "") // #870: see currentApplicationInput's continuation call site
 		if err != nil {
 			return nil, nil, "", err
 		}

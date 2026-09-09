@@ -360,3 +360,116 @@ test.describe('DeepWiki chat history', () => {
     expect(cleared?.name, 'and still named after the question that opened it').toBe(first);
   });
 });
+
+/**
+ * DWIKI-018 — a reader-uploaded file reaches the invocation, prepended in
+ * front of the question (#873).
+ *
+ * The fixture `ask` echoes `arguments["question"]` verbatim
+ * (`run/fixture.go::fixtureAsk`), and that argument is derived AFTER
+ * `ApplyExtraContext` has already folded the attachment's content into it —
+ * so the answer below is a direct window onto what the engine received, the
+ * same technique DWIKI-016 uses for a wiki-page attachment.
+ */
+test.describe('DeepWiki chat file attachments', () => {
+  test.setTimeout(120_000);
+
+  test.use({ storageState: STORAGE_STATE.member });
+
+  test('DWIKI-018: an attached file’s content is prepended before the question', async ({ page }) => {
+    const drawer = await openChatDrawer(page);
+
+    await drawer.getByTestId('wiki-chat-attach-input').setInputFiles({
+      name: 'notes.md',
+      mimeType: 'text/plain',
+      buffer: Buffer.from('The onboarding checklist lives in a file nobody indexed.'),
+    });
+    await expect(drawer.getByTestId('wiki-chat-attach-chips')).toContainText('notes.md');
+
+    const question = 'What does the attached note say?';
+    await drawer.getByPlaceholder('Ask about this repository').fill(question);
+    await drawer.getByRole('button', { name: 'Send' }).click();
+
+    const answer = drawer.getByTestId('wiki-chat-answer').last();
+    await expect(answer).toContainText('Given these attached files:', { timeout: 60_000 });
+    await expect(answer).toContainText('--- file: notes.md ---');
+    await expect(answer).toContainText('The onboarding checklist lives in a file nobody indexed.');
+    // Prepended, not substituted: the reader's own question is still there.
+    await expect(answer).toContainText(question);
+    await expect(drawer.getByTestId('wiki-chat-error')).toHaveCount(0);
+  });
+
+  test('removing an attachment before sending leaves no trace of it in the invocation', async ({ page }) => {
+    const drawer = await openChatDrawer(page);
+
+    await drawer.getByTestId('wiki-chat-attach-input').setInputFiles({
+      name: 'scratch.txt',
+      mimeType: 'text/plain',
+      buffer: Buffer.from('this must never reach the provider'),
+    });
+    await expect(drawer.getByTestId('wiki-chat-attach-chips')).toContainText('scratch.txt');
+    // Not MUI's own `data-testid="CancelIcon"` — that is a dev-only MUI
+    // internal (`createSvgIcon`, stripped under NODE_ENV=production, which
+    // is what this app's E2E image builds), so `WikiFileAttach.tsx` now
+    // sets an explicit test id on the chip's delete icon instead.
+    await drawer.getByTestId('wiki-chat-attach-chips').getByTestId('wiki-chat-attach-chip-remove').click();
+    await expect(drawer.getByTestId('wiki-chat-attach-chips')).toHaveCount(0);
+
+    const question = 'A question with nothing attached';
+    await drawer.getByPlaceholder('Ask about this repository').fill(question);
+    await drawer.getByRole('button', { name: 'Send' }).click();
+
+    const answer = drawer.getByTestId('wiki-chat-answer').last();
+    await expect(answer).toContainText(`Fixture answer to: ${question}`, { timeout: 60_000 });
+    await expect(answer).not.toContainText('this must never reach the provider');
+  });
+});
+
+/**
+ * DWIKI-019 — the session list: every stored wiki chat for this toolkit is
+ * listable, resumable, and deletable, not just the one the browser last
+ * held a key to (#873).
+ */
+test.describe('DeepWiki chat sessions', () => {
+  test.setTimeout(180_000);
+
+  test.use({ storageState: STORAGE_STATE.member });
+
+  test('DWIKI-019: past sessions can be listed, resumed, and deleted', async ({ page }) => {
+    const stamp = Date.now();
+    await seedConversationKey(page, `dwiki-019-${stamp}`);
+    let drawer = await openChatDrawer(page);
+
+    const first = `first session question ${stamp}`;
+    await ask(page, first);
+
+    // "Clear" opens a NEW session; the one just asked stays stored.
+    await drawer.getByRole('button', { name: 'Clear the conversation' }).click();
+    const second = `second session question ${stamp}`;
+    await ask(page, second);
+
+    await drawer.getByTestId('wiki-chat-sessions-button').click();
+    const options = page.getByTestId('wiki-chat-session-option');
+    await expect(options.filter({ hasText: first })).toHaveCount(1);
+    await expect(options.filter({ hasText: second })).toHaveCount(1);
+
+    // Resume the FIRST session — the one this browser is not currently on.
+    await options.filter({ hasText: first }).click();
+    await expect(drawer.getByText(first, { exact: true })).toBeVisible({ timeout: 30_000 });
+    await expect(drawer.getByText(second, { exact: true })).toHaveCount(0);
+
+    // Delete the session now open. The drawer starts a fresh one rather
+    // than showing a transcript for a conversation that no longer exists.
+    await drawer.getByTestId('wiki-chat-sessions-button').click();
+    await options.filter({ hasText: first }).getByTestId('wiki-chat-session-delete').click();
+    const confirmModal = page.getByTestId('wiki-chat-session-delete-modal');
+    await confirmModal.getByRole('button', { name: 'Delete', exact: true }).click();
+    await expect(page.getByText('Ask a question about this repository')).toBeVisible();
+
+    // And it is gone from the list — not merely cleared off screen.
+    drawer = page.getByTestId('wiki-chat-drawer');
+    await drawer.getByTestId('wiki-chat-sessions-button').click();
+    await expect(page.getByTestId('wiki-chat-session-option').filter({ hasText: first })).toHaveCount(0);
+    await expect(page.getByTestId('wiki-chat-session-option').filter({ hasText: second })).toHaveCount(1);
+  });
+});

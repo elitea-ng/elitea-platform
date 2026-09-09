@@ -56,6 +56,14 @@ import {
 } from './api/conversationApi';
 import { downloadConversationExport } from './api/conversationExportApi';
 import {
+  deleteMessageFeedback,
+  getMessageFeedback,
+  setMessageFeedback,
+  useDeleteMessageFeedbackMutation,
+  useMessageFeedbackQuery,
+  useSetMessageFeedbackMutation,
+} from './api/messageFeedbackApi';
+import {
   deleteAllMessagesFromConversation,
   deleteMessageFromConversation,
   messageList,
@@ -152,6 +160,17 @@ export const conversationApi = {
    * budget is exactly met, and an export IS a conversation read.
    */
   downloadExport: downloadConversationExport,
+  /**
+   * Message like/dislike + optional comment (#880). Bundled the same way
+   * `downloadExport` just above is — a real, spec-described route, but the
+   * 20-symbol barrel budget has no room for three more top-level exports.
+   */
+  useMessageFeedback: useMessageFeedbackQuery,
+  useSetMessageFeedback: useSetMessageFeedbackMutation,
+  useDeleteMessageFeedback: useDeleteMessageFeedbackMutation,
+  getMessageFeedback,
+  setMessageFeedback,
+  deleteMessageFeedback,
 } as const;
 
 /** The 8 context-management endpoints (`../api/contextManagementApi.ts`), same hooks + fetchers bundling as `conversationApi`. */

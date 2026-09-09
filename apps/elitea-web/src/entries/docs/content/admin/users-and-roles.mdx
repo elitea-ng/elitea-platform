@@ -1,0 +1,54 @@
+---
+title: "Users and roles"
+description: "Manage every account on the deployment and edit the permission matrix that defines each role."
+---
+
+Users and Roles are two related admin pages: Users acts on individual accounts, and Roles defines what each role is allowed to do.
+
+## Manage users
+
+Open **Users** in the admin console. The table lists every account on the deployment, with search.
+
+<Steps>
+  <Step title="Find the account">
+    Search by name or e-mail.
+  </Step>
+  <Step title="Act on it">
+    From the row menu: delete the account, grant or revoke the global admin role, or suspend/unsuspend it. A suspended account cannot sign in.
+  </Step>
+  <Step title="Review activity">
+    Open the activity drawer for a per-user view built on the same audit data as the Audit Trail page.
+  </Step>
+  <Step title="Export">
+    **Export to CSV** downloads the current list.
+  </Step>
+</Steps>
+
+<Screenshot id="admin-users-table" alt="Admin Users table with row actions" />
+
+<Note>
+Invitations do not have a dedicated accept-invite page. A new member accepts an invite by signing in; the invite is resolved by matching their identity on first login.
+</Note>
+
+## Edit roles and permissions
+
+Open **Roles**. It shows a permission matrix across three scopes, each a tab:
+
+- **Central** — the administration-mode roles used across the deployment (the ones this admin console itself is gated on).
+- **Public Project** — roles available inside the shared public project.
+- **Support Project** — roles for the support project, if one is configured for this deployment. If none is configured, this tab reports that rather than an empty grid.
+
+<Steps>
+  <Step title="Toggle a permission">
+    Click a cell to grant or revoke that permission for that role, within the selected scope.
+  </Step>
+  <Step title="Create, rename, or delete a role">
+    Use the controls above the matrix. A new standard role only reaches projects that already exist once you use **Apply to Projects** next to it — creating the role does not retroactively push it everywhere by itself.
+  </Step>
+</Steps>
+
+<Screenshot id="admin-roles-matrix" alt="Roles permission matrix with scope tabs" />
+
+<Warning>
+The `super_admin` column is disabled for anyone who is not a super admin, in the console only — this is a display convenience, not an enforced rule. The server does not treat `super_admin` specially beyond the permission checks that apply to any other role.
+</Warning>

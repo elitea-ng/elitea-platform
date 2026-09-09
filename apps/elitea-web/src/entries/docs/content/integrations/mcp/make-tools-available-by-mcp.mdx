@@ -1,0 +1,35 @@
+---
+title: "Make toolkit tools available by MCP"
+description: "Expose specific tools from a connected toolkit to MCP clients, alongside your mcp-tagged agents and pipelines."
+---
+
+Agents and pipelines reach MCP clients through a tag, but toolkit tools reach them through a per-toolkit checkbox: **Make tools available by MCP**, in the toolkit editor's Tools section. Only the tools you've selected on a flagged toolkit are published; nothing is exposed by default.
+
+## Expose a toolkit's tools
+
+<Steps>
+<Step title="Open the toolkit">
+Open an existing toolkit (or create one — see the toolkit's own page under [Toolkits](/menus/toolkits)), and go to its Tools tab.
+</Step>
+<Step title="Select the tools to expose">
+Choose which of the toolkit's tools should be callable at all (the same selection agents and pipelines use).
+</Step>
+<Step title="Enable Make tools available by MCP">
+Check **Make tools available by MCP**. Elitea publishes one MCP tool per selected tool, named `<toolkit>_<tool>` (for example `github_create_issue`).
+</Step>
+<Step title="Save">
+Select **Save**. The client's next `tools/list` call picks up the change — reconnect the client if it caches the tool list for the session.
+</Step>
+</Steps>
+
+<Screenshot id="mcp-tool-selection" alt="Toolkit editor Tools tab with Make tools available by MCP checked" />
+
+## How a call runs
+
+A `tools/call` for a published toolkit tool dispatches through the same run path chat uses — with idempotency and polling for the worker's result — not a stub. It still needs the toolkit's own prerequisites: the right worker for that toolkit type, and a working credential.
+
+## Common issues
+
+<Note>
+This only controls MCP exposure — the toolkit still needs to work in ordinary use (the right worker, a valid credential) before its tools will succeed when an MCP client calls them; see the toolkit's own page for that.
+</Note>

@@ -36,6 +36,14 @@ type mockSkillRepo struct {
 	updateCalls int
 	// relationErr is the error AttachSkill and DetachSkill return.
 	relationErr error
+
+	// #874 version-machinery call recorders, so a test can assert what the
+	// repository was asked to do without a real database.
+	createVersionCalls int
+	updateVersionCalls int
+	deleteVersionCalls []string
+	restoreCalls       []string
+	setDefaultCalls    []string
 }
 
 func (m *mockSkillRepo) List(_ context.Context, _ string, params handler.ListParams) (handler.ListResponse, error) {
@@ -106,6 +114,158 @@ func (m *mockSkillRepo) Update(_ context.Context, projectID, skillID string, ski
 
 func (m *mockSkillRepo) Delete(_ context.Context, _, _ string) error {
 	return m.err
+}
+
+// ---- #874 version machinery ---------------------------------------------
+
+func (m *mockSkillRepo) GetVersion(_ context.Context, _, skillID, versionID string) (handler.Skill, error) {
+	if m.err != nil {
+		return handler.Skill{}, m.err
+	}
+	for _, s := range m.skills {
+		if s.ID != skillID {
+			continue
+		}
+		for _, v := range s.Versions {
+			if v.ID == versionID {
+				out := s
+				picked := v
+				out.VersionDetails = &picked
+				out.Instructions = picked.Instructions
+				out.Tags = picked.Tags
+				return out, nil
+			}
+		}
+		return handler.Skill{}, apierr.NotFound("skill version not found")
+	}
+	return handler.Skill{}, apierr.NotFound("skill not found")
+}
+
+func (m *mockSkillRepo) CreateVersion(_ context.Context, _, skillID string, input handler.VersionCreateInput) (handler.Skill, error) {
+	m.createVersionCalls++
+	if m.err != nil {
+		return handler.Skill{}, m.err
+	}
+	for i, s := range m.skills {
+		if s.ID != skillID {
+			continue
+		}
+		for _, existing := range s.Versions {
+			if existing.Name == input.Name {
+				return handler.Skill{}, apierr.Conflict("a version with that name already exists")
+			}
+		}
+		v := handler.SkillVersion{ID: "new-version-id", Name: input.Name, Instructions: input.Instructions, Tags: input.Tags}
+		m.skills[i].Versions = append(m.skills[i].Versions, v)
+		out := m.skills[i]
+		out.VersionDetails = &v
+		out.Instructions = v.Instructions
+		out.Tags = v.Tags
+		return out, nil
+	}
+	return handler.Skill{}, apierr.NotFound("skill not found")
+}
+
+func (m *mockSkillRepo) UpdateVersion(_ context.Context, _, skillID, versionID string, skill handler.Skill) (handler.Skill, error) {
+	m.updateVersionCalls++
+	if m.err != nil {
+		return handler.Skill{}, m.err
+	}
+	for i, s := range m.skills {
+		if s.ID != skillID {
+			continue
+		}
+		m.skills[i].Name = skill.Name
+		m.skills[i].Description = skill.Description
+		for j, v := range s.Versions {
+			if v.ID == versionID {
+				m.skills[i].Versions[j].Instructions = skill.Instructions
+				m.skills[i].Versions[j].Tags = skill.Tags
+				out := m.skills[i]
+				picked := m.skills[i].Versions[j]
+				out.VersionDetails = &picked
+				out.Instructions = picked.Instructions
+				out.Tags = picked.Tags
+				return out, nil
+			}
+		}
+		return handler.Skill{}, apierr.NotFound("skill version not found")
+	}
+	return handler.Skill{}, apierr.NotFound("skill not found")
+}
+
+func (m *mockSkillRepo) DeleteVersion(_ context.Context, _, skillID, versionID string) error {
+	m.deleteVersionCalls = append(m.deleteVersionCalls, versionID)
+	if m.err != nil {
+		return m.err
+	}
+	for i, s := range m.skills {
+		if s.ID != skillID {
+			continue
+		}
+		for j, v := range s.Versions {
+			if v.ID == versionID {
+				if v.Name == "base" {
+					return apierr.BadRequest(`cannot delete the "base" version`)
+				}
+				m.skills[i].Versions = append(s.Versions[:j:j], s.Versions[j+1:]...)
+				return nil
+			}
+		}
+		return apierr.NotFound("skill version not found")
+	}
+	return apierr.NotFound("skill not found")
+}
+
+func (m *mockSkillRepo) RestoreVersion(_ context.Context, _, skillID, versionID string) (handler.Skill, error) {
+	m.restoreCalls = append(m.restoreCalls, versionID)
+	if m.err != nil {
+		return handler.Skill{}, m.err
+	}
+	for i, s := range m.skills {
+		if s.ID != skillID {
+			continue
+		}
+		var source *handler.SkillVersion
+		for _, v := range s.Versions {
+			if v.ID == versionID {
+				picked := v
+				source = &picked
+			}
+		}
+		if source == nil {
+			return handler.Skill{}, apierr.NotFound("skill version not found")
+		}
+		for j, v := range m.skills[i].Versions {
+			if v.Name == "base" {
+				m.skills[i].Versions[j].Instructions = source.Instructions
+				m.skills[i].Versions[j].Tags = source.Tags
+				out := m.skills[i]
+				picked := m.skills[i].Versions[j]
+				out.VersionDetails = &picked
+				out.Instructions = picked.Instructions
+				out.Tags = picked.Tags
+				return out, nil
+			}
+		}
+		return handler.Skill{}, apierr.NotFound("base version not found")
+	}
+	return handler.Skill{}, apierr.NotFound("skill not found")
+}
+
+func (m *mockSkillRepo) SetDefaultVersion(_ context.Context, _, skillID, versionID string) (handler.Skill, error) {
+	m.setDefaultCalls = append(m.setDefaultCalls, versionID)
+	if m.err != nil {
+		return handler.Skill{}, m.err
+	}
+	for i, s := range m.skills {
+		if s.ID != skillID {
+			continue
+		}
+		m.skills[i].DefaultVersionID = versionID
+		return m.skills[i], nil
+	}
+	return handler.Skill{}, apierr.NotFound("skill not found")
 }
 
 // attachCall records one AttachSkill or DetachSkill call. The relation form of
@@ -946,5 +1106,267 @@ func TestSkillRelation_CarriesTheRepositoryStatus(t *testing.T) {
 				t.Errorf("status = %d, want %d; body: %s", rec.Code, tc.want, rec.Body.String())
 			}
 		})
+	}
+}
+
+// ---- #874 version machinery (HTTP layer) --------------------------------
+
+func TestSkillCreateVersion_RejectsEmptyAndReservedNames(t *testing.T) {
+	repo := &mockSkillRepo{skills: []handler.Skill{{ID: "s-1", Name: "Reviewer"}}}
+	r := setupSkillsRouter(repo)
+
+	cases := []struct {
+		name string
+		body string
+		want int
+	}{
+		{"empty name", `{"instructions":"i"}`, http.StatusBadRequest},
+		{"blank name", `{"name":"   ","instructions":"i"}`, http.StatusBadRequest},
+		{"reserved base", `{"name":"base","instructions":"i"}`, http.StatusBadRequest},
+		{"valid", `{"name":"v2","instructions":"i"}`, http.StatusCreated},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/v2/projects/proj-1/skills/s-1/versions",
+				strings.NewReader(tc.body))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, req)
+			if rec.Code != tc.want {
+				t.Errorf("status = %d, want %d; body: %s", rec.Code, tc.want, rec.Body.String())
+			}
+		})
+	}
+	if repo.createVersionCalls != 1 {
+		t.Errorf("repo.CreateVersion called %d times, want exactly 1 (only the valid case)", repo.createVersionCalls)
+	}
+}
+
+func TestSkillCreateVersion_ReachesRepositoryWithTheRightSkillID(t *testing.T) {
+	repo := &mockSkillRepo{skills: []handler.Skill{{ID: "s-1", Name: "Reviewer"}}}
+	r := setupSkillsRouter(repo)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/projects/proj-1/skills/s-1/versions",
+		strings.NewReader(`{"name":"v2","instructions":"new content","tags":["a","b"]}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, body: %s", rec.Code, rec.Body.String())
+	}
+	var got handler.Skill
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.VersionDetails == nil || got.VersionDetails.Name != "v2" || got.VersionDetails.Instructions != "new content" {
+		t.Errorf("version_details=%+v", got.VersionDetails)
+	}
+	// The route used to be bound to Create, which ignores {skillID} — this
+	// is the regression #874 fixes: the version must land on THIS skill.
+	if len(repo.skills[0].Versions) != 1 || repo.skills[0].Versions[0].Name != "v2" {
+		t.Errorf("repo.skills[0].Versions=%+v, want the new version attached to s-1", repo.skills[0].Versions)
+	}
+	if len(repo.skills) != 1 {
+		t.Errorf("repo.skills=%+v, want CreateVersion to add NO new skill row (the pre-#874 bug created one)", repo.skills)
+	}
+}
+
+func TestSkillGet_VersionScopedRouteReturnsTheNamedVersion(t *testing.T) {
+	repo := &mockSkillRepo{skills: []handler.Skill{{
+		ID: "s-1", Name: "Reviewer",
+		Versions: []handler.SkillVersion{
+			{ID: "v-base", Name: "base", Instructions: "base content"},
+			{ID: "v-2", Name: "v2", Instructions: "v2 content"},
+		},
+	}}}
+	r := setupSkillsRouter(repo)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v2/projects/proj-1/skills/s-1/v-2", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body: %s", rec.Code, rec.Body.String())
+	}
+	var got handler.Skill
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.VersionDetails == nil || got.VersionDetails.ID != "v-2" || got.Instructions != "v2 content" {
+		t.Errorf("got=%+v, want version v-2's content", got)
+	}
+}
+
+func TestSkillUpdate_VersionScopedRouteEditsTheNamedVersion(t *testing.T) {
+	repo := &mockSkillRepo{skills: []handler.Skill{{
+		ID: "s-1", Name: "Reviewer",
+		Versions: []handler.SkillVersion{
+			{ID: "v-base", Name: "base", Instructions: "base content"},
+			{ID: "v-2", Name: "v2", Instructions: "old v2 content"},
+		},
+	}}}
+	r := setupSkillsRouter(repo)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v2/projects/proj-1/skills/s-1/v-2",
+		strings.NewReader(`{"name":"Reviewer","description":"d","instructions":"new v2 content","tags":["x"]}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body: %s", rec.Code, rec.Body.String())
+	}
+	if repo.updateVersionCalls != 1 {
+		t.Errorf("repo.UpdateVersion called %d times, want 1", repo.updateVersionCalls)
+	}
+	if repo.updateCalls != 0 {
+		t.Errorf("repo.Update (the unversioned/base path) called %d times, want 0 — a versioned PUT must not touch base", repo.updateCalls)
+	}
+}
+
+func TestSkillDelete_VersionScopedRouteDeletesOnlyTheNamedVersion(t *testing.T) {
+	repo := &mockSkillRepo{skills: []handler.Skill{{
+		ID: "s-1", Name: "Reviewer",
+		Versions: []handler.SkillVersion{
+			{ID: "v-base", Name: "base"},
+			{ID: "v-2", Name: "v2"},
+		},
+	}}}
+	r := setupSkillsRouter(repo)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v2/projects/proj-1/skills/s-1/v-2", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, body: %s", rec.Code, rec.Body.String())
+	}
+	if len(repo.deleteVersionCalls) != 1 || repo.deleteVersionCalls[0] != "v-2" {
+		t.Errorf("deleteVersionCalls=%v, want [v-2]", repo.deleteVersionCalls)
+	}
+}
+
+func TestSkillDelete_VersionScopedRouteRefusesBase(t *testing.T) {
+	repo := &mockSkillRepo{skills: []handler.Skill{{
+		ID: "s-1", Name: "Reviewer",
+		Versions: []handler.SkillVersion{{ID: "v-base", Name: "base"}},
+	}}}
+	r := setupSkillsRouter(repo)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v2/projects/proj-1/skills/s-1/v-base", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (base refused); body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestSkillGet_UnversionedRouteStillListsEveryVersion is the "no separate
+// listVersions" contract Repository's doc comment states: the plain GET
+// /skill/{mode}/{projectID}/{skillID} — the one call the version
+// selector/compare UI already makes on page load — carries every version in
+// `versions[]`, not just `base`. skills.getSkill has no companion
+// skills.listVersions entry in endpoints.manifest.json for exactly this
+// reason.
+func TestSkillGet_UnversionedRouteStillListsEveryVersion(t *testing.T) {
+	repo := &mockSkillRepo{skills: []handler.Skill{{
+		ID: "s-1", Name: "Reviewer",
+		Versions: []handler.SkillVersion{
+			{ID: "v-base", Name: "base"},
+			{ID: "v-2", Name: "v2"},
+		},
+	}}}
+	r := setupSkillsRouter(repo)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v2/projects/proj-1/skills/s-1", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body: %s", rec.Code, rec.Body.String())
+	}
+	var got handler.Skill
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got.Versions) != 2 {
+		t.Fatalf("versions=%+v, want 2", got.Versions)
+	}
+}
+
+func TestSkillRestoreVersion_CopiesContentOntoBase(t *testing.T) {
+	repo := &mockSkillRepo{skills: []handler.Skill{{
+		ID: "s-1", Name: "Reviewer",
+		Versions: []handler.SkillVersion{
+			{ID: "v-base", Name: "base", Instructions: "stale"},
+			{ID: "v-2", Name: "v2", Instructions: "the good content"},
+		},
+	}}}
+	r := setupSkillsRouter(repo)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/projects/proj-1/skills/s-1/versions/v-2/restore", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body: %s", rec.Code, rec.Body.String())
+	}
+	var got handler.Skill
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.VersionDetails == nil || got.VersionDetails.Name != "base" || got.VersionDetails.Instructions != "the good content" {
+		t.Errorf("got=%+v, want base restored to v-2's content", got)
+	}
+	if len(repo.restoreCalls) != 1 || repo.restoreCalls[0] != "v-2" {
+		t.Errorf("restoreCalls=%v, want [v-2]", repo.restoreCalls)
+	}
+}
+
+func TestSkillSetDefaultVersion_ReadsVersionIDAndDoesNotTouchTheSkillName(t *testing.T) {
+	repo := &mockSkillRepo{skills: []handler.Skill{{
+		ID: "s-1", Name: "Reviewer",
+		Versions: []handler.SkillVersion{{ID: "2", Name: "v2"}},
+	}}}
+	r := setupSkillsRouter(repo)
+
+	// Before #874 this exact body (what setDefaultSkillVersion sends) reached
+	// the generic Update handler, which read no "version_id" key and wrote
+	// the skill's own name to "". version_id is a row id (relationID/rowID),
+	// so it must be numeric — the same leniency AttachSkill's tests use.
+	req := httptest.NewRequest(http.MethodPatch, "/api/v2/projects/proj-1/skills/s-1/default_version",
+		strings.NewReader(`{"version_id":"2"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body: %s", rec.Code, rec.Body.String())
+	}
+	if len(repo.setDefaultCalls) != 1 || repo.setDefaultCalls[0] != "2" {
+		t.Errorf("setDefaultCalls=%v, want [2]", repo.setDefaultCalls)
+	}
+	if repo.skills[0].Name != "Reviewer" {
+		t.Errorf("skill name=%q, want unchanged %q (regression: used to be wiped to empty)", repo.skills[0].Name, "Reviewer")
+	}
+}
+
+func TestSkillSetDefaultVersion_RequiresVersionID(t *testing.T) {
+	repo := &mockSkillRepo{skills: []handler.Skill{{ID: "s-1", Name: "Reviewer"}}}
+	r := setupSkillsRouter(repo)
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/v2/projects/proj-1/skills/s-1/default_version",
+		strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %s", rec.Code, rec.Body.String())
+	}
+	if len(repo.setDefaultCalls) != 0 {
+		t.Errorf("setDefaultCalls=%v, want none — repository must not be reached with no version_id", repo.setDefaultCalls)
 	}
 }

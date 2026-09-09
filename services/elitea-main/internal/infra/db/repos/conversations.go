@@ -835,6 +835,37 @@ func (r *ConversationsRepo) AddParticipant(ctx context.Context, projectID, conve
 	if _, err := transaction.Exec(ctx, mapping, id, participantID, entitySettings); err != nil {
 		return fmt.Errorf("conversations: add participant mapping: %w", err)
 	}
+
+	// Stamp `meta.single_participant` for the entity types run-history
+	// filters on (issue #868's own DoD: the agent/toolkit/pipeline editor's
+	// History tab reads this conversation back through
+	// `?entity_name=...&entity_meta_id=...`, and `Handler.List` (see its own
+	// comment) has ALWAYS matched only against this meta field — DeepWiki's
+	// `resolveConversation` is the one caller that ever wrote it. A
+	// conversation created the ordinary way (this method) never did, so the
+	// filter matched nothing and every run-history tab read back empty
+	// (agents.run-history.spec.ts / toolkits.run-history.spec.ts, #882 CI).
+	//
+	// `llm`/`dummy`/`user` participants are not "run history" subjects and
+	// are left out, matching participantDisplayMeta's own default-vs-special
+	// split above. Last write wins for a conversation carrying more than one
+	// trackable participant — no journey exercises that shape today.
+	if entityName == "application" || entityName == "toolkit" || entityName == "pipeline" {
+		singleParticipant, err := json.Marshal(map[string]any{
+			"entity_name": entityName,
+			"entity_meta": body["entity_meta"],
+		})
+		if err != nil {
+			return fmt.Errorf("conversations: encode single_participant: %w", err)
+		}
+		metaUpdate := fmt.Sprintf(`UPDATE %s.chat_conversations
+			SET meta = COALESCE(meta, '{}'::jsonb) || jsonb_build_object('single_participant', $1::jsonb)
+			WHERE id = $2`, s)
+		if _, err := transaction.Exec(ctx, metaUpdate, singleParticipant, id); err != nil {
+			return fmt.Errorf("conversations: stamp single_participant: %w", err)
+		}
+	}
+
 	if err := transaction.Commit(ctx); err != nil {
 		return fmt.Errorf("conversations: add participant commit: %w", err)
 	}
@@ -1395,6 +1426,175 @@ func (r *ConversationsRepo) GetMessageByUUID(ctx context.Context, projectID, mes
 		"message_items":         items,
 	}
 
+	return result, nil
+}
+
+// messageGroupExists proves a message-group uuid names a row IN THIS
+// PROJECT'S SCHEMA — chat_message_group.uuid is generated per tenant, so
+// "some project has this uuid" (what the feedback table's own FK checks) is
+// not the same claim as "this project does".
+func (r *ConversationsRepo) messageGroupExists(ctx context.Context, s, messageUUID string) (bool, error) {
+	var exists bool
+	q := fmt.Sprintf(`SELECT EXISTS(SELECT 1 FROM %s.chat_message_group WHERE uuid = $1::uuid)`, s)
+	if err := r.pool.QueryRow(ctx, q, messageUUID).Scan(&exists); err != nil {
+		return false, fmt.Errorf("conversations: check message exists: %w", err)
+	}
+	return exists, nil
+}
+
+// readMessageFeedbackSummary reads the aggregate like/dislike counts for one
+// message plus the CALLER's own row (nil when they have not rated it yet).
+// Shared by all three feedback endpoints — Get answers it directly, Set and
+// Delete each return the summary AFTER their write so the client never has
+// to issue a second request to see the effect of the first.
+func (r *ConversationsRepo) readMessageFeedbackSummary(ctx context.Context, s, messageUUID, userID string) (conversations.MessageFeedbackSummary, error) {
+	var summary conversations.MessageFeedbackSummary
+
+	aggQ := fmt.Sprintf(`
+		SELECT
+			COUNT(*) FILTER (WHERE rating = 1) AS likes,
+			COUNT(*) FILTER (WHERE rating = -1) AS dislikes
+		FROM %s.chat_message_feedback WHERE message_group_uuid = $1::uuid`, s)
+	if err := r.pool.QueryRow(ctx, aggQ, messageUUID).Scan(&summary.Likes, &summary.Dislikes); err != nil {
+		return summary, fmt.Errorf("conversations: aggregate message feedback: %w", err)
+	}
+
+	// An empty userID is an unauthenticated caller (GetMessageFeedback is
+	// reachable with one in the same defensive style GetMessage is) — there
+	// is no "mine" to look up.
+	if userID == "" {
+		return summary, nil
+	}
+
+	mineQ := fmt.Sprintf(`
+		SELECT rating, COALESCE(comment, '')
+		FROM %s.chat_message_feedback WHERE message_group_uuid = $1::uuid AND user_id = $2`, s)
+	var rating int
+	var comment string
+	switch err := r.pool.QueryRow(ctx, mineQ, messageUUID, userID).Scan(&rating, &comment); {
+	case err == nil:
+		summary.Mine = &conversations.MessageFeedback{Rating: rating, Comment: comment}
+	case errors.Is(err, pgx.ErrNoRows):
+		// No vote from this caller yet — Mine stays nil, not an error.
+	default:
+		return summary, fmt.Errorf("conversations: read caller's message feedback: %w", err)
+	}
+
+	return summary, nil
+}
+
+// GetMessageFeedback answers the aggregate counts plus the caller's own vote
+// for one message (#880). 404s a message that does not exist in this
+// project, same as GetMessageByUUID — "feedback for a message this project
+// never had" is not a meaningful zero.
+func (r *ConversationsRepo) GetMessageFeedback(ctx context.Context, projectID, messageUUID, userID string) (conversations.MessageFeedbackSummary, error) {
+	s := schema(projectID)
+	if _, err := uuid.Parse(messageUUID); err != nil {
+		return conversations.MessageFeedbackSummary{}, apierr.NotFound("message not found")
+	}
+	exists, err := r.messageGroupExists(ctx, s, messageUUID)
+	if err != nil {
+		return conversations.MessageFeedbackSummary{}, err
+	}
+	if !exists {
+		return conversations.MessageFeedbackSummary{}, apierr.NotFound("message not found")
+	}
+	return r.readMessageFeedbackSummary(ctx, s, messageUUID, userID)
+}
+
+// SetMessageFeedback upserts the caller's like/dislike + optional comment on
+// one message (#880). ON CONFLICT DO UPDATE is what makes "change your mind"
+// replace the row instead of accumulating a second one — the table's own
+// UNIQUE(message_group_uuid, user_id) constraint (tenant/0135) is what makes
+// that safe under a concurrent write from the same user (two tabs, a retried
+// request): both upserts land, in commit order, and neither can duplicate.
+func (r *ConversationsRepo) SetMessageFeedback(ctx context.Context, projectID, messageUUID, userID string, rating int, comment string) (conversations.MessageFeedbackSummary, error) {
+	s := schema(projectID)
+	if _, err := uuid.Parse(messageUUID); err != nil {
+		return conversations.MessageFeedbackSummary{}, apierr.NotFound("message not found")
+	}
+	exists, err := r.messageGroupExists(ctx, s, messageUUID)
+	if err != nil {
+		return conversations.MessageFeedbackSummary{}, err
+	}
+	if !exists {
+		return conversations.MessageFeedbackSummary{}, apierr.NotFound("message not found")
+	}
+
+	upsert := fmt.Sprintf(`
+		INSERT INTO %s.chat_message_feedback (message_group_uuid, user_id, rating, comment, created_at, updated_at)
+		VALUES ($1::uuid, $2, $3, NULLIF($4, ''), now(), now())
+		ON CONFLICT (message_group_uuid, user_id)
+		DO UPDATE SET rating = EXCLUDED.rating, comment = EXCLUDED.comment, updated_at = now()`, s)
+	if _, err := r.pool.Exec(ctx, upsert, messageUUID, userID, rating, comment); err != nil {
+		return conversations.MessageFeedbackSummary{}, fmt.Errorf("conversations: set message feedback: %w", err)
+	}
+
+	return r.readMessageFeedbackSummary(ctx, s, messageUUID, userID)
+}
+
+// DeleteMessageFeedback retracts the caller's own like/dislike on one
+// message (#880). Deleting a row that never existed (the caller had not
+// voted) is a no-op, not an error — the returned summary is simply
+// unchanged, matching DELETE's usual idempotent shape.
+func (r *ConversationsRepo) DeleteMessageFeedback(ctx context.Context, projectID, messageUUID, userID string) (conversations.MessageFeedbackSummary, error) {
+	s := schema(projectID)
+	if _, err := uuid.Parse(messageUUID); err != nil {
+		return conversations.MessageFeedbackSummary{}, apierr.NotFound("message not found")
+	}
+
+	del := fmt.Sprintf(`DELETE FROM %s.chat_message_feedback WHERE message_group_uuid = $1::uuid AND user_id = $2`, s)
+	if _, err := r.pool.Exec(ctx, del, messageUUID, userID); err != nil {
+		return conversations.MessageFeedbackSummary{}, fmt.Errorf("conversations: delete message feedback: %w", err)
+	}
+
+	return r.readMessageFeedbackSummary(ctx, s, messageUUID, userID)
+}
+
+// ListMessageFeedbackBatch answers every message's like/dislike summary in
+// ONE query — Export's caller (export.go) walks up to exportMessageCap
+// messages, and reading feedback one message at a time would turn one
+// export into a query per message. Messages with no feedback row at all are
+// simply absent from the returned map, same absence-means-unrated contract
+// `readMessageFeedbackSummary` uses for `Mine`.
+func (r *ConversationsRepo) ListMessageFeedbackBatch(ctx context.Context, projectID string, messageUUIDs []string, userID string) (map[string]conversations.MessageFeedbackSummary, error) {
+	result := make(map[string]conversations.MessageFeedbackSummary)
+	if len(messageUUIDs) == 0 {
+		return result, nil
+	}
+	s := schema(projectID)
+
+	q := fmt.Sprintf(`
+		SELECT message_group_uuid::text, rating, COALESCE(comment, ''), user_id::text
+		FROM %s.chat_message_feedback WHERE message_group_uuid = ANY($1::uuid[])`, s)
+	rows, err := r.pool.Query(ctx, q, messageUUIDs)
+	if err != nil {
+		return nil, fmt.Errorf("conversations: batch message feedback: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var messageUUID, comment, rowUserID string
+		var rating int
+		if err := rows.Scan(&messageUUID, &rating, &comment, &rowUserID); err != nil {
+			return nil, fmt.Errorf("conversations: scan batch message feedback: %w", err)
+		}
+		summary := result[messageUUID]
+		switch rating {
+		case 1:
+			summary.Likes++
+		case -1:
+			summary.Dislikes++
+		}
+		if userID != "" && rowUserID == userID {
+			mine := conversations.MessageFeedback{Rating: rating, Comment: comment}
+			summary.Mine = &mine
+		}
+		result[messageUUID] = summary
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("conversations: batch message feedback: %w", err)
+	}
 	return result, nil
 }
 

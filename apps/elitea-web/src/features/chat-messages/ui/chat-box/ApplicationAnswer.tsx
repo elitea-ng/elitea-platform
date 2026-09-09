@@ -35,18 +35,18 @@ import Typography from '@mui/material/Typography';
 
 import { ApplicationAnswerActions } from './ApplicationAnswerActions';
 import { AssistantAvatar } from './MessageAvatar';
+import { MessageFeedbackControl } from './MessageFeedbackControl';
+import { RememberMemoryAction } from './RememberMemoryAction';
 import { MessageHeaderRow } from './MessageHeaderRow';
 import { actionKey, asDraft, ApplicationAnswerThinking, swarmChildContent } from './ApplicationAnswerThinking';
 import { ChatContinue } from '../chat-continue/ChatContinue';
-import type { ChatContinueProps, McpAuthRequiredAction } from '../chat-continue/ChatContinue';
+import type { McpAuthRequiredAction } from '../chat-continue/ChatContinue';
 import { ChatHitlActions } from '../chat-hitl-actions/ChatHitlActions';
-import type { HitlInterrupt, HitlResumePayload } from '../chat-hitl-actions/ChatHitlActions';
+import type { HitlInterrupt } from '../chat-hitl-actions/ChatHitlActions';
 import { ErrorTrace } from '../error-trace/ErrorTrace';
 
 import { AnswerContent } from './AnswerContent';
-import type { AnswerCanvasSelection } from './AnswerContent';
 import { readAnswerItems } from './AnswerMessageItems';
-import type { CanvasEditPayload, CodeBlockInfo } from '../canvas/Canvas';
 
 import { t } from '@/shared/i18n';
 import { BasicAccordion } from '@/shared/ui/BasicAccordion';
@@ -56,100 +56,32 @@ import { TOOL_ACTION_TYPES, ToolActionStatus } from '@/shared/lib/chat';
 import type { SubAgentGroupable } from '../../lib/subAgentGrouping';
 import type { ChatMessage } from '../../lib/convertMessagesToChatHistory';
 
-/** Loading/streaming/regenerating status flags, grouped to stay under the component-props budget. */
-export interface ApplicationAnswerStatus {
-  readonly isLoading?: boolean;
-  readonly isStreaming?: boolean;
-  readonly isRegenerating?: boolean;
-}
+import type { ApplicationAnswerProps } from './ApplicationAnswer.types';
 
-/** Copy/delete/regenerate action handlers, grouped to stay under the component-props budget. */
-export interface ApplicationAnswerActionHandlers {
-  readonly onCopy?: (() => void) | undefined;
-  readonly onDelete?: (() => void) | undefined;
-  readonly onRegenerate?: (() => void) | undefined;
-  readonly shouldDisableRegenerate?: boolean;
-  /**
-   * Opens the canvas editor for a `canvas_message` item in this answer — the
-   * opener issue 853 is about. It rides in this group rather than as its own
-   * prop because the component is at its §3.5 props ceiling, and it belongs
-   * with the other per-message actions.
-   */
-  readonly onEditCanvas?: ((payload: CanvasEditPayload) => void) | undefined;
-  /** The canvas block currently open in the editor, so this answer's copy of it shows a placeholder instead. */
-  readonly selectedCodeBlockInfo?: CodeBlockInfo | undefined;
-  /** Carves a canvas out of a range the reader HIGHLIGHTED in this answer — see `./AnswerContent`, which stamps this row's group onto it. */
-  readonly onCreateCanvasFromSelection?: ((payload: AnswerCanvasSelection) => void) | undefined;
-}
-
-/** Read-aloud (TTS) props, grouped to stay under the component-props budget. */
-export interface ApplicationAnswerTts {
-  readonly onAutoSpeak?: ((text: string, messageId: string) => void) | undefined;
-  readonly speakingMessageId?: string;
-  /** Not yet consumed, see module doc. */
-  readonly speakingSegments?: readonly unknown[];
-  /** The word being read aloud, as an offset range — see module doc for the `speakingMessageId` gate. */
-  readonly spokenRange?: { readonly start: number; readonly end: number };
-}
-
-/** MCP-auth / token-limit continue-execution props, grouped to stay under the component-props budget. */
-export interface ApplicationAnswerContinuation {
-  readonly onContinueMcpExecution?: ((messageId: string, addToIgnoreList?: boolean, authorizationRequestId?: string) => void) | undefined;
-  readonly onContinueTokenLimitExecution?: ((messageId: string) => void) | undefined;
-  readonly renderAuthModal?: ChatContinueProps['renderAuthModal'];
-  readonly hideContinueButton?: boolean;
-}
+// `ApplicationAnswerProps` and the per-group prop interfaces it composes
+// (`ApplicationAnswerStatus`/`ActionHandlers`/`Tts`/`Continuation`/
+// `Feedback`/`Hitl`/`Author`) live in `./ApplicationAnswer.types` — split
+// out purely to keep this file under the §3.5 file-length budget, same
+// rationale as `NewChatInput.types.ts`. `features/chat-messages/index.ts`
+// imports `ApplicationAnswerProps` directly from `./ApplicationAnswer.types`,
+// not through this re-export, so there is no separate barrel entry to keep
+// in sync here.
+export type {
+  ApplicationAnswerActionHandlers,
+  ApplicationAnswerAuthor,
+  ApplicationAnswerContinuation,
+  ApplicationAnswerFeedback,
+  ApplicationAnswerHitl,
+  ApplicationAnswerProps,
+  ApplicationAnswerStatus,
+  ApplicationAnswerTts,
+} from './ApplicationAnswer.types';
 
 function authorizationRequestId(action: SubAgentGroupable): string | undefined {
   const draft = asDraft(action);
   const metadata = (draft.toolMeta ?? {}) as Record<string, unknown>;
   const value = draft.authorizationRequestId ?? metadata['authorization_request_id'] ?? metadata['interrupt_id'] ?? draft.id;
   return typeof value === 'string' && value !== '' ? value : undefined;
-}
-
-/** HITL interrupt/resume props, grouped to stay under the component-props budget. */
-export interface ApplicationAnswerHitl {
-  /** HITL interrupt for resume (single-pause shape). */
-  readonly hitlInterrupt?: unknown;
-  /** HITL interrupts for resume (parallel-fan-out shape). */
-  readonly hitlInterrupts?: readonly unknown[] | undefined;
-  readonly onHitlResume?: ((payload: HitlResumePayload) => void) | undefined;
-}
-
-/** Caption-line identity: who answered, and whether this row is a sub-agent's. Grouped to stay under the §3.5 component-props budget. */
-export interface ApplicationAnswerAuthor {
-  /**
-   * The answering participant's display name, shown in the caption line
-   * (`<mark> Elitea to Message`). Supplied by the list, which is where the
-   * conversation's participants are known — `entities/message`'s assistant
-   * normaliser drops the participant, so the row cannot resolve it alone.
-   */
-  readonly participantName?: string | undefined;
-  /** Whether this is a swarm child message. */
-  readonly isSwarmChild?: boolean;
-  /** Display name of the swarm agent. */
-  readonly swarmAgentName?: string;
-}
-
-/** @public Props for `ApplicationAnswer`. */
-export interface ApplicationAnswerProps {
-  /** The AI answer message to render. */
-  readonly answer: ChatMessage;
-  /** Message ID for tracking. */
-  readonly messageId: string;
-  /** Tool actions for this answer (thinking steps, tool calls, swarm children). */
-  readonly toolActions?: readonly SubAgentGroupable[] | undefined;
-  /** Whether auto-speak mode is active. */
-  readonly isSpeakingMode?: boolean;
-  /** Whether this is the last message. */
-  readonly isLastMessage?: boolean;
-  /** Who the row is captioned as, grouped to stay under the component-props budget. */
-  readonly author?: ApplicationAnswerAuthor;
-  readonly status?: ApplicationAnswerStatus;
-  readonly actions?: ApplicationAnswerActionHandlers;
-  readonly tts?: ApplicationAnswerTts;
-  readonly continuation?: ApplicationAnswerContinuation;
-  readonly hitl?: ApplicationAnswerHitl;
 }
 
 /** Defensive read of a message-level token-limit pause signal — not yet a typed `ChatMessage` field (see module doc). */
@@ -175,9 +107,11 @@ export function ApplicationAnswer({
   tts: { onAutoSpeak, speakingMessageId, spokenRange } = {},
   continuation: { onContinueMcpExecution, onContinueTokenLimitExecution, renderAuthModal, hideContinueButton = false } = {},
   hitl: { hitlInterrupt, hitlInterrupts, onHitlResume } = {},
+  feedback: { projectId: feedbackProjectId, enabled: feedbackEnabled = true } = {},
 }: ApplicationAnswerProps): ReactNode {
   const isProcessing = isLoading || isRegenerating || isStreaming;
   const isLoadingOrRegenerating = isLoading || isRegenerating;
+  const showFeedback = Boolean(feedbackProjectId) && feedbackEnabled && !isProcessing;
   const exception = answer.exception;
   const canRenderContent = !isLoadingOrRegenerating;
   // `spokenRange` is one global range, not scoped to a message id — it only
@@ -191,6 +125,34 @@ export function ApplicationAnswer({
   // otherwise render as an empty bubble. Which of `content` and the text items
   // actually carries the words is `./AnswerContent`'s subject.
   const hasTextContent = !!answer.content || items.length > 0;
+
+  /*
+   * "Open as document" (issue #879) — the WHOLE answer carved into a
+   * `document` canvas, not a range the reader highlighted. Only offered
+   * before the answer has been split at all: once a canvas already exists
+   * inside it (`items.length > 1`, or the lone item is itself a canvas), the
+   * words for a create() are not one contiguous range any more, and this
+   * button would ask the create route to carve a "selection" that spans a
+   * canvas block it cannot serialise as text.
+   */
+  const soleItem = items.length === 1 ? items[0] : undefined;
+  const wholeAnswerText = useMemo(() => {
+    if (items.length > 1) return undefined;
+    if (soleItem !== undefined) return soleItem.kind === 'text' ? soleItem.content : undefined;
+    return answer.content;
+  }, [items.length, soleItem, answer.content]);
+  const wholeAnswerItemId = soleItem?.kind === 'text' ? soleItem.messageItemId : undefined;
+
+  const onOpenAsDocument = useCallback(() => {
+    const text = wholeAnswerText;
+    if (!onCreateCanvasFromSelection || !text || text.trim() === '') return;
+    onCreateCanvasFromSelection({
+      messageGroupUuid: answer.id,
+      selectedText: text,
+      messageItemId: wholeAnswerItemId,
+      kind: 'document',
+    });
+  }, [onCreateCanvasFromSelection, wholeAnswerText, wholeAnswerItemId, answer.id]);
 
   const { swarmChildActions, nonSwarmChildActions } = useMemo(() => {
     if (isProcessing) return { swarmChildActions: [] as readonly SubAgentGroupable[], nonSwarmChildActions: toolActions };
@@ -263,6 +225,7 @@ export function ApplicationAnswer({
           sentToName={t('features.chatMessages.replyTo', 'Message')}
           sentToInteractive
           createdAt={answer.createdAt}
+          memoriesUsed={answer.memoriesUsed}
         />
       )}
 
@@ -381,17 +344,45 @@ export function ApplicationAnswer({
               </Box>
             )}
 
-          <ApplicationAnswerActions
-            hasContent={hasTextContent || !!exception}
-            isProcessing={isProcessing}
-            shouldDisableRegenerate={shouldDisableRegenerate}
-            hasSpeakableText={hasTextContent}
-            isSpeaking={!!speakingMessageId}
-            onAutoSpeak={onAutoSpeak ? handleAutoSpeak : undefined}
-            onCopy={onCopy}
-            onRegenerate={onRegenerate}
-            onDelete={onDelete}
-          />
+          <Box
+            sx={{
+              display: 'flex',
+              // `space-between` needs TWO items to place one at each edge — a
+              // single flex child under it sits at flex-start, which would
+              // silently un-right-align the actions row on every message with
+              // no resolved project id. `flex-end` is the ORIGINAL single-row
+              // alignment (`ApplicationAnswerActions`'s own box), kept as the
+              // fallback rather than assumed to still hold once this became a
+              // two-item row.
+              justifyContent: showFeedback ? 'space-between' : 'flex-end',
+              alignItems: 'flex-start',
+            }}
+          >
+            {showFeedback && <MessageFeedbackControl projectId={feedbackProjectId as string} messageId={messageId} />}
+            {showFeedback && (
+              // #870 "Remember this" — same gate as the feedback control
+              // beside it (a resolved project id, not still processing).
+              // `conversationId` is not yet threaded to this row (no
+              // `ChatMessage` field carries it today), so a memory saved
+              // here has no `source_conversation_id` — informational-only
+              // provenance, not a functional gap.
+              <RememberMemoryAction projectId={feedbackProjectId as string} content={answer.content} disabled={isProcessing} />
+            )}
+            <ApplicationAnswerActions
+              hasContent={hasTextContent || !!exception}
+              isProcessing={isProcessing}
+              shouldDisableRegenerate={shouldDisableRegenerate}
+              hasSpeakableText={hasTextContent}
+              isSpeaking={!!speakingMessageId}
+              onAutoSpeak={onAutoSpeak ? handleAutoSpeak : undefined}
+              onCopy={onCopy}
+              onRegenerate={onRegenerate}
+              onDelete={onDelete}
+              onOpenAsDocument={
+                onCreateCanvasFromSelection && wholeAnswerText && wholeAnswerText.trim() !== '' ? onOpenAsDocument : undefined
+              }
+            />
+          </Box>
         </Box>
       )}
     </Box>

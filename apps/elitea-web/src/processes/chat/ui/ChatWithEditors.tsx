@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { useCallback } from 'react';
 
-import { useRouteContext } from '@tanstack/react-router';
+import { useParams, useRouteContext } from '@tanstack/react-router';
 
 import Box from '@mui/material/Box';
 import Drawer from '@mui/material/Drawer';
@@ -14,6 +14,7 @@ import { ToolkitEditor } from '@/features/toolkits';
 import ChatPage from '@/pages/chat';
 import { t } from '@/shared/i18n';
 import { DeleteEntityModal } from '@/shared/ui/DeleteEntityModal';
+import { useSelectedProject } from '@/widgets/app-shell';
 
 import { ChatConversationSidebar } from './ChatConversationSidebar';
 import { ChatPlayback } from './ChatPlayback';
@@ -24,6 +25,8 @@ import { useChatWithEditors } from './ChatWithEditors.hooks';
 import { renderAgentEditorShell, renderPipelineEditorShell, renderToolkitEditorShell } from './EditorShell';
 import { useCanvasCreation } from './useCanvasCreation';
 import { useCreateChatReset } from './useCreateChatReset';
+import { FileCanvasDrawer } from './FileCanvasDrawer';
+import { useFileCanvas } from './useFileCanvas';
 
 /**
  * Who is signed in, read off the router root context's `auth` seam — the same
@@ -104,6 +107,17 @@ function selectViewerId(context: unknown): string | undefined {
  * "another editor is open" queue-confirm).
  */
 export function ChatWithEditors(): ReactNode {
+  // `strict: false`, this file's established convention (see
+  // `usePlaybackConversationId.ts`'s own doc comment) for a component that
+  // must not depend on which route file mounts it — `ChatWithEditors` is
+  // mounted at `/_shell/chat`, which carries no `conversationId` itself;
+  // the param only exists on the child route `/_shell/chat/$conversationId`.
+  // Needed here (issue #867) so a created agent/pipeline/toolkit can be
+  // attached to the conversation actually open right now.
+  const { conversationId } = useParams({ strict: false }) as { conversationId?: string };
+  const { project } = useSelectedProject();
+  const projectId = project?.id === undefined ? undefined : String(project.id);
+
   const {
     isEditingAgent,
     isEditingPipeline,
@@ -122,7 +136,7 @@ export function ChatWithEditors(): ReactNode {
     handleShowToolkitEditor,
     handleShowCanvasEditor,
     canvas,
-  } = useChatWithEditors();
+  } = useChatWithEditors({ projectId, conversationId });
 
   /*
    * The canvas CREATE. Called HERE and not inside `useChatWithEditors`, for
@@ -137,6 +151,14 @@ export function ChatWithEditors(): ReactNode {
    * new block with the control every stored canvas already has.
    */
   const canvasCreation = useCanvasCreation();
+
+  /*
+   * "Open in canvas" from a message ATTACHMENT (issue #878). Composed HERE
+   * for the same reason `canvasCreation` is: it needs `projectId`, and this
+   * is the layer that has it without re-deriving it inside a hook a plain
+   * `renderHook` mounts (`useFileCanvas`'s own tests do exactly that).
+   */
+  const fileCanvas = useFileCanvas(projectId);
 
   /*
    * `strict: false` reads the ROOT's merged context from any component under
@@ -200,6 +222,16 @@ export function ChatWithEditors(): ReactNode {
               onCloseAgentEditor: editAgent.onCloseAgentEditor,
               onClosePipelineEditor: editPipeline.onClosePipelineEditor,
               /*
+                * "Create new" in the composer's "+" menu (issue #867).
+                * `mutex.onCreate*` already exist — `useEditorMutex` was
+                * built to serve exactly this, queuing behind an open editor
+                * the same way `onEditAgent`/`onEditToolkit`/`onEditPipeline`
+                * do — they were simply never read by anything until now.
+                */
+              onCreateAgent: mutex.onCreateAgent,
+              onCreatePipeline: mutex.onCreatePipeline,
+              onCreateToolkit: mutex.onCreateToolkit,
+              /*
                 * The transcript's canvas opener (issue 853). Both halves travel
                 * together: the handler that opens a stored canvas block, and the
                 * block currently open — the transcript swaps that one for an
@@ -209,6 +241,8 @@ export function ChatWithEditors(): ReactNode {
               selectedCanvasBlock: canvas.selectedCodeBlockInfo,
               /* And the gesture that MAKES one: a range highlighted in an answer. */
               onCreateCanvasFromSelection: canvasCreation.onCreateCanvasFromSelection,
+              /* A stored FILE, opened from a message attachment (issue #878). */
+              onOpenFileInCanvas: fileCanvas.onOpenFileInCanvas,
             }}
           />
           )}
@@ -284,9 +318,23 @@ export function ChatWithEditors(): ReactNode {
              * their own canvas.
              */
             {...(viewerId !== undefined ? { viewer: { id: viewerId } } : {})}
+            /*
+             * "Save to artifacts" (issue #878) — offered here too, not only
+             * on a file-opened canvas: a canvas MADE from a turn has no
+             * artifact identity yet, so every save here is a "save as" (no
+             * `source` to pre-fill), and — deliberately NOT threaded through
+             * `canvas`'s own save (`editCanvas`, the `elitea_core` PUT) — the
+             * two are independent actions: this one additionally publishes
+             * the document as a browsable file, it does not replace the
+             * canvas's own storage.
+             */
+            {...(canvas.projectId !== undefined ? { saveToArtifacts: { onSaved: () => undefined } } : {})}
           />
         </Drawer>
       )}
+
+      {/* The FILE canvas (issue #878) — a message attachment opened for editing. See `FileCanvasDrawer`'s own doc for why it is a second, independent drawer. */}
+      <FileCanvasDrawer fileCanvas={fileCanvas} projectId={projectId} viewerId={viewerId} />
 
       {isEditingToolkit && (
         <ToolkitEditor

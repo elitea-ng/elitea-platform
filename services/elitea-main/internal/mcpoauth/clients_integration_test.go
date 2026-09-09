@@ -48,7 +48,7 @@ func testPool(t *testing.T) *pgxpool.Pool {
 		}
 		admin.Close()
 	})
-	migration, err := os.ReadFile("../../migrations/shared/0124_mcp_oauth_clients.sql")
+	migration, err := os.ReadFile("../../migrations/shared/0127_mcp_oauth_clients.sql")
 	require.NoError(t, err)
 	for range 2 {
 		_, err = pool.Exec(ctx, string(migration))

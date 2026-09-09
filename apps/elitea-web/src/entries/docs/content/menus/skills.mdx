@@ -1,0 +1,80 @@
+---
+title: "Skills"
+description: "Create reusable, Markdown-based instruction sets you attach to agents and invoke on demand during a conversation."
+---
+
+A skill is a focused, reusable instruction set — write it once in Markdown, attach it to as many agents as you need, and invoke it mid-conversation with `~skill-name`. Skills are available in team and personal projects only; the Skills menu is hidden when the Public project is selected.
+
+<Screenshot id="skills-list" alt="The Skills dashboard for the current project" />
+
+## Create a skill
+
+<Steps>
+  <Step title="Open the form">Select **+** in the sidebar, or **Create** from the Skills page, and choose Skill.</Step>
+  <Step title="Fill in General">Give it a **Name** (lowercase letters, digits, and hyphens only, no leading/trailing hyphen, 64 characters max, and it must not contain "claude" or "anthropic"), a **Description**, and optional tags.</Step>
+  <Step title="Write Instructions">Enter the skill's instructions in the Markdown editor, up to 5,000 characters. Toggle Edit/Preview to check formatting.</Step>
+  <Step title="Save">The skill opens with a test chat panel on the right so you can verify its behavior before attaching it to any agent.</Step>
+</Steps>
+
+<Tip title="Generate a skill with AI">
+Select **Generate with AI** in the General section to describe what the skill should do in plain language and get a drafted name, description, and instructions to review before saving.
+</Tip>
+
+## Test a skill
+
+The right-hand test chat is ephemeral — it is not saved and clears when you leave the page. Pick a model and adjust its settings the same way you would in a normal conversation, including voice input and playback if configured for the project.
+
+## Versions
+
+Skills keep a version history, the same **base**-plus-named-versions model [agents and pipelines](/how-tos/agents-pipelines/entity-versioning) use:
+
+<Steps>
+<Step title="Work in base">
+Every new skill starts on the **base** version. Edit and save it as many times as you like.
+</Step>
+<Step title="Save as a new version">
+Click **New version** and give it a name. `base` is reserved and cannot be reused as a custom name; a duplicate name is rejected.
+</Step>
+<Step title="Switch and edit">
+Use the version dropdown next to the skill's name to switch versions. Saving always updates whichever version is currently selected.
+</Step>
+</Steps>
+
+**Set default** pins a version as the one a new attachment to an agent proposes — it does not change what an agent that has *already* attached this skill uses; that stays fixed at attach time (see [Attach a skill to an agent](#attach-a-skill-to-an-agent) below). You cannot delete the default version or `base`, and a published version is frozen until you unpublish it.
+
+**Compare versions** opens a read-only, side-by-side diff of the current version's instructions and tags against any other version — useful for checking what changed before you restore or publish.
+
+**Restore** copies a named version's instructions and tags back onto `base`, overwriting `base`'s current content. This is the skill equivalent of agents' "Set as default": skills have no separate "currently active" pointer to repoint, so restoring means writing the content directly onto the one version the unversioned editor and every new attachment read.
+
+**Delete version** removes any version except `base`, the current default, or a published one.
+
+## Export, import, fork, and publish
+
+- **Export** downloads the current version as a `.md` file; **Import** on the Skills page uploads one back (always as a new `base` version, regardless of the version it was exported from).
+- **Fork** copies a skill version into a project you choose.
+- **Publish** submits a version to [Catalog](/menus/catalog); **Unpublish** removes it. See [Skill publishing](/how-tos/agents-pipelines/publishing).
+
+## Attach a skill to an agent
+
+Open the agent, scroll to its **Skills** section, and select **+ Skill** to search and attach — up to five skills per agent version. Each attachment uses the skill's `base` version by default; select the version name on the card to switch. Attaching requires the agent to be saved first.
+
+## Use a skill in chat
+
+In a conversation with an agent that has skills attached, type `~` to open a picker of that agent's skills, then select one to invoke its instructions for that turn.
+
+## Delete a skill
+
+Deleting a skill removes it from every agent it is attached to. Confirm in the dialog — unlike the agent editor's delete confirmation, it does not ask you to type the skill's name.
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Skills menu is missing">You are in the Public project — switch to a team or personal project.</Accordion>
+  <Accordion title="Cannot save">Check the character limits and validation rules on Name, Description, and Instructions, and confirm something actually changed since the last save.</Accordion>
+  <Accordion title="+ Skill button is disabled on an agent">Save the agent first, or check whether it already has five skills attached.</Accordion>
+  <Accordion title="~ mention shows no skills">The current agent has no skills attached yet — attach one and start a new conversation.</Accordion>
+</AccordionGroup>
+
+<Info title="Related">
+[Agents](/menus/agents) · [Entity versioning](/how-tos/agents-pipelines/entity-versioning) · [Import/export](/how-tos/agents-pipelines/import-export) · [Catalog](/menus/catalog)
+</Info>

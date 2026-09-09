@@ -1,5 +1,9 @@
 # External Elitea-as-MCP source mapping
 
+Current shared migration numbers and rehearsal upgrade requirements are recorded in
+[shared migration reconciliation](shared-migrations-20260909.md).
+Historical proof sections retain the version numbers used during those checks.
+
 Status: capability-disabled catalogue and direct execution are implemented for
 saved agent and pipeline versions and for selected read-only toolkit
 operations. The UI now gives agent and pipeline versions an explicit MCP
@@ -116,7 +120,7 @@ owning vault and fails closed if the vault is unavailable. This is an
 intentional availability hardening over the current eager `VaultClient`
 construction; it does not bypass secret redemption.
 
-Migration `0122_toolkit_execute_read.sql` extends both earlier allowlists. It
+Migration `0125_toolkit_execute_read.sql` extends both earlier allowlists. It
 admits the direct-tool protobuf media type through
 `input_bundle_entries_content_size` and admits
 `TOOLKIT_EXECUTE_READ_RESULT` through `output_inbox_payload_type`. Its isolated

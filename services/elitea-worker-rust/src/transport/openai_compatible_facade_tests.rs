@@ -105,6 +105,13 @@ fn assert_exact_captured_request(request: &CapturedModelRequest) {
     assert_eq!(
         request
             .headers
+            .get("x-elitea-execution-id")
+            .expect("execution id header"),
+        "execution/fixture-one"
+    );
+    assert_eq!(
+        request
+            .headers
             .get(CONTENT_LENGTH)
             .expect("request content length")
             .to_str()
@@ -234,6 +241,49 @@ async fn automatic_max_tokens_omits_the_openai_wire_limit() {
     let body: serde_json::Value =
         serde_json::from_slice(&captured[0].body).expect("model request JSON");
     assert!(body.get("max_completion_tokens").is_none());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn distinct_execution_ids_produce_distinct_execution_id_headers() {
+    let (client, captured) = test_model_gateway_client(
+        vec![TestModelGatewayOutcome::Response(
+            test_model_gateway_response(Body::new(Full::new(Bytes::from(ordinary_sse())))),
+        )],
+        test_model_gateway_config(),
+    )
+    .expect("model gateway client");
+    let bound = client
+        .bind_ordinary(
+            &ClaimScopedEliteaContext::fixture_with_execution_id(
+                17,
+                TOKEN,
+                "execution/distinct-42",
+            ),
+            17,
+            test_model_facade_invocation(),
+        )
+        .expect("bound model with a distinct execution id");
+
+    drain(
+        bound
+            .generate_for_test(test_model_request("explain this"))
+            .await
+            .expect("model response stream"),
+    )
+    .await
+    .expect("valid SSE");
+
+    let captured = captured.lock().expect("captured model request");
+    let [request] = captured.as_slice() else {
+        panic!("exactly one model request expected")
+    };
+    assert_eq!(
+        request
+            .headers
+            .get("x-elitea-execution-id")
+            .expect("execution id header"),
+        "execution/distinct-42"
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -402,6 +452,66 @@ async fn tool_history_round_trip(retire_tool: bool) {
     assert_eq!(second_body["messages"][3]["role"], "tool");
     assert_eq!(second_body["messages"][3]["tool_call_id"], "call_1");
     assert_eq!(second_body["messages"][3]["content"], "{\"value\":42}");
+}
+
+/// #866/#882: `seed_skipped_internal_tools_notice` (agents/session.rs) seeds
+/// a role="tool" `Content` carrying a single bounded `Part::Text` — no
+/// `FunctionResponse` to pair, because there is no real tool call. Before
+/// this fix `validate_openai_content`'s "function" | "tool" arm accepted
+/// ONLY `Part::FunctionResponse`, so every turn whose history carried that
+/// notice failed HERE — client-side, before a byte reached the gateway —
+/// with an empty, `is_error` answer (measured on `chat-stream-rust`'s
+/// `chat.agent-tools.spec.ts`, PR #882).
+#[tokio::test(flavor = "current_thread")]
+async fn skipped_internal_tools_notice_reaches_a_valid_openai_tool_message() {
+    let (client, captured) = test_model_gateway_client(
+        vec![TestModelGatewayOutcome::Response(
+            test_model_gateway_response(Body::new(Full::new(Bytes::from(ordinary_sse())))),
+        )],
+        test_model_gateway_config(),
+    )
+    .expect("model gateway client");
+    let bound = client
+        .bind_ordinary(
+            &ClaimScopedEliteaContext::fixture(17, TOKEN),
+            17,
+            test_model_facade_invocation(),
+        )
+        .expect("bound model");
+
+    let notice = Content {
+        role: "tool".to_owned(),
+        parts: vec![Part::Text {
+            text: "internal tool 'planner' is not available on this worker".to_owned(),
+        }],
+    };
+    let user = Content::new("user").with_text("what tools are on?");
+
+    drain(
+        bound
+            .generate_for_test(tool_request(vec![notice, user]))
+            .await
+            .expect("the notice must not make the runtime refuse the whole turn"),
+    )
+    .await
+    .expect("ordinary response, unaffected by the notice ahead of it");
+
+    let captured = captured.lock().expect("captured requests");
+    let body: serde_json::Value = serde_json::from_slice(&captured[0].body).expect("body");
+    // messages[0] is the fixture invocation's own system instruction —
+    // present ahead of every content this test named.
+    assert_eq!(body["messages"][1]["role"], "tool");
+    assert_eq!(
+        body["messages"][1]["content"],
+        "internal tool 'planner' is not available on this worker"
+    );
+    assert!(
+        body["messages"][1]["tool_call_id"].is_string(),
+        "a role=\"tool\" OpenAI message must carry SOME tool_call_id, even a synthetic one \
+         with no real call to pair — an absent field is the shape a stricter upstream than \
+         this fixture would be likeliest to reject"
+    );
+    assert_eq!(body["messages"][2]["role"], "user");
 }
 
 #[tokio::test(flavor = "current_thread")]

@@ -71,7 +71,9 @@
     "revision": "b5113a129329b85d23c2d5c2bf55f18e307414ec",
     "patch_revisions": [
       "5c9409779ac0a55f8bf74f6ef438977089187a14",
-      "07ddc5cd67a0c747f83ca0e26421cde71bd97d9d"
+      "07ddc5cd67a0c747f83ca0e26421cde71bd97d9d",
+      "4e631ed9e9523b33410a31bd2242c93fa9ec0b4b",
+      "afff234904b6d5de551436b53c078722f13ff4de"
     ],
     "contents": [
       {
@@ -83,6 +85,6 @@
         "sha256": "9cfac67a8a1c1d0eb43dbf6245f4ee03f659e4de4023cadf6921fa0e16bbed28"
       }
     ],
-    "verified_on": "2026-08-23"
+    "verified_on": "2026-09-09"
   }
 }

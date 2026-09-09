@@ -84,7 +84,7 @@ const ChatWindow: React.FC<TChatWindowProps> = memo(props => {
         placeholder={placeholder}
         text={inputText}
         onTextChange={setInputText}
-        onSend={(text, file) => void handleSend(text, file)}
+        onSend={(text, files, onFileStatus) => handleSend(text, files, onFileStatus)}
         disabled={isLoading || isStreaming}
       />
     </div>

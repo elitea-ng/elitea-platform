@@ -1,0 +1,53 @@
+---
+title: "API usage"
+description: "Call Elitea's REST API with a personal access token: endpoint layout, the OpenAPI UI, MCP, and SCIM."
+---
+
+Everything the web app does goes through the same REST API you can call directly — from a script, a Power Automate flow, or any HTTP client that can send a bearer token.
+
+## Authenticate
+
+<Steps>
+<Step title="Create a personal access token">
+Open [Settings › Personal tokens](/getting-started/create-personal-access-token) and create a token. Copy it immediately — it's shown once.
+</Step>
+<Step title="Send it with every request">
+Add an `Authorization: Bearer <token>` header. A pylon-compatibility alternative, `X-API-Key: <token>`, is also accepted.
+</Step>
+<Step title="Scope your calls to a project">
+Most endpoints take a project id in the path. A token can only act on projects its owner belongs to.
+</Step>
+</Steps>
+
+<Screenshot id="mcp-server-token" alt="Personal access tokens page" />
+
+## Endpoint layout
+
+- REST endpoints live under `/api/v2/...` — the same paths the web app calls.
+- Interactive API documentation (OpenAPI/Swagger UI) is served at `/api/docs`, with the raw spec at `/api/openapi.yaml` and `/api/openapi.json`. Both are public — no token needed to read the spec.
+- The MCP server is at `/app/{projectID}/mcp` (see [Elitea MCP server](/integrations/mcp/mcp-server)) — the same bearer token authenticates it.
+- SCIM provisioning, for identity providers that push users and groups, is at `/api/v2/scim/v2`. It's configured per identity provider under [Authentication](/admin/authentication), not by a personal token.
+
+## Call the API from Power Automate (or any HTTP client)
+
+<Steps>
+<Step title="Add an HTTP action">
+In your flow, add a generic HTTP (or "HTTP with Azure AD" if you prefer a service account) action.
+</Step>
+<Step title="Set the method and URL">
+Point it at the `/api/v2/...` path for the operation you need — check `/api/docs` for the exact path, parameters and body shape.
+</Step>
+<Step title="Add the Authorization header">
+Set the header to `Bearer <your personal access token>`, stored as a secret in your flow, not inline in plain text.
+</Step>
+</Steps>
+
+## Common issues
+
+<Note>
+A token only reaches projects its owner belongs to — a 403 on an otherwise-correct call usually means the token owner isn't a member of the project id in the path, not a malformed request.
+</Note>
+
+<Note>
+Webhooks (both directions) have a UI now: a pipeline's inbound trigger is configured from the pipeline editor's **Triggers & schedules** panel, and the project's outbound webhook registry has its own **Settings › Webhooks** page — see [Webhooks and pipeline triggers](/how-tos/credentials-toolkits/webhooks-and-triggers). Both APIs still work with a personal access token if you'd rather script registration.
+</Note>

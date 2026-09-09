@@ -1,0 +1,50 @@
+---
+title: "Slack"
+description: "Connect Slack to Elitea: prerequisites, credential setup and the tools it exposes."
+---
+
+Read and post messages in Slack channels. It's listed under the **communication** category in the toolkit type picker.
+
+## Prerequisites
+
+- An account at Slack with permission to issue an API token or credential, saved in Elitea as a **`slack`** credential (`/credentials/create-credential/<type>`).
+
+## Connect the toolkit
+
+<Steps>
+<Step title="Open the toolkit type picker">
+In the left navigation, open **Toolkits**, then select **New**. Filter the type picker by the **communication** category, or search for "Slack".
+</Step>
+
+<Step title="Pick or create a credential">
+Under the credential field, choose an existing **slack** credential, or select **Create credential** to add one without leaving the form.
+</Step>
+
+<Step title="Save">
+Name the toolkit and select **Create**. It's now available to attach to agents, pipelines and conversations in this project.
+</Step>
+</Steps>
+
+<Screenshot id="toolkit-new-generic" alt="New toolkit dialog with the Slack type selected" />
+
+## Available tools
+
+<Accordion title="Available tools (7)">
+
+| Tool |
+|---|
+| Create slack channel |
+| Invite to conversation |
+| List channel users |
+| List workspace conversations |
+| List workspace users |
+| Read messages |
+| Send message |
+
+</Accordion>
+
+## Common issues
+
+<Note>
+The credential form for Slack supports **Check connection** — use it before saving to confirm Elitea can reach Slack with these details, instead of discovering an auth problem from a failed tool call later.
+</Note>
