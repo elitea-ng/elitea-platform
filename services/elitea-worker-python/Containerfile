@@ -139,5 +139,55 @@ RUN python -m pip install \
     && python -c "from elitea_worker.agent_current_runtime_capabilities import require_agent_current_runtime_capabilities; print('agent-current-runtime-profile=' + require_agent_current_runtime_capabilities())" \
     && rm -rf /wheels
 
+# The `pyodide` internal tool (#872): elitea_sdk's SandboxToolkit refuses to
+# construct unless it finds SANDBOX_SERVICE_URL, or BOTH a `deno` executable
+# on PATH and a PYODIDE_SANDBOX_PKG Deno entrypoint that exists. This image
+# shipped none of those, so every agent's "Python sandbox" toggle silently did
+# nothing on this worker. Install a pinned, digest verified `deno` binary —
+# see scripts/install_pinned_deno.py for why this is a direct GitHub release
+# download rather than an apt/pip package, and how the checksum gate keeps
+# that an admitted download rather than an unpinned one.
+ARG TARGETARCH=amd64
+COPY services/elitea-worker-python/scripts/install_pinned_deno.py /tmp/install_pinned_deno.py
+RUN python3 /tmp/install_pinned_deno.py --target-arch "${TARGETARCH}" --dest /usr/local/bin/deno \
+    && rm -f /tmp/install_pinned_deno.py \
+    && /usr/local/bin/deno --version
+
+# The second half of #872: `deno` alone is not enough. `PyodideSandboxTool`
+# also needs a Deno entrypoint script (PYODIDE_SANDBOX_PKG) that actually
+# implements the sandbox — the SDK ships one, patched, at
+# infra/data/sandbox/main.ts. Its content needs no separate pin: it is part of
+# the exact SDK checkout the build stage already verified against
+# ELITEA_SDK_ARCHIVE_SHA256, so copying it from that stage carries the same
+# guarantee.
+#
+# main.ts statically imports npm:pyodide@0.29.0 and two jsr:@std packages —
+# all three exact-versioned, never a bare `latest` — and `deno cache` resolves
+# and caches that whole graph right here, at build time, when network access
+# is expected and already used by every step above. That is what keeps every
+# later `deno run` of this exact script from touching the network at all: the
+# cache is content-addressed by exact URL+version, so a script that names
+# exact versions is fully served from it. MEASURED: this adds one 8 MiB WASM
+# runtime and a few hundred KB of TypeScript to the image, and nothing this
+# admits ever downloads elitea_sdk-selected Python packages (pandas, numpy…)
+# into the sandbox — the model's own code can `import` packages Pyodide does
+# not bundle, and doing THAT is a genuine runtime network call the toolkit's
+# own `allow_net` setting already gates; it is not something a build-time
+# cache could remove.
+#
+# DENO_DIR/PYODIDE_SANDBOX_PKG are set here, as image-wide ENV, rather than
+# left to elitea_worker.agents.internal_tools.ensure_sandbox_state_directories
+# to default at runtime: MEASURED, a `deno run` of main.ts against this fully
+# warmed, read-only cache needs no further write to DENO_DIR at all, so there
+# is nothing for the per-run private-directory treatment SANDBOX_BASE gets to
+# buy here — and baking the path means every deployment shape ships the same
+# warm cache instead of re-resolving it, network-free or not, on first use.
+ENV DENO_DIR=/opt/elitea/sandbox/deno-cache \
+    PYODIDE_SANDBOX_PKG=/opt/elitea/sandbox/main.ts
+COPY --from=build /build/elitea-sdk/infra/data/sandbox/main.ts /opt/elitea/sandbox/main.ts
+RUN /usr/local/bin/deno cache --node-modules-dir=auto /opt/elitea/sandbox/main.ts \
+    && chown -R 10001:10001 /opt/elitea/sandbox \
+    && chmod -R go-w /opt/elitea/sandbox
+
 USER 10001:10001
 ENTRYPOINT ["elitea-worker"]

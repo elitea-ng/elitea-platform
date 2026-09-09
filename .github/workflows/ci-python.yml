@@ -250,6 +250,17 @@ jobs:
             poppler-utils \
             tesseract-ocr
 
+      # #872: the pyodide internal tool needs `deno` on PATH exactly as the
+      # admitted image will have it. One script (also run by the Containerfile)
+      # is the single source of the pinned version and per-arch digest, so this
+      # runner and the shipped image can never pin two different binaries.
+      - name: Install the pinned deno binary the sandbox internal tool needs
+        run: |
+          sudo python3 services/elitea-worker-python/scripts/install_pinned_deno.py \
+            --target-arch amd64 \
+            --dest /usr/local/bin/deno
+          deno --version
+
       - name: Check out the exact worker-locked SDK source
         env:
           SDK_REVISION: b5113a129329b85d23c2d5c2bf55f18e307414ec
@@ -279,10 +290,29 @@ jobs:
             "./services/elitea-worker-python[agent-current,indexing-current,test]"
           python -m pip check
 
+      # #872: vendor the SDK's patched Pyodide sandbox entrypoint at the SAME
+      # path the Containerfile bakes it to, and pre-warm its module graph the
+      # same way the image build does, so the worker's own default
+      # (elitea_worker.agents.internal_tools._DEFAULT_PYODIDE_SANDBOX_PKG)
+      # resolves here with no extra test-only wiring and the unit suite
+      # exercises a REAL sandbox execution rather than a mock.
+      - name: Pre-warm the pyodide sandbox entrypoint for the worker tests
+        run: |
+          sudo mkdir -p /opt/elitea/sandbox
+          sudo cp /tmp/elitea-sdk-current/infra/data/sandbox/main.ts /opt/elitea/sandbox/main.ts
+          sudo DENO_DIR=/opt/elitea/sandbox/deno-cache \
+            deno cache --node-modules-dir=auto /opt/elitea/sandbox/main.ts
+          sudo chmod -R a+rwX /opt/elitea/sandbox
+
       - name: Unit and byte-conformance tests
         env:
           ELITEA_CONFORMANCE_ROOT: ${{ github.workspace }}/testdata/proto/runtime/v1
           ELITEA_SDK_SOURCE_ROOT: /tmp/elitea-sdk-current
+          # Matches the Containerfile's own ENV: without this, the sandbox
+          # test's DENO_DIR default would be an empty per-run /tmp directory,
+          # and it would need the network access the pre-warm step above
+          # exists to remove.
+          DENO_DIR: /opt/elitea/sandbox/deno-cache
         run: |
           # Every test_*.py under scripts/contract/ runs. A named list stops
           # covering a file the day somebody adds one, and two files had sat

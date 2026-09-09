@@ -90,6 +90,18 @@ export const INTERNAL_TOOLS_LIST: readonly InternalToolDescriptor[] = [
     infoTooltip: { text: 'Enable managing and tracking todo items for task planning.' },
   },
   {
+    // #872: as of the Python worker's image, this toggle actually executes
+    // (a pinned `deno` binary plus the SDK's own sandbox entrypoint, both
+    // baked in at build time — services/elitea-worker-python/Containerfile).
+    // The Rust worker still skips it (#866), the same as every other entry
+    // in this list without a `requiredToolkitType` gate. This descriptor
+    // list has no field for "which worker(s) support this tool", and the
+    // app has no signal anywhere for which worker a deployment is running
+    // (services/elitea-main never serves ELITEA_WORKER_IMPLEMENTATION to the
+    // frontend) — so this toggle cannot be conditionally hidden or labelled
+    // per worker the way `requiredToolkitType` conditions on a project's
+    // toolkit-type schema map. See /menus/internal-tools for the operator-
+    // facing note instead.
     name: 'pyodide',
     title: 'Python sandbox',
     icon: 'PythonIcon',

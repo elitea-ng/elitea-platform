@@ -33,12 +33,30 @@ form toggled on:
     deploy/helm/elitea/templates/worker/deployment.yaml).
 
   * `pyodide`. The SDK materialises it through `SandboxToolkit.get_toolkit`,
-    whose tool constructor initialises a sandbox eagerly and raises
-    `RuntimeError("Deno is required for PyodideSandbox…")` when neither
-    `SANDBOX_SERVICE_URL` nor a `deno` executable is present. This image ships
-    neither, and cannot: Deno is a runtime download this build has no admitted,
-    hash-pinned source for. So `pyodide` IS a capability this worker lacks, and
-    it is skipped the way the Rust runtime skips what it lacks.
+    whose tool constructor (`BasePyodideSandbox.__init__`) raises unless THREE
+    things are true: `deno` is on PATH, `PYODIDE_SANDBOX_PKG` names a Deno
+    entrypoint script that exists, and — MEASURED, past both of those — the
+    worker's own process CWD is writable, because the entrypoint hardcodes
+    `node_modules_dir="auto"` and deno then materialises a `node_modules`
+    directory relative to CWD on every run. As of #872 the image fixes all
+    three:
+
+      - a pinned, checksum-verified `deno` binary (the Containerfile and
+        `scripts/install_pinned_deno.py`);
+      - the SDK's own patched entrypoint, `infra/data/sandbox/main.ts` at the
+        pinned SDK revision, baked into the image at
+        `_DEFAULT_PYODIDE_SANDBOX_PKG` — its content needs no separate pin,
+        being already covered by `ELITEA_SDK_ARCHIVE_SHA256` — together with a
+        `deno cache` of its whole module graph (`npm:pyodide@0.29.0` plus two
+        `jsr:@std` packages, all exact-versioned) pre-warmed at build time so
+        no later `deno run` of it touches the network;
+      - `ensure_sandbox_state_directories` points `SANDBOX_BASE`/`DENO_DIR` at
+        directories this worker can write when it owns that choice (the image
+        instead bakes `DENO_DIR`/`PYODIDE_SANDBOX_PKG` itself — same class of
+        fix `ensure_sdk_state_directory` applies to `ELITEA_DIR`/`planner`),
+        and `_prepare_sandbox_run_directory` gives the process a writable CWD
+        before deno's own `node_modules` materialisation, which is a step
+        beyond what `ELITEA_DIR` needed.
 
 WHY SKIPPING AND NOT REFUSING. The whole turn dies on either failure — the
 exception escapes `LangChainAssistant`'s constructor, and the browser gets an
@@ -70,6 +88,7 @@ from collections.abc import Iterable
 from typing import Callable
 
 __all__ = [
+    "ensure_sandbox_state_directories",
     "ensure_sdk_state_directory",
     "serve_internal_tools",
     "unservable_internal_tools",
@@ -80,23 +99,50 @@ __all__ = [
 # SDK CLI's configuration root, and a shared name would let a developer's
 # `.elitea` tree and a worker's plan spool mean the same path.
 _STATE_DIRECTORY_NAME = "elitea-worker-state"
+# The sandbox's two cache directories live under the same private tree, in
+# their own named subdirectories, so a single readable-only-by-this-uid
+# directory covers both `planner` and `pyodide` state.
+_SANDBOX_BASE_DIRECTORY_NAME = "pyodide-sandbox"
+_DENO_CACHE_DIRECTORY_NAME = "deno-cache"
+
+# Where the Containerfile bakes the SDK's patched Deno entrypoint
+# (infra/data/sandbox/main.ts at the pinned SDK revision — its content is
+# already covered by ELITEA_SDK_ARCHIVE_SHA256, so nothing here pins it a
+# second time) and a fully pre-warmed `deno cache` of its module graph
+# (npm:pyodide + two jsr:@std packages, all exact-versioned specifiers). Used
+# only when the operator has not set PYODIDE_SANDBOX_PKG/DENO_DIR themselves.
+_DEFAULT_PYODIDE_SANDBOX_PKG = "/opt/elitea/sandbox/main.ts"
 
 _SANDBOX_TOOL = "pyodide"
 _SANDBOX_REASON = "sandbox_backend_unavailable"
 
 
+def _pyodide_entrypoint_path() -> str:
+    """The Deno script `PyodideSandboxTool` will run, resolved the same way
+    `elitea_sdk.runtime.langchain.pyodide_sandbox.get_default_pkg_name` does.
+    """
+
+    configured = (os.environ.get("PYODIDE_SANDBOX_PKG") or "").strip()
+    return configured or _DEFAULT_PYODIDE_SANDBOX_PKG
+
+
 def _sandbox_backend_available() -> bool:
-    """Mirror the SDK's own two ways of reaching a Python sandbox.
+    """Mirror the SDK's own preconditions for a Python sandbox.
 
     `PyodideSandboxTool._initialize_sandbox` takes a remote sandbox when
-    `SANDBOX_SERVICE_URL` is set and otherwise requires `deno` on PATH. Both are
-    read here rather than assumed absent, so an image or a deployment that adds
-    either one starts serving the tool without another change in this file.
+    `SANDBOX_SERVICE_URL` is set. Otherwise `BasePyodideSandbox.__init__`
+    requires BOTH a non-empty `pkg_name` (from `PYODIDE_SANDBOX_PKG`, or the
+    image's own default) that names a file that actually exists, AND `deno` on
+    PATH. All three are read here rather than assumed, so an image or a
+    deployment that adds any one of them starts serving the tool without
+    another change in this file.
     """
 
     if (os.environ.get("SANDBOX_SERVICE_URL") or "").strip():
         return True
-    return shutil.which("deno") is not None
+    if shutil.which("deno") is None:
+        return False
+    return os.path.isfile(_pyodide_entrypoint_path())
 
 
 # name -> (precondition, reason_code). Only names with a MEASURED, image-level
@@ -133,6 +179,113 @@ def ensure_sdk_state_directory() -> str:
     return directory
 
 
+def _private_directory(path: str) -> str:
+    """Create `path` (and parents) as a directory only this uid can read."""
+
+    os.makedirs(path, mode=0o700, exist_ok=True)
+    os.chmod(path, 0o700)
+    return path
+
+
+def ensure_sandbox_state_directories() -> tuple[str, str]:
+    """Point the SDK's Pyodide sandbox cache directories at ones this worker
+    can write, and create them.
+
+    `elitea_sdk.runtime.tools.sandbox._initialize_sandbox` reads `SANDBOX_BASE`
+    and `DENO_DIR` and falls back to `~/.cache/pyodide` and `~/.cache/deno`
+    when either is unset. This worker's image user has `--home-dir
+    /nonexistent`, so both defaults resolve under a path uid 10001 cannot
+    create — the same class of bug `ensure_sdk_state_directory` exists to fix
+    for `ELITEA_DIR`/`planner`.
+
+    Idempotent, and callable on every run. A `SANDBOX_BASE` or `DENO_DIR` the
+    OPERATOR set is left exactly as it is — nothing here even stats it, let
+    alone creates a subdirectory under it — for the same reason `ELITEA_DIR`
+    is: including one that turns out to be unwritable, naming a directory is
+    a choice about where sandbox state lands. (`_prepare_sandbox_run_
+    directory` still creates `<SANDBOX_BASE>/tmp` on demand, right before the
+    one thing that needs it, regardless of who chose the parent — seeing
+    this module's OWN default is not the only way that directory can be
+    missing.)
+
+    `DENO_DIR`/`PYODIDE_SANDBOX_PKG` are usually already set here: the image
+    bakes both at a fully pre-warmed, read-only path (see the Containerfile),
+    which reads as "the deployment already chose", the same as an operator's
+    own value.
+    """
+
+    sandbox_base = (os.environ.get("SANDBOX_BASE") or "").strip()
+    if not sandbox_base:
+        sandbox_base = os.path.join(
+            tempfile.gettempdir(), _STATE_DIRECTORY_NAME, _SANDBOX_BASE_DIRECTORY_NAME
+        )
+        _private_directory(sandbox_base)
+        os.environ["SANDBOX_BASE"] = sandbox_base
+
+    deno_dir = (os.environ.get("DENO_DIR") or "").strip()
+    if not deno_dir:
+        deno_dir = os.path.join(
+            tempfile.gettempdir(), _STATE_DIRECTORY_NAME, _DENO_CACHE_DIRECTORY_NAME
+        )
+        _private_directory(deno_dir)
+        os.environ["DENO_DIR"] = deno_dir
+
+    if not (os.environ.get("PYODIDE_SANDBOX_PKG") or "").strip():
+        # Read directly by `elitea_sdk...pyodide_sandbox.get_default_pkg_name`;
+        # setting it here (rather than only in `_pyodide_entrypoint_path`)
+        # means a caller that reads the environment directly, not through this
+        # module, still sees the image's own entrypoint.
+        os.environ["PYODIDE_SANDBOX_PKG"] = _DEFAULT_PYODIDE_SANDBOX_PKG
+
+    return sandbox_base, deno_dir
+
+
+def _prepare_sandbox_run_directory() -> None:
+    """Give the process a writable, already-permitted current directory
+    before Pyodide runs.
+
+    Every Pyodide sandbox tool the SDK builds hardcodes `node_modules_dir=
+    "auto"`, which makes deno materialise a `node_modules` tree under CWD on
+    EVERY run — MEASURED, even when `DENO_DIR`'s own module cache is already
+    fully pre-warmed (the Containerfile's build-time `deno cache` step) and
+    read-only at runtime: deno's own dependency materialisation runs with
+    deno's full privilege, outside the script's `--allow-write` grants, so it
+    succeeds into an unwritable CWD too — but the SANDBOXED SCRIPT then fails
+    to `--allow-read` the files deno just wrote there, because CWD is not one
+    of the three roots `_initialize_sandbox` grants
+    (`sandbox_base`/`sandbox_base/tmp`/`DENO_DIR`).
+
+    This worker's process CWD is `/` in every deployment shape this repository
+    ships (no WORKDIR is set), which is neither writable NOR one of those
+    three granted roots. Changing CWD to `<SANDBOX_BASE>/tmp` — a directory
+    the SDK already grants both read AND write on — fixes both problems with
+    the one existing, already-permitted directory, rather than adding a
+    fourth path the SDK would need to be told about and cannot be. Created
+    here, on demand, rather than relying on `ensure_sandbox_state_directories`
+    to have created it: that function does not touch an operator-chosen
+    `SANDBOX_BASE` at all, and this directory is an SDK-internal convention —
+    not a location the operator named — so creating it here is not the same
+    kind of relocation `ensure_sandbox_state_directories` avoids.
+
+    Scoped to run only for a turn that actually keeps `pyodide` in its served
+    set AND is not using a remote sandbox service (see the one call site, in
+    `serve_internal_tools`) — a remote sandbox spawns no local deno subprocess
+    and needs no local CWD — rather than changing the process's CWD
+    unconditionally on every turn: nothing else in this worker is known to
+    depend on CWD, but there is no `cwd=` seam this worker owns in the SDK's
+    subprocess call to scope the change any more tightly than that.
+    """
+
+    sandbox_base = (os.environ.get("SANDBOX_BASE") or "").strip()
+    if not sandbox_base:
+        # ensure_sandbox_state_directories always runs first and always sets
+        # this; an empty value here means it did not, which is a caller bug.
+        raise RuntimeError("SANDBOX_BASE is unset; call ensure_sandbox_state_directories first")
+    sandbox_tmp = os.path.join(sandbox_base, "tmp")
+    _private_directory(sandbox_tmp)
+    os.chdir(sandbox_tmp)
+
+
 def unservable_internal_tools(names: Iterable[str]) -> list[tuple[str, str]]:
     """The (name, reason_code) pairs this image cannot materialise, in order."""
 
@@ -157,11 +310,17 @@ def serve_internal_tools(names: Iterable[str]) -> list[str]:
 
     requested = list(names)
     dropped = dict(unservable_internal_tools(requested))
-    if not dropped:
-        return requested
-    for name, reason in dropped.items():
-        _report_skipped_internal_tool(name, reason)
-    return [name for name in requested if name not in dropped]
+    served = requested if not dropped else [
+        name for name in requested if name not in dropped
+    ]
+    if dropped:
+        for name, reason in dropped.items():
+            _report_skipped_internal_tool(name, reason)
+    # A remote sandbox service spawns no local deno subprocess, so it has no
+    # use for a local writable CWD; only the local-deno path needs it.
+    if _SANDBOX_TOOL in served and not (os.environ.get("SANDBOX_SERVICE_URL") or "").strip():
+        _prepare_sandbox_run_directory()
+    return served
 
 
 def _report_skipped_internal_tool(name: str, reason: str) -> None:

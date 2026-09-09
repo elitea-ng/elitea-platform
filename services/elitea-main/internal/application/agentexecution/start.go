@@ -376,11 +376,12 @@ const maxCurrentAgentStepLimit = 1024
 // (apps/elitea-web/src/features/agents/lib/internalTools.ts) plus `ask_user`.
 // Membership here means "the product can do this", not "every worker can":
 // BOTH runtimes skip what they cannot serve, with a logged
-// `agent_internal_tool_skipped` — the native one for what it has not
-// implemented (services/elitea-worker-rust/src/agents/internal_tools.rs), and
-// the Python one for what its image cannot build, which today is `pyodide`,
-// whose sandbox needs a Deno runtime that image does not ship
-// (services/elitea-worker-python/src/elitea_worker/agents/internal_tools.py).
+// `agent_internal_tool_skipped` — the native one for six of these it has not
+// implemented, `pyodide` included (services/elitea-worker-rust/src/agents/
+// internal_tools.rs). The Python worker's image now ships everything in this
+// map (#872 gave it a pinned Deno runtime plus the SDK's own sandbox
+// entrypoint, closing the one gap it had —
+// services/elitea-worker-python/src/elitea_worker/agents/internal_tools.py).
 // This layer FORWARDS rather than judges, because refusing here turned every
 // form toggle into an agent that stopped answering on both workers at once.
 //

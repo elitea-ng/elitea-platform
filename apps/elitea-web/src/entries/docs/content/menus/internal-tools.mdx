@@ -1,6 +1,6 @@
 ---
 title: "Internal tools"
-description: "Built-in chat and agent capabilities — image creation, data analysis, planner, swarm mode, and smart tools selection."
+description: "Built-in chat and agent capabilities — image creation, data analysis, planner, Python sandbox, swarm mode, and smart tools selection."
 ---
 
 Internal tools are capabilities you turn on from **Modules** in chat or an agent's Tools section, without configuring an external toolkit. They come from a fixed platform catalogue (`features/agents/lib/internalTools.ts`) and are turned on per conversation or saved as an agent's default.
@@ -37,6 +37,14 @@ For datasets larger than about 100 MB, or analysis needing custom code, use a Py
 ## Planner
 
 Lets an agent create, prioritize, and track tasks directly from natural language during a conversation — for example, "create a high-priority task to review contracts by Friday." Tasks carry a title, priority, due date, and status, and are scoped to the conversation that created them: deleting or clearing the conversation removes its tasks too.
+
+## Python sandbox
+
+Runs Python code the model writes in an isolated [Pyodide](https://pyodide.org/en/stable/usage/packages-in-pyodide.html) sandbox — useful for calculations, quick data transforms, or testing a snippet mid-conversation without a full toolkit. The sandbox has no access to the host filesystem or your other toolkit credentials; code that imports a package Pyodide does not bundle installs it over the network the first time, so results can take longer for those imports.
+
+<Note>
+On the Python worker, this toggle executes for real: the image ships a pinned `deno` runtime and the sandbox's own entrypoint, both baked in at build time. The Rust worker still skips it — tracked in [#866](https://github.com/elitea-ng/elitea-platform/issues/866) along with the five other internal tools it does not implement.
+</Note>
 
 ## Swarm mode
 

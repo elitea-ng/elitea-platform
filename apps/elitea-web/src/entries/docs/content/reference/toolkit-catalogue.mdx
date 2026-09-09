@@ -65,10 +65,10 @@ Create a toolkit from `/toolkits/create/<type>`; MCP-shaped types are created fr
 | zephyr_squad | Test management | ✅ | ✅ | [Other toolkits](/integrations/toolkits/other-toolkits) |
 | VectorStore, mcp_config *(built in, no label)* | — | n/a | n/a | — |
 | Application, Custom, Database, Datasource *(native, hand-written)* | — | n/a | n/a | [Custom toolkit](/integrations/toolkits/custom_toolkit) |
-| Python Sandbox *(toggle only)* | Internal tool | — | — | not run by any shipped worker |
+| Python Sandbox *(toggle only)* | Internal tool | ✅ | — | [Internal tools](/menus/internal-tools#python-sandbox) |
 
 <Note>
-The Python Sandbox toggle is visible on every agent's tool list but is not executed by either worker today (tracked in #872).
+The Python Sandbox toggle is visible on every agent's tool list. As of #872 the Python worker executes it (a pinned `deno` binary plus the SDK's own sandbox entrypoint, both baked into the image); the Rust worker still skips it, the same as the other five internal tools tracked in #866.
 </Note>
 
 ## Index-capable types

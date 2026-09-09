@@ -40,6 +40,7 @@ from elitea_worker.agents.configuration_registry import (
     RegistryLoader,
 )
 from elitea_worker.agents.internal_tools import (
+    ensure_sandbox_state_directories,
     ensure_sdk_state_directory,
     serve_internal_tools,
 )
@@ -563,6 +564,7 @@ class EliteaSdkAgentAdapter:
         _require_initial_agent_kernel(payload)
         _apply_toolkit_guardrails(payload)
         ensure_sdk_state_directory()
+        ensure_sandbox_state_directories()
         _install_ask_user_question_ids()
         with self._execution_memory() as memory, _sdk_budget_boundary():
             application = payload.application
@@ -598,6 +600,7 @@ class EliteaSdkAgentAdapter:
         _require_initial_agent_kernel(payload)
         _apply_toolkit_guardrails(payload)
         ensure_sdk_state_directory()
+        ensure_sandbox_state_directories()
         _install_ask_user_question_ids()
         internal_tools = serve_internal_tools(payload.internal_tools)
         with self._execution_memory() as memory, _sdk_budget_boundary():
