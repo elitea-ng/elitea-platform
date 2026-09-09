@@ -453,6 +453,13 @@ func (h *Handler) AdministrationRequestUpdate(w http.ResponseWriter, r *http.Req
 	// The in-app row is the delivery of record and is already committed; the
 	// e-mail is a second channel that never fails the decision (ADR-0024 WP7).
 	h.mailDecision(r.Context(), row)
+	if h.events != nil && row != nil {
+		h.events.Emit(r.Context(), strconv.FormatInt(row.ProjectID, 10), "moderation.request.decided", map[string]any{
+			"request_id": row.ID,
+			"issue_type": row.IssueType,
+			"status":     row.Status,
+		})
+	}
 	writeModerationJSON(w, http.StatusOK, row)
 }
 

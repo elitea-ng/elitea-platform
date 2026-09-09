@@ -493,6 +493,16 @@ export const shots: readonly Shot[] = [
     notes: "Triggers & schedules panel; mask the secret webhook URL.",
   },
   {
+    id: "webhooks-settings-table",
+    // #876's second half: the outbound webhook registry's Settings page,
+    // with its "Recent deliveries" expandable row.
+    route: "/app/settings/webhooks",
+    viewport: DEFAULT_VIEWPORT,
+    mask: ["webhook-secret"],
+    persona: "member",
+    notes: "Webhooks settings table; mask the live secret column.",
+  },
+  {
     id: "credential-select-dropdown",
     route: "/app/toolkits/create/jira",
     viewport: DEFAULT_VIEWPORT,

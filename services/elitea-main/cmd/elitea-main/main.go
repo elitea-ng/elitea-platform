@@ -65,6 +65,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/wikichat"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/events"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/identityproviders"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/authsvc"
 	infradb "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db"
@@ -270,6 +271,34 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			logger.Warn("could not flush the audit trail on shutdown", "err", flushErr)
 		}
 	}()
+
+	// The domain-events Publisher — #876's second half. Every producer that
+	// wires it (pipeline run admission, agent version publish/unpublish,
+	// conversation create, artifact upload, moderation decision) reaches it
+	// through the SAME instance, built once here, exactly like auditRecorder
+	// above and for the same reason: two Publishers over one webhook registry
+	// would mean two independent dispatch paths that could disagree about
+	// what already fired.
+	//
+	// Its Bus is events.NoopBus{}: the project SSE stream's own bus
+	// (eventStreamRedis, built later in this function once RedisConfig is
+	// read) is not yet open at this point in composition, and re-ordering
+	// that construction earlier is a change this fix does not also make. The
+	// PRACTICAL effect is scoped to these five NEW event types only — they do
+	// not additionally appear on the project SSE stream in this change — and
+	// does not touch the SSE stream's existing traffic (budget.soft_alert and
+	// the rest), which is unaffected. Webhook delivery itself does not need
+	// the Bus at all: it reaches the Dispatcher Sink below regardless.
+	//
+	// Its one Sink is the webhook Dispatcher, wired only when the webhooks
+	// table's repository composes (webhooksRepository never returns nil, but
+	// the guard mirrors the one WebhookRepo's own composition documents: a
+	// pool-less deployment gets a Dispatcher with a nil Repository, and
+	// HandleDomainEvent's own nil guard turns that into a no-op rather than a
+	// panic).
+	webhookDeliveries := webhookDeliveriesRepository(pool)
+	webhookDispatcher := webhook.NewDispatcher(webhooksRepository(pool), webhookDeliveries)
+	domainEvents := events.NewPublisher(events.NoopBus{}, webhookDispatcher)
 
 	// Object store. Production remains fail-closed: when the capability is
 	// enabled, startup requires a working S3/Azure/GCS backend. The mixed
@@ -1620,6 +1649,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 				legacyrbac.NewPostgresResolver(pool),
 				auditRecorder,
 				logger,
+				domainEvents,
 			)
 			// The schedule TICK. It rides elitea-main's platform scheduler —
 			// the same framework `index.schedule.scan.v1` uses — so the clock,
@@ -2126,6 +2156,12 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		// two-arm fallback (EventSource → RedisClient) whose members were BOTH
 		// unassigned, so the endpoint 404'd everywhere (#152).
 		RedisClient: eventStreamRedis,
+		// #876's second half — see this variable's own composition comment,
+		// above, for why its Bus is a no-op and its one Sink is the webhook
+		// Dispatcher.
+		DomainEvents:      domainEvents,
+		WebhookDeliveries: webhookDeliveries,
+		WebhookDispatcher: webhookDispatcher,
 	})
 
 	// NOTE(#126): the Socket.IO prototype server (internal/api/socketio) is
@@ -2227,6 +2263,17 @@ func webhooksRepository(pool *pgxpool.Pool) webhook.Repository {
 		return nil
 	}
 	return dbrepos.NewWebhooksRepo(pool)
+}
+
+// webhookDeliveriesRepository backs the delivery log (#876's second half) —
+// same nil-pool guard as webhooksRepository above, and the same reason: a
+// typed-nil *WebhooksRepo boxed into the interface would make every method
+// on it panic instead of the caller's own nil check catching it first.
+func webhookDeliveriesRepository(pool *pgxpool.Pool) webhook.DeliveryRepository {
+	if pool == nil {
+		return nil
+	}
+	return dbrepos.NewWebhookDeliveriesRepo(pool)
 }
 
 func evalDimensionsRepository(pool *pgxpool.Pool) v2evaluation.Repository {

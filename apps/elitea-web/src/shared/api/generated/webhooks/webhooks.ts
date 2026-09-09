@@ -53,6 +53,8 @@ import type {
 } from "@tanstack/react-query";
 
 import type {
+  ErrorResponse,
+  ListWebhookDeliveries200,
   ListWebhooks200,
   N400Response,
   N401Response,
@@ -60,6 +62,7 @@ import type {
   N404Response,
   N500Response,
   Webhook,
+  WebhookDelivery,
   WebhookWriteRequest,
 } from "../model";
 
@@ -1115,6 +1118,498 @@ export function useDeleteWebhook<
   const queryOptions = getDeleteWebhookQueryOptions(
     projectID,
     webhookID,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listWebhookDeliveriesResponse200 = {
+  data: ListWebhookDeliveries200;
+  status: 200;
+};
+
+export type listWebhookDeliveriesResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listWebhookDeliveriesResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listWebhookDeliveriesResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type listWebhookDeliveriesResponse501 = {
+  data: ErrorResponse;
+  status: 501;
+};
+
+export type listWebhookDeliveriesResponseSuccess =
+  listWebhookDeliveriesResponse200 & {
+    headers: Headers;
+  };
+export type listWebhookDeliveriesResponseError = (
+  | listWebhookDeliveriesResponse401
+  | listWebhookDeliveriesResponse403
+  | listWebhookDeliveriesResponse404
+  | listWebhookDeliveriesResponse501
+) & {
+  headers: Headers;
+};
+
+export type listWebhookDeliveriesResponse =
+  listWebhookDeliveriesResponseSuccess | listWebhookDeliveriesResponseError;
+
+export const getListWebhookDeliveriesUrl = (
+  projectID: string,
+  webhookID: string,
+) => {
+  return `/webhooks/prompt_lib/${projectID}/${webhookID}/deliveries`;
+};
+
+/**
+ * handler.go's ListDeliveries. Up to 20 rows (maxRecentDeliveries) — both automatic deliveries and manual redeliveries, distinguished by `redelivery_of`.
+ * @summary This webhook's recent delivery attempts, newest first
+ */
+export const listWebhookDeliveries = async (
+  projectID: string,
+  webhookID: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listWebhookDeliveriesResponse> => {
+  return eliteaFetch<listWebhookDeliveriesResponse>(
+    getListWebhookDeliveriesUrl(projectID, webhookID),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListWebhookDeliveriesQueryKey = (
+  projectID: string,
+  webhookID: string,
+) => {
+  return [`/webhooks/prompt_lib/${projectID}/${webhookID}/deliveries`] as const;
+};
+
+export const getListWebhookDeliveriesQueryOptions = <
+  TData = Awaited<ReturnType<typeof listWebhookDeliveries>>,
+  TError = N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectID: string,
+  webhookID: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listWebhookDeliveries>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getListWebhookDeliveriesQueryKey(projectID, webhookID);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listWebhookDeliveries>>
+  > = ({ signal }) =>
+    listWebhookDeliveries(projectID, webhookID, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectID !== null &&
+      projectID !== undefined &&
+      webhookID !== null &&
+      webhookID !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listWebhookDeliveries>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListWebhookDeliveriesQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listWebhookDeliveries>>
+>;
+export type ListWebhookDeliveriesQueryError =
+  N401Response | N403Response | N404Response | ErrorResponse;
+
+export function useListWebhookDeliveries<
+  TData = Awaited<ReturnType<typeof listWebhookDeliveries>>,
+  TError = N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectID: string,
+  webhookID: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listWebhookDeliveries>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listWebhookDeliveries>>,
+          TError,
+          Awaited<ReturnType<typeof listWebhookDeliveries>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListWebhookDeliveries<
+  TData = Awaited<ReturnType<typeof listWebhookDeliveries>>,
+  TError = N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectID: string,
+  webhookID: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listWebhookDeliveries>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listWebhookDeliveries>>,
+          TError,
+          Awaited<ReturnType<typeof listWebhookDeliveries>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListWebhookDeliveries<
+  TData = Awaited<ReturnType<typeof listWebhookDeliveries>>,
+  TError = N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectID: string,
+  webhookID: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listWebhookDeliveries>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary This webhook's recent delivery attempts, newest first
+ */
+
+export function useListWebhookDeliveries<
+  TData = Awaited<ReturnType<typeof listWebhookDeliveries>>,
+  TError = N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectID: string,
+  webhookID: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listWebhookDeliveries>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListWebhookDeliveriesQueryOptions(
+    projectID,
+    webhookID,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type redeliverWebhookDeliveryResponse201 = {
+  data: WebhookDelivery;
+  status: 201;
+};
+
+export type redeliverWebhookDeliveryResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type redeliverWebhookDeliveryResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type redeliverWebhookDeliveryResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type redeliverWebhookDeliveryResponse501 = {
+  data: ErrorResponse;
+  status: 501;
+};
+
+export type redeliverWebhookDeliveryResponseSuccess =
+  redeliverWebhookDeliveryResponse201 & {
+    headers: Headers;
+  };
+export type redeliverWebhookDeliveryResponseError = (
+  | redeliverWebhookDeliveryResponse401
+  | redeliverWebhookDeliveryResponse403
+  | redeliverWebhookDeliveryResponse404
+  | redeliverWebhookDeliveryResponse501
+) & {
+  headers: Headers;
+};
+
+export type redeliverWebhookDeliveryResponse =
+  | redeliverWebhookDeliveryResponseSuccess
+  | redeliverWebhookDeliveryResponseError;
+
+export const getRedeliverWebhookDeliveryUrl = (
+  projectID: string,
+  webhookID: string,
+  deliveryID: string,
+) => {
+  return `/webhooks/prompt_lib/${projectID}/${webhookID}/deliveries/${deliveryID}/redeliver`;
+};
+
+/**
+ * handler.go's Redeliver, over Dispatcher.Redeliver. Runs SYNCHRONOUSLY — the response IS the outcome, not an acknowledgement that a retry was queued — and logs a NEW row (`redelivery_of` set to the original delivery's id) rather than mutating the one being resent.
+ * @summary Resend a previously logged delivery's exact payload
+ */
+export const redeliverWebhookDelivery = async (
+  projectID: string,
+  webhookID: string,
+  deliveryID: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<redeliverWebhookDeliveryResponse> => {
+  return eliteaFetch<redeliverWebhookDeliveryResponse>(
+    getRedeliverWebhookDeliveryUrl(projectID, webhookID, deliveryID),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getRedeliverWebhookDeliveryQueryKey = (
+  projectID: string,
+  webhookID: string,
+  deliveryID: string,
+) => {
+  return [
+    "POST",
+    `/webhooks/prompt_lib/${projectID}/${webhookID}/deliveries/${deliveryID}/redeliver`,
+  ] as const;
+};
+
+export const getRedeliverWebhookDeliveryQueryOptions = <
+  TData = Awaited<ReturnType<typeof redeliverWebhookDelivery>>,
+  TError = N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectID: string,
+  webhookID: string,
+  deliveryID: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof redeliverWebhookDelivery>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getRedeliverWebhookDeliveryQueryKey(projectID, webhookID, deliveryID);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof redeliverWebhookDelivery>>
+  > = ({ signal }) =>
+    redeliverWebhookDelivery(projectID, webhookID, deliveryID, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectID !== null &&
+      projectID !== undefined &&
+      webhookID !== null &&
+      webhookID !== undefined &&
+      deliveryID !== null &&
+      deliveryID !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof redeliverWebhookDelivery>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type RedeliverWebhookDeliveryQueryResult = NonNullable<
+  Awaited<ReturnType<typeof redeliverWebhookDelivery>>
+>;
+export type RedeliverWebhookDeliveryQueryError =
+  N401Response | N403Response | N404Response | ErrorResponse;
+
+export function useRedeliverWebhookDelivery<
+  TData = Awaited<ReturnType<typeof redeliverWebhookDelivery>>,
+  TError = N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectID: string,
+  webhookID: string,
+  deliveryID: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof redeliverWebhookDelivery>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof redeliverWebhookDelivery>>,
+          TError,
+          Awaited<ReturnType<typeof redeliverWebhookDelivery>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRedeliverWebhookDelivery<
+  TData = Awaited<ReturnType<typeof redeliverWebhookDelivery>>,
+  TError = N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectID: string,
+  webhookID: string,
+  deliveryID: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof redeliverWebhookDelivery>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof redeliverWebhookDelivery>>,
+          TError,
+          Awaited<ReturnType<typeof redeliverWebhookDelivery>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRedeliverWebhookDelivery<
+  TData = Awaited<ReturnType<typeof redeliverWebhookDelivery>>,
+  TError = N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectID: string,
+  webhookID: string,
+  deliveryID: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof redeliverWebhookDelivery>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Resend a previously logged delivery's exact payload
+ */
+
+export function useRedeliverWebhookDelivery<
+  TData = Awaited<ReturnType<typeof redeliverWebhookDelivery>>,
+  TError = N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectID: string,
+  webhookID: string,
+  deliveryID: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof redeliverWebhookDelivery>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getRedeliverWebhookDeliveryQueryOptions(
+    projectID,
+    webhookID,
+    deliveryID,
     options,
   );
 

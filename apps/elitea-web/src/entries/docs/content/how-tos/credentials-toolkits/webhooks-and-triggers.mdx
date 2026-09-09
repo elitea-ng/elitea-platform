@@ -26,10 +26,12 @@ Separately from pipeline triggers, each project also has a generic outbound webh
 
 <Steps>
 1. Open **Settings › Webhooks** for the project.
-2. Select **Register a new webhook**, give it a destination URL, and (optionally) a comma-separated list of event types to fire on — leave the events field blank to fire on every event.
+2. Select **Register a new webhook**, give it a destination URL, and pick one or more events from the picker below — leave it empty to fire on every event. You can also type a custom event type if you're watching for something outside the built-in catalog.
 3. Save. The new webhook's secret is shown once, in a dialog with a copy button — save it now, since your receiver verifies every request's `X-Webhook-Signature` header against it.
 4. Verify the signature on your receiving end: it's an HMAC-SHA256 of the raw request body, keyed with the secret, the same scheme the pipeline trigger's bearer token protects against.
 </Steps>
+
+<Screenshot id="webhooks-settings-table" alt="The project Webhooks settings page, listing registered webhooks with their events and Active toggle" mask="webhook-secret" />
 
 From the same page you can:
 
@@ -37,10 +39,59 @@ From the same page you can:
 - **Rotate** the secret — mints a fresh value and shows it once, exactly like creation.
 - **Enable or disable** a webhook without deleting it, with the toggle in the Active column.
 - **Delete** a webhook, with a confirmation step.
+- **Expand a row** to see its **Recent deliveries** — every attempt Elitea made, newest first, with the event, outcome, how many tries it took, and the destination's response code or the transport error. Each delivery has a **Redeliver** action that resends the exact same signed body on demand, for example after you've fixed a receiver that was down.
 
 <Note>
 The webhook API itself still works with a personal access token, if you'd rather script registration: create an entry with a target URL, the events you want, and a secret Elitea will sign requests with.
 </Note>
+
+### The event catalog
+
+A webhook's `events` field accepts any string — there's no fixed vocabulary enforced server-side — but the picker offers this built-in catalog, since these are the events this platform's own producers actually emit:
+
+| Event | Fires when |
+| --- | --- |
+| `pipeline.run.started` | An unattended pipeline run is admitted, from an inbound trigger or a schedule. |
+| `schedule.fired` | A pipeline's cron schedule fires and admits a run (a `pipeline.run.started` also fires for the same run). |
+| `agent.version.published` | An agent or pipeline version is published to the catalog. |
+| `agent.version.unpublished` | A published agent version is withdrawn. |
+| `conversation.created` | A new chat conversation is created. |
+| `artifact.uploaded` | A file is uploaded to a project artifact bucket. |
+| `moderation.request.decided` | A moderation or project-creation request is approved or rejected. |
+
+<Note>
+`pipeline.run.succeeded` and `pipeline.run.failed` are reserved names in the catalog for a pipeline's eventual outcome, but no producer emits them yet — that signal sits deep in the platform's turn-settlement machinery, and wiring it safely is tracked separately. You can still register a webhook for either; it simply won't fire until that wiring lands.
+</Note>
+
+Every delivery's JSON body has the same envelope, regardless of event:
+
+```json
+{
+  "type": "conversation.created",
+  "project_id": "42",
+  "payload": { "conversation_id": "c1a2...", "name": "Support triage" },
+  "timestamp": "2026-09-09T02:00:00Z"
+}
+```
+
+### Verifying the signature
+
+Every delivery carries an `X-Webhook-Signature` header shaped `sha256=<hex>` — an HMAC-SHA256 of the exact request body, keyed with the webhook's secret — plus an `X-Webhook-Event` header repeating the event type outside the signed body, so you can route before parsing JSON. A minimal Node.js verifier:
+
+```js
+import { createHmac, timingSafeEqual } from 'node:crypto';
+
+function verifyWebhookSignature(secret, rawBody, header) {
+  const expected = 'sha256=' + createHmac('sha256', secret).update(rawBody).digest('hex');
+  const a = Buffer.from(header ?? '');
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+```
+
+Compute the HMAC over the **raw bytes** of the request body, before any JSON parsing — a body that's been re-serialized (re-ordered keys, different whitespace) produces a different digest and fails verification even though the content is unchanged.
+
+A failed delivery is retried automatically, up to three attempts with a short backoff, before it's logged as `failed` in the Recent deliveries panel — a receiver that's briefly unavailable usually doesn't need a manual Redeliver at all.
 
 ## Next steps
 

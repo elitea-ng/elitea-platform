@@ -2951,6 +2951,112 @@
       "usedBy": [
         "widgets/app-shell"
       ]
+    },
+    {
+      "id": "webhooks.listWebhooks",
+      "method": "GET",
+      "path": "/webhooks/prompt_lib/{projectID}",
+      "operationId": "listWebhooks",
+      "source": "generated",
+      "responseSchema": "ListWebhooks200",
+      "fixture": null,
+      "usedBy": [
+        "pages/settings/Webhooks.tsx"
+      ]
+    },
+    {
+      "id": "webhooks.createWebhook",
+      "method": "POST",
+      "path": "/webhooks/prompt_lib/{projectID}",
+      "operationId": "createWebhook",
+      "source": "generated",
+      "responseSchema": "Webhook",
+      "fixture": null,
+      "usedBy": [
+        "pages/settings/Webhooks.tsx"
+      ]
+    },
+    {
+      "id": "webhooks.getWebhook",
+      "method": "GET",
+      "path": "/webhooks/prompt_lib/{projectID}/{webhookID}",
+      "operationId": "getWebhook",
+      "source": "generated",
+      "responseSchema": "Webhook",
+      "fixture": null,
+      "usedBy": []
+    },
+    {
+      "id": "webhooks.updateWebhook",
+      "method": "PUT",
+      "path": "/webhooks/prompt_lib/{projectID}/{webhookID}",
+      "operationId": "updateWebhook",
+      "source": "generated",
+      "responseSchema": "Webhook",
+      "fixture": null,
+      "usedBy": [
+        "pages/settings/Webhooks.tsx"
+      ]
+    },
+    {
+      "id": "webhooks.deleteWebhook",
+      "method": "DELETE",
+      "path": "/webhooks/prompt_lib/{projectID}/{webhookID}",
+      "operationId": "deleteWebhook",
+      "source": "generated",
+      "responseSchema": null,
+      "fixture": null,
+      "usedBy": [
+        "pages/settings/Webhooks.tsx"
+      ]
+    },
+    {
+      "id": "webhooks.listWebhookDeliveries",
+      "method": "GET",
+      "path": "/webhooks/prompt_lib/{projectID}/{webhookID}/deliveries",
+      "operationId": "listWebhookDeliveries",
+      "source": "generated",
+      "responseSchema": "ListWebhookDeliveries200",
+      "fixture": null,
+      "usedBy": [
+        "features/settings"
+      ]
+    },
+    {
+      "id": "webhooks.redeliverWebhookDelivery",
+      "method": "POST",
+      "path": "/webhooks/prompt_lib/{projectID}/{webhookID}/deliveries/{deliveryID}/redeliver",
+      "operationId": "redeliverWebhookDelivery",
+      "source": "generated",
+      "responseSchema": "WebhookDelivery",
+      "fixture": null,
+      "usedBy": [
+        "features/settings"
+      ]
+    },
+    {
+      "id": "admin.createProjectRequest",
+      "method": "POST",
+      "path": "/admin/moderation_status/project_request",
+      "operationId": "createProjectRequest",
+      "source": "generated",
+      "responseSchema": "ModerationRequestRow",
+      "fixture": null,
+      "usedBy": [
+        "features/project-requests"
+      ]
+    },
+    {
+      "id": "admin.listMyProjectRequests",
+      "method": "GET",
+      "path": "/admin/moderation_status/project_requests/mine",
+      "operationId": "listMyProjectRequests",
+      "source": "generated",
+      "responseSchema": "ModerationRequestList",
+      "fixture": null,
+      "usedBy": [
+        "features/project-requests"
+      ]
     }
   ]
 }

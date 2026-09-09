@@ -11,9 +11,11 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 
+import Autocomplete from '@mui/material/Autocomplete';
 import Box from '@mui/material/Box';
 import FormControlLabel from '@mui/material/FormControlLabel';
 import Switch from '@mui/material/Switch';
+import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
@@ -21,7 +23,7 @@ import { t } from '@/shared/i18n';
 import { BaseModal } from '@/shared/ui/BaseModal';
 import { InputBase } from '@/shared/ui/InputBase';
 
-import { formatWebhookEvents, parseWebhookEvents } from '../../lib/webhooks/webhookHelpers';
+import { WEBHOOK_EVENT_TYPES } from '../../lib/webhooks/webhookEventCatalogue';
 
 export interface WebhookFormValues {
   readonly url: string;
@@ -43,7 +45,7 @@ const descriptionSx: SxProps<Theme> = { color: 'text.secondary' };
 
 export function WebhookFormDialog({ open, isSaving, initialValues, onClose, onSubmit }: WebhookFormDialogProps) {
   const [url, setUrl] = useState('');
-  const [events, setEvents] = useState('');
+  const [events, setEvents] = useState<readonly string[]>([]);
   const [active, setActive] = useState(true);
   const [urlError, setUrlError] = useState('');
 
@@ -53,7 +55,7 @@ export function WebhookFormDialog({ open, isSaving, initialValues, onClose, onSu
   useEffect(() => {
     if (!open) return;
     setUrl(initialValues?.url ?? '');
-    setEvents(initialValues ? formatWebhookEvents(initialValues.events) : '');
+    setEvents(initialValues?.events ?? []);
     setActive(initialValues?.active ?? true);
     setUrlError('');
   }, [open, initialValues]);
@@ -64,7 +66,7 @@ export function WebhookFormDialog({ open, isSaving, initialValues, onClose, onSu
       setUrlError(t('entities.webhook.form.urlRequired', 'A destination URL is required'));
       return;
     }
-    onSubmit({ url: trimmedUrl, events: parseWebhookEvents(events), active });
+    onSubmit({ url: trimmedUrl, events, active });
   }, [url, events, active, onSubmit]);
 
   const isEdit = initialValues !== undefined;
@@ -96,15 +98,23 @@ export function WebhookFormDialog({ open, isSaving, initialValues, onClose, onSu
             helperText={urlError || undefined}
             data-testid="webhook-form-url"
           />
-          <InputBase
-            label={t('entities.webhook.form.eventsLabel', 'Events')}
-            placeholder="application.created, execution.completed"
-            helperText={t(
-              'entities.webhook.form.eventsHelp',
-              'Comma-separated event types. Leave blank to fire on every event.',
+          <Autocomplete
+            multiple
+            freeSolo
+            options={WEBHOOK_EVENT_TYPES}
+            value={events as string[]}
+            onChange={(_event, next) => setEvents(next)}
+            renderInput={(params) => (
+              <TextField
+                {...params}
+                label={t('entities.webhook.form.eventsLabel', 'Events')}
+                placeholder={t('entities.webhook.form.eventsPlaceholder', 'Pick an event, or type your own')}
+                helperText={t(
+                  'entities.webhook.form.eventsHelp',
+                  'Leave blank to fire on every event. Pick from the catalog or type a custom event type.',
+                )}
+              />
             )}
-            value={events}
-            onChange={(event) => setEvents(event.target.value)}
             data-testid="webhook-form-events"
           />
           <FormControlLabel

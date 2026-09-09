@@ -91,7 +91,16 @@ test('Settings: create, rotate, disable and delete a webhook', async ({ page }, 
   const dialog = page.getByTestId('webhook-form-dialog');
   await expect(dialog).toBeVisible({ timeout: 5_000 });
   await dialog.getByTestId('webhook-form-url').locator('input').fill(destination, { timeout: 3_000 });
-  await dialog.getByTestId('webhook-form-events').locator('input').fill('application.created, execution.completed', { timeout: 3_000 });
+  // #876's second half swapped the free-text comma field for an MUI
+  // Autocomplete (multiple, freeSolo — see webhookEventCatalogue.ts): each
+  // event is typed and committed with Enter, the standard MUI interaction
+  // for adding a freeSolo chip, rather than filled as one comma-joined
+  // string.
+  const eventsInput = dialog.getByTestId('webhook-form-events').locator('input');
+  await eventsInput.fill('application.created', { timeout: 3_000 });
+  await eventsInput.press('Enter');
+  await eventsInput.fill('execution.completed', { timeout: 3_000 });
+  await eventsInput.press('Enter');
 
   const created = page.waitForResponse(
     (res) => res.request().method() === 'POST' && res.url().includes('/webhooks/prompt_lib/'),

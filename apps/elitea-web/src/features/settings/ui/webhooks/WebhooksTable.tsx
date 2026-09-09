@@ -7,9 +7,11 @@
  * pagination, no sort — the same "no `GridTableContainer`" call
  * `TokensTable.tsx`'s header documents for the same reason.
  */
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
+import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
@@ -17,6 +19,7 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined';
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 import Box from '@mui/material/Box';
 import Chip from '@mui/material/Chip';
+import Collapse from '@mui/material/Collapse';
 import IconButton from '@mui/material/IconButton';
 import Paper from '@mui/material/Paper';
 import Switch from '@mui/material/Switch';
@@ -36,6 +39,7 @@ import { DeleteEntityModal } from '@/shared/ui/DeleteEntityModal';
 
 import type { WebhookPermissions } from '../../lib/webhooks/useWebhookPermissions';
 import { MASKED_SECRET } from '../../lib/webhooks/webhookHelpers';
+import { WebhookDeliveriesPanel } from './WebhookDeliveriesPanel';
 
 export interface WebhookViewRow {
   readonly id: string;
@@ -46,6 +50,7 @@ export interface WebhookViewRow {
 }
 
 export interface WebhooksTableProps {
+  readonly projectId: string;
   readonly rows: readonly WebhookViewRow[];
   readonly isLoading: boolean;
   readonly permissions: WebhookPermissions;
@@ -61,6 +66,7 @@ const urlCellSx: SxProps<Theme> = { display: 'flex', alignItems: 'center', gap: 
 const urlTextSx: SxProps<Theme> = { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' };
 const secretCellSx: SxProps<Theme> = { display: 'flex', alignItems: 'center', gap: '0.25rem', fontFamily: 'monospace' };
 const eventsCellSx: SxProps<Theme> = { display: 'flex', flexWrap: 'wrap', gap: '0.25rem', maxWidth: '16rem' };
+const collapseCellSx: SxProps<Theme> = { paddingTop: 0, paddingBottom: 0, borderBottom: 'none' };
 
 /** One row's reveal state — local to the table, since it is purely a display toggle over data already fetched. */
 function useRevealedSecrets() {
@@ -105,9 +111,13 @@ function SecretCell({ row, canReveal, isRevealed, onToggle }: SecretCellProps) {
   );
 }
 
-export function WebhooksTable({ rows, isLoading, permissions, onEdit, onRotate, onToggleActive, onDelete }: WebhooksTableProps) {
+export function WebhooksTable({ projectId, rows, isLoading, permissions, onEdit, onRotate, onToggleActive, onDelete }: WebhooksTableProps) {
   const { isRevealed, toggle } = useRevealedSecrets();
   const [pendingDelete, setPendingDelete] = useState<WebhookViewRow | null>(null);
+  // Deliveries panels are collapsed by default — WebhookDeliveriesPanel only
+  // fetches while its row is expanded, so a project with many webhooks does
+  // not fire N delivery-list requests just for rendering the table.
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   if (!isLoading && rows.length === 0) {
     return (
@@ -125,6 +135,7 @@ export function WebhooksTable({ rows, isLoading, permissions, onEdit, onRotate, 
         <Table size="small" data-testid="webhooks-table">
           <TableHead>
             <TableRow>
+              <TableCell />
               <TableCell>{t('entities.webhook.table.url', 'URL')}</TableCell>
               <TableCell>{t('entities.webhook.table.events', 'Events')}</TableCell>
               <TableCell>{t('entities.webhook.table.secret', 'Secret')}</TableCell>
@@ -133,8 +144,23 @@ export function WebhooksTable({ rows, isLoading, permissions, onEdit, onRotate, 
             </TableRow>
           </TableHead>
           <TableBody>
-            {rows.map((row) => (
-              <TableRow key={row.id} data-testid={`webhook-row-${row.id}`}>
+            {rows.map((row) => {
+              const isExpanded = expandedId === row.id;
+              return (
+              <Fragment key={row.id}>
+              <TableRow data-testid={`webhook-row-${row.id}`}>
+                <TableCell>
+                  <Tooltip title={t('entities.webhook.table.deliveries', 'Recent deliveries')}>
+                    <IconButton
+                      size="small"
+                      onClick={() => setExpandedId(isExpanded ? null : row.id)}
+                      aria-label={t('entities.webhook.table.deliveriesAria', 'Toggle recent deliveries')}
+                      data-testid={`webhook-expand-${row.id}`}
+                    >
+                      {isExpanded ? <KeyboardArrowUpIcon fontSize="small" /> : <KeyboardArrowDownIcon fontSize="small" />}
+                    </IconButton>
+                  </Tooltip>
+                </TableCell>
                 <TableCell>
                   <Box sx={urlCellSx}>
                     <Typography variant="bodySmall" sx={urlTextSx} title={row.url}>
@@ -195,7 +221,18 @@ export function WebhooksTable({ rows, isLoading, permissions, onEdit, onRotate, 
                   )}
                 </TableCell>
               </TableRow>
-            ))}
+              <TableRow>
+                <TableCell colSpan={6} sx={collapseCellSx}>
+                  <Collapse in={isExpanded} unmountOnExit>
+                    {isExpanded && (
+                      <WebhookDeliveriesPanel projectId={projectId} webhookId={row.id} canRedeliver={permissions.canUpdate} />
+                    )}
+                  </Collapse>
+                </TableCell>
+              </TableRow>
+              </Fragment>
+              );
+            })}
           </TableBody>
         </Table>
       </TableContainer>

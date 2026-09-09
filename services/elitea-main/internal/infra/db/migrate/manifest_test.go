@@ -522,7 +522,16 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// parity rather than a new policy, and the route would answer 403 on a
 	// clean database without them. A new file for 0120's reason: 0082 is
 	// checksum-immutable and 0060 returns early on any configured deployment.
-	require.EqualValues(t, 121, Head(shared))
+	//
+	// 122: shared/0122_webhooks_and_deliveries.sql, the `webhooks` table
+	// #876's first half shipped a repository and five routes against but no
+	// migration ever created (router.go said so explicitly), plus
+	// `webhook_deliveries`, the delivery log #876's second half adds when it
+	// wires the Dispatcher to real producers. No new permission grant: every
+	// route reuses the `configurations.configuration*` strings 0072 already
+	// grants, so this file has no shared-permission sibling of its own kind
+	// — it IS the shared file, for a table rather than a grant.
+	require.EqualValues(t, 122, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

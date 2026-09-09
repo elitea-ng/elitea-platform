@@ -582,8 +582,15 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
  *
  * #867 (chat composer "Create new" wiring) adds no generated operation: it
  * wires existing create routes to existing editors, described already.
+ *
+ * 243 -> 245, wiring the webhook Dispatcher to real producers (#876's
+ * second half). Two new operations, from the delivery-log routes v2.yaml
+ * gained alongside the CRUD five: `listWebhookDeliveries` (the "Recent
+ * deliveries" panel's GET) and `redeliverWebhookDelivery` (its Redeliver
+ * action's POST) — both in the same generated/webhooks/webhooks.ts tag
+ * file the five CRUD operations already live in.
  */
-const GENERATED_OPERATION_COUNT = 243;
+const GENERATED_OPERATION_COUNT = 245;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -705,8 +712,17 @@ const GENERATED_OPERATION_COUNT = 243;
  * either, "expected during Wave 1/2"), so this is a real but pre-existing
  * gap in those two picks' own R-A5 bookkeeping, not something this merge
  * regenerration step is asked to backfill.
+ *
+ * 251 -> 260, wiring the webhook Dispatcher to real producers (#876's
+ * second half). Nine entries: the backfill this file's own note above
+ * flagged as missing — the five webhook CRUD operations
+ * (webhooks.listWebhooks/createWebhook/getWebhook/updateWebhook/
+ * deleteWebhook) and the two project-request operations
+ * (admin.createProjectRequest/listMyProjectRequests) — plus the two new
+ * delivery-log operations GENERATED_OPERATION_COUNT's own note above
+ * describes (webhooks.listWebhookDeliveries/redeliverWebhookDelivery).
  */
-const MANIFEST_ENTRY_COUNT = 251;
+const MANIFEST_ENTRY_COUNT = 260;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

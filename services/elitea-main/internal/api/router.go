@@ -65,6 +65,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
 	platformauth "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/events"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/identityproviders"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/migrate"
 	dbrepos "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
@@ -250,6 +251,29 @@ type RouterConfig struct {
 	WebhookRepo          webhook.Repository
 	RedisClient          *goredis.Client
 	EventSource          v2events.EventSource
+	// DomainEvents is #876's second half: the ONE domain-events Publisher
+	// every producer below (conversation create, artifact upload, agent
+	// publish/unpublish, moderation decision, pipeline run admission) emits
+	// through, which fans out to the project SSE bus AND — via the webhook
+	// Dispatcher composed as one of its Sinks in cmd/elitea-main/main.go —
+	// to every registered webhook subscribed to that event.
+	//
+	// main.go builds this UNCONDITIONALLY, never leaving it nil: even with
+	// no Redis and no webhook repository it is a Publisher over
+	// events.NoopBus with zero sinks, so every `.WithEvents(cfg.DomainEvents)`
+	// call below can pass it straight through with no nil check — passing a
+	// nil *events.Publisher through an interface-typed Option parameter
+	// would box a typed nil into a non-nil interface (the #86 trap this
+	// service's own NewPlatformHandler documents), which is what "never
+	// leave it nil" avoids needing a second guard against.
+	DomainEvents *events.Publisher
+	// WebhookDeliveries and WebhookDispatcher back the two new delivery-log
+	// routes (GET .../deliveries, POST .../deliveries/{id}/redeliver). Both
+	// nil-gated the same way WebhookRepo already is: absent, the two routes
+	// simply are not composed via webhook.WithDispatcher and the handler's
+	// own nil check answers 404 instead of dispatching.
+	WebhookDeliveries webhook.DeliveryRepository
+	WebhookDispatcher *webhook.Dispatcher
 	// EvalDimensionsRepo backs the Agent Evaluation DIMENSION LIBRARY — the
 	// first and, for now, only slice of that feature. Unassigned, the four
 	// routes are not registered at all, which answers 404: a stubbed 200 with
@@ -488,7 +512,7 @@ func newArtifactHandler(cfg RouterConfig) (h *v2artifacts.Handler, ok bool) {
 	return v2artifacts.NewHandler(
 		artifactRepoAdapter{bucketsRepo, objectsRepo, grantsRepo, permissionsRepo},
 		cfg.ObjectStore,
-	), true
+	).WithEvents(cfg.DomainEvents), true
 }
 
 // bucketBootstrapRepoAdapter satisfies artifactbootstrap.Repository the same
@@ -1361,6 +1385,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// INTERFACE check that holds, because that field is documented
 				// never to receive a boxed nil pointer.
 				v2core.WithCostBudgets(cfg.GatewayStatus != nil),
+				v2core.WithEvents(cfg.DomainEvents),
 			)
 
 			// === Auth endpoints ===
@@ -1446,7 +1471,14 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			// no pool composes a Handler exactly as before — approving a
 			// Project Request then answers 502 and filing one answers 503,
 			// rather than either being silently wired to nothing.
-			moderationOptions := []v2moderation.Option{v2moderation.WithMailer(decisionMailer)}
+			moderationOptions := []v2moderation.Option{
+				v2moderation.WithMailer(decisionMailer),
+				// moderation.request.decided (#876's second half) — covers
+				// BOTH an ordinary app request and a Project Request (#871),
+				// since AdministrationRequestUpdate is the one decision path
+				// both flow through.
+				v2moderation.WithEvents(cfg.DomainEvents),
+			}
 			if projectProvisionerOK {
 				moderationOptions = append(moderationOptions, v2moderation.WithProjectProvisioner(projectProvisioner))
 			}
@@ -2808,7 +2840,8 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						WithPool(cfg.Pool).
 						WithObjectStore(cfg.ObjectStore).
 						WithAttachmentStore(newAttachmentStore(cfg.Pool)).
-						WithUserContextDefaults(newUserContextDefaults(cfg.Pool))
+						WithUserContextDefaults(newUserContextDefaults(cfg.Pool)).
+						WithEvents(cfg.DomainEvents)
 					requireConversationRead := projectPermission("models.chat.conversation.details")
 					requireMessageDelete := projectPermission("models.chat.messages.delete")
 					requireEntitySettings := projectPermission("models.chat.entity_settings.update")
@@ -3874,9 +3907,20 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			// still the fix: the disclosure is one CREATE TABLE away, and the
 			// route must not be the thing that decides.
 			if cfg.WebhookRepo != nil {
+				webhookOptions := []webhook.Option{webhook.WithPermissionResolver(coreResolver)}
+				// The delivery log routes (#876's second half). Both
+				// WebhookDispatcher and WebhookDeliveries are set together by
+				// main.go's composition (one Dispatcher, one repository) —
+				// nil-checking the pair here rather than trusting
+				// WithDispatcher's own internal nil-safety keeps the SAME
+				// "gate what you mount" discipline this file applies to every
+				// other optional route group.
+				if cfg.WebhookDispatcher != nil && cfg.WebhookDeliveries != nil {
+					webhookOptions = append(webhookOptions, webhook.WithDispatcher(cfg.WebhookDispatcher, cfg.WebhookDeliveries))
+				}
 				r.Mount("/webhooks/prompt_lib/{projectID}", webhook.NewHandler(
 					cfg.WebhookRepo,
-					webhook.WithPermissionResolver(coreResolver),
+					webhookOptions...,
 				).Routes())
 			}
 

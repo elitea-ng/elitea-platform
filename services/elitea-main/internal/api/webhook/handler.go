@@ -81,6 +81,14 @@ type Handler struct {
 	// permissionResolver gates every route in Routes(). nil answers 403 on all
 	// five — see require below.
 	permissionResolver auth.PermissionResolver
+	// deliveries backs the two delivery routes (ListDeliveries, Redeliver).
+	// nil answers 501 (not configured on this deployment) on both, the same
+	// "named refusal, not a bare 500 or a misleading 404" shape apierr
+	// .NotImplemented documents — see require() and the two handlers below.
+	deliveries DeliveryRepository
+	// dispatcher backs Redeliver's actual re-send. nil answers 501, same as
+	// deliveries — the two are always wired together (see WithDispatcher).
+	dispatcher *Dispatcher
 }
 
 // Option configures a Handler. Same shape as the other v2 packages'.
@@ -91,6 +99,16 @@ type Option func(*Handler)
 // rotates another tenant's webhook secret.
 func WithPermissionResolver(resolver auth.PermissionResolver) Option {
 	return func(h *Handler) { h.permissionResolver = resolver }
+}
+
+// WithDispatcher wires the delivery log routes (GET .../deliveries, POST
+// .../deliveries/{deliveryID}/redeliver) to a live Dispatcher and its
+// DeliveryRepository. Both routes answer 501 until this is applied.
+func WithDispatcher(dispatcher *Dispatcher, deliveries DeliveryRepository) Option {
+	return func(h *Handler) {
+		h.dispatcher = dispatcher
+		h.deliveries = deliveries
+	}
 }
 
 func NewHandler(repo Repository, opts ...Option) *Handler {
@@ -123,6 +141,13 @@ func (h *Handler) Routes() chi.Router {
 	r.With(h.require(detailsPermission)).Get("/{webhookID}", h.Get)
 	r.With(h.require(updatePermission)).Put("/{webhookID}", h.Update)
 	r.With(h.require(deletePermission)).Delete("/{webhookID}", h.Delete)
+	// The delivery log is a READ of what the webhook already did, so it
+	// takes the same permission as reading the webhook itself.
+	r.With(h.require(detailsPermission)).Get("/{webhookID}/deliveries", h.ListDeliveries)
+	// Redeliver is a WRITE — it makes the platform issue a new outbound
+	// HTTP call on the caller's behalf — so it takes the update string, the
+	// same one rotating the secret or flipping active takes.
+	r.With(h.require(updatePermission)).Post("/{webhookID}/deliveries/{deliveryID}/redeliver", h.Redeliver)
 	return r
 }
 
@@ -206,6 +231,61 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// maxRecentDeliveries bounds the "Recent deliveries" panel. Older attempts
+// remain in the table (redelivering old evidence is exactly what Redeliver's
+// own comment says the log is FOR) — this only bounds the ONE listing route.
+const maxRecentDeliveries = 20
+
+// ListDeliveries answers the "Recent deliveries" panel: this webhook's last
+// maxRecentDeliveries attempt sequences, newest first, whether they were
+// originals or redeliveries.
+func (h *Handler) ListDeliveries(w http.ResponseWriter, r *http.Request) {
+	if h.deliveries == nil {
+		apierr.Write(w, apierr.NotImplemented("delivery log not available on this deployment"))
+		return
+	}
+	projectID := chi.URLParam(r, "projectID")
+	webhookID := chi.URLParam(r, "webhookID")
+
+	// A webhook id that names nothing in this project must answer 404, not
+	// an empty deliveries list — the same reason Get() below checks the
+	// webhook exists before reading its deliveries: a caller probing ids
+	// must see no difference between "no deliveries yet" and "not your
+	// webhook" from the deliveries route alone, but the two ARE different to
+	// a legitimate caller and the 404 says which.
+	if _, err := h.repo.Get(r.Context(), projectID, webhookID); err != nil {
+		apierr.Write(w, err)
+		return
+	}
+
+	deliveries, err := h.deliveries.ListRecent(r.Context(), projectID, webhookID, maxRecentDeliveries)
+	if err != nil {
+		apierr.Write(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": deliveries})
+}
+
+// Redeliver re-sends one logged delivery's exact payload and logs the new
+// attempt as its own row. See Dispatcher.Redeliver's doc comment for why it
+// is synchronous and why it is a new row rather than an update.
+func (h *Handler) Redeliver(w http.ResponseWriter, r *http.Request) {
+	if h.dispatcher == nil || h.deliveries == nil {
+		apierr.Write(w, apierr.NotImplemented("delivery log not available on this deployment"))
+		return
+	}
+	projectID := chi.URLParam(r, "projectID")
+	webhookID := chi.URLParam(r, "webhookID")
+	deliveryID := chi.URLParam(r, "deliveryID")
+
+	delivery, err := h.dispatcher.Redeliver(r.Context(), projectID, webhookID, deliveryID)
+	if err != nil {
+		apierr.Write(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, delivery)
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

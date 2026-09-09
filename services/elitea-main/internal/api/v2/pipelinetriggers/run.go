@@ -209,6 +209,33 @@ func (h *Handler) admit(ctx context.Context, schema string, request runRequest) 
 		h.discardRunConversation(ctx, schema, conversationUUID)
 		return runOutcome{}, fmt.Errorf("pipelinetriggers: start pipeline run: %w", err)
 	}
+
+	// #876's second half: pipeline.run.started fires for BOTH entry points
+	// (this is the one admission path both use), and schedule.fired
+	// additionally fires when a schedule — not an inbound trigger — is what
+	// admitted this run. Both are "admitted", not "finished" — see
+	// internal/events.EventPipelineRunSucceeded's doc comment for why this
+	// package does not also emit the run's eventual outcome.
+	if h.events != nil {
+		projectID := strconv.FormatInt(request.ProjectID, 10)
+		h.events.Emit(ctx, projectID, "pipeline.run.started", map[string]any{
+			"execution_id":      outcome.ExecutionID,
+			"conversation_uuid": conversationUUID,
+			"application_id":    target.ApplicationID,
+			"version_id":        target.VersionID,
+			"origin":            request.Origin,
+		})
+		if request.ScheduleID != 0 {
+			h.events.Emit(ctx, projectID, "schedule.fired", map[string]any{
+				"schedule_id":       request.ScheduleID,
+				"execution_id":      outcome.ExecutionID,
+				"conversation_uuid": conversationUUID,
+				"application_id":    target.ApplicationID,
+				"version_id":        target.VersionID,
+			})
+		}
+	}
+
 	return runOutcome{
 		ExecutionID:       outcome.ExecutionID,
 		ConversationUUID:  conversationUUID,

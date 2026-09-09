@@ -193,6 +193,7 @@ export const WebhooksContent = memo(function WebhooksContent() {
       />
       <Box sx={styles.content}>
         <WebhooksTable
+          projectId={projectId}
           rows={rows}
           isLoading={listQuery.isFetching}
           permissions={permissions}

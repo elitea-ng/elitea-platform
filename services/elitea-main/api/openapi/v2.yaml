@@ -8370,6 +8370,43 @@ components:
         active: { type: boolean }
       required: [url, events, active]
 
+    WebhookDelivery:
+      type: object
+      description: >
+        NOTE(issue 876, second half): internal/api/webhook/dispatcher.go's
+        `Delivery` — one COMPLETED attempt sequence (not one row per HTTP
+        try; `attempts` counts how many tries the sequence made, 1 to 3).
+        `payload` is the exact signed body that was sent, so Redeliver can
+        resend it byte-identical.
+      properties:
+        id: { type: string }
+        webhook_id: { type: string }
+        project_id: { type: string }
+        event:
+          type: string
+          description: The event type this delivery carried, e.g. `conversation.created`.
+        status:
+          type: string
+          enum: [pending, success, failed]
+        attempts:
+          type: integer
+          description: How many HTTP attempts this sequence made (1-3).
+        response_code:
+          type: integer
+          nullable: true
+          description: The destination's HTTP status on the last attempt, absent on a transport-level failure (DNS, refused connection, timeout).
+        last_error:
+          type: string
+          description: Empty on a successful delivery.
+        payload:
+          description: The exact JSON body that was (or will be, on redeliver) signed and POSTed.
+        redelivery_of:
+          type: string
+          description: The id of the delivery this one resent, empty for an original, automatic delivery.
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+      required: [id, webhook_id, project_id, event, status, attempts, created_at, updated_at]
+
     SecretListItem:
       type: object
       description: >
@@ -18202,6 +18239,97 @@ paths:
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '404': { $ref: '#/components/responses/404' }
+
+  # ── The delivery log (issue #876's second half) ─────────────────────────
+  #
+  # Until this change webhook.Dispatcher (internal/api/webhook/dispatcher.go)
+  # was composed against NO event producer — every registered webhook was
+  # inert. These two routes are the visible half of the fix: the "Recent
+  # deliveries" panel reads GET .../deliveries, and its "Redeliver" row
+  # action calls POST .../deliveries/{deliveryID}/redeliver. Both answer 501
+  # (not 404 — see WithDispatcher's own comment) on a deployment composed
+  # with no Dispatcher, the same "named refusal instead of a 200 that quietly
+  # does nothing" shape #617's evidence bar asks for elsewhere in this
+  # document.
+  /webhooks/prompt_lib/{projectID}/{webhookID}/deliveries:
+    parameters:
+      - name: projectID
+        in: path
+        required: true
+        schema: { type: string }
+      - name: webhookID
+        in: path
+        required: true
+        schema: { type: string }
+
+    get:
+      operationId: listWebhookDeliveries
+      summary: This webhook's recent delivery attempts, newest first
+      description: >
+        handler.go's ListDeliveries. Up to 20 rows
+        (maxRecentDeliveries) — both automatic deliveries and manual
+        redeliveries, distinguished by `redelivery_of`.
+      tags: [webhooks]
+      responses:
+        '200':
+          description: The webhook's recent deliveries
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/WebhookDelivery' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '501':
+          description: This deployment composed no delivery log.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /webhooks/prompt_lib/{projectID}/{webhookID}/deliveries/{deliveryID}/redeliver:
+    parameters:
+      - name: projectID
+        in: path
+        required: true
+        schema: { type: string }
+      - name: webhookID
+        in: path
+        required: true
+        schema: { type: string }
+      - name: deliveryID
+        in: path
+        required: true
+        schema: { type: string }
+
+    post:
+      operationId: redeliverWebhookDelivery
+      summary: Resend a previously logged delivery's exact payload
+      description: >
+        handler.go's Redeliver, over Dispatcher.Redeliver. Runs
+        SYNCHRONOUSLY — the response IS the outcome, not an
+        acknowledgement that a retry was queued — and logs a NEW row
+        (`redelivery_of` set to the original delivery's id) rather than
+        mutating the one being resent.
+      tags: [webhooks]
+      responses:
+        '201':
+          description: The new delivery row, reflecting this attempt's outcome
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WebhookDelivery' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '501':
+          description: This deployment composed no delivery log or dispatcher.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
 
   # ── The stored-credential checks and the revalidation ──────────────────
   #

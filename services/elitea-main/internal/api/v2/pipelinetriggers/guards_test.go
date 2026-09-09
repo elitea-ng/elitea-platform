@@ -205,13 +205,18 @@ func TestScheduleJobIsRegisteredAsDurableAdmission(t *testing.T) {
 func TestNewPlatformHandlerDoesNotBoxATypedNil(t *testing.T) {
 	var absentStart *fakeAbsentStart
 	var absentVault *fakeAbsentVault
-	handler := NewPlatformHandler(nil, absentStart, absentVault, nil, nil, nil)
+	var absentEvents *fakeAbsentEvents
+	handler := NewPlatformHandler(nil, absentStart, absentVault, nil, nil, nil, absentEvents)
 	if handler.start != nil {
 		t.Fatal("a nil start use case was boxed into a non-nil interface; the inbound route " +
 			"would report a runtime it does not have and then dereference nil")
 	}
 	if handler.vault != nil {
 		t.Fatal("a nil vault was boxed into a non-nil interface")
+	}
+	if handler.events != nil {
+		t.Fatal("a nil events publisher was boxed into a non-nil interface; admit() would " +
+			"dereference it on its first pipeline.run.started Emit call")
 	}
 	if _, err := handler.admit(context.Background(), "p_1", runRequest{}); err != ErrRuntimeUnavailable {
 		t.Fatalf("admit with no runtime = %v, want ErrRuntimeUnavailable", err)
@@ -221,3 +226,5 @@ func TestNewPlatformHandlerDoesNotBoxATypedNil(t *testing.T) {
 type fakeAbsentStart struct{ AgentStartUseCase }
 
 type fakeAbsentVault struct{ HiddenVault }
+
+type fakeAbsentEvents struct{ EventEmitter }

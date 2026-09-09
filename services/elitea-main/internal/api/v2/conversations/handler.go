@@ -9,6 +9,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -237,6 +238,52 @@ type Handler struct {
 	store        storage.ObjectStore
 	attachments  AttachmentStore
 	userDefaults UserContextDefaults
+	events       EventEmitter
+}
+
+// EventEmitter is the seam to internal/events.Publisher — declared locally,
+// like AttachmentStore and UserContextDefaults above, so this package (which
+// the composition root imports) does not import internal/events and close a
+// cycle. *events.Publisher already satisfies this structurally.
+type EventEmitter interface {
+	Emit(ctx context.Context, projectID, eventType string, payload any)
+}
+
+// WithEvents wires the conversation.created producer (#876's second half).
+// Left nil, Create still works exactly as before — no webhook fires on a
+// new conversation and no project SSE notice is sent for it, which is the
+// same "degraded, not wrong" shape every other optional dependency here
+// uses.
+//
+// Guarded by eventEmitterPresent: the composition root passes a
+// *events.Publisher through this interface-typed parameter, and Go boxes a
+// nil *events.Publisher into a NON-NIL EventEmitter — the #86 trap this
+// service has met at four other composition roots — which would otherwise
+// turn a deployment with no domain-events publisher into a panic on the
+// first conversation Create.
+func (h *Handler) WithEvents(emitter EventEmitter) *Handler {
+	if eventEmitterPresent(emitter) {
+		h.events = emitter
+	}
+	return h
+}
+
+// eventEmitterPresent reports whether emitter holds something usable — false
+// for a nil interface AND for an interface boxing a nil pointer. Same check
+// internal/api/v2/pipelinetriggers/job.go's present() performs, duplicated
+// locally rather than shared to avoid a new cross-package dependency for one
+// six-line function.
+func eventEmitterPresent(emitter EventEmitter) bool {
+	if emitter == nil {
+		return false
+	}
+	v := reflect.ValueOf(emitter)
+	switch v.Kind() {
+	case reflect.Ptr, reflect.Map, reflect.Slice, reflect.Chan, reflect.Func, reflect.Interface:
+		return !v.IsNil()
+	default:
+		return true
+	}
 }
 
 // UserContextDefaults reads the caller's own context-management defaults —
@@ -559,6 +606,13 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		apierr.Write(w, err)
 		return
+	}
+	if h.events != nil {
+		h.events.Emit(r.Context(), projectID, "conversation.created", map[string]any{
+			"conversation_id": created.ID,
+			"name":            created.Name,
+			"created_by":      created.CreatedBy,
+		})
 	}
 	writeJSON(w, http.StatusCreated, created)
 }

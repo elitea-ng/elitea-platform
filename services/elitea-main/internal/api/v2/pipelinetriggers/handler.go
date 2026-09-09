@@ -190,10 +190,36 @@ type Handler struct {
 	permissions auth.PermissionResolver
 	recorder    audit.Recorder
 	logger      *slog.Logger
+	events      EventEmitter
+}
+
+// EventEmitter is the seam to internal/events.Publisher, declared locally so
+// this package does not import internal/events and close a cycle.
+// *events.Publisher satisfies this structurally.
+type EventEmitter interface {
+	Emit(ctx context.Context, projectID, eventType string, payload any)
 }
 
 // Option configures a Handler.
 type Option func(*Handler)
+
+// WithEvents wires the pipeline.run.started and schedule.fired producers
+// (#876's second half) — both emitted from admit() in run.go, the ONE
+// admission path both the inbound trigger and the schedule tick call. Left
+// nil, admit() runs exactly as before.
+//
+// Guarded by present(), the same "typed nil boxed as a non-nil interface"
+// check job.go's WithAgentStart uses: the composition root passes a
+// *events.Publisher THROUGH this interface-typed parameter, and a nil
+// *events.Publisher would otherwise become a non-nil EventEmitter that
+// panics the first time admit() calls Emit on it.
+func WithEvents(emitter EventEmitter) Option {
+	return func(h *Handler) {
+		if present(emitter) {
+			h.events = emitter
+		}
+	}
+}
 
 // WithAgentStart supplies the execution use case.
 //

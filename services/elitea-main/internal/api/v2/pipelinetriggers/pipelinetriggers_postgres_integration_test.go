@@ -202,7 +202,7 @@ func newHarness(t *testing.T) *harness {
 			projectID:   homeProject,
 			permissions: []string{pipelinetriggers.RunPermission},
 		},
-		recorder, nil,
+		recorder, nil, nil,
 	)
 	router := chi.NewRouter()
 	// The SETTINGS routes are mounted WITHOUT the project permission gate the
@@ -459,7 +459,7 @@ func TestInboundTriggerRefusesWhenTheCreatorLostThePermission(t *testing.T) {
 	stripped := pipelinetriggers.NewPlatformHandler(
 		h.pool, h.start, h.vault,
 		fixedPermissions{userID: ownerUserID, projectID: homeProject, permissions: nil},
-		h.recorder, nil,
+		h.recorder, nil, nil,
 	)
 	router := chi.NewRouter()
 	router.Post(pipelinetriggers.InboundPath, stripped.Trigger)
@@ -858,7 +858,7 @@ func TestAnAuthorWhoLostAccessStopsTheSchedule(t *testing.T) {
 	stripped := pipelinetriggers.NewPlatformHandler(
 		h.pool, h.start, h.vault,
 		fixedPermissions{userID: ownerUserID, projectID: homeProject, permissions: nil},
-		h.recorder, nil,
+		h.recorder, nil, nil,
 	)
 	result, err := stripped.RunDueSchedules(context.Background(), time.Now().UTC())
 	if err != nil {

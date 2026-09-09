@@ -27,6 +27,11 @@ export type { WebhookFormValues } from './ui/webhooks/WebhookFormDialog';
 import { WebhookSecretDialog } from './ui/webhooks/WebhookSecretDialog';
 import { WebhooksTable } from './ui/webhooks/WebhooksTable';
 export type { WebhookViewRow } from './ui/webhooks/WebhooksTable';
+// WebhookDeliveriesPanel is mounted BY WebhooksTable itself (the row expand
+// toggle), not by pages/settings/Webhooks.tsx directly — it is exported here
+// anyway, in the same bundle, so a future consumer (an admin-wide deliveries
+// view, say) does not need a second entry point for #876's second half.
+import { WebhookDeliveriesPanel } from './ui/webhooks/WebhookDeliveriesPanel';
 
 
 import { ProjectContextBody, ProjectContextToasts } from './ui/project-context/ProjectContextBody';
@@ -90,6 +95,7 @@ export const webhooksFeature = {
   WebhookFormDialog,
   WebhookSecretDialog,
   WebhooksTable,
+  WebhookDeliveriesPanel,
 };
 
 /** Project-context tab (`pages/settings/ProjectContext.tsx`). */

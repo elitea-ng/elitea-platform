@@ -44,7 +44,12 @@ import { faker } from "@faker-js/faker";
 import { HttpResponse, delay, http } from "msw";
 import type { RequestHandlerOptions } from "msw";
 
-import type { ListWebhooks200, Webhook } from "../model";
+import type {
+  ListWebhookDeliveries200,
+  ListWebhooks200,
+  Webhook,
+  WebhookDelivery,
+} from "../model";
 
 export const getListWebhooksResponseMock = (
   overrideResponse: Partial<Extract<ListWebhooks200, object>> = {},
@@ -126,6 +131,69 @@ export const getUpdateWebhookResponseMock = (
     undefined,
   ]),
   active: faker.datatype.boolean(),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
+
+export const getListWebhookDeliveriesResponseMock = (
+  overrideResponse: Partial<Extract<ListWebhookDeliveries200, object>> = {},
+): ListWebhookDeliveries200 => ({
+  items: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    webhook_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    project_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    event: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    status: faker.helpers.arrayElement([
+      "pending",
+      "success",
+      "failed",
+    ] as const),
+    attempts: faker.number.int(),
+    response_code: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([faker.number.int(), null]),
+      undefined,
+    ]),
+    last_error: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    payload: faker.helpers.arrayElement([{}, undefined]),
+    redelivery_of: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  })),
+  ...overrideResponse,
+});
+
+export const getRedeliverWebhookDeliveryResponseMock = (
+  overrideResponse: Partial<Extract<WebhookDelivery, object>> = {},
+): WebhookDelivery => ({
+  id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  webhook_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  project_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  event: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  status: faker.helpers.arrayElement(["pending", "success", "failed"] as const),
+  attempts: faker.number.int(),
+  response_code: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([faker.number.int(), null]),
+    undefined,
+  ]),
+  last_error: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  payload: faker.helpers.arrayElement([{}, undefined]),
+  redelivery_of: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
   updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
   ...overrideResponse,
@@ -256,10 +324,64 @@ export const getDeleteWebhookMockHandler = (
     options,
   );
 };
+
+export const getListWebhookDeliveriesMockHandler = (
+  overrideResponse?:
+    | ListWebhookDeliveries200
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<ListWebhookDeliveries200> | ListWebhookDeliveries200),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/webhooks/prompt_lib/:projectID/:webhookID/deliveries",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListWebhookDeliveriesResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getRedeliverWebhookDeliveryMockHandler = (
+  overrideResponse?:
+    | WebhookDelivery
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<WebhookDelivery> | WebhookDelivery),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/webhooks/prompt_lib/:projectID/:webhookID/deliveries/:deliveryID/redeliver",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getRedeliverWebhookDeliveryResponseMock(),
+        { status: 201 },
+      );
+    },
+    options,
+  );
+};
 export const getWebhooksMock = () => [
   getListWebhooksMockHandler(),
   getCreateWebhookMockHandler(),
   getGetWebhookMockHandler(),
   getUpdateWebhookMockHandler(),
   getDeleteWebhookMockHandler(),
+  getListWebhookDeliveriesMockHandler(),
+  getRedeliverWebhookDeliveryMockHandler(),
 ];

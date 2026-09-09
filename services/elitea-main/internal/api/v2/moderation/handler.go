@@ -7,6 +7,7 @@ package moderation
 
 import (
 	"context"
+	"reflect"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -24,6 +25,45 @@ type Handler struct {
 	// without an ensurer fails closed (503) — see that file's Option docs.
 	provisioner      ProjectProvisioner
 	personalProjects PersonalProjectEnsurer
+	// events backs the moderation.request.decided producer (#876's second
+	// half). nil leaves AdministrationRequestUpdate exactly as before — no
+	// webhook fires on a decision.
+	events EventEmitter
+}
+
+// EventEmitter is the seam to internal/events.Publisher, declared locally
+// (like DecisionMailer above) so this package does not import
+// internal/events and close a cycle. *events.Publisher satisfies this
+// structurally.
+type EventEmitter interface {
+	Emit(ctx context.Context, projectID, eventType string, payload any)
+}
+
+// WithEvents wires the moderation.request.decided producer.
+//
+// Guarded by eventEmitterPresent (see conversations.Handler.WithEvents'
+// identical comment in that package): a nil *events.Publisher boxed into
+// this interface parameter is non-nil, and unguarded would panic
+// AdministrationRequestUpdate's first Emit call.
+func WithEvents(emitter EventEmitter) Option {
+	return func(h *Handler) {
+		if eventEmitterPresent(emitter) {
+			h.events = emitter
+		}
+	}
+}
+
+func eventEmitterPresent(emitter EventEmitter) bool {
+	if emitter == nil {
+		return false
+	}
+	v := reflect.ValueOf(emitter)
+	switch v.Kind() {
+	case reflect.Ptr, reflect.Map, reflect.Slice, reflect.Chan, reflect.Func, reflect.Interface:
+		return !v.IsNil()
+	default:
+		return true
+	}
 }
 
 // DecisionMailer is the seam to internal/application/mailer.

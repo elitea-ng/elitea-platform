@@ -84,6 +84,8 @@ var webhookPermissions = []struct {
 	{http.MethodGet, "/api/v2/projects/proj-1/webhooks/wh-1", detailsPermission},
 	{http.MethodPut, "/api/v2/projects/proj-1/webhooks/wh-1", updatePermission},
 	{http.MethodDelete, "/api/v2/projects/proj-1/webhooks/wh-1", deletePermission},
+	{http.MethodGet, "/api/v2/projects/proj-1/webhooks/wh-1/deliveries", detailsPermission},
+	{http.MethodPost, "/api/v2/projects/proj-1/webhooks/wh-1/deliveries/del-1/redeliver", updatePermission},
 }
 
 // allWebhookPermissions is the distinct set the five routes draw from.
