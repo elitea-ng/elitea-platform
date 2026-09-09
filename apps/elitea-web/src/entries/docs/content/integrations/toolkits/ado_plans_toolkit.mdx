@@ -1,0 +1,75 @@
+---
+title: "ADO plans"
+description: "Connect ADO plans to Elitea: prerequisites, credential setup and the tools it exposes."
+---
+
+Read Azure DevOps test plans, test suites and test cases. It's listed under the **test management** category in the toolkit type picker.
+
+## Prerequisites
+
+- An account at ADO plans with permission to issue an API token or credential, saved in Elitea as a **`ado`** credential (`/credentials/create-credential/<type>`).
+- Or skip the saved credential and paste `token` directly into the toolkit's own settings (inline auth).
+- If you plan to index content for retrieval: a `pgvector` credential and an embedding model, configured under AI providers.
+
+## Connect the toolkit
+
+<Steps>
+<Step title="Open the toolkit type picker">
+In the left navigation, open **Toolkits**, then select **New**. Filter the type picker by the **test management** category, or search for "ADO plans".
+</Step>
+
+<Step title="Pick or create a credential">
+Under the credential field, choose an existing **ado** credential, or select **Create credential** to add one without leaving the form.
+</Step>
+
+<Step title="Add indexing settings (optional)">
+If you plan to index this source, set an **embedding model** and a **pgvector** credential. Leave both empty to use the toolkit without indexing.
+</Step>
+
+<Step title="Save">
+Name the toolkit and select **Create**. It's now available to attach to agents, pipelines and conversations in this project.
+</Step>
+</Steps>
+
+<Screenshot id="toolkit-new-generic" alt="New toolkit dialog with the ADO plans type selected" />
+
+## Available tools
+
+<Accordion title="Available tools (18)">
+
+| Tool |
+|---|
+| Add test case |
+| Create test case |
+| Create test cases |
+| Create test plan |
+| Create test suite |
+| Delete test plan |
+| Delete test suite |
+| Get all test case fields for project |
+| Get test case |
+| Get test cases |
+| Get test plan |
+| Get test suite |
+| Index data |
+| List indexes |
+| Remove index |
+| Search index |
+| Stepback search index |
+| Stepback summary index |
+
+</Accordion>
+
+## Common issues
+
+<Note>
+On the Rust worker (Helm's default), this tile is hidden — the Rust worker does not materialise `ADO plans` (tracked in #865). Use a deployment running the Python worker to connect ADO plans.
+</Note>
+
+<Note>
+The Indexes tab only appears when the configured worker can run this type's `index_data` tool; if the worker can't, the tab is hidden and shows the worker's refusal message. `index_data` itself can't be run from the Test tools pane — use the Indexes tab.
+</Note>
+
+<Note>
+The credential form for ADO plans supports **Check connection** — use it before saving to confirm Elitea can reach ADO plans with these details, instead of discovering an auth problem from a failed tool call later.
+</Note>

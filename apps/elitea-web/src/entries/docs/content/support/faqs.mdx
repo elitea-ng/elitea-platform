@@ -1,0 +1,46 @@
+---
+title: "Frequently asked questions"
+description: "Short answers to common questions about projects, models, credentials, and sharing in Elitea."
+---
+
+<AccordionGroup>
+  <Accordion title="What's the difference between my personal project and a team project?">
+    Your personal project is visible only to you — a sandbox for experimenting. A team project shares its agents, pipelines, toolkits, and conversations with every member, according to their role. Switch between them with the project selector at the top of the sidebar.
+  </Accordion>
+
+  <Accordion title="Why can't I see the Skills menu?">
+    Skills are hidden when the Public project is selected. Switch to a team or personal project.
+  </Accordion>
+
+  <Accordion title="Do I need a credential for every agent?">
+    Only if the agent uses a toolkit that requires one. A plain agent with no toolkits needs only a model — configured once for the whole project in [AI Providers](/menus/settings/ai-providers).
+  </Accordion>
+
+  <Accordion title="Can I get my agent's exact instructions back after I lose them?">
+    Yes, as long as they were saved as a version. Use the version dropdown on the agent to switch to an earlier version, or [export](/how-tos/agents-pipelines/import-export) a version as a backup file.
+  </Accordion>
+
+  <Accordion title="What happens to a shared conversation link if I revoke it?">
+    It stops working immediately. Elitea shows the same "unavailable" message whether a link was revoked, expired, or never valid, so a recipient cannot tell which case applies.
+  </Accordion>
+
+  <Accordion title="Why does my agent stop mid-response?">
+    Its model likely hit the configured **Max Completion Tokens** limit. Increase it in the agent's model settings — and check any nested agents' limits too. See [Troubleshooting](/support/troubleshooting).
+  </Accordion>
+
+  <Accordion title="Can I use the same credential across multiple toolkits?">
+    Yes — one credential can back several toolkits and agents. See [Credentials](/menus/credentials).
+  </Accordion>
+
+  <Accordion title="Why is a toolkit type missing from the create list?">
+    Which toolkit types are available depends on the worker your deployment runs, and on any restriction your administrator applied. See the [toolkit catalogue](/reference/toolkit-catalogue).
+  </Accordion>
+
+  <Accordion title="Is there a way to recover a deleted secret?">
+    No — deleting a secret is permanent, and every credential referencing it fails authentication immediately. Consider hiding a secret first if you only want to stop new usage while confirming nothing still depends on it.
+  </Accordion>
+</AccordionGroup>
+
+<Info title="Still stuck?">
+See [Troubleshooting](/support/troubleshooting) for error-message-specific fixes, or reach your platform administrator through [Help and support](/menus/help-and-support).
+</Info>

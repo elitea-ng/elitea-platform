@@ -1,0 +1,57 @@
+---
+title: "Pipeline node reference"
+description: "Every pipeline node type, which ones the runtime actually executes, node id rules, and reserved state keys."
+---
+
+The Flow editor's Add-node menu offers more node types than the runtime compiler admits. This page lists both, plus the rules for node ids and state.
+
+## Node types
+
+<Tabs>
+  <Tab title="Runtime-admitted (9)">
+    These are the only node types the pipeline compiler accepts and will actually run:
+
+    `decision` · `agent` · `toolkit` · `mcp` · `hitl` · `llm` · `printer` · `router` · `state_modifier`
+
+    See the node-type guides: [interaction nodes](/how-tos/pipelines/nodes/interaction-nodes), [execution nodes](/how-tos/pipelines/nodes/execution-nodes), and [control-flow nodes](/how-tos/pipelines/nodes/control-flow-nodes) (which also covers state-modifier and printer, the utility nodes).
+  </Tab>
+  <Tab title="Render-only / deprecated">
+    `tool`, `pipeline`, `function`, `loop`, `loop_from_tool`, and `condition` still appear in some existing flows for backward compatibility, but the compiler has no execution arm for them — their editor tooltips still point at older migration material that this documentation set does not carry forward. Rebuild any flow that still uses one of these with an admitted node type instead.
+  </Tab>
+  <Tab title="No compiler arm yet">
+    `code` and `custom` render in the editor but have no compiler arm either, so the Add-node menu withholds them.
+  </Tab>
+  <Tab title="Sentinels">
+    `END` marks a pipeline's completion point; `ghost` and `defaultType` are internal placeholders you will not select directly.
+  </Tab>
+</Tabs>
+
+## Node id rules
+
+A node id must match `^[A-Za-z0-9_.:-]+$` and be 128 bytes or fewer. Avoid spaces or other punctuation — a node id containing a space is a common cause of a pipeline that fails to save or compile.
+
+## Reserved state keys
+
+Do not use these names for your own state variables — the runtime writes to them directly:
+
+`__elitea_hitl_resume_v1` · `__elitea_tool_resume_v1` · `__elitea_llm_tool_resume_v1` · `__elitea_pipeline_node_event_scope_v1` · `__elitea_application_task_v1` · `__elitea_application_messages_v1` · `__elitea_application_result_v1` · `__elitea_subgraph_result_v1` · `output` · `result` · `router_output` · `elitea_response` · `printer_output` · `state_types` · `context_info` · `hitl_decisions` · `hitl_interrupt` · `parallel_tasks` · `_pipeline_blocked` · `session_id` · `thread_id` · `execution_finished` · `chat_history`
+
+`input` and `messages` are built into every pipeline (see [State](/menus/pipelines#state)) but are not on the reserved list — you can still read them, just don't redefine them with a conflicting shape.
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="A node type from an older export does not run">
+    It is likely one of the render-only/deprecated types. Replace it with the closest runtime-admitted type — for example, replace `tool` with `toolkit`, and `function` with `code`'s admitted successor once available, or an `llm`/`toolkit` node.
+  </Accordion>
+  <Accordion title="Pipeline fails to save with a node-id error">
+    Check the id against the `^[A-Za-z0-9_.:-]+$` pattern and the 128-byte limit — spaces are the most common cause.
+  </Accordion>
+  <Accordion title="A state variable is not behaving as expected">
+    Confirm its name is not one of the reserved keys above; pick a different name if it collides.
+  </Accordion>
+</AccordionGroup>
+
+<Info title="Related">
+[Pipelines](/menus/pipelines) · [Pipeline structure](/how-tos/pipelines/structure) · [Flow editor](/how-tos/pipelines/flow-editor) · [YAML editor](/how-tos/pipelines/yaml)
+</Info>

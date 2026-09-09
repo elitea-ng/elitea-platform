@@ -1,0 +1,40 @@
+---
+title: "Overview of the Elitea platform"
+description: "Elitea brings agents, pipelines, chat, toolkits, and credentials together in one platform for building and running AI-driven work."
+---
+
+Elitea is a platform for creating and running AI agents and automated workflows, and for chatting with AI models directly. It combines several building blocks that you configure once and reuse across your project.
+
+## Key building blocks
+
+- **[Agents](/menus/agents)**: virtual assistants that combine instructions, an AI model, and optional toolkits to perform tasks — from answering questions to creating tickets in Jira.
+- **[Pipelines](/menus/pipelines)**: visual workflows that chain agents, toolkits, and logic nodes into a multi-step, repeatable process.
+- **[Chat](/menus/chat)**: the conversational interface where you talk to models, agents, pipelines, toolkits, and MCP servers, and where you build and edit them inline.
+- **[Skills](/menus/skills)**: reusable, named instruction sets you attach to agents so several agents can share the same behavior.
+- **[Toolkits](/menus/toolkits)**: integrations with external services (Jira, GitHub, Confluence, and more) that give agents and pipelines the ability to act outside the chat.
+- **[Credentials](/menus/credentials)**: securely stored authentication details (API keys, tokens) that toolkits and AI providers use to connect.
+- **[Artifacts](/menus/artifacts)**: bucket-based file storage shared between agents, pipelines, and conversations.
+- **[Indexing](/how-tos/indexing/indexing-overview)**: turns documents and connected sources into searchable vector indexes so agents can retrieve grounded context instead of relying on conversation history alone.
+- **[MCP servers](/menus/toolkits#mcp-servers)**: remote Model Context Protocol servers that add external tools to your agents, pipelines, and conversations.
+- **[Applications](/menus/applications)**: purpose-built integrations — DeepWiki and Inventory — that turn a code repository into browsable documentation or a queryable component graph. See [DeepWiki and Inventory](/menus/deepwiki-and-inventory).
+- **[Elitea Catalog](/menus/catalog)**: a shared library of published agents and skills you can browse, fork, and start using immediately.
+
+## Accessing Elitea
+
+1. Open the deployment URL in a modern browser.
+2. If you are not signed in, you are redirected to your organization's sign-in screen (OIDC, SAML, or a Form-based login, depending on how your administrator configured authentication).
+3. After signing in you land in **Chat**.
+4. Use the **Project Selector** at the top of the sidebar to switch between your personal project and any team projects you belong to.
+5. Select the Elitea icon at the top of the sidebar to open the full menu list — Chat, Agents, Pipelines, Skills, Toolkits, Applications, Credentials, Artifacts, Catalog, and Settings.
+
+<Note>
+There is no separate login or password-reset page inside Elitea itself — sign-in is handled by your identity provider or by the platform's Form-based login, and invited users accept an invite by signing in for the first time.
+</Note>
+
+Ready to see what's possible? Continue with [key concepts](/home/key-concepts), or jump straight into the [chat quick start](/getting-started/chat-quick-start).
+
+---
+
+<Info title="Reference">
+For definitions of terms used throughout the platform, see the [Glossary](/home/glossary).
+</Info>

@@ -1,0 +1,36 @@
+---
+title: "Webhooks and pipeline triggers"
+description: "Start a pipeline from an external system with a signed webhook URL, on a cron schedule, or from a chat message."
+---
+
+A pipeline has two unattended ways to start without a person watching a chat: an inbound webhook trigger and a cron schedule. Both live together in the pipeline editor's **Triggers & schedules** section, and both exist so you can wire a pipeline into an external process — a CI job, an issue-tracker automation, a recurring maintenance task — without anyone opening a conversation to kick it off.
+
+## Pipeline triggers
+
+<Steps>
+1. Open a pipeline's configuration and expand **Triggers & schedules**.
+2. Reveal the trigger's secret URL (hidden until you explicitly show it) or rotate it if you suspect it's been exposed.
+3. Configure the external system (GitHub, GitLab, or any custom sender) to POST to that URL when the event you want fires.
+4. Send the secret as an `Authorization: Bearer` header where the sender supports it — a token embedded in the URL itself is accepted as a fallback, but it's the less safe option since URLs get written to proxy and browser logs.
+</Steps>
+
+<Screenshot id="pipeline-trigger-schedule-panel" alt="Triggers and schedules panel on a pipeline's configuration form" mask="trigger-url" />
+
+<Note>
+The same section also configures the cron schedule, and an agent's info panel shows which trigger type (chat message, schedule, or webhook — GitHub, GitLab, or custom) is wired to it.
+</Note>
+
+## Webhook API
+
+Separately from pipeline triggers, each project also has a generic outbound webhook registry — you can register a URL, a list of events, and a secret, and Elitea calls that URL when those events occur. This is a different, newer capability than pipeline triggers, keyed on the project rather than a specific pipeline, and it has no equivalent in the legacy platform.
+
+Registering one today means calling the webhook API directly with your personal access token: create an entry with a target URL, the events you want, and a secret Elitea will sign requests with, then verify that signature on your receiving end the same way you would for the pipeline trigger's bearer token.
+
+<Note>
+Not available yet: a page to create, list, rotate, or delete these webhooks — use the API directly. (tracked in [#876](https://github.com/elitea-ng/elitea-platform/issues/876))
+</Note>
+
+## Next steps
+
+- [Webhooks and triggers reference](/integrations/third-party-integrations/api-usage) for the underlying API calls.
+- [Pipeline runs](/how-tos/pipelines/pipeline-runs) for what a triggered run looks like once it starts.

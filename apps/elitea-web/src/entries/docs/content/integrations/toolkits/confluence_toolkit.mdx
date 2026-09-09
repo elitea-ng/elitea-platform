@@ -1,0 +1,81 @@
+---
+title: "Confluence"
+description: "Connect Confluence to Elitea: prerequisites, credential setup and the tools it exposes."
+---
+
+Read and update Confluence pages and spaces. It's listed under the **documentation** category in the toolkit type picker.
+
+## Prerequisites
+
+- An account at Confluence with permission to issue an API token or credential, saved in Elitea as a **`confluence`** credential (`/credentials/create-credential/<type>`).
+- If you plan to index content for retrieval: a `pgvector` credential and an embedding model, configured under AI providers.
+
+## Connect the toolkit
+
+<Steps>
+<Step title="Open the toolkit type picker">
+In the left navigation, open **Toolkits**, then select **New**. Filter the type picker by the **documentation** category, or search for "Confluence".
+</Step>
+
+<Step title="Pick or create a credential">
+Under the credential field, choose an existing **confluence** credential, or select **Create credential** to add one without leaving the form.
+</Step>
+
+<Step title="Add indexing settings (optional)">
+If you plan to index this source, set an **embedding model** and a **pgvector** credential. Leave both empty to use the toolkit without indexing.
+</Step>
+
+<Step title="Save">
+Name the toolkit and select **Create**. It's now available to attach to agents, pipelines and conversations in this project.
+</Step>
+</Steps>
+
+<Screenshot id="toolkit-new-generic" alt="New toolkit dialog with the Confluence type selected" />
+
+## Available tools
+
+<Accordion title="Available tools (25)">
+
+| Tool |
+|---|
+| Add file to page |
+| Create page |
+| Create pages |
+| Delete page |
+| Execute generic confluence |
+| Get page attachments |
+| Get page id by title |
+| Get page tree |
+| Get page with image descriptions |
+| Get pages with label |
+| Index data |
+| List indexes |
+| List pages with label |
+| Read page by id |
+| Remove index |
+| Search by title |
+| Search index |
+| Search pages |
+| Site search |
+| Stepback search index |
+| Stepback summary index |
+| Update labels |
+| Update page by id |
+| Update page by title |
+| Update pages |
+
+</Accordion>
+
+## Common issues
+
+<Note>
+On the Rust worker (Helm's default), this tile is hidden — the Rust worker does not materialise `Confluence` (tracked in #865). Use a deployment running the Python worker to connect Confluence.
+</Note>
+
+<Note>
+The Indexes tab only appears when the configured worker can run this type's `index_data` tool; if the worker can't, the tab is hidden and shows the worker's refusal message. `index_data` itself can't be run from the Test tools pane — use the Indexes tab.
+</Note>
+
+<Note>
+The credential form for Confluence supports **Check connection** — use it before saving to confirm Elitea can reach Confluence with these details, instead of discovering an auth problem from a failed tool call later.
+</Note>

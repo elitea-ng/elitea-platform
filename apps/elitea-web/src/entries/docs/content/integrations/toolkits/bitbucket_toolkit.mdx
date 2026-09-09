@@ -1,0 +1,78 @@
+---
+title: "Bitbucket"
+description: "Connect Bitbucket to Elitea: prerequisites, credential setup and the tools it exposes."
+---
+
+Read and write files, branches and pull requests in a Bitbucket repository. It's listed under the **code repositories** category in the toolkit type picker.
+
+## Prerequisites
+
+- An account at Bitbucket with permission to issue an API token or credential, saved in Elitea as a **`bitbucket`** credential (`/credentials/create-credential/<type>`).
+- If you plan to index content for retrieval: a `pgvector` credential and an embedding model, configured under AI providers.
+
+## Connect the toolkit
+
+<Steps>
+<Step title="Open the toolkit type picker">
+In the left navigation, open **Toolkits**, then select **New**. Filter the type picker by the **code repositories** category, or search for "Bitbucket".
+</Step>
+
+<Step title="Pick or create a credential">
+Under the credential field, choose an existing **bitbucket** credential, or select **Create credential** to add one without leaving the form.
+</Step>
+
+<Step title="Add indexing settings (optional)">
+If you plan to index this source, set an **embedding model** and a **pgvector** credential. Leave both empty to use the toolkit without indexing.
+</Step>
+
+<Step title="Save">
+Name the toolkit and select **Create**. It's now available to attach to agents, pipelines and conversations in this project.
+</Step>
+</Steps>
+
+<Screenshot id="toolkit-new-generic" alt="New toolkit dialog with the Bitbucket type selected" />
+
+## Available tools
+
+<Accordion title="Available tools (22)">
+
+| Tool |
+|---|
+| Add pull request comment |
+| Close pull request |
+| Create branch |
+| Create file |
+| Create pull request |
+| Delete branch |
+| Get pull request |
+| Get pull requests changes |
+| Get pull requests commits |
+| Grep file |
+| Index data |
+| List branches in repo |
+| List files |
+| List indexes |
+| Read file |
+| Read multiple files |
+| Remove index |
+| Search index |
+| Set active branch |
+| Stepback search index |
+| Stepback summary index |
+| Update file |
+
+</Accordion>
+
+## Common issues
+
+<Note>
+On the Rust worker (Helm's default), this tile is hidden — the Rust worker does not materialise `Bitbucket` (tracked in #865). Use a deployment running the Python worker to connect Bitbucket.
+</Note>
+
+<Note>
+The Indexes tab only appears when the configured worker can run this type's `index_data` tool; if the worker can't, the tab is hidden and shows the worker's refusal message. `index_data` itself can't be run from the Test tools pane — use the Indexes tab.
+</Note>
+
+<Note>
+The credential form for Bitbucket supports **Check connection** — use it before saving to confirm Elitea can reach Bitbucket with these details, instead of discovering an auth problem from a failed tool call later.
+</Note>

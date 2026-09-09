@@ -1,0 +1,79 @@
+---
+title: "TestRail"
+description: "Connect TestRail to Elitea: prerequisites, credential setup and the tools it exposes."
+---
+
+Read and manage TestRail test cases, runs and results. It's listed under the **test management** category in the toolkit type picker.
+
+## Prerequisites
+
+- An account at TestRail with permission to issue an API token or credential, saved in Elitea as a **`testrail`** credential (`/credentials/create-credential/<type>`).
+- If you plan to index content for retrieval: a `pgvector` credential and an embedding model, configured under AI providers.
+
+## Connect the toolkit
+
+<Steps>
+<Step title="Open the toolkit type picker">
+In the left navigation, open **Toolkits**, then select **New**. Filter the type picker by the **test management** category, or search for "TestRail".
+</Step>
+
+<Step title="Pick or create a credential">
+Under the credential field, choose an existing **testrail** credential, or select **Create credential** to add one without leaving the form.
+</Step>
+
+<Step title="Add indexing settings (optional)">
+If you plan to index this source, set an **embedding model** and a **pgvector** credential. Leave both empty to use the toolkit without indexing.
+</Step>
+
+<Step title="Save">
+Name the toolkit and select **Create**. It's now available to attach to agents, pipelines and conversations in this project.
+</Step>
+</Steps>
+
+<Screenshot id="toolkit-new-generic" alt="New toolkit dialog with the TestRail type selected" />
+
+## Available tools
+
+<Accordion title="Available tools (23)">
+
+| Tool |
+|---|
+| Add case |
+| Add cases |
+| Add file to case |
+| Add section |
+| Delete case |
+| Delete section |
+| Get case |
+| Get cases |
+| Get cases by filter |
+| Get results |
+| Get results for case |
+| Get results for run |
+| Get run |
+| Get runs |
+| Get sections |
+| Get suites |
+| Index data |
+| List indexes |
+| Remove index |
+| Search index |
+| Stepback search index |
+| Stepback summary index |
+| Update case |
+
+</Accordion>
+
+## Common issues
+
+<Note>
+On the Rust worker (Helm's default), this tile is hidden — the Rust worker does not materialise `TestRail` (tracked in #865). Use a deployment running the Python worker to connect TestRail.
+</Note>
+
+<Note>
+The Indexes tab only appears when the configured worker can run this type's `index_data` tool; if the worker can't, the tab is hidden and shows the worker's refusal message. `index_data` itself can't be run from the Test tools pane — use the Indexes tab.
+</Note>
+
+<Note>
+The credential form for TestRail supports **Check connection** — use it before saving to confirm Elitea can reach TestRail with these details, instead of discovering an auth problem from a failed tool call later.
+</Note>

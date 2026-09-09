@@ -1,0 +1,60 @@
+---
+title: "Publish agents and skills"
+description: "Submit an agent version or a skill to the shared catalog for review, and manage what's already published."
+---
+
+Publishing submits an agent version or a skill for review, then makes it available in the shared catalog (Agent HUB / the Elitea Catalog's Skills tab) once approved. Pipelines cannot be published — this applies to agents and skills only.
+
+## Publish an agent version
+
+<Steps>
+<Step title="Open Publish">
+Open the agent, select the version you want to publish, and choose **Publish** from the toolbar's three-dot menu.
+</Step>
+<Step title="Preparation">
+Enter a unique version name (letters, numbers, dots, hyphens, underscores; up to 50 characters) and pick a category from the project's configured list. Agree to the publishing terms to continue.
+</Step>
+<Step title="Validation">
+Elitea runs an automated AI review of the version and reports critical issues, warnings, and suggestions. A failing result stops the wizard here; a pass or warning-only result lets you continue.
+</Step>
+<Step title="Publishing">
+Confirm to submit. The version goes to the moderation queue for admin review before it appears in the catalog.
+</Step>
+</Steps>
+
+<Screenshot id="agent-publish-dialog" alt="Publish version dialog on an agent" />
+
+Any skills attached to the agent are kept and still work at runtime, but publishing the agent does not separately publish those skills as their own catalog entries.
+
+<Note>
+The **Publish** action is hidden if your role lacks the publish permission. If it's visible but disabled with a policy tooltip, the platform has restricted publishing to an allowed list of projects — ask your administrator.
+</Note>
+
+## Publish a skill
+
+Skills publish the same way, from a skill's three-dot menu — but a skill has a single version, so there's no version selector: you publish the skill as it currently stands.
+
+<Steps>
+<Step title="Open Publish">
+On the skill's page, choose **Publish**.
+</Step>
+<Step title="Name and categorize">
+Enter a version name and pick a category, as with an agent.
+</Step>
+<Step title="Review the gate">
+Elitea runs a set of structural checks (not an AI review) and reports which passed, which are warnings, and which block publishing. A failing check must be fixed before you can continue — there's no "publish anyway" past a failure.
+</Step>
+<Step title="Publish">
+Confirm. The skill is submitted for moderation, same as an agent.
+</Step>
+</Steps>
+
+## Unpublish
+
+Unpublishing removes the item from the catalog immediately (no moderation step) and returns its status to Draft. You get an in-app notification when your agent or skill is published, rejected, or unpublished by a moderator.
+
+## Guides and references
+
+- [Publish moderation queue](/admin/app-requests-and-toolkit-types) (admin)
+- [Elitea Catalog](/menus/catalog)
+- [Version agents and pipelines](/how-tos/agents-pipelines/entity-versioning)

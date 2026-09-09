@@ -1,0 +1,39 @@
+---
+title: "Pre-built MCP servers"
+description: "Admin-curated MCP servers offered to every project as ready-made toolkits, with their secrets sealed in the vault."
+---
+
+An admin can curate a catalogue of MCP servers that every project sees as ready-made toolkit tiles, so project members don't each have to look up a URL and register their own OAuth client. This replaces what the legacy docs called "EPAM MCPs" — the mechanism is now vendor-neutral; an admin can add any MCP server here, not a fixed list.
+
+## Add a server to the catalogue
+
+<Steps>
+<Step title="Open the MCP servers admin section">
+As an admin, open **Configuration** in the admin console and go to the MCP servers section.
+</Step>
+<Step title="Add MCP server">
+Select **Add MCP server**. Give it a display name (its catalogue key is derived from the name, or fixed once other projects reference it) and the server's base URL.
+</Step>
+<Step title="Add OAuth credentials, if needed">
+If the server needs OAuth and doesn't support Dynamic Client Registration, enter the **OAuth client ID** and **client secret**. The secret is sealed into the platform vault immediately — no endpoint ever returns it again, including this form on a later edit.
+</Step>
+<Step title="Offer it to projects">
+Check **Offer this server to projects**, then **Save**. Project members now see it as a tile, the same as a hand-added Remote MCP.
+</Step>
+</Steps>
+
+<Screenshot id="mcp-prebuilt-admin" alt="Admin MCP servers catalogue with Add MCP server dialog" />
+
+## Common issues
+
+<Note>
+A catalogued server is a built-in Elitea type, not part of the SDK worker-capability catalogue. Both the Rust and Python workers can call its tools — only HTTP-based servers can be catalogued in the first place, and that is the only transport either worker's MCP client needs.
+</Note>
+
+<Note>
+Removing a catalogued server deletes its stored client secret permanently. To stop offering a server without losing the secret, edit it and clear **Offer this server to projects** instead of deleting it.
+</Note>
+
+<Note>
+Stdio-transport MCP servers are refused here — only HTTP-based remote servers can be catalogued.
+</Note>

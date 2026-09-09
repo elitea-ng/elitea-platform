@@ -1,0 +1,30 @@
+---
+title: "Authorize sensitive actions"
+description: "Review and approve or block a tool call an agent or pipeline pauses on because it was marked sensitive by an administrator."
+---
+
+An administrator can mark specific tools — deleting a repository, running a shell command, dropping a database table — as sensitive. When an agent or pipeline tries to call one, the conversation pauses and shows you an authorization card before the tool runs. You don't configure this yourself; it applies platform-wide once an administrator sets it up.
+
+## What you see
+
+The card shows the action as `toolkit_name.tool_name`, the exact arguments the tool would run with (with fields like passwords, tokens, and API keys automatically masked), and your organization's policy message explaining why approval is required.
+
+<Screenshot id="chat-hitl-authorization-card" alt="A sensitive-action authorization card paused in a conversation" />
+
+## Respond
+
+- **Authorize** — the tool runs as planned and the conversation continues.
+- **Block** — the tool is skipped; the agent is told the call was rejected and continues or stops depending on its own logic.
+- **Block with comment** — same as Block, but you can add a short note explaining what you want instead; that note is passed back to the agent as the reason for the rejection.
+
+If the same tool is called again later in the same run, only the first call raises the interrupt — later calls in that batch are auto-approved once you've authorized the first one.
+
+This works the same way whether the sensitive tool call happens in a plain conversation, inside an agent's own run, or at a toolkit, MCP, code, or LLM node in a pipeline — execution pauses at that exact point and resumes from there once you decide.
+
+## Configuring which tools are sensitive
+
+This is an administrator task, done from the Guardrails section of admin configuration — see [Configuration](/admin/features-and-configuration). An admin can mark tools sensitive per toolkit type, per specific toolkit, or for every toolkit with a wildcard, and can customize the organization name and policy message shown on the card.
+
+## Related
+
+- [Use chat](/how-tos/chat-conversations/how-to-use-chat-functionality)

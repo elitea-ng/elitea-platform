@@ -1,0 +1,66 @@
+---
+title: "Build an agent with AI"
+description: "Describe an agent in plain language and let Elitea generate a starting draft you review before it is created."
+---
+
+Build with AI turns a short, natural-language description into a starting agent draft — name, description, instructions, welcome message and conversation starters. Nothing is created until you review the draft and confirm.
+
+## Generate a draft
+
+<Steps>
+<Step title="Open the form">
+Go to **Agents**, click **Create**, and open the **General** section of the new agent form.
+</Step>
+<Step title="Open Build with AI">
+Click **Build with AI** (sparkle icon) in the section header. The button only appears if you have permission to create or update agents in the project, and the project has a default LLM model configured.
+</Step>
+<Step title="Describe the agent">
+Enter what the agent is for, what tasks it should handle, and any tone or constraints you want. Press **Enter** to generate (Shift+Enter adds a line break instead).
+</Step>
+<Step title="Review and edit">
+Elitea returns a draft with **Name** (up to 32 characters), **Description**, **Instructions**, **Welcome message** (up to 768 characters) and up to four **Conversation starters**. Every field is editable before you create the agent. Use **Back to prompt** to revise your description and regenerate.
+</Step>
+<Step title="Create the agent">
+Click **Create Agent**. The agent is created with the reviewed fields and the project's default model, and the page opens on its Configuration tab for further setup.
+</Step>
+</Steps>
+
+<Screenshot id="build-agent-with-ai-dialog" alt="Build with AI dialog showing the description input step" />
+
+<Note>
+Not available yet: AI-suggested toolkits, agents, pipelines, MCPs or skills to attach to the new agent — the draft only generates the text fields above; the review form shows no resource suggestions. (tracked in [#881](https://github.com/elitea-ng/elitea-platform/issues/881))
+</Note>
+
+The same generator is available for a skill (`/skills/create`) and for project context (Settings › public project context) — the underlying draft endpoint serves all three, so the same "describe it, review it, create it" flow applies there too. See [Create and share a skill](/menus/skills).
+
+## Edit instructions with AI
+
+Once an agent exists, its Configuration tab's General section can show an **Edit with AI** button next to the Instructions field. It needs a model configured on the agent's version and an AI configuration the deployment has enabled; if either is missing, the button does not appear at all rather than failing on click.
+
+<Steps>
+<Step title="Open the editor">
+Click **Edit with AI**.
+</Step>
+<Step title="Describe the change">
+Enter what you want changed about the instructions — for example, tightening scope or changing tone.
+</Step>
+<Step title="Review the diff">
+Elitea proposes replacement instructions and shows a highlighted diff against the current text.
+</Step>
+<Step title="Apply">
+Applying the suggestion fills in the Instructions field, the same way any manual edit would. Save the agent version afterward to keep the change.
+</Step>
+</Steps>
+
+This tool edits **instructions only** — it does not touch the name, welcome message, conversation starters, or attached toolkits/skills, and it has no separate "save as version" step of its own; use the agent's normal version controls for that (see [Version agents and pipelines](/how-tos/agents-pipelines/entity-versioning)).
+
+<Note>
+Creating or editing an agent from inside a chat conversation's "+" menu is not available — that menu only attaches existing agents as participants. Use `/agents/create` for a new agent, or the standalone agent editor above. See [Edit agents, pipelines, toolkits and MCPs from chat](/how-tos/chat-conversations/create-entities-from-chat).
+</Note>
+
+## Guides and references
+
+- [Agents overview](/menus/agents) — creating and configuring agents manually
+- [Publish agents and skills](/how-tos/agents-pipelines/publishing)
+- [Version agents and pipelines](/how-tos/agents-pipelines/entity-versioning)
+- [Toolkits overview](/menus/toolkits)

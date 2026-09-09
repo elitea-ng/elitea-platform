@@ -1,0 +1,73 @@
+---
+title: "Toolkits"
+description: "Configure toolkit integrations and MCP servers, organize them with folders, and turn on indexing where a type supports it."
+---
+
+A toolkit is a configured integration with an external service, or with an Elitea-native capability, that gives agents and pipelines the ability to act. Elitea serves 52 toolkit types; see the full [toolkit catalogue](/reference/toolkit-catalogue) for the list, categories, and which deployment worker runs each one.
+
+<Screenshot id="toolkits-list" alt="The Toolkits dashboard with type tiles" />
+
+## Create a toolkit
+
+<Steps>
+  <Step title="Start creation">Select **+ Toolkit** from the Toolkits page, or **/toolkits/create** from anywhere.</Step>
+  <Step title="Pick a type">Choose a type from the categorized tile grid, or search by name.</Step>
+  <Step title="Configure it">Give it a **Name** and **Description**, select or create a **Credential**, and set any type-specific parameters. For index-capable types, optionally select a **PGVector configuration** and **embedding model** to turn on indexing.</Step>
+  <Step title="Select tools">In **Tools**, turn on only the operations the toolkit needs — grouped as Read, Create & update, Delete, and Execute — then **Save**.</Step>
+</Steps>
+
+<Warning title="Worker coverage varies by deployment">
+Which toolkit types actually run depends on the worker your deployment uses. A type the current worker cannot build is served with its tile hidden rather than shown broken. Helm's default Rust worker hides 17 legacy toolkit types (tracked in #865); the compose/dev default Python worker fails to import 4 types — Google Places, Rally, ServiceNow, and Slack (tracked in #869). Check the [toolkit catalogue](/reference/toolkit-catalogue) for the exact list per worker.
+</Warning>
+
+<Note>
+Advanced users can switch a toolkit's configuration to **Raw JSON** editing from the form/JSON toggle.
+</Note>
+
+## Organize with folders
+
+The **Folders** panel on the right groups toolkits for easier navigation. Create a folder with **+ Folder**, then move a toolkit into it from the folder icon on its card (hover to reveal it). Removing a toolkit from a folder does not delete it — it just returns to the main list. Pin frequently used folders from their three-dot menu.
+
+## Shared credentials in team projects
+
+If a toolkit uses a shared credential that each team member must supply individually, a **Credential setup required** banner appears on its card until you create the matching private credential. Changing a shared credential can make the toolkit stop working for teammates who have not configured their own — consider the impact before doing so.
+
+## Test a toolkit
+
+Select **Test** on a toolkit's detail page to open a dedicated test view: pick a tool, a model, and any required parameters, then run it and review the result. See [Test toolkit tools](/how-tos/credentials-toolkits/test-toolkit-tools).
+
+## Indexing
+
+Toolkit types that carry an `index_data` tool (Artifact, the ADO family, Bitbucket, Confluence, Figma, GitHub, GitLab, Jira, QTest, SharePoint, TestRail, XRAY Cloud, and the Zephyr family) show an **Indexes** panel once PGVector and an embedding model are configured and the `Index data` tool is turned on. Use it to create, reindex, or delete indexes. See [Indexing overview](/how-tos/indexing/indexing-overview).
+
+## MCP servers
+
+MCP servers extend agents, pipelines, and conversations with tools from an external Model Context Protocol server, configured the same way as a toolkit. The MCPs menu is shown when your administrator has turned on MCP menu exposure.
+
+<Screenshot id="mcps-list" alt="The MCPs dashboard listing connected servers" />
+
+- **Remote MCP** — an HTTP/HTTPS-based server. Provide its URL and authentication (a bearer token, OAuth client credentials, or custom headers), then load and select its tools.
+- **Pre-built MCP servers** — administrator-curated connections your project can enable directly. See [Pre-built MCP servers](/integrations/mcp/prebuilt-mcp-servers).
+
+A connection shows **Connected** or **Disconnected** on its card. Elitea's own MCP connections run over streamable HTTP only — there is no local, STDIO-based MCP server or client in the platform.
+
+<Tip>
+Enable **Make tools available by MCP** on a toolkit's Tools section to expose its selected tools to external MCP clients through Elitea's own MCP server. See [Make tools available by MCP](/integrations/mcp/make-tools-available-by-mcp).
+</Tip>
+
+## Use toolkits and MCPs
+
+Attach a toolkit or MCP from an agent's or pipeline's **Tools** section, or add it as a participant directly in a [conversation](/menus/chat).
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Connection fails">Verify the selected credential and any required URL or project identifier, and confirm the target service is reachable.</Accordion>
+  <Accordion title="Toolkit type is missing from the create list">The running worker may not support that type — check the [toolkit catalogue](/reference/toolkit-catalogue), or ask your administrator whether the type is restricted for this project.</Accordion>
+  <Accordion title="Indexes panel is unavailable">Confirm the toolkit type supports indexing, that PGVector and an embedding model are configured in [AI Providers](/menus/settings/ai-providers), and that `Index data` is turned on in Tools.</Accordion>
+  <Accordion title="MCP shows Disconnected">For a Remote MCP, verify the server URL is reachable and its authentication has not expired.</Accordion>
+</AccordionGroup>
+
+<Info title="Related">
+[Credentials](/menus/credentials) · [How to use credentials](/how-tos/credentials-toolkits/how-to-use-credentials) · [Webhooks and triggers](/how-tos/credentials-toolkits/webhooks-and-triggers) · [Toolkit catalogue](/reference/toolkit-catalogue)
+</Info>

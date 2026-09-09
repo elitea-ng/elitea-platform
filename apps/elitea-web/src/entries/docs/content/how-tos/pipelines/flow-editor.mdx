@@ -1,0 +1,43 @@
+---
+title: "Use the flow editor"
+description: "Build a pipeline visually: add nodes, connect them, and switch between the Flow and YAML views."
+---
+
+The flow editor is the visual workspace for building a pipeline: a canvas you arrange nodes on, connected by the edges the pipeline follows at runtime.
+
+## Open the flow editor
+
+Open **Pipelines**, then an existing pipeline or a new one, and select **Flow** in its Configuration tab (next to **YAML**). Both views describe the same pipeline and stay in sync — a change in one shows up in the other.
+
+## Add and connect a node
+
+<Steps>
+<Step title="Open the node palette">
+Click the **+** button on the canvas to open the Add-node menu.
+</Step>
+<Step title="Pick a node type">
+Choose from the nine types the runtime executes: Agent, Decision, HITL, LLM, MCP, Printer, Router, State modifier, Toolkit. See [Pipeline node types](/how-tos/pipelines/nodes/overview) for what each does.
+</Step>
+<Step title="Configure it">
+Click the new node to open its configuration panel and set its fields (model, toolkit, routing condition, and so on, depending on the type).
+</Step>
+<Step title="Connect it">
+Drag from one node's connection point to the next to create an edge. You can also start a connection and drop it on empty canvas to add a new node in the same step.
+</Step>
+</Steps>
+
+<Screenshot id="pipeline-add-node-menu" alt="Add-node menu open in the flow editor" />
+
+<Note>
+Code and Custom node types are not offered in the Add-node menu — the runtime has no execution logic for either. A pipeline authored before this restriction that still contains one keeps displaying it, but you cannot add a new one.
+</Note>
+
+## Canvas controls
+
+The left-side toolbar zooms in and out, fits the whole pipeline to view, locks the canvas against accidental edits, collapses or expands all node cards at once, and auto-arranges the layout.
+
+## Guides and references
+
+- [Pipeline structure: entry point, states and connections](/how-tos/pipelines/structure)
+- [Edit a pipeline as YAML](/how-tos/pipelines/yaml)
+- [Pipeline node types](/how-tos/pipelines/nodes/overview)

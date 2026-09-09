@@ -1,0 +1,41 @@
+---
+title: "Projects"
+description: "Create, suspend, delete, and manage membership for every project on the deployment."
+---
+
+The admin **Projects** page is the deployment-wide project list. Every project — team or personal — appears here, regardless of who owns it. This is the one place an administrator sees and acts on every project at once, rather than one project's own Settings page at a time.
+
+## Manage an existing project
+
+<Steps>
+  <Step title="Find the project">
+    Search the table by name.
+  </Step>
+  <Step title="Suspend or unsuspend it">
+    A suspended project's members lose access until it is unsuspended.
+  </Step>
+  <Step title="Add a project admin, or change a member's role">
+    Both are available from the project's row menu.
+  </Step>
+  <Step title="Export">
+    **Export to CSV** downloads the current list.
+  </Step>
+</Steps>
+
+<Screenshot id="admin-projects-table" alt="Admin Projects table with row actions" />
+
+## Create or delete a project
+
+Both actions run a multi-step process rather than a single database write: creating a project provisions its record, quota, dedicated schema, permission set, a system user and token, vault secrets, storage buckets, and vector store together; deleting one reverses the same steps, ending in dropping the project's schema. Each step's status is tracked individually, and a failed attempt is compensated rather than left half-applied.
+
+<Warning>
+Deleting a project destroys its data irreversibly. There is no undo.
+</Warning>
+
+## There is no self-service request flow
+
+Every project is created by an administrator from this page. There is no in-app way for a member to request a new project and have it approved — unlike application access, which does have a request/approval flow (see [App requests and toolkit types](/admin/app-requests-and-toolkit-types)).
+
+<Note>
+Not available yet: a self-service "request a project" flow mirroring the App Requests moderation pattern (tracked in [#871](https://github.com/elitea-ng/elitea-platform/issues/871)). Until then, ask your administrator directly to create a project for your team.
+</Note>

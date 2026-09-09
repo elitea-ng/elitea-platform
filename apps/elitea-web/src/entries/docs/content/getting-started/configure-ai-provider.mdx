@@ -1,0 +1,66 @@
+---
+title: "Configure an AI provider"
+description: "Add an LLM, embedding or voice provider to your project so chat, agents and pipelines have a model to call."
+---
+
+Before anyone can chat or run an agent, a project needs at least one configured AI provider. Elitea supports seven provider kinds, and you configure each one the same way: pick a type, fill in its connection details, save.
+
+<Steps>
+<Step title="Open AI providers">
+Go to Settings → AI Providers (`/settings/model-configuration`). Configurations are grouped by kind: LLM, embedding, vector store, image generation, speech-to-text and text-to-speech.
+</Step>
+<Step title="Pick a provider type">
+Click **Create** and choose a type, or go directly to `/settings/create-configuration/<type>` (for example `open_ai`, `azure_open_ai`, `ai_dial`, `anthropic`, `ollama`, `amazon_bedrock`, `vertex_ai`, or `vllm`).
+</Step>
+<Step title="Fill in the connection fields">
+Fields vary by provider — see the table below. Give the configuration a display name for identification, then save.
+</Step>
+<Step title="Add a model">
+Once the provider connection exists, add the specific model it serves (display name, the exact model identifier the provider expects, context window, max output tokens). The model then appears in the model selector across chat, agents and pipelines. The most recently added model becomes the default for new conversations.
+</Step>
+</Steps>
+
+## Provider fields
+
+<Accordion title="OpenAI, Anthropic, Ollama, vLLM">
+| Field | Notes |
+|---|---|
+| API key | Required for OpenAI and Anthropic; optional for Ollama and vLLM, which are commonly self-hosted with no key |
+| Endpoint (`api_base`) | Defaults to the provider's public API; override it for a self-hosted or proxied endpoint |
+</Accordion>
+
+<Accordion title="Azure OpenAI / EPAM DIAL">
+| Field | Notes |
+|---|---|
+| API key | Required |
+| Endpoint (`api_base`) | Your Azure resource URL, or your DIAL host |
+| API version | Optional for DIAL, required for Azure (for example `2024-02-01`) |
+</Accordion>
+
+<Accordion title="Amazon Bedrock">
+| Field | Notes |
+|---|---|
+| AWS access key ID | Required |
+| AWS secret access key | Required |
+| AWS region | Required, for example `us-east-1` |
+</Accordion>
+
+<Accordion title="Google Vertex AI">
+| Field | Notes |
+|---|---|
+| Google Cloud project | Required |
+| Location | Required, for example `us-central1` |
+| Service account JSON | Required — paste the whole service-account credentials document |
+</Accordion>
+
+<Note>
+The field names above are the LLM gateway's own credential keys, not display labels this form invents — they're what actually gets sent through when a model call is made, which matters if you're troubleshooting a configuration that saves but doesn't resolve.
+</Note>
+
+<Warning>
+Never paste a real API key or service-account document into a screenshot or shared document. Treat every field above marked as a key or secret the same way you'd treat a password.
+</Warning>
+
+An administrator can also configure providers globally, shared across every project, from the admin console's LLM Proxy section — useful for a team-wide default model that individual projects don't need to configure themselves.
+
+<Screenshot id="configure-ai-provider-form" alt="Create configuration form for an OpenAI provider, with the API key field masked" />

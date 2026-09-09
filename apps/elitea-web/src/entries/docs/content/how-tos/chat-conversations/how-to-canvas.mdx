@@ -1,0 +1,41 @@
+---
+title: "Use canvas"
+description: "Edit a code block, table, or diagram from an assistant's reply in a dedicated collaborative editor."
+---
+
+Canvas turns a code block, table, or Mermaid diagram from an assistant's reply into its own editor, so you can refine it without leaving the conversation.
+
+## Open canvas
+
+Ask a model to generate something canvas supports — a script, a Markdown table, or a Mermaid diagram — then click the edit (pencil) icon that appears on that block. This opens the canvas editor for just that piece of content.
+
+<Tabs>
+<Tab title="Code">
+Syntax-highlighted editing with its own undo/redo history. Use **Copy** to copy the current content to your clipboard, or **Save** to persist your edits back to the conversation.
+</Tab>
+<Tab title="Table">
+A spreadsheet-like view over the Markdown table. Edit cells directly, then **Save**, or export the table to CSV or XLSX.
+</Tab>
+<Tab title="Diagram">
+Edit the underlying Mermaid source with a live preview, then **Save**.
+</Tab>
+</Tabs>
+
+## Real-time collaboration
+
+If more than one person has the same conversation open, everyone sees who else is editing a canvas at the same time — canvas is a collaboratively edited block, not a private draft.
+
+## Closing and reopening a canvas
+
+Closing the canvas panel doesn't discard your edits as long as you've saved — the block in the conversation updates with your latest saved version. Reopening the same block later (by clicking its edit icon again) picks up where you left off, since it's editing the message's content directly rather than a separate draft.
+
+<Note>
+Canvas edits the block that was just generated in the current turn. Opening or saving a previously stored file into canvas isn't supported — canvas has no "open file" action, and its content types are limited to code, tables and Mermaid diagrams. To work with a stored file, use [Artifacts](/menus/artifacts) instead.
+</Note>
+
+## Related
+
+- [Use chat](/how-tos/chat-conversations/how-to-use-chat-functionality)
+- [Manage artifact buckets and files](/menus/artifacts)
+
+<Screenshot id="chat-canvas-code" alt="Canvas editor open on a generated code block" />

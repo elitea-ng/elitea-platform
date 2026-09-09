@@ -1,0 +1,54 @@
+---
+title: "Budgets and LLM governance"
+description: "Set per-project and per-member spend limits, and author the rules the LLM gateway enforces on every call."
+---
+
+Budgets and LLM Governance are two separate admin pages that both shape how the LLM gateway treats a request.
+
+## Set spend limits
+
+Open **Budgets**. Each row is a project or a project member with a spend ceiling.
+
+<Steps>
+  <Step title="Find the project">
+    Search, then open its budget dialog.
+  </Step>
+  <Step title="Set the ceiling">
+    Choose a monthly limit, or mark it unlimited. The gateway bills on the calendar month; no other period is enforced.
+  </Step>
+  <Step title="Set the failure policy">
+    Choose whether the gateway fails open (allows calls through) or fails closed (refuses calls) if it cannot reach its budget counter, or inherit the platform default.
+  </Step>
+  <Step title="Manage per-member limits">
+    Open the members drawer to set a spend ceiling for an individual project member, on top of the project ceiling.
+  </Step>
+</Steps>
+
+<Screenshot id="admin-budgets-table" alt="Admin Budgets table with a project's budget dialog open" />
+
+<Warning>
+A budget stored here is only enforced if the LLM gateway is configured with `GATEWAY_NATS_URL`. Without it, every number on this page round-trips and saves, but no call is ever refused for exceeding it. The page shows a warning only when the gateway itself reports enforcement is off — never from silence.
+</Warning>
+
+<Note>
+Not available yet: the budget and usage numbers here are per (project, member, period) only — there is no per-agent or per-tool cost breakdown. Spend cannot be attributed to which agent or which tool caused it (tracked in [#875](https://github.com/elitea-ng/elitea-platform/issues/875)).
+</Note>
+
+## Author LLM governance rules
+
+Open **LLM Governance**. Each row is a scoped rule the gateway reads and enforces on the `/llm` path: budgets, rate limits, model and MCP server allowlists, credential rate policy, and CEL-based routing rules.
+
+<Steps>
+  <Step title="Create an entry">
+    Choose the scope it applies to (provider, model, or project) and the rule fields for that scope.
+  </Step>
+  <Step title="Save">
+    A saved definition does not take effect immediately — the gateway polls this table on a refresh interval (30 seconds by default) rather than reloading on every write, so a replica that missed an event still converges.
+  </Step>
+</Steps>
+
+<Screenshot id="admin-governance-table" alt="LLM Governance rule table" />
+
+<Warning>
+A saved rule can still be unenforceable: it may fail to load, or load and match nothing it could ever apply to. The gateway's own status report (surfaced on the [LLM proxy](/admin/llm-proxy) Status tab) names any rule it rejected — a save here is not proof the rule is in force.
+</Warning>

@@ -1,0 +1,49 @@
+---
+title: "Memory"
+description: "Configure context-window management, context editing, and automatic summarization for your new conversations."
+---
+
+Settings › Memory controls how much conversation history is kept and how it is managed as a conversation grows — not a persistent, cross-conversation memory.
+
+<Screenshot id="settings-memory" alt="Memory settings with context management and summarization controls" />
+
+<Note title="Not available yet: long-term memory">
+A "Coming soon" placeholder for persistent, cross-conversation recall exists in Profile, but it is not implemented — this Memory page is context-window management only (tracked in #870).
+</Note>
+
+## Context management
+
+Turn context management on to have Elitea automatically manage history as it approaches a model's token limit.
+
+- **Max Context Tokens** (default 64,000) — the ceiling for conversation history sent per request.
+- **Preserve Recent Messages** (default 5) — the number of most-recent messages always kept, regardless of the token ceiling.
+
+## Context editing
+
+When context management is on, context editing clears older tool outputs from the sent history while keeping recent results, reducing token usage without losing recent detail.
+
+## Automatic summarization
+
+With context management on, turn on summarization to have Elitea condense older messages into a summary once the conversation grows past a threshold, instead of dropping them outright.
+
+- **Summarization instructions** — free text guiding style and focus of the generated summary.
+- **Target Summary Tokens** (default 4,096) — the target length for each generated summary.
+
+<Warning>
+Summarization only runs while context management is turned on — turning context management off disables summarization too, even if its own toggle is still on.
+</Warning>
+
+## How settings apply
+
+All Memory settings apply to every **new** conversation you start in Chat, Agents, and Pipelines. Existing conversations, and conversations started by other users, keep their own settings.
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="A change does not seem to save">Settings auto-save on blur or on toggle — watch for a "Settings saved successfully" confirmation, and check numeric fields are within their valid range.</Accordion>
+  <Accordion title="Summarization has no effect">Confirm context management is turned on — summarization is inactive whenever it is off.</Accordion>
+</AccordionGroup>
+
+<Info title="Related">
+[Context management](/how-tos/chat-conversations/context-management) · [Chat](/menus/chat)
+</Info>

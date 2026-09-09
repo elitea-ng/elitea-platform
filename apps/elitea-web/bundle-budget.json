@@ -47,16 +47,25 @@
       "initialNote": [
         "Own line, not folded into 'app' (PREAMBLE decision 7): a separate Vite",
         "mode with its own dependency set (react + react-dom, minisearch, the",
-        "MDX-compiled content/component tree; no MUI). Measured 156.6 KiB gzip",
-        "on the four placeholder pages this unit ships (embedded-docs W1a,",
-        "2026-09-08); 200 gives headroom for real content before this needs",
-        "raising again with a fresh measurement.",
+        "MDX-compiled content/component tree; no MUI). 200 (measured 156.6 KiB",
+        "gzip on the four W1a placeholder pages, 2026-09-08) did not survive the",
+        "real content merge: `content-registry.ts` imports every `content/**/*.mdx`",
+        "with `{ eager: true }` (its own header explains why — a handful of",
+        "placeholder pages, not a real site), so all 126 pages the embedded-docs",
+        "W5 merge landed (2026-09-08) compile into the entry's one JS chunk.",
+        "Measured 351.2 KiB gzip on that merge; 400 gives headroom for the",
+        "in-flight screenshot batches (embedded-docs W4a) before this needs",
+        "raising again. The real fix is switching `content-registry.ts` from",
+        "`eager: true` to a per-slug lazy `import()` keyed off `router.ts`'s",
+        "current slug, which would move most of this into routeChunkKB instead",
+        "of initialKB — out of scope for a content-merge unit, tracked as a",
+        "follow-up.",
         "`mermaid` itself does NOT count here: Mermaid.tsx dynamic-imports it,",
         "so its ~140 KiB gzip parser chunk (plus one further chunk per diagram",
         "type it lazy-loads) lands in routeChunkKB below, not the initial set —",
         "confirmed by index.html carrying no <link rel=modulepreload> for it."
       ],
-      "initialKB": 200,
+      "initialKB": 400,
       "routeChunkKB": 250
     }
   }

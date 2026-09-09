@@ -1,0 +1,64 @@
+---
+title: "Other toolkit types"
+description: "The 15 toolkit types in the catalogue that have no dedicated page: cloud, testing and Zephyr variants."
+---
+
+Beyond the toolkits with their own page, the type picker offers 15 more types. Most configure a single whitelisted API call rather than a rich tool set, or cover a Zephyr variant that isn't Zephyr Scale or Zephyr Enterprise. Each row below states whether it runs on the Python worker (compose's default) and the Rust worker (Helm's default) — see [Toolkits](/menus/toolkits) for what a hidden tile means.
+
+## Cloud and infrastructure
+
+Each of these wraps a single provider API in one or two generic call tools; none needs a saved credential beyond what the provider's own client library picks up from the worker's environment, except where noted.
+
+| Type | Label | What it does | Auth | Python | Rust |
+|---|---|---|---|---|---|
+| `aws` | Cloud AWS | Runs one whitelisted AWS API call (`execute_aws`). | none | No | No |
+| `azure` | Cloud Azure | Runs one whitelisted Azure API call, plus a health check. | none | No | Yes |
+| `gcp` | Cloud GCP | Runs one whitelisted Google Cloud API request. | none | No | Yes |
+| `k8s` | Cloud Kubernetes | Runs one whitelisted `kubectl`-style command, plus a health check. | none | No | Yes |
+| `keycloak` | Keycloak | Runs one whitelisted Keycloak admin API request. | none | Yes | Yes |
+| `localgit` | Local GIT | Reads, diffs and commits files in a Git checkout the worker can reach on disk. | none | No | No |
+
+<Note>
+`aws`, `bigquery`, `gcp`, `k8s` and `localgit` fail to import on the Python worker (tracked in #869) and — except `azure`/`gcp`/`k8s` — are also skipped by the Rust worker (tracked in #865); check both columns before relying on one of these in a fresh install.
+</Note>
+
+## Data and search
+
+| Type | Label | What it does | Auth | Python | Rust |
+|---|---|---|---|---|---|
+| `azure_search` | Azure Search | Queries and fetches documents from an Azure AI Search index. | saved credential: `azure_search` | No | Yes |
+| `bigquery` | Cloud GCP (BigQuery) | Runs BigQuery queries and vector similarity search over BigQuery-backed embeddings. | saved credential: `bigquery`; inline: `api_key` | No | No |
+| `delta_lake` | AWS Delta Lake | Reads a Delta Lake table's schema and rows, including vector search. | saved credential: `delta_lake`; inline: AWS access key/secret/session token/region | No | No |
+| `elastic` | Elasticsearch | Runs a search query against an Elasticsearch index. | none | Yes | Yes |
+
+## Communication and testing
+
+| Type | Label | What it does | Auth | Python | Rust |
+|---|---|---|---|---|---|
+| `yagmail` | Yet Another Gmail | Sends an email through a Gmail account. | none | No | Yes |
+| `carrier` | Carrier | Triggers and reads Carrier backend/UI test runs and reports. | saved credential: `carrier` | Yes | No |
+| `zephyr` | Zephyr | Adds and reads Zephyr test case steps — the base Zephyr integration, distinct from Scale/Enterprise/Squad below. | none | Yes | Yes |
+| `zephyr_squad` | Zephyr Squad | Test steps, executions, cycles and BDD content for Zephyr Squad. | none | Yes | Yes |
+| `zephyr_essential` | Zephyr Essential | The largest Zephyr integration: test cases, cycles, executions, folders, issue links and BDD content, plus indexing (`index_data`). | saved credential: `pgvector`, `zephyr_essential` | Yes | No |
+
+## Connect one of these toolkits
+
+<Steps>
+<Step title="Open the toolkit type picker">
+In the left navigation, open **Toolkits**, then select **New**. Filter the tile grid by category (cloud, testing, and so on), or search by name.
+</Step>
+<Step title="Fill in the credential, if any">
+Types with a saved-credential column above need one created first (or inline via **Create credential** in the form); the rest only take a project/host/namespace-style setting.
+</Step>
+<Step title="Save">
+Name the toolkit and select **Create**.
+</Step>
+</Steps>
+
+<Screenshot id="toolkit-new-other-toolkits" alt="Toolkit type picker filtered to the cloud category" />
+
+## Common issues
+
+<Note>
+A type whose worker column says No for your deployment doesn't error loudly — its tile is simply absent from the picker (`metadata.hidden=true`). If a type you expect is missing, check which worker the deployment runs before assuming it doesn't exist.
+</Note>

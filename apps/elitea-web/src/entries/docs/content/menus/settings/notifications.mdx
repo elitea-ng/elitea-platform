@@ -1,0 +1,40 @@
+---
+title: "Notifications"
+description: "Review recent alerts from the quick popover, or browse your full history in Notifications Center."
+---
+
+Elitea delivers real-time notifications over a live connection for events like publish decisions, mentions, budget thresholds, and expiring tokens.
+
+<Screenshot id="settings-notifications" alt="Notifications Center with the notification table" />
+
+## Quick popover
+
+Select the bell icon in the sidebar for a fast, unread-only view: up to 5 items, with **Mark as read** on hover and **Mark all as read** / **View all** in the footer.
+
+## Notifications Center
+
+Settings › Notifications shows every notification, read and unread, with search by message text, sortable **Type** and **Date & Time** columns, and bulk **Mark as read**, **Mark as unread**, and **Delete** actions.
+
+## What triggers a notification
+
+| Event | What it means |
+|---|---|
+| Publish approved / rejected | Your published agent or skill version was reviewed. |
+| Mentioned or added to a conversation | A teammate `@mentioned` you or added you to a conversation. |
+| Index created, reindexed, or failed | A toolkit index finished or failed. |
+| Bucket expiration warning | Files in an artifact bucket will be deleted within 24 hours under its retention policy. |
+| Personal access token expiring | A token will stop working within 24 hours. |
+| Project or member budget threshold / limit reached | Shared-model spend is near or at its monthly limit. |
+
+Several of these link straight to the relevant page — for example, an expiring-token notification opens Settings › Personal Tokens, and a budget notification opens Settings › Usage.
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="The bell still shows unread after I opened everything">Opening the popover does not mark items read automatically — use **Mark as read** or **Mark all as read** explicitly.</Accordion>
+  <Accordion title="A notification's link goes somewhere unexpected">Some links (for example, a mention) open the exact conversation and message; others open a settings page scoped to the relevant project.</Accordion>
+</AccordionGroup>
+
+<Info title="Related">
+[Personal tokens](/menus/settings/personal-tokens) · [Analytics and usage](/menus/settings/analytics-and-usage) · [Artifacts](/menus/artifacts)
+</Info>

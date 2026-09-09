@@ -1,0 +1,40 @@
+---
+title: "Elitea MCP Tools (internal tool)"
+description: "Let an agent call other tagged agents and MCP-enabled toolkit tools at runtime through Elitea's own MCP server."
+---
+
+<Warning>
+Elitea MCP Tools is a Python-worker-only internal tool. On a deployment running the Rust worker (the Helm default), it is skipped silently — the agent still answers, just without this capability.
+</Warning>
+
+Elitea MCP Tools connects an agent to Elitea's own MCP server from inside a conversation, so it can discover and call other agents and toolkit tools that have been explicitly exposed, without you pre-wiring every dependency.
+
+## What becomes callable
+
+- **Other agents**, if they carry the `mcp` tag. Each one becomes a callable that takes a single task description and returns that agent's final response. Agents without the tag are never listed, published or not.
+- **Toolkit tools**, for any toolkit with its MCP option turned on. Each enabled tool becomes an individual callable with the toolkit's native input and output shape.
+
+## Enable it
+
+<Steps>
+<Step title="Turn on the module">
+In a conversation, click **+** in the composer, open **Modules**, and toggle **Elitea MCP Tools** on. To make it the default for every new conversation with a given agent, open that agent's configuration, find the module in its tools list, and save.
+</Step>
+<Step title="Tag the agents you want callable">
+Add the `mcp` tag to any agent you want this module to be able to call.
+</Step>
+<Step title="Expose the toolkit tools you want callable">
+On a toolkit, turn on its MCP option and select which of its tools are exposed.
+</Step>
+</Steps>
+
+<Screenshot id="agent-tools-menu-mcp-toggle" alt="An agent's Tools menu with the Elitea MCP Tools toggle visible" />
+
+<Note>
+This page describes calling existing agents and toolkit tools through the module. Whether the module can also create or update agents and pipelines directly could not be verified against the current source and is not documented here as present.
+</Note>
+
+## Related
+
+- [Use chat](/how-tos/chat-conversations/how-to-use-chat-functionality)
+- [Manage your MCP servers](/menus/toolkits)

@@ -1,0 +1,84 @@
+---
+title: "Toolkit catalogue"
+description: "Every toolkit type Elitea serves, its category, and whether the Python or Rust worker can run it."
+---
+
+Elitea serves 52 toolkit types from a single catalogue. Which ones you can actually create a tile for depends on the **worker** your deployment runs: a type the running worker cannot build is hidden rather than shown broken, and an administrator can additionally restrict specific types per project on the Toolkit types page. No feature flag gates an individual type — only worker capability and that admin restriction do.
+
+<Warning title="Helm and compose default to different workers">
+Kubernetes/Helm deployments default to the **Rust** worker (22 types materialize). The one-host compose stack defaults to the **Python** worker (39 of 52 types import successfully). Your administrator can override the default; ask which worker is running before assuming a type is available.
+</Warning>
+
+Create a toolkit from `/toolkits/create/<type>`; MCP-shaped types are created from `/mcps/create` instead.
+
+## Catalogue
+
+| Type | Category | Python worker | Rust worker | Guide |
+|---|---|:---:|:---:|---|
+| ado_boards | Project management | ✅ | — | [ADO boards](/integrations/toolkits/ado_boards_toolkit) |
+| ado_plans | Test management | ✅ | — | [ADO plans](/integrations/toolkits/ado_plans_toolkit) |
+| ado_repos | Code repositories | ✅ | — | [ADO repos](/integrations/toolkits/ado_repos_toolkit) |
+| ado_wiki | Documentation | ✅ | — | [ADO wiki](/integrations/toolkits/ado_wiki_toolkit) |
+| aha | Project management | ✅ | — | [Aha!](/integrations/toolkits/aha_toolkit) |
+| Artifact *(built in)* | Storage | n/a | n/a | [Artifact toolkit](/integrations/toolkits/artifact_toolkit) |
+| aws | Cloud | — | — | [Other toolkits](/integrations/toolkits/other-toolkits) |
+| azure | — | — | ✅ | [Other toolkits](/integrations/toolkits/other-toolkits) |
+| azure_search | Other | — | ✅ | [Other toolkits](/integrations/toolkits/other-toolkits) |
+| bigquery | — | — | — | [Other toolkits](/integrations/toolkits/other-toolkits) |
+| bitbucket | Code repositories | ✅ | — | [Bitbucket](/integrations/toolkits/bitbucket_toolkit) |
+| carrier | Testing | ✅ | — | [Other toolkits](/integrations/toolkits/other-toolkits) |
+| confluence | Documentation | ✅ | — | [Confluence](/integrations/toolkits/confluence_toolkit) |
+| Data Analysis *(built in)* | Internal tool | n/a | n/a | [Internal tools](/menus/internal-tools#data-analysis) |
+| delta_lake | — | — | — | [Other toolkits](/integrations/toolkits/other-toolkits) |
+| elastic | — | ✅ | ✅ | [Other toolkits](/integrations/toolkits/other-toolkits) |
+| figma | Other | ✅ | — | [Figma](/integrations/toolkits/figma_toolkit) |
+| gcp | — | — | ✅ | [Other toolkits](/integrations/toolkits/other-toolkits) |
+| github | Code repositories | ✅ | ✅ | [GitHub](/integrations/toolkits/github_toolkit) |
+| gitlab | Code repositories | ✅ | — | [GitLab](/integrations/toolkits/gitlab_toolkit) |
+| gitlab_org | Code repositories | ✅ | ✅ | [GitLab Org](/integrations/toolkits/gitlab_org_toolkit) |
+| google_places | Other | — | ✅ | [Google Places](/integrations/toolkits/google_places_toolkit) |
+| jira | Project management | ✅ | — | [Jira](/integrations/toolkits/jira_toolkit) |
+| k8s | — | — | ✅ | [Other toolkits](/integrations/toolkits/other-toolkits) |
+| keycloak | Authentication, identity | ✅ | ✅ | [Other toolkits](/integrations/toolkits/other-toolkits) |
+| localgit | — | — | — | [Other toolkits](/integrations/toolkits/other-toolkits) |
+| Memory *(built in)* | Other | n/a | n/a | [Memory toolkit](/integrations/toolkits/memory_toolkit) |
+| openapi | Integrations | ✅ | ✅ | [OpenAPI](/integrations/toolkits/openapi_toolkit) |
+| postman | — | ✅ | ✅ | [Postman](/integrations/toolkits/postman_toolkit) |
+| pptx | Office | ✅ | — | [PPTX](/integrations/toolkits/powerpoint_toolkit) |
+| qtest | Test management | ✅ | — | [QTest](/integrations/toolkits/qtest_toolkit) |
+| rally | Project management | — | ✅ | [Rally](/integrations/toolkits/rally_toolkit) |
+| Remote MCP *(built in)* | Other | n/a | n/a | [Remote MCP](/integrations/mcp/remote-mcp) |
+| report_portal | Testing | ✅ | ✅ | [Report Portal](/integrations/toolkits/reportportal_toolkit) |
+| salesforce | Other | ✅ | ✅ | [Salesforce](/integrations/toolkits/salesforce_toolkit) |
+| service_now | Other | — | ✅ | [ServiceNow](/integrations/toolkits/servicenow_toolkit) |
+| sharepoint | Office | ✅ | ✅ | [Sharepoint](/integrations/toolkits/sharepoint_toolkit) |
+| slack | Communication | — | ✅ | [Slack](/integrations/toolkits/slack_toolkit) |
+| sonar | Development | ✅ | ✅ | [Sonar](/integrations/toolkits/sonar_toolkit) |
+| sql | Development | ✅ | ✅ | [SQL](/integrations/toolkits/sql_toolkit) |
+| testio | Testing | ✅ | — | [TestIO](/integrations/toolkits/testIO_toolkit) |
+| testrail | Test management | ✅ | — | [Testrail](/integrations/toolkits/testrail_toolkit) |
+| yagmail | — | — | ✅ | [Other toolkits](/integrations/toolkits/other-toolkits) |
+| zephyr | Test management | ✅ | ✅ | [Other toolkits](/integrations/toolkits/other-toolkits) |
+| zephyr_enterprise | Test management | ✅ | — | [Zephyr Enterprise](/integrations/toolkits/zephyr_enterprise_toolkit) |
+| zephyr_essential | Test management | ✅ | — | [Other toolkits](/integrations/toolkits/other-toolkits) |
+| zephyr_scale | Test management | ✅ | — | [Zephyr Scale](/integrations/toolkits/zephyr_scale_toolkit) |
+| zephyr_squad | Test management | ✅ | ✅ | [Other toolkits](/integrations/toolkits/other-toolkits) |
+| VectorStore, mcp_config *(built in, no label)* | — | n/a | n/a | — |
+| Application, Custom, Database, Datasource *(native, hand-written)* | — | n/a | n/a | [Custom toolkit](/integrations/toolkits/custom_toolkit) |
+| Python Sandbox *(toggle only)* | Internal tool | — | — | not run by any shipped worker |
+
+<Note>
+The Python Sandbox toggle is visible on every agent's tool list but is not executed by either worker today (tracked in #872).
+</Note>
+
+## Index-capable types
+
+These 20 types carry a `pgvector_configuration`/`embedding_model` pair and show the Indexes panel once PGVector and an embedding model are configured: Artifact, Memory, VectorStore, ADO boards, ADO plans, ADO repos, ADO wiki, Bitbucket, Confluence, Figma, GitHub, GitLab, Jira, QTest, Sharepoint, TestRail, XRAY cloud, Zephyr Enterprise, Zephyr Essential, Zephyr Scale. See [Indexing overview](/how-tos/indexing/indexing-overview).
+
+## Saved-credential types
+
+The following types reference a saved credential from [Credentials](/menus/credentials): ado, aha, azure_search, bigquery, bitbucket, carrier, confluence, delta_lake, figma, github, gitlab, google_places, jira, openapi, pgvector, postman, qtest, rally, report_portal, salesforce, service_now, sharepoint, slack, sonar, sql, testio, testrail, xray, zephyr, zephyr_enterprise, zephyr_essential.
+
+<Info title="Related">
+[Toolkits](/menus/toolkits) · [Credentials](/menus/credentials) · [How to use credentials](/how-tos/credentials-toolkits/how-to-use-credentials)
+</Info>

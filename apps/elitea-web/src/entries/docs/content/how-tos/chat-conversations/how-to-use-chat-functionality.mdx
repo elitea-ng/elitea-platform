@@ -1,0 +1,74 @@
+---
+title: "Use chat"
+description: "Send messages, organize conversations into folders, attach agents and toolkits as participants, and manage message output in Elitea chat."
+---
+
+Chat is where you talk to models, agents, pipelines, toolkits, and MCP servers in one conversation. Every conversation keeps its own context — nothing is shared between conversations unless you attach the same participant to more than one.
+
+## Create a conversation
+
+Click **+ Conversation** at the top of the sidebar. Pick a model from the selector at the bottom of the composer, or type `#` to search and attach an agent, pipeline, toolkit, or MCP connection that already exists in the project — selected participants appear as chips above the input box. Type your message and send it; the conversation is named automatically from your first message, and you can rename it any time.
+
+<Screenshot id="chat-conversation-view" alt="An open conversation with participants and message history" />
+
+## Organize conversations into folders
+
+Click the folder icon next to **Conversations** at the top of the sidebar to create a folder, then move conversations into it either by dragging one onto the folder, or by right-clicking a conversation and choosing **Move to**.
+
+<Steps>
+<Step title="Manage a conversation">
+Right-click a conversation (or use its options menu) for: **Rename**, **Move to**, **Playback** (step through it turn by turn without sending anything live), **Pin/unpin** (keeps it at the top of the list), and **Delete**.
+</Step>
+<Step title="Manage a folder">
+Right-click a folder for: **Rename**, **Pin/unpin**, and **Delete** — deleting a folder does not delete the conversations in it, they move back to the root list.
+</Step>
+</Steps>
+
+<Screenshot id="chat-conversation-list-folders" alt="Conversation list with folders and a pinned conversation" />
+
+## Visibility in private vs. team projects
+
+<Tabs>
+<Tab title="Private project">
+Conversations and folders are personal — only you can see them. You can still add agents, pipelines, toolkits and MCPs as participants, but you cannot add other users.
+</Tab>
+<Tab title="Team project">
+Folders are visible to every project member. A conversation is visible only to its participants, unless it's explicitly marked public — at which point every project member can see and interact with it.
+
+<Warning>
+Making a conversation or folder public cannot be undone.
+</Warning>
+</Tab>
+</Tabs>
+
+In a team project, add a colleague as a conversation participant to collaborate directly — see [Add teammates to a conversation](/how-tos/chat-conversations/add-teammates-to-conversation).
+
+## Attach participants
+
+Click the **+** icon in the composer toolbar to open the menu: **Modules** (the internal tools, listed first), then **Agents**, **Pipelines**, **Toolkits**, and **MCPs**. Each category lists the items that already exist in the project — pick one to add it as a participant.
+
+<Note>
+Not available yet: creating a brand-new agent, pipeline, toolkit, or MCP connection from this menu. It only lists existing items to attach. To create one, use [Create an agent](/menus/agents), [Create a pipeline](/menus/pipelines), or [Create a toolkit](/menus/toolkits), then come back and attach it. (tracked in [#867](https://github.com/elitea-ng/elitea-platform/issues/867))
+</Note>
+
+You can also type `#` in the message box for the same picker inline, or `/` to mention a specific tool from a toolkit or MCP that's already a participant (for example `/Jira/createIssue`). The search box in each category filters only the participants already loaded on the page — on a project with a very large catalogue, typing a name that hasn't loaded yet finds nothing.
+
+Once a participant is attached, click it in the **Participants** panel to make it active, then send your message. To edit an attached agent, pipeline, or toolkit's configuration without leaving the conversation, see [Edit agents, pipelines, toolkits and MCPs from chat](/how-tos/chat-conversations/create-entities-from-chat).
+
+<Screenshot id="chat-plus-menu-open" alt="The composer's + menu open, showing Modules, Agents, Pipelines, Toolkits and MCPs" />
+
+## Choose a model and tune settings
+
+Click the model selector to pick an LLM. Click the settings icon next to it to adjust generation parameters — the exact fields depend on the model (a reasoning depth control for reasoning models, a creativity/temperature control for standard ones), plus a max-completion-tokens option and a **Steps limit** (default 25, range 0–999) that caps how many tool calls a turn can make before the run stops and returns whatever it has.
+
+## Work with the response
+
+Below an assistant message you get **Read out** (if voice is configured — see [Voice](/menus/chat#voice)), **Copy**, **Regenerate**, and **Delete**. To change your own last message, use its **Edit** action: the message becomes editable, any attachments stay attached unless you remove them, and **Save and apply** re-sends it and regenerates the answer.
+
+## Related
+
+- [Attach files to a conversation](/how-tos/chat-conversations/attach-files)
+- [Use canvas](/how-tos/chat-conversations/how-to-canvas)
+- [Manage conversation context](/how-tos/chat-conversations/context-management)
+- [Elitea MCP Tools (internal tool)](/how-tos/chat-conversations/elitea-mcp-tools)
+- [Authorize sensitive actions](/how-tos/chat-conversations/sensitive-action-authorization-guardrail)

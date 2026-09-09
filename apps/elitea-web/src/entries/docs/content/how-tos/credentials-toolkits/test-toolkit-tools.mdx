@@ -1,0 +1,39 @@
+---
+title: "Test toolkit tools"
+description: "Run a single tool against a configured toolkit to verify credentials and behavior before you attach it to an agent."
+---
+
+Before attaching a toolkit to an agent or a chat, you can run one of its tools directly to confirm the credential works and the tool returns what you expect.
+
+## Run a test
+
+<Steps>
+1. Open a saved toolkit's configuration page (unsaved changes disable testing — save first).
+2. Open its **Test tools** pane.
+3. Pick a tool from the list and fill in its arguments.
+4. Choose a model if the tool needs one, and run it.
+5. Read the result in the transcript alongside the run.
+</Steps>
+
+<Screenshot id="test-tools-pane-result" alt="Test tools pane on a toolkit showing a tool argument form and a run result" />
+
+<Warning>
+**Index Data can't be tested here.** The Go backend routes it through a separate, asynchronous endpoint owned by the toolkit's [Indexes tab](/how-tos/indexing/using-indexes-tab-interface); running it from Test tools returns that route's own refusal instead of an actual index run.
+</Warning>
+
+<Note>
+There's no history of past test runs to come back to — a run's result only exists in this session's transcript (tracked in [#868](https://github.com/elitea-ng/elitea-platform/issues/868)). If you need a persisted record of what a toolkit did, message traces exist as an API — see [API usage](/integrations/third-party-integrations/api-usage).
+</Note>
+
+## What testing verifies
+
+A successful run confirms the credential authenticates and the tool's arguments are valid for your instance of the external service — useful before wiring the toolkit into an agent where a failure is harder to diagnose. A failing run typically means a credential problem, a permission problem on the external service, or an argument the service rejects.
+
+## Choosing which tool to test first
+
+If a toolkit exposes many tools, start with the simplest read-only one (a list or search operation) rather than something that writes to the external system. That confirms the credential and connection work before you risk a test run creating or modifying real data in Jira, GitHub, or whichever service the toolkit reaches. Once a read tool succeeds, move on to testing the write tools you actually plan to use.
+
+## Next steps
+
+- [Use credentials in a toolkit](/how-tos/credentials-toolkits/how-to-use-credentials) if the test fails on authentication.
+- [Index and search data with tools](/how-tos/indexing/indexing-tools) for search tools once an index exists.

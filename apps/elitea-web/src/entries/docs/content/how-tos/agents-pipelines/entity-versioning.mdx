@@ -1,0 +1,53 @@
+---
+title: "Version agents and pipelines"
+description: "Save named versions of an agent or pipeline, set a default, compare versions, and share or export a specific one."
+---
+
+Agents and pipelines keep a version history. The first save always creates a version named **base**; from there you can keep editing base, or branch off into named versions you can compare, publish, and share independently.
+
+## Save a version
+
+<Steps>
+<Step title="Work in base">
+Every new agent or pipeline starts on the **base** version. Edit and save it as many times as you like — nothing else is required to keep working.
+</Step>
+<Step title="Save as a new version">
+When you want to preserve the current configuration, click **Save As Version** in the toolbar and enter a name: alphanumeric characters, hyphens and underscores only, no spaces, up to 20 characters, and unique within the entity. `base` is reserved and cannot be reused as a custom name.
+</Step>
+<Step title="Switch and edit">
+Use the version dropdown next to the entity name to switch versions. Saving always updates whichever version is currently selected — switch first, then save, if you want to update a specific version rather than base.
+</Step>
+</Steps>
+
+<Screenshot id="agent-save-as-version-dialog" alt="Save as new version dialog on an agent" />
+
+## Set a default version
+
+A default version is the one automatically selected when the agent is added to a conversation, used as a toolkit in another agent or pipeline, or exposed as an MCP toolkit. Pin a version as default from the version dropdown or the toolbar's three-dot menu, then confirm in the dialog. Only Draft versions can be set as default; published versions and the currently-set default cannot be deleted until you designate a different one.
+
+If no version is explicitly set as default, `base` is used implicitly.
+
+## Compare versions
+
+When an entity has two or more versions, a **Compare versions** action becomes available from the toolbar's three-dot menu. It opens a read-only, side-by-side comparison of any two versions — useful for checking what changed before you set a new default or publish.
+
+## Share a version
+
+- **Copy link** copies a direct URL to the currently selected version to your clipboard. Anyone with access to the project can open it; the link does not grant access by itself, and it stops resolving if the version is later deleted.
+- **Export** downloads the current version as a Markdown file. If the version references nested agents or pipelines, the export becomes a ZIP containing one Markdown file per entity (the main one plus each dependency). Import the file into another project with [Import and export entities](/how-tos/agents-pipelines/import-export).
+
+Publishing an agent (see [Publish agents and skills](/how-tos/agents-pipelines/publishing)) only exports its **published** versions.
+
+## Delete a version
+
+You can delete any version except `base` and the current default. If other agents or pipelines reference the version you're deleting, a replacement-version dialog lists them and lets you pick which version they should point to instead; the system updates those references automatically.
+
+<Note>
+Not available yet: skill version history, compare, or rollback — a skill has a single implicit version and none of the controls on this page apply to it. (tracked in [#874](https://github.com/elitea-ng/elitea-platform/issues/874))
+</Note>
+
+## Guides and references
+
+- [Agents overview](/menus/agents)
+- [Pipelines overview](/menus/pipelines)
+- [Import and export entities](/how-tos/agents-pipelines/import-export)

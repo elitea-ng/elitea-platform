@@ -1,0 +1,44 @@
+---
+title: "Remote MCP"
+description: "Connect Elitea to someone else's MCP server as a client, with OAuth authorization when the server requires it."
+---
+
+Remote MCP is the other direction from the [Elitea MCP server](/integrations/mcp/mcp-server): instead of exposing Elitea's tools to an external client, a Remote MCP toolkit lets an Elitea agent or pipeline call tools hosted on someone else's MCP server. It's listed as **Remote MCP** in the toolkit type picker; there is no local or stdio MCP client — only this HTTP connection.
+
+## Prerequisites
+
+- The remote server's URL.
+- If the server requires OAuth: either nothing further (if it supports Dynamic Client Registration) or a pre-registered OAuth client ID and secret from that server's own admin console.
+
+## Connect a remote MCP server
+
+<Steps>
+<Step title="Open the toolkit type picker">
+In the left navigation, open **Toolkits**, then select **New**, and choose **Remote MCP**.
+</Step>
+<Step title="Enter the server URL">
+Enter the remote server's URL and save.
+</Step>
+<Step title="Authorize, if required">
+If the server requires OAuth, Elitea opens an authorization dialog — automatically, either now or the first time an agent tries to call one of its tools. Servers that support Dynamic Client Registration need nothing from you beyond clicking **Authorize**; a server that doesn't asks for a **Client ID** and **Client Secret** first. The flow uses PKCE or OIDC depending on what the server advertises, and you can choose to remember the credentials for the session.
+</Step>
+<Step title="Sync tools">
+Once authorized, Elitea calls the remote server's `tools/list` and shows the tools it offers. Attach the toolkit to an agent or pipeline the same way as any other toolkit.
+</Step>
+</Steps>
+
+<Screenshot id="mcp-remote-create" alt="Create Remote MCP toolkit form" />
+
+## Common issues
+
+<Note>
+Remote MCP is a built-in Elitea type, not part of the SDK worker-capability catalogue. Both the Rust and Python workers can call a Remote MCP toolkit's tools — the Rust worker's MCP client only speaks streamable HTTP, which is the only transport a remote server can use here anyway.
+</Note>
+
+<Note>
+Authorization can happen mid-conversation: if a tool call fails because the session isn't authorized yet, Elitea shows the same authorization dialog from chat. Send your message again once it succeeds.
+</Note>
+
+<Note>
+The redirect for the OAuth flow lands on `/mcp-auth-callback`. If you're testing behind a proxy or a non-default host, make sure that path is reachable at the same origin the browser used to start the flow.
+</Note>

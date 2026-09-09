@@ -1,0 +1,59 @@
+---
+title: "Internal tools"
+description: "Built-in chat and agent capabilities — image creation, data analysis, planner, swarm mode, and smart tools selection."
+---
+
+Internal tools are capabilities you turn on from **Modules** in chat or an agent's Tools section, without configuring an external toolkit. They come from a fixed platform catalogue (`features/agents/lib/internalTools.ts`) and are turned on per conversation or saved as an agent's default.
+
+<Warning title="These modules need the Python worker">
+Every internal tool on this page runs only when your deployment's worker is the **Python** worker. The **Rust** worker — Helm's default — skips each one with a logged warning and the agent still answers, just without that capability (tracked in #866). Ask your administrator which worker your deployment runs before relying on these in production.
+</Warning>
+
+<Screenshot id="internal-tools-menu" alt="The Modules panel listing internal tools with toggles" />
+
+## Turn a module on
+
+<Tabs>
+  <Tab title="In chat">
+    Select **+** in the chat toolbar → **Modules**, then toggle the tool on. The setting lasts for the conversation.
+  </Tab>
+  <Tab title="On an agent">
+    Open the agent, find **Modules** under **Tools** (select **Show all** if it is collapsed), toggle the tool, and **Save**. New conversations with that agent turn it on by default.
+  </Tab>
+</Tabs>
+
+## Image creation
+
+Generates images from a text prompt and shows them inline, using an image-generation model configured in **AI Providers**. Generated images are saved automatically to the project's `attachments` bucket, where you can also download or delete them later from [Artifacts](/menus/artifacts).
+
+## Data analysis
+
+Runs pandas-style analysis over a file you upload to the conversation — summaries, filtering, aggregation, and chart generation — driven entirely by natural-language requests. Upload the file first, then ask for the analysis; generated charts and exported files are saved back to the conversation.
+
+<Tip>
+For datasets larger than about 100 MB, or analysis needing custom code, use a Python-based toolkit or a pipeline Code node instead.
+</Tip>
+
+## Planner
+
+Lets an agent create, prioritize, and track tasks directly from natural language during a conversation — for example, "create a high-priority task to review contracts by Friday." Tasks carry a title, priority, due date, and status, and are scoped to the conversation that created them: deleting or clearing the conversation removes its tasks too.
+
+## Swarm mode
+
+Turns a set of agents into peers that can hand off control to one another mid-conversation, all sharing the same conversation history. The agent the user addresses is simply the default entry point; any peer can transfer to any other with a `transfer_to_<agent_name>` tool, and each hand-off's task argument must be fully self-contained — the receiving agent gets no other context. Swarm-enabled agents cannot themselves be added as a child of another swarm agent.
+
+## Smart tools selection
+
+Reduces token usage when an agent has many toolkits configured by binding only two meta-tools (`get_tool_schema`, `invoke_tool`) instead of every individual tool definition, loading real tool schemas on demand. Turn it on once a conversation or agent uses five or more toolkits — the more toolkits, the larger the savings.
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="A module toggle has no effect">Confirm the deployment's worker is Python, not Rust — the Rust worker silently skips every module on this page.</Accordion>
+  <Accordion title="Image creation is missing from the list">No image-generation model is configured for the project yet — add one in [AI Providers](/menus/settings/ai-providers).</Accordion>
+  <Accordion title="Modules are missing from the chat toolbar entirely">No module is available for the project at all — ask your administrator to configure at least one provider or toolkit.</Accordion>
+</AccordionGroup>
+
+<Info title="Related">
+[Chat: Modules](/menus/chat#modules) · [Agents: Modules](/menus/agents#modules) · [Elitea MCP tools](/how-tos/chat-conversations/elitea-mcp-tools) · [Attach files](/how-tos/chat-conversations/attach-files)
+</Info>

@@ -1,0 +1,53 @@
+---
+title: "Wikis (DeepWiki)"
+description: "Generate browsable, AI-written documentation from a code repository or a bucket of files, and ask questions about it."
+---
+
+DeepWiki turns a code repository — or a folder of files in an artifact bucket — into browsable documentation: a page tree, diagrams, and a chat you can ask questions of. It lives at its own **Wikis** area, addressed by the wiki toolkit that generated it, rather than under Toolkits.
+
+<Note>
+DeepWiki needs the deployment's `-engine` image tag and `ELITEA_DEEPWIKI_ENABLED`. A deployment on the default image lists and reads existing wikis but refuses every generation request.
+</Note>
+
+## Prerequisites
+
+- A wiki toolkit pointed at a source: a **Repository** (via a GitHub, GitLab or ADO Repos toolkit you've already connected), an **Artifact folder**, or a **Bucket**.
+- An `llm_model` and `embedding_model` set on the toolkit, or a project default for both — generation and wiki chat fall back to the project's default model when the toolkit sets none, and refuse outright if the project has none either.
+
+## Generate a wiki
+
+<Steps>
+<Step title="Add a wiki toolkit">
+If the project has none yet, add one — the Wikis area prompts you to when it finds none for the project.
+</Step>
+<Step title="Point it at a source">
+Under the toolkit's own settings, set the wiki source: a repository toolkit to clone, an artifact folder, or a bucket. Optionally set a folder prefix to scope a bucket or artifact source.
+</Step>
+<Step title="Generate">
+Select **Generate wiki**. Choose a planner mode (**Agentic** or **Clustering**) and whether to **Skip tests**, then confirm. Generation can take several minutes and runs one at a time per slot — if all slots are busy, wait or stop another run first.
+</Step>
+</Steps>
+
+<Screenshot id="deepwiki-browser" alt="DeepWiki page browser with the generation panel open" />
+
+## Browse and edit
+
+Once generated, browse the page tree, open **Edit page** to hand-correct a page (diagrams that fail to render offer a one-click fix you can accept or discard), and use **Delete wiki** to remove generated pages.
+
+## Ask about the wiki
+
+Select **Ask about this repository** to open the chat drawer. You can attach specific wiki pages as context for your question — this attaches page content, not an uploaded file.
+
+<Note>
+Wiki chat history is read-only once a session ends — you can review past turns but not continue a conversation ("attachments" here means attaching wiki pages, not uploading a file; tracked in #873).
+</Note>
+
+## Common issues
+
+<Note>
+DeepWiki runs on the deployment's engine sidecar, not the Rust/Python agent worker — generation and wiki chat work the same regardless of which worker your deployment runs for agents and toolkits.
+</Note>
+
+<Note>
+"No embedding_model is set" or "No llm_model is set" warnings mean generation or chat will use the project's default model for that role — and refuse outright if the project has none.
+</Note>

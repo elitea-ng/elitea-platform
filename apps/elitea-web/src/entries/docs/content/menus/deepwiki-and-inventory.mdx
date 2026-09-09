@@ -1,0 +1,50 @@
+---
+title: "DeepWiki and Inventory"
+description: "Two application integrations that turn a code repository into browsable documentation or a queryable component graph."
+---
+
+DeepWiki and Inventory are configured from [Applications](/menus/applications) and, once set up, open at `/deepwiki` and `/inventory`. Visiting either route resolves your project's configured toolkit automatically: it opens directly if there is exactly one, offers a picker if there are several, or shows an empty state if none is configured yet.
+
+## DeepWiki
+
+DeepWiki generates a searchable, AI-authored wiki from a connected code repository — architecture summaries, source-linked explanations, and a chat panel for asking questions about the codebase.
+
+<Screenshot id="deepwiki-workspace" alt="A DeepWiki workspace with generated pages and the wiki chat drawer" />
+
+**Configuration:** a code toolkit (GitHub, GitLab, Bitbucket, or Azure DevOps Repos), an LLM model, a max-token budget, and an embedding model.
+
+**What you can do:**
+
+- Browse generated wiki pages and architecture diagrams.
+- Ask questions in the wiki chat drawer, attaching specific wiki pages as context.
+- Edit a generated page directly, or regenerate content for the connected repository.
+
+<Note title="Not available yet: multi-turn chat history and file uploads">
+The wiki chat's history is read-only — you cannot continue a previous session — and "attachments" in DeepWiki chat means attaching existing wiki pages as context, not uploading a file (tracked in #873).
+</Note>
+
+## Inventory
+
+Inventory builds a knowledge graph of your codebase — components, dependencies, and ownership — so you can understand the code estate before planning a migration or refactor.
+
+<Screenshot id="inventory-workspace" alt="An Inventory workspace with the entity browser and graph filters" />
+
+**Configuration:** one or more repository toolkits (GitHub and Azure DevOps Repos by default) and the AI model settings used to build the graph.
+
+**What you can do:**
+
+- Browse entities by name, type, layer, or source.
+- Inspect a single component's properties and relationships.
+- Ask questions about the ingested codebase in the Inventory chat panel.
+- Review ingestion statistics for each connected source.
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="/deepwiki or /inventory shows an empty state">No toolkit of that type is configured yet in this project — configure one from [Applications](/menus/applications).</Accordion>
+  <Accordion title="Generation or ingestion never completes">Confirm the underlying repository toolkit's credentials are still valid, and check for a completion notification.</Accordion>
+</AccordionGroup>
+
+<Info title="Related">
+[Applications](/menus/applications) · [Toolkits](/menus/toolkits) · [Notifications](/menus/settings/notifications)
+</Info>

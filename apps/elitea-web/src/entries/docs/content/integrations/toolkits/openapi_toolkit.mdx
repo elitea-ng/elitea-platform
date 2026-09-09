@@ -1,0 +1,42 @@
+---
+title: "OpenAPI"
+description: "Connect OpenAPI to Elitea: prerequisites, credential setup and the tools it exposes."
+---
+
+Turn any OpenAPI/Swagger specification into callable tools, one per operation, without writing a dedicated integration. It's listed under the **integrations** category in the toolkit type picker.
+
+## Prerequisites
+
+- The base URL and OpenAPI/Swagger specification of the API you want to expose, plus whatever auth that API requires (API key, bearer token or basic auth), saved in Elitea as an **`openapi`** credential (`/credentials/create-credential/openapi`).
+
+## Connect the toolkit
+
+<Steps>
+<Step title="Open the toolkit type picker">
+In the left navigation, open **Toolkits**, then select **New**. Filter the type picker by the **integrations** category, or search for "OpenAPI".
+</Step>
+
+<Step title="Pick or create a credential">
+Under the credential field, choose an existing **openapi** credential, or select **Create credential** to add one without leaving the form.
+</Step>
+
+<Step title="Save">
+Name the toolkit and select **Create**. It's now available to attach to agents, pipelines and conversations in this project.
+</Step>
+</Steps>
+
+<Screenshot id="toolkit-new-generic" alt="New toolkit dialog with the OpenAPI type selected" />
+
+## Available tools
+
+OpenAPI has no fixed tool list in the catalogue snapshot — its tools are generated dynamically at connect time, not enumerable ahead of time.
+
+## Common issues
+
+<Note>
+Both the Rust and Python workers materialise `openapi`; this toolkit works the same regardless of which worker your deployment runs.
+</Note>
+
+<Note>
+There's no connection check on this form. Save the toolkit, then run one read-only tool from the editor's Test tools pane to confirm the credential works before attaching OpenAPI to an agent.
+</Note>

@@ -1,0 +1,49 @@
+---
+title: "Google Places"
+description: "Connect Google Places to Elitea: prerequisites, credential setup and the tools it exposes."
+---
+
+Look up places, addresses and reviews through the Google Places API. It's listed under the **other** category in the toolkit type picker.
+
+## Prerequisites
+
+- An account at Google Places with permission to issue an API token or credential, saved in Elitea as a **`google_places`** credential (`/credentials/create-credential/<type>`).
+
+## Connect the toolkit
+
+<Steps>
+<Step title="Open the toolkit type picker">
+In the left navigation, open **Toolkits**, then select **New**. Filter the type picker by the **other** category, or search for "Google Places".
+</Step>
+
+<Step title="Pick or create a credential">
+Under the credential field, choose an existing **google_places** credential, or select **Create credential** to add one without leaving the form.
+</Step>
+
+<Step title="Save">
+Name the toolkit and select **Create**. It's now available to attach to agents, pipelines and conversations in this project.
+</Step>
+</Steps>
+
+<Screenshot id="toolkit-new-generic" alt="New toolkit dialog with the Google Places type selected" />
+
+## Available tools
+
+<Accordion title="Available tools (2)">
+
+| Tool |
+|---|
+| Find near |
+| Places |
+
+</Accordion>
+
+## Common issues
+
+<Note>
+On the Python worker (the compose standalone default), `Google Places` fails to import and the tile is hidden (tracked in #869). Use a deployment running the Rust worker to connect Google Places.
+</Note>
+
+<Note>
+There's no connection check on this form. Save the toolkit, then run one read-only tool from the editor's Test tools pane to confirm the credential works before attaching Google Places to an agent.
+</Note>

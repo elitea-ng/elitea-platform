@@ -1,0 +1,34 @@
+---
+title: "Manage conversation context"
+description: "Read the context budget widget and configure how a conversation prunes, summarizes, and preserves its history."
+---
+
+Every conversation, agent run, and pipeline execution tracks how many tokens its history is using and manages that automatically once the limit gets close. This is enabled by default — there's nothing to turn on to start seeing it.
+
+## The context budget widget
+
+The widget appears once you've sent a first message. It has three views:
+
+- **Collapsed**: a status line — green under the limit, orange over it.
+- **Compact**: adds current token usage as a percentage, the message count, and how many summaries have been generated, plus an edit button.
+- **Expanded**: the full configuration, in three sections — token management, summarization, and user instructions — plus a toggle to turn context management off entirely for this conversation.
+
+<Screenshot id="chat-context-budget-widget" alt="The context budget widget in expanded view" />
+
+## Configure it
+
+Click the widget's edit control to open the full settings:
+
+- **Max context tokens** and **preserve recent messages** control how much history is kept before older messages are pruned or summarized.
+- **Automatic summarization** compresses older messages into a summary once usage nears the limit, guided by your own summarization instructions and a target summary length. The target must stay below the max token limit — the form won't let you save otherwise.
+- **User instructions** let you keep system messages pinned, pick a default persona for plain model chat, and add custom behavior instructions.
+
+Your personal defaults for these settings live in [Settings › Memory](/menus/settings/memory); a conversation, agent, or pipeline can override them for itself.
+
+## Why this matters
+
+A model can only see as much conversation history as fits in its context window. Without pruning or summarization, a long-running conversation eventually pushes early messages out entirely, and the model loses track of what was said. Automatic summarization trades some detail for a much longer effective memory — the summary stands in for the messages it replaces, so the model still has a sense of what happened even after the original text is gone.
+
+## Related
+
+- [Use chat](/how-tos/chat-conversations/how-to-use-chat-functionality)

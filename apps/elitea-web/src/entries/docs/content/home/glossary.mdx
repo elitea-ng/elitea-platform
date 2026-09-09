@@ -1,0 +1,124 @@
+---
+title: "Glossary"
+description: "Definitions of the terms used across Elitea's chat, agents, pipelines, toolkits, and settings."
+---
+
+This glossary defines terms used throughout the platform. Where the current UI uses a different name than older documentation, the current name is listed first.
+
+## A
+
+**Agent** — A configurable virtual assistant that combines instructions, an AI model, and optional toolkits to perform tasks and answer questions.
+
+**AI Providers** — The Settings section where you configure LLM, embedding, vector storage, image generation, speech recognition, and text-to-speech models and their credentials for a project.
+
+**Artifact** — A file stored in a project bucket, shared between agents, pipelines, and conversations for temporary storage and context.
+
+## B
+
+**Bucket** — A container in Artifacts that groups related files under a single retention policy.
+
+## C
+
+**Canvas** — The in-chat editor for code, table, and Mermaid-diagram blocks generated during a conversation. It edits the block created in the current turn; it does not open or save previously stored files.
+
+**Catalog (Elitea Catalog)** — The shared library of published agents and skills, browsable and searchable across all your projects. Older documentation calls this "Agent HUB" or "Agents Studio."
+
+**Chat** — The conversational interface where you interact with models, agents, pipelines, toolkits, MCP servers, and teammates.
+
+**Context management** — Automated pruning and summarization of older conversation messages so long conversations stay within a model's token limit. Configured in Settings › Memory.
+
+**Conversation Starter** — A predefined prompt configured on an agent or pipeline that helps users begin an interaction.
+
+**Credential** — Securely stored authentication information (API key, token, or similar) used by a toolkit or AI provider to connect to an external service.
+
+## E
+
+**Entity** — General term for the main things you create and manage: agents, pipelines, skills, toolkits, and artifacts.
+
+## I
+
+**Indexing** — The process of extracting content from files and toolkits and storing it in a vector database so it can be retrieved with semantic search.
+
+## L
+
+**LLM (Large Language Model)** — The AI model that processes and generates text for a conversation, agent, or pipeline.
+
+## M
+
+**MCP (Model Context Protocol)** — A protocol that lets Elitea connect to external MCP servers over HTTP, exposing their tools to agents, pipelines, and conversations. Elitea itself also acts as an MCP server, exposing agents (tagged `mcp`) and MCP-enabled toolkit tools to external MCP clients.
+
+**Memory** — In Settings, the personal page that configures context-window management (pruning, summarization) for new conversations. Persistent, cross-conversation long-term memory is not available yet.
+
+## N
+
+**Node** — A single step in a pipeline (agent, toolkit, MCP, LLM, decision, router, state modifier, printer, or human-in-the-loop) that the pipeline compiler can run.
+
+## P
+
+**Participant** — Anything active in a conversation: a model, an agent, a pipeline, a toolkit, an MCP server, or a human teammate.
+
+**Personal Access Token (PAT)** — A token you generate in Settings › Personal Tokens for programmatic API access or IDE integration.
+
+**Pipeline** — A visual, multi-step workflow connecting agents, toolkits, and control-flow nodes into a repeatable automated process.
+
+**Project Context** — A project-level background document that Elitea applies to every AI interaction in the project, giving agents shared domain terminology, workflows, and constraints.
+
+**Public Project** — A shared, deployment-wide project (separate from your personal and team projects) that some settings sections — Project Context, Prompts, Environment — are scoped to.
+
+## R
+
+**Remote MCP** — An MCP connection to an HTTP/HTTPS-based server, configured like any other toolkit type.
+
+## S
+
+**Skill** — A reusable, Markdown-based instruction set attached to an agent version and invoked on demand with `~skill-name`.
+
+**Support Assistant** — An AI-powered help widget, embedded in the platform, that is aware of the project and page you are on.
+
+## T
+
+**Tag** — A label used to categorize and filter agents, pipelines, and other entities.
+
+**Toolkit** — A configured integration — with an external service or an Elitea-native capability — that gives agents and pipelines the ability to act. See the [toolkit catalogue](/reference/toolkit-catalogue).
+
+**Token** — A unit of text used by AI models to measure input and output size, and also the name for a personal access token depending on context.
+
+## V
+
+**Version** — A saved snapshot of an agent, pipeline, or skill. Agents and pipelines support multiple named versions; skills currently support only one implicit `base` version.
+
+**Vector Storage** — The storage layer (PGVector) used for embeddings and semantic retrieval, configured per project in AI Providers.
+
+## W
+
+**Webhook** — A callback-based mechanism some pipeline triggers use to start a run from an external event. Webhook management is available through the API only; there is no management page in the UI yet.
+
+---
+
+## Terms you may see in older material
+
+These names appear in earlier documentation but describe something that has changed shape or is no longer part of the platform. They are listed here so the term is not a dead end.
+
+<AccordionGroup>
+  <Accordion title="Agent HUB / Agents Studio → Elitea Catalog">
+    The shared library of published agents and skills is now the **Catalog** tab, reachable from the sidebar.
+  </Accordion>
+  <Accordion title="Local MCP / Elitea MCP Client / STDIO transport">
+    Elitea's MCP server is streamable-HTTP only. There is no local STDIO MCP client or server; only Remote MCP connections exist.
+  </Accordion>
+  <Accordion title="Elitea Code (IDE extensions)">
+    No trace of dedicated VS Code or IntelliJ extensions exists in the current platform. Personal tokens still expose IDE settings snippets on the Personal Tokens page.
+  </Accordion>
+  <Accordion title="Langfuse">
+    Tracing is provided through OpenTelemetry via the platform's own collector; there is no Langfuse integration.
+  </Accordion>
+  <Accordion title="ReAct / XMLChat agent types">
+    These were older application types. The current agent-type values are `openai` (default), `react`, `dial`, and `pipeline`.
+  </Accordion>
+  <Accordion title="Top K / Top P sampling parameters">
+    Not exposed in the current model-settings UI. Use Temperature or Creativity/Reasoning instead, depending on the model.
+  </Accordion>
+  <Accordion title="Collection">
+    "Collection" as a distinct entity type is not present in the current platform; content is organized with tags and folders instead.
+  </Accordion>
+</AccordionGroup>
