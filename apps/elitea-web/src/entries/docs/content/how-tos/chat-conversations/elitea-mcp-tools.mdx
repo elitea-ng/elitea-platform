@@ -4,7 +4,7 @@ description: "Let an agent call other tagged agents and MCP-enabled toolkit tool
 ---
 
 <Warning>
-Elitea MCP Tools is a Python-worker-only internal tool. On a deployment running the Rust worker (the Helm default), it is skipped silently — the agent still answers, just without this capability.
+Elitea MCP Tools is a Python-worker-only internal tool — Python is the default worker for both Helm and compose (#865/#866). On a deployment that opts into the Rust worker instead, the run gets a visible notice rather than being skipped silently — the agent still answers, just without this capability (tracked in #866).
 </Warning>
 
 Elitea MCP Tools connects an agent to Elitea's own MCP server from inside a conversation, so it can discover and call other agents and toolkit tools that have been explicitly exposed, without you pre-wiring every dependency.

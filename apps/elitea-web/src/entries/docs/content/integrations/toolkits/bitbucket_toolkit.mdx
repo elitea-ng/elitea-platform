@@ -66,7 +66,7 @@ Name the toolkit and select **Create**. It's now available to attach to agents, 
 ## Common issues
 
 <Note>
-On the Rust worker (Helm's default), this tile is hidden — the Rust worker does not materialise `Bitbucket` (tracked in #865). Use a deployment running the Python worker to connect Bitbucket.
+On the Rust worker, this tile is hidden — the Rust worker does not materialise `Bitbucket` (tracked in #865). Helm now defaults to the Python worker, matching compose (#865, #866); a deployment that opts into the Rust worker still needs the Python worker to connect Bitbucket.
 </Note>
 
 <Note>

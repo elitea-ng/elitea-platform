@@ -5,8 +5,8 @@ description: "Every toolkit type Elitea serves, its category, and whether the Py
 
 Elitea serves 52 toolkit types from a single catalogue. Which ones you can actually create a tile for depends on the **worker** your deployment runs: a type the running worker cannot build is hidden rather than shown broken, and an administrator can additionally restrict specific types per project on the Toolkit types page. No feature flag gates an individual type — only worker capability and that admin restriction do.
 
-<Warning title="Helm and compose default to different workers">
-Kubernetes/Helm deployments default to the **Rust** worker (22 types materialize). The one-host compose stack defaults to the **Python** worker (43 of 52 types import successfully). Your administrator can override the default; ask which worker is running before assuming a type is available.
+<Warning title="The Rust worker runs a narrower catalogue">
+Both Kubernetes/Helm and the one-host compose stack default to the **Python** worker (43 of 52 types import successfully) since #865/#866. An administrator can opt a deployment into the **Rust** worker instead (22 types materialize) for its smaller footprint; ask which worker is running before assuming a type is available.
 </Warning>
 
 Create a toolkit from `/toolkits/create/<type>`; MCP-shaped types are created from `/mcps/create` instead.
@@ -68,7 +68,7 @@ Create a toolkit from `/toolkits/create/<type>`; MCP-shaped types are created fr
 | Python Sandbox *(toggle only)* | Internal tool | ✅ | — | [Internal tools](/menus/internal-tools#python-sandbox) |
 
 <Note>
-The Python Sandbox toggle is visible on every agent's tool list. As of #872 the Python worker executes it (a pinned `deno` binary plus the SDK's own sandbox entrypoint, both baked into the image); the Rust worker still skips it, the same as the other five internal tools tracked in #866.
+The Python Sandbox toggle is visible on every agent's tool list. As of #872 the Python worker executes it (a pinned `deno` binary plus the SDK's own sandbox entrypoint, both baked into the image); on a deployment running the Rust worker instead, the run gets a visible notice rather than the tool executing, the same as the other five internal tools tracked in #866.
 </Note>
 
 ## Index-capable types

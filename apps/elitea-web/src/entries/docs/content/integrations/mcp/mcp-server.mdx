@@ -71,7 +71,7 @@ sequenceDiagram
 ## Common issues
 
 <Note>
-Calling a toolkit tool through this MCP server needs the Python worker's toolkit dispatch — on the Rust worker (Helm's default), a toolkit tool call answers a protocol error instead of a result. Agent and pipeline tools tagged `mcp` run the same way on either worker.
+Calling a toolkit tool through this MCP server needs the Python worker's toolkit dispatch — Helm and compose both default to the Python worker (#865/#866), and on a deployment that opts into the Rust worker instead, a toolkit tool call answers a protocol error instead of a result. Agent and pipeline tools tagged `mcp` run the same way on either worker.
 </Note>
 
 <Note>

@@ -144,10 +144,11 @@ jobs:
       # other render script here, and the template matrix below, set
       # `worker.enabled=false`, and `helm lint` does not enter a body its
       # condition excludes. That was tolerable with one worker image. It stopped
-      # being tolerable when `worker.implementation` arrived and the default
-      # became the Rust worker, whose argument list the Python shape does not
-      # satisfy — a mismatch that reaches an operator as a CrashLoopBackOff and
-      # not as a configuration error.
+      # being tolerable when `worker.implementation` arrived (the default is
+      # python since #865/#866, but rust stays one values override away), since
+      # a Rust image started with the Python argument list does not satisfy
+      # it — a mismatch that reaches an operator as a CrashLoopBackOff and not
+      # as a configuration error.
       #
       # It needs PyYAML like render-bf0-2b.sh does, and installs it the same way.
       # The DeepWiki component (ADR-0022 P3). Both directions, for the reason

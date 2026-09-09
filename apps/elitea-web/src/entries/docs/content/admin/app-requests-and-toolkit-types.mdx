@@ -44,9 +44,9 @@ This page does not add a new toolkit type. A pre-built MCP server becomes a type
 </Note>
 
 <Warning>
-The worker column is advisory: it reports whether the toolkit type is known to run on the deployment's configured worker, not whether the type is disallowed. Elitea can run its agent runtime on either a Rust worker (Helm's default) or a Python worker (compose's default), and their toolkit coverage differs:
+The worker column is advisory: it reports whether the toolkit type is known to run on the deployment's configured worker, not whether the type is disallowed. Elitea can run its agent runtime on either a Python worker (the default for both Helm and compose, #865/#866) or a Rust worker (opt-in), and their toolkit coverage differs:
 
-- **Rust worker default** hides 17 toolkit types that only run on the Python worker (for example Jira, Confluence, GitHub, Bitbucket, and several others) — tracked in [#865](https://github.com/elitea-ng/elitea-platform/issues/865).
+- **Choosing the Rust worker** hides 18 toolkit types that only run on the Python worker (for example Jira, Confluence, TestRail, Bitbucket, and several others — GitHub itself is one of the Rust worker's 22 supported families, not one of the hidden ones) — tracked in [#865](https://github.com/elitea-ng/elitea-platform/issues/865).
 - **Python worker default** fails to import 9 toolkit types with no supported substitute on this worker (`aws`, `azure`, `azure_search`, `bigquery`, `delta_lake`, `gcp`, `k8s`, `localgit`, `yagmail`). Google Places, Rally, ServiceNow and Slack used to be on this list too; they import cleanly as of [#869](https://github.com/elitea-ng/elitea-platform/issues/869).
 
 Check which worker your deployment runs before assuming a type's tile will actually work.

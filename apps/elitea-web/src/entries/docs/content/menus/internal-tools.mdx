@@ -6,7 +6,7 @@ description: "Built-in chat and agent capabilities — image creation, data anal
 Internal tools are capabilities you turn on from **Modules** in chat or an agent's Tools section, without configuring an external toolkit. They come from a fixed platform catalogue (`features/agents/lib/internalTools.ts`) and are turned on per conversation or saved as an agent's default.
 
 <Warning title="These modules need the Python worker">
-Every internal tool on this page runs only when your deployment's worker is the **Python** worker. The **Rust** worker — Helm's default — skips each one with a logged warning and the agent still answers, just without that capability (tracked in #866). Ask your administrator which worker your deployment runs before relying on these in production.
+Every internal tool on this page runs only when your deployment's worker is the **Python** worker — Helm's default since #865/#866, matching the one-host compose stack. A deployment that opts into the **Rust** worker gets a visible in-conversation notice instead of the tool running (tracked in #866). Ask your administrator which worker your deployment runs before relying on these in production.
 </Warning>
 
 <Screenshot id="internal-tools-menu" alt="The Modules panel listing internal tools with toggles" />
@@ -43,7 +43,7 @@ Lets an agent create, prioritize, and track tasks directly from natural language
 Runs Python code the model writes in an isolated [Pyodide](https://pyodide.org/en/stable/usage/packages-in-pyodide.html) sandbox — useful for calculations, quick data transforms, or testing a snippet mid-conversation without a full toolkit. The sandbox has no access to the host filesystem or your other toolkit credentials; code that imports a package Pyodide does not bundle installs it over the network the first time, so results can take longer for those imports.
 
 <Note>
-On the Python worker, this toggle executes for real: the image ships a pinned `deno` runtime and the sandbox's own entrypoint, both baked in at build time. The Rust worker still skips it — tracked in [#866](https://github.com/elitea-ng/elitea-platform/issues/866) along with the five other internal tools it does not implement.
+On the Python worker (Helm's default since #865/#866), this toggle executes for real: the image ships a pinned `deno` runtime and the sandbox's own entrypoint, both baked in at build time. On a deployment that opts into the Rust worker, the run gets a visible notice instead — tracked in [#866](https://github.com/elitea-ng/elitea-platform/issues/866) along with the five other internal tools it does not implement.
 </Note>
 
 ## Swarm mode
@@ -57,7 +57,7 @@ Reduces token usage when an agent has many toolkits configured by binding only t
 ## Troubleshooting
 
 <AccordionGroup>
-  <Accordion title="A module toggle has no effect">Confirm the deployment's worker is Python, not Rust — the Rust worker silently skips every module on this page.</Accordion>
+  <Accordion title="A module toggle has no effect">Confirm the deployment's worker is Python (Helm's default) — a deployment running the Rust worker instead surfaces a visible notice in the conversation rather than running the module.</Accordion>
   <Accordion title="Image creation is missing from the list">No image-generation model is configured for the project yet — add one in [AI Providers](/menus/settings/ai-providers).</Accordion>
   <Accordion title="Modules are missing from the chat toolbar entirely">No module is available for the project at all — ask your administrator to configure at least one provider or toolkit.</Accordion>
 </AccordionGroup>

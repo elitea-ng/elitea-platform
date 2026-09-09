@@ -32,9 +32,11 @@
   it. elitea-main serves a toolkit type as creatable only when the running
   worker can build it, and the two workers can build different sets: the Python
   image imports 39 of the 52 SDK toolkits and the native worker materializes 22
-  families. Nothing else tells this process which one is deployed, and its own
-  default is python while this chart's default is rust — so an unstated value
-  would offer tiles a native-worker release cannot run.
+  families. Nothing else tells this process which one is deployed. This
+  chart's default (python, #865/#866) now agrees with elitea-main's own
+  built-in default, but an unstated value would still under-serve a release
+  that overrides worker.implementation to rust without this template
+  running — so the value is always written explicitly, never left implicit.
 
   An explicit env entry still wins, for the release that pins
   worker.image.repository directly and so does not follow worker.implementation.
