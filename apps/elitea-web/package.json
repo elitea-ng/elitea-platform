@@ -30,7 +30,9 @@
     "e2e": "playwright test",
     "e2e:chat-stream": "bash scripts/chat-stream-e2e.sh",
     "e2e:visual": "node scripts/run-visual-container.mjs",
-    "e2e:visual:update": "node scripts/run-visual-container.mjs --update-snapshots"
+    "e2e:visual:update": "node scripts/run-visual-container.mjs --update-snapshots",
+    "docs:shots": "npx tsx scripts/docs-shots.ts",
+    "docs:shots-merge": "node scripts/docs-shots-merge.mjs"
   },
   "dependencies": {
     "@codemirror/commands": "6.11.0",
@@ -129,7 +131,9 @@
     "remark-frontmatter": "5.0.0",
     "remark-gfm": "4.0.1",
     "remark-mdx-frontmatter": "5.2.0",
+    "sharp": "0.35.4",
     "storybook": "10.5.10",
+    "tsx": "4.23.13",
     "typescript": "7.0.2",
     "unified": "11.0.5",
     "unist-util-visit": "5.1.0",

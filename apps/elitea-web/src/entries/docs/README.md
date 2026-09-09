@@ -57,18 +57,114 @@ the build turns the fence into a `<Mermaid>` element for you). See
 ## Adding a screenshot
 
 1. Add an entry to `shots.manifest.ts`: `{ id, route, viewport, selector?,
-   actions?, mask? }`, where `route` is a real path in the running app
-   (e.g. `/app/agents-hub`).
+   actions?, mask?, persona?, theme?, notes? }`, where `route` is a real path
+   in the running app (e.g. `/app/agents-hub`). If you are staging content in
+   a scratchpad rather than editing this file directly, drop a
+   `shots.<batch>.json` there instead (same shape, `viewport` may also be
+   spelled `"1440x900"`) and see "Refreshing screenshots" below for how it
+   gets folded in.
 2. Reference it in a page: `<Screenshot id="your-id" alt="..." />`. With no
    image committed yet, this renders a labelled placeholder instead of a
    broken `<img>` — nothing breaks while the capture is pending.
-3. Capture it with `apps/elitea-web/scripts/docs-shots.ts` (a later unit;
-   it drives Playwright against the e2e stack) — or, until that lands, save
-   a WebP by hand as `content/img/<id>.webp`, ≤250 KB, 1440×900, light theme.
+3. Capture it with `apps/elitea-web/scripts/docs-shots.ts` — see "Refreshing
+   screenshots" below — or, in a pinch, save a WebP by hand as
+   `content/img/<id>.webp`, ≤250 KB, 1440×900, light theme.
 4. `docs-content.test.ts` checks every committed image is ≤250 KB and
    referenced by some page, and every `Screenshot id` used has a manifest
    entry. `scripts/binary-allowlist.txt` already allows
    `apps/elitea-web/src/entries/docs/content/img/*.webp`.
+
+## Refreshing screenshots
+
+`apps/elitea-web/scripts/docs-shots.ts` is the repeatable capture driver
+(embedded-docs unit W3). It reads `shots.manifest.ts`, signs in to a
+**running** e2e stack the same way the Playwright suite does (reusing
+`playwright.config.ts`'s `STORAGE_STATE`/`BASE_URL`, not a second login
+implementation), and for every shot: sets the viewport, switches the app to
+light theme through its own toggle, navigates to `route`, waits for network
+idle and a quiet DOM (no fixed sleeps), runs any `actions`, blanks any `mask`
+selectors, captures a PNG, and re-encodes it to WebP at ≤250 KB under
+`content/img/<id>.webp`.
+
+### 1. Bring up the e2e stack
+
+```bash
+# from apps/elitea-web — never the elitea-standalone compose project
+bash scripts/e2e-stack.sh up
+bash scripts/e2e-stack.sh seed
+```
+
+This stack (compose project `elitea-e2e`) is separate from
+`elitea-standalone` and safe to run alongside it, **except** that both
+default to the same OIDC mock port (9400). If `elitea-standalone` (or
+anything else) already holds 9400, pass a free one through and use it for
+every command below:
+
+```bash
+E2E_OIDC_PORT=9401 bash scripts/e2e-stack.sh up
+E2E_OIDC_PORT=9401 bash scripts/e2e-stack.sh seed
+```
+
+The stack serves the app at `http://localhost:8082` by default (`E2E_PORT`
+to change it; CI uses 8080). Podman locally, `docker compose` in CI —
+`scripts/e2e-stack.sh` auto-detects which.
+
+### 2. Merge staged shots (if a writer dropped any)
+
+```bash
+node scripts/docs-shots-merge.mjs /path/to/staging/dir
+```
+
+Folds every `shots.<batch>.json` in that directory into `shots.manifest.ts`,
+deduping by `id`; an `id` defined differently in two places is a hard error
+and nothing is written. Safe to re-run once the conflict is fixed.
+
+### 3. Capture
+
+```bash
+# everything in the manifest
+npx tsx scripts/docs-shots.ts --base-url http://localhost:8082
+
+# just the ids you touched
+npx tsx scripts/docs-shots.ts --only chat-home,agents-hub --fail-on-missing
+
+# via the npm script (same thing)
+npm run docs:shots -- --only chat-home --fail-on-missing
+```
+
+Flags: `--only <id,id,…>`, `--base-url <url>` (defaults to
+`playwright.config.ts`'s `BASE_URL` / `PLAYWRIGHT_BASE_URL`), `--persona
+<member|admin|chat>` (default for shots that do not name one), and
+`--fail-on-missing` (exit non-zero if any requested shot produced no file —
+useful for a targeted `--only` run, not recommended for a full run while the
+manifest still holds writer-staged entries whose route isn't capturable yet,
+e.g. a template placeholder like `/chat/:conversationId`).
+
+If no persona's `STORAGE_STATE` file exists yet (a fresh stack), the script
+runs `npx playwright test --project=setup` once, first — the same sign-in
+every journey and the `@visual` suite already trust, not a second
+implementation of OIDC.
+
+The script prints a final `id | bytes | route` table. Commit the resulting
+`content/img/*.webp` files normally; they are pre-allowlisted in
+`scripts/binary-allowlist.txt`.
+
+### 4. Verify
+
+```bash
+npm run test:unit -- src/entries/docs   # size/reference checks in docs-content.test.ts
+npm run build:docs                       # confirms Vite bundles the new images
+bash scripts/no-binaries-check.sh        # confirms nothing landed outside the allowlist
+```
+
+### CI
+
+`.github/workflows/ci-web-e2e.yml`'s `docs-shots` job runs the same steps
+against a fresh stack on `workflow_dispatch` (input `only`, passed straight
+to `--only`) and uploads `content/img/*.webp` as an artifact — it never
+commits. Download the artifact, look at the images, commit the ones you mean
+to change, the same discipline the `visual` job's baseline-regeneration mode
+follows.
 
 ## Running the build
 

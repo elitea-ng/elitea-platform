@@ -860,6 +860,19 @@
         "typescript/require-await": "off",
         "typescript/no-unsafe-assignment": "off"
       }
+    },
+    {
+      // embedded-docs unit W3: the screenshot manifest is enumerated typed
+      // data, one object per `<Screenshot id>` used anywhere under
+      // `content/**`, and `scripts/docs-shots-merge.mjs` grows it batch by
+      // batch as content writers stage more shots — the same shape of
+      // exemption `src/shared/api/socket/events.ts` already has for the same
+      // reason (many small, evidence-commented entries, not logic). Only
+      // `max-lines` is relaxed; every other rule still applies to this file.
+      "files": ["src/entries/docs/shots.manifest.ts"],
+      "rules": {
+        "max-lines": "off"
+      }
     }
   ]
 }
