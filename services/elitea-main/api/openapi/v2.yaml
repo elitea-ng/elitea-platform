@@ -1311,6 +1311,44 @@ components:
           items:
             $ref: '#/components/schemas/MessageTraceStep'
 
+    ConversationSummary:
+      type: object
+      description: >
+        One row of listConversations — the run-history panel's (issue #868)
+        light projection of a conversation. `duration` is a placeholder:
+        internal/api/v2/conversations/handler.go's List always answers `-1`
+        for it (no per-conversation duration is computed server-side yet); a
+        caller wanting a displayed duration derives one from
+        created_at/updated_at instead of trusting this field.
+      required: [id, name, created_at, updated_at, duration, message_groups_count]
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        created_at: { type: string }
+        updated_at: { type: string }
+        duration:
+          type: integer
+          description: Always -1 today; see the schema description.
+        message_groups_count: { type: integer }
+        meta:
+          type: object
+          additionalProperties: true
+          nullable: true
+          description: >
+            Carries `single_participant` (the entity this conversation was
+            filtered by, when entity_name/entity_meta_id were sent) among
+            other conversation-level flags (`is_hidden`, etc).
+
+    ConversationListing:
+      type: object
+      required: [total, rows]
+      properties:
+        total: { type: integer }
+        rows:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConversationSummary'
+
     MessageTraceStep:
       type: object
       description: >
@@ -11214,6 +11252,73 @@ paths:
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '404': { $ref: '#/components/responses/404' }
+        '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/conversations/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      operationId: listConversations
+      summary: List conversations, optionally scoped to one participant entity
+      description: |
+        Backs the run-history panel (issue #868): entity_name + entity_meta_id
+        narrow the listing to conversations whose `meta.single_participant`
+        is that one agent/pipeline (`entity_name=application`) or toolkit/MCP
+        (`entity_name=toolkit`) — internal/api/v2/conversations/handler.go's
+        List, registered at router.go's models.chat.conversations.list route.
+
+        Hidden (support/DeepWiki) conversations are excluded unless
+        hidden=only. mine=true narrows to the CALLER's own conversations;
+        with no resolvable caller it answers an empty page rather than
+        everybody's — see the handler's own comment on why that is a safety
+        property, not a convenience.
+
+        The route also serves POST (create a conversation), which is
+        handwritten in entities/conversation's own conversationApi and is not
+        documented here.
+      tags: [chat]
+      parameters:
+        - name: source
+          in: query
+          required: false
+          schema: { type: string }
+          description: Filter by `chat_conversations.source` (e.g. `deepwiki`).
+        - name: entity_name
+          in: query
+          required: false
+          schema: { type: string }
+          description: '`application` (agents and pipelines) or `toolkit` (toolkits and MCP connections).'
+        - name: entity_meta_id
+          in: query
+          required: false
+          schema: { type: string }
+          description: The participant entity's id, paired with entity_name.
+        - name: mine
+          in: query
+          required: false
+          schema: { type: boolean }
+        - name: hidden
+          in: query
+          required: false
+          schema: { type: string }
+          description: '`only` inverts the default hidden-conversation exclusion; any other value keeps the default.'
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 10, maximum: 100 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, default: 0 }
+      responses:
+        '200':
+          description: The matching conversations, newest first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationListing'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
         '500': { $ref: '#/components/responses/500' }
 
   /elitea_core/message_traces/prompt_lib/{project_id}/{conversation_id}:

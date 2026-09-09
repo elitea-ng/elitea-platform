@@ -1,6 +1,7 @@
 import { useMemo, type ComponentProps } from 'react';
 
 import type { ConfigurationTab } from '@/features/toolkits';
+import { RunHistoryPanel } from '@/entities/run-history';
 
 import { SHAREPOINT_AUTH_MODALS } from './sharepointAuthModals';
 import type { McpLoadToolsSlot } from './useMcpLoadTools';
@@ -22,9 +23,11 @@ export interface UseConfigurationTabSlotsParams {
   readonly renderCredentialPicker: ConfigurationTabSlots['renderCredentialPicker'];
   /** Absent for a toolkit that is not MCP-shaped; see `./useMcpLoadTools.tsx`. */
   readonly mcpLoadTools: McpLoadToolsSlot | undefined;
+  /** For `renderRunHistory` (issue #868) — `RunHistoryPanel` needs the project id `ToolkitRunHistoryRenderProps` itself doesn't carry. */
+  readonly projectId: string | undefined;
 }
 
-export function useConfigurationTabSlots({ renderCredentialPicker, mcpLoadTools }: UseConfigurationTabSlotsParams): ConfigurationTabSlots {
+export function useConfigurationTabSlots({ renderCredentialPicker, mcpLoadTools, projectId }: UseConfigurationTabSlotsParams): ConfigurationTabSlots {
   return useMemo(
     () => ({
       // The one place in the app that can legally hand SharePoint's
@@ -42,7 +45,22 @@ export function useConfigurationTabSlots({ renderCredentialPicker, mcpLoadTools 
       // arguments, Run, read the result, over the synchronous
       // `POST /elitea_core/test_tool/...` route. That pane imports nothing this
       // layer has to hand it, so the page supplies nothing.
+      //
+      // `renderRunHistory` (issue #868) IS supplied — `@/entities/run-history`'s
+      // `RunHistoryPanel`, the same component `pages/pipelines` and
+      // `pages/agents` wire into their own run-history slots. Toolkits'
+      // `ToolkitRunHistoryRenderProps` carries no `onRestoreConversation` (the
+      // toolkit editor's test pane is a stateless synchronous tool-run form,
+      // not a conversation to restore into), so none is passed.
+      renderRunHistory: ({ toolkitId, onClose }) => (
+        <RunHistoryPanel
+          projectId={projectId}
+          entityName="toolkit"
+          entityId={toolkitId}
+          onClose={onClose}
+        />
+      ),
     }),
-    [renderCredentialPicker, mcpLoadTools],
+    [renderCredentialPicker, mcpLoadTools, projectId],
   );
 }

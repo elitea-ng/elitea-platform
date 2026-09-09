@@ -23,7 +23,15 @@ From the same dialog, you can stop a run in progress.
 <Screenshot id="pipeline-run-state-dialog" alt="Pipeline run state dialog with step-by-step timeline" />
 
 <Note>
-This page could not confirm from source whether a run's timeline stays inspectable after you navigate away and back, or only while the run view stays open — verify locally before relying on it for after-the-fact debugging. There is no separate "run history" list page for pipelines (tracked in [#868](https://github.com/elitea-ng/elitea-platform/issues/868)); see [Import and export entities](/how-tos/agents-pipelines/import-export) if you need a durable record of a specific configuration.
+This page could not confirm from source whether a run's timeline stays inspectable after you navigate away and back, or only while the run view stays open — verify locally before relying on it for after-the-fact debugging.
+</Note>
+
+## Run history
+
+The clock icon next to the run-state indicator opens **History**: every past conversation that used this pipeline, newest first, with its date, a derived duration, and its message count. Select a run to see its recorded trace — the tool calls and thinking steps the runtime logged for that conversation. A pipeline with no past conversations shows an empty state rather than a blank panel.
+
+<Note>
+History has no "restore into the live test pane" action yet for pipelines — selecting a run opens its trace, but does not reload that conversation into the chat panel above (tracked in [#868](https://github.com/elitea-ng/elitea-platform/issues/868), the same partial-restore gap agents' Configuration tab already discloses).
 </Note>
 
 ## Reading a step's state

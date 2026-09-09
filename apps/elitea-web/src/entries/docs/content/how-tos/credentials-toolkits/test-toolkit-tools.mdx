@@ -22,12 +22,16 @@ Before attaching a toolkit to an agent or a chat, you can run one of its tools d
 </Warning>
 
 <Note>
-There's no history of past test runs to come back to — a run's result only exists in this session's transcript (tracked in [#868](https://github.com/elitea-ng/elitea-platform/issues/868)). If you need a persisted record of what a toolkit did, message traces exist as an API — see [API usage](/integrations/third-party-integrations/api-usage).
+There's no history of individual **Test tools** runs to come back to — a run's result only exists in this session's transcript. The toolkit's own **History** tab (the clock icon on its Configuration tab) is a different, related record: every past *conversation* that attached this toolkit, with its recorded trace of tool calls and thinking steps.
 </Note>
 
 ## What testing verifies
 
 A successful run confirms the credential authenticates and the tool's arguments are valid for your instance of the external service — useful before wiring the toolkit into an agent where a failure is harder to diagnose. A failing run typically means a credential problem, a permission problem on the external service, or an argument the service rejects.
+
+## Run history
+
+The clock icon on a saved toolkit's Configuration tab opens **History**: every past conversation that attached this toolkit, newest first, with its date, a derived duration, and its message count. Select a run to see its recorded trace — the tool calls the runtime logged for that conversation. A toolkit with no past conversations shows an empty state rather than a blank panel.
 
 ## Choosing which tool to test first
 

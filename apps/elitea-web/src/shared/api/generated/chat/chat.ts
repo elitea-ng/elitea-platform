@@ -56,10 +56,12 @@ import type {
   CanvasPresence,
   CanvasPresenceRequest,
   ConversationExport,
+  ConversationListing,
   CreateSupportConversationBody,
   ErrorResponse,
   ExportConversationParams,
   GetMessageTraceParams,
+  ListConversationsParams,
   ListMessageTracesParams,
   ListSupportConversationsParams,
   MessageTraceListing,
@@ -1809,6 +1811,260 @@ export function useExportConversation<
   const queryOptions = getExportConversationQueryOptions(
     projectId,
     conversationId,
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listConversationsResponse200 = {
+  data: ConversationListing;
+  status: 200;
+};
+
+export type listConversationsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listConversationsResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listConversationsResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type listConversationsResponseSuccess = listConversationsResponse200 & {
+  headers: Headers;
+};
+export type listConversationsResponseError = (
+  | listConversationsResponse401
+  | listConversationsResponse403
+  | listConversationsResponse500
+) & {
+  headers: Headers;
+};
+
+export type listConversationsResponse =
+  listConversationsResponseSuccess | listConversationsResponseError;
+
+export const getListConversationsUrl = (
+  projectId: string,
+  params?: ListConversationsParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/elitea_core/conversations/prompt_lib/${projectId}?${stringifiedParams}`
+    : `/elitea_core/conversations/prompt_lib/${projectId}`;
+};
+
+/**
+ * Backs the run-history panel (issue #868): entity_name + entity_meta_id
+ * narrow the listing to conversations whose `meta.single_participant`
+ * is that one agent/pipeline (`entity_name=application`) or toolkit/MCP
+ * (`entity_name=toolkit`) — internal/api/v2/conversations/handler.go's
+ * List, registered at router.go's models.chat.conversations.list route.
+ *
+ * Hidden (support/DeepWiki) conversations are excluded unless
+ * hidden=only. mine=true narrows to the CALLER's own conversations;
+ * with no resolvable caller it answers an empty page rather than
+ * everybody's — see the handler's own comment on why that is a safety
+ * property, not a convenience.
+ *
+ * The route also serves POST (create a conversation), which is
+ * handwritten in entities/conversation's own conversationApi and is not
+ * documented here.
+ * @summary List conversations, optionally scoped to one participant entity
+ */
+export const listConversations = async (
+  projectId: string,
+  params?: ListConversationsParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listConversationsResponse> => {
+  return eliteaFetch<listConversationsResponse>(
+    getListConversationsUrl(projectId, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListConversationsQueryKey = (
+  projectId: string,
+  params?: ListConversationsParams,
+) => {
+  return [
+    `/elitea_core/conversations/prompt_lib/${projectId}`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getListConversationsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listConversations>>,
+  TError = N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  params?: ListConversationsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listConversations>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListConversationsQueryKey(projectId, params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listConversations>>
+  > = ({ signal }) =>
+    listConversations(projectId, params, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listConversations>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListConversationsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listConversations>>
+>;
+export type ListConversationsQueryError =
+  N401Response | N403Response | N500Response;
+
+export function useListConversations<
+  TData = Awaited<ReturnType<typeof listConversations>>,
+  TError = N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  params: undefined | ListConversationsParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listConversations>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listConversations>>,
+          TError,
+          Awaited<ReturnType<typeof listConversations>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListConversations<
+  TData = Awaited<ReturnType<typeof listConversations>>,
+  TError = N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  params?: ListConversationsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listConversations>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listConversations>>,
+          TError,
+          Awaited<ReturnType<typeof listConversations>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListConversations<
+  TData = Awaited<ReturnType<typeof listConversations>>,
+  TError = N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  params?: ListConversationsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listConversations>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List conversations, optionally scoped to one participant entity
+ */
+
+export function useListConversations<
+  TData = Awaited<ReturnType<typeof listConversations>>,
+  TError = N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  params?: ListConversationsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listConversations>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListConversationsQueryOptions(
+    projectId,
     params,
     options,
   );

@@ -47,6 +47,7 @@ import type { RequestHandlerOptions } from "msw";
 import type {
   CanvasPresence,
   ConversationExport,
+  ConversationListing,
   MessageTraceListing,
   MessageTraceStepDetail,
   SupportAssistantConfig,
@@ -291,6 +292,28 @@ export const getExportConversationResponseMock = (
       ...overrideResponse,
     },
   ]);
+
+export const getListConversationsResponseMock = (
+  overrideResponse: Partial<Extract<ConversationListing, object>> = {},
+): ConversationListing => ({
+  total: faker.number.int(),
+  rows: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    id: faker.number.int(),
+    name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    created_at: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    updated_at: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    duration: faker.number.int(),
+    message_groups_count: faker.number.int(),
+    meta: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([null]),
+      undefined,
+    ]),
+  })),
+  ...overrideResponse,
+});
 
 export const getListMessageTracesResponseMock = (
   overrideResponse: Partial<Extract<MessageTraceListing, object>> = {},
@@ -651,6 +674,32 @@ export const getExportConversationMockHandler = (
   );
 };
 
+export const getListConversationsMockHandler = (
+  overrideResponse?:
+    | ConversationListing
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<ConversationListing> | ConversationListing),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/conversations/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListConversationsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getListMessageTracesMockHandler = (
   overrideResponse?:
     | MessageTraceListing
@@ -710,6 +759,7 @@ export const getChatMock = () => [
   getStartSupportTurnMockHandler(),
   getHeartbeatCanvasPresenceMockHandler(),
   getExportConversationMockHandler(),
+  getListConversationsMockHandler(),
   getListMessageTracesMockHandler(),
   getGetMessageTraceMockHandler(),
 ];

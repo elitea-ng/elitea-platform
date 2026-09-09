@@ -266,7 +266,7 @@ export function EditToolkit({ isMCP = false, deps }: EditToolkitProps): ReactNod
   const renderCredentialPicker = useToolkitCredentialPickerSlot(projectId, saveControls.reportCredentialRefusal);
   const renderCredentialsSelect = useScheduleCredentialsSelectSlot(projectId);
   const mcpLoadTools = useMcpLoadTools({ projectId, editToolDetail, onChangeToolDetail: handleChangeToolDetail });
-  const configurationTabSlots = useConfigurationTabSlots({ renderCredentialPicker, mcpLoadTools });
+  const configurationTabSlots = useConfigurationTabSlots({ renderCredentialPicker, mcpLoadTools, projectId });
 
   const title = resolveTitle(isMCP, detail?.name);
 

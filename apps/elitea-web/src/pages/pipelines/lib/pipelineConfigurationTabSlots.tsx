@@ -5,6 +5,7 @@ import Box from '@mui/material/Box';
 import type { SxProps, Theme } from '@mui/material/styles';
 
 import type { ConfigurationTabProps } from '@/features/pipelines';
+import { RunHistoryPanel } from '@/entities/run-history';
 import { t } from '@/shared/i18n';
 import { NoResultsMessage } from '@/shared/ui/NoResultsMessage';
 
@@ -38,6 +39,19 @@ export interface PipelineChatSlotContext {
  *
  * The file keeps its two other jobs — assembling the slot object and holding
  * the editor's error boundary — and no longer claims anything is missing.
+ *
+ * `renderRunHistory` (issue #868) is real now too: `@/entities/run-history`
+ * exists (it did not when the paragraph above was first written), and
+ * `RunHistoryPanel` is the same component `pages/toolkits` and
+ * `pages/agents` wire into their own run-history slots — the conversation
+ * list and trace view are entity-agnostic, keyed only by `entity_name` +
+ * `entity_meta_id`. `onRestoreConversation` is threaded straight through to
+ * `RunHistoryPanel`; nothing downstream of `usePipelineChat` consumes a
+ * restored conversation id yet (same disclosed, partially-ported state
+ * `features/agents/ui/ConfigurationTab.tsx`'s own doc comment records for
+ * its identical prop) — restoring history into the live test-chat pane is
+ * therefore a NEW gap this file discloses rather than one it silently
+ * closes.
  */
 
 /**
@@ -68,6 +82,15 @@ export function buildPipelineConfigurationTabSlots(
         slotRef={ref}
         identity={chat.identity}
         user={chat.user}
+      />
+    ),
+    renderRunHistory: ({ applicationId: runApplicationId, onRestoreConversation, onClose }) => (
+      <RunHistoryPanel
+        projectId={panel.projectId}
+        entityName="application"
+        entityId={runApplicationId}
+        onClose={onClose}
+        onRestoreConversation={(conversationId) => onRestoreConversation(conversationId)}
       />
     ),
   };

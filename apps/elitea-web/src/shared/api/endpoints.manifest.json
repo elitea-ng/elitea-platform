@@ -1322,6 +1322,18 @@
       ]
     },
     {
+      "id": "runHistory.listConversations",
+      "method": "GET",
+      "path": "/elitea_core/conversations/prompt_lib/{project_id}",
+      "operationId": "listConversations",
+      "source": "generated",
+      "responseSchema": "ConversationListing",
+      "fixture": null,
+      "usedBy": [
+        "entities/run-history"
+      ]
+    },
+    {
       "id": "social.getCurrentAuthor",
       "method": "GET",
       "path": "/social/author",

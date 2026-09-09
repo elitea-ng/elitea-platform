@@ -76,6 +76,14 @@ A saved agent's editor includes an **Evaluation** tab to define what "good" look
   <Tab title="Runs">Start a run against a dataset and your dimensions. Runs poll for progress while this tab stays open — leaving it pauses polling until you return — and produce a scorecard with one score per dimension per case when they finish.</Tab>
 </Tabs>
 
+## History
+
+A saved agent's editor also includes a **History** tab: every past conversation that used this agent, newest first, with its date, a derived duration, and its message count. Select a run to see its recorded trace — the tool calls and thinking steps the runtime logged for that conversation. An agent with no past conversations shows an empty state rather than a blank panel.
+
+<Note>
+Selecting a run in History does not currently reload that conversation into the Test panel above — there is no live restore path from this tab (issue #868, same disclosed gap as pipelines' equivalent History tab).
+</Note>
+
 ## Best practices
 
 <AccordionGroup>

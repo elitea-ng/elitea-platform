@@ -4194,5 +4194,16 @@
   "features.projectRequests.title": "Request a project",
   "features.projectRequests.toast.failed": "Failed to submit the request.",
   "features.projectRequests.toast.submitted": "Request submitted. An operator will review it.",
-  "widgets.sidebar.projectSwitcher.requestProject": "+ Request a project"
+  "widgets.sidebar.projectSwitcher.requestProject": "+ Request a project",
+  "entities.runHistory.close": "Close run history",
+  "entities.runHistory.empty": "This has not been used in a conversation yet. Attach it to a chat to start its history.",
+  "entities.runHistory.emptyTitle": "No runs yet",
+  "entities.runHistory.list.messageCount": "{{count}} messages",
+  "entities.runHistory.list.restore": "Restore",
+  "entities.runHistory.selectPrompt": "Select a run to see its trace.",
+  "entities.runHistory.title": "Run history",
+  "entities.runHistory.trace.empty": "This conversation has no recorded tool calls or thinking steps.",
+  "entities.runHistory.trace.emptyTitle": "No trace steps",
+  "entities.runHistory.trace.errorChip": "Error",
+  "pages.agents.editApplication.tabs.history": "History"
 }
