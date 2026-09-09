@@ -43,7 +43,18 @@ src/entries/docs/
 Internal links are root-relative slugs with no extension:
 `[Quick start](/quick-start)`, or `[a heading](/quick-start#sign-in)` for a
 specific section (the anchor must match a real heading — `rehype-slug`'s
-generated `id`, i.e. the heading text, lowercased and hyphenated).
+generated `id`, i.e. the heading text, lowercased and hyphenated). Write them
+exactly like that — no `/docs/` or `/elitea-platform/` prefix, and no
+`toPath()` call — the `a` override in `components/index.ts`
+(`DocsLink.tsx`) prefixes the docs base for you at render time, the same way
+`Card`'s own `href` does (`Card.tsx`), so a page never has to know whether it
+is served at `/docs/` (nginx) or `/elitea-platform/` (GitHub Pages, via
+`DOCS_BASE`). A bare `#heading` anchor (same page) and an external
+`https://…`/`mailto:…` link are both left untouched — the latter always
+opens in a new tab (`target="_blank" rel="noopener"`, added automatically).
+A raw `<img src="/…">` gets the same base treatment (`DocsImage.tsx`), but
+the contract prefers `<Screenshot id alt>` (below) — its `src` comes from a
+Vite build-time asset URL, which already carries the base on its own.
 
 ### Components available in every page
 

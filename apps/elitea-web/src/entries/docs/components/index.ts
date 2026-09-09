@@ -16,6 +16,8 @@ import { AccordionGroup, Accordion } from './Accordion';
 import { Badge } from './Badge';
 import { CardGroup, Card } from './Card';
 import { Check, Info, Note, Tip, Warning } from './Callouts';
+import { DocsImage } from './DocsImage';
+import { DocsLink } from './DocsLink';
 import { Frame } from './Frame';
 import { Icon } from './Icon';
 import { Mermaid } from './Mermaid';
@@ -60,4 +62,10 @@ export const docsComponents: Record<string, ComponentType<any>> = {
   Screenshot,
   Icon,
   Mermaid,
+  // Lowercase keys: MDX resolves a compiled Markdown link/image (`a`/`img`,
+  // not authored as JSX) against these the same way it resolves `<Card>`
+  // against `Card` above — see `DocsLink.tsx`/`DocsImage.tsx` for why they
+  // exist (root-relative content hrefs/srcs need the docs base prefixed).
+  a: DocsLink,
+  img: DocsImage,
 };

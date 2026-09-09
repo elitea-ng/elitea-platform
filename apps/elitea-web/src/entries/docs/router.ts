@@ -29,6 +29,47 @@ export function currentSlug(pathname: string = window.location.pathname): string
   return rest.endsWith('/') ? rest.slice(0, -1) : rest;
 }
 
+/** `true` for an href this router must never touch: it has its own scheme
+ * (`https://…`, `mailto:…`) and belongs to the browser's normal link
+ * handling, not the docs SPA's client-side routing. Deliberately narrow —
+ * only the two schemes the MDX content convention (README.md) actually
+ * uses — rather than a generic "has a colon" test, so a root-relative slug
+ * is never misclassified. */
+const EXTERNAL_HREF_RE = /^(?:https?:|mailto:)/i;
+export function isExternalHref(href: string): boolean {
+  return EXTERNAL_HREF_RE.test(href);
+}
+
+/** Prefixes a root-relative pathname (`/menus/chat`, `/content/img/x.webp`)
+ * with BASE, unless it is already there — the fix for the defect
+ * `docs-shots`/MDX content links land on: content is authored as
+ * base-agnostic root-relative paths (README.md's convention), but the built
+ * SPA is not always served from `/` (nginx: `/docs/`, GitHub Pages:
+ * `/elitea-platform/`), so a raw `<a href="/menus/chat">` or `<img
+ * src="/x.webp">` would leave the docs base entirely. Idempotent so it is
+ * safe to call on a value that might already be based (e.g. one built by
+ * `toPath` upstream). */
+export function withBase(pathname: string): string {
+  if (pathname.startsWith(BASE)) return pathname;
+  return `${BASE}${pathname.replace(/^\//, '')}`;
+}
+
+/**
+ * Resolves an MDX content `href` the way the README's link convention
+ * intends: a root-relative slug (`/menus/chat`, optionally `#anchor`) gets
+ * BASE prefixed via `withBase` so both the rendered attribute and the
+ * click-delegation in `handleDocsLinkClick` (which only intercepts hrefs
+ * already under BASE) resolve to the right page. Left untouched: an
+ * external href (`isExternalHref`) — the caller decides `target`/`rel` for
+ * those — a bare `#anchor` (native same-page scrolling, no routing
+ * involved), and anything that is not root-relative at all (an unexpected
+ * shape in content; passed through rather than guessed at).
+ */
+export function resolveContentHref(href: string): string {
+  if (href.startsWith('#') || isExternalHref(href) || !href.startsWith('/')) return href;
+  return withBase(href);
+}
+
 export type RouteListener = () => void;
 
 const listeners = new Set<RouteListener>();

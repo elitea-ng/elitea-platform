@@ -2,9 +2,16 @@
  * `Card` / `CardGroup cols` from the MDX contract. A `Card` with an `href` is
  * a link (internal slug or external URL, same rule as prose links); one with
  * no `href` is a plain content tile.
+ *
+ * `Card` is a plain TSX component, not MDX content — its `<a>` below is
+ * compiled straight into this module and never passes through the MDX
+ * components map's `a` override (`DocsLink.tsx`), so it has to apply the
+ * same href resolution and external-link treatment itself rather than
+ * inheriting it for free.
  */
 import type { CSSProperties, ReactNode } from 'react';
 
+import { isExternalHref, resolveContentHref } from '../router';
 import { Icon } from './Icon';
 
 export interface CardProps {
@@ -23,8 +30,14 @@ export function Card({ title, icon, href, children }: CardProps) {
     </>
   );
   if (href !== undefined) {
+    const external = isExternalHref(href);
     return (
-      <a className="docs-card docs-card--link" href={href}>
+      <a
+        className="docs-card docs-card--link"
+        href={external ? href : resolveContentHref(href)}
+        target={external ? '_blank' : undefined}
+        rel={external ? 'noopener' : undefined}
+      >
         {body}
       </a>
     );
