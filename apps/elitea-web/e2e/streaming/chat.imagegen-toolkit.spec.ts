@@ -86,21 +86,42 @@ const WORKER = process.env['E2E_WORKER'] ?? 'python';
  * points the CHAT model at (`API_BASE="http://llm-mock:8090"`) — reused here
  * so the image-generation model resolves against the SAME mock process.
  *
- * The credential TYPE is deliberately NOT `vllm` (what `seed-llm` uses for
- * the chat model): bifrost's vLLM provider hand-refuses every image
- * operation — `ImageGeneration is not supported by the vLLM provider`
- * (`core/providers/vllm/vllm.go`, `NewUnsupportedOperationError`) — so a
- * `vllm`-typed credential 500s `POST /llm/v1/images/generations` before the
- * request ever reaches this mock's `_images_generations` stub, regardless of
- * what upstream it names. `open_ai` is bifrost's dialect for this mock
- * anyway (`deploy/mock-llm/server.py` speaks the OpenAI `/v1/images/
- * generations` shape) and its provider implements ImageGeneration, honouring
- * a custom `data.api_base` exactly like `vllm` would have
- * (`api.model-grants.spec.ts`'s `createPlatformProvider` seeds one the same
- * way).
+ * The credential TYPE is `azure_open_ai`, and neither of the two other
+ * options that look plausible actually reaches the mock's image stub:
+ *
+ *  - `vllm` (what `seed-llm` uses for the chat model): bifrost's vLLM
+ *    provider hand-refuses every image operation — `ImageGeneration is not
+ *    supported by the vLLM provider` (`core/providers/vllm/vllm.go`,
+ *    `NewUnsupportedOperationError`) — so a `vllm`-typed credential 500s
+ *    `POST /llm/v1/images/generations` before the request ever reaches this
+ *    mock's `_images_generations` stub, regardless of what upstream it
+ *    names.
+ *  - `open_ai` with a custom `data.api_base` (tried first — see git blame):
+ *    LOOKS right, since bifrost's OpenAI provider implements ImageGeneration
+ *    and `api.model-grants.spec.ts`'s `createPlatformProvider` seeds an
+ *    `open_ai` row with a non-OpenAI `api_base` too — but that spec never
+ *    DISPATCHES through the credential, it only checks grant/visibility CRUD.
+ *    A real dispatch runs into `account.ProviderForCredential`
+ *    (services/elitea-llm-gateway/internal/account/credential_selector.go):
+ *    an `open_ai` credential whose `api_base` is not `api.openai.com` is
+ *    silently REROUTED to bifrost's vLLM provider — "only that provider
+ *    carries a per-key base URL" — landing on the exact same hand-refusal as
+ *    the `vllm`-typed credential above. (A LITERAL `api.openai.com` base
+ *    would dodge the reroute, but then bifrost dials the real OpenAI, which
+ *    this mock cannot be.)
+ *
+ * `azure_open_ai` is the only credential type this gateway serves that both
+ * implements a real `ImageGeneration` call (`core/providers/azure/azure.go`)
+ * AND accepts a per-credential endpoint (`AzureKeyConfig.Endpoint`, taken
+ * from `data.api_base` unconditionally — `account.go`'s `buildKey` never
+ * origin-checks Azure the way it does OpenAI). Its request lands at
+ * `{api_base}/openai/v1/images/generations` — the mock aliases that path to
+ * the SAME stub `/v1/images/generations` answers — and its auth header is
+ * `api-key` rather than `Authorization` (harmless here: the mock does not
+ * validate either).
  */
 const MOCK_UPSTREAM_BASE = 'http://llm-mock:8090';
-const MOCK_CREDENTIAL_TYPE = 'open_ai';
+const MOCK_CREDENTIAL_TYPE = 'azure_open_ai';
 
 /** What `deploy/mock-llm/server.py`'s images stub advertises as a model id. */
 const IMAGE_MODEL_NAME = process.env['MOCK_LLM_IMAGE_MODEL'] ?? 'E2E-MOCK-IMAGE-MODEL';

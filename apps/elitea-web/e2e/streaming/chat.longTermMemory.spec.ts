@@ -46,10 +46,10 @@ import {
   AUTOTEST_PREFIX,
   clearMockLlmJournal,
   deleteConversation,
+  expectStoredAssistantAnswer,
   fillComposer,
   readCallerPersonalProjectId,
   readMockLlmJournal,
-  readStoredMessageGroups,
 } from '../fixtures/api';
 
 /** The model the standalone stack seeds; overridable for the real-model lane. */
@@ -134,12 +134,20 @@ test('a memory saved in Settings > Memory reaches a later chat turn’s system p
     const startResponse = await started;
     expect(startResponse.status(), `the turn was refused: ${(await startResponse.text()).slice(0, 300)}`).toBe(200);
 
-    await expect
-      .poll(
-        async () => (await readStoredMessageGroups(page, projectId, conversationId)).length,
-        { timeout: 120_000, message: 'the turn never stored a question + answer pair' },
-      )
-      .toBe(2);
+    // NOT a poll on `readStoredMessageGroups(...).length === 2`: the ANSWER
+    // group row is inserted (empty, `is_streaming: true`) the moment the turn
+    // is admitted — well before the worker ever calls the model — so a count
+    // check like that is satisfied almost instantly and races ahead of the
+    // actual `/v1/chat/completions` dispatch this test reads next. Measured
+    // on a real run: the count reached 2 about 20ms after admission, while
+    // the mock's journal was still empty. `expectStoredAssistantAnswer`
+    // polls the finalised row instead (`metadata.is_error` PRESENT, per its
+    // own header) — by the time it resolves the model call has necessarily
+    // already happened.
+    await expectStoredAssistantAnswer(page, projectId, conversationId, {
+      timeout: 120_000,
+      message: 'the turn never finished — no non-error assistant answer landed',
+    });
 
     // ── the system-prompt proof ─────────────────────────────────────────
     const journal = await readMockLlmJournal(page);

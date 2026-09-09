@@ -868,7 +868,20 @@ class Handler(BaseHTTPRequestHandler):
         if path == f"{TOOL_PATH_PREFIX}/items":
             self._tool_create_item(path)
             return
-        if path == "/v1/images/generations":
+        # `/openai/v1/images/generations` is Bifrost's AZURE image-generation
+        # shape (core/providers/azure/azure.go's `ImageGeneration`, which
+        # hardcodes `{endpoint}/openai/v1/images/generations` — no api-version
+        # query param, since that alias lives on the key, not the URL). It is
+        # the SAME stub as the plain OpenAI path: a chat.imagegen-toolkit.
+        # spec.ts credential has to be `azure_open_ai` to reach this mock at
+        # all (`account.ProviderForCredential` in services/elitea-llm-gateway
+        # silently reroutes an `open_ai` credential naming a non-OpenAI
+        # `api_base` to Bifrost's vLLM provider, which — like Ollama — hand-
+        # refuses `ImageGeneration`; OpenAI's own provider refuses any
+        # `api_base` that is not `api.openai.com`. Azure is the only
+        # supported provider left that both implements a real image call and
+        # accepts a per-credential endpoint).
+        if path in ("/v1/images/generations", "/openai/v1/images/generations"):
             self._images_generations()
             return
         if path not in ("/v1/chat/completions", "/v1/completions", "/v1/embeddings"):
@@ -963,7 +976,8 @@ class Handler(BaseHTTPRequestHandler):
         self._send(201, TOOL_CREATE_BODY)
 
     def _images_generations(self) -> None:
-        """`POST /v1/images/generations` — what the imagegen toolkit calls (#864).
+        """`POST /v1/images/generations` (or its Azure alias) — what the
+        imagegen toolkit calls (#864).
 
         The gateway's `POST /llm/v1/images/generations` route
         (services/elitea-llm-gateway) forwards here through Bifrost exactly the
