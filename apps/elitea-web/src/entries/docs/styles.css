@@ -264,6 +264,59 @@ td {
   padding: 32px 32px 64px;
 }
 
+/* The page's own H1 (PREAMBLE §3 content rule: pages start at H2 — the
+   frontmatter `title` is the H1, rendered once here by `App.tsx`, not
+   repeated in every page's MDX). */
+.docs-page-title {
+  margin: 0 0 24px;
+  font-size: 32px;
+  line-height: 1.25;
+  font-weight: 700;
+  color: var(--docs-text);
+}
+
+/* `<Suspense>` fallback while a page's lazy MDX chunk loads (`App.tsx`'s
+   `DocsPageSkeleton`) — a few animated bars roughly the shape of a page's
+   first paragraphs, so the layout doesn't jump once real content arrives. */
+.docs-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-top: 4px;
+}
+
+.docs-skeleton__line {
+  height: 14px;
+  border-radius: 6px;
+  background: var(--docs-bg-raised);
+  animation: docs-skeleton-pulse 1.4s ease-in-out infinite;
+}
+
+.docs-skeleton__line--title {
+  width: 40%;
+  height: 20px;
+}
+
+.docs-skeleton__line--short {
+  width: 60%;
+}
+
+@keyframes docs-skeleton-pulse {
+  0%,
+  100% {
+    opacity: 0.6;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .docs-skeleton__line {
+    animation: none;
+  }
+}
+
 .docs-toc {
   flex: 0 0 220px;
   padding: 32px 16px;

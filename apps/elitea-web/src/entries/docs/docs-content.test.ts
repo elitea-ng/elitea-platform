@@ -97,6 +97,7 @@ interface ParsedPage {
   readonly relPath: string;
   readonly frontmatter: Frontmatter;
   readonly headingIds: ReadonlySet<string>;
+  readonly h1Lines: readonly string[];
   readonly internalLinks: ReadonlyArray<{ target: string; anchor: string | undefined }>;
   readonly screenshotIds: readonly string[];
   readonly mermaidBlocks: readonly string[];
@@ -131,6 +132,18 @@ function extractScreenshotIds(prose: string): string[] {
   return screenshotIds;
 }
 
+/** `# ` (level-1) headings only — MDX content must not declare its own H1:
+ * `App.tsx` renders one, from `frontmatter.title`, above every page's
+ * compiled content, so a page's own `# ` would produce two H1s on the same
+ * page. Content pages are expected to start at `## ` (H2). */
+function extractH1Lines(body: string): string[] {
+  const h1Lines: string[] = [];
+  for (const match of body.matchAll(/^#(?!#)\s+(.+)$/gm)) {
+    if (match[1] !== undefined) h1Lines.push(match[1]);
+  }
+  return h1Lines;
+}
+
 function extractMermaidBlocks(body: string): string[] {
   const mermaidBlocks: string[] = [];
   for (const match of body.matchAll(/```mermaid\n([\s\S]*?)```/g)) {
@@ -157,6 +170,7 @@ function parsePage(filePath: string): ParsedPage {
     relPath: relative(CONTENT_DIR, filePath),
     frontmatter,
     headingIds: extractHeadingIds(body),
+    h1Lines: extractH1Lines(body),
     internalLinks: extractInternalLinks(prose),
     screenshotIds: extractScreenshotIds(prose),
     mermaidBlocks: extractMermaidBlocks(body),
@@ -234,6 +248,13 @@ describe('docs content', () => {
     const files = readdirSync(IMG_DIR).filter((file) => file.endsWith('.webp'));
     const unreferenced = files.filter((file) => !referencedIds.has(file.replace(/\.webp$/, '')));
     expect(unreferenced, 'unreferenced committed screenshot(s)').toEqual([]);
+  });
+
+  it('no page declares its own H1 — App.tsx renders one from frontmatter.title', () => {
+    const problems = pages
+      .filter((page) => page.h1Lines.length > 0)
+      .map((page) => `${page.relPath}: "# ${page.h1Lines[0]}"`);
+    expect(problems).toEqual([]);
   });
 
   it('every page declares frontmatter title and description', () => {

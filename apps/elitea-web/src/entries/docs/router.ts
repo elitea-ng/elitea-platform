@@ -44,17 +44,19 @@ export function onRouteChange(listener: RouteListener): () => void {
   return () => listeners.delete(listener);
 }
 
-/** Navigate to `slug`, pushing a history entry, and notify listeners. A
- * navigation to the CURRENT slug is a no-op push (same as clicking the
- * active nav link twice) but still scrolls to top, matching normal link
- * behaviour. */
-function navigate(slug: string): void {
-  const path = toPath(slug);
-  if (path !== window.location.pathname) {
+/** Navigate to `slug` (optionally with a `#anchor` hash), pushing a history
+ * entry, and notify listeners. Scrolling is NOT this function's job: `App.tsx`
+ * owns it, because the target page's content — and, for a hash link, the
+ * heading it needs to scroll to — may still be loading (`content-registry.ts`
+ * loads each page's component lazily), so scrolling has to wait for that
+ * content to actually mount rather than happening synchronously here. */
+function navigate(slug: string, hash = ''): void {
+  const path = `${toPath(slug)}${hash}`;
+  const current = `${window.location.pathname}${window.location.hash}`;
+  if (path !== current) {
     window.history.pushState({}, '', path);
   }
   notify();
-  window.scrollTo({ top: 0 });
 }
 
 let popstateWired = false;
@@ -79,7 +81,10 @@ export function initHistoryListener(): () => void {
  * routes it through `navigate` instead of a full page load — the whole point
  * of a history-based SPA router. Externally-targeted links (`target="_blank"`,
  * a modifier key held, a `download` attribute) fall through to the browser's
- * default handling untouched.
+ * default handling untouched. `url.hash` (e.g. a content link written as
+ * `/menus/chat#voice`) is passed through to `navigate` so the target page's
+ * heading anchor survives the client-side transition instead of being
+ * silently dropped.
  */
 /** A modifier key or non-primary button means "open in a new tab/window" —
  * the browser's job, not the router's. */
@@ -130,5 +135,5 @@ export function handleDocsLinkClick(event: MouseEvent): void {
   if (url === undefined) return;
 
   event.preventDefault();
-  navigate(currentSlug(url.pathname) ?? '');
+  navigate(currentSlug(url.pathname) ?? '', url.hash);
 }
