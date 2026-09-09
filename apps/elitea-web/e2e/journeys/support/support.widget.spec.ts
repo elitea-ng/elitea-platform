@@ -407,7 +407,7 @@ test('SUP-W3: the widget expands to full view and collapses back (legacy test_ex
   });
 });
 
-test('SUP-W4: the attach control opens a file picker and the chosen file appears on the message being composed (legacy test_attach_button_present_and_opens_picker)', async ({
+test('SUP-W4: the attach control opens a file picker and TWO chosen files appear on the message being composed (legacy test_attach_button_present_and_opens_picker, extended by #877 for multi-file)', async ({
   page,
 }) => {
   await withAssistantOn(page, async () => {
@@ -426,58 +426,69 @@ test('SUP-W4: the attach control opens a file picker and the chosen file appears
     });
     await expect(attach).toBeEnabled();
 
-    // ── 2. Clicking it OPENS A PICKER ───────────────────────────────────
+    // ── 2. Clicking it OPENS A PICKER that now accepts MULTIPLE files ──
     // The `filechooser` event is the browser's own, raised only when an
     // `input[type=file]` is really activated. `MessageInput.tsx` forwards the
     // button's click to a hidden input through a ref, and that forwarding is
     // the thing the legacy case is about: a button wired to nothing paints
     // identically and raises no event, so this wait is what discriminates.
+    // `isMultiple()` reads the input's own `multiple` attribute — #877 added
+    // it, closing the "one file at a time" gap the legacy port shipped with.
     const [chooser] = await Promise.all([
       page.waitForEvent('filechooser', { timeout: 20_000 }),
       attach.click(),
     ]);
-    expect(chooser.isMultiple(), 'this port takes one file at a time').toBe(false);
+    expect(chooser.isMultiple(), '#877: the picker must accept more than one file').toBe(true);
 
-    // ── 3. A small file attaches, and shows on the message ──────────────
+    // ── 3. TWO files attach in one pick, and both show on the message ──
     // In memory, so the journey carries no fixture file and cannot fail on a
-    // path. Nothing is uploaded here: `MessageInput` holds the file and the
-    // adapter uploads it when the message is SENT — and a send is an agent
-    // turn, which the e2e-standalone stack has no worker for. What this
-    // asserts is the half that is a client fact, and the half the legacy case
-    // actually names.
-    const fileName = `${AUTOTEST_PREFIX}note_${RUN_ID}.txt`;
-    await chooser.setFiles({
-      name: fileName,
-      mimeType: 'text/plain',
-      buffer: Buffer.from('autotest support attachment\n'),
-    });
+    // path. Nothing is uploaded here: `MessageInput` holds the files and the
+    // adapter uploads each one when the message is SENT — and a send is an
+    // agent turn, which the e2e-standalone stack has no worker for. What
+    // this asserts is the half that is a client fact.
+    //
+    // Two files, not one, because the removal assertion below has to
+    // distinguish "the right chip went" from "the list went" — same
+    // reasoning as `chat.attachments.spec.ts`'s J12c.
+    const keepName = `${AUTOTEST_PREFIX}note_keep_${RUN_ID}.txt`;
+    const dropName = `${AUTOTEST_PREFIX}note_drop_${RUN_ID}.txt`;
+    await chooser.setFiles([
+      { name: keepName, mimeType: 'text/plain', buffer: Buffer.from('autotest support attachment (keep)\n') },
+      { name: dropName, mimeType: 'text/plain', buffer: Buffer.from('autotest support attachment (drop)\n') },
+    ]);
 
-    const draft = `${AUTOTEST_PREFIX}with an attachment ${RUN_ID}`;
+    const draft = `${AUTOTEST_PREFIX}with two attachments ${RUN_ID}`;
     const input = chatWindow.locator('#elitea-assistant-message-input');
     await input.fill(draft);
 
-    const chip = chatWindow.locator('.elitea-assistant-file-chip');
-    await expect(chip, 'the chosen file must appear on the message being composed').toHaveCount(1, {
+    const chips = chatWindow.locator('.elitea-assistant-file-chip');
+    await expect(chips, 'both chosen files must appear on the message being composed').toHaveCount(2, {
       timeout: 15_000,
     });
-    await expect(chip.locator('.elitea-assistant-file-chip-name')).toHaveText(fileName);
-    // The message text is still there beside it: attaching a file must not
+    await expect(chatWindow.locator('.elitea-assistant-file-chip-name').nth(0)).toHaveText(keepName);
+    await expect(chatWindow.locator('.elitea-assistant-file-chip-name').nth(1)).toHaveText(dropName);
+    // The message text is still there beside them: attaching files must not
     // waive or clear the question. `SupportPredictPayload.content` is
     // `min_length=1` server-side, so a composer that swallowed the text would
     // make every attachment turn refusable.
     await expect(input).toHaveValue(draft);
     await expect(chatWindow.locator('.elitea-assistant-send-button')).toBeEnabled();
 
-    // ── 4. …and it can be taken off again ───────────────────────────────
-    // The chip's own remove control. Proves the chip is live state rather
-    // than a paint: a rendered filename that nothing owns cannot be removed.
-    await chatWindow.getByRole('button', { name: 'Remove attachment' }).click();
+    // ── 4. …and ONE of them can be taken off again ──────────────────────
+    // The chip's own, per-file remove control (`Remove <name>` — #877 named
+    // it by file since a generic "Remove attachment" label can no longer
+    // tell two chips apart). Proves each chip is live, independently-owned
+    // state rather than a paint: a rendered filename that nothing owns
+    // cannot be removed on its own.
+    await chatWindow.getByRole('button', { name: `Remove ${dropName}` }).click();
     await expect
       .poll(async () => chatWindow.locator('.elitea-assistant-file-chip').count(), {
         timeout: 15_000,
-        message: 'removing the attachment left its chip on the message',
+        message: 'removing one attachment left the wrong chip count on the message',
       })
-      .toBe(0);
-    await expect(input, 'removing the file must not clear the message').toHaveValue(draft);
+      .toBe(1);
+    await expect(chatWindow.locator('.elitea-assistant-file-chip-name')).toHaveText(keepName);
+    await expect(input, 'removing a file must not clear the message').toHaveValue(draft);
+    await expect(chatWindow.locator('.elitea-assistant-send-button')).toBeEnabled();
   });
 });
