@@ -144,6 +144,16 @@ export interface MessageGroupMetaWire {
   readonly thread_id?: string;
   readonly output_limit_reached?: boolean;
   readonly output_limit_sequence?: number | string;
+  /**
+   * How many of the caller's persistent, cross-conversation memories (#870)
+   * this turn's recall injected into the prompt. Stamped by
+   * `internal/infra/db/repos.MemoriesRepo.RecordCurrentMemoryUsage`, a
+   * best-effort merge (`meta || jsonb_build_object(...)`) into this SAME
+   * `chat_message_group.meta` column after the turn is admitted — never
+   * present on a turn that recalled nothing (0 is not stamped at all, so
+   * "absent" and "0" mean the same thing to a reader).
+   */
+  readonly memories_used?: number;
 }
 
 /**

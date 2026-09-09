@@ -567,7 +567,7 @@
   {
     "slug": "menus/settings/memory",
     "title": "Memory",
-    "description": "Configure context-window management, context editing, and automatic summarization for your new conversations."
+    "description": "Configure context-window management for your conversations, and manage the facts Elitea remembers about you across every conversation."
   },
   {
     "slug": "menus/settings/notifications",

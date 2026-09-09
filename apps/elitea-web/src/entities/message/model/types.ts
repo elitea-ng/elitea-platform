@@ -102,6 +102,12 @@ export interface AssistantMessage extends MessageBase {
   readonly threadId?: string;
   readonly requiresConfirmation?: { readonly message: string; readonly buttonText: string };
   readonly likes?: number;
+  /**
+   * How many of the caller's persistent, cross-conversation memories (#870)
+   * this turn's recall used. `undefined` (not `0`) whenever the turn used
+   * none — see `MessageGroupMetaWire.memories_used`'s own comment.
+   */
+  readonly memoriesUsed?: number;
 }
 
 export type Message = UserMessage | AssistantMessage;

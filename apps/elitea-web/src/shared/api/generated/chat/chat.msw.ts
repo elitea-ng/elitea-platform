@@ -46,8 +46,11 @@ import type { RequestHandlerOptions } from "msw";
 
 import type {
   CanvasPresence,
+  ClearMemories200,
   ConversationExport,
   ConversationListing,
+  MemoryEntry,
+  MemoryEntryList,
   MessageFeedbackSummary,
   MessageTraceListing,
   MessageTraceStepDetail,
@@ -488,6 +491,85 @@ export const getGetMessageTraceResponseMock = (): MessageTraceStepDetail => ({
   },
 });
 
+export const getListMemoriesResponseMock = (
+  overrideResponse: Partial<Extract<MemoryEntryList, object>> = {},
+): MemoryEntryList => ({
+  items: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    project_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    content: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    tags: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+    source_conversation_id: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        null,
+      ]),
+      undefined,
+    ]),
+    enabled: faker.datatype.boolean(),
+    created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  })),
+  total: faker.number.int(),
+  ...overrideResponse,
+});
+
+export const getCreateMemoryResponseMock = (
+  overrideResponse: Partial<Extract<MemoryEntry, object>> = {},
+): MemoryEntry => ({
+  id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  project_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  content: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  tags: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  source_conversation_id: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    undefined,
+  ]),
+  enabled: faker.datatype.boolean(),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
+
+export const getClearMemoriesResponseMock = (
+  overrideResponse: Partial<Extract<ClearMemories200, object>> = {},
+): ClearMemories200 => ({ removed: faker.number.int(), ...overrideResponse });
+
+export const getUpdateMemoryResponseMock = (
+  overrideResponse: Partial<Extract<MemoryEntry, object>> = {},
+): MemoryEntry => ({
+  id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  project_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  content: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  tags: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  source_conversation_id: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    undefined,
+  ]),
+  enabled: faker.datatype.boolean(),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
+
 export const getGetMessageFeedbackResponseMock = (
   overrideResponse: Partial<Extract<MessageFeedbackSummary, object>> = {},
 ): MessageFeedbackSummary => ({
@@ -816,6 +898,132 @@ export const getGetMessageTraceMockHandler = (
   );
 };
 
+export const getListMemoriesMockHandler = (
+  overrideResponse?:
+    | MemoryEntryList
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<MemoryEntryList> | MemoryEntryList),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/memories/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListMemoriesResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getCreateMemoryMockHandler = (
+  overrideResponse?:
+    | MemoryEntry
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<MemoryEntry> | MemoryEntry),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/memories/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getCreateMemoryResponseMock(),
+        { status: 201 },
+      );
+    },
+    options,
+  );
+};
+
+export const getClearMemoriesMockHandler = (
+  overrideResponse?:
+    | ClearMemories200
+    | ((
+        info: Parameters<Parameters<typeof http.delete>[1]>[0],
+      ) => Promise<ClearMemories200> | ClearMemories200),
+  options?: RequestHandlerOptions,
+) => {
+  return http.delete(
+    "*/elitea_core/memories/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getClearMemoriesResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getUpdateMemoryMockHandler = (
+  overrideResponse?:
+    | MemoryEntry
+    | ((
+        info: Parameters<Parameters<typeof http.put>[1]>[0],
+      ) => Promise<MemoryEntry> | MemoryEntry),
+  options?: RequestHandlerOptions,
+) => {
+  return http.put(
+    "*/elitea_core/memory/prompt_lib/:projectId/:memoryId",
+    async (info: Parameters<Parameters<typeof http.put>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getUpdateMemoryResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getDeleteMemoryMockHandler = (
+  overrideResponse?:
+    | void
+    | ((
+        info: Parameters<Parameters<typeof http.delete>[1]>[0],
+      ) => Promise<void> | void),
+  options?: RequestHandlerOptions,
+) => {
+  return http.delete(
+    "*/elitea_core/memory/prompt_lib/:projectId/:memoryId",
+    async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
+      await delay(0);
+      if (typeof overrideResponse === "function") {
+        await overrideResponse(info);
+      }
+
+      return new HttpResponse(null, { status: 204 });
+    },
+    options,
+  );
+};
+
 export const getGetMessageFeedbackMockHandler = (
   overrideResponse?:
     | MessageFeedbackSummary
@@ -904,6 +1112,11 @@ export const getChatMock = () => [
   getListConversationsMockHandler(),
   getListMessageTracesMockHandler(),
   getGetMessageTraceMockHandler(),
+  getListMemoriesMockHandler(),
+  getCreateMemoryMockHandler(),
+  getClearMemoriesMockHandler(),
+  getUpdateMemoryMockHandler(),
+  getDeleteMemoryMockHandler(),
   getGetMessageFeedbackMockHandler(),
   getSetMessageFeedbackMockHandler(),
   getDeleteMessageFeedbackMockHandler(),

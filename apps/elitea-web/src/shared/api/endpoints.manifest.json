@@ -2979,6 +2979,67 @@
       ]
     },
     {
+      "id": "memories.listMemories",
+      "method": "GET",
+      "path": "/elitea_core/memories/prompt_lib/{projectID}",
+      "operationId": "listMemories",
+      "source": "generated",
+      "responseSchema": "MemoryEntryList",
+      "fixture": null,
+      "usedBy": [
+        "features/settings/ui/memory/LongTermMemoryManagement.tsx"
+      ]
+    },
+    {
+      "id": "memories.createMemory",
+      "method": "POST",
+      "path": "/elitea_core/memories/prompt_lib/{projectID}",
+      "operationId": "createMemory",
+      "source": "generated",
+      "responseSchema": "MemoryEntry",
+      "fixture": null,
+      "usedBy": [
+        "features/settings/ui/memory/LongTermMemoryManagement.tsx",
+        "features/chat-messages/ui/chat-box/RememberMemoryAction.tsx"
+      ]
+    },
+    {
+      "id": "memories.updateMemory",
+      "method": "PUT",
+      "path": "/elitea_core/memory/prompt_lib/{projectID}/{memoryID}",
+      "operationId": "updateMemory",
+      "source": "generated",
+      "responseSchema": "MemoryEntry",
+      "fixture": null,
+      "usedBy": [
+        "features/settings/ui/memory/LongTermMemoryManagement.tsx"
+      ]
+    },
+    {
+      "id": "memories.deleteMemory",
+      "method": "DELETE",
+      "path": "/elitea_core/memory/prompt_lib/{projectID}/{memoryID}",
+      "operationId": "deleteMemory",
+      "source": "generated",
+      "responseSchema": null,
+      "fixture": null,
+      "usedBy": [
+        "features/settings/ui/memory/LongTermMemoryManagement.tsx"
+      ]
+    },
+    {
+      "id": "memories.clearMemories",
+      "method": "DELETE",
+      "path": "/elitea_core/memories/prompt_lib/{projectID}",
+      "operationId": "clearMemories",
+      "source": "generated",
+      "responseSchema": "ClearMemories200",
+      "fixture": null,
+      "usedBy": [
+        "features/settings/ui/memory/LongTermMemoryManagement.tsx"
+      ]
+    },
+    {
       "id": "webhooks.listWebhooks",
       "method": "GET",
       "path": "/webhooks/prompt_lib/{projectID}",

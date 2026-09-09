@@ -1,15 +1,11 @@
 ---
 title: "Memory"
-description: "Configure context-window management, context editing, and automatic summarization for your new conversations."
+description: "Configure context-window management for your conversations, and manage the facts Elitea remembers about you across every conversation."
 ---
 
-Settings › Memory controls how much conversation history is kept and how it is managed as a conversation grows — not a persistent, cross-conversation memory.
+Settings › Memory has two, independent sections: **Context management** controls how much conversation history is kept as a single conversation grows, and **Long-term Memory** is a persistent store of facts Elitea recalls in every later conversation in this project.
 
 <Screenshot id="settings-memory" alt="Memory settings with context management and summarization controls" />
-
-<Note title="Not available yet: long-term memory">
-A "Coming soon" placeholder for persistent, cross-conversation recall exists in Profile, but it is not implemented — this Memory page is context-window management only (tracked in #870).
-</Note>
 
 ## Context management
 
@@ -18,11 +14,11 @@ Turn context management on to have Elitea automatically manage history as it app
 - **Max Context Tokens** (default 64,000) — the ceiling for conversation history sent per request.
 - **Preserve Recent Messages** (default 5) — the number of most-recent messages always kept, regardless of the token ceiling.
 
-## Context editing
+### Context editing
 
 When context management is on, context editing clears older tool outputs from the sent history while keeping recent results, reducing token usage without losing recent detail.
 
-## Automatic summarization
+### Automatic summarization
 
 With context management on, turn on summarization to have Elitea condense older messages into a summary once the conversation grows past a threshold, instead of dropping them outright.
 
@@ -33,17 +29,57 @@ With context management on, turn on summarization to have Elitea condense older 
 Summarization only runs while context management is turned on — turning context management off disables summarization too, even if its own toggle is still on.
 </Warning>
 
-## How settings apply
+Context management settings apply to every **new** conversation you start in Chat, Agents, and Pipelines in this project. Existing conversations, and conversations started by other users, keep their own settings.
 
-All Memory settings apply to every **new** conversation you start in Chat, Agents, and Pipelines. Existing conversations, and conversations started by other users, keep their own settings.
+## Long-term Memory
+
+The **Long-term Memory** section is a list of facts Elitea remembers about you — not tied to one conversation. A memory you save here is recalled by Elitea in **every later conversation in this project**, unlike context management above, which only manages history inside a single conversation.
+
+<Note title="Different from the Memory toolkit">
+This is not the same feature as the [Memory toolkit](/integrations/toolkits/memory_toolkit) you can attach to an agent, pipeline, or conversation. The toolkit is a tool the model calls mid-turn to read and write its own key/value store. Long-term Memory here is never a tool call: your enabled memories are added to the assistant's context automatically, before a turn starts, whenever there is room and they are relevant to what you asked.
+</Note>
+
+### Add a memory
+
+Select **Add memory** and describe a fact you want Elitea to know about you going forward — for example, "Prefers TypeScript over Python for new services." Optionally add comma-separated tags to help you find it again later. New memories are enabled by default.
+
+### Manage your memories
+
+Each row shows the memory's text and tags, with:
+
+- An **enabled** switch — turn a memory off to stop it from being recalled without deleting it.
+- **Edit** — change the text, tags, or enabled state.
+- **Delete** — remove one memory permanently.
+
+Use the search box to filter the list by content or tag. **Clear all** deletes every memory in this project after a confirmation — this cannot be undone.
+
+**Use my memories in chat** is a master switch above the list. It is a shortcut, not a separate setting: turning it off disables every currently-enabled memory in one action, and turning it on re-enables every memory that was on before. There is nothing else it controls.
+
+### Save a memory from a chat message
+
+You do not have to come back to Settings to save a memory. On any assistant answer in Chat, select the bookmark icon (**Remember this**) next to the message's other actions to save that answer's text as a new, enabled memory. A small confirmation icon shows it was saved.
+
+### How recall works
+
+At the start of a chat turn, Elitea reads your enabled memories in this project and adds a bounded selection of them to the assistant's context, alongside the conversation's own history:
+
+- Memories matching keywords in what you just typed are preferred, then the most recently saved ones fill any remaining room.
+- Recall is bounded — only a limited number of memories, and a limited amount of text, are added to any one turn, so a large memory list never crowds out the rest of the conversation.
+- A turn that used at least one memory shows a small **"Using N memories"** indicator next to its timestamp.
+
+<Warning>
+Recall is best-effort. If the memory store is briefly unavailable, the turn still runs — it simply proceeds without your recalled memories that one time.
+</Warning>
 
 ## Troubleshooting
 
 <AccordionGroup>
-  <Accordion title="A change does not seem to save">Settings auto-save on blur or on toggle — watch for a "Settings saved successfully" confirmation, and check numeric fields are within their valid range.</Accordion>
+  <Accordion title="A context management change does not seem to save">Settings auto-save on blur or on toggle — watch for a "Settings saved successfully" confirmation, and check numeric fields are within their valid range.</Accordion>
   <Accordion title="Summarization has no effect">Confirm context management is turned on — summarization is inactive whenever it is off.</Accordion>
+  <Accordion title="A memory does not seem to be recalled">Confirm the memory's own enabled switch, and the "Use my memories in chat" master switch, are both on. Recall is also bounded — with many memories saved, an unrelated one may simply not have been selected for that particular turn.</Accordion>
+  <Accordion title="I do not see a project's memories">Long-term Memory is scoped per project, the same as everything else in Settings. Switch projects to see that project's own memories.</Accordion>
 </AccordionGroup>
 
 <Info title="Related">
-[Context management](/how-tos/chat-conversations/context-management) · [Chat](/menus/chat)
+[Context management](/how-tos/chat-conversations/context-management) · [Chat](/menus/chat) · [Memory toolkit](/integrations/toolkits/memory_toolkit)
 </Info>

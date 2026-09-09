@@ -40,6 +40,7 @@ import Typography from '@mui/material/Typography';
 import { ApplicationAnswerActions } from './ApplicationAnswerActions';
 import { AssistantAvatar } from './MessageAvatar';
 import { MessageFeedbackControl } from './MessageFeedbackControl';
+import { RememberMemoryAction } from './RememberMemoryAction';
 import { MessageHeaderRow } from './MessageHeaderRow';
 import { actionKey, asDraft, ApplicationAnswerThinking, swarmChildContent } from './ApplicationAnswerThinking';
 import { ChatContinue } from '../chat-continue/ChatContinue';
@@ -284,6 +285,7 @@ export function ApplicationAnswer({
           sentToName={t('features.chatMessages.replyTo', 'Message')}
           sentToInteractive
           createdAt={answer.createdAt}
+          memoriesUsed={answer.memoriesUsed}
         />
       )}
 
@@ -407,6 +409,15 @@ export function ApplicationAnswer({
             }}
           >
             {showFeedback && <MessageFeedbackControl projectId={feedbackProjectId as string} messageId={messageId} />}
+            {showFeedback && (
+              // #870 "Remember this" — same gate as the feedback control
+              // beside it (a resolved project id, not still processing).
+              // `conversationId` is not yet threaded to this row (no
+              // `ChatMessage` field carries it today), so a memory saved
+              // here has no `source_conversation_id` — informational-only
+              // provenance, not a functional gap.
+              <RememberMemoryAction projectId={feedbackProjectId as string} content={answer.content} disabled={isProcessing} />
+            )}
             <ApplicationAnswerActions
               hasContent={hasTextContent || !!exception}
               isProcessing={isProcessing}

@@ -23,6 +23,19 @@ export const PERMISSIONS = {
       update: 'models.chat.folders.update',
       delete: 'models.chat.folders.delete',
     },
+    /**
+     * Persistent, cross-conversation personal memory (#870,
+     * internal/api/v2/memories). Reuses the two strings the current
+     * chat-config/project-context reads and the conversation update route
+     * already declare (`models.chat.conversation.details` /
+     * `.update`, router.go's own comment) rather than a new memories-scoped
+     * permission — memory read/write is not a wider claim than reading or
+     * editing the conversation itself.
+     */
+    memories: {
+      list: 'models.chat.conversation.details',
+      write: 'models.chat.conversation.update',
+    },
   },
   applications: {
     list: 'models.applications.public_applications.list',

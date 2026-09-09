@@ -18,7 +18,10 @@
  */
 import type { ReactNode } from 'react';
 
+import PsychologyOutlinedIcon from '@mui/icons-material/PsychologyOutlined';
 import Box from '@mui/material/Box';
+import Chip from '@mui/material/Chip';
+import Tooltip from '@mui/material/Tooltip';
 import type { Theme } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
 
@@ -40,6 +43,13 @@ export interface MessageHeaderRowProps {
   readonly onSentToClick?: (() => void) | undefined;
   /** The message's ISO creation time; renders the right-aligned relative label. */
   readonly createdAt?: string | undefined;
+  /**
+   * How many of the caller's persistent memories (#870) this turn's recall
+   * used. Renders a small "Using N memories" chip left of the timestamp;
+   * absent (not `0`) whenever the turn used none, matching
+   * `AssistantMessage.memoriesUsed`'s own "absent means none" contract.
+   */
+  readonly memoriesUsed?: number | undefined;
 }
 
 const headerRowSx = {
@@ -93,6 +103,7 @@ export function MessageHeaderRow({
   sentToInteractive = false,
   onSentToClick,
   createdAt,
+  memoriesUsed,
 }: MessageHeaderRowProps): ReactNode {
   return (
     <Box sx={headerRowSx} data-testid="chat-message-header">
@@ -118,7 +129,20 @@ export function MessageHeaderRow({
           </>
         )}
       </Box>
-      <Box sx={{ flexShrink: 0, display: 'flex', alignItems: 'center' }}>
+      <Box sx={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
+        {memoriesUsed !== undefined && memoriesUsed > 0 && (
+          <Tooltip
+            title={t('features.chatMessages.memoriesUsedTooltip', 'Elitea used {{count}} of your saved memories for this answer', { count: memoriesUsed })}
+          >
+            <Chip
+              icon={<PsychologyOutlinedIcon fontSize="small" />}
+              label={t('features.chatMessages.memoriesUsed', 'Using {{count}} memories', { count: memoriesUsed })}
+              size="small"
+              variant="outlined"
+              data-testid="chat-message-memories-used"
+            />
+          </Tooltip>
+        )}
         {createdAt !== undefined && createdAt !== '' && <CreatedTimeInfo createdAt={createdAt} />}
       </Box>
     </Box>
