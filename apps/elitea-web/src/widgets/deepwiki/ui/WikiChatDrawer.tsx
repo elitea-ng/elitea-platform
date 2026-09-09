@@ -348,15 +348,6 @@ export const WikiChatDrawer = memo(function WikiChatDrawer({
           onResume={resumeConversation}
           onDelete={deleteConversation}
           disabled={chat.state.isLoading}
-          // The listing is fetched once per `historyEpoch` and nothing bumps
-          // it after an ordinary send — only Clear/Resume/Delete did, before
-          // this. A reader who asks one question and immediately opens this
-          // menu must see that very session in it, so the menu itself is one
-          // more trigger. Gated on `disabled` upstream (the button cannot be
-          // clicked mid-turn), so this never re-hydrates a running stream.
-          onOpen={() => {
-            setHistoryEpoch((epoch) => epoch + 1);
-          }}
         />
         <IconButton size="small" onClick={onClose} aria-label={t('widgets.deepwiki.chat.close', 'Close')}>
           <CloseIcon fontSize="small" />
