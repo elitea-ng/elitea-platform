@@ -488,6 +488,19 @@ export const getListAnalyticsAgentsResponseMock = (
     avg_duration_ms: faker.number.float({ fractionDigits: 2 }),
     total_tokens: faker.number.int(),
     error_rate: faker.number.float({ fractionDigits: 2 }),
+    priced: faker.datatype.boolean(),
+    input_cost: faker.helpers.arrayElement([
+      faker.number.float({ fractionDigits: 2 }),
+      undefined,
+    ]),
+    output_cost: faker.helpers.arrayElement([
+      faker.number.float({ fractionDigits: 2 }),
+      undefined,
+    ]),
+    total_cost: faker.helpers.arrayElement([
+      faker.number.float({ fractionDigits: 2 }),
+      undefined,
+    ]),
   })),
   ...overrideResponse,
 });
@@ -601,6 +614,19 @@ export const getGetAnalyticsAgentDetailResponseAnalyticsAgentsListMock = (
       avg_duration_ms: faker.number.float({ fractionDigits: 2 }),
       total_tokens: faker.number.int(),
       error_rate: faker.number.float({ fractionDigits: 2 }),
+      priced: faker.datatype.boolean(),
+      input_cost: faker.helpers.arrayElement([
+        faker.number.float({ fractionDigits: 2 }),
+        undefined,
+      ]),
+      output_cost: faker.helpers.arrayElement([
+        faker.number.float({ fractionDigits: 2 }),
+        undefined,
+      ]),
+      total_cost: faker.helpers.arrayElement([
+        faker.number.float({ fractionDigits: 2 }),
+        undefined,
+      ]),
     })),
   },
   ...overrideResponse,
@@ -746,6 +772,71 @@ export const getGetAnalyticsCostsResponseMock = (
         })),
         by_model_truncated: faker.datatype.boolean(),
         by_user_truncated: faker.datatype.boolean(),
+        agent_dimension_available: faker.datatype.boolean(),
+        attributed_agent_calls: faker.number.int(),
+        unattributed_agent_calls: faker.number.int(),
+        by_agent: faker.helpers.arrayElement([
+          Array.from(
+            { length: faker.number.int({ min: 1, max: 10 }) },
+            (_, i) => i + 1,
+          ).map(() => ({
+            application_id: faker.string.alpha({
+              length: { min: 10, max: 20 },
+            }),
+            name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+            calls: faker.number.int(),
+            prompt_tokens: faker.number.int(),
+            completion_tokens: faker.number.int(),
+            total_tokens: faker.number.int(),
+            priced: faker.datatype.boolean(),
+            input_cost: faker.helpers.arrayElement([
+              faker.number.float({ fractionDigits: 2 }),
+              undefined,
+            ]),
+            output_cost: faker.helpers.arrayElement([
+              faker.number.float({ fractionDigits: 2 }),
+              undefined,
+            ]),
+            total_cost: faker.helpers.arrayElement([
+              faker.number.float({ fractionDigits: 2 }),
+              undefined,
+            ]),
+          })),
+          undefined,
+        ]),
+        by_agent_truncated: faker.datatype.boolean(),
+        tool_dimension_available: faker.datatype.boolean(),
+        attributed_tool_calls: faker.number.int(),
+        unattributed_tool_calls: faker.number.int(),
+        by_tool: faker.helpers.arrayElement([
+          Array.from(
+            { length: faker.number.int({ min: 1, max: 10 }) },
+            (_, i) => i + 1,
+          ).map(() => ({
+            toolkit_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+            toolkit_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+            tool_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+            attributed_runs: faker.number.int(),
+            prompt_tokens: faker.number.int(),
+            completion_tokens: faker.number.int(),
+            total_tokens: faker.number.int(),
+            priced: faker.datatype.boolean(),
+            input_cost: faker.helpers.arrayElement([
+              faker.number.float({ fractionDigits: 2 }),
+              undefined,
+            ]),
+            output_cost: faker.helpers.arrayElement([
+              faker.number.float({ fractionDigits: 2 }),
+              undefined,
+            ]),
+            total_cost: faker.helpers.arrayElement([
+              faker.number.float({ fractionDigits: 2 }),
+              undefined,
+            ]),
+          })),
+          undefined,
+        ]),
+        by_tool_truncated: faker.datatype.boolean(),
       },
     },
     undefined,

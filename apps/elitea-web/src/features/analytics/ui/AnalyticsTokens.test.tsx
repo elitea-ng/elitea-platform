@@ -62,6 +62,14 @@ const ESTIMATE: AnalyticsUsageEstimate = {
   ],
   by_model_truncated: false,
   by_user_truncated: false,
+  agent_dimension_available: false,
+  attributed_agent_calls: 0,
+  unattributed_agent_calls: 2,
+  by_agent_truncated: false,
+  tool_dimension_available: false,
+  attributed_tool_calls: 0,
+  unattributed_tool_calls: 0,
+  by_tool_truncated: false,
 };
 
 const COSTS_BODY = {

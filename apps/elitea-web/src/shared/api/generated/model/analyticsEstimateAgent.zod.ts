@@ -41,29 +41,28 @@
  */
 import * as zod from "zod";
 
-export const AgentAnalytics = zod
+export const AnalyticsEstimateAgent = zod
   .object({
     application_id: zod.string(),
     name: zod.string(),
-    run_count: zod.int(),
-    avg_duration_ms: zod.number(),
+    calls: zod.int(),
+    prompt_tokens: zod.int(),
+    completion_tokens: zod.int(),
     total_tokens: zod.int(),
-    error_rate: zod.number(),
     priced: zod
       .boolean()
       .describe(
-        "False when the catalogue prices none of this agent's calls (issue #875). The row keeps its token counts and omits its money.\n",
+        "False when the catalogue prices none of this agent's calls. The row keeps its token counts and omits its money.\n",
       ),
-    input_cost: zod
-      .number()
-      .optional()
-      .describe(
-        "This agent's calls priced at each call's OWN model rate, summed — an ESTIMATE from gateway.gateway_models, never the accounted figure \/analytics_costs' kpis.total_cost reports. Absent when priced is false.\n",
-      ),
+    input_cost: zod.number().optional(),
     output_cost: zod.number().optional(),
     total_cost: zod.number().optional(),
   })
-  .describe("NOTE(W2) internal\/domain\/analytics\/types.go:22-29.");
+  .describe(
+    "One agent's LLM spend in the window (issue #875), from gateway.llm_request_logs.execution_id resolved through elitea_runtime.execution_jobs into the tenant chat projection — the same correlation AgentAnalytics reports as counts, priced through gateway.gateway_models.\n",
+  );
 
-export type AgentAnalytics = zod.input<typeof AgentAnalytics>;
-export type AgentAnalyticsOutput = zod.output<typeof AgentAnalytics>;
+export type AnalyticsEstimateAgent = zod.input<typeof AnalyticsEstimateAgent>;
+export type AnalyticsEstimateAgentOutput = zod.output<
+  typeof AnalyticsEstimateAgent
+>;

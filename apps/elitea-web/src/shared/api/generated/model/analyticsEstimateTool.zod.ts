@@ -41,29 +41,31 @@
  */
 import * as zod from "zod";
 
-export const AgentAnalytics = zod
+export const AnalyticsEstimateTool = zod
   .object({
-    application_id: zod.string(),
-    name: zod.string(),
-    run_count: zod.int(),
-    avg_duration_ms: zod.number(),
+    toolkit_id: zod
+      .string()
+      .describe("Empty when the producer did not know one. See ToolAnalytics."),
+    toolkit_name: zod.string(),
+    tool_name: zod.string(),
+    attributed_runs: zod
+      .int()
+      .describe(
+        "Distinct EXECUTIONS that called this tool and also correlate to at least one priceable request — not a tool_call_records row count. A tool called twice inside one execution and never elsewhere reads attributed_runs: 1 here and run_count: 2 on the Tools tab; both are correct measurements of different things.\n",
+      ),
+    prompt_tokens: zod.int(),
+    completion_tokens: zod.int(),
     total_tokens: zod.int(),
-    error_rate: zod.number(),
-    priced: zod
-      .boolean()
-      .describe(
-        "False when the catalogue prices none of this agent's calls (issue #875). The row keeps its token counts and omits its money.\n",
-      ),
-    input_cost: zod
-      .number()
-      .optional()
-      .describe(
-        "This agent's calls priced at each call's OWN model rate, summed — an ESTIMATE from gateway.gateway_models, never the accounted figure \/analytics_costs' kpis.total_cost reports. Absent when priced is false.\n",
-      ),
+    priced: zod.boolean(),
+    input_cost: zod.number().optional(),
     output_cost: zod.number().optional(),
     total_cost: zod.number().optional(),
   })
-  .describe("NOTE(W2) internal\/domain\/analytics\/types.go:22-29.");
+  .describe(
+    "One (toolkit, tool)'s attributed LLM spend in the window (issue #875). See AnalyticsUsageEstimate.by_tool for the attribution rule.\n",
+  );
 
-export type AgentAnalytics = zod.input<typeof AgentAnalytics>;
-export type AgentAnalyticsOutput = zod.output<typeof AgentAnalytics>;
+export type AnalyticsEstimateTool = zod.input<typeof AnalyticsEstimateTool>;
+export type AnalyticsEstimateToolOutput = zod.output<
+  typeof AnalyticsEstimateTool
+>;

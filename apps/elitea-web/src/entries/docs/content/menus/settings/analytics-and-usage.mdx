@@ -15,7 +15,7 @@ Choose a date range with the quick presets (Last 24h/7d/30d/90d) or custom From/
 
 <CardGroup cols={3}>
   <Card title="Overview" icon="chart-line">Team size, AI adoption, LLM calls, tool runs, and the top adopters.</Card>
-  <Card title="Costs" icon="coins">Estimated LLM spend by day, by user, and by model.</Card>
+  <Card title="Costs" icon="coins">Estimated LLM spend by day, by user, by model, by agent, and by tool.</Card>
   <Card title="Tokens" icon="coins">Input, output, and cache token usage by day, user, and model.</Card>
   <Card title="Agents & Pipelines" icon="diagram-project">Run counts, latency, and errors per agent or pipeline.</Card>
   <Card title="Tools" icon="toolbox">Call counts, latency, and errors per tool.</Card>
@@ -25,8 +25,8 @@ Choose a date range with the quick presets (Last 24h/7d/30d/90d) or custom From/
 
 Select **Export to Excel** to download all tabs for the selected range as a single workbook.
 
-<Note title="Cost and token totals are project- and member-scoped only">
-Costs and tokens break down by user and by model, and agent/pipeline analytics break down runs, latency, and errors per agent — but cost itself is never attributed to a specific agent or tool (tracked in #875).
+<Note title="Cost by agent and by tool is an estimate, not the accounted spend">
+The Costs tab's **Cost by Agent** and **Cost by Tool** tables answer which agent or tool a call is attributable to (#875), the same estimate the by-model and by-user tables already give — derived from the request log and the price catalogue, not the figure the Usage tab's budget meter accounts. Cost by agent covers calls made from a runtime execution, which most direct `/llm` traffic is not; cost by tool attributes an execution's whole LLM spend to every tool that execution called, so a tool used inside a longer turn is not "what that one tool call cost" in isolation. Both tables are absent — not a zero row — for a deployment or a window that cannot correlate either dimension yet. Setting a spend LIMIT per agent or per tool is not available; see [Budgets and LLM Governance](/admin/budgets-and-governance).
 </Note>
 
 ## Usage

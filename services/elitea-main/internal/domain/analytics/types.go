@@ -1,6 +1,9 @@
 package analytics
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // UsageSummary is the project overview: what the LLM path did in a window.
 //
@@ -165,6 +168,23 @@ type AgentAnalytics struct {
 	AvgDuration   float64 `json:"avg_duration_ms"`
 	TotalTokens   int64   `json:"total_tokens"`
 	ErrorRate     float64 `json:"error_rate"`
+
+	// Priced (issue #875) is true when the catalogue prices at least one call
+	// this agent made. The three money fields below are pointers so they
+	// disappear from the JSON when nothing priced them — the same
+	// "priced"/omitted-money contract estimate.go's by_model and by_user rows
+	// already carry, so a client reading either dimension learns the absence
+	// the same way.
+	//
+	// This is an ESTIMATE, derived from gateway.gateway_models the way every
+	// other cost figure this platform derives (never accounted) is. It can
+	// never disagree with GetUsageSummary's total_tokens for the same agent,
+	// because it is computed over the SAME rows agentUsage already resolves —
+	// it adds a price to a token count agentUsage was already summing.
+	Priced     bool         `json:"priced"`
+	InputCost  *json.Number `json:"input_cost,omitempty"`
+	OutputCost *json.Number `json:"output_cost,omitempty"`
+	TotalCost  *json.Number `json:"total_cost,omitempty"`
 }
 
 // AgentBreakdown is the Agents tab, and the reason it is a struct rather than a

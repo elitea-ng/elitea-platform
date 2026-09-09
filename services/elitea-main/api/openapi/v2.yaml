@@ -1057,7 +1057,9 @@ components:
         [token_dimension_available, cost_dimension_available,
          cache_dimension_available, currency, priced_calls, unpriced_calls,
          totals, by_model, by_user, daily, by_model_truncated,
-         by_user_truncated]
+         by_user_truncated, agent_dimension_available, attributed_agent_calls,
+         unattributed_agent_calls, by_agent_truncated, tool_dimension_available,
+         attributed_tool_calls, unattributed_tool_calls, by_tool_truncated]
       properties:
         token_dimension_available:
           type: boolean
@@ -1112,6 +1114,156 @@ components:
           type: boolean
         by_user_truncated:
           type: boolean
+        agent_dimension_available:
+          type: boolean
+          description: >
+            True when this deployment can correlate a request to an agent at
+            all — the SAME capability GetAgentAnalytics reports as
+            AgentBreakdown.Available (issue #875). False for a database that
+            has not run shared migration 0100, or for a window with no
+            execution-tagged request. Money, not the volume that endpoint
+            already answers.
+        attributed_agent_calls:
+          type: integer
+          format: int64
+          description: >
+            Priceable requests correlated to an agent in the window.
+        unattributed_agent_calls:
+          type: integer
+          format: int64
+          description: >
+            Priceable requests NOT made from a runtime execution — most /llm
+            traffic. by_agent is never expected to sum to totals.calls.
+        by_agent:
+          type: array
+          description: >
+            One entry per agent, capped at 100 rows, ABSENT when
+            agent_dimension_available is false. Present and empty when the
+            window has attributable traffic but the tenant chat projection
+            cannot name any of it — a real and different state from absence.
+          items:
+            $ref: '#/components/schemas/AnalyticsEstimateAgent'
+        by_agent_truncated:
+          type: boolean
+        tool_dimension_available:
+          type: boolean
+          description: >
+            True when this deployment records tool calls
+            (elitea_runtime.tool_call_records, shared migration 0119) AND can
+            correlate the request log's execution id (0100). It says nothing
+            about whether any row in the window actually correlates — see
+            attributed_tool_calls.
+        attributed_tool_calls:
+          type: integer
+          format: int64
+          description: >
+            tool_call_records rows in the window that carry an execution id,
+            and so can be priced. An explicit run (toolkit.call_tool.v1) makes
+            no LLM call itself, so it is counted here but contributes no
+            money.
+        unattributed_tool_calls:
+          type: integer
+          format: int64
+        by_tool:
+          type: array
+          description: |
+            One entry per (toolkit, tool), capped at 100 rows, ABSENT when
+            tool_dimension_available is false.
+
+            There is no producer that ties one LLM request to one tool: a
+            completion decides whether to call a tool, but the token cost
+            belongs to the completion, not to any one tool it invoked. So each
+            row is an EXECUTION's total LLM cost attributed to every tool that
+            execution called — an execution that calls two tools counts its
+            cost under both, deliberately, and by_tool is never expected to
+            sum to totals.total_cost the way by_model already is not expected
+            to (one call has one model but can touch several tools). A tool
+            called more than once inside one execution is folded into ONE
+            attribution (see AnalyticsEstimateTool.attributed_runs), so a
+            repeated call cannot multiply the same execution's cost.
+          items:
+            $ref: '#/components/schemas/AnalyticsEstimateTool'
+        by_tool_truncated:
+          type: boolean
+
+    AnalyticsEstimateAgent:
+      type: object
+      required:
+        [application_id, name, calls, prompt_tokens, completion_tokens,
+         total_tokens, priced]
+      properties:
+        application_id: { type: string }
+        name: { type: string }
+        calls:
+          type: integer
+          format: int64
+        prompt_tokens:
+          type: integer
+          format: int64
+        completion_tokens:
+          type: integer
+          format: int64
+        total_tokens:
+          type: integer
+          format: int64
+        priced:
+          type: boolean
+          description: >
+            False when the catalogue prices none of this agent's calls. The
+            row keeps its token counts and omits its money.
+        input_cost:
+          type: number
+        output_cost:
+          type: number
+        total_cost:
+          type: number
+      description: >
+        One agent's LLM spend in the window (issue #875), from
+        gateway.llm_request_logs.execution_id resolved through
+        elitea_runtime.execution_jobs into the tenant chat projection — the
+        same correlation AgentAnalytics reports as counts, priced through
+        gateway.gateway_models.
+
+    AnalyticsEstimateTool:
+      type: object
+      required:
+        [toolkit_id, toolkit_name, tool_name, attributed_runs, prompt_tokens,
+         completion_tokens, total_tokens, priced]
+      properties:
+        toolkit_id:
+          type: string
+          description: Empty when the producer did not know one. See ToolAnalytics.
+        toolkit_name: { type: string }
+        tool_name: { type: string }
+        attributed_runs:
+          type: integer
+          format: int64
+          description: >
+            Distinct EXECUTIONS that called this tool and also correlate to at
+            least one priceable request — not a tool_call_records row count.
+            A tool called twice inside one execution and never elsewhere reads
+            attributed_runs: 1 here and run_count: 2 on the Tools tab; both are
+            correct measurements of different things.
+        prompt_tokens:
+          type: integer
+          format: int64
+        completion_tokens:
+          type: integer
+          format: int64
+        total_tokens:
+          type: integer
+          format: int64
+        priced:
+          type: boolean
+        input_cost:
+          type: number
+        output_cost:
+          type: number
+        total_cost:
+          type: number
+      description: >
+        One (toolkit, tool)'s attributed LLM spend in the window (issue #875).
+        See AnalyticsUsageEstimate.by_tool for the attribution rule.
 
     AnalyticsEstimateTotals:
       type: object
@@ -3896,7 +4048,7 @@ components:
 
     AgentAnalytics:
       type: object
-      required: [application_id, name, run_count, avg_duration_ms, total_tokens, error_rate]
+      required: [application_id, name, run_count, avg_duration_ms, total_tokens, error_rate, priced]
       properties:
         application_id: { type: string }
         name: { type: string }
@@ -3904,6 +4056,22 @@ components:
         avg_duration_ms: { type: number }
         total_tokens: { type: integer }
         error_rate: { type: number }
+        priced:
+          type: boolean
+          description: >
+            False when the catalogue prices none of this agent's calls (issue
+            #875). The row keeps its token counts and omits its money.
+        input_cost:
+          type: number
+          description: >
+            This agent's calls priced at each call's OWN model rate, summed —
+            an ESTIMATE from gateway.gateway_models, never the accounted
+            figure /analytics_costs' kpis.total_cost reports. Absent when
+            priced is false.
+        output_cost:
+          type: number
+        total_cost:
+          type: number
       description: NOTE(W2) internal/domain/analytics/types.go:22-29.
 
     ToolAnalytics:

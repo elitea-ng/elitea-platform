@@ -9,13 +9,14 @@ import { Bar, BarChart, ResponsiveContainer, Tooltip as RechartsTooltip, XAxis, 
 import { t } from '@/shared/i18n';
 
 import { useProjectCostsQuery } from '../api/useAnalytics';
-import { costShareTotal, modelRow, userRow } from '../lib/estimate';
+import { agentRow, costShareTotal, modelRow, toolRow, userRow } from '../lib/estimate';
 import { fmtNum, fmtUsd } from '../lib/format';
 import { ChartTooltip } from './components/ChartTooltip';
 import { AnalyticsLoadError } from './components/DetailStatus';
 import { EstimateCard, EstimateNotice, EstimateTiles, EstimateUnavailable } from './components/EstimateShell';
 import type { EstimateTile } from './components/EstimateShell';
 import { CostTable } from './components/EstimateTables';
+import type { EstimateRow } from './components/EstimateTables';
 
 /**
  * The Costs tab.
@@ -86,6 +87,8 @@ function AnalyticsCostsImpl({ projectId, dateFrom, dateTo }: AnalyticsCostsProps
 
   const modelRows = useMemo(() => (estimate?.by_model ?? []).map(modelRow), [estimate]);
   const userRows = useMemo(() => (estimate?.by_user ?? []).map(userRow), [estimate]);
+  const agentRows = useMemo(() => (estimate?.by_agent ?? []).map(agentRow), [estimate]);
+  const toolRows = useMemo(() => (estimate?.by_tool ?? []).map(toolRow), [estimate]);
 
   if (isFetching) {
     return (
@@ -199,8 +202,74 @@ function AnalyticsCostsImpl({ projectId, dateFrom, dateTo }: AnalyticsCostsProps
         shareTotal={shareTotal}
         emptyMessage={t('analytics.costs.byModelEmpty', 'No model was called in this window.')}
       />
+      <AgentAndToolCostTables
+        estimate={estimate}
+        agentRows={agentRows}
+        toolRows={toolRows}
+        shareTotal={shareTotal}
+      />
     </Box>
   );
 }
 
 export const AnalyticsCosts = memo(AnalyticsCostsImpl);
+
+interface AgentAndToolCostTablesProps {
+  readonly estimate: NonNullable<ReturnType<typeof useProjectCostsQuery>['data']>['estimate'];
+  readonly agentRows: readonly EstimateRow[];
+  readonly toolRows: readonly EstimateRow[];
+  readonly shareTotal: number;
+}
+
+/**
+ * The agent and tool cost tables (issue #875), split out of AnalyticsCostsImpl
+ * to keep that function under the complexity budget.
+ *
+ * Each table is ABSENT when its dimension is unavailable — the same contract
+ * the Agents/Tools tabs' own `*_dimension_available` flags hold — never
+ * rendered as an empty table, which would read as "no agent/tool ran" for a
+ * window this deployment cannot correlate at all.
+ */
+function AgentAndToolCostTables({
+  estimate,
+  agentRows,
+  toolRows,
+  shareTotal,
+}: AgentAndToolCostTablesProps): ReactNode {
+  if (estimate === undefined) return null;
+  return (
+    <>
+      {estimate.agent_dimension_available && (
+        <CostTable
+          title={t('analytics.costs.byAgentTitle', 'Cost by Agent')}
+          subtitle={
+            estimate.by_agent_truncated
+              ? t('analytics.costs.byAgentTruncated', 'The busiest agents; the list was capped')
+              : t('analytics.costs.byAgentSubtitle', 'Every agent run correlated to a call in the window')
+          }
+          entityColumn={t('analytics.costs.columnAgent', 'Agent')}
+          rows={agentRows}
+          shareTotal={shareTotal}
+          emptyMessage={t('analytics.costs.byAgentEmpty', 'No agent run correlated to a call in this window.')}
+        />
+      )}
+      {estimate.tool_dimension_available && (
+        <CostTable
+          title={t('analytics.costs.byToolTitle', 'Cost by Tool')}
+          subtitle={
+            estimate.by_tool_truncated
+              ? t('analytics.costs.byToolTruncated', 'The busiest tools; the list was capped')
+              : t(
+                  'analytics.costs.byToolSubtitle',
+                  "Each execution's LLM spend attributed to every tool it called",
+                )
+          }
+          entityColumn={t('analytics.costs.columnTool', 'Tool')}
+          rows={toolRows}
+          shareTotal={shareTotal}
+          emptyMessage={t('analytics.costs.byToolEmpty', 'No tool call correlated to a call in this window.')}
+        />
+      )}
+    </>
+  );
+}

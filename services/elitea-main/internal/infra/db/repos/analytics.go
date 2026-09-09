@@ -94,17 +94,28 @@ package repos
 // usageDimensions.Available already does for a deployment upgraded mid-period.
 // It never answers "0 agent runs" for a month full of them.
 //
-// # Money is deliberately not read here
+// # The ACCOUNTED total is deliberately not read here
 //
 // `total_cost` has a producer — gateway.llm_budget_accumulators — and
 // /analytics_costs already reports it, with the scope rules that keep it from
 // double-counting (a user-scope row is a subset of its project's spend, not an
-// addition to it). Reading the same table a second way here would be a second
-// view of the same money that could disagree with the first. The client asks
-// /analytics_costs for cost and this endpoint for volume.
+// addition to it). Reading that table a second way here would be a second
+// view of the ACCOUNTED money that could disagree with the first, so it never
+// is: the client asks /analytics_costs for the accounted figure and this
+// endpoint for volume.
+//
+// agentUsage's Priced/InputCost/OutputCost/TotalCost fields (issue #875) are a
+// DIFFERENT figure and do not break this rule: they price each row at
+// gateway.gateway_models' catalogue rate, the exact ESTIMATE
+// /analytics_costs' own `estimate` block already derives for by_model and
+// by_user, from the same request-log rows this file was already summing for
+// tokens. It is a second query of that estimate, the way the Costs tab's
+// by_model and the Overview tab's model table already are two queries of
+// overlapping request-log rows — never a second query of the accumulator.
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -152,6 +163,13 @@ const (
 	// is REPORTED (AgentBreakdown.Truncated) because the client normalises its
 	// share column by summing what it received.
 	agentRowsLimit = 100
+	// agentCostScale is how many decimal places agentUsage's derived money
+	// carries — a STRING because it is interpolated into the query text, not
+	// bound as a parameter. Matches estimateCostScale
+	// (internal/api/v2/analytics/estimate.go): three digits finer than the
+	// platform's own int64 nano-USD unit, so a division by 1,000,000 in
+	// NUMERIC does not keep growing the scale into a string of trailing zeros.
+	agentCostScale = "12"
 	// toolRowsLimit caps the Tools tab. Same order as agentRowsLimit and for
 	// the same reason: the rows are one per (toolkit, tool), not one per call.
 	// The cut is REPORTED (ToolBreakdown.Truncated) because the client
@@ -567,6 +585,14 @@ LEFT JOIN ` + schema + `.applications AS app
 	// keyed (execution_id, generation), and a join on the id alone multiplies
 	// every request by the number of retries the turn had.
 	//
+	// The LEFT JOIN against gateway.gateway_models (issue #875) prices EACH
+	// ROW at ITS OWN model's rate before the per-execution sum, the way
+	// estimate.go's by_model and by_user reads do — an agent's calls can
+	// address several different models, so pricing has to happen before the
+	// aggregate, not after. A row the catalogue does not price joins to NULL
+	// rates; sum() skips a NULL term, so an unpriced call adds nothing to the
+	// money and everything to the tokens agentUsage was already summing.
+	//
 	// agent: DISTINCT ON (task_id) because a projection could hold more than
 	// one group against an execution; the earliest is the response the
 	// execution was admitted for.
@@ -576,8 +602,14 @@ WITH attributed AS (
            count(*)::bigint AS requests,
            coalesce(sum(l.prompt_tokens + l.completion_tokens), 0)::bigint AS tokens,
            coalesce(sum(l.duration_ms), 0)::bigint AS duration_ms,
-           count(*) FILTER (WHERE ` + errorPredicate + `)::bigint AS errors
+           count(*) FILTER (WHERE ` + errorPredicate + `)::bigint AS errors,
+           bool_or(m.input_cost_per_1m_tokens IS NOT NULL
+                    OR m.output_cost_per_1m_tokens IS NOT NULL) AS priced,
+           coalesce(sum(l.prompt_tokens::numeric * m.input_cost_per_1m_tokens) / 1000000, 0) AS input_cost,
+           coalesce(sum(l.completion_tokens::numeric * m.output_cost_per_1m_tokens) / 1000000, 0) AS output_cost
     FROM gateway.llm_request_logs AS l
+    LEFT JOIN gateway.gateway_models AS m
+      ON m.provider = l.provider AND m.model_name = l.model
     WHERE l.project_id = $1
       AND l.occurred_at >= $2
       AND l.occurred_at < $3
@@ -607,7 +639,11 @@ SELECT agent.application_id,
        sum(attributed.requests)::bigint,
        sum(attributed.tokens)::bigint,
        sum(attributed.duration_ms)::bigint,
-       sum(attributed.errors)::bigint
+       sum(attributed.errors)::bigint,
+       bool_or(attributed.priced),
+       round(sum(attributed.input_cost), ` + agentCostScale + `)::text,
+       round(sum(attributed.output_cost), ` + agentCostScale + `)::text,
+       round(sum(attributed.input_cost) + sum(attributed.output_cost), ` + agentCostScale + `)::text
 FROM agent
 JOIN attributed ON attributed.execution_id = agent.execution_id` + nameJoin + `
 GROUP BY agent.application_id` + nameGroup + `
@@ -626,13 +662,19 @@ LIMIT $4`
 	agents := make([]analytics.AgentAnalytics, 0)
 	for rows.Next() {
 		var (
-			agent      analytics.AgentAnalytics
-			durationMS int64
-			errorCount int64
+			agent                      analytics.AgentAnalytics
+			durationMS                 int64
+			errorCount                 int64
+			inCost, outCost, totalCost string
 		)
 		if err := rows.Scan(&agent.ApplicationID, &agent.Name, &agent.RunCount,
-			&agent.TotalTokens, &durationMS, &errorCount); err != nil {
+			&agent.TotalTokens, &durationMS, &errorCount,
+			&agent.Priced, &inCost, &outCost, &totalCost); err != nil {
 			return nil, false, fmt.Errorf("analytics: agent usage scan: %w", err)
+		}
+		if agent.Priced {
+			in, out, total := json.Number(inCost), json.Number(outCost), json.Number(totalCost)
+			agent.InputCost, agent.OutputCost, agent.TotalCost = &in, &out, &total
 		}
 		// Guarded rather than assumed non-zero. A group-by cannot produce a row
 		// with no requests today, but a division that only works because of an

@@ -80,6 +80,16 @@ class EliteaClientContext:
     # has none; the SDK client is then built without the header, and the
     # platform refuses the one route that reads it.
     secrets_header_value: str = field(default="", repr=False)
+    # The runtime execution this client is scoped to (issue 875). Forwarded to
+    # the LLM call path as X-Elitea-Execution-Id so the gateway's request log
+    # (shared migration 0100) can carry it — the value
+    # internal/llmproxy/identity.go's HeaderExecutionID reads off the inbound
+    # request and re-signs, and the only producer the agent-cost read
+    # (internal/api/v2/analytics/estimate.go) has. Empty for a client built
+    # outside an execution claim (there is none today; every construction site
+    # is claim-bound), which is the same "not every caller carries one" case
+    # the header's own edge-side validation already tolerates.
+    execution_id: str = ""
 
     def __post_init__(self) -> None:
         if self.project_id < 1 or not _valid_base_url(self.base_url):
@@ -140,6 +150,7 @@ class ClaimBoundEliteaClientContextFactory:
             base_url=self._base_url,
             auth_token=redeemed.auth_token,
             secrets_header_value=redeemed.secrets_header_value,
+            execution_id=claim.execution_id,
         )
 
 

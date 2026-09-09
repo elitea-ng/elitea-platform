@@ -49,10 +49,21 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 )
+
+// agentExecutionCapabilities is internal/infra/db/repos/analytics.go's
+// agentCapabilities, duplicated rather than imported: this package must not
+// import internal/infra/db/repos (a repos-package integration test builds this
+// package's CostsHandler over the SAME migrated template
+// GetAgentAnalytics' own tests use, and repos -> analytics -> repos would be an
+// import cycle for that test binary). The two lists must never drift —
+// agent_execution_jobs' own CHECK constraint (shared 0055) is the same pair,
+// which is what keeps THAT copy from drifting either.
+const agentExecutionCapabilities = `('agent.execute.application.v1', 'agent.execute.adhoc.v1')`
 
 // Row caps. Both probe for one extra row, so a cut is reported rather than
 // silent — the rule the neighbouring repository states at length.
@@ -203,6 +214,95 @@ type costEstimate struct {
 	Daily            []estimateDailyRow `json:"daily"`
 	ByModelTruncated bool               `json:"by_model_truncated"`
 	ByUserTruncated  bool               `json:"by_user_truncated"`
+
+	// AgentDimensionAvailable is true when this deployment can correlate a
+	// request to an agent at all — the same capability GetAgentAnalytics
+	// (internal/infra/db/repos/analytics.go) reports as
+	// AgentBreakdown.Available. False for a database that has not run shared
+	// migration 0100, or for a window with no execution-tagged request.
+	//
+	// This is a MONEY view of the SAME correlation that endpoint already
+	// serves as counts (issue 875): both read gateway.llm_request_logs
+	// .execution_id and resolve it through elitea_runtime.execution_jobs into
+	// the tenant chat projection. Nothing here is a second source of truth
+	// about which requests are agent requests — see estimateByAgent.
+	AgentDimensionAvailable bool `json:"agent_dimension_available"`
+	// AttributedAgentCalls and UnattributedAgentCalls split the window's
+	// PRICEABLE requests the same way GetAgentAnalytics splits ALL of them:
+	// most /llm traffic is not made from a runtime execution, so ByAgent is
+	// never expected to sum to Totals.Calls.
+	AttributedAgentCalls   int64              `json:"attributed_agent_calls"`
+	UnattributedAgentCalls int64              `json:"unattributed_agent_calls"`
+	ByAgent                []estimateAgentRow `json:"by_agent,omitempty"`
+	ByAgentTruncated       bool               `json:"by_agent_truncated"`
+
+	// ToolDimensionAvailable is true when this deployment records tool calls
+	// at all (elitea_runtime.tool_call_records, shared migration 0119) and can
+	// resolve the request log's execution id (0100). It says nothing about
+	// whether any ROW in the window correlates — see AttributedToolCalls.
+	ToolDimensionAvailable bool `json:"tool_dimension_available"`
+	// AttributedToolCalls and UnattributedToolCalls split the tool_call_records
+	// rows in the window by whether they carry an execution id. A call an
+	// agent made inside a turn carries one only from #875 onward
+	// (internal/infra/db/repos/agent_trace.go); an explicit run
+	// (toolkit.call_tool.v1) always did, but makes no LLM call itself, so it
+	// contributes rows here and never money. A large UnattributedToolCalls is
+	// the signal that ByTool's money covers a fraction of the Tools tab's own
+	// call counts.
+	AttributedToolCalls   int64             `json:"attributed_tool_calls"`
+	UnattributedToolCalls int64             `json:"unattributed_tool_calls"`
+	ByTool                []estimateToolRow `json:"by_tool,omitempty"`
+	ByToolTruncated       bool              `json:"by_tool_truncated"`
+}
+
+// estimateAgentRows and estimateToolRows cap ByAgent and ByTool, in the same
+// order as estimateModelRows and for the same reason (agentRowsLimit /
+// toolRowsLimit, internal/infra/db/repos/analytics.go): the rows are one per
+// AGENT or one per TOOL, not one per call, so a group-by can collapse a
+// project's whole history into a much smaller table. The cut is reported
+// (ByAgentTruncated / ByToolTruncated).
+const (
+	estimateAgentRows = 100
+	estimateToolRows  = 100
+)
+
+// estimateAgentRow is one agent (application) in the window, money derived the
+// same way estimateModelRow's is.
+type estimateAgentRow struct {
+	ApplicationID    string       `json:"application_id"`
+	Name             string       `json:"name"`
+	Calls            int64        `json:"calls"`
+	PromptTokens     int64        `json:"prompt_tokens"`
+	CompletionTokens int64        `json:"completion_tokens"`
+	TotalTokens      int64        `json:"total_tokens"`
+	Priced           bool         `json:"priced"`
+	InputCost        *json.Number `json:"input_cost,omitempty"`
+	OutputCost       *json.Number `json:"output_cost,omitempty"`
+	TotalCost        *json.Number `json:"total_cost,omitempty"`
+}
+
+// estimateToolRow is one (toolkit, tool) in the window.
+//
+// AttributedRuns is NOT the Tools tab's call count. It counts distinct
+// EXECUTIONS that called this tool and that also correlate to at least one
+// priceable request — not tool_call_records rows — because the money below is
+// an execution's total LLM spend attributed to every tool that execution used,
+// and an execution that called the same tool three times must not triple that
+// attribution. A tool called twice inside one execution and never elsewhere
+// therefore reads AttributedRuns: 1 here and RunCount: 2 on the Tools tab, and
+// both are correct measurements of different things.
+type estimateToolRow struct {
+	ToolkitID        string       `json:"toolkit_id"`
+	ToolkitName      string       `json:"toolkit_name"`
+	ToolName         string       `json:"tool_name"`
+	AttributedRuns   int64        `json:"attributed_runs"`
+	PromptTokens     int64        `json:"prompt_tokens"`
+	CompletionTokens int64        `json:"completion_tokens"`
+	TotalTokens      int64        `json:"total_tokens"`
+	Priced           bool         `json:"priced"`
+	InputCost        *json.Number `json:"input_cost,omitempty"`
+	OutputCost       *json.Number `json:"output_cost,omitempty"`
+	TotalCost        *json.Number `json:"total_cost,omitempty"`
 }
 
 // relationsPresent reports whether every named relation exists.
@@ -266,6 +366,12 @@ func buildEstimate(ctx context.Context, tx pgx.Tx, projectID int64, from, to tim
 		return nil, err
 	}
 	if err := estimateDaily(ctx, tx, estimate, pricesPresent, priced, projectID, from, to); err != nil {
+		return nil, err
+	}
+	if err := estimateByAgent(ctx, tx, estimate, pricesPresent, priced, projectID, from, to); err != nil {
+		return nil, err
+	}
+	if err := estimateByTool(ctx, tx, estimate, pricesPresent, priced, projectID, from, to); err != nil {
 		return nil, err
 	}
 	if !priced {
@@ -532,5 +638,350 @@ ORDER BY 1`
 		return err
 	}
 	estimate.Daily = out
+	return nil
+}
+
+/* ── agent and tool cost, issue 875 ───────────────────────────────────── */
+
+// requestLogExecutionIDColumn probes for the column shared migration 0100
+// adds to gateway.llm_request_logs — the same probe
+// internal/infra/db/repos/analytics.go's agentExecutionColumn runs, duplicated
+// here rather than shared because this package reads with raw pgx.Tx and that
+// one reads through its own repository seam.
+//
+// The probe runs BEFORE any query that references the column, never as a
+// caught error after: this file's queries share one REPEATABLE READ
+// transaction with by_model, by_user and daily, and PostgreSQL aborts the
+// WHOLE transaction on a failed statement, which would take those down too.
+func requestLogExecutionIDColumn(ctx context.Context, tx pgx.Tx) (bool, error) {
+	const query = `
+SELECT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'gateway'
+      AND table_name = 'llm_request_logs'
+      AND column_name = 'execution_id'
+)`
+	var present bool
+	if err := tx.QueryRow(ctx, query).Scan(&present); err != nil {
+		return false, err
+	}
+	return present, nil
+}
+
+// estimateAgentAttribution splits the window's request-log rows into those
+// that carry a usable execution id and those that do not — the same split
+// GetAgentAnalytics' agentAttribution reports as AttributedCalls /
+// UnattributedCalls, so the two numbers can be compared across the Overview
+// and Agents tabs without reading two different predicates.
+func estimateAgentAttribution(
+	ctx context.Context, tx pgx.Tx, projectID int64, from, to time.Time,
+) (attributed, unattributed int64, err error) {
+	query := `
+SELECT count(*) FILTER (WHERE l.execution_id IS NOT NULL AND EXISTS (
+           SELECT 1 FROM elitea_runtime.execution_jobs AS j
+           WHERE j.execution_id = l.execution_id
+             AND j.capability_id IN ` + agentExecutionCapabilities + `
+             AND (j.resource_project_id = l.project_id
+                  OR j.projection_project_id = l.project_id)))::bigint,
+       count(*)::bigint
+FROM gateway.llm_request_logs AS l
+WHERE l.project_id = $1
+  AND l.occurred_at >= $2
+  AND l.occurred_at < $3`
+
+	var total int64
+	if err := tx.QueryRow(ctx, query, projectID, from, to).Scan(&attributed, &total); err != nil {
+		return 0, 0, fmt.Errorf("analytics: estimate agent attribution: %w", err)
+	}
+	return attributed, total - attributed, nil
+}
+
+// estimateByAgent is the ByAgent view: the SAME execution-to-agent correlation
+// GetAgentAnalytics reads (internal/infra/db/repos/analytics.go's agentUsage —
+// gateway.llm_request_logs.execution_id, resolved through
+// elitea_runtime.execution_jobs into the tenant chat projection), priced
+// through gateway.gateway_models the way ByModel and ByUser already are in
+// this file.
+//
+// It is a SEPARATE query from agentUsage, not a shared one: that one answers
+// on its own snapshot and reports token/duration/error counts and never money
+// (analytics.go's own header: "Money is deliberately not read here"). This one
+// runs inside the SAME REPEATABLE READ transaction Costs() opened for
+// by_model, by_user and daily, so a reader comparing this table against them
+// never sees two snapshots of a table the gateway commits into continuously.
+func estimateByAgent(ctx context.Context, tx pgx.Tx, estimate *costEstimate,
+	pricesPresent, priced bool, projectID int64, from, to time.Time,
+) error {
+	hasExecutionColumn, err := requestLogExecutionIDColumn(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if !hasExecutionColumn {
+		// A NAMED absence rather than an empty table — see AgentDimensionAvailable.
+		return nil
+	}
+	// estimateAgentAttribution's query references elitea_runtime.execution_jobs
+	// directly, with no probe of its own — a Go-bootstrapped database can carry
+	// 0100's column (part of GatewayMigrationSQL's history) without ever having
+	// run the elitea_runtime baseline, and PostgreSQL would answer 42P01/3F000
+	// rather than zero rows. Checked here, not caught after: this read shares
+	// the ONE REPEATABLE READ transaction Costs() opened for by_model, by_user
+	// and daily, and a failed statement poisons all of them.
+	jobsPresent, err := relationsPresent(ctx, tx, "elitea_runtime.execution_jobs")
+	if err != nil {
+		return err
+	}
+	if !jobsPresent {
+		return nil
+	}
+
+	attributed, unattributed, err := estimateAgentAttribution(ctx, tx, projectID, from, to)
+	if err != nil {
+		return err
+	}
+	estimate.AttributedAgentCalls = attributed
+	estimate.UnattributedAgentCalls = unattributed
+	if attributed == 0 {
+		// NOT AVAILABLE, and not "zero agent spend" — the pre-0100 window, or a
+		// runtime that is not tagging its calls. See AgentBreakdown.Available.
+		return nil
+	}
+	estimate.AgentDimensionAvailable = true
+
+	schema := pgx.Identifier{"p_" + strconv.FormatInt(projectID, 10)}.Sanitize()
+	present, err := relationsPresent(ctx, tx, schema+".chat_message_group", schema+".chat_participants")
+	if err != nil {
+		return err
+	}
+	if !present {
+		// The chat projection is required for the execution-to-agent join and
+		// is absent on a Go-bootstrapped database with no pylon history — the
+		// same split agentUsage documents. The attributed count above is still
+		// a true measurement of the window.
+		estimate.ByAgent = []estimateAgentRow{}
+		return nil
+	}
+	named, err := relationsPresent(ctx, tx, schema+".applications")
+	if err != nil {
+		return err
+	}
+	// A fixed fragment chosen from two constants, never assembled from request
+	// data — mirrors agentUsage's own nameSelect/nameJoin/nameGroup split, and
+	// for the same reason a bare literal cannot appear in GROUP BY.
+	nameSelect, nameJoin, nameGroup := `''`, ``, ``
+	if named {
+		nameSelect = `coalesce(app.name, '')`
+		nameJoin = `
+LEFT JOIN ` + schema + `.applications AS app
+       ON app.id = agent.application_id::integer`
+		nameGroup = `, coalesce(app.name, '')`
+	}
+
+	query := `
+WITH calls AS (
+  SELECT l.execution_id, l.prompt_tokens, l.completion_tokens, ` + rateColumns(pricesPresent) +
+		sourceClause(pricesPresent) + requestLogWindow + `
+    AND l.execution_id IS NOT NULL
+    AND EXISTS (
+        SELECT 1 FROM elitea_runtime.execution_jobs AS j
+        WHERE j.execution_id = l.execution_id
+          AND j.capability_id IN ` + agentExecutionCapabilities + `
+          AND (j.resource_project_id = l.project_id OR j.projection_project_id = l.project_id)
+    )
+), agent AS (
+    SELECT DISTINCT ON (g.task_id)
+           g.task_id AS execution_id,
+           (author.entity_meta ->> 'id') AS application_id
+    FROM ` + schema + `.chat_message_group AS g
+    JOIN ` + schema + `.chat_participants AS author
+      ON author.id = g.author_participant_id
+     AND author.entity_name = 'application'
+    WHERE g.task_id IN (SELECT DISTINCT execution_id FROM calls)
+      AND author.entity_meta ->> 'id' ~ '^[1-9][0-9]*$'
+    ORDER BY g.task_id, g.id
+)
+SELECT agent.application_id,
+       ` + nameSelect + `,
+       count(*)::bigint,
+       coalesce(sum(calls.prompt_tokens), 0)::bigint,
+       coalesce(sum(calls.completion_tokens), 0)::bigint,
+       bool_or(` + pricedPredicate + `),
+       ` + costExpr("prompt_tokens", "in_rate") + `,
+       ` + costExpr("completion_tokens", "out_rate") + `,
+       ` + totalCostExpr() + `
+FROM calls
+JOIN agent ON agent.execution_id = calls.execution_id` + nameJoin + `
+GROUP BY agent.application_id` + nameGroup + `
+ORDER BY count(*) DESC, agent.application_id ASC
+LIMIT $4`
+
+	rows, err := tx.Query(ctx, query, projectID, from, to, estimateAgentRows+1)
+	if err != nil {
+		return fmt.Errorf("analytics: estimate by agent: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]estimateAgentRow, 0, estimateAgentRows)
+	for rows.Next() {
+		var row estimateAgentRow
+		var rowPriced bool
+		var inCost, outCost, totalCost string
+		if err := rows.Scan(&row.ApplicationID, &row.Name, &row.Calls,
+			&row.PromptTokens, &row.CompletionTokens, &rowPriced,
+			&inCost, &outCost, &totalCost); err != nil {
+			return err
+		}
+		row.TotalTokens = row.PromptTokens + row.CompletionTokens
+		row.Priced = rowPriced
+		row.InputCost, row.OutputCost, row.TotalCost = scanCosts(priced && rowPriced, inCost, outCost, totalCost)
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if len(out) > estimateAgentRows {
+		estimate.ByAgent, estimate.ByAgentTruncated = out[:estimateAgentRows], true
+		return nil
+	}
+	estimate.ByAgent = out
+	return nil
+}
+
+// estimateToolAttribution splits the window's tool_call_records rows into
+// those that carry an execution id and those that do not, the same way
+// estimateAgentAttribution splits the request log. See
+// ToolCallRecord.ExecutionID (internal/infra/db/repos/tool_call_records.go)
+// for which producer sets it and since when.
+func estimateToolAttribution(
+	ctx context.Context, tx pgx.Tx, projectID int64, from, to time.Time,
+) (attributed, unattributed int64, err error) {
+	const query = `
+SELECT count(*) FILTER (WHERE r.execution_id IS NOT NULL)::bigint,
+       count(*)::bigint
+FROM elitea_runtime.tool_call_records AS r
+WHERE r.project_id = $1
+  AND r.started_at >= $2
+  AND r.started_at < $3`
+
+	var total int64
+	if err := tx.QueryRow(ctx, query, projectID, from, to).Scan(&attributed, &total); err != nil {
+		return 0, 0, fmt.Errorf("analytics: estimate tool attribution: %w", err)
+	}
+	return attributed, total - attributed, nil
+}
+
+// estimateByTool is the ByTool view.
+//
+// There is no producer that ties an LLM request directly to a tool: a
+// completion decides whether to call a tool, but the token cost belongs to the
+// COMPLETION, not to any one tool it may have invoked. So this attributes an
+// EXECUTION's total LLM cost to every tool that execution called (#875) —
+// correlated through elitea_runtime.tool_call_records.execution_id, which
+// agent_trace.go's recordAgentToolCalls now stamps with the same value
+// gateway.llm_request_logs.execution_id carries.
+//
+// AN EXECUTION THAT CALLS TWO TOOLS COUNTS ITS COST TWICE, ONCE PER TOOL. That
+// is a deliberate fan-out, not a bug: ByTool answers "what did using this tool
+// cost", not "how was the project's spend partitioned", and those are
+// different questions with different arithmetic — the second one is
+// Totals.TotalCost, and ByTool is never expected to sum to it, the same way
+// ByAgent and ByModel already are not (each request has exactly one model but
+// can touch several tools). A tool called more than once inside one execution
+// is folded into ONE attribution (see estimateToolRow.AttributedRuns) so a
+// repeated call cannot multiply the same execution's cost.
+func estimateByTool(ctx context.Context, tx pgx.Tx, estimate *costEstimate,
+	pricesPresent, priced bool, projectID int64, from, to time.Time,
+) error {
+	hasExecutionColumn, err := requestLogExecutionIDColumn(ctx, tx)
+	if err != nil {
+		return err
+	}
+	recordsPresent, err := relationsPresent(ctx, tx, "elitea_runtime.tool_call_records")
+	if err != nil {
+		return err
+	}
+	if !hasExecutionColumn || !recordsPresent {
+		return nil
+	}
+	estimate.ToolDimensionAvailable = true
+
+	attributed, unattributed, err := estimateToolAttribution(ctx, tx, projectID, from, to)
+	if err != nil {
+		return err
+	}
+	estimate.AttributedToolCalls = attributed
+	estimate.UnattributedToolCalls = unattributed
+	if attributed == 0 {
+		estimate.ByTool = []estimateToolRow{}
+		return nil
+	}
+
+	query := `
+WITH calls AS (
+  SELECT l.execution_id, l.prompt_tokens, l.completion_tokens, ` + rateColumns(pricesPresent) +
+		sourceClause(pricesPresent) + requestLogWindow + `
+    AND l.execution_id IS NOT NULL
+), executions AS (
+  SELECT execution_id,
+         coalesce(sum(prompt_tokens), 0)::bigint AS prompt_tokens,
+         coalesce(sum(completion_tokens), 0)::bigint AS completion_tokens,
+         bool_or(` + pricedPredicate + `) AS priced,
+         ` + costNumeric("prompt_tokens", "in_rate") + ` AS input_cost,
+         ` + costNumeric("completion_tokens", "out_rate") + ` AS output_cost
+  FROM calls
+  GROUP BY execution_id
+), tool_calls AS (
+  SELECT DISTINCT r.execution_id, r.toolkit_id, r.toolkit_name, r.tool_name
+  FROM elitea_runtime.tool_call_records AS r
+  WHERE r.project_id = $1
+    AND r.started_at >= $2
+    AND r.started_at < $3
+    AND r.execution_id IS NOT NULL
+)
+SELECT coalesce(tc.toolkit_id::text, ''),
+       coalesce(tc.toolkit_name, ''),
+       tc.tool_name,
+       count(*)::bigint,
+       coalesce(sum(e.prompt_tokens), 0)::bigint,
+       coalesce(sum(e.completion_tokens), 0)::bigint,
+       bool_or(e.priced),
+       round(coalesce(sum(e.input_cost), 0), ` + strconv.Itoa(estimateCostScale) + `)::text,
+       round(coalesce(sum(e.output_cost), 0), ` + strconv.Itoa(estimateCostScale) + `)::text,
+       round(coalesce(sum(e.input_cost) + sum(e.output_cost), 0), ` + strconv.Itoa(estimateCostScale) + `)::text
+FROM tool_calls AS tc
+JOIN executions AS e ON e.execution_id = tc.execution_id
+GROUP BY tc.toolkit_id, tc.toolkit_name, tc.tool_name
+ORDER BY count(*) DESC, tc.tool_name ASC
+LIMIT $4`
+
+	rows, err := tx.Query(ctx, query, projectID, from, to, estimateToolRows+1)
+	if err != nil {
+		return fmt.Errorf("analytics: estimate by tool: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]estimateToolRow, 0, estimateToolRows)
+	for rows.Next() {
+		var row estimateToolRow
+		var rowPriced bool
+		var inCost, outCost, totalCost string
+		if err := rows.Scan(&row.ToolkitID, &row.ToolkitName, &row.ToolName, &row.AttributedRuns,
+			&row.PromptTokens, &row.CompletionTokens, &rowPriced,
+			&inCost, &outCost, &totalCost); err != nil {
+			return err
+		}
+		row.TotalTokens = row.PromptTokens + row.CompletionTokens
+		row.Priced = rowPriced
+		row.InputCost, row.OutputCost, row.TotalCost = scanCosts(priced && rowPriced, inCost, outCost, totalCost)
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if len(out) > estimateToolRows {
+		estimate.ByTool, estimate.ByToolTruncated = out[:estimateToolRows], true
+		return nil
+	}
+	estimate.ByTool = out
 	return nil
 }

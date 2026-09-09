@@ -340,6 +340,36 @@ def _secrets_header_kwargs(context: EliteaClientContext) -> dict[str, str]:
     return {"XSECRET": context.secrets_header_value}
 
 
+# Must match elitea-main's internal/llmproxy/identity.go HeaderExecutionID and
+# elitea-llm-gateway's internal/llmproxy/identity.go headerExecutionID.
+_EXECUTION_ID_HEADER = "X-Elitea-Execution-Id"
+
+
+def _execution_header_kwargs(context: EliteaClientContext) -> dict[str, dict[str, str]]:
+    """The ``api_extra_headers`` argument that tags this client's model calls
+    with the execution they were made from (issue 875).
+
+    UNLIKE ``_secrets_header_kwargs`` this MUST go through
+    ``api_extra_headers``: the value has to reach the MODEL call as a request
+    header, and ``api_extra_headers`` is exactly the argument ``client.py``
+    copies onto ``default_headers`` for that call
+    (``elitea_sdk/runtime/clients/client.py``). It carries no secret and
+    authorizes nothing — the edge re-validates its shape and resolves it
+    against the caller's own project at read time
+    (``internal/infra/db/repos/analytics.go``) — so there is no reason to keep
+    it off the model call the way the X-SECRET value is kept off it.
+
+    An empty value adds no argument: a client built with no execution id (none
+    exists today — every construction site is claim-bound) must not send an
+    empty header for a caller not to have to distinguish it from a missing
+    one.
+    """
+
+    if not context.execution_id:
+        return {}
+    return {"api_extra_headers": {_EXECUTION_ID_HEADER: context.execution_id}}
+
+
 class EliteaSdkIndexingAdapter:
     """Pinned adapter for the current ``index_data`` SDK entrypoint.
 
@@ -367,6 +397,7 @@ class EliteaSdkIndexingAdapter:
             base_url=context.base_url,
             auth_token=context.auth_token,
             **_secrets_header_kwargs(context),
+            **_execution_header_kwargs(context),
         )
         return cls(client)
 
@@ -472,6 +503,7 @@ class EliteaSdkToolkitToolAdapter:
             # value authenticates one platform route and must not reach the
             # model call. A tool run makes model calls, so this matters here.
             **_secrets_header_kwargs(context),
+            **_execution_header_kwargs(context),
         )
         return cls(client)
 
@@ -551,6 +583,7 @@ class EliteaSdkAgentAdapter:
             base_url=context.base_url,
             auth_token=context.auth_token,
             **_secrets_header_kwargs(context),
+            **_execution_header_kwargs(context),
         )
         return cls(
             client,
