@@ -664,7 +664,17 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// named row and RestoreVersion copies a named version's content back onto
 	// `base` — and this column is where each write records which version it
 	// came from. No new table and no permission, so no shared sibling.
-	require.EqualValues(t, 136, Head(tenant))
+	// 137: tenant/0137_personal_memory_entries.sql, persistent
+	// cross-conversation personal memory (#870). One row per remembered
+	// fact, scoped to (project, user_id) the same way chat_message_feedback
+	// (135) is. `user_id` is not a foreign key (same reason as 135).
+	// `source_conversation_uuid` deliberately carries no foreign key and no
+	// ON DELETE action, so a memory outlives the conversation it was
+	// captured from. It introduces NO permission (the CRUD routes reuse
+	// `models.chat.conversation.details` for reads and
+	// `models.chat.conversation.update` for writes), so it has no shared
+	// sibling.
+	require.EqualValues(t, 137, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own

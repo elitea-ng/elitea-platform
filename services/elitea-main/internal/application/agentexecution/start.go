@@ -141,6 +141,10 @@ type CurrentApplicationStartService struct {
 	guardrails           CurrentAgentGuardrailResolver
 	freezer              CurrentApplicationVersionFreezer
 	admissions           admissionSubmitter
+	// memories is optional — attached after construction via WithMemories
+	// (#870, memories.go). A service nobody attaches it to injects no
+	// long-term memory, exactly its pre-#870 behavior.
+	memories CurrentMemoryRecallResolver
 }
 
 func NewCurrentApplicationStartService(
@@ -217,8 +221,17 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 	if err != nil {
 		return CurrentApplicationStartOutcome{}, err
 	}
+	// #870: recalled BEFORE building the input so its text can ride the same
+	// `instructions` field the worker already decodes — see memories.go's
+	// CurrentMemoryRecallResolver comment for why this is not a new wire
+	// field. Fails open: a memory-store hiccup costs this turn its recalled
+	// context, never the turn itself.
+	memoryRecall := service.resolveCurrentMemoryRecall(
+		ctx, request.ProjectID, request.ActorUserID,
+		currentMemoryRecallUserInputText(request.UserInput),
+	)
 	input, err := currentApplicationInput(
-		request, target, suggestionPolicy, toolkitGuardrails, attachments,
+		request, target, suggestionPolicy, toolkitGuardrails, attachments, memoryRecall.Text,
 	)
 	if err != nil {
 		return CurrentApplicationStartOutcome{}, err
@@ -250,6 +263,9 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 	if err != nil {
 		return CurrentApplicationStartOutcome{}, err
 	}
+	// Best-effort, AFTER admission — see recordCurrentMemoryUsage's own
+	// comment for why this never affects the turn's outcome.
+	service.recordCurrentMemoryUsage(ctx, request.ProjectID, responseMessageID, memoryRecall)
 	return CurrentApplicationStartOutcome{
 		ExecutionID: outcome.ExecutionID, CommandID: outcome.CommandID,
 		ResponseMessageID: responseMessageID, Created: outcome.Created,
@@ -268,6 +284,7 @@ func currentApplicationInput(
 	nextInputSuggestion json.RawMessage,
 	toolkitGuardrails json.RawMessage,
 	attachments []CurrentTurnAttachment,
+	memoryText string,
 ) (*runtimev1.AgentExecutionInputV1, error) {
 	skills, err := projectCurrentApplicationSkills(request.UserInput, target.VersionDetails)
 	if err != nil {
@@ -277,11 +294,16 @@ func currentApplicationInput(
 	if err != nil {
 		return nil, ErrInvalidCurrentAgentStart
 	}
+	// #870: appended AFTER skill processing, onto version_details as it
+	// stands, so recalled memory text is never itself scanned for
+	// `[[skill:...]]` markers — see appendCurrentApplicationMemories's own
+	// comment.
+	versionDetails := appendCurrentApplicationMemories(skills.versionDetails, memoryText)
 	application, err := json.Marshal(map[string]any{
 		"id":              target.ApplicationID,
 		"version_id":      target.ApplicationVersionID,
 		"variables":       json.RawMessage(target.Variables),
-		"version_details": json.RawMessage(skills.versionDetails),
+		"version_details": json.RawMessage(versionDetails),
 	})
 	if err != nil {
 		return nil, ErrInvalidCurrentAgentStart

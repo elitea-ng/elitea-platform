@@ -1657,8 +1657,9 @@ func TestProductionRouterLLMRouteHasNoLastResortBackend(t *testing.T) {
 
 func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 	// Pins #243's core invariant: cmd/elitea-main/main.go always sets
-	// AppsRepo, ConvsRepo, SkillsRepo, FoldersRepo, TagsRepo, AnalyticsRepo,
-	// and WebhookRepo, so prototypeCompatibilityRequested(cfg) was always
+	// AppsRepo, ConvsRepo, SkillsRepo, FoldersRepo, MemoriesRepo (#870),
+	// TagsRepo, AnalyticsRepo, and WebhookRepo, so
+	// prototypeCompatibilityRequested(cfg) was always
 	// true in every real deployment and the "reviewed production router"
 	// top-level branch NewRouter used to build inline was unreachable dead
 	// code. This test builds a RouterConfig with exactly those fields — the
@@ -1680,6 +1681,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		ConvsRepo:     dbrepos.NewConversationsRepo(pool),
 		SkillsRepo:    dbrepos.NewSkillsRepo(pool),
 		FoldersRepo:   dbrepos.NewFoldersRepo(pool),
+		MemoriesRepo:  dbrepos.NewMemoriesRepo(pool),
 		TagsRepo:      dbrepos.NewTagsRepo(pool),
 		AnalyticsRepo: dbrepos.NewAnalyticsRepo(pool),
 		WebhookRepo:   dbrepos.NewWebhooksRepo(pool),
@@ -1726,6 +1728,8 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"DELETE /api/v2/elitea_core/folder/prompt_lib/{projectID}/{folderID}",
 		"DELETE /api/v2/elitea_core/index_cancel/prompt_lib/{projectID}/{toolkitID}/{indexName}/{taskID}",
 		"DELETE /api/v2/elitea_core/index_meta/prompt_lib/{projectID}/{toolkitID}/{indexMetaID}",
+		"DELETE /api/v2/elitea_core/memories/prompt_lib/{projectID}",
+		"DELETE /api/v2/elitea_core/memory/prompt_lib/{projectID}/{memoryID}",
 		"DELETE /api/v2/elitea_core/message/prompt_lib/{projectID}/{messageID}",
 		"DELETE /api/v2/elitea_core/message_feedback/prompt_lib/{projectID}/{messageID}",
 		"DELETE /api/v2/elitea_core/messages/prompt_lib/{projectID}/{conversationID}",
@@ -1862,6 +1866,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"GET /api/v2/elitea_core/index_meta/prompt_lib/{projectID}/{toolkitID}",
 		"GET /api/v2/elitea_core/index_meta/prompt_lib/{projectID}/{toolkitID}/{indexMetaID}",
 		"GET /api/v2/elitea_core/internal_mcp_pat_status/prompt_lib/{projectID}/{toolkitType}",
+		"GET /api/v2/elitea_core/memories/prompt_lib/{projectID}",
 		"GET /api/v2/elitea_core/message/prompt_lib/{projectID}/{messageID}",
 		"GET /api/v2/elitea_core/message_feedback/prompt_lib/{projectID}/{messageID}",
 		"GET /api/v2/elitea_core/message_trace/prompt_lib/{projectID}/{stepID}",
@@ -2059,6 +2064,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"POST /api/v2/elitea_core/mcp_dcr_proxy/{projectID}",
 		"POST /api/v2/elitea_core/mcp_oauth_proxy/{projectID}",
 		"POST /api/v2/elitea_core/mcp_sync_tools/prompt_lib/{projectID}",
+		"POST /api/v2/elitea_core/memories/prompt_lib/{projectID}",
 		"POST /api/v2/elitea_core/message_feedback/prompt_lib/{projectID}/{messageID}",
 		"POST /api/v2/elitea_core/participants/prompt_lib/{projectID}/{conversationID}",
 		"POST /api/v2/elitea_core/pin/prompt_lib/{projectID}/{entityType}/{entityID}",
@@ -2156,6 +2162,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"PUT /api/v2/elitea_core/conversation/prompt_lib/{projectID}/{conversationID}",
 		"PUT /api/v2/elitea_core/entity_settings/prompt_lib/{projectID}/{conversationID}/{participantID}",
 		"PUT /api/v2/elitea_core/folder/prompt_lib/{projectID}/{folderID}",
+		"PUT /api/v2/elitea_core/memory/prompt_lib/{projectID}/{memoryID}",
 		"PUT /api/v2/elitea_core/project_budget/administration/{projectID}/budget",
 		"PUT /api/v2/elitea_core/project_context/prompt_lib/{projectID}/project-context",
 		"PUT /api/v2/elitea_core/project_info/prompt_lib/{projectID}/project-info",

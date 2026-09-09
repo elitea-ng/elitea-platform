@@ -39,6 +39,7 @@ import (
 	indextypesapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indextypes"
 	v2inventory "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/inventory"
 	v2mcp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/mcp"
+	v2memories "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/memories"
 	notificationsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/notifications"
 	v2pipelinetriggers "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/pipelinetriggers"
 	predictapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/predict"
@@ -2163,6 +2164,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		SharedChatTranscript: sharedChatTranscriptRepository(pool),
 		SkillsRepo:           skillsRepository(pool),
 		FoldersRepo:          foldersRepository(pool),
+		MemoriesRepo:         memoriesRepository(pool),
 		TagsRepo:             tagsRepository(pool),
 		AnalyticsRepo:        analyticsRepository(pool),
 		// The Agent Evaluation dimension library. Wired here, at the
@@ -2290,6 +2292,20 @@ func foldersRepository(pool *pgxpool.Pool) v2folders.Repository {
 		return nil
 	}
 	return dbrepos.NewFoldersRepo(pool)
+}
+
+// memoriesRepository backs the CRUD router config field (MemoriesRepo),
+// over the general-purpose pool. Turn-start RECALL is a SEPARATE
+// *dbrepos.MemoriesRepo instance, built against the admission pool inside
+// internal/runtimecomposition/composition.go — same table, same query
+// logic, different connection pool, matching how that file already builds
+// its own agentGuardrails/agentVersions repositories rather than reusing
+// this file's RouterConfig ones.
+func memoriesRepository(pool *pgxpool.Pool) v2memories.Repository {
+	if pool == nil {
+		return nil
+	}
+	return dbrepos.NewMemoriesRepo(pool)
 }
 
 // splitEnvList splits a comma-separated environment variable into trimmed,

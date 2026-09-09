@@ -1402,6 +1402,70 @@ components:
             text: { type: string, nullable: true }
             thinking: { type: string, nullable: true }
 
+    MemoryEntry:
+      type: object
+      description: >
+        One persistent, cross-conversation personal memory (#870).
+        internal/api/v2/memories/handler.go. Scoped to (project, the
+        authenticated caller) — never readable or writable cross-user.
+        `enabled=false` keeps the entry without letting it reach a chat
+        turn's recall (internal/application/agentexecution's
+        CurrentMemoryRecallResolver). NOT the same feature as the `memory`
+        TOOLKIT type (integrations/toolkits/memory_toolkit) — that is an
+        agent-scoped key/value store the LLM calls as a tool mid-turn; this
+        is read passively, before a turn starts.
+      required: [id, project_id, content, tags, enabled, created_at, updated_at]
+      properties:
+        id: { type: string }
+        project_id: { type: string }
+        content:
+          type: string
+          description: The remembered fact's text. Refused past 4000 characters (memories.MaxContentBytes).
+        tags:
+          type: array
+          items: { type: string }
+          description: Free-form labels for the settings panel's own search/filter. Never more than 16 (memories.MaxTags).
+        source_conversation_id:
+          type: string
+          nullable: true
+          description: >
+            The conversation this memory was captured from, when it was saved
+            via the "Remember this" message action (chat_conversations.uuid).
+            Absent when typed directly into the settings panel. Informational
+            only — the source conversation may since have been deleted
+            (tenant/0137_personal_memory_entries.sql's own header explains
+            why this deliberately holds no foreign key).
+        enabled: { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    MemoryEntryList:
+      type: object
+      required: [items, total]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/MemoryEntry' }
+        total: { type: integer }
+
+    MemoryEntryWriteRequest:
+      type: object
+      required: [content]
+      description: >
+        The body for both `createMemory` and `updateMemory`. `updateMemory`
+        is a FULL-RECORD replace (matches the settings panel's edit dialog
+        and its per-row enable/disable Switch, which both send the whole
+        record), so `content` is required on both.
+      properties:
+        content: { type: string }
+        tags:
+          type: array
+          items: { type: string }
+        source_conversation_id: { type: string }
+        enabled:
+          type: boolean
+          description: Defaults to `true` when omitted on create; on update it is a full-record field like the rest.
+
     MessageFeedback:
       type: object
       description: >
@@ -11699,6 +11763,151 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/memories/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      operationId: listMemories
+      summary: List the caller's own persistent, cross-conversation memories
+      description: |
+        internal/api/v2/memories/handler.go's List (#870). Answers only the
+        AUTHENTICATED caller's own entries in this project — never another
+        user's, and never gated by an "admin sees everyone's memories" mode.
+        Most recent first. `q`, when given, filters by a case-insensitive
+        substring match over content and tags.
+      tags: [chat]
+      parameters:
+        - name: q
+          in: query
+          required: false
+          schema: { type: string }
+          description: Case-insensitive substring filter over content and tags.
+      responses:
+        '200':
+          description: The caller's own memories in this project.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemoryEntryList'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500': { $ref: '#/components/responses/500' }
+    post:
+      operationId: createMemory
+      summary: Save a new persistent, cross-conversation memory
+      description: |
+        internal/api/v2/memories/handler.go's Create (#870). Used both by
+        Settings > Memory's "Add memory" control and by the chat message
+        "Remember this" action (which additionally sends
+        `source_conversation_id`).
+      tags: [chat]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MemoryEntryWriteRequest'
+      responses:
+        '201':
+          description: The created memory.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemoryEntry'
+        '400':
+          description: content was blank or exceeded the length limit, or tags exceeded their limits.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500': { $ref: '#/components/responses/500' }
+    delete:
+      operationId: clearMemories
+      summary: Delete every one of the caller's own memories in this project
+      description: |
+        internal/api/v2/memories/handler.go's ClearAll (#870). Settings >
+        Memory's "Clear all" control, after its own confirmation dialog.
+        Never touches another user's memories.
+      tags: [chat]
+      responses:
+        '200':
+          description: How many memories were removed.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [removed]
+                properties:
+                  removed: { type: integer }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/memory/prompt_lib/{project_id}/{memory_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: memory_id
+        in: path
+        required: true
+        schema: { type: string }
+    put:
+      operationId: updateMemory
+      summary: Replace one of the caller's own memories
+      description: |
+        internal/api/v2/memories/handler.go's Update (#870). A FULL-RECORD
+        replace — the settings panel's edit dialog and its per-row
+        enable/disable Switch both send the whole record, never a partial
+        patch. `memory_id` naming another user's entry, or no entry at all,
+        answers 404 — a caller never learns whether an id belongs to someone
+        else.
+      tags: [chat]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MemoryEntryWriteRequest'
+      responses:
+        '200':
+          description: The updated memory.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemoryEntry'
+        '400':
+          description: content was blank or exceeded the length limit, or tags exceeded their limits.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No such memory owned by the caller in this project.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500': { $ref: '#/components/responses/500' }
+    delete:
+      operationId: deleteMemory
+      summary: Delete one of the caller's own memories
+      description: |
+        internal/api/v2/memories/handler.go's Delete (#870). Idempotent: a
+        `memory_id` that never existed, or already belonged to someone else,
+        answers 204 the same as a successful delete — the same
+        DeleteMessageFeedback-style shape, matching MemoriesRepo.Delete's own
+        comment.
+      tags: [chat]
+      responses:
+        '204':
+          description: Deleted (or already absent).
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
         '500': { $ref: '#/components/responses/500' }
 
   /elitea_core/message_feedback/prompt_lib/{project_id}/{message_id}:

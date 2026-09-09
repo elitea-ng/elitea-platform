@@ -38,6 +38,7 @@ import (
 	v2folders "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/folders"
 	v2indextypes "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indextypes"
 	v2inventory "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/inventory"
+	v2memories "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/memories"
 	v2pipelinetriggers "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/pipelinetriggers"
 	v2skills "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/skills"
 	v2social "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/social"
@@ -147,6 +148,7 @@ func buildFullSurfaceConfig() api.RouterConfig {
 		EvalDimensionsRepo: struct{ v2evaluation.Repository }{},
 		SkillsRepo:         struct{ v2skills.Repository }{},
 		FoldersRepo:        struct{ v2folders.Repository }{},
+		MemoriesRepo:       struct{ v2memories.Repository }{},
 		TagsRepo:           struct{ v2tags.Repository }{},
 		AnalyticsRepo:      struct{ v2analytics.Repository }{},
 		ConvsRepo:          struct{ v2convs.Repository }{},

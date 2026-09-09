@@ -624,6 +624,14 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if targetErr != nil {
 			return nil, fmt.Errorf("construct current agent start service: %w", targetErr)
 		}
+		// Persistent, cross-conversation personal memory (#870). WithMemories
+		// is a post-construction setter — see its own comment — precisely so
+		// this one line is the whole diff needed here, with none of the six
+		// *_test.go constructors under agentexecution touched. Built against
+		// the SAME admission pool every other resolver in this block uses
+		// (agentGuardrails, agentVersions above), not RouterConfig's
+		// MemoriesRepo (main.go) — see that field's own comment.
+		agentStart = agentStart.WithMemories(repos.NewMemoriesRepo(dependencies.AdmissionPool))
 		agentDispatcher, err := agentexecutionapp.NewDispatcher(agentJobs, agentProducer)
 		if err != nil {
 			return nil, err

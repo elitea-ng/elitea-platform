@@ -38,6 +38,7 @@ import (
 	v2indextypes "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indextypes"
 	v2inventory "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/inventory"
 	v2mcp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/mcp"
+	v2memories "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/memories"
 	v2messagetraces "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/messagetraces"
 	v2moderation "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/moderation"
 	v2openapidocs "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/openapidocs"
@@ -244,9 +245,16 @@ type RouterConfig struct {
 	ToolkitRegistry admin.ToolkitRegistrySource
 	SkillsRepo      v2skills.Repository
 	FoldersRepo     v2folders.Repository
-	TagsRepo        v2tags.Repository
-	AnalyticsRepo   v2analytics.Repository
-	ConvsRepo       v2convs.Repository
+	// MemoriesRepo backs persistent, cross-conversation personal memory
+	// (#870) — Settings > Memory's CRUD. Its recall INTO a chat turn is a
+	// separate dependency, wired straight into
+	// agentexecutionapp.CurrentApplicationStartService.WithMemories at
+	// composition (internal/runtimecomposition/composition.go), not through
+	// this HTTP router config.
+	MemoriesRepo  v2memories.Repository
+	TagsRepo      v2tags.Repository
+	AnalyticsRepo v2analytics.Repository
+	ConvsRepo     v2convs.Repository
 	// SharedChatStore and SharedChatTranscript back "share a conversation by
 	// link" (internal/api/v2/sharedchat). Two fields for one feature because
 	// they have different tenancies — one central link table, one per-project
@@ -2744,6 +2752,30 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					r.With(requireFolderUpdate).Patch("/folder/prompt_lib/{projectID}/{folderID}", folderHandler.Update)
 					r.With(projectPermission("models.chat.folders.delete")).
 						Delete("/folder/prompt_lib/{projectID}/{folderID}", folderHandler.Delete)
+				}
+
+				// Long-term memory (#870) — Settings > Memory's persistent,
+				// cross-conversation personal memory CRUD. Read declares
+				// `models.chat.conversation.details`, write declares
+				// `models.chat.conversation.update` — the same two strings
+				// promptcontextreads' current chat-config/project-context
+				// reads and the current conversation update route already
+				// declare, so this needs no new permission and no migration
+				// to seed one (same reasoning as message_feedback's own
+				// router comment). Recall — reading these rows INTO a chat
+				// turn — is wired separately, straight into
+				// agentexecutionapp.CurrentApplicationStartService at
+				// composition (internal/runtimecomposition/composition.go),
+				// not through this HTTP surface.
+				if cfg.MemoriesRepo != nil {
+					memoryHandler := v2memories.NewHandler(cfg.MemoriesRepo)
+					requireMemoryRead := projectPermission("models.chat.conversation.details")
+					requireMemoryWrite := projectPermission("models.chat.conversation.update")
+					r.With(requireMemoryRead).Get("/memories/prompt_lib/{projectID}", memoryHandler.List)
+					r.With(requireMemoryWrite).Post("/memories/prompt_lib/{projectID}", memoryHandler.Create)
+					r.With(requireMemoryWrite).Delete("/memories/prompt_lib/{projectID}", memoryHandler.ClearAll)
+					r.With(requireMemoryWrite).Put("/memory/prompt_lib/{projectID}/{memoryID}", memoryHandler.Update)
+					r.With(requireMemoryWrite).Delete("/memory/prompt_lib/{projectID}/{memoryID}", memoryHandler.Delete)
 				}
 
 				// Tags
