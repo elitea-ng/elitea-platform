@@ -453,9 +453,9 @@ func internalSkillMap(skill skillsapi.Skill) (map[string]any, error) {
 		body["tags"] = internalSkillTagObjects(skill.Tags)
 	}
 	if rawVersions, present := body["versions"].([]any); present {
-		for _, rawVersion := range rawVersions {
+		for index, rawVersion := range rawVersions {
 			if version, ok := rawVersion.(map[string]any); ok {
-				version["tags"] = internalSkillTagObjects(skill.Tags)
+				version["tags"] = internalSkillTagObjects(skill.Versions[index].Tags)
 			}
 		}
 	}
