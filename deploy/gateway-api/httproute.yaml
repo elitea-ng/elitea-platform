@@ -205,6 +205,14 @@ spec:
         - path:
             type: PathPrefix
             value: /app
+        # The embedded docs SPA (embedded-docs programme decision 5): the
+        # same elitea-web backend serves it, from its own `/docs/` nginx
+        # location (apps/elitea-web/nginx/spa.conf) — a second match on the
+        # SAME rule, not a new rule, since both prefixes route to the
+        # identical backend with no filter difference between them.
+        - path:
+            type: PathPrefix
+            value: /docs
       backendRefs:
         - name: elitea-web
           port: 80

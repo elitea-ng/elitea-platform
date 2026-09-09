@@ -829,6 +829,7 @@ case "${1:-}" in
     fi
     echo "→ Stack ready."
     echo "     web app       http://localhost:${PORT}/app/"
+    echo "     docs          http://localhost:${PORT}/docs/"
     echo "     admin console http://localhost:${PORT}/admin/app/"
     echo "     API           http://localhost:${PORT}/api/v2"
     echo "     OIDC provider http://localhost:9400"

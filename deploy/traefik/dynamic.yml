@@ -78,6 +78,17 @@ http:
       service: elitea-ui
       entryPoints:
         - web
+    # Embedded docs SPA (embedded-docs programme decision 5). Same backend
+    # container as `app` above (the elitea-web nginx image serves both
+    # `/app/` and `/docs/` — see apps/elitea-web/nginx/spa.conf): no priority
+    # needed, since `/docs` and `/app` share no prefix to race over. Nothing
+    # here is a root-mounted Go route, so `edge_root_routes_test.go` has no
+    # reason to know about this rule — it only walks elitea-main's router.
+    docs:
+      rule: "PathPrefix(`/docs`)"
+      service: elitea-ui
+      entryPoints:
+        - web
     root-redirect:
       rule: "Path(`/`)"
       service: elitea-ui
