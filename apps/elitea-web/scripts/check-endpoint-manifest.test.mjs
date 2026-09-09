@@ -589,8 +589,19 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
  * deliveries" panel's GET) and `redeliverWebhookDelivery` (its Redeliver
  * action's POST) — both in the same generated/webhooks/webhooks.ts tag
  * file the five CRUD operations already live in.
+ *
+ * 245 -> 260 (#874, skill versioning). MEASURED against the committed
+ * generated tree at the base commit: the real count there was 248, three
+ * above this constant's prior value — pre-existing drift this file did not
+ * carry, not something #874 introduced. The +12 this change actually adds:
+ * getSkill, getSkillVersion, updateSkill, updateSkillVersion,
+ * createSkillVersion, deleteSkill, deleteSkillVersion, setDefaultVersion,
+ * restoreSkillVersion, importSkill, exportSkill, exportSkillVersion — the
+ * eleven ids that came off testdata/reverse_check_allowlist.txt on the Go
+ * side plus restoreSkillVersion, the one genuinely NEW operation (the
+ * rollback the issue's title names; skills had no such route before).
  */
-const GENERATED_OPERATION_COUNT = 245;
+const GENERATED_OPERATION_COUNT = 260;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -721,8 +732,19 @@ const GENERATED_OPERATION_COUNT = 245;
  * (admin.createProjectRequest/listMyProjectRequests) — plus the two new
  * delivery-log operations GENERATED_OPERATION_COUNT's own note above
  * describes (webhooks.listWebhookDeliveries/redeliverWebhookDelivery).
+ *
+ * 260 -> 261 (#874). ONE new entry, `skills.restoreVersion` — the rollback
+ * action, genuinely new surface with no prior manifest row. The other
+ * eleven skills.* ids this change describes in v2.yaml (see
+ * GENERATED_OPERATION_COUNT's own #874 note) already had entries — this
+ * change fills in their `operationId` (previously null) rather than adding
+ * rows, following skills.generateDraft's own precedent (#254 P1): a
+ * hand-written entry keeps `source: "handwritten"` even once the route is
+ * described, because features/skills still calls it through
+ * `features/skills/api/skillsApi.ts`'s raw eliteaFetch wrappers, not the
+ * generated hooks.
  */
-const MANIFEST_ENTRY_COUNT = 260;
+const MANIFEST_ENTRY_COUNT = 261;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

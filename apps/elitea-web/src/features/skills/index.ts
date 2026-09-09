@@ -1,5 +1,6 @@
 export { GenerateSkillModal } from './ui/GenerateSkillModal';
 export { PublicSkillsCatalog } from './ui/PublicSkillsCatalog';
+export { SkillCompareModal } from './ui/SkillCompareModal';
 export { SkillEditorToolbar } from './ui/SkillEditorToolbar';
 export { SkillForm } from './ui/SkillForm';
 export type { SkillIconControl } from './ui/SkillForm';
@@ -7,6 +8,7 @@ export { SkillImportButton } from './ui/SkillImportButton';
 export { SkillPublishControls } from './ui/SkillPublishControls';
 export { SkillsList } from './ui/SkillsList';
 export { cancelSkillTest, exportSkill, testSkill } from './api/skillsApi';
+export { skillVersionKey } from './lib/skillVersionKey';
 // Only the two symbols an outside caller actually needs. The dialog, the
 // icon-list query and the upload/delete mutations are the slice's INTERNAL
 // wiring — `SkillForm` composes them — and exporting them put this barrel over

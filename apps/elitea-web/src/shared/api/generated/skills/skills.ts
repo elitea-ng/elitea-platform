@@ -61,6 +61,8 @@ import type {
   IconGalleryPage,
   IconMeta,
   IconUploadForm,
+  ImportSkill200,
+  ImportSkillBody,
   ListAgentsWithSkill200,
   ListPublicSkills200,
   ListPublicSkillsParams,
@@ -90,7 +92,9 @@ import type {
   SkillIconBindRefusal,
   SkillIconBindRequest,
   SkillIconDeleteRefusal,
+  SkillSetDefaultVersionRequest,
   SkillValidationResult,
+  SkillVersionCreateRequest,
   SkillsList,
   UnpublishSkill200,
   UnpublishSkillBody,
@@ -4847,6 +4851,933 @@ export function useExportSkillVersionFork<
   return withQueryKey(query, queryOptions.queryKey);
 }
 
+export type getSkillResponse200 = {
+  data: Skill;
+  status: 200;
+};
+
+export type getSkillResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getSkillResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type getSkillResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type getSkillResponseSuccess = getSkillResponse200 & {
+  headers: Headers;
+};
+export type getSkillResponseError = (
+  getSkillResponse401 | getSkillResponse403 | getSkillResponse404
+) & {
+  headers: Headers;
+};
+
+export type getSkillResponse = getSkillResponseSuccess | getSkillResponseError;
+
+export const getGetSkillUrl = (projectId: string, skillId: number) => {
+  return `/elitea_core/skill/prompt_lib/${projectId}/${skillId}`;
+};
+
+/**
+ * NOTE(#874): internal/api/v2/skills/handler.go Get. `instructions`/
+ * `tags`/`version_details` answer `base`'s content; `versions` carries
+ * EVERY version of the skill (not just `base`, as before #874).
+ * @summary Retrieve a skill (its `base` version, plus every version)
+ */
+export const getSkill = async (
+  projectId: string,
+  skillId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getSkillResponse> => {
+  return eliteaFetch<getSkillResponse>(getGetSkillUrl(projectId, skillId), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetSkillQueryKey = (projectId: string, skillId: number) => {
+  return [`/elitea_core/skill/prompt_lib/${projectId}/${skillId}`] as const;
+};
+
+export const getGetSkillQueryOptions = <
+  TData = Awaited<ReturnType<typeof getSkill>>,
+  TError = N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  skillId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getSkill>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetSkillQueryKey(projectId, skillId);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getSkill>>> = ({
+    signal,
+  }) => getSkill(projectId, skillId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      skillId !== null &&
+      skillId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<Awaited<ReturnType<typeof getSkill>>, TError, TData> & {
+    queryKey: DataTag<QueryKey, TData, TError>;
+  };
+};
+
+export type GetSkillQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getSkill>>
+>;
+export type GetSkillQueryError = N401Response | N403Response | N404Response;
+
+export function useGetSkill<
+  TData = Awaited<ReturnType<typeof getSkill>>,
+  TError = N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  skillId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getSkill>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getSkill>>,
+          TError,
+          Awaited<ReturnType<typeof getSkill>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetSkill<
+  TData = Awaited<ReturnType<typeof getSkill>>,
+  TError = N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  skillId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getSkill>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getSkill>>,
+          TError,
+          Awaited<ReturnType<typeof getSkill>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetSkill<
+  TData = Awaited<ReturnType<typeof getSkill>>,
+  TError = N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  skillId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getSkill>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Retrieve a skill (its `base` version, plus every version)
+ */
+
+export function useGetSkill<
+  TData = Awaited<ReturnType<typeof getSkill>>,
+  TError = N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  skillId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getSkill>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetSkillQueryOptions(projectId, skillId, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type updateSkillResponse200 = {
+  data: Skill;
+  status: 200;
+};
+
+export type updateSkillResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type updateSkillResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type updateSkillResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type updateSkillResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type updateSkillResponseSuccess = updateSkillResponse200 & {
+  headers: Headers;
+};
+export type updateSkillResponseError = (
+  | updateSkillResponse400
+  | updateSkillResponse401
+  | updateSkillResponse403
+  | updateSkillResponse404
+) & {
+  headers: Headers;
+};
+
+export type updateSkillResponse =
+  updateSkillResponseSuccess | updateSkillResponseError;
+
+export const getUpdateSkillUrl = (projectId: string, skillId: number) => {
+  return `/elitea_core/skill/prompt_lib/${projectId}/${skillId}`;
+};
+
+/**
+ * NOTE(#874): internal/api/v2/skills/handler.go Update, unversioned
+ * branch (repo.Update). Always writes `base` — see updateSkillVersion
+ * for editing a NAMED version.
+ * @summary Update the skill's name/description and `base` version's content
+ */
+export const updateSkill = async (
+  projectId: string,
+  skillId: number,
+  skillCreateRequest: SkillCreateRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<updateSkillResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+  return eliteaFetch<updateSkillResponse>(
+    getUpdateSkillUrl(projectId, skillId),
+    {
+      ...options,
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(skillCreateRequest),
+    },
+  );
+};
+
+export const getUpdateSkillQueryKey = (
+  projectId: string,
+  skillId: number,
+  skillCreateRequest?: SkillCreateRequest,
+) => {
+  return [
+    "PUT",
+    `/elitea_core/skill/prompt_lib/${projectId}/${skillId}`,
+    skillCreateRequest,
+  ] as const;
+};
+
+export const getUpdateSkillQueryOptions = <
+  TData = Awaited<ReturnType<typeof updateSkill>>,
+  TError = N400Response | N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  skillId: number,
+  skillCreateRequest: SkillCreateRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof updateSkill>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getUpdateSkillQueryKey(projectId, skillId, skillCreateRequest);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof updateSkill>>> = ({
+    signal,
+  }) =>
+    updateSkill(projectId, skillId, skillCreateRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      skillId !== null &&
+      skillId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof updateSkill>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type UpdateSkillQueryResult = NonNullable<
+  Awaited<ReturnType<typeof updateSkill>>
+>;
+export type UpdateSkillQueryError =
+  N400Response | N401Response | N403Response | N404Response;
+
+export function useUpdateSkill<
+  TData = Awaited<ReturnType<typeof updateSkill>>,
+  TError = N400Response | N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  skillId: number,
+  skillCreateRequest: SkillCreateRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof updateSkill>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof updateSkill>>,
+          TError,
+          Awaited<ReturnType<typeof updateSkill>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUpdateSkill<
+  TData = Awaited<ReturnType<typeof updateSkill>>,
+  TError = N400Response | N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  skillId: number,
+  skillCreateRequest: SkillCreateRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof updateSkill>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof updateSkill>>,
+          TError,
+          Awaited<ReturnType<typeof updateSkill>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUpdateSkill<
+  TData = Awaited<ReturnType<typeof updateSkill>>,
+  TError = N400Response | N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  skillId: number,
+  skillCreateRequest: SkillCreateRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof updateSkill>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Update the skill's name/description and `base` version's content
+ */
+
+export function useUpdateSkill<
+  TData = Awaited<ReturnType<typeof updateSkill>>,
+  TError = N400Response | N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  skillId: number,
+  skillCreateRequest: SkillCreateRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof updateSkill>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getUpdateSkillQueryOptions(
+    projectId,
+    skillId,
+    skillCreateRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type createSkillVersionResponse201 = {
+  data: Skill;
+  status: 201;
+};
+
+export type createSkillVersionResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type createSkillVersionResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type createSkillVersionResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type createSkillVersionResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type createSkillVersionResponse409 = {
+  data: N409Response;
+  status: 409;
+};
+
+export type createSkillVersionResponseSuccess =
+  createSkillVersionResponse201 & {
+    headers: Headers;
+  };
+export type createSkillVersionResponseError = (
+  | createSkillVersionResponse400
+  | createSkillVersionResponse401
+  | createSkillVersionResponse403
+  | createSkillVersionResponse404
+  | createSkillVersionResponse409
+) & {
+  headers: Headers;
+};
+
+export type createSkillVersionResponse =
+  createSkillVersionResponseSuccess | createSkillVersionResponseError;
+
+export const getCreateSkillVersionUrl = (
+  projectId: string,
+  skillId: number,
+) => {
+  return `/elitea_core/skill/prompt_lib/${projectId}/${skillId}`;
+};
+
+/**
+ * NOTE(#874): internal/api/v2/skills/handler.go CreateVersion. Before
+ * #874 this exact URL was bound to createSkill, which ignores
+ * {skill_id} and creates an unrelated new skill — every "New version"
+ * click quietly left the target skill's version set unchanged and
+ * leaked a stray skill into the project's list.
+ * @summary Save the current content as a new NAMED version ("Save As Version")
+ */
+export const createSkillVersion = async (
+  projectId: string,
+  skillId: number,
+  skillVersionCreateRequest: SkillVersionCreateRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<createSkillVersionResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+  return eliteaFetch<createSkillVersionResponse>(
+    getCreateSkillVersionUrl(projectId, skillId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(skillVersionCreateRequest),
+    },
+  );
+};
+
+export const getCreateSkillVersionQueryKey = (
+  projectId: string,
+  skillId: number,
+  skillVersionCreateRequest?: SkillVersionCreateRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/skill/prompt_lib/${projectId}/${skillId}`,
+    skillVersionCreateRequest,
+  ] as const;
+};
+
+export const getCreateSkillVersionQueryOptions = <
+  TData = Awaited<ReturnType<typeof createSkillVersion>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N409Response,
+>(
+  projectId: string,
+  skillId: number,
+  skillVersionCreateRequest: SkillVersionCreateRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createSkillVersion>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getCreateSkillVersionQueryKey(
+      projectId,
+      skillId,
+      skillVersionCreateRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof createSkillVersion>>
+  > = ({ signal }) =>
+    createSkillVersion(projectId, skillId, skillVersionCreateRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      skillId !== null &&
+      skillId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof createSkillVersion>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type CreateSkillVersionQueryResult = NonNullable<
+  Awaited<ReturnType<typeof createSkillVersion>>
+>;
+export type CreateSkillVersionQueryError =
+  N400Response | N401Response | N403Response | N404Response | N409Response;
+
+export function useCreateSkillVersion<
+  TData = Awaited<ReturnType<typeof createSkillVersion>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N409Response,
+>(
+  projectId: string,
+  skillId: number,
+  skillVersionCreateRequest: SkillVersionCreateRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createSkillVersion>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof createSkillVersion>>,
+          TError,
+          Awaited<ReturnType<typeof createSkillVersion>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCreateSkillVersion<
+  TData = Awaited<ReturnType<typeof createSkillVersion>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N409Response,
+>(
+  projectId: string,
+  skillId: number,
+  skillVersionCreateRequest: SkillVersionCreateRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createSkillVersion>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof createSkillVersion>>,
+          TError,
+          Awaited<ReturnType<typeof createSkillVersion>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCreateSkillVersion<
+  TData = Awaited<ReturnType<typeof createSkillVersion>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N409Response,
+>(
+  projectId: string,
+  skillId: number,
+  skillVersionCreateRequest: SkillVersionCreateRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createSkillVersion>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Save the current content as a new NAMED version ("Save As Version")
+ */
+
+export function useCreateSkillVersion<
+  TData = Awaited<ReturnType<typeof createSkillVersion>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N409Response,
+>(
+  projectId: string,
+  skillId: number,
+  skillVersionCreateRequest: SkillVersionCreateRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createSkillVersion>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getCreateSkillVersionQueryOptions(
+    projectId,
+    skillId,
+    skillVersionCreateRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type deleteSkillResponse204 = {
+  data: void;
+  status: 204;
+};
+
+export type deleteSkillResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type deleteSkillResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type deleteSkillResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type deleteSkillResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type deleteSkillResponseSuccess = deleteSkillResponse204 & {
+  headers: Headers;
+};
+export type deleteSkillResponseError = (
+  | deleteSkillResponse400
+  | deleteSkillResponse401
+  | deleteSkillResponse403
+  | deleteSkillResponse404
+) & {
+  headers: Headers;
+};
+
+export type deleteSkillResponse =
+  deleteSkillResponseSuccess | deleteSkillResponseError;
+
+export const getDeleteSkillUrl = (projectId: string, skillId: number) => {
+  return `/elitea_core/skill/prompt_lib/${projectId}/${skillId}`;
+};
+
+/**
+ * NOTE(#874): internal/api/v2/skills/handler.go Delete, unversioned
+ * branch. Refuses (400) while any version is published — see
+ * skillpublish's unpublish operations.
+ * @summary Delete the whole skill
+ */
+export const deleteSkill = async (
+  projectId: string,
+  skillId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<deleteSkillResponse> => {
+  return eliteaFetch<deleteSkillResponse>(
+    getDeleteSkillUrl(projectId, skillId),
+    {
+      ...options,
+      method: "DELETE",
+    },
+  );
+};
+
+export const getDeleteSkillQueryKey = (projectId: string, skillId: number) => {
+  return [
+    "DELETE",
+    `/elitea_core/skill/prompt_lib/${projectId}/${skillId}`,
+  ] as const;
+};
+
+export const getDeleteSkillQueryOptions = <
+  TData = Awaited<ReturnType<typeof deleteSkill>>,
+  TError = N400Response | N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  skillId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof deleteSkill>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getDeleteSkillQueryKey(projectId, skillId);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof deleteSkill>>> = ({
+    signal,
+  }) => deleteSkill(projectId, skillId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      skillId !== null &&
+      skillId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof deleteSkill>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type DeleteSkillQueryResult = NonNullable<
+  Awaited<ReturnType<typeof deleteSkill>>
+>;
+export type DeleteSkillQueryError =
+  N400Response | N401Response | N403Response | N404Response;
+
+export function useDeleteSkill<
+  TData = Awaited<ReturnType<typeof deleteSkill>>,
+  TError = N400Response | N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  skillId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof deleteSkill>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof deleteSkill>>,
+          TError,
+          Awaited<ReturnType<typeof deleteSkill>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDeleteSkill<
+  TData = Awaited<ReturnType<typeof deleteSkill>>,
+  TError = N400Response | N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  skillId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof deleteSkill>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof deleteSkill>>,
+          TError,
+          Awaited<ReturnType<typeof deleteSkill>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDeleteSkill<
+  TData = Awaited<ReturnType<typeof deleteSkill>>,
+  TError = N400Response | N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  skillId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof deleteSkill>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Delete the whole skill
+ */
+
+export function useDeleteSkill<
+  TData = Awaited<ReturnType<typeof deleteSkill>>,
+  TError = N400Response | N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  skillId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof deleteSkill>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getDeleteSkillQueryOptions(projectId, skillId, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
 export type setSkillRelationResponse200 = {
   data: SetSkillRelation200;
   status: 200;
@@ -4897,8 +5828,7 @@ export const getSetSkillRelationUrl = (projectId: string, skillId: number) => {
  * skill update, and the body selects the operation. A body that carries
  * `has_relation` attaches (`true`, 201) or detaches (`false`, 200) the
  * skill on the agent version named by `entity_version_id`; any other body
- * is the plain update, which this document does not describe
- * (`skills.updateSkill` stays on the reverse-check allowlist). This is the
+ * is the plain update — see the `put` operation on this path. This is the
  * convention apps/elitea-ui's `updateSkillRelation` already calls and the
  * toolkit twin implements (internal/api/v2/skills/handler.go Update).
  * @summary Attach or detach a skill on one agent version
@@ -5105,6 +6035,2022 @@ export function useSetSkillRelation<
     projectId,
     skillId,
     setSkillRelationBody,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getSkillVersionResponse200 = {
+  data: Skill;
+  status: 200;
+};
+
+export type getSkillVersionResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getSkillVersionResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type getSkillVersionResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type getSkillVersionResponseSuccess = getSkillVersionResponse200 & {
+  headers: Headers;
+};
+export type getSkillVersionResponseError = (
+  | getSkillVersionResponse401
+  | getSkillVersionResponse403
+  | getSkillVersionResponse404
+) & {
+  headers: Headers;
+};
+
+export type getSkillVersionResponse =
+  getSkillVersionResponseSuccess | getSkillVersionResponseError;
+
+export const getGetSkillVersionUrl = (
+  projectId: string,
+  skillId: number,
+  versionId: number,
+) => {
+  return `/elitea_core/skill/prompt_lib/${projectId}/${skillId}/${versionId}`;
+};
+
+/**
+ * NOTE(#874): internal/api/v2/skills/handler.go Get, versioned branch
+ * (repo.GetVersion). `instructions`/`tags`/`version_details` answer
+ * THIS version's content; `versions` still carries every version — the
+ * round trip the version selector and the client-side compare view
+ * (there is no server-side compare endpoint, matching agents'
+ * CompareVersionsModal) both use.
+ * @summary Retrieve one NAMED version's content
+ */
+export const getSkillVersion = async (
+  projectId: string,
+  skillId: number,
+  versionId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getSkillVersionResponse> => {
+  return eliteaFetch<getSkillVersionResponse>(
+    getGetSkillVersionUrl(projectId, skillId, versionId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetSkillVersionQueryKey = (
+  projectId: string,
+  skillId: number,
+  versionId: number,
+) => {
+  return [
+    `/elitea_core/skill/prompt_lib/${projectId}/${skillId}/${versionId}`,
+  ] as const;
+};
+
+export const getGetSkillVersionQueryOptions = <
+  TData = Awaited<ReturnType<typeof getSkillVersion>>,
+  TError = N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  skillId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getSkillVersion>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGetSkillVersionQueryKey(projectId, skillId, versionId);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getSkillVersion>>> = ({
+    signal,
+  }) =>
+    getSkillVersion(projectId, skillId, versionId, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      skillId !== null &&
+      skillId !== undefined &&
+      versionId !== null &&
+      versionId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getSkillVersion>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetSkillVersionQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getSkillVersion>>
+>;
+export type GetSkillVersionQueryError =
+  N401Response | N403Response | N404Response;
+
+export function useGetSkillVersion<
+  TData = Awaited<ReturnType<typeof getSkillVersion>>,
+  TError = N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  skillId: number,
+  versionId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getSkillVersion>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getSkillVersion>>,
+          TError,
+          Awaited<ReturnType<typeof getSkillVersion>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetSkillVersion<
+  TData = Awaited<ReturnType<typeof getSkillVersion>>,
+  TError = N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  skillId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getSkillVersion>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getSkillVersion>>,
+          TError,
+          Awaited<ReturnType<typeof getSkillVersion>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetSkillVersion<
+  TData = Awaited<ReturnType<typeof getSkillVersion>>,
+  TError = N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  skillId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getSkillVersion>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Retrieve one NAMED version's content
+ */
+
+export function useGetSkillVersion<
+  TData = Awaited<ReturnType<typeof getSkillVersion>>,
+  TError = N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  skillId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getSkillVersion>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetSkillVersionQueryOptions(
+    projectId,
+    skillId,
+    versionId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type updateSkillVersionResponse200 = {
+  data: Skill;
+  status: 200;
+};
+
+export type updateSkillVersionResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type updateSkillVersionResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type updateSkillVersionResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type updateSkillVersionResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type updateSkillVersionResponse409 = {
+  data: N409Response;
+  status: 409;
+};
+
+export type updateSkillVersionResponseSuccess =
+  updateSkillVersionResponse200 & {
+    headers: Headers;
+  };
+export type updateSkillVersionResponseError = (
+  | updateSkillVersionResponse400
+  | updateSkillVersionResponse401
+  | updateSkillVersionResponse403
+  | updateSkillVersionResponse404
+  | updateSkillVersionResponse409
+) & {
+  headers: Headers;
+};
+
+export type updateSkillVersionResponse =
+  updateSkillVersionResponseSuccess | updateSkillVersionResponseError;
+
+export const getUpdateSkillVersionUrl = (
+  projectId: string,
+  skillId: number,
+  versionId: number,
+) => {
+  return `/elitea_core/skill/prompt_lib/${projectId}/${skillId}/${versionId}`;
+};
+
+/**
+ * NOTE(#874): internal/api/v2/skills/handler.go Update, versioned
+ * branch (repo.UpdateVersion). name/description in the body still
+ * update the SKILL row — those columns are shared across every
+ * version. Refuses (409) a published version.
+ * @summary Edit one NAMED version's instructions/tags
+ */
+export const updateSkillVersion = async (
+  projectId: string,
+  skillId: number,
+  versionId: number,
+  skillCreateRequest: SkillCreateRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<updateSkillVersionResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+  return eliteaFetch<updateSkillVersionResponse>(
+    getUpdateSkillVersionUrl(projectId, skillId, versionId),
+    {
+      ...options,
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(skillCreateRequest),
+    },
+  );
+};
+
+export const getUpdateSkillVersionQueryKey = (
+  projectId: string,
+  skillId: number,
+  versionId: number,
+  skillCreateRequest?: SkillCreateRequest,
+) => {
+  return [
+    "PUT",
+    `/elitea_core/skill/prompt_lib/${projectId}/${skillId}/${versionId}`,
+    skillCreateRequest,
+  ] as const;
+};
+
+export const getUpdateSkillVersionQueryOptions = <
+  TData = Awaited<ReturnType<typeof updateSkillVersion>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N409Response,
+>(
+  projectId: string,
+  skillId: number,
+  versionId: number,
+  skillCreateRequest: SkillCreateRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateSkillVersion>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getUpdateSkillVersionQueryKey(
+      projectId,
+      skillId,
+      versionId,
+      skillCreateRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof updateSkillVersion>>
+  > = ({ signal }) =>
+    updateSkillVersion(projectId, skillId, versionId, skillCreateRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      skillId !== null &&
+      skillId !== undefined &&
+      versionId !== null &&
+      versionId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof updateSkillVersion>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type UpdateSkillVersionQueryResult = NonNullable<
+  Awaited<ReturnType<typeof updateSkillVersion>>
+>;
+export type UpdateSkillVersionQueryError =
+  N400Response | N401Response | N403Response | N404Response | N409Response;
+
+export function useUpdateSkillVersion<
+  TData = Awaited<ReturnType<typeof updateSkillVersion>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N409Response,
+>(
+  projectId: string,
+  skillId: number,
+  versionId: number,
+  skillCreateRequest: SkillCreateRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateSkillVersion>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof updateSkillVersion>>,
+          TError,
+          Awaited<ReturnType<typeof updateSkillVersion>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUpdateSkillVersion<
+  TData = Awaited<ReturnType<typeof updateSkillVersion>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N409Response,
+>(
+  projectId: string,
+  skillId: number,
+  versionId: number,
+  skillCreateRequest: SkillCreateRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateSkillVersion>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof updateSkillVersion>>,
+          TError,
+          Awaited<ReturnType<typeof updateSkillVersion>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUpdateSkillVersion<
+  TData = Awaited<ReturnType<typeof updateSkillVersion>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N409Response,
+>(
+  projectId: string,
+  skillId: number,
+  versionId: number,
+  skillCreateRequest: SkillCreateRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateSkillVersion>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Edit one NAMED version's instructions/tags
+ */
+
+export function useUpdateSkillVersion<
+  TData = Awaited<ReturnType<typeof updateSkillVersion>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N409Response,
+>(
+  projectId: string,
+  skillId: number,
+  versionId: number,
+  skillCreateRequest: SkillCreateRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateSkillVersion>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getUpdateSkillVersionQueryOptions(
+    projectId,
+    skillId,
+    versionId,
+    skillCreateRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type deleteSkillVersionResponse204 = {
+  data: void;
+  status: 204;
+};
+
+export type deleteSkillVersionResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type deleteSkillVersionResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type deleteSkillVersionResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type deleteSkillVersionResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type deleteSkillVersionResponse409 = {
+  data: N409Response;
+  status: 409;
+};
+
+export type deleteSkillVersionResponseSuccess =
+  deleteSkillVersionResponse204 & {
+    headers: Headers;
+  };
+export type deleteSkillVersionResponseError = (
+  | deleteSkillVersionResponse400
+  | deleteSkillVersionResponse401
+  | deleteSkillVersionResponse403
+  | deleteSkillVersionResponse404
+  | deleteSkillVersionResponse409
+) & {
+  headers: Headers;
+};
+
+export type deleteSkillVersionResponse =
+  deleteSkillVersionResponseSuccess | deleteSkillVersionResponseError;
+
+export const getDeleteSkillVersionUrl = (
+  projectId: string,
+  skillId: number,
+  versionId: number,
+) => {
+  return `/elitea_core/skill/prompt_lib/${projectId}/${skillId}/${versionId}`;
+};
+
+/**
+ * NOTE(#874): internal/api/v2/skills/handler.go Delete, versioned
+ * branch (repo.DeleteVersion). Refuses (400) `base` and the current
+ * default version; refuses (409) a published version.
+ * @summary Delete one NAMED version
+ */
+export const deleteSkillVersion = async (
+  projectId: string,
+  skillId: number,
+  versionId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<deleteSkillVersionResponse> => {
+  return eliteaFetch<deleteSkillVersionResponse>(
+    getDeleteSkillVersionUrl(projectId, skillId, versionId),
+    {
+      ...options,
+      method: "DELETE",
+    },
+  );
+};
+
+export const getDeleteSkillVersionQueryKey = (
+  projectId: string,
+  skillId: number,
+  versionId: number,
+) => {
+  return [
+    "DELETE",
+    `/elitea_core/skill/prompt_lib/${projectId}/${skillId}/${versionId}`,
+  ] as const;
+};
+
+export const getDeleteSkillVersionQueryOptions = <
+  TData = Awaited<ReturnType<typeof deleteSkillVersion>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N409Response,
+>(
+  projectId: string,
+  skillId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteSkillVersion>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getDeleteSkillVersionQueryKey(projectId, skillId, versionId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof deleteSkillVersion>>
+  > = ({ signal }) =>
+    deleteSkillVersion(projectId, skillId, versionId, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      skillId !== null &&
+      skillId !== undefined &&
+      versionId !== null &&
+      versionId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof deleteSkillVersion>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type DeleteSkillVersionQueryResult = NonNullable<
+  Awaited<ReturnType<typeof deleteSkillVersion>>
+>;
+export type DeleteSkillVersionQueryError =
+  N400Response | N401Response | N403Response | N404Response | N409Response;
+
+export function useDeleteSkillVersion<
+  TData = Awaited<ReturnType<typeof deleteSkillVersion>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N409Response,
+>(
+  projectId: string,
+  skillId: number,
+  versionId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteSkillVersion>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof deleteSkillVersion>>,
+          TError,
+          Awaited<ReturnType<typeof deleteSkillVersion>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDeleteSkillVersion<
+  TData = Awaited<ReturnType<typeof deleteSkillVersion>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N409Response,
+>(
+  projectId: string,
+  skillId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteSkillVersion>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof deleteSkillVersion>>,
+          TError,
+          Awaited<ReturnType<typeof deleteSkillVersion>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDeleteSkillVersion<
+  TData = Awaited<ReturnType<typeof deleteSkillVersion>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N409Response,
+>(
+  projectId: string,
+  skillId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteSkillVersion>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Delete one NAMED version
+ */
+
+export function useDeleteSkillVersion<
+  TData = Awaited<ReturnType<typeof deleteSkillVersion>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N409Response,
+>(
+  projectId: string,
+  skillId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteSkillVersion>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getDeleteSkillVersionQueryOptions(
+    projectId,
+    skillId,
+    versionId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type restoreSkillVersionResponse200 = {
+  data: Skill;
+  status: 200;
+};
+
+export type restoreSkillVersionResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type restoreSkillVersionResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type restoreSkillVersionResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type restoreSkillVersionResponse409 = {
+  data: N409Response;
+  status: 409;
+};
+
+export type restoreSkillVersionResponseSuccess =
+  restoreSkillVersionResponse200 & {
+    headers: Headers;
+  };
+export type restoreSkillVersionResponseError = (
+  | restoreSkillVersionResponse401
+  | restoreSkillVersionResponse403
+  | restoreSkillVersionResponse404
+  | restoreSkillVersionResponse409
+) & {
+  headers: Headers;
+};
+
+export type restoreSkillVersionResponse =
+  restoreSkillVersionResponseSuccess | restoreSkillVersionResponseError;
+
+export const getRestoreSkillVersionUrl = (
+  projectId: string,
+  skillId: number,
+  versionId: number,
+) => {
+  return `/elitea_core/skill_version_restore/prompt_lib/${projectId}/${skillId}/${versionId}`;
+};
+
+/**
+ * NOTE(#874): internal/api/v2/skills/handler.go RestoreVersion. The
+ * capability the issue's title names: skills had no rollback at all
+ * before this route. Unlike agents' "Set as default" (which repoints a
+ * pointer and leaves every version's content untouched), skills have
+ * no distinguished "currently active" row to repoint — the unversioned
+ * GET/PUT/DELETE and every FRESH attachment's proposed version both
+ * read `base` directly — so this OVERWRITES `base` with version_id's
+ * content and records the lineage (parent_version_id). Refuses (409)
+ * while `base` itself is published.
+ * @summary Rollback — copy a NAMED version's content back onto `base`
+ */
+export const restoreSkillVersion = async (
+  projectId: string,
+  skillId: number,
+  versionId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<restoreSkillVersionResponse> => {
+  return eliteaFetch<restoreSkillVersionResponse>(
+    getRestoreSkillVersionUrl(projectId, skillId, versionId),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getRestoreSkillVersionQueryKey = (
+  projectId: string,
+  skillId: number,
+  versionId: number,
+) => {
+  return [
+    "POST",
+    `/elitea_core/skill_version_restore/prompt_lib/${projectId}/${skillId}/${versionId}`,
+  ] as const;
+};
+
+export const getRestoreSkillVersionQueryOptions = <
+  TData = Awaited<ReturnType<typeof restoreSkillVersion>>,
+  TError = N401Response | N403Response | N404Response | N409Response,
+>(
+  projectId: string,
+  skillId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof restoreSkillVersion>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getRestoreSkillVersionQueryKey(projectId, skillId, versionId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof restoreSkillVersion>>
+  > = ({ signal }) =>
+    restoreSkillVersion(projectId, skillId, versionId, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      skillId !== null &&
+      skillId !== undefined &&
+      versionId !== null &&
+      versionId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof restoreSkillVersion>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type RestoreSkillVersionQueryResult = NonNullable<
+  Awaited<ReturnType<typeof restoreSkillVersion>>
+>;
+export type RestoreSkillVersionQueryError =
+  N401Response | N403Response | N404Response | N409Response;
+
+export function useRestoreSkillVersion<
+  TData = Awaited<ReturnType<typeof restoreSkillVersion>>,
+  TError = N401Response | N403Response | N404Response | N409Response,
+>(
+  projectId: string,
+  skillId: number,
+  versionId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof restoreSkillVersion>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof restoreSkillVersion>>,
+          TError,
+          Awaited<ReturnType<typeof restoreSkillVersion>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRestoreSkillVersion<
+  TData = Awaited<ReturnType<typeof restoreSkillVersion>>,
+  TError = N401Response | N403Response | N404Response | N409Response,
+>(
+  projectId: string,
+  skillId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof restoreSkillVersion>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof restoreSkillVersion>>,
+          TError,
+          Awaited<ReturnType<typeof restoreSkillVersion>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRestoreSkillVersion<
+  TData = Awaited<ReturnType<typeof restoreSkillVersion>>,
+  TError = N401Response | N403Response | N404Response | N409Response,
+>(
+  projectId: string,
+  skillId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof restoreSkillVersion>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Rollback — copy a NAMED version's content back onto `base`
+ */
+
+export function useRestoreSkillVersion<
+  TData = Awaited<ReturnType<typeof restoreSkillVersion>>,
+  TError = N401Response | N403Response | N404Response | N409Response,
+>(
+  projectId: string,
+  skillId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof restoreSkillVersion>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getRestoreSkillVersionQueryOptions(
+    projectId,
+    skillId,
+    versionId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type setDefaultVersionResponse200 = {
+  data: Skill;
+  status: 200;
+};
+
+export type setDefaultVersionResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type setDefaultVersionResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type setDefaultVersionResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type setDefaultVersionResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type setDefaultVersionResponseSuccess = setDefaultVersionResponse200 & {
+  headers: Headers;
+};
+export type setDefaultVersionResponseError = (
+  | setDefaultVersionResponse400
+  | setDefaultVersionResponse401
+  | setDefaultVersionResponse403
+  | setDefaultVersionResponse404
+) & {
+  headers: Headers;
+};
+
+export type setDefaultVersionResponse =
+  setDefaultVersionResponseSuccess | setDefaultVersionResponseError;
+
+export const getSetDefaultVersionUrl = (projectId: string, skillId: number) => {
+  return `/elitea_core/skill_default_version/prompt_lib/${projectId}/${skillId}`;
+};
+
+/**
+ * NOTE(#874): internal/api/v2/skills/handler.go SetDefaultVersion.
+ * Writes skills.meta.default_version_id — the version a NEW attachment
+ * proposes. Before #874 this URL was bound to the generic skill-update
+ * handler, which read no `version_id` key and wrote the skill's own
+ * name to "" on every call (see setSkillRelation's history on the
+ * `patch` /skill/.../{skill_id} operation for the sibling defect the
+ * same overloaded-URL convention produced).
+ * @summary Mark a version as the skill's default
+ */
+export const setDefaultVersion = async (
+  projectId: string,
+  skillId: number,
+  skillSetDefaultVersionRequest: SkillSetDefaultVersionRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<setDefaultVersionResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+  return eliteaFetch<setDefaultVersionResponse>(
+    getSetDefaultVersionUrl(projectId, skillId),
+    {
+      ...options,
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(skillSetDefaultVersionRequest),
+    },
+  );
+};
+
+export const getSetDefaultVersionQueryKey = (
+  projectId: string,
+  skillId: number,
+  skillSetDefaultVersionRequest?: SkillSetDefaultVersionRequest,
+) => {
+  return [
+    "PATCH",
+    `/elitea_core/skill_default_version/prompt_lib/${projectId}/${skillId}`,
+    skillSetDefaultVersionRequest,
+  ] as const;
+};
+
+export const getSetDefaultVersionQueryOptions = <
+  TData = Awaited<ReturnType<typeof setDefaultVersion>>,
+  TError = N400Response | N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  skillId: number,
+  skillSetDefaultVersionRequest: SkillSetDefaultVersionRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setDefaultVersion>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getSetDefaultVersionQueryKey(
+      projectId,
+      skillId,
+      skillSetDefaultVersionRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof setDefaultVersion>>
+  > = ({ signal }) =>
+    setDefaultVersion(projectId, skillId, skillSetDefaultVersionRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      skillId !== null &&
+      skillId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof setDefaultVersion>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type SetDefaultVersionQueryResult = NonNullable<
+  Awaited<ReturnType<typeof setDefaultVersion>>
+>;
+export type SetDefaultVersionQueryError =
+  N400Response | N401Response | N403Response | N404Response;
+
+export function useSetDefaultVersion<
+  TData = Awaited<ReturnType<typeof setDefaultVersion>>,
+  TError = N400Response | N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  skillId: number,
+  skillSetDefaultVersionRequest: SkillSetDefaultVersionRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setDefaultVersion>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof setDefaultVersion>>,
+          TError,
+          Awaited<ReturnType<typeof setDefaultVersion>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSetDefaultVersion<
+  TData = Awaited<ReturnType<typeof setDefaultVersion>>,
+  TError = N400Response | N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  skillId: number,
+  skillSetDefaultVersionRequest: SkillSetDefaultVersionRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setDefaultVersion>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof setDefaultVersion>>,
+          TError,
+          Awaited<ReturnType<typeof setDefaultVersion>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSetDefaultVersion<
+  TData = Awaited<ReturnType<typeof setDefaultVersion>>,
+  TError = N400Response | N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  skillId: number,
+  skillSetDefaultVersionRequest: SkillSetDefaultVersionRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setDefaultVersion>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Mark a version as the skill's default
+ */
+
+export function useSetDefaultVersion<
+  TData = Awaited<ReturnType<typeof setDefaultVersion>>,
+  TError = N400Response | N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  skillId: number,
+  skillSetDefaultVersionRequest: SkillSetDefaultVersionRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setDefaultVersion>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getSetDefaultVersionQueryOptions(
+    projectId,
+    skillId,
+    skillSetDefaultVersionRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type importSkillResponse200 = {
+  data: ImportSkill200;
+  status: 200;
+};
+
+export type importSkillResponse201 = {
+  data: Skill;
+  status: 201;
+};
+
+export type importSkillResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type importSkillResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type importSkillResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type importSkillResponseSuccess = (
+  importSkillResponse200 | importSkillResponse201
+) & {
+  headers: Headers;
+};
+export type importSkillResponseError = (
+  importSkillResponse400 | importSkillResponse401 | importSkillResponse403
+) & {
+  headers: Headers;
+};
+
+export type importSkillResponse =
+  importSkillResponseSuccess | importSkillResponseError;
+
+export const getImportSkillUrl = (projectId: string) => {
+  return `/elitea_core/skill_import/prompt_lib/${projectId}`;
+};
+
+/**
+ * NOTE: internal/api/v2/skills/handler.go Import. The server also
+ * accepts a JSON {content, filename} body (readImportPayload's second
+ * branch), but the shipped UI's importSkill() always sends multipart —
+ * the only shape documented here, matching every other upload
+ * operation in this document (uploadApplicationIcon,
+ * uploadCurrentSocialAvatar, etc. — a requestBody with both multipart
+ * and application/json makes orval generate ImportSkillBodyOne/Two
+ * model names that do not match the files its own model-file-splitter
+ * writes). Only .md is accepted. A duplicate skill name reuses the
+ * existing skill and returns a `notice` field instead of erroring.
+ * @summary Import a skill from a Markdown file (always as a new `base` version)
+ */
+export const importSkill = async (
+  projectId: string,
+  importSkillBody: ImportSkillBody,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<importSkillResponse> => {
+  const formData = new FormData();
+  if (importSkillBody.file !== undefined) {
+    formData.append(`file`, importSkillBody.file);
+  }
+
+  return eliteaFetch<importSkillResponse>(getImportSkillUrl(projectId), {
+    ...options,
+    method: "POST",
+    body: formData,
+  });
+};
+
+export const getImportSkillQueryKey = (
+  projectId: string,
+  importSkillBody?: ImportSkillBody,
+) => {
+  return [
+    "POST",
+    `/elitea_core/skill_import/prompt_lib/${projectId}`,
+    importSkillBody,
+  ] as const;
+};
+
+export const getImportSkillQueryOptions = <
+  TData = Awaited<ReturnType<typeof importSkill>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  importSkillBody: ImportSkillBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof importSkill>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getImportSkillQueryKey(projectId, importSkillBody);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof importSkill>>> = ({
+    signal,
+  }) => importSkill(projectId, importSkillBody, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof importSkill>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ImportSkillQueryResult = NonNullable<
+  Awaited<ReturnType<typeof importSkill>>
+>;
+export type ImportSkillQueryError = N400Response | N401Response | N403Response;
+
+export function useImportSkill<
+  TData = Awaited<ReturnType<typeof importSkill>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  importSkillBody: ImportSkillBody,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof importSkill>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof importSkill>>,
+          TError,
+          Awaited<ReturnType<typeof importSkill>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useImportSkill<
+  TData = Awaited<ReturnType<typeof importSkill>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  importSkillBody: ImportSkillBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof importSkill>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof importSkill>>,
+          TError,
+          Awaited<ReturnType<typeof importSkill>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useImportSkill<
+  TData = Awaited<ReturnType<typeof importSkill>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  importSkillBody: ImportSkillBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof importSkill>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Import a skill from a Markdown file (always as a new `base` version)
+ */
+
+export function useImportSkill<
+  TData = Awaited<ReturnType<typeof importSkill>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  importSkillBody: ImportSkillBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof importSkill>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getImportSkillQueryOptions(
+    projectId,
+    importSkillBody,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type exportSkillResponse200 = {
+  data: string;
+  status: 200;
+};
+
+export type exportSkillResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type exportSkillResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type exportSkillResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type exportSkillResponseSuccess = exportSkillResponse200 & {
+  headers: Headers;
+};
+export type exportSkillResponseError = (
+  exportSkillResponse401 | exportSkillResponse403 | exportSkillResponse404
+) & {
+  headers: Headers;
+};
+
+export type exportSkillResponse =
+  exportSkillResponseSuccess | exportSkillResponseError;
+
+export const getExportSkillUrl = (projectId: string, skillId: number) => {
+  return `/elitea_core/skill_export/prompt_lib/${projectId}/${skillId}`;
+};
+
+/**
+ * NOTE(#874): internal/api/v2/skills/handler.go Export, unversioned
+ * branch. `text/markdown`, Content-Disposition names the file.
+ * @summary Export `base` as a Markdown file
+ */
+export const exportSkill = async (
+  projectId: string,
+  skillId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<exportSkillResponse> => {
+  return eliteaFetch<exportSkillResponse>(
+    getExportSkillUrl(projectId, skillId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getExportSkillQueryKey = (projectId: string, skillId: number) => {
+  return [
+    `/elitea_core/skill_export/prompt_lib/${projectId}/${skillId}`,
+  ] as const;
+};
+
+export const getExportSkillQueryOptions = <
+  TData = Awaited<ReturnType<typeof exportSkill>>,
+  TError = N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  skillId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof exportSkill>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getExportSkillQueryKey(projectId, skillId);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof exportSkill>>> = ({
+    signal,
+  }) => exportSkill(projectId, skillId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      skillId !== null &&
+      skillId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof exportSkill>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ExportSkillQueryResult = NonNullable<
+  Awaited<ReturnType<typeof exportSkill>>
+>;
+export type ExportSkillQueryError = N401Response | N403Response | N404Response;
+
+export function useExportSkill<
+  TData = Awaited<ReturnType<typeof exportSkill>>,
+  TError = N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  skillId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof exportSkill>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof exportSkill>>,
+          TError,
+          Awaited<ReturnType<typeof exportSkill>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useExportSkill<
+  TData = Awaited<ReturnType<typeof exportSkill>>,
+  TError = N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  skillId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof exportSkill>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof exportSkill>>,
+          TError,
+          Awaited<ReturnType<typeof exportSkill>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useExportSkill<
+  TData = Awaited<ReturnType<typeof exportSkill>>,
+  TError = N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  skillId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof exportSkill>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Export `base` as a Markdown file
+ */
+
+export function useExportSkill<
+  TData = Awaited<ReturnType<typeof exportSkill>>,
+  TError = N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  skillId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof exportSkill>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getExportSkillQueryOptions(projectId, skillId, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type exportSkillVersionResponse200 = {
+  data: string;
+  status: 200;
+};
+
+export type exportSkillVersionResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type exportSkillVersionResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type exportSkillVersionResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type exportSkillVersionResponseSuccess =
+  exportSkillVersionResponse200 & {
+    headers: Headers;
+  };
+export type exportSkillVersionResponseError = (
+  | exportSkillVersionResponse401
+  | exportSkillVersionResponse403
+  | exportSkillVersionResponse404
+) & {
+  headers: Headers;
+};
+
+export type exportSkillVersionResponse =
+  exportSkillVersionResponseSuccess | exportSkillVersionResponseError;
+
+export const getExportSkillVersionUrl = (
+  projectId: string,
+  skillId: number,
+  versionId: number,
+) => {
+  return `/elitea_core/skill_export/prompt_lib/${projectId}/${skillId}/${versionId}`;
+};
+
+/**
+ * NOTE(#874): internal/api/v2/skills/handler.go Export, versioned
+ * branch. Before #874 this route accepted {version_id} but never read
+ * it — every export answered `base`'s content regardless of the
+ * version requested.
+ * @summary Export one NAMED version as a Markdown file
+ */
+export const exportSkillVersion = async (
+  projectId: string,
+  skillId: number,
+  versionId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<exportSkillVersionResponse> => {
+  return eliteaFetch<exportSkillVersionResponse>(
+    getExportSkillVersionUrl(projectId, skillId, versionId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getExportSkillVersionQueryKey = (
+  projectId: string,
+  skillId: number,
+  versionId: number,
+) => {
+  return [
+    `/elitea_core/skill_export/prompt_lib/${projectId}/${skillId}/${versionId}`,
+  ] as const;
+};
+
+export const getExportSkillVersionQueryOptions = <
+  TData = Awaited<ReturnType<typeof exportSkillVersion>>,
+  TError = N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  skillId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof exportSkillVersion>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getExportSkillVersionQueryKey(projectId, skillId, versionId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof exportSkillVersion>>
+  > = ({ signal }) =>
+    exportSkillVersion(projectId, skillId, versionId, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      skillId !== null &&
+      skillId !== undefined &&
+      versionId !== null &&
+      versionId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof exportSkillVersion>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ExportSkillVersionQueryResult = NonNullable<
+  Awaited<ReturnType<typeof exportSkillVersion>>
+>;
+export type ExportSkillVersionQueryError =
+  N401Response | N403Response | N404Response;
+
+export function useExportSkillVersion<
+  TData = Awaited<ReturnType<typeof exportSkillVersion>>,
+  TError = N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  skillId: number,
+  versionId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof exportSkillVersion>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof exportSkillVersion>>,
+          TError,
+          Awaited<ReturnType<typeof exportSkillVersion>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useExportSkillVersion<
+  TData = Awaited<ReturnType<typeof exportSkillVersion>>,
+  TError = N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  skillId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof exportSkillVersion>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof exportSkillVersion>>,
+          TError,
+          Awaited<ReturnType<typeof exportSkillVersion>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useExportSkillVersion<
+  TData = Awaited<ReturnType<typeof exportSkillVersion>>,
+  TError = N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  skillId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof exportSkillVersion>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Export one NAMED version as a Markdown file
+ */
+
+export function useExportSkillVersion<
+  TData = Awaited<ReturnType<typeof exportSkillVersion>>,
+  TError = N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  skillId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof exportSkillVersion>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getExportSkillVersionQueryOptions(
+    projectId,
+    skillId,
+    versionId,
     options,
   );
 

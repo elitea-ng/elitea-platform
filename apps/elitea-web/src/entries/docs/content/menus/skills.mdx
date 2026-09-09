@@ -26,11 +26,27 @@ The right-hand test chat is ephemeral — it is not saved and clears when you le
 
 ## Versions
 
-Skills support named versions alongside the always-present `base` version. Use **Save As Version** to create one — `base` is reserved and duplicate names are rejected. Set any version as the default from the overflow menu; you cannot delete the default or `base` version.
+Skills keep a version history, the same **base**-plus-named-versions model [agents and pipelines](/how-tos/agents-pipelines/entity-versioning) use:
 
-<Note title="Not available yet: multi-version workflows">
-Unlike agents and pipelines, skills have no version comparison or rollback view — only a flat list of named versions (tracked in #874).
-</Note>
+<Steps>
+<Step title="Work in base">
+Every new skill starts on the **base** version. Edit and save it as many times as you like.
+</Step>
+<Step title="Save as a new version">
+Click **New version** and give it a name. `base` is reserved and cannot be reused as a custom name; a duplicate name is rejected.
+</Step>
+<Step title="Switch and edit">
+Use the version dropdown next to the skill's name to switch versions. Saving always updates whichever version is currently selected.
+</Step>
+</Steps>
+
+**Set default** pins a version as the one a new attachment to an agent proposes — it does not change what an agent that has *already* attached this skill uses; that stays fixed at attach time (see [Attach a skill to an agent](#attach-a-skill-to-an-agent) below). You cannot delete the default version or `base`, and a published version is frozen until you unpublish it.
+
+**Compare versions** opens a read-only, side-by-side diff of the current version's instructions and tags against any other version — useful for checking what changed before you restore or publish.
+
+**Restore** copies a named version's instructions and tags back onto `base`, overwriting `base`'s current content. This is the skill equivalent of agents' "Set as default": skills have no separate "currently active" pointer to repoint, so restoring means writing the content directly onto the one version the unversioned editor and every new attachment read.
+
+**Delete version** removes any version except `base`, the current default, or a published one.
 
 ## Export, import, fork, and publish
 
@@ -48,7 +64,7 @@ In a conversation with an agent that has skills attached, type `~` to open a pic
 
 ## Delete a skill
 
-Deleting a skill removes it from every agent it is attached to. Confirm by typing the skill's name in the delete dialog.
+Deleting a skill removes it from every agent it is attached to. Confirm in the dialog — unlike the agent editor's delete confirmation, it does not ask you to type the skill's name.
 
 ## Troubleshooting
 

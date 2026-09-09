@@ -43,11 +43,12 @@ Publishing an agent (see [Publish agents and skills](/how-tos/agents-pipelines/p
 You can delete any version except `base` and the current default. If other agents or pipelines reference the version you're deleting, a replacement-version dialog lists them and lets you pick which version they should point to instead; the system updates those references automatically.
 
 <Note>
-Not available yet: skill version history, compare, or rollback — a skill has a single implicit version and none of the controls on this page apply to it. (tracked in [#874](https://github.com/elitea-ng/elitea-platform/issues/874))
+Skills keep their own version history — the same **base**-plus-named-versions model this page describes, but with a compare view built for a single instructions field and a **Restore** action instead of the replacement-version dialog above. See [Skills](/menus/skills)'s own Versions section for the skill-specific mechanics.
 </Note>
 
 ## Guides and references
 
 - [Agents overview](/menus/agents)
 - [Pipelines overview](/menus/pipelines)
+- [Skills](/menus/skills)
 - [Import and export entities](/how-tos/agents-pipelines/import-export)

@@ -40,50 +40,22 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
-import { SkillVersion } from "./skillVersion.zod";
 
-export const Skill = zod
+export const SkillSetDefaultVersionRequest = zod
   .object({
-    id: zod.string(),
-    project_id: zod.string(),
-    name: zod.string(),
-    description: zod.string().optional(),
-    type: zod.string(),
-    config: zod.record(zod.string(), zod.unknown()).optional(),
-    is_default: zod.boolean(),
-    instructions: zod
-      .string()
-      .optional()
+    version_id: zod
+      .unknown()
       .describe(
-        "The CURRENT version's instructions — `base`'s, unless the request named another version (getSkillVersion, updateSkillVersion) — also available at version_details.instructions.",
+        "The version to mark default. Numeric or string; must name a version of this skill.",
       ),
-    tags: zod
-      .array(zod.string())
-      .optional()
-      .describe(
-        "The current version's tags (also available at version_details.tags).",
-      ),
-    versions: zod
-      .array(SkillVersion)
-      .optional()
-      .describe(
-        "EVERY version of the skill (#874), `base` first — not just `base`, as before #874. getSkill\/getSkillVersion both carry the full set; there is no separate list-versions endpoint.",
-      ),
-    version_details: SkillVersion.optional().describe(
-      "The CURRENT version (see `instructions`), not always versions[0].",
-    ),
-    default_version_id: zod
-      .string()
-      .optional()
-      .describe(
-        "skills.meta.default_version_id (#874), mirroring applications.meta.default_version_id. The version a NEW attachment proposes. Does NOT change which version an EXISTING agent attachment resolves at chat time — that stays keyed off entity_skill_mapping.skill_version_id, fixed at attach time.",
-      ),
-    created_at: zod.iso.datetime({ offset: true }),
-    updated_at: zod.iso.datetime({ offset: true }),
   })
   .describe(
-    'NOTE(W2): `config` is never populated in responses, `is_default` (the boolean property, unrelated to `default_version_id`) is always false, `type` is always the literal \"skill\", and `updated_at` is always the zero sentinel \"0001-01-01T00:00:00Z\" — the skills table itself has no updated_at\/is_default columns (migrations\/001_initial.sql). instructions\/tags\/versions\/ version_details\/default_version_id, in contrast, DO round-trip.\n',
+    "setDefaultVersion's body (internal\/api\/v2\/skills\/handler.go SetDefaultVersion). Before #874 this URL was bound to the generic skill-update handler, which read no `version_id` key and wrote the skill's own name to \"\" on every call.\n",
   );
 
-export type Skill = zod.input<typeof Skill>;
-export type SkillOutput = zod.output<typeof Skill>;
+export type SkillSetDefaultVersionRequest = zod.input<
+  typeof SkillSetDefaultVersionRequest
+>;
+export type SkillSetDefaultVersionRequestOutput = zod.output<
+  typeof SkillSetDefaultVersionRequest
+>;

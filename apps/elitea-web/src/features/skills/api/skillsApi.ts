@@ -143,6 +143,40 @@ export function setDefaultSkillVersion(
   );
 }
 
+/**
+ * restoreSkillVersion is the rollback (#874): it copies `versionId`'s
+ * instructions/tags back onto `base` and returns the skill with `base` as
+ * `version_details`. Skills have no distinguished "currently active" row to
+ * repoint the way agents' "Set as default" does — the unversioned GET/PUT/
+ * DELETE and every fresh attachment both read `base` directly — so restoring
+ * a version means overwriting the one row those actually use.
+ */
+export function restoreSkillVersion(
+  projectId: string,
+  skillId: string,
+  versionId: string | number,
+): Promise<SkillRecord> {
+  return fetchData<SkillRecord>(
+    `/elitea_core/skill_version_restore/prompt_lib/${projectId}/${skillId}/${versionId}`,
+    { method: 'POST' },
+  );
+}
+
+/**
+ * deleteSkillVersion removes one NAMED version — a thin, explicitly-named
+ * wrapper over deleteSkill(projectId, skillId, versionId) so a caller that
+ * means "delete this version" does not have to remember that the whole-skill
+ * delete and the version delete share one function distinguished only by an
+ * optional argument.
+ */
+export function deleteSkillVersion(
+  projectId: string,
+  skillId: string,
+  versionId: string,
+): Promise<void> {
+  return deleteSkill(projectId, skillId, versionId);
+}
+
 export function generateSkillDraft(projectId: string, description: string): Promise<SkillDraft> {
   return fetchData<SkillDraft>(
     `/elitea_core/generate_skill_draft/prompt_lib/${projectId}`,

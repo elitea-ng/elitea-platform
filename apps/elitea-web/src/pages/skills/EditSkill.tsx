@@ -1,10 +1,7 @@
 import type { ReactNode } from 'react';
 import { useEffect, useMemo, useState } from 'react';
 
-import AddOutlinedIcon from '@mui/icons-material/AddOutlined';
 import Box from '@mui/material/Box';
-import MenuItem from '@mui/material/MenuItem';
-import Select from '@mui/material/Select';
 import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
@@ -14,7 +11,8 @@ import { useNavigate, useParams } from '@tanstack/react-router';
 import {
   exportSkill,
   isSkillValid,
-  SkillEditorToolbar,
+  skillVersionKey,
+  SkillCompareModal,
   SkillForm,
   SkillPublishControls,
   useBindSkillIconMutation,
@@ -23,17 +21,17 @@ import {
   type SkillIconControl,
   type SkillIconMeta,
   type SkillRecord,
-  type SkillVersion,
   type SkillWriteInput,
 } from '@/features/skills';
 import { hasBackendCapability } from '@/shared/config';
 import { usePermissionSet } from '@/widgets/sidebar';
 import { t } from '@/shared/i18n';
-import { BaseBtn } from '@/shared/ui/BaseBtn';
 import { BaseModal } from '@/shared/ui/BaseModal';
 import { DeleteEntityModal } from '@/shared/ui/DeleteEntityModal';
 
+import { useEditSkillVersionControls } from './lib/useEditSkillVersionControls';
 import { useSelectedProjectId } from './lib/useSelectedProjectId';
+import { SkillEditorHeader } from './SkillEditorHeader';
 import { SkillTestPanel } from './SkillTestPanel';
 
 interface EditSkillParams {
@@ -53,9 +51,10 @@ export function toSkillForm(skill: SkillRecord | undefined): SkillWriteInput {
   };
 }
 
-export function skillVersionKey(version: SkillVersion): string {
-  return String(version.id ?? version.name);
-}
+// Re-exported for this file's own test (`./EditSkill.test.tsx`); the
+// function itself lives in `features/skills/lib/skillVersionKey.ts` (see the
+// import above) so `SkillCompareModal` (a feature, not a page) can use it too.
+export { skillVersionKey };
 
 /**
  * The icon a skill currently wears, read from the shape the API writes:
@@ -96,77 +95,6 @@ function downloadMarkdown(content: string, filename: string): void {
   URL.revokeObjectURL(url);
 }
 
-interface SkillEditorHeaderProps {
-  readonly skill: SkillRecord;
-  readonly versions: readonly SkillVersion[];
-  readonly activeVersion: string | undefined;
-  readonly isDirty: boolean;
-  readonly isSaving: boolean;
-  readonly isSettingDefault: boolean;
-  readonly onNavigateVersion: (version: string) => void;
-  readonly onNewVersion: () => void;
-  readonly onSetDefault: (version: string) => void;
-  readonly onSave: () => void;
-  readonly onDiscard: () => void;
-  readonly onDelete: () => void;
-  readonly onExport: () => void;
-  readonly publishing: ReactNode;
-}
-
-function SkillEditorHeader(props: SkillEditorHeaderProps): ReactNode {
-  const selectedVersion =
-    props.activeVersion ?? skillVersionKey(props.skill.version_details ?? props.versions[0]!);
-  return (
-    <Box sx={headerSx}>
-      <Box sx={titleSx}>
-        <Typography variant="headingSmall">{props.skill.name}</Typography>
-        {props.versions.length > 0 && (
-          <Select
-            size="small"
-            value={selectedVersion}
-            onChange={(event) => props.onNavigateVersion(event.target.value)}
-          >
-            {props.versions.map((version) => (
-              <MenuItem
-                key={skillVersionKey(version)}
-                value={skillVersionKey(version)}
-              >
-                {version.name}
-              </MenuItem>
-            ))}
-          </Select>
-        )}
-        <BaseBtn
-          variant="secondary"
-          startIcon={<AddOutlinedIcon />}
-          onClick={props.onNewVersion}
-        >
-          {t('skills.edit.newVersion', 'New version')}
-        </BaseBtn>
-        {props.activeVersion && (
-          <BaseBtn
-            variant="secondary"
-            disabled={props.isSettingDefault}
-            onClick={() => props.onSetDefault(props.activeVersion ?? '')}
-          >
-            {t('skills.edit.setDefault', 'Set default')}
-          </BaseBtn>
-        )}
-      </Box>
-      <SkillEditorToolbar
-        isDirty={props.isDirty}
-        isSaving={props.isSaving}
-        canDelete
-        onSave={props.onSave}
-        onDiscard={props.onDiscard}
-        onDelete={props.onDelete}
-        onExport={props.onExport}
-        publishing={props.publishing}
-      />
-    </Box>
-  );
-}
-
 /**
  * buildSkillIconControl returns the icon binding, or `undefined` when there is
  * nothing to bind to — no project, or a skill whose version id is not known
@@ -203,6 +131,14 @@ export function EditSkill(): ReactNode {
   const [error, setError] = useState<string>();
   const permissions = usePermissionSet(projectId);
   const bindIcon = useBindSkillIconMutation(projectId ?? '');
+  const versionControls = useEditSkillVersionControls({
+    tab: params.tab,
+    skillId: params.skillId,
+    version: params.version,
+    skill: detail.data,
+    mutations,
+    setError,
+  });
 
   useEffect(() => setValue(initialValue), [initialValue]);
 
@@ -231,7 +167,7 @@ export function EditSkill(): ReactNode {
   const canTestSkill = hasBackendCapability('llmPredictStreaming');
 
   const isDirty = JSON.stringify(value) !== JSON.stringify(initialValue);
-  const versions = detail.data?.versions ?? [];
+  const { versions, goToVersion } = versionControls;
 
   const save = (): void => {
     setShowErrors(true);
@@ -271,18 +207,16 @@ export function EditSkill(): ReactNode {
         isDirty={isDirty}
         isSaving={mutations.update.isPending}
         isSettingDefault={mutations.setDefault.isPending}
-        onNavigateVersion={(version) => {
-          void navigate({
-            to: '/skills/$tab/$skillId/$version',
-            params: { tab: params.tab ?? 'all', skillId: params.skillId ?? '', version },
-          });
-        }}
+        onNavigateVersion={goToVersion}
         onNewVersion={() => setVersionOpen(true)}
         onSetDefault={(version) => {
           if (params.skillId) {
             void mutations.setDefault.mutateAsync({ skillId: params.skillId, versionId: version });
           }
         }}
+        onCompare={versionControls.compare.onOpen}
+        onRestore={versionControls.restore.onOpen}
+        onDeleteVersion={versionControls.deleteVersion.onOpen}
         onSave={save}
         onDiscard={() => setValue(initialValue)}
         onDelete={() => setDeleteOpen(true)}
@@ -357,20 +291,42 @@ export function EditSkill(): ReactNode {
           />
         }
       />
+      {versionControls.compare.open && (
+        <SkillCompareModal
+          open={versionControls.compare.open}
+          onClose={versionControls.compare.onClose}
+          versions={versions}
+          leftVersionKey={versionControls.activeVersionKey}
+        />
+      )}
+      <BaseModal
+        open={versionControls.restore.open}
+        variant="simple"
+        title={t('skills.edit.restoreVersionTitle', 'Restore this version?')}
+        onClose={versionControls.restore.onClose}
+        onConfirm={versionControls.restore.onConfirm}
+        actions={{ confirming: versionControls.restore.confirming }}
+        content={
+          <Typography>
+            {t(
+              'skills.edit.restoreVersionBody',
+              'This copies the current version’s instructions and tags onto base, overwriting base’s current content. This cannot be undone.',
+            )}
+          </Typography>
+        }
+      />
+      <DeleteEntityModal
+        open={versionControls.deleteVersion.open}
+        name={versionControls.deleteVersion.name}
+        confirming={versionControls.deleteVersion.confirming}
+        onClose={versionControls.deleteVersion.onClose}
+        onConfirm={versionControls.deleteVersion.onConfirm}
+      />
     </Box>
   );
 }
 
 const pageSx: SxProps<Theme> = { height: '100%', display: 'flex', flexDirection: 'column' };
-const headerSx: SxProps<Theme> = (theme: Theme) => ({
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  gap: theme.spacing(1),
-  padding: theme.spacing(1, 3),
-  borderBottom: `0.0625rem solid ${theme.vars.palette.border.lines}`,
-});
-const titleSx: SxProps<Theme> = { display: 'flex', alignItems: 'center', gap: 1 };
 const contentSx: SxProps<Theme> = { flex: 1, minHeight: 0, display: 'grid', gridTemplateColumns: '1fr 1fr' };
 const formPaneSx: SxProps<Theme> = (theme: Theme) => ({ overflowY: 'auto', padding: theme.spacing(3) });
 const testPaneSx: SxProps<Theme> = (theme: Theme) => ({
