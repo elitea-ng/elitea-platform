@@ -57,7 +57,13 @@ func (r *WebhookDeliveriesRepo) ListRecent(ctx context.Context, projectID, webho
 	}
 	defer rows.Close()
 
-	var items []webhook.Delivery
+	// A nil slice marshals to JSON `null`, not `[]` — same trap the sibling
+	// `WebhooksRepo.List` had (see its own comment): a webhook with no
+	// deliveries yet answered `{"items":null}`, and `api.webhook-deliveries
+	// .spec.ts`'s poll for the FIRST delivery row (`body.items.find(...)`)
+	// crashed on that null before the delivery it was waiting for ever
+	// existed (#882 CI).
+	items := []webhook.Delivery{}
 	for rows.Next() {
 		var d webhook.Delivery
 		if err := rows.Scan(&d.ID, &d.WebhookID, &d.ProjectID, &d.Event, &d.Status,
