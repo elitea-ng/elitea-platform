@@ -133,10 +133,16 @@ test('J17.2: the create page offers real, server-supplied toolkit types', async 
   // And the headings the metadata groups them under.
   await expect(page.getByText('Code Repositories', { exact: true }).first()).toBeVisible();
   await expect(page.getByText('Test Management', { exact: true }).first()).toBeVisible();
-  // Slack is served, and served HIDDEN: the admitted Python worker image
-  // cannot import it, so offering the tile would produce a toolkit that fails
-  // at its first tool call. Absence here is the capability projection working.
-  await expect(page.getByRole('button', { name: 'Slack', exact: true })).toHaveCount(0);
+  // AWS is served, and served HIDDEN: the admitted Python worker image
+  // cannot import it (current_python_worker_toolkit_capability_snapshot
+  // .json's `unsupported_import_keys`), so offering the tile would produce a
+  // toolkit that fails at its first tool call. Absence here is the
+  // capability projection working. NOT Slack — #869 (same branch) pinned
+  // slack_sdk on the Python image specifically so Slack import succeeds;
+  // asserting it hidden here would be asserting the gap #869 just closed.
+  // `aws` has no frontend ToolTypes entry, so its tile falls back to
+  // `humanizeToolkitTypeKey` ("aws" -> "Aws" — see toolMenu.ts).
+  await expect(page.getByRole('button', { name: 'Aws', exact: true })).toHaveCount(0);
 
   // checkA11y earns its place here and has now caught TWO different causes of the
   // same critical `button-name` violation, which is why it stays unconditional:
