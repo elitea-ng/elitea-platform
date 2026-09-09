@@ -614,8 +614,9 @@ export const shots: readonly Shot[] = [
     route: "/app/deepwiki/:toolkitId",
     viewport: DEFAULT_VIEWPORT,
     persona: "member",
+    placeholders: { toolkitId: "wikiToolkitId" },
     notes:
-      "Needs a wiki toolkit; generated pages need the DeepWiki real-engine compose overlay, else shoot the empty/picker state at /deepwiki.",
+      "docs-seed.ts's createWikiToolkit (unit W4b) seeds a real `wikis`-type toolkit over elitea-ng/elitea-platform, and generation starts for real on this stack's real-engine — but the DeepWiki host container's callback-CA bind mount (`/certs/ca.crt`) is broken on this run (source path from a since-removed worktree), so every invocation fails before any page lands. Recapture once that mount is fixed; this id and inventory-workspace/browser previously shared ONE `toolkitId` seed key (the github toolkit) — this placeholder override is the fix for that, independent of the cert issue.",
   },
   {
     id: "inventory-workspace",
@@ -819,8 +820,9 @@ export const shots: readonly Shot[] = [
     route: "/app/deepwiki/:toolkitId",
     viewport: DEFAULT_VIEWPORT,
     persona: "member",
+    placeholders: { toolkitId: "wikiToolkitId" },
     notes:
-      "DeepWiki page browser with the generation panel visible. Needs the real-engine compose overlay and the seeded wiki toolkit in project 90200 (E2E Wiki id 9001); otherwise shoot the empty/no-wiki-yet state.",
+      "Same autotest_docs_wiki toolkit and same cert-mount blocker as deepwiki-workspace (unit W4b); recapture once generation can actually complete on this stack.",
   },
   {
     id: "inventory-browser",

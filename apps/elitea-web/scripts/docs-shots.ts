@@ -62,6 +62,7 @@
  *                                 [--persona member|admin|chat]
  *                                 [--fail-on-missing] [--seed-map PATH]
  *                                 [--report DIR]
+ *                                 [--project-id ID --project-name NAME]
  *
  *   --only              Comma-separated shot ids to capture (default: all).
  *   --base-url          Overrides playwright.config.ts's BASE_URL /
@@ -76,6 +77,18 @@
  *                       (bad ones included) to this directory, named
  *                       `<id>.png`, for a human review pass — separate from
  *                       the committed `content/img/<id>.webp`.
+ *   --project-id/       Pin every captured context to this project (unit
+ *   --project-name      W4b) — required together. `auth.setup.ts`'s stored
+ *                       storageState always pins member/admin to "Default
+ *                       Project" (id "1"; `e2e/fixtures/project.ts`), so a
+ *                       `docs-seed.ts --project-name` run captured with
+ *                       neither of these flags silently lands every shot
+ *                       back in "Default Project" instead — measured live:
+ *                       an empty conversation, a 404 pipeline, an unrelated
+ *                       toolkit, none of them an error `detectBadCapture`
+ *                       catches. Match these to the SAME project
+ *                       `docs-seed.ts --project-name`/its resolved id
+ *                       targeted.
  *   --fail-on-missing   Exit non-zero if any requested shot produced no
  *                       `content/img/<id>.webp` (capture error, a route
  *                       whose placeholder did not resolve, a detected bad
@@ -133,6 +146,22 @@ interface Cli {
   readonly failOnMissing: boolean;
   readonly seedMapPath: string;
   readonly reportDir: string | undefined;
+  /**
+   * Pins EVERY captured context to this project (unit W4b), the same way a
+   * real user's own project switch would, WITHOUT depending on
+   * `auth.setup.ts`'s stored `localStorage` — that file always pins
+   * member/admin to `"Default Project"` (id "1"; see
+   * `e2e/fixtures/project.ts`'s `DEFAULT_PROJECT_ID`/`DEFAULT_PROJECT_NAME`),
+   * which is the ONLY project a captured context lands in otherwise. Measured
+   * live: every shot in a `docs-seed.ts --project-name` run silently
+   * captured "Default Project" — an empty conversation, a 404 pipeline, an
+   * unrelated toolkit id — because nothing told the browser context to look
+   * anywhere else. Both flags are required together (a project without its
+   * name renders the switcher's "No projects" label mid-capture, which
+   * `detectBadCapture` does not catch either).
+   */
+  readonly projectId: string | undefined;
+  readonly projectName: string | undefined;
 }
 
 /** Default `docs-seed.ts` output path, mirrored here so the two scripts agree
@@ -146,6 +175,8 @@ function parseArgs(argv: readonly string[]): Cli {
   let failOnMissing = false;
   let seedMapPath = DEFAULT_SEED_MAP_PATH;
   let reportDir: string | undefined;
+  let projectId: string | undefined;
+  let projectName: string | undefined;
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -190,11 +221,26 @@ function parseArgs(argv: readonly string[]): Cli {
         reportDir = resolve(value);
         break;
       }
+      case "--project-id": {
+        const value = argv[++i];
+        if (value === undefined) throw new Error("--project-id requires a value");
+        projectId = value;
+        break;
+      }
+      case "--project-name": {
+        const value = argv[++i];
+        if (value === undefined) throw new Error("--project-name requires a value");
+        projectName = value;
+        break;
+      }
       default:
         throw new Error(`unknown argument: ${arg}`);
     }
   }
-  return { only, baseUrl, persona, failOnMissing, seedMapPath, reportDir };
+  if ((projectId === undefined) !== (projectName === undefined)) {
+    throw new Error("--project-id and --project-name must be passed together");
+  }
+  return { only, baseUrl, persona, failOnMissing, seedMapPath, reportDir, projectId, projectName };
 }
 
 /**
@@ -489,6 +535,16 @@ async function detectBadCapture(page: Page): Promise<string | undefined> {
   if ((await somethingWrong.count()) > 0) {
     return 'found "Something went wrong" text on the page';
   }
+  // The app's own global 404 route (`src/routes/__404.tsx`, `route.notFound.
+  // message`) renders "Page not found. Try …" — neither the title/URL check
+  // above nor the error-boundary/"Something went wrong" checks catch it
+  // (measured live, unit W4b: a mis-scoped route landed here and still
+  // produced a committed webp, silently, because this function said nothing
+  // was wrong).
+  const pageNotFound = page.getByText(/Page not found/i);
+  if ((await pageNotFound.count()) > 0) {
+    return 'found "Page not found" text on the page';
+  }
   return undefined;
 }
 
@@ -528,6 +584,7 @@ async function captureShot(
   tmpDir: string,
   seedMap: Record<string, unknown>,
   reportDir: string | undefined,
+  project: { readonly id: string; readonly name: string } | undefined,
 ): Promise<CaptureResult> {
   const persona = shot.persona ?? cliPersona;
   const theme = shot.theme ?? "light";
@@ -540,6 +597,24 @@ async function captureShot(
       baseURL: baseUrl,
       reducedMotion: "reduce",
     });
+    // Pins every page this context opens to `project`, overriding whatever
+    // `auth.setup.ts`'s stored storageState pinned the persona to (always
+    // "Default Project" — see the CLI's own doc on `--project-id`). Set
+    // through `addInitScript`, which runs before the app's own bundle on
+    // EVERY document this context loads, so it beats the app's first read of
+    // these keys rather than racing it the way a post-load `page.evaluate`
+    // would.
+    if (project !== undefined) {
+      await context.addInitScript(
+        ({ id, name }) => {
+          localStorage.setItem("el.project.id", id);
+          localStorage.setItem("el.project.name", name);
+          sessionStorage.setItem("el.project.id", id);
+          sessionStorage.setItem("el.project.name", name);
+        },
+        project,
+      );
+    }
     const page = await context.newPage();
 
     await setColorScheme(page, baseUrl, theme);
@@ -653,6 +728,10 @@ async function main(): Promise<void> {
   });
   const results: CaptureResult[] = [];
   try {
+    const project =
+      cli.projectId !== undefined && cli.projectName !== undefined
+        ? { id: cli.projectId, name: cli.projectName }
+        : undefined;
     for (const shot of shotsToRun) {
       console.log(`docs-shots: capturing ${shot.id} (${shot.route}) …`);
       const result = await captureShot(
@@ -663,6 +742,7 @@ async function main(): Promise<void> {
         tmpDir,
         seedMap,
         cli.reportDir,
+        project,
       );
       results.push(result);
       if (result.error !== undefined)
