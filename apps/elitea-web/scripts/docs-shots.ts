@@ -60,20 +60,32 @@
  *
  *   npx tsx scripts/docs-shots.ts [--only id,id,…] [--base-url URL]
  *                                 [--persona member|admin|chat]
- *                                 [--fail-on-missing]
+ *                                 [--fail-on-missing] [--seed-map PATH]
+ *                                 [--report DIR]
  *
  *   --only              Comma-separated shot ids to capture (default: all).
  *   --base-url          Overrides playwright.config.ts's BASE_URL /
  *                       PLAYWRIGHT_BASE_URL.
  *   --persona           Default persona for shots that do not name one
  *                       (default: member).
+ *   --seed-map          Path to docs-seed.ts's JSON output, used to resolve
+ *                       a route's `:placeholder` segments (default:
+ *                       playwright-results/docs-seed.json). A route with no
+ *                       placeholder works with no seed map at all.
+ *   --report            Also write a PNG copy of every attempted capture
+ *                       (bad ones included) to this directory, named
+ *                       `<id>.png`, for a human review pass — separate from
+ *                       the committed `content/img/<id>.webp`.
  *   --fail-on-missing   Exit non-zero if any requested shot produced no
- *                       `content/img/<id>.webp` (capture error, or a
+ *                       `content/img/<id>.webp` (capture error, a route
+ *                       whose placeholder did not resolve, a detected bad
+ *                       capture — see `detectBadCapture` — or a
  *                       conversion that could not reach the byte ceiling).
  */
 import { execFileSync } from "node:child_process";
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -119,13 +131,21 @@ interface Cli {
   readonly baseUrl: string;
   readonly persona: ShotPersona;
   readonly failOnMissing: boolean;
+  readonly seedMapPath: string;
+  readonly reportDir: string | undefined;
 }
+
+/** Default `docs-seed.ts` output path, mirrored here so the two scripts agree
+ * on a default without one importing the other. */
+const DEFAULT_SEED_MAP_PATH = join(WEB_ROOT, "playwright-results/docs-seed.json");
 
 function parseArgs(argv: readonly string[]): Cli {
   let only: string[] | undefined;
   let baseUrl = BASE_URL;
   let persona: ShotPersona = "member";
   let failOnMissing = false;
+  let seedMapPath = DEFAULT_SEED_MAP_PATH;
+  let reportDir: string | undefined;
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -158,11 +178,62 @@ function parseArgs(argv: readonly string[]): Cli {
       case "--fail-on-missing":
         failOnMissing = true;
         break;
+      case "--seed-map": {
+        const value = argv[++i];
+        if (value === undefined) throw new Error("--seed-map requires a value");
+        seedMapPath = resolve(value);
+        break;
+      }
+      case "--report": {
+        const value = argv[++i];
+        if (value === undefined) throw new Error("--report requires a value");
+        reportDir = resolve(value);
+        break;
+      }
       default:
         throw new Error(`unknown argument: ${arg}`);
     }
   }
-  return { only, baseUrl, persona, failOnMissing };
+  return { only, baseUrl, persona, failOnMissing, seedMapPath, reportDir };
+}
+
+/**
+ * Reads `docs-seed.ts`'s output map, or `{}` if it does not exist yet — a
+ * manifest entry with no placeholder in its route works fine with an empty
+ * map, and this script should not force every caller to have run the seed
+ * first (e.g. a re-capture of one placeholder-free `--only` id).
+ */
+function readSeedMap(path: string): Record<string, unknown> {
+  if (!existsSync(path)) {
+    console.warn(
+      `docs-shots: no seed map at ${path} — routes with a ":placeholder" will fail to resolve. ` +
+        "Run docs-seed.ts first if any requested shot needs one.",
+    );
+    return {};
+  }
+  return JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+}
+
+/**
+ * Resolves every `:name` segment in `route` from `seedMap`, honouring the
+ * shot's own `placeholders` override (see shots.manifest.ts's doc on that
+ * field) before falling back to `seedMap[name]` directly. Throws, naming the
+ * unresolved segment, rather than navigating to a route that still contains
+ * a literal `:agentId` — which would "succeed" as a capture of a 404 page.
+ */
+function resolveRoute(shot: Shot, seedMap: Record<string, unknown>): string {
+  return shot.route.replace(/:([A-Za-z][A-Za-z0-9_]*)/g, (match, name: string) => {
+    const seedMapKey = shot.placeholders?.[name] ?? name;
+    const value = seedMap[seedMapKey];
+    if (typeof value !== "string" && typeof value !== "number") {
+      throw new Error(
+        `route placeholder "${match}" (seed map key "${seedMapKey}") did not resolve to a ` +
+          `string/number in the seed map — got ${JSON.stringify(value)}. Run docs-seed.ts, or ` +
+          "check the shot's `placeholders` override.",
+      );
+    }
+    return String(value);
+  });
 }
 
 /**
@@ -392,6 +463,35 @@ interface CaptureResult {
   readonly error: string | undefined;
 }
 
+/**
+ * Detects an obviously bad capture: a 404/error page, or the app's own error
+ * boundary — checked BEFORE the shutter, so a page that failed to load never
+ * becomes a committed screenshot of a crash. Title/URL are checked for the
+ * literal substrings "404" and "error" (case-insensitive); the DOM is
+ * checked for `[data-testid="error-boundary"]` and the text "Something went
+ * wrong", the two surfaces this app's own error boundaries render.
+ */
+async function detectBadCapture(page: Page): Promise<string | undefined> {
+  const title = await page.title().catch(() => "");
+  const url = page.url();
+  const badTextPattern = /404|error/i;
+  if (badTextPattern.test(title)) {
+    return `page title looks like an error page: "${title}"`;
+  }
+  if (badTextPattern.test(new URL(url).pathname)) {
+    return `URL path looks like an error route: "${url}"`;
+  }
+  const errorBoundary = page.locator('[data-testid="error-boundary"]');
+  if ((await errorBoundary.count()) > 0) {
+    return 'found [data-testid="error-boundary"] on the page';
+  }
+  const somethingWrong = page.getByText(/Something went wrong/i);
+  if ((await somethingWrong.count()) > 0) {
+    return 'found "Something went wrong" text on the page';
+  }
+  return undefined;
+}
+
 /** Encodes `png` to WebP under `MAX_IMAGE_BYTES`, stepping quality down and
  * then, if still over budget, resizing to `RESIZE_WIDTH` wide. Returns the
  * final buffer even if the ceiling could not be reached, so the caller can
@@ -426,9 +526,12 @@ async function captureShot(
   baseUrl: string,
   cliPersona: ShotPersona,
   tmpDir: string,
+  seedMap: Record<string, unknown>,
+  reportDir: string | undefined,
 ): Promise<CaptureResult> {
   const persona = shot.persona ?? cliPersona;
   const theme = shot.theme ?? "light";
+  const route = resolveRoute(shot, seedMap);
   let context: BrowserContext | undefined;
   try {
     context = await browser.newContext({
@@ -441,7 +544,7 @@ async function captureShot(
 
     await setColorScheme(page, baseUrl, theme);
 
-    await page.goto(`${baseUrl}${shot.route}`, {
+    await page.goto(`${baseUrl}${route}`, {
       waitUntil: "domcontentloaded",
     });
     await page.addStyleTag({ content: FREEZE_CSS });
@@ -460,6 +563,11 @@ async function captureShot(
       await waitForDomStable(page);
     }
 
+    const badCapture = await detectBadCapture(page);
+    if (badCapture !== undefined) {
+      throw new Error(`bad capture detected before the shutter: ${badCapture}`);
+    }
+
     await applyMask(page, shot.mask ?? []);
 
     const pngPath = join(tmpDir, `${shot.id}.png`);
@@ -469,20 +577,26 @@ async function captureShot(
       await page.screenshot({ path: pngPath, fullPage: false });
     }
 
-    const webp = await encodeWebp(readFileSync(pngPath));
+    const pngBuffer = readFileSync(pngPath);
+    if (reportDir !== undefined) {
+      mkdirSync(reportDir, { recursive: true });
+      writeFileSync(join(reportDir, `${shot.id}.png`), pngBuffer);
+    }
+
+    const webp = await encodeWebp(pngBuffer);
     writeFileSync(join(IMG_DIR, `${shot.id}.webp`), webp);
     rmSync(pngPath, { force: true });
 
     return {
       id: shot.id,
-      route: shot.route,
+      route,
       bytes: webp.byteLength,
       error: undefined,
     };
   } catch (error) {
     return {
       id: shot.id,
-      route: shot.route,
+      route,
       bytes: undefined,
       error: error instanceof Error ? error.message : String(error),
     };
@@ -529,6 +643,8 @@ async function main(): Promise<void> {
     shotsToRun.map((shot) => shot.persona ?? cli.persona),
   );
   ensureStorageStates(personasNeeded, cli.baseUrl);
+  const seedMap = readSeedMap(cli.seedMapPath);
+  if (cli.reportDir !== undefined) mkdirSync(cli.reportDir, { recursive: true });
 
   const tmpDir = mkdtempSync(join(tmpdir(), "docs-shots-"));
   const browser = await chromium.launch({
@@ -545,6 +661,8 @@ async function main(): Promise<void> {
         cli.baseUrl,
         cli.persona,
         tmpDir,
+        seedMap,
+        cli.reportDir,
       );
       results.push(result);
       if (result.error !== undefined)

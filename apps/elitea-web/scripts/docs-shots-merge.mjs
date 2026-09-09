@@ -48,6 +48,8 @@ const KNOWN_FIELDS = new Set([
   "persona",
   "theme",
   "notes",
+  "seed",
+  "placeholders",
 ]);
 
 function fail(message) {
@@ -91,6 +93,31 @@ function normalizeViewport(viewport, source, id) {
   return DEFAULT_VIEWPORT;
 }
 
+/**
+ * The main SPA is served under the `/app` basepath on every stack this
+ * script targets (`vite_base_uri` defaults to `/app/`; confirmed against
+ * `e2e/journeys/**` — every journey that navigates directly builds
+ * `BASE_URL + '/app/...'`, never a bare `/...`). The admin console is a
+ * SEPARATE bundle mounted at `/admin/app` (`src/pages/admin/router.tsx`'s
+ * `ADMIN_BASE_PATH`).
+ *
+ * Every batch handed to this merge so far (the original hand-authored
+ * entries and staging batches A/B/C) wrote routes WITHOUT the `/app` prefix
+ * — `/chat`, `/agents/latest/:agentId`, `/toolkits/create`, etc. — which
+ * `docs-shots.ts` then opens literally, landing on whatever the traefik
+ * default vhost or a 404 serves at that bare path rather than the intended
+ * screen. Batch D (admin) got it right by writing `/admin/app/...` routes
+ * directly. So the fix belongs here, applied once to both existing and
+ * incoming entries, rather than re-explained to every future writer: a
+ * route that is not already `/app/...` or `/admin/...` gets `/app`
+ * prepended.
+ */
+function normalizeRoute(route) {
+  if (route === "/app" || route.startsWith("/app/")) return route;
+  if (route === "/admin" || route.startsWith("/admin/")) return route;
+  return `/app${route}`;
+}
+
 /** Fills in the same defaults docs-shots.ts applies at capture time, so two
  * entries that differ only by an omitted default do not read as a conflict. */
 function normalizeShot(shot, source) {
@@ -107,7 +134,7 @@ function normalizeShot(shot, source) {
   }
   return {
     id: shot.id,
-    route: shot.route,
+    route: normalizeRoute(shot.route),
     viewport: normalizeViewport(shot.viewport, source, shot.id),
     ...(shot.selector !== undefined ? { selector: shot.selector } : {}),
     ...(shot.actions !== undefined ? { actions: shot.actions } : {}),
@@ -115,6 +142,8 @@ function normalizeShot(shot, source) {
     ...(shot.persona !== undefined ? { persona: shot.persona } : {}),
     ...(shot.theme !== undefined ? { theme: shot.theme } : {}),
     ...(shot.notes !== undefined ? { notes: shot.notes } : {}),
+    ...(shot.seed !== undefined ? { seed: shot.seed } : {}),
+    ...(shot.placeholders !== undefined ? { placeholders: shot.placeholders } : {}),
   };
 }
 
