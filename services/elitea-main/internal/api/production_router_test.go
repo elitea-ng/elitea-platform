@@ -1775,6 +1775,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"GET /api/v2/admin/identity_providers/administration",
 		"GET /api/v2/admin/maintenance/{mode}",
 		"GET /api/v2/admin/mcp_prebuilt_servers/administration",
+		"GET /api/v2/admin/moderation_status/project_requests/mine",
 		"GET /api/v2/admin/moderation_status/{mode}/{projectID}/{entityID}",
 		"GET /api/v2/admin/moderation_statuses/administration",
 		"GET /api/v2/admin/modes/administration",
@@ -1995,6 +1996,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		// pylon's invites_bulkusers and invites_bulkprojects console pages,
 		// which are the same cross product with one side pinned.
 		"POST /api/v2/admin/invites_bulk/administration",
+		"POST /api/v2/admin/moderation_status/project_request",
 		"POST /api/v2/admin/moderation_status/{mode}/{projectID}/{entityID}",
 		"POST /api/v2/admin/modes/administration",
 		"POST /api/v2/admin/permissions/{scope}/{mode}",

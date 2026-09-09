@@ -32,10 +32,22 @@ Both actions run a multi-step process rather than a single database write: creat
 Deleting a project destroys its data irreversibly. There is no undo.
 </Warning>
 
-## There is no self-service request flow
+## Approving a member's project request
 
-Every project is created by an administrator from this page. There is no in-app way for a member to request a new project and have it approved — unlike application access, which does have a request/approval flow (see [App requests and toolkit types](/admin/app-requests-and-toolkit-types)).
+A member does not have to ask you directly. From the project switcher, **+ Request a project** opens a small form — a name and a justification — that files a request the same way the App Requests moderation pattern already handles application access (see [App requests and toolkit types](/admin/app-requests-and-toolkit-types)). It lands on **this same App Requests page**, under the "Project Request" issue type.
+
+<Steps>
+  <Step title="Filter the queue">
+    On [App Requests](/admin/app-requests-and-toolkit-types), set the Issue Type filter to **Project Request**.
+  </Step>
+  <Step title="Approve or reject">
+    **Approve** runs the same multi-step creation process described above — schema, permissions, vault, the lot — with the requester made the new project's admin. **Reject** requires a reason, exactly like any other app request, and creates nothing.
+  </Step>
+  <Step title="The requester is notified either way">
+    Approving names the new project's id in the queue and in the requester's notification; rejecting delivers your reason.
+  </Step>
+</Steps>
 
 <Note>
-Not available yet: a self-service "request a project" flow mirroring the App Requests moderation pattern (tracked in [#871](https://github.com/elitea-ng/elitea-platform/issues/871)). Until then, ask your administrator directly to create a project for your team.
+Unlike every other request this queue handles, approving a "Project Request" is not clerical: it is the one decision on this page that creates something rather than only recording an answer.
 </Note>

@@ -3048,6 +3048,15 @@ components:
           description: Required when a moderator rejects, null otherwise.
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+        created_project_id:
+          type: integer
+          format: int64
+          description: >
+            Set ONLY on an APPROVED `Project Request` row (issue #871) — the
+            id the project-creation pipeline assigned. Absent on every other
+            row, and absent on a `Project Request` row that is still
+            `pending` or was `rejected` (internal/api/v2/moderation/
+            project_requests.go's `decideProjectRequest`).
       description: >
         NOTE(W2): one `centry.moderation_state` row as
         internal/api/v2/moderation/requests.go's `requestRow` marshals it
@@ -3102,6 +3111,22 @@ components:
         authenticated caller), and a non-empty `meta` is refused with 400 (an
         absent, null or empty one is tolerated for the two shipped clients).
         `project_id` and `entity_id` come from the path.
+
+    ProjectRequestCreate:
+      type: object
+      required: [name, description]
+      properties:
+        name:
+          type: string
+          description: The requested project's name. Stored as `entity_id`.
+        description:
+          type: string
+          description: The requester's justification for the new project.
+      description: >
+        internal/api/v2/moderation/project_requests.go's
+        `projectRequestCreateBody`. `project_id` (the caller's own personal
+        project) and `issue_type` ("Project Request") are never client
+        fields — the server fills both.
 
     PlatformSettings:
       type: object
@@ -9913,6 +9938,69 @@ paths:
               schema:
                 $ref: '#/components/schemas/ModerationRequestRow'
         '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+
+  # ── Self-service "request a project" (issue #871) ───────────────────────
+  #
+  # internal/api/v2/moderation/project_requests.go. Reuses
+  # `centry.moderation_state` with `issue_type = "Project Request"` rather
+  # than a new table — see that file's header. Approving one (through the
+  # existing `PUT /admin/moderation_status/administration` above) runs the
+  # SAME project-creation pipeline `POST /projects/project/administration`
+  # uses, with the requester as the new project's admin.
+  /admin/moderation_status/project_request:
+    post:
+      operationId: createProjectRequest
+      summary: Request a new project
+      description: |
+        Any authenticated user may call this — there is no permission gate
+        beyond being signed in. The row's `project_id` is the caller's own
+        PERSONAL project (resolved, and provisioned if it does not exist
+        yet, via the same ensurer login-time provisioning uses); it is
+        bookkeeping only and never read back to decide anything.
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectRequestCreate'
+      responses:
+        '201':
+          description: 'The created project request, with `status` set to "pending"'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModerationRequestRow'
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '503':
+          description: >
+            The database, or the personal-project ensurer, is not wired on
+            this deployment.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/moderation_status/project_requests/mine:
+    get:
+      operationId: listMyProjectRequests
+      summary: List the caller's own project requests
+      description: |
+        Every `Project Request` row the caller has ever filed, across every
+        `project_id` it happens to carry (unlike the per-entity read above,
+        this is not scoped to one project — a project request has no home
+        project to scope it to). Newest first.
+      tags: [admin]
+      responses:
+        '200':
+          description: The caller's project requests, newest first
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModerationRequestList'
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
 

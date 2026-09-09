@@ -81,7 +81,7 @@ The variable is empty by default, so a fresh install stays unprivileged until yo
 Open the deployment in your browser and sign in through your identity provider (or the Form plane, if configured). If your reference matches an `ELITEA_INITIAL_GLOBAL_ADMINS` entry, you land with a global administrator role.
 </Step>
 <Step title="Create your first project">
-Open the admin console at `/admin/app/projects` and create a project. Project creation is administrator-only — Elitea has no self-service "request a project" flow; every project starts with an administrator creating it and assigning members afterward.
+Open the admin console at `/admin/app/projects` and create a project. Project *creation* is administrator-only — but a member does not have to wait on you to ask: the project switcher's **+ Request a project** files a request an administrator approves or rejects from the App Requests page (see [Projects](/admin/projects)), the same way application-access requests already work.
 </Step>
 <Step title="Add an AI provider">
 In your project, open Settings → AI Providers (`/settings/create-configuration/open_ai` for OpenAI, or pick another provider type) and save a model configuration. See [Configure an AI provider](/getting-started/configure-ai-provider) for the full field list per provider. Everything from here on — chat, agents, toolkits — is configured entirely from the UI; no direct database access is required.

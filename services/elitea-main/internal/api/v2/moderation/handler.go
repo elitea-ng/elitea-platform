@@ -18,6 +18,12 @@ type Handler struct {
 	// Outbound e-mail for decision notices (ADR-0024 WP7); nil means the
 	// in-app notification row is the only delivery, as before.
 	mailer DecisionMailer
+	// provisioner and personalProjects back the project-request half (#871,
+	// project_requests.go). Both nil until wired: approving a Project
+	// Request without a provisioner fails closed (502), and filing one
+	// without an ensurer fails closed (503) — see that file's Option docs.
+	provisioner      ProjectProvisioner
+	personalProjects PersonalProjectEnsurer
 }
 
 // DecisionMailer is the seam to internal/application/mailer.

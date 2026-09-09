@@ -323,6 +323,7 @@ export * from "./projectInfoUpdateRequest.zod";
 export * from "./projectInfoUpdateResponse.zod";
 export * from "./projectQuota.zod";
 export * from "./projectQuotaUpdate.zod";
+export * from "./projectRequestCreate.zod";
 export * from "./projectStatistics.zod";
 export * from "./projectWithGroups.zod";
 export * from "./publicApplicationDetail.zod";

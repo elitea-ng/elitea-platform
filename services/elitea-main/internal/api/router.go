@@ -1438,7 +1438,29 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					admin.WithToolkitTypePolicy(toolkitTypePolicyStore),
 				}, adminOptions...)...,
 			)
-			moderationHandler := v2moderation.NewHandler(cfg.Pool, v2moderation.WithMailer(decisionMailer))
+			// Project requests (#871) reuse the SAME provisioner and personal-
+			// project ensurer the projects route and login-time provisioning
+			// use, built once above (newProjectProvisioner's own doc comment:
+			// a second Provisioner is the shape #920/whatever-comes-next would
+			// be). Both Options no-op on a nil argument, so a deployment with
+			// no pool composes a Handler exactly as before — approving a
+			// Project Request then answers 502 and filing one answers 503,
+			// rather than either being silently wired to nothing.
+			moderationOptions := []v2moderation.Option{v2moderation.WithMailer(decisionMailer)}
+			if projectProvisionerOK {
+				moderationOptions = append(moderationOptions, v2moderation.WithProjectProvisioner(projectProvisioner))
+			}
+			// `personalProjects` is a concrete `*personalproject.Ensurer`, not
+			// an interface, so this nil check is a real pointer comparison —
+			// wrapping a nil one straight into the Option's interface
+			// parameter would build a NON-nil interface holding a nil pointer
+			// (the typed-nil trap this codebase has shipped before), which
+			// `h.personalProjects == nil` in project_requests.go would then
+			// fail to catch.
+			if personalProjects != nil {
+				moderationOptions = append(moderationOptions, v2moderation.WithPersonalProjectEnsurer(personalProjects))
+			}
+			moderationHandler := v2moderation.NewHandler(cfg.Pool, moderationOptions...)
 			// The admin panel's surface. Every route below is gated on the same
 			// pylon permission its Python counterpart declares in
 			// legacy/plugins/admin/api/v2/, resolved from the database in
@@ -2038,6 +2060,19 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					permissionResolver, platformauth.PermissionModeDefault,
 					"admin.moderation.create",
 				)).Delete("/moderation_status/{mode}/{projectID}/{entityID}", moderationHandler.RequestDelete)
+
+				// Self-service "request a project" (#871). No permission
+				// wrapper on either route — deliberately: r.Use(apimw.Auth(...))
+				// already gates everything under /api/v2 (this whole block is
+				// inside that group), and the issue's own gate is "any
+				// authenticated user may request", not a granted string. The
+				// APPROVAL half stays on the PUT above, which already answers
+				// this exact request shape (an `id` and a `status`) — see
+				// internal/api/v2/moderation/project_requests.go for the branch
+				// that runs the project-creation pipeline instead of a plain
+				// status flip when the row names this issue type.
+				r.Post("/moderation_status/project_request", moderationHandler.CreateProjectRequest)
+				r.Get("/moderation_status/project_requests/mine", moderationHandler.MyProjectRequests)
 
 				// Preserve current-main gateway administration. Server-side
 				// permission enforcement is required even when the UI hides

@@ -41,50 +41,20 @@
  */
 import * as zod from "zod";
 
-export const ModerationRequestRow = zod
+export const ProjectRequestCreate = zod
   .object({
-    id: zod.int(),
-    user_id: zod
-      .int()
-      .describe(
-        "The author. Taken from the authenticated principal, never from the request body.",
-      ),
-    user_email: zod
+    name: zod
       .string()
-      .describe(
-        "LEFT JOIN on the auth user, so a row whose author was deleted still lists, with an empty address.\n",
-      ),
-    project_id: zod.int(),
-    issue_type: zod
+      .describe("The requested project's name. Stored as `entity_id`."),
+    description: zod
       .string()
-      .describe(
-        "The label the requesting client showed for the catalogue entry.",
-      ),
-    entity_id: zod
-      .string()
-      .describe(
-        'The catalogue key, an arbitrary string — `centry.moderation_state.entity_id` is VARCHAR (migrations\/001_initial.sql:243), e.g. \"inventory\".\n',
-      ),
-    description: zod.string().describe("The requester's own justification."),
-    status: zod.enum(["pending", "approved", "rejected"]),
-    rejection_comment: zod
-      .string()
-      .nullable()
-      .describe("Required when a moderator rejects, null otherwise."),
-    created_at: zod.iso.datetime({ offset: true }),
-    updated_at: zod.iso.datetime({ offset: true }),
-    created_project_id: zod
-      .int()
-      .optional()
-      .describe(
-        "Set ONLY on an APPROVED `Project Request` row (issue #871) — the id the project-creation pipeline assigned. Absent on every other row, and absent on a `Project Request` row that is still `pending` or was `rejected` (internal\/api\/v2\/moderation\/ project_requests.go's `decideProjectRequest`).\n",
-      ),
+      .describe("The requester's justification for the new project."),
   })
   .describe(
-    "NOTE(W2): one `centry.moderation_state` row as internal\/api\/v2\/moderation\/requests.go's `requestRow` marshals it (:163-175).\n",
+    "internal\/api\/v2\/moderation\/project_requests.go's `projectRequestCreateBody`. `project_id` (the caller's own personal project) and `issue_type` (\"Project Request\") are never client fields — the server fills both.\n",
   );
 
-export type ModerationRequestRow = zod.input<typeof ModerationRequestRow>;
-export type ModerationRequestRowOutput = zod.output<
-  typeof ModerationRequestRow
+export type ProjectRequestCreate = zod.input<typeof ProjectRequestCreate>;
+export type ProjectRequestCreateOutput = zod.output<
+  typeof ProjectRequestCreate
 >;

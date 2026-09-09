@@ -1,12 +1,16 @@
 import userEvent from '@testing-library/user-event';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import CssBaseline from '@mui/material/CssBaseline';
 import { ThemeProvider } from '@mui/material/styles';
-import { describe, expect, it, vi } from 'vitest';
+import { http, HttpResponse } from 'msw';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Project } from '@/entities/project';
+import { AppProviders } from '@/app/providers/AppProviders';
+import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { DEFAULT_BRAND_PACK, buildEliteaTheme } from '@/shared/brand';
 import { renderWithTheme } from '@/shared/ui/lib/testTheme';
+import { server } from '@/test/setup';
 
 import { ProjectSwitcher } from '../ui/ProjectSwitcher';
 
@@ -472,5 +476,49 @@ describe('ProjectSwitcher', () => {
     expect(marks).toHaveLength(1);
     const selectedRow = screen.getByRole('option', { name: /Acme/ });
     expect(selectedRow).toContainElement(marks[0] ?? null);
+  });
+});
+
+/**
+ * "Request a project" (#871). A separate describe block because it needs a
+ * `QueryClientProvider` (`RequestProjectDialog` only mounts, and only then
+ * calls `useQuery`, once opened — see `ProjectSwitcher.tsx`'s own comment on
+ * why every OTHER test above stays on the plain `renderWithTheme` that has
+ * none).
+ */
+describe('ProjectSwitcher — request a project', () => {
+  const BASE = '/api/v2';
+
+  beforeEach(() => {
+    configureGeneratedClient({ baseUrl: BASE });
+  });
+  afterEach(() => {
+    resetGeneratedClient();
+  });
+
+  it('opens the request-a-project dialog from the footer row, closing the switcher popup', async () => {
+    server.use(http.get(`${BASE}/admin/moderation_status/project_requests/mine`, () => HttpResponse.json({ total: 0, rows: [] })));
+    const user = userEvent.setup();
+
+    render(
+      <AppProviders>
+        <ProjectSwitcher
+          projects={projects}
+          selectedProjectId="2"
+          onSelect={vi.fn()}
+        />
+      </AppProviders>,
+    );
+
+    await user.click(screen.getByRole('button', { name: /Acme/ }));
+    await user.click(screen.getByTestId('project-switcher-request-project'));
+
+    expect(await screen.findByTestId('request-project-dialog')).toBeInTheDocument();
+    // The switcher's own popup closed — the two are mutually exclusive.
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(screen.getByText("You haven't requested a project yet.")).toBeInTheDocument();
+    });
   });
 });

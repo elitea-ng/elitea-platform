@@ -177,6 +177,13 @@ type requestRow struct {
 	RejectionComment *string   `json:"rejection_comment"`
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
+	// CreatedProjectID is set ONLY by decideProjectRequest (project_requests.go),
+	// on an APPROVED Project Request row — the id `projectprovisioning
+	// .Provision` returned, kept in memory rather than round-tripped through
+	// `meta` for the response. Every other decision path leaves it nil, which
+	// `omitempty` keeps out of the JSON body entirely rather than serialising
+	// a null every existing caller has never seen.
+	CreatedProjectID *int64 `json:"created_project_id,omitempty"`
 }
 
 // sortableRequestColumns is both the sort allow-list and what keeps the ORDER BY
@@ -397,11 +404,46 @@ func (h *Handler) AdministrationRequestUpdate(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	row, err := h.applyDecision(r.Context(), *body.ID, status, comment)
+	// issue_type decides which decision path runs. It is read separately
+	// from, and BEFORE, the row lock decideProjectRequest takes: issue_type
+	// is immutable once a request is filed (see this file's header on why
+	// the requester's own fields cannot be rewritten later), so a plain read
+	// here cannot race with anything that would change the answer.
+	issueType, err := h.lookupIssueType(r.Context(), *body.ID)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		writeModerationError(w, http.StatusNotFound, "app request not found")
+		return
+	case err != nil:
+		writeModerationError(w, http.StatusInternalServerError, "failed to read the app request")
+		return
+	}
+
+	var row *requestRow
+	if issueType == ProjectRequestIssueType {
+		row, err = h.decideProjectRequest(r.Context(), *body.ID, status, comment)
+	} else {
+		row, err = h.applyDecision(r.Context(), *body.ID, status, comment)
+	}
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		// An id that matches nothing is a 404, not a 200 that changed nothing.
 		writeModerationError(w, http.StatusNotFound, "app request not found")
+		return
+	case errors.Is(err, errRequestAlreadyDecided):
+		// Not a 500: the row exists and the decision even matches the caller's
+		// intent half the time (approving twice). A 200 that ran the
+		// provisioning pipeline a second time would create a SECOND project
+		// for one request.
+		writeModerationError(w, http.StatusConflict, "this request has already been decided")
+		return
+	case errors.Is(err, errProjectProvisioningFailed):
+		// The moderation row is untouched (still pending) — see
+		// decideProjectRequest: the UPDATE only runs after Provision
+		// succeeds. A 502 names the failure without leaving a request an
+		// operator cannot retry.
+		writeModerationError(w, http.StatusBadGateway,
+			"approved, but creating the project failed: "+err.Error())
 		return
 	case err != nil:
 		writeModerationError(w, http.StatusInternalServerError, "failed to update the app request")
@@ -436,6 +478,15 @@ func (h *Handler) mailDecision(ctx context.Context, row *requestRow) {
 
 // decisionMessage is the one sentence both channels carry.
 func decisionMessage(row requestRow) string {
+	// A Project Request reads oddly through the generic sentence below —
+	// "Your Project Request moderation request has been approved" repeats
+	// "request" twice and never says what was approved. See
+	// project_requests.go for what a Project Request row is and what its
+	// approval causes.
+	if row.IssueType == ProjectRequestIssueType {
+		return projectRequestDecisionMessage(row)
+	}
+
 	message := fmt.Sprintf("Your %s moderation request has been %s.", row.IssueType, row.Status)
 	if row.RejectionComment != nil && *row.RejectionComment != "" {
 		message += " Reason: " + *row.RejectionComment

@@ -203,7 +203,22 @@ export const AppRequestsTable = memo(function AppRequestsTable({
         minWidth: 200,
         sortable: false,
         renderCell: (params: GridRenderCellParams<AppRequestRow>) => {
-          const { description, rejection_comment: reason } = params.row;
+          const { description, rejection_comment: reason, created_project_id: projectId } = params.row;
+          // A Project Request's approval (#871) causes something the six
+          // other issue types never do: a real project. Surfacing the id
+          // here is the only place an operator can see WHICH project one
+          // of their approvals created, since nothing else on this page —
+          // or the requester's own status read — names it otherwise.
+          if (projectId !== undefined) {
+            return (
+              <Box sx={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', minWidth: 0 }}>
+                {ellipsised(description)}
+                <Typography variant="bodySmall" color="success.main">
+                  {t('pages.admin.appRequests.projectCreated', 'Project #{{id}} created', { id: projectId })}
+                </Typography>
+              </Box>
+            );
+          }
           if (reason === null || reason === '') return ellipsised(description);
           // A rejection reason has nowhere else to go: the reference page never
           // renders it back, so the operator's own words are invisible the
