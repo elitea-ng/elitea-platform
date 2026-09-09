@@ -4,6 +4,7 @@ import {
   CANVAS_FILE_OPEN_SIZE_LIMIT_BYTES,
   detectCanvasFileOpenKind,
   isCanvasFileOpenSizeOk,
+  isUnsupportedCanvasDocumentFormat,
 } from './canvasFileSource';
 
 describe('detectCanvasFileOpenKind', () => {
@@ -22,12 +23,14 @@ describe('detectCanvasFileOpenKind', () => {
     expect(detectCanvasFileOpenKind('module.ts')).toEqual({ type: 'code', language: 'typescript' });
   });
 
-  it('maps markdown to code (a markdown file is not necessarily a single table)', () => {
-    expect(detectCanvasFileOpenKind('README.md')).toEqual({ type: 'code', language: 'markdown' });
+  it('maps markdown/text to a document (issue #879) — prose, not a single table or a code fence', () => {
+    expect(detectCanvasFileOpenKind('README.md')).toEqual({ type: 'document', language: 'document' });
+    expect(detectCanvasFileOpenKind('notes.markdown')).toEqual({ type: 'document', language: 'document' });
+    expect(detectCanvasFileOpenKind('notes.txt')).toEqual({ type: 'document', language: 'document' });
   });
 
   it('is nested-path and case aware', () => {
-    expect(detectCanvasFileOpenKind('folder/nested/Notes.TXT')).toEqual({ type: 'code', language: 'markdown' });
+    expect(detectCanvasFileOpenKind('folder/nested/Notes.TXT')).toEqual({ type: 'document', language: 'document' });
   });
 
   it('refuses a binary/office kind and an unrecognised extension', () => {
@@ -35,6 +38,19 @@ describe('detectCanvasFileOpenKind', () => {
     expect(detectCanvasFileOpenKind('report.docx')).toBeUndefined();
     expect(detectCanvasFileOpenKind('archive.zip')).toBeUndefined();
     expect(detectCanvasFileOpenKind('no-extension-at-all')).toBeUndefined();
+  });
+});
+
+describe('isUnsupportedCanvasDocumentFormat', () => {
+  it('names .docx and its office siblings as recognised-but-unopenable (issue #879)', () => {
+    expect(isUnsupportedCanvasDocumentFormat('report.docx')).toBe(true);
+    expect(isUnsupportedCanvasDocumentFormat('Report.DOCX')).toBe(true);
+    expect(isUnsupportedCanvasDocumentFormat('sheet.xlsx')).toBe(true);
+  });
+
+  it('is false for an openable kind and for an extension it has never heard of', () => {
+    expect(isUnsupportedCanvasDocumentFormat('README.md')).toBe(false);
+    expect(isUnsupportedCanvasDocumentFormat('archive.zip')).toBe(false);
   });
 });
 

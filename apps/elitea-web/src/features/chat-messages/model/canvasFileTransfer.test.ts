@@ -60,6 +60,12 @@ describe('openArtifactFileInCanvas', () => {
     expect(sharedArtifacts.fetchArtifactBlob).not.toHaveBeenCalled();
   });
 
+  it('names a .docx refusal distinctly (issue #879) — a recognised office format, not an unheard-of extension', async () => {
+    const result = await openArtifactFileInCanvas({ projectId: 'p1', bucket: 'docs', name: 'report.docx' });
+    expect(result).toEqual({ ok: false, reason: 'unsupported-format' });
+    expect(sharedArtifacts.fetchArtifactBlob).not.toHaveBeenCalled();
+  });
+
   it('refuses an oversized file by its KNOWN size, before fetching', async () => {
     const result = await openArtifactFileInCanvas({ projectId: 'p1', bucket: 'docs', name: 'big.py', size: 3 * 1024 * 1024 });
     expect(result).toEqual({ ok: false, reason: 'too-large' });
