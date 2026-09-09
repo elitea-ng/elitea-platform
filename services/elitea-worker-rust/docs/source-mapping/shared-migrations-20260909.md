@@ -60,3 +60,31 @@ This source merge performs no database reconciliation and changes no running dat
 Manifest checks verify unique versions, canonical heads, names, and checksum enforcement.
 They do not prove an existing rehearsal database can upgrade or roll back safely.
 The separate database reconciliation and deployment checks remain required before runtime cutover.
+
+## Verified copy proof: 2026-09-09
+
+The current procedure is `scripts/database/reconcile_rust_shared_receipts_20260909.py`.
+It moves verified receipt versions only and archives the original ledger in a private external JSONL file.
+It does not recreate product tables or add a database audit table.
+The archive is flushed before the receipt transaction starts.
+
+A fresh rehearsal database dump is restored into an isolated proof copy.
+PostgreSQL restore removes redundant parentheses from one identity CHECK expression.
+The procedure accepts that exact equivalent expression and preserves the raw catalog in its receipt archive.
+All other catalog checks remain exact.
+
+The rollback-only run passes against that copy.
+The explicit copy commit then passes, followed by two successful runs of the unchanged current migrator.
+All 205 original tables retain their 299,787 rows, original column names and types, and relation OIDs.
+Row fingerprints compare only original columns so additive columns remain visible as separate schema changes.
+The shared ledger reaches version 130; tenant histories reach version 137.
+Migration 128 is absent because toolkit artifacts reuse the existing artifact ledger.
+
+Eight tables are additive: upstream webhook, delivery, pipeline-run, chat-feedback, and personal-memory tables, plus the scoped OAuth grant store.
+Tenant feedback and memory tables exist separately in each of the two tenant schemas.
+The new Rust work adds no tenant migration.
+The existing column and row preservation check passes after all migrations.
+
+All five receipt tests pass, including both original OAuth ledger variants, rollback, injected failure, drift refusal, and repeat refusal.
+These results prove the isolated copy upgrade only.
+The active database and running service images remain unchanged at this checkpoint.
