@@ -48,7 +48,14 @@ async function findCreatedAgentId(request: APIRequestContext, agentName: string)
 
 test('creating an agent from the "+" menu attaches it to the conversation the click happened in', async ({ page }) => {
   const conversationId = await createConversation(page.request, uniqueName('composercreate'));
-  const agentName = uniqueName('composercreate-agent');
+  // Short tag: `CreateAgentForm`'s name field is capped at
+  // `shared/lib/limits.ts`'s `MAX_NAME_LENGTH` (32, with an on-screen
+  // "characters left" counter) and truncates on type — `uniqueName`'s own
+  // `${AUTOTEST_PREFIX}${tag}-${Date.now()}` shape is 43+ chars with the
+  // longer tag other journeys use, which silently saved a DIFFERENT
+  // (truncated) name than `agentName` names below, so the by-name lookup
+  // after creation never found it (#882 CI).
+  const agentName = uniqueName('cc-agent');
   let createdAgentId: string | undefined;
 
   try {
