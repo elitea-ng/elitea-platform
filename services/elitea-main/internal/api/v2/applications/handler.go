@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -84,32 +85,17 @@ func (h *Handler) GetDefaultVersion(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectID")
 
-	// UI sends limit/offset; convert to page/pageSize
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
-	if limit < 1 || limit > 100 {
-		limit = 20
+	values, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		apierr.Write(w, apierr.BadRequest("invalid list query"))
+		return
 	}
-	if offset < 0 {
-		offset = 0
+	req, err := parseApplicationList(values)
+	if err != nil {
+		apierr.Write(w, err)
+		return
 	}
-	page := (offset / limit) + 1
-
-	// UI sends "query" for search text
-	search := r.URL.Query().Get("query")
-	if search == "" {
-		search = r.URL.Query().Get("search")
-	}
-
-	req := applications.ListRequest{
-		ProjectID:  projectID,
-		Page:       page,
-		PageSize:   limit,
-		Search:     search,
-		Tags:       r.URL.Query().Get("tags"),
-		FolderID:   r.URL.Query().Get("folder_id"),
-		AgentsType: r.URL.Query().Get("agents_type"),
-	}
+	req.ProjectID = projectID
 
 	resp, err := h.repo.List(r.Context(), req)
 	if err != nil {

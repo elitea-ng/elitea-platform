@@ -178,13 +178,24 @@ type GuardrailRule struct {
 }
 
 type ListRequest struct {
-	ProjectID  string `json:"-"`
-	Page       int    `json:"page,omitempty"`
-	PageSize   int    `json:"page_size,omitempty"`
-	Search     string `json:"search,omitempty"`
-	Tags       string `json:"tags,omitempty"`
-	FolderID   string `json:"folder_id,omitempty"`
-	AgentsType string `json:"-"`
+	ProjectID   string     `json:"-"`
+	Page        int        `json:"page,omitempty"`
+	PageSize    int        `json:"page_size,omitempty"`
+	Search      string     `json:"search,omitempty"`
+	Tags        string     `json:"tags,omitempty"`
+	FolderID    string     `json:"folder_id,omitempty"`
+	AgentsType  string     `json:"-"`
+	IDs         []int32    `json:"ids,omitempty"`
+	AuthorID    int64      `json:"author_id,omitempty"`
+	Statuses    []string   `json:"statuses,omitempty"`
+	MyLiked     bool       `json:"my_liked,omitempty"`
+	WithoutTags bool       `json:"without_tags,omitempty"`
+	TrendStart  *time.Time `json:"trend_start_period,omitempty"`
+	TrendEnd    *time.Time `json:"trend_end_period,omitempty"`
+	SortBy      string     `json:"sort_by,omitempty"`
+	SortOrder   string     `json:"sort_order,omitempty"`
+	// Offset preserves arbitrary HTTP offsets. Nil uses Page and PageSize.
+	Offset *int `json:"-"`
 }
 
 type ListResponse struct {

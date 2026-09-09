@@ -11,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/ownership"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db"
@@ -41,7 +42,7 @@ func testContext(t *testing.T) context.Context {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	t.Cleanup(cancel)
-	return ctx
+	return auth.ContextWithUser(ctx, auth.User{ID: "1", UserID: "1"})
 }
 
 // apiStatus returns the HTTP status an error carries, or 0 when it is not a
@@ -379,7 +380,7 @@ func TestApplicationsRepoPostgres_ListFiltersPaginatesAndAttributes(t *testing.T
 	// An application with no version row is not a listable agent.
 	createTestApplication(t, repo, "versionless", 5, nil)
 
-	classic, err := repo.List(ctx, applications.ListRequest{ProjectID: testProjectID, Page: 1, PageSize: 10})
+	classic, err := repo.List(ctx, applications.ListRequest{ProjectID: testProjectID, Page: 1, PageSize: 10, AgentsType: "classic"})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -410,7 +411,7 @@ func TestApplicationsRepoPostgres_ListFiltersPaginatesAndAttributes(t *testing.T
 		t.Errorf("search total = %d, want 2", searched.Total)
 	}
 
-	paged, err := repo.List(ctx, applications.ListRequest{ProjectID: testProjectID, Page: 2, PageSize: 2})
+	paged, err := repo.List(ctx, applications.ListRequest{ProjectID: testProjectID, Page: 2, PageSize: 2, AgentsType: "classic"})
 	if err != nil {
 		t.Fatalf("list page 2: %v", err)
 	}

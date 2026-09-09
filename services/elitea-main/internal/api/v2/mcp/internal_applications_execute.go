@@ -18,6 +18,7 @@ import (
 
 	applicationsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/applications"
 	eliteacoreapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
 )
 
@@ -75,9 +76,26 @@ func (executor *postgresInternalApplicationExecutor) Execute(
 	project := strconv.FormatInt(projectID, 10)
 	switch operation {
 	case internalListApplications:
+		actor := strconv.FormatInt(actorID, 10)
+		ctx = auth.ContextWithUser(ctx, auth.User{ID: actor, UserID: actor})
 		query := url.Values{}
-		for _, name := range []string{"query", "agents_type", "limit", "offset"} {
+		for _, name := range []string{"query", "agents_type", "limit", "offset", "tags", "author_id", "statuses", "my_liked", "ids", "without_tags", "trend_start_period", "trend_end_period", "sort_by", "sort_order"} {
 			if value, present := arguments[name]; present {
+				valid := false
+				switch name {
+				case "my_liked", "without_tags":
+					_, valid = value.(bool)
+				case "author_id", "limit", "offset":
+					switch value.(type) {
+					case json.Number, int, int32, int64, float64:
+						valid = true
+					}
+				default:
+					_, valid = value.(string)
+				}
+				if !valid {
+					return jsonExecution(http.StatusBadRequest, map[string]any{"error": "invalid " + name + " argument type"})
+				}
 				query.Set(name, scalarArgument(value))
 			}
 		}

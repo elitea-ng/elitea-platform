@@ -127,11 +127,15 @@ func TestInternalApplicationsCategoryPublishesExactlyTheCurrentEightOperations(t
 			t.Fatal("skill copy was advertised outside create-version")
 		}
 	}
-	for _, unsupported := range []string{"tags", "folder_id", "author_id", "statuses", "my_liked", "ids"} {
-		if _, advertised := listProperties[unsupported]; advertised {
-			t.Fatalf("list schema advertises unsupported filter %q", unsupported)
+	for _, supported := range []string{"tags", "author_id", "statuses", "my_liked", "ids", "sort_by", "sort_order", "without_tags", "trend_start_period", "trend_end_period"} {
+		if _, advertised := listProperties[supported]; !advertised {
+			t.Fatalf("list schema omits supported filter %q", supported)
 		}
 	}
+	if _, advertised := listProperties["folder_id"]; advertised {
+		t.Fatal("folder_id is not a supported list filter")
+	}
+
 	wire, err := json.Marshal(tools)
 	if err != nil {
 		t.Fatalf("marshal tools: %v", err)
