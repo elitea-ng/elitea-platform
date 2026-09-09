@@ -1,13 +1,13 @@
 ---
 title: "Use canvas"
-description: "Edit a code block, table, or diagram from an assistant's reply in a dedicated collaborative editor."
+description: "Edit a code block, table, diagram, or prose document from an assistant's reply in a dedicated collaborative editor."
 ---
 
-Canvas turns a code block, table, or Mermaid diagram from an assistant's reply into its own editor, so you can refine it without leaving the conversation.
+Canvas turns a code block, table, Mermaid diagram, or a piece of prose from an assistant's reply into its own editor, so you can refine it without leaving the conversation.
 
 ## Open canvas
 
-Ask a model to generate something canvas supports — a script, a Markdown table, or a Mermaid diagram — then click the edit (pencil) icon that appears on that block. This opens the canvas editor for just that piece of content.
+Ask a model to generate something canvas supports — a script, a Markdown table, a Mermaid diagram, or a written passage — then click the edit (pencil) icon that appears on that block. This opens the canvas editor for just that piece of content.
 
 <Tabs>
 <Tab title="Code">
@@ -19,7 +19,18 @@ A spreadsheet-like view over the Markdown table. Edit cells directly, then **Sav
 <Tab title="Diagram">
 Edit the underlying Mermaid source with a live preview, then **Save**.
 </Tab>
+<Tab title="Document">
+A rich-text editor for prose — headings, bold/italic/inline code, bullet and numbered lists, blockquotes, links, and basic tables, all backed by Markdown as the underlying source. Format with the toolbar or the usual keyboard shortcuts, with its own undo/redo history, then **Save**. Saving to artifacts writes the document out as a plain `.md` file.
+</Tab>
 </Tabs>
+
+### Opening a whole reply as a document
+
+You don't have to highlight anything first: an assistant reply that hasn't already been split into a canvas gets an **Open as document** icon in its action row (alongside Copy, Regenerate, and Delete). Click it to open the whole answer in the rich-text document editor.
+
+### Turning a highlighted passage into canvas
+
+Highlighting part of a reply and using the selection's **Create canvas** control carves that range out into its own canvas block. A highlighted passage of prose becomes a document canvas; a highlighted fenced code block (```` ``` ````&nbsp;to&nbsp;```` ``` ````) becomes a code canvas.
 
 ## Real-time collaboration
 
@@ -31,12 +42,12 @@ Closing the canvas panel doesn't discard your edits as long as you've saved — 
 
 ## Open a stored file in canvas
 
-Canvas isn't limited to blocks generated in the current turn — it can also open a previously stored text-like file (code, Markdown, CSV/TSV, or Mermaid), from two places:
+Canvas isn't limited to blocks generated in the current turn — it can also open a previously stored text-like file (code, Markdown or plain text, CSV/TSV, or Mermaid), from two places:
 
 - **A message attachment.** Hover a text-like attachment card in the conversation and click its **Open in canvas** icon.
 - **An artifact bucket file.** In [Artifacts](/menus/artifacts), open a file's preview and click **Open in canvas** in its toolbar.
 
-Either way, the file's content loads into the same editor described above — code gets syntax highlighting, a `.csv`/`.tsv` file opens as a table, and a `.mmd`/`.mermaid` file opens as a diagram with a live preview. Files over 2 MB, and non-text kinds such as images or `.docx`, aren't opened in canvas.
+Either way, the file's content loads into the editor matching its kind — code gets syntax highlighting, a `.csv`/`.tsv` file opens as a table, a `.mmd`/`.mermaid` file opens as a diagram with a live preview, and a `.md`/`.markdown`/`.txt` file opens in the rich-text document editor. Files over 2 MB aren't opened in canvas. Office formats such as `.docx` aren't opened either — canvas has no converter for them — so download the file instead of opening it in canvas.
 
 ## Save to artifacts
 
