@@ -19,7 +19,7 @@ func (executor *handlerInternalConfigurationExecutor) executeTyped(
 		return jsonExecution(http.StatusServiceUnavailable, map[string]string{"error": "typed configuration services are unavailable"})
 	}
 	query := url.Values{}
-	if raw, present := arguments["section"]; present && !(raw == nil && operation == internalSetDefaultConfigurationModel) {
+	if raw, present := arguments["section"]; present && (raw != nil || operation != internalSetDefaultConfigurationModel) {
 		section, ok := raw.(string)
 		if !ok || utf8.RuneCountInString(section) > internalConfigurationMaxFilterLength {
 			return internalConfigurationBadRequest("section must be a bounded string")

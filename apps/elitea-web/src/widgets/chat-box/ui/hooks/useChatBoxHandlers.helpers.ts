@@ -14,7 +14,7 @@ import type { SocketClient } from '@/shared/api/socket/client';
 import { ToolActionStatus } from '@/shared/lib/chat';
 import { ROLES } from '@/shared/lib/enums';
 
-import type { McpAuthorizationBatch } from './useChatBoxHandlers.authorization';
+import type { McpAuthorizationBatch } from './useChatBoxHandlers.authorization.types';
 
 /** A resolved HITL interrupt action from the user ('approve'/'reject'/'edit'/'block_with_comment'). `value` carries the rewritten prompt/comment text for 'edit'/'block_with_comment'. `childThreadId` (Track-2 independent fan-out child) is present only when this decision resumes ONE still-running child independently of its siblings. */
 export interface HitlInterruptAction {

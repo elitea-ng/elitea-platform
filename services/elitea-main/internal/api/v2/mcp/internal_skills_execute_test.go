@@ -251,8 +251,9 @@ func independentCurrentSkillName(name string) bool {
 	length := 0
 	for index, character := range characters {
 		length++
-		if !((character >= 'a' && character <= 'z') ||
-			(character >= '0' && character <= '9') || character == '-') {
+		isLetter := character >= 'a' && character <= 'z'
+		isDigit := character >= '0' && character <= '9'
+		if !isLetter && !isDigit && character != '-' {
 			return false
 		}
 		if character == '-' && (index == 0 || index == len(characters)-1) {

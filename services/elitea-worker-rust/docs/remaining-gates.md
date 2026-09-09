@@ -34,6 +34,9 @@ OpenAPI supports delegated OAuth and client credentials. DCR remains an MCP or o
 
 ## Immediate next slice
 
+Verify the repaired PR checks first. The [CI repair ledger](source-mapping/pr-883-ci-repair.md) records this prerequisite.
+CI repair does not close any runtime gate below.
+
 Audit skill and project-context draft generation against the current platform.
 Reuse Main's composed draft service instead of adding a second model execution path.
 Verify source prompt ownership, permissions, edit-by-ID behavior, validation, and safe failures before publishing either internal MCP operation.

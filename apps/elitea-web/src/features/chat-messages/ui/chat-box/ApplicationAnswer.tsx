@@ -15,12 +15,8 @@
  * §3.5 component-props budget — see sibling `ActionView.tsx`/`entities/agents`
  * for the same established grouping pattern elsewhere in this Wave.
  *
- * Per-word TTS highlight sync (issue #625 item 1): `tts.spokenRange` reaches
- * `shared/ui/Markdown` now, but only for the row `tts.speakingMessageId`
- * names — `spokenRange` is one global offset range, not scoped to a message
- * id, so every other row must see `undefined` rather than highlight an
- * unrelated offset at the same position. `speakingSegments` still has no
- * reader; nothing in this pass needed it.
+ * TTS highlighting applies only to `tts.speakingMessageId` (#625).
+ * Other rows receive no range: the global offset is not scoped to a message.
  *
  * Canvas message items ARE rendered now (issue 853): `./AnswerMessageItems`
  * walks `message_items` in their stored order and mounts the ported `Canvas`

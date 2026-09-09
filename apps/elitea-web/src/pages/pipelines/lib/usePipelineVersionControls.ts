@@ -138,10 +138,9 @@ const EMPTY_VERSION_BODY: Omit<VersionWriteRequest, 'name'> = {};
  * **After a new version is created** two things happen that the agents twin
  * does not need. The application-detail response (the dropdown's source) is
  * stale by exactly one entry, so it is invalidated — same as agents. And the
- * live graph is carried onto the new version with a follow-up PUT, because
- * the create endpoint physically cannot store it; see
- * `carryPipelineGraphToVersion.ts` for the two handlers that were read to
- * establish that. The navigation happens LAST, after both, so the editor
+ * live graph is carried onto the new version with a follow-up PUT. Main now
+ * accepts geometry on creation, but this caller's POST still uses the stored
+ * instructions, not the live canvas. The navigation happens LAST, so the editor
  * re-seeds from a version that already holds the graph instead of flashing
  * the pre-carry one.
  */

@@ -13,9 +13,6 @@
  * `continuation`/`pagination`) to stay under the §3.5 component-props
  * budget, mirroring the same grouping pattern used by sibling
  * `ApplicationAnswer.tsx`.
- *
- * Port of `apps/elitea-ui/src/[fsd]/features/chat/ui/chat-box/
- * ChatMessageList.jsx`.
  */
 import type { ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useRef } from 'react';

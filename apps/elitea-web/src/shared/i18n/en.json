@@ -4111,5 +4111,16 @@
   "pages.admin.platformModels.scope.projects": "Selected projects",
   "pages.admin.platformModels.scope.chipAll": "All projects",
   "pages.admin.platformModels.scope.chipNone": "No project",
-  "pages.admin.platformModels.scope.chipProjects": "{{count}} projects"
+  "pages.admin.platformModels.scope.chipProjects": "{{count}} projects",
+  "mcps.logoutModal.clearGrant": "Remove the saved authorization from this browser and its other tabs. Other credentials stay authorized.",
+  "mcps.logoutModal.credentialLabel": "Credential: ",
+  "mcps.logoutModal.credentialTitle": "Toolkit authorization",
+  "pages.admin.mcpServers.dialog.configSchema": "Project parameter schema (YAML mapping)",
+  "pages.admin.mcpServers.dialog.configSchemaHelp": "Define properties with type, description, required, default, and secret metadata. Main validates every template before saving.",
+  "pages.admin.mcpServers.dialog.error.configSchemaYaml": "Project parameter schema must be a valid YAML mapping.",
+  "pages.admin.mcpServers.dialog.error.headersYaml": "Headers must be a valid YAML mapping.",
+  "pages.admin.mcpServers.dialog.headers": "Headers (YAML mapping)",
+  "pages.admin.mcpServers.dialog.headersHelp": "Header values may use declared placeholders, for example Bearer {api_token}.",
+  "pages.toolkits.oauth.authorizationOnUse": "Authorize this credential when you use the toolkit.",
+  "pages.toolkits.oauth.savedAuthorization": "Saved authorization"
 }

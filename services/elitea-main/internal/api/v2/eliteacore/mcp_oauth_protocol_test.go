@@ -240,7 +240,11 @@ func TestMCPOAuthProtocolTLSGrantsAndProtectedOpenAPI(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				defer response.Body.Close()
+				defer func() {
+					if err := response.Body.Close(); err != nil {
+						t.Error(err)
+					}
+				}()
 				if response.StatusCode != status {
 					t.Fatalf("protected resource status = %d, want %d", response.StatusCode, status)
 				}

@@ -71,7 +71,7 @@ export function rememberClientSecret(scope: ClientSecretScope, storageKey: strin
   secrets.set(vaultKey(scope, storageKey), secret);
 }
 
-export function recallClientSecret(scope: ClientSecretScope, storageKey: string): string | undefined {
+function recallClientSecret(scope: ClientSecretScope, storageKey: string): string | undefined {
   return secrets.get(vaultKey(scope, storageKey));
 }
 

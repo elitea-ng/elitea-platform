@@ -347,12 +347,9 @@ export function toVersionOptions(versions: readonly ApplicationVersionSummary[])
  *    fixing that is a change to a page this unit does not own.)
  *
  * `instructions` is the version's STORED graph, not the live canvas. That is
- * deliberate and is only half the story: `versionFromBody` reads no
- * `pipeline_settings` key at all and `insertVersion`'s column list does not
- * carry it, so the POST cannot persist the laid-out geometry no matter what
- * it is given. `lib/carryPipelineGraphToVersion.ts` follows the create with
- * the PUT that CAN write both, so the live graph reaches the new version
- * through one mechanism rather than half through each.
+ * deliberate: this mapper has no live canvas reader. Main accepts geometry
+ * on creation now, but this caller still supplies the live instructions and
+ * geometry together through `carryPipelineGraphToVersion` after creation.
  */
 export function toNewPipelineVersionBody(
   version: ApplicationVersionDetail,

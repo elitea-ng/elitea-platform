@@ -49,6 +49,7 @@ Detailed ledgers:
 - `../testing-gaps.md` records accepted progression decisions, verification debt, observed warnings, and separate implementation gaps.
 - `../remaining-gates.md` records the continuation order after the latest main sync.
 - `main-sync-20260909.md` records conflict resolutions, regenerated contracts, and merge verification.
+- `pr-883-ci-repair.md` records post-merge CI failures, focused repairs, and local verification limits.
 - `main-sync-20260908.md` records the main integration and rehearsal cutover gate.
 - `toolkit-test.md` records required toolkit Test parity under `TKTEST-RUST-01`.
 - `toolkit-discovery.md` separates standalone discovery command parity from existing Rust runtime tool binding.

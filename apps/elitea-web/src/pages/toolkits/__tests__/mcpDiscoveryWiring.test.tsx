@@ -87,7 +87,8 @@ describe('real MCP editor discovery composition', () => {
       await user.click(await screen.findByRole('button', { name: 'Remote MCP' }));
       const url = await screen.findByRole('textbox', { name: 'URL' });
       await user.clear(url);
-      await user.type(url, 'https://resource.example.com/mcp');
+      // Paste once, as a user would, without rerendering the schema for every character.
+      await user.paste('https://resource.example.com/mcp');
     }
     await user.click(await screen.findByRole('button', { name: 'Load Tools' }));
     await waitFor(() => expect(requests).toBe(1));

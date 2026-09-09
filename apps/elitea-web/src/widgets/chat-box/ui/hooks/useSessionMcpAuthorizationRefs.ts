@@ -2,7 +2,7 @@
 import type { RefObject } from 'react';
 import { useEffect, useRef } from 'react';
 
-import type { McpAuthorizationBatch } from './useChatBoxHandlers.authorization';
+import type { McpAuthorizationBatch } from './useChatBoxHandlers.authorization.types';
 
 export interface SessionMcpAuthorizationRefs {
   readonly sessionDeclinedMcpServersRef: RefObject<Map<string, Record<string, unknown>>>;

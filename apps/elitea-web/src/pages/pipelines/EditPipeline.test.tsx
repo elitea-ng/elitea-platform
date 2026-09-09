@@ -852,7 +852,7 @@ describe('pipeline versioning', () => {
    * `lib/editPipelineMappers.ts`). And the follow-up PUT must carry a
    * `pipeline_settings.nodes` array derived from the LIVE editor stores by
    * the REAL `usePipelineGraphDraft`, aimed at the id the POST minted —
-   * because `CreateVersion` cannot store the graph geometry at all.
+   * because this caller does not yet pass the live graph to `CreateVersion`.
    */
   it('saves a new version, then carries the live graph onto it', async () => {
     const graphYaml = 'entry_point: Printer_1\nnodes:\n  - id: Printer_1\n    type: printer\n    transition: END\n';

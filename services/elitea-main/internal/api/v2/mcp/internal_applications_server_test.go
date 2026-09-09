@@ -39,7 +39,6 @@ func (executor *recordingInternalApplicationExecutor) Execute(
 }
 
 type recordingInternalPermissionResolver struct {
-	permission string
 	mode       string
 	projectID  string
 	resolution auth.PermissionResolution

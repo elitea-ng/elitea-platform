@@ -199,11 +199,9 @@ test('J16b: "Save As Version" stores a runnable pipeline version, graph and all'
     );
   }
 
-  // 3. The laid-out geometry reached it. `CreateVersion` cannot write this
-  //    column at all, so an empty object here is precisely the state a
-  //    create-only implementation leaves behind.
+  // 3. The LIVE laid-out geometry reached the new version.
   const nodes = stored.pipelineSettings['nodes'];
-  expect(Array.isArray(nodes), 'pipeline_settings.nodes must be an array, not the empty jsonb the POST leaves').toBe(true);
+  expect(Array.isArray(nodes), 'pipeline_settings.nodes must preserve the live canvas').toBe(true);
   expect((nodes as unknown[]).length).toBeGreaterThan(0);
 
   // 4. `meta` is not reset. `versionFromBody` DOES read the key and only
@@ -223,24 +221,17 @@ test('J16b: "Save As Version" stores a runnable pipeline version, graph and all'
 });
 
 /**
- * The reason the editor issues a second request at all, pinned against the
- * running backend rather than against a reading of the handler.
- *
- * This posts a version body that DOES carry `pipeline_settings` — something
- * the app itself never sends — and shows the column comes back empty while
- * `instructions` round-trips. Without this, the geometry assertion in the
- * test above could be vacuous: it would pass just as well if `CreateVersion`
- * stored the graph and the follow-up PUT were dead code.
- *
- * If elitea-main ever learns to persist `pipeline_settings` on create, this
- * test goes RED — and that is the signal to delete
- * `lib/carryPipelineGraphToVersion.ts`, not to relax the assertion.
+ * Main now accepts graph geometry on version creation. Pin its exact stored
+ * value, not the earlier omission. The editor still sends its live canvas
+ * through the follow-up PUT; its POST body contains the stored instructions.
+ * The preceding UI test independently verifies that unsaved edits survive.
  */
-test('J16b: the version-create endpoint cannot store a graph, which is why a PUT follows it', async ({ page }) => {
+test('J16b: version creation preserves graph instructions and geometry', async ({ page }) => {
   const name = `${AUTOTEST_PREFIX}post-${Date.now() % 1e9}`;
   const id = await createPipelineThroughUi(page, name);
 
   const instructions = 'entry_point: Printer_1\nnodes:\n  - id: Printer_1\n    type: printer\n';
+  const pipelineSettings = { nodes: [{ id: 'Printer_1' }], edges: [], orientation: 'vertical', layout_version: '1.0' };
   const resp = await page.request.post(
     `${API_BASE}/elitea_core/versions/prompt_lib/${DEFAULT_PROJECT_ID}/${id}`,
     {
@@ -248,7 +239,7 @@ test('J16b: the version-create endpoint cannot store a graph, which is why a PUT
         name: `probe${Date.now() % 1e5}`,
         agent_type: 'pipeline',
         instructions,
-        pipeline_settings: { nodes: [{ id: 'Printer_1' }], edges: [], orientation: 'vertical', layout_version: '1.0' },
+        pipeline_settings: pipelineSettings,
       },
     },
   );
@@ -256,12 +247,9 @@ test('J16b: the version-create endpoint cannot store a graph, which is why a PUT
   const created = (await resp.json()) as { id?: string | number };
 
   const stored = await readStoredPipelineVersion(page.request, DEFAULT_PROJECT_ID, id, String(created.id));
-  // The document IS read on create…
-  expect(stored.instructions).toContain('Printer_1');
+  expect(stored.instructions).toBe(instructions);
   expect(stored.agentType).toBe('pipeline');
-  // …the geometry is NOT. `versionFromBody` has no branch for the key and
-  // `insertVersion`'s INSERT does not name the column.
-  expect(stored.pipelineSettings['nodes']).toBeUndefined();
+  expect(stored.pipelineSettings).toEqual(pipelineSettings);
 });
 
 test('J16b: the version selector loads the chosen version graph into the editor', async ({ page }) => {

@@ -12,18 +12,7 @@ import {
 import type { ChatBoxHandlerDeps, ToolActionLike } from './useChatBoxHandlers.helpers';
 import { undeliveredText } from './useChatBoxHandlers.turns';
 
-export type McpAuthorizationAction = 'authorize' | 'skip';
-
-interface McpAuthorizationDecision {
-  readonly interruptId: string;
-  readonly toolCallId?: string | undefined;
-  readonly action: McpAuthorizationAction;
-}
-
-export interface McpAuthorizationBatch {
-  readonly original: ChatMessage;
-  readonly decisions: Map<string, McpAuthorizationDecision>;
-}
+import type { McpAuthorizationAction, McpAuthorizationBatch, McpAuthorizationDecision } from './useChatBoxHandlers.authorization.types';
 
 function exactRequestId(action: ToolActionLike | undefined): string | undefined {
   const meta = action?.toolMeta ?? {};

@@ -158,9 +158,7 @@ const ChatBoxInner = memo(function ChatBox({
   });
   const lifecycle = data.lifecycle;
 
-  // Mirror the live, socket-synced history out to the parent's own mirror,
-  // when one is supplied (no live caller exists yet — the routing gap this
-  // whole unit operates under).
+  // Mirror live history to the parent when supplied.
   useEffect(() => {
     setChatHistory?.(messages);
   }, [messages, setChatHistory]);
