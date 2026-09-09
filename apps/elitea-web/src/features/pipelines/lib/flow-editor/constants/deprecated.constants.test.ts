@@ -10,13 +10,13 @@ describe('DeprecatedTips', () => {
       expect(tip).toBeDefined();
       expect(tip?.text).toBe('This node is deprecated and will be removed in a future version. ');
       expect(tip?.linkText).toBe('View Migration Guide');
-      expect(tip?.linkUrl).toMatch(/^https:\/\/elitea\.ai\/docs\/migration\/v2\.0\.1\//);
+      expect(tip?.linkUrl).toMatch(/^\/docs\/how-tos\/pipelines\//);
     }
   });
 
   it('gives the Condition node its own condition-node-migration link', () => {
     expect(DeprecatedTips[PipelineNodeTypes.Condition]?.linkUrl).toBe(
-      'https://elitea.ai/docs/migration/v2.0.1/condition-node-migration',
+      '/docs/how-tos/pipelines/condition-node-migration',
     );
   });
 
