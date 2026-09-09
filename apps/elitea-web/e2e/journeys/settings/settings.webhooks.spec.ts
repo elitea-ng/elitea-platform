@@ -54,6 +54,19 @@ async function listWebhooks(request: import('@playwright/test').APIRequestContex
   return body.items;
 }
 
+/**
+ * `response.text()` for an ERROR MESSAGE only — never let reading it become
+ * the thing that throws. WebKit evicts a `page.waitForResponse()` response's
+ * body once the page has moved on from whatever triggered it (here: the row
+ * a rotate/disable/delete acted on re-rendering or disappearing), which is
+ * near-instant for all three of this journey's PUT/DELETE writes — "Protocol
+ * error (Network.getResponseBody): Missing content ... navigated away from"
+ * on a genuinely successful write, not a real failure (#882 CI, webkit only).
+ */
+async function safeText(response: import('@playwright/test').APIResponse): Promise<string> {
+  return response.text().catch((error: unknown) => `(response body unavailable: ${String(error)})`);
+}
+
 test.afterAll(async ({ browser }) => {
   const context = await browser.newContext({ storageState: STORAGE_STATE.member });
   try {
@@ -143,7 +156,7 @@ test('Settings: create, rotate, disable and delete a webhook', async ({ page }, 
   );
   await row.getByRole('button', { name: 'Rotate secret' }).click({ timeout: 5_000 });
   const rotateWrite = await rotated;
-  expect(rotateWrite.status(), await rotateWrite.text()).toBeLessThan(300);
+  expect(rotateWrite.status(), await safeText(rotateWrite)).toBeLessThan(300);
 
   await expect(page.getByTestId('webhook-secret-dialog')).toBeVisible({ timeout: 5_000 });
   const rotatedSecret = await page.getByTestId('webhook-secret-value').inputValue();
@@ -163,7 +176,7 @@ test('Settings: create, rotate, disable and delete a webhook', async ({ page }, 
   );
   await row.getByRole('switch', { name: 'Toggle active' }).click({ timeout: 5_000 });
   const disableWrite = await disabled;
-  expect(disableWrite.status(), await disableWrite.text()).toBeLessThan(300);
+  expect(disableWrite.status(), await safeText(disableWrite)).toBeLessThan(300);
 
   const afterDisable = await listWebhooks(page.request);
   expect(afterDisable.find((w) => w.id === createdWebhook.id)!.active).toBe(false);
@@ -176,7 +189,7 @@ test('Settings: create, rotate, disable and delete a webhook', async ({ page }, 
   await row.getByRole('button', { name: 'Delete' }).click({ timeout: 5_000 });
   await page.getByRole('button', { name: 'Delete', exact: true }).click({ timeout: 5_000 }); // confirm dialog
   const deleteWrite = await deleted;
-  expect(deleteWrite.status(), await deleteWrite.text()).toBeLessThan(300);
+  expect(deleteWrite.status(), await safeText(deleteWrite)).toBeLessThan(300);
   createdHere.delete(createdWebhook.id);
 
   const afterDelete = await listWebhooks(page.request);
