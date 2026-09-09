@@ -82,17 +82,6 @@ participant.addParticipantIntoConversation
 participant.deleteParticipantFromConversation
 pipelines.stopLlmTask
 runtime.executionEvents
-skills.createSkillVersion
-skills.deleteSkill
-skills.deleteSkillVersion
-skills.export
-skills.exportVersion
-skills.getSkill
-skills.getSkillVersion
-skills.import
-skills.setDefaultVersion
-skills.updateSkill
-skills.updateSkillVersion
 toolkits.deleteIndexItem
 toolkits.getIndexHistoryConversationDetails
 toolkits.getIndexesList

@@ -17,9 +17,22 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
-// SkillVersion is the single "base" version of a skill's content. The
-// platform ships one implicit version per skill today (see issue #37); real
-// multi-version support is a tracked fast-follow, not built here.
+// SkillVersion is one row of skill_versions.
+//
+// #874 GAVE THIS MORE THAN ONE ROW PER SKILL. Before this change the
+// platform shipped exactly one implicit version per skill, named "base" —
+// this doc comment said so plainly, and the read side hardcoded the join to
+// `sv.name = 'base'` (internal/infra/db/repos/skills.go). Every skill still
+// gets a `base` version on create and it stays the version the unversioned
+// GET/PUT/DELETE (`/skill/{mode}/{projectID}/{skillID}`, no {versionID}
+// segment) read and write — `base` is reserved and cannot be deleted or
+// reused as a NAMED version's name, matching application_versions' own
+// "base" convention (repos/applications.go's defaultVersionName). What's new
+// is that a skill can now carry additional NAMED versions alongside it,
+// created from CreateVersion ("Save As Version"), edited independently
+// through the {versionID}-scoped PUT, diffed client-side the way
+// CompareVersionsModal diffs application_versions, and copied back onto
+// `base` through RestoreVersion (rollback).
 type SkillVersion struct {
 	ID           string   `json:"id,omitempty"`
 	Name         string   `json:"name"`
@@ -36,6 +49,28 @@ type SkillVersion struct {
 	// `{"updated": true}`, the row holds the icon, and the form still shows
 	// the placeholder. Omitted when the column is NULL or `{}`.
 	Meta map[string]any `json:"meta,omitempty"`
+	// Status is skill_versions.status: "draft" or "published" (#249). A
+	// published version is frozen — UpdateVersion and DeleteVersion both
+	// refuse it, mirroring application_versions' own published/embedded
+	// guard (skills.go's guardEntityVersion already applies this rule to
+	// entity_skill_mapping writes; #874 applies the same status read to
+	// version content writes).
+	Status string `json:"status,omitempty"`
+	// CreatedAt is skill_versions.created_at, surfaced so the version
+	// selector can sort newest-first the way AgentPipelineVersionSelector
+	// does.
+	CreatedAt time.Time `json:"created_at,omitempty"`
+	// ParentVersionID is skill_versions.parent_version_id
+	// (migrations/tenant/0136_skill_version_lineage.sql): which version this
+	// one was cloned or restored from. Omitted when the row has no recorded
+	// ancestor — every skill's original `base` version, and any version
+	// created before this migration ran.
+	ParentVersionID string `json:"parent_version_id,omitempty"`
+	// IsDefault reports whether this is the version named by
+	// skills.meta.default_version_id — the version a new attachment
+	// proposes and the one skillpublish's ExportFork prefers when nothing
+	// else pins one. Mirrors ApplicationVersionDetail's own `is_default`.
+	IsDefault bool `json:"is_default,omitempty"`
 }
 
 type Skill struct {
@@ -53,8 +88,14 @@ type Skill struct {
 	Tags           []string       `json:"tags,omitempty"`
 	Versions       []SkillVersion `json:"versions,omitempty"`
 	VersionDetails *SkillVersion  `json:"version_details,omitempty"`
-	CreatedAt      time.Time      `json:"created_at"`
-	UpdatedAt      time.Time      `json:"updated_at"`
+	// DefaultVersionID is skills.meta->>'default_version_id' (#874),
+	// mirroring applications.meta->>'default_version_id'
+	// (repos/applications.go). It is the version a new attachment proposes;
+	// it does NOT affect which version a chat turn reads — that stays keyed
+	// off entity_skill_mapping.skill_version_id, fixed at attach time.
+	DefaultVersionID string    `json:"default_version_id,omitempty"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 // skillVersionInput lets Create accept the {versions: [{name, instructions, tags}]}
@@ -169,6 +210,72 @@ type Repository interface {
 	Create(ctx context.Context, projectID string, skill Skill) (Skill, error)
 	Update(ctx context.Context, projectID, skillID string, skill Skill) (Skill, error)
 	Delete(ctx context.Context, projectID, skillID string) error
+
+	// ---- Version machinery (#874) --------------------------------------
+	//
+	// The unversioned Get/Update/Delete above stay exactly as they were —
+	// they always read and write the skill's `base` version, the same
+	// version a skill has always had. These five methods are what a skill
+	// gained: multiple NAMED versions alongside `base`, get/create/update/
+	// delete over that set, and a rollback that copies a named version's
+	// content back onto `base`.
+	//
+	// There is no separate ListVersions: Get/GetVersion already carry the
+	// FULL Versions slice (every version, not just `base`, since #874) — the
+	// version selector and compare UI's "list versions" need is served by
+	// the same read that already answers the skill's detail view, matching
+	// features/skills/api/skillsApi.ts's contract
+	// (apps/elitea-web/src/shared/api/endpoints.manifest.json's
+	// skills.getSkill/getSkillVersion entries; there is no
+	// skills.listVersions entry to serve).
+
+	// GetVersion returns the skill with VersionDetails/Instructions/Tags set
+	// to the NAMED version (not necessarily `base`), and Versions carrying
+	// every version — the shape the version-switch and compare UI need.
+	// Answers NotFound when versionID does not belong to skillID.
+	GetVersion(ctx context.Context, projectID, skillID, versionID string) (Skill, error)
+	// CreateVersion adds one NAMED version ("Save As Version"). `Name` must
+	// be non-empty and not "base" — the handler refuses those before this is
+	// called — and a duplicate name is a Conflict. When Instructions is
+	// empty, the new version clones SourceVersionID's content (default:
+	// `base`), matching entity-versioning.mdx's "Save As Version" for
+	// agents/pipelines; the frontend's existing createSkillVersion() call
+	// already sends the full instructions/tags of whatever is on screen, so
+	// the common path never takes the clone branch.
+	CreateVersion(ctx context.Context, projectID, skillID string, input VersionCreateInput) (Skill, error)
+	// UpdateVersion edits ONE named version's instructions/tags (plus the
+	// skill's own name/description, shared across every version, same as
+	// Update). Refuses a published version with Conflict, mirroring
+	// application_versions' "Unpublish first" guard.
+	UpdateVersion(ctx context.Context, projectID, skillID, versionID string, skill Skill) (Skill, error)
+	// DeleteVersion removes one named version. Refuses `base` and the
+	// current default version with BadRequest, and a published version with
+	// Conflict.
+	DeleteVersion(ctx context.Context, projectID, skillID, versionID string) error
+	// RestoreVersion is the rollback: it copies versionID's
+	// instructions/tags/meta onto `base` and records the lineage
+	// (parent_version_id), then returns the skill with `base` as
+	// VersionDetails. Unlike agents' "Set as default" — which repoints a
+	// pointer and leaves every version's content untouched — skills have no
+	// distinguished "currently active" row to repoint: entity_skill_mapping
+	// pins a skill_version_id at ATTACH time (skills.go's AttachSkill), so
+	// restoring a version means overwriting the one row every unversioned
+	// read and every new attachment actually uses.
+	RestoreVersion(ctx context.Context, projectID, skillID, versionID string) (Skill, error)
+	// SetDefaultVersion writes skills.meta.default_version_id. It does not
+	// change which version any existing agent attachment resolves — see
+	// Skill.DefaultVersionID's doc comment.
+	SetDefaultVersion(ctx context.Context, projectID, skillID, versionID string) (Skill, error)
+}
+
+// VersionCreateInput is CreateVersion's request shape.
+type VersionCreateInput struct {
+	Name         string
+	Instructions string
+	Tags         []string
+	// SourceVersionID names the version to clone Instructions/Tags from when
+	// both are empty. Empty means `base`.
+	SourceVersionID string
 }
 
 type Handler struct {
@@ -184,8 +291,14 @@ func (h *Handler) Routes() chi.Router {
 	r.Get("/", h.List)
 	r.Post("/", h.Create)
 	r.Get("/{skillID}", h.Get)
+	r.Get("/{skillID}/{versionID}", h.Get)
 	r.Put("/{skillID}", h.Update)
+	r.Put("/{skillID}/{versionID}", h.Update)
 	r.Delete("/{skillID}", h.Delete)
+	r.Delete("/{skillID}/{versionID}", h.Delete)
+	r.Post("/{skillID}/versions", h.CreateVersion)
+	r.Post("/{skillID}/versions/{versionID}/restore", h.RestoreVersion)
+	r.Patch("/{skillID}/default_version", h.SetDefaultVersion)
 	return r
 }
 
@@ -231,11 +344,25 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 // carries the published SkillsList keys beside the Pylon ones, so both shipped
 // clients accept one body.
 
+// Get serves both GET /skill/{mode}/{projectID}/{skillID} and the
+// {versionID}-scoped form (#874). With no {versionID}, VersionDetails stays
+// `base` exactly as it always has; with one, it names the requested version
+// — the round trip the version selector and CompareVersionsModal-style
+// client-side diff both need (fetchSkill(projectId, skillId, versionId) in
+// features/skills/api/skillsApi.ts already sends the 5-segment form; before
+// this change the route only matched 4 segments and answered 404).
 func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectID")
 	skillID := chi.URLParam(r, "skillID")
+	versionID := chi.URLParam(r, "versionID")
 
-	skill, err := h.repo.Get(r.Context(), projectID, skillID)
+	var skill Skill
+	var err error
+	if versionID != "" {
+		skill, err = h.repo.GetVersion(r.Context(), projectID, skillID, versionID)
+	} else {
+		skill, err = h.repo.Get(r.Context(), projectID, skillID)
+	}
 	if err != nil {
 		apierr.Write(w, err)
 		return
@@ -260,6 +387,114 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, created)
 }
 
+// createVersionRequest is CreateVersion's body: `{name, instructions, tags}`,
+// the exact shape features/skills/api/skillsApi.ts's createSkillVersion()
+// already sends. SourceVersionID is new surface: when a caller omits
+// Instructions, the new version clones SourceVersionID's content (default
+// `base`) rather than being created empty.
+type createVersionRequest struct {
+	Name            string   `json:"name"`
+	Instructions    string   `json:"instructions,omitempty"`
+	Tags            []string `json:"tags,omitempty"`
+	SourceVersionID string   `json:"source_version_id,omitempty"`
+}
+
+// CreateVersion serves POST /skill/{mode}/{projectID}/{skillID} — the route
+// that used to be bound to Create and silently created an unrelated new
+// skill instead of a version of this one (see router.go's mount comment).
+func (h *Handler) CreateVersion(w http.ResponseWriter, r *http.Request) {
+	projectID := chi.URLParam(r, "projectID")
+	skillID := chi.URLParam(r, "skillID")
+
+	var req createVersionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		apierr.Write(w, apierr.BadRequest("invalid request body"))
+		return
+	}
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		apierr.Write(w, apierr.BadRequest("version name is required"))
+		return
+	}
+	if name == "base" {
+		apierr.Write(w, apierr.BadRequest(`"base" is reserved and cannot be used as a version name`))
+		return
+	}
+
+	created, err := h.repo.CreateVersion(r.Context(), projectID, skillID, VersionCreateInput{
+		Name:            name,
+		Instructions:    req.Instructions,
+		Tags:            req.Tags,
+		SourceVersionID: req.SourceVersionID,
+	})
+	if err != nil {
+		apierr.Write(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, created)
+}
+
+// RestoreVersion serves POST
+// /skill_version_restore/{mode}/{projectID}/{skillID}/{versionID} — the
+// rollback the issue asks for. It copies versionID's content back onto
+// `base` and returns the skill with `base` as VersionDetails.
+func (h *Handler) RestoreVersion(w http.ResponseWriter, r *http.Request) {
+	projectID := chi.URLParam(r, "projectID")
+	skillID := chi.URLParam(r, "skillID")
+	versionID := chi.URLParam(r, "versionID")
+
+	restored, err := h.repo.RestoreVersion(r.Context(), projectID, skillID, versionID)
+	if err != nil {
+		apierr.Write(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, restored)
+}
+
+// SetDefaultVersion serves PATCH
+// /skill_default_version/{mode}/{projectID}/{skillID}. Before #874 this URL
+// was bound to the generic Update, which decodes {name, description,
+// instructions, tags} and reads no "version_id" key — the frontend's
+// setDefaultSkillVersion() has sent {"version_id": N} here since before this
+// change, Update saw no "name" key in that body, and wrote the skill's own
+// name to "" on every "Set default" click. This reads version_id (numeric or
+// string, same leniency as the skill-relation body) and writes
+// skills.meta.default_version_id.
+func (h *Handler) SetDefaultVersion(w http.ResponseWriter, r *http.Request) {
+	projectID := chi.URLParam(r, "projectID")
+	skillID := chi.URLParam(r, "skillID")
+
+	raw, err := io.ReadAll(io.LimitReader(r.Body, maxUpdateBytes))
+	if err != nil {
+		apierr.Write(w, apierr.BadRequest("invalid request body"))
+		return
+	}
+	var keys map[string]json.RawMessage
+	if len(strings.TrimSpace(string(raw))) > 0 {
+		if err := json.Unmarshal(raw, &keys); err != nil {
+			apierr.Write(w, apierr.BadRequest("invalid request body"))
+			return
+		}
+	}
+
+	versionID, err := relationID(keys, "version_id")
+	if err != nil {
+		apierr.Write(w, apierr.BadRequest(err.Error()))
+		return
+	}
+	if versionID == "" {
+		apierr.Write(w, apierr.BadRequest("version_id is required"))
+		return
+	}
+
+	updated, err := h.repo.SetDefaultVersion(r.Context(), projectID, skillID, versionID)
+	if err != nil {
+		apierr.Write(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
+}
+
 // Update serves PUT and PATCH on /skill/{mode}/{projectID}/{skillID}.
 //
 // The URL is overloaded, and the body shape selects the operation. A body that
@@ -277,6 +512,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectID")
 	skillID := chi.URLParam(r, "skillID")
+	versionID := chi.URLParam(r, "versionID")
 
 	// The body is read once and unmarshalled twice, because presence of a key
 	// cannot be seen through `createRequest`.
@@ -302,7 +538,17 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	updated, err := h.repo.Update(r.Context(), projectID, skillID, req.toSkill())
+	// #874: the {versionID}-scoped PUT edits a NAMED version's
+	// instructions/tags instead of `base`. The skill's own name/description
+	// still come from the same body — they are columns on `skills`, shared
+	// across every version — so UpdateVersion writes both the shared row and
+	// the one named version.
+	var updated Skill
+	if versionID != "" {
+		updated, err = h.repo.UpdateVersion(r.Context(), projectID, skillID, versionID, req.toSkill())
+	} else {
+		updated, err = h.repo.Update(r.Context(), projectID, skillID, req.toSkill())
+	}
 	if err != nil {
 		apierr.Write(w, err)
 		return
@@ -463,11 +709,21 @@ func rowID(value, key string) (string, error) {
 	return strconv.FormatInt(parsed, 10), nil
 }
 
+// Delete serves both DELETE /skill/{mode}/{projectID}/{skillID} (removes the
+// whole skill) and the {versionID}-scoped form (#874, removes one named
+// version — DeleteVersion refuses `base` and the current default).
 func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectID")
 	skillID := chi.URLParam(r, "skillID")
+	versionID := chi.URLParam(r, "versionID")
 
-	if err := h.repo.Delete(r.Context(), projectID, skillID); err != nil {
+	var err error
+	if versionID != "" {
+		err = h.repo.DeleteVersion(r.Context(), projectID, skillID, versionID)
+	} else {
+		err = h.repo.Delete(r.Context(), projectID, skillID)
+	}
+	if err != nil {
 		apierr.Write(w, err)
 		return
 	}
@@ -631,8 +887,20 @@ func readImportPayload(r *http.Request) (content, filename string, err error) {
 func (h *Handler) Export(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectID")
 	skillID := chi.URLParam(r, "skillID")
+	versionID := chi.URLParam(r, "versionID")
 
-	sk, err := h.repo.Get(r.Context(), projectID, skillID)
+	// #874: the {versionID} segment was already accepted by the route
+	// (skill_export/{mode}/{projectID}/{skillID}/{versionID}) but never read
+	// here — every export answered `base`'s content regardless. serializeSkillMarkdown
+	// reads sk.Instructions/sk.Tags, which GetVersion sets to the requested
+	// version.
+	var sk Skill
+	var err error
+	if versionID != "" {
+		sk, err = h.repo.GetVersion(r.Context(), projectID, skillID, versionID)
+	} else {
+		sk, err = h.repo.Get(r.Context(), projectID, skillID)
+	}
 	if err != nil {
 		apierr.Write(w, err)
 		return

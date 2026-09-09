@@ -399,6 +399,15 @@ BEGIN
             WHERE shared_owner_id IS NOT NULL', schema_name);
 
     -- Skill versions
+    --
+    -- parent_version_id (#874) converges a fresh install with
+    -- migrations/tenant/0136_skill_version_lineage.sql, which adds the same
+    -- column to a database that already ran this function before #874 —
+    -- the pattern 0134's header documents (ADD COLUMN IF NOT EXISTS there is
+    -- a no-op once this file already declares the column). Nullable and ON
+    -- DELETE SET NULL: it is provenance, not a lifecycle constraint — see
+    -- 0136's header for why a deleted ancestor must not take its clone or a
+    -- restored `base` down with it.
     EXECUTE format('
         CREATE TABLE IF NOT EXISTS %I.skill_versions (
             id SERIAL PRIMARY KEY,
@@ -410,8 +419,9 @@ BEGIN
             uuid UUID UNIQUE DEFAULT gen_random_uuid(),
             meta JSONB DEFAULT ''{}''::jsonb,
             status VARCHAR NOT NULL DEFAULT ''draft'',
+            parent_version_id INTEGER REFERENCES %I.skill_versions(id) ON DELETE SET NULL,
             CONSTRAINT _skill_version_name_uc UNIQUE (skill_id, name)
-        )', schema_name, schema_name);
+        )', schema_name, schema_name, schema_name);
 
     EXECUTE format('
         CREATE INDEX IF NOT EXISTS ix_skill_versions_status

@@ -5668,15 +5668,43 @@ components:
       required: [name, instructions, tags]
       properties:
         id: { type: string }
-        name: { type: string, description: 'The platform ships a single implicit "base" version today (issue #37); real multi-version support is a tracked fast-follow.' }
+        name:
+          type: string
+          description: >-
+            "base" is the always-present working copy every skill has had
+            since creation, and is reserved — it cannot be deleted or reused
+            as a NAMED version's name. Since #874 a skill may carry
+            additional named versions alongside it, created by
+            createSkillVersion.
         instructions: { type: string }
         tags:
           type: array
           items: { type: string }
+        status:
+          type: string
+          description: >-
+            "draft" or "published" (#249). A published version is frozen:
+            updateSkillVersion and deleteSkillVersion both refuse it with
+            409, mirroring application_versions' own guard.
+        created_at: { type: string, format: date-time }
+        parent_version_id:
+          type: string
+          description: >-
+            The version this one was cloned from (createSkillVersion) or
+            restored from (restoreSkillVersion). Absent when the row has no
+            recorded ancestor.
+        is_default:
+          type: boolean
+          description: >-
+            Whether this is the version named by Skill.default_version_id —
+            the version a NEW attachment proposes. Does not affect which
+            version an EXISTING agent attachment resolves at chat time; see
+            Skill.default_version_id.
       description: >
         A skill's content: the instructions an agent follows plus its topical
         tags. Persisted in skill_versions/skill_version_tag_association
-        (repos/skills.go upsertBaseSkillVersion).
+        (repos/skills.go). Since #874 one skill_versions row is no longer the
+        whole story — see Skill.versions.
 
     Skill:
       type: object
@@ -5713,29 +5741,42 @@ components:
         is_default: { type: boolean }
         instructions:
           type: string
-          description: The base version's instructions (also available at version_details.instructions).
+          description: >-
+            The CURRENT version's instructions — `base`'s, unless the
+            request named another version (getSkillVersion,
+            updateSkillVersion) — also available at version_details.instructions.
         tags:
           type: array
           items: { type: string }
-          description: The base version's tags (also available at version_details.tags).
+          description: The current version's tags (also available at version_details.tags).
         versions:
           type: array
           items: { $ref: '#/components/schemas/SkillVersion' }
-          description: Always the single base version today — see SkillVersion.name.
+          description: >-
+            EVERY version of the skill (#874), `base` first — not just
+            `base`, as before #874. getSkill/getSkillVersion both carry the
+            full set; there is no separate list-versions endpoint.
         version_details:
           allOf: [{ $ref: '#/components/schemas/SkillVersion' }]
-          description: Convenience alias for versions[0].
+          description: The CURRENT version (see `instructions`), not always versions[0].
+        default_version_id:
+          type: string
+          description: >-
+            skills.meta.default_version_id (#874), mirroring
+            applications.meta.default_version_id. The version a NEW
+            attachment proposes. Does NOT change which version an EXISTING
+            agent attachment resolves at chat time — that stays keyed off
+            entity_skill_mapping.skill_version_id, fixed at attach time.
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
       description: >
-        NOTE(W2): `config` is never populated in responses, `is_default` is
-        always false, `type` is always the literal "skill", and `updated_at`
-        is always the zero sentinel "0001-01-01T00:00:00Z" — the skills
-        table itself has no updated_at/is_default columns
+        NOTE(W2): `config` is never populated in responses, `is_default` (the
+        boolean property, unrelated to `default_version_id`) is always
+        false, `type` is always the literal "skill", and `updated_at` is
+        always the zero sentinel "0001-01-01T00:00:00Z" — the skills table
+        itself has no updated_at/is_default columns
         (migrations/001_initial.sql). instructions/tags/versions/
-        version_details, in contrast, DO round-trip: they're read from a
-        joined skill_versions + skill_version_tag_association row
-        (repos/skills.go Get/List), not discarded.
+        version_details/default_version_id, in contrast, DO round-trip.
 
     SkillsList:
       type: object
@@ -5863,6 +5904,53 @@ components:
         row and its tag associations in the same transaction
         (repos/skills.go Create/Update). type/config/is_default remain
         silently discarded, and the response Type is hardcoded "skill".
+
+        The SAME shape serves updateSkillVersion's body — see
+        SkillVersionCreateRequest for the create-a-NAMED-version shape,
+        which additionally requires `name` and accepts `source_version_id`.
+
+    # ---- Skill versions (#874) --------------------------------------------
+
+    SkillVersionCreateRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          description: >-
+            Must be non-empty and not "base" (400 otherwise); a duplicate
+            name for this skill is a 409.
+        instructions:
+          type: string
+          description: >-
+            When omitted (or empty), the new version clones
+            source_version_id's content instead of being created empty.
+        tags:
+          type: array
+          items: { type: string }
+        source_version_id:
+          type: string
+          description: >-
+            The version to clone instructions/tags from when `instructions`
+            is empty. Defaults to `base`.
+      description: >
+        createSkillVersion's body (internal/api/v2/skills/handler.go
+        createVersionRequest) — "Save As Version". Posted to the SAME path
+        as getSkill/updateSkill/deleteSkill (skill_id in the URL, no
+        version_id): before #874 this exact URL was bound to createSkill,
+        which ignored skill_id and created an unrelated new skill.
+
+    SkillSetDefaultVersionRequest:
+      type: object
+      required: [version_id]
+      properties:
+        version_id:
+          description: The version to mark default. Numeric or string; must name a version of this skill.
+      description: >
+        setDefaultVersion's body (internal/api/v2/skills/handler.go
+        SetDefaultVersion). Before #874 this URL was bound to the generic
+        skill-update handler, which read no `version_id` key and wrote the
+        skill's own name to "" on every call.
 
     # ---- Skill publishing (#249) -----------------------------------------
 
@@ -16634,6 +16722,96 @@ paths:
         schema:
           type: integer
 
+    get:
+      operationId: getSkill
+      summary: Retrieve a skill (its `base` version, plus every version)
+      description: |
+        NOTE(#874): internal/api/v2/skills/handler.go Get. `instructions`/
+        `tags`/`version_details` answer `base`'s content; `versions` carries
+        EVERY version of the skill (not just `base`, as before #874).
+      tags: [skills]
+      responses:
+        '200':
+          description: The skill
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Skill'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+
+    put:
+      operationId: updateSkill
+      summary: Update the skill's name/description and `base` version's content
+      description: |
+        NOTE(#874): internal/api/v2/skills/handler.go Update, unversioned
+        branch (repo.Update). Always writes `base` — see updateSkillVersion
+        for editing a NAMED version.
+      tags: [skills]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SkillCreateRequest'
+      responses:
+        '200':
+          description: Updated skill
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Skill'
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+
+    post:
+      operationId: createSkillVersion
+      summary: Save the current content as a new NAMED version ("Save As Version")
+      description: |
+        NOTE(#874): internal/api/v2/skills/handler.go CreateVersion. Before
+        #874 this exact URL was bound to createSkill, which ignores
+        {skill_id} and creates an unrelated new skill — every "New version"
+        click quietly left the target skill's version set unchanged and
+        leaked a stray skill into the project's list.
+      tags: [skills]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SkillVersionCreateRequest'
+      responses:
+        '201':
+          description: Created version (the skill, with the new version as version_details)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Skill'
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '409': { $ref: '#/components/responses/409' }
+
+    delete:
+      operationId: deleteSkill
+      summary: Delete the whole skill
+      description: |
+        NOTE(#874): internal/api/v2/skills/handler.go Delete, unversioned
+        branch. Refuses (400) while any version is published — see
+        skillpublish's unpublish operations.
+      tags: [skills]
+      responses:
+        '204':
+          description: Deleted (no content)
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+
     patch:
       operationId: setSkillRelation
       summary: Attach or detach a skill on one agent version
@@ -16642,8 +16820,7 @@ paths:
         skill update, and the body selects the operation. A body that carries
         `has_relation` attaches (`true`, 201) or detaches (`false`, 200) the
         skill on the agent version named by `entity_version_id`; any other body
-        is the plain update, which this document does not describe
-        (`skills.updateSkill` stays on the reverse-check allowlist). This is the
+        is the plain update — see the `put` operation on this path. This is the
         convention apps/elitea-ui's `updateSkillRelation` already calls and the
         toolkit twin implements (internal/api/v2/skills/handler.go Update).
       tags: [skills]
@@ -16685,6 +16862,265 @@ paths:
                   it (internal/api/v2/skills/handler.go:395, AttachSkill) —
                   the writer owns the shape.
         '400': { $ref: '#/components/responses/400' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+
+  /elitea_core/skill/prompt_lib/{project_id}/{skill_id}/{version_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: skill_id
+        in: path
+        required: true
+        schema: { type: integer }
+      - name: version_id
+        in: path
+        required: true
+        schema: { type: integer }
+
+    get:
+      operationId: getSkillVersion
+      summary: Retrieve one NAMED version's content
+      description: |
+        NOTE(#874): internal/api/v2/skills/handler.go Get, versioned branch
+        (repo.GetVersion). `instructions`/`tags`/`version_details` answer
+        THIS version's content; `versions` still carries every version — the
+        round trip the version selector and the client-side compare view
+        (there is no server-side compare endpoint, matching agents'
+        CompareVersionsModal) both use.
+      tags: [skills]
+      responses:
+        '200':
+          description: The skill, scoped to this version
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Skill'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+
+    put:
+      operationId: updateSkillVersion
+      summary: Edit one NAMED version's instructions/tags
+      description: |
+        NOTE(#874): internal/api/v2/skills/handler.go Update, versioned
+        branch (repo.UpdateVersion). name/description in the body still
+        update the SKILL row — those columns are shared across every
+        version. Refuses (409) a published version.
+      tags: [skills]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SkillCreateRequest'
+      responses:
+        '200':
+          description: Updated version (the skill, with this version as version_details)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Skill'
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '409': { $ref: '#/components/responses/409' }
+
+    delete:
+      operationId: deleteSkillVersion
+      summary: Delete one NAMED version
+      description: |
+        NOTE(#874): internal/api/v2/skills/handler.go Delete, versioned
+        branch (repo.DeleteVersion). Refuses (400) `base` and the current
+        default version; refuses (409) a published version.
+      tags: [skills]
+      responses:
+        '204':
+          description: Deleted (no content)
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '409': { $ref: '#/components/responses/409' }
+
+  /elitea_core/skill_version_restore/prompt_lib/{project_id}/{skill_id}/{version_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: skill_id
+        in: path
+        required: true
+        schema: { type: integer }
+      - name: version_id
+        in: path
+        required: true
+        schema: { type: integer }
+
+    post:
+      operationId: restoreSkillVersion
+      summary: Rollback — copy a NAMED version's content back onto `base`
+      description: |
+        NOTE(#874): internal/api/v2/skills/handler.go RestoreVersion. The
+        capability the issue's title names: skills had no rollback at all
+        before this route. Unlike agents' "Set as default" (which repoints a
+        pointer and leaves every version's content untouched), skills have
+        no distinguished "currently active" row to repoint — the unversioned
+        GET/PUT/DELETE and every FRESH attachment's proposed version both
+        read `base` directly — so this OVERWRITES `base` with version_id's
+        content and records the lineage (parent_version_id). Refuses (409)
+        while `base` itself is published.
+      tags: [skills]
+      responses:
+        '200':
+          description: The skill, with `base` (now holding version_id's content) as version_details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Skill'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '409': { $ref: '#/components/responses/409' }
+
+  /elitea_core/skill_default_version/prompt_lib/{project_id}/{skill_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: skill_id
+        in: path
+        required: true
+        schema: { type: integer }
+
+    patch:
+      operationId: setDefaultVersion
+      summary: Mark a version as the skill's default
+      description: |
+        NOTE(#874): internal/api/v2/skills/handler.go SetDefaultVersion.
+        Writes skills.meta.default_version_id — the version a NEW attachment
+        proposes. Before #874 this URL was bound to the generic skill-update
+        handler, which read no `version_id` key and wrote the skill's own
+        name to "" on every call (see setSkillRelation's history on the
+        `patch` /skill/.../{skill_id} operation for the sibling defect the
+        same overloaded-URL convention produced).
+      tags: [skills]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SkillSetDefaultVersionRequest'
+      responses:
+        '200':
+          description: Updated skill
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Skill'
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+
+  /elitea_core/skill_import/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+
+    post:
+      operationId: importSkill
+      summary: Import a skill from a Markdown file (always as a new `base` version)
+      description: |
+        NOTE: internal/api/v2/skills/handler.go Import. The server also
+        accepts a JSON {content, filename} body (readImportPayload's second
+        branch), but the shipped UI's importSkill() always sends multipart —
+        the only shape documented here, matching every other upload
+        operation in this document (uploadApplicationIcon,
+        uploadCurrentSocialAvatar, etc. — a requestBody with both multipart
+        and application/json makes orval generate ImportSkillBodyOne/Two
+        model names that do not match the files its own model-file-splitter
+        writes). Only .md is accepted. A duplicate skill name reuses the
+        existing skill and returns a `notice` field instead of erroring.
+      tags: [skills]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        '200':
+          description: Reused an existing skill of the same name
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Skill'
+                  - type: object
+                    properties:
+                      notice: { type: string }
+        '201':
+          description: Imported skill
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Skill'
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+
+  /elitea_core/skill_export/prompt_lib/{project_id}/{skill_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: skill_id
+        in: path
+        required: true
+        schema: { type: integer }
+
+    get:
+      operationId: exportSkill
+      summary: Export `base` as a Markdown file
+      description: |
+        NOTE(#874): internal/api/v2/skills/handler.go Export, unversioned
+        branch. `text/markdown`, Content-Disposition names the file.
+      tags: [skills]
+      responses:
+        '200':
+          description: Markdown file
+          content:
+            text/markdown:
+              schema: { type: string }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+
+  /elitea_core/skill_export/prompt_lib/{project_id}/{skill_id}/{version_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: skill_id
+        in: path
+        required: true
+        schema: { type: integer }
+      - name: version_id
+        in: path
+        required: true
+        schema: { type: integer }
+
+    get:
+      operationId: exportSkillVersion
+      summary: Export one NAMED version as a Markdown file
+      description: |
+        NOTE(#874): internal/api/v2/skills/handler.go Export, versioned
+        branch. Before #874 this route accepted {version_id} but never read
+        it — every export answered `base`'s content regardless of the
+        version requested.
+      tags: [skills]
+      responses:
+        '200':
+          description: Markdown file
+          content:
+            text/markdown:
+              schema: { type: string }
+        '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '404': { $ref: '#/components/responses/404' }
 

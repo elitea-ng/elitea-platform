@@ -2477,18 +2477,65 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					requireSkillCreate := projectPermission("models.applications.skills.create")
 					requireSkillUpdate := projectPermission("models.applications.skills.update")
 					requireSkillExport := projectPermission("models.applications.skills.export")
+					requireSkillDelete := projectPermission("models.applications.skills.delete")
+					requireSkillDetails := projectPermission("models.applications.skills.details")
 					r.With(projectPermission("models.applications.skills.list")).
 						Get("/skills/{mode}/{projectID}", skillHandler.List)
 					r.With(requireSkillCreate).Post("/skills/{mode}/{projectID}", skillHandler.Create)
-					r.With(projectPermission("models.applications.skills.details")).
+					r.With(requireSkillDetails).
 						Get("/skill/{mode}/{projectID}/{skillID}", skillHandler.Get)
-					r.With(requireSkillCreate).Post("/skill/{mode}/{projectID}/{skillID}", skillHandler.Create)
+					// The {versionID} segment lets a caller read one NAMED
+					// version's content (switch-version, compare) instead of
+					// whichever version Get() answers by default (#874). Same
+					// handler as the 4-segment form above — Get reads the
+					// optional chi param itself, the pattern skill_export
+					// already uses below.
+					r.With(requireSkillDetails).
+						Get("/skill/{mode}/{projectID}/{skillID}/{versionID}", skillHandler.Get)
+					// #874: this used to be bound to Create, which ignores the
+					// {skillID} path segment entirely and creates an UNRELATED
+					// new skill — the frontend's createSkillVersion() call
+					// (features/skills/api/skillsApi.ts) has posted here since
+					// before this change, so every "New version" click quietly
+					// left the target skill's version set unchanged and leaked
+					// a stray skill into the project's list instead.
+					// CreateVersion reads {skillID} and adds a NAMED version
+					// row to the skill the URL names.
+					r.With(requireSkillCreate).Post("/skill/{mode}/{projectID}/{skillID}", skillHandler.CreateVersion)
 					r.With(requireSkillUpdate).Put("/skill/{mode}/{projectID}/{skillID}", skillHandler.Update)
 					r.With(requireSkillUpdate).Patch("/skill/{mode}/{projectID}/{skillID}", skillHandler.Update)
-					r.With(projectPermission("models.applications.skills.delete")).
-						Delete("/skill/{mode}/{projectID}/{skillID}", skillHandler.Delete)
+					// #874: edits a NAMED version's instructions/tags (the
+					// skill's own name/description still come from the body,
+					// same as the 4-segment form — those columns are shared
+					// across every version of the skill).
 					r.With(requireSkillUpdate).
-						Patch("/skill_default_version/{mode}/{projectID}/{skillID}", skillHandler.Update)
+						Put("/skill/{mode}/{projectID}/{skillID}/{versionID}", skillHandler.Update)
+					r.With(requireSkillDelete).Delete("/skill/{mode}/{projectID}/{skillID}", skillHandler.Delete)
+					// #874: deletes one NAMED version. Delete reads the
+					// optional {versionID} param itself; refuses `base` and
+					// the current default version (skills.go's DeleteVersion).
+					r.With(requireSkillDelete).
+						Delete("/skill/{mode}/{projectID}/{skillID}/{versionID}", skillHandler.Delete)
+					// #874: rollback — copies a named version's content back
+					// onto `base`, mirroring "restore" as agents' version bar
+					// terms the "Set as default" action's confirmation
+					// dialog (SetDefaultVersionDialog.tsx), except skills
+					// have no distinguished "latest" row to repoint, so the
+					// restore itself copies fields rather than moving a
+					// pointer.
+					r.With(requireSkillUpdate).
+						Post("/skill_version_restore/{mode}/{projectID}/{skillID}/{versionID}", skillHandler.RestoreVersion)
+					// #874: this used to be bound to the generic Update,
+					// which decodes the body as {name, description,
+					// instructions, tags} and therefore read no "version_id"
+					// key at all — a click on "Set default" sent
+					// {"version_id": N}, Update saw no "name" key, and wrote
+					// the skill's OWN name to "". SetDefaultVersion reads
+					// version_id and writes skills.meta.default_version_id,
+					// the same shape applications.meta.default_version_id
+					// already uses (repos/applications.go).
+					r.With(requireSkillUpdate).
+						Patch("/skill_default_version/{mode}/{projectID}/{skillID}", skillHandler.SetDefaultVersion)
 					// NOTE(#395): GET
 					// /application_skills/{mode}/{projectID}/{appVersionID}
 					// stood here, on skillHandler.ListForApplication. It was

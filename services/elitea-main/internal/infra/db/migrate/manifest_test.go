@@ -656,7 +656,15 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// `models.chat.messages.details`, the same string GetMessage already
 	// declares — reading a message's feedback is not a wider claim than
 	// reading the message), so it has no shared sibling.
-	require.EqualValues(t, 135, Head(tenant))
+	//
+	// 136: tenant/0136_skill_version_lineage.sql, which gives skill_versions a
+	// nullable `parent_version_id` (ON DELETE SET NULL). #874 gives a skill
+	// multiple named skill_versions rows the way application_versions already
+	// gives an agent — CreateVersion clones a version's content into a new
+	// named row and RestoreVersion copies a named version's content back onto
+	// `base` — and this column is where each write records which version it
+	// came from. No new table and no permission, so no shared sibling.
+	require.EqualValues(t, 136, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own

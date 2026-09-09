@@ -107,7 +107,14 @@ const (
 	// 78 -> 76 (#254 P1), when the three AI-draft routes were served and
 	// described. Two ids came off: applications.generateAgentDraft and
 	// skills.generateDraft, the two manifest entries on those paths.
-	maxAllowlistEntries = 76
+	//
+	// 76 -> 65 (#874), when skill versioning was described: the eleven
+	// skills.* ids (getSkill, getSkillVersion, updateSkill,
+	// updateSkillVersion, createSkillVersion, deleteSkill,
+	// deleteSkillVersion, setDefaultVersion, import, export, exportVersion)
+	// all came off in the same change that gave skills real multi-version
+	// history, compare and rollback.
+	maxAllowlistEntries = 65
 )
 
 // buildFullSurfaceConfig returns a RouterConfig for the real production
