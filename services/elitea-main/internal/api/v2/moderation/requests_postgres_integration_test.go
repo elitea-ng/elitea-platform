@@ -61,6 +61,7 @@ type requestRow struct {
 	RejectionComment *string   `json:"rejection_comment"`
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
+	CreatedProjectID *int64    `json:"created_project_id,omitempty"`
 }
 
 type requestListing struct {

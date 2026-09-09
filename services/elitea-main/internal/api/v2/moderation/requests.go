@@ -205,7 +205,7 @@ var sortableRequestColumns = map[string]string{
 const requestColumns = `
 SELECT m.id, m.user_id, COALESCE(u.email, ''), m.project_id, m.issue_type,
        COALESCE(m.entity_id, ''), m.description, m.status, m.rejection_comment,
-       m.created_at, m.updated_at
+       m.created_at, m.updated_at, m.meta
 FROM centry.moderation_state m
 LEFT JOIN public.auth_core__user u ON u.id = m.user_id`
 
@@ -906,7 +906,7 @@ func (h *Handler) deleteOwnRequests(
 DELETE FROM centry.moderation_state m
 WHERE m.project_id = $1 AND m.entity_id = $2 AND m.user_id = $3
 RETURNING m.id, m.user_id, ''::text, m.project_id, m.issue_type, COALESCE(m.entity_id, ''),
-          m.description, m.status, m.rejection_comment, m.created_at, m.updated_at`,
+          m.description, m.status, m.rejection_comment, m.created_at, m.updated_at, m.meta`,
 		projectID, entityID, userID)
 	if err != nil {
 		return nil, 0, err
@@ -980,16 +980,44 @@ func scanRequests(ctx context.Context, query queryFunc, statement string, args .
 	result := make([]requestRow, 0)
 	for rows.Next() {
 		var row requestRow
+		var meta []byte
 		if err := rows.Scan(&row.ID, &row.UserID, &row.UserEmail, &row.ProjectID, &row.IssueType,
 			&row.EntityID, &row.Description, &row.Status, &row.RejectionComment,
-			&row.CreatedAt, &row.UpdatedAt); err != nil {
+			&row.CreatedAt, &row.UpdatedAt, &meta); err != nil {
 			// A scan failure is a schema disagreement, not a bad row: skipping it
 			// would report a shorter queue rather than a broken one.
 			return nil, fmt.Errorf("scan app request: %w", err)
 		}
+		row.CreatedProjectID = createdProjectIDFromMeta(meta)
 		result = append(result, row)
 	}
 	return result, rows.Err()
+}
+
+// createdProjectIDFromMeta reads `created_project_id` out of a row's `meta`
+// JSONB — decideProjectRequest (project_requests.go) is the only writer,
+// storing exactly `{"created_project_id": <id>}` on an APPROVED Project
+// Request. Every other row's `meta` is NULL/empty, or holds a shape this
+// endpoint has no reader for, both of which report "no created project" the
+// same way a genuinely absent one does — this is a display convenience, not
+// a contract other code depends on, so a decode failure degrades quietly
+// rather than turning the whole listing into a 500.
+//
+// Without this, the admin queue's "Project #N created" line (AppRequestsTable
+// .tsx) never rendered for ANY listed row: `requestColumns` used to omit
+// `meta` entirely, so `CreatedProjectID` stayed nil on every read except the
+// single decide response that set it in memory (#882 CI).
+func createdProjectIDFromMeta(meta []byte) *int64 {
+	if len(meta) == 0 {
+		return nil
+	}
+	var decoded struct {
+		CreatedProjectID *int64 `json:"created_project_id"`
+	}
+	if err := json.Unmarshal(meta, &decoded); err != nil {
+		return nil
+	}
+	return decoded.CreatedProjectID
 }
 
 func writeModerationJSON(w http.ResponseWriter, code int, value any) {

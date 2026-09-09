@@ -174,6 +174,11 @@ func projectRequestRouter(handler *moderation.Handler, principal auth.User) chi.
 	router.Post(projectRequestCreateURL, handler.CreateProjectRequest)
 	router.Get(projectRequestMineURL, handler.MyProjectRequests)
 	router.Put(projectRequestDecideURL, handler.AdministrationRequestUpdate)
+	// `queueURL` (requests_postgres_integration_test.go, same package): the
+	// admin queue read, needed here so an approved Project Request's
+	// `created_project_id` can be asserted on the LISTED row, not only on
+	// the one-shot decide response (see TestAdminQueueSurfacesTheCreatedProjectID).
+	router.Get(queueURL, handler.AdministrationRequests)
 	return router
 }
 
@@ -388,6 +393,74 @@ func TestApprovingAProjectRequestProvisionsTheProjectWithTheRequesterAsAdmin(t *
 	// The operator who approved it did NOT thereby become its admin.
 	if isProjectAdmin(t, pool, decided.CreatedProjectID, operatorID) {
 		t.Errorf("operator %d was made an admin of a project it only approved", operatorID)
+	}
+}
+
+// TestAdminQueueSurfacesTheCreatedProjectID — #882 CI: `requestColumns`
+// (requests.go) never selected `meta`, so `created_project_id` — written
+// there by decideProjectRequest at approval time — was populated on the
+// ONE-SHOT decide response and nowhere else. The admin App Requests page
+// (AppRequestsTable.tsx) reads it off the LISTED row to show "Project #N
+// created", so every approved Project Request read back through the queue
+// looked exactly like a clerical decision with nothing provisioned.
+func TestAdminQueueSurfacesTheCreatedProjectID(t *testing.T) {
+	pool := newProjectRequestPool(t)
+	handler := newProjectRequestHandler(t, pool)
+	const requesterID int64 = 90401
+	const operatorID int64 = 90402
+	seedUser(t, pool, requesterID, "requester-queue@example.com")
+	seedUser(t, pool, operatorID, "operator-queue@example.com")
+	requester := auth.User{ID: fmt.Sprint(requesterID), UserID: fmt.Sprint(requesterID)}
+	operator := auth.User{ID: fmt.Sprint(operatorID), UserID: fmt.Sprint(operatorID)}
+
+	const projectName = "Queue Surfaced Automation"
+	created := doJSON(t, projectRequestRouter(handler, requester), http.MethodPost, projectRequestCreateURL,
+		map[string]string{"name": projectName, "description": "Queue read coverage."})
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create: status = %d, body = %s", created.Code, created.Body.String())
+	}
+	var createdRow struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.Unmarshal(created.Body.Bytes(), &createdRow); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+
+	operatorRouter := projectRequestRouter(handler, operator)
+	decision := doJSON(t, operatorRouter, http.MethodPut, projectRequestDecideURL,
+		map[string]any{"id": createdRow.ID, "status": "approved"})
+	if decision.Code != http.StatusOK {
+		t.Fatalf("approve: status = %d, body = %s", decision.Code, decision.Body.String())
+	}
+	var decided struct {
+		CreatedProjectID int64 `json:"created_project_id"`
+	}
+	if err := json.Unmarshal(decision.Body.Bytes(), &decided); err != nil {
+		t.Fatalf("decode decision response: %v", err)
+	}
+	if decided.CreatedProjectID <= 0 {
+		t.Fatalf("created_project_id = %d, want a real project id", decided.CreatedProjectID)
+	}
+
+	// THE ASSERTION #882 CI CAUGHT: the SAME id, read back through the
+	// admin queue's LISTING, not the decide response.
+	listing := readQueue(t, operatorRouter, "status=approved")
+	var found *requestRow
+	for i := range listing.Rows {
+		if listing.Rows[i].ID == createdRow.ID {
+			found = &listing.Rows[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("request %d not found in the approved queue (rows: %+v)", createdRow.ID, listing.Rows)
+	}
+	if found.CreatedProjectID == nil {
+		t.Fatalf("queue row for request %d carries no created_project_id", createdRow.ID)
+	}
+	if *found.CreatedProjectID != decided.CreatedProjectID {
+		t.Errorf("queue row created_project_id = %d, want %d (the decide response's own answer)",
+			*found.CreatedProjectID, decided.CreatedProjectID)
 	}
 }
 
