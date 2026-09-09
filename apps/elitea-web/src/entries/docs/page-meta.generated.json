@@ -60,6 +60,61 @@
     "description": "Manage every account on the deployment and edit the permission matrix that defines each role."
   },
   {
+    "slug": "deployment/argocd",
+    "title": "GitOps with ArgoCD",
+    "description": "The app-of-apps root, sync-wave order, per-environment value overrides, image promotion, and rollback."
+  },
+  {
+    "slug": "deployment/configuration",
+    "title": "Post-install configuration",
+    "description": "Console and operator settings: identity, e-mail, egress, budgets, workers, observability and maintenance."
+  },
+  {
+    "slug": "deployment/helm-install",
+    "title": "Install with Helm",
+    "description": "Prerequisites, secrets to create beforehand, which values file to start from, and the install sequence from nats through the first admin."
+  },
+  {
+    "slug": "deployment/operations",
+    "title": "Day-2 operations",
+    "description": "Upgrades, changing SECRETS_MASTER_KEY, scaling, backups, the CI/CD publish pipeline, and security posture."
+  },
+  {
+    "slug": "deployment/overview",
+    "title": "Production deployment overview",
+    "description": "The target Kubernetes topology, what the Helm chart creates versus what you bring, and where the signed release artefacts live."
+  },
+  {
+    "slug": "development/backend",
+    "title": "Backend services and workers",
+    "description": "Run elitea-main against the compose database, work with migrations, edit the OpenAPI spec, and test the workers."
+  },
+  {
+    "slug": "development/e2e-stack",
+    "title": "Run the browser test stack",
+    "description": "Bring up the self-contained E2E stack, seed its personas, and run Playwright projects against it."
+  },
+  {
+    "slug": "development/frontend",
+    "title": "elitea-web development",
+    "description": "Dev server modes, unit and Storybook tests, and the gate scripts a frontend change has to satisfy."
+  },
+  {
+    "slug": "development/kind",
+    "title": "Run a local Kubernetes cluster",
+    "description": "Install the real Helm chart into a kind cluster to prove the DeepWiki provider's two-container pod and mTLS hop, offline."
+  },
+  {
+    "slug": "development/overview",
+    "title": "Set up a development environment",
+    "description": "The toolchain, repository layout, and checks you need before you run Elitea locally or send a change."
+  },
+  {
+    "slug": "development/standalone-stack",
+    "title": "Run the standalone stack",
+    "description": "Bring up the full Compose stack locally with deploy/scripts/standalone-stack.sh: certs, seeding, a real model, and the overlays."
+  },
+  {
     "slug": "getting-started/chat-quick-start",
     "title": "Chat quick start",
     "description": "Send your first message, attach a toolkit, and try a public agent — the fastest path through Elitea's chat."

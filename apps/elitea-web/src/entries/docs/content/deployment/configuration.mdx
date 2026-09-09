@@ -1,0 +1,115 @@
+---
+title: "Post-install configuration"
+description: "Console and operator settings: identity, e-mail, egress, budgets, workers, observability and maintenance."
+---
+
+Once the chart has installed and you have signed in as the first administrator (see [Install with Helm](/deployment/helm-install#first-admin-bootstrap)), most day-to-day configuration moves into the admin console rather than back into a values file. This page is the map of what still lives where.
+
+## Identity: OIDC, SAML, SCIM
+
+Configure identity providers under **Configuration › Authentication** in the admin console — see [Authentication](/admin/authentication) for the click-through. What matters at the deployment level:
+
+- **The first global admin** is a chart/environment setting, not a console one — `identity.initial_global_admins` in the auth document, or `main.env.ELITEA_INITIAL_GLOBAL_ADMINS`. See the Helm install guide.
+- **An OIDC-only install now gets the configuration plane.** Before, only a Form authentication document (`ELITEA_AUTH_CONFIG_FILE`) composed the principal validator the configuration write path needs; now `env.OIDC_ISSUER_URL` alone composes it too, as long as `ELITEA_AI_PROJECT_ID` is set. A deployment with no authentication at all is still refused, in both the chart and the binary.
+- **SCIM** provisions accounts and groups at `/api/v2/scim/v2`, authenticated with a personal access token; the console side is only the group-to-role binding (see [Authentication](/admin/authentication#bind-scim-groups-to-a-project-role)).
+
+## The first global administrator
+
+A fresh database seeds only `dev@elitea.ai`. On a single-sign-on deployment, this account has no password. Set `identity.initial_global_admins` or the equivalent environment variable before you rely on the admin console.
+
+## E-mail: SMTP bootstrap defaults
+
+`SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_TLS`, `EMAIL_FROM`, `EMAIL_REPLY_TO` and `PUBLIC_BASE_URL` are a **default layer**, not the whole configuration. **Admin → E-mail** writes a second layer into the database, and `internal/emailsettings` merges the two field by field on every send — the database wins where it has a value.
+
+<Steps>
+<Step title="Set the bootstrap defaults">
+Ship `EMAIL_FROM` and `PUBLIC_BASE_URL` at minimum through `main.env`; `SMTP_PASSWORD` belongs in the `secrets:` block (a Secret), never as a plaintext parameter.
+</Step>
+<Step title="Let an administrator name the relay">
+A change in the console needs no restart or re-sync — the merge runs per message.
+</Step>
+<Step title="Check what resolved">
+```bash
+curl -s -H "Authorization: Bearer $ADMIN_PAT" \
+  https://elitea.example.com/api/v2/admin/email/administration | jq
+```
+`.settings` is what the console stored, `.effective` is the merged document the next message uses, `.sources` names `database`/`environment`/`unset` per field, and `.configured`/`.reason` say whether a message can be sent.
+</Step>
+</Steps>
+
+<Note>
+`ELITEA_EMAIL_SUPPRESS: "true"` renders every message and sends none — the setting for a shadow or staging deployment. It outranks the console.
+</Note>
+
+## Egress allowlists
+
+Two separate allowlists guard two separate outbound paths, both fail-closed by default in the dangerous direction:
+
+<Tabs>
+<Tab title="LLM gateway — GATEWAY_EGRESS_ALLOWLIST">
+Names the hosts a saved provider credential's `api_base` may point at. It is the **floor**: the gateway also reads `egress_allowlist` rows from `gateway.governance_config` (edit them at **Admin → LLM Proxy → Governance**, no re-sync needed) and enforces the **union**. An authored row can only *add* a destination — nothing an admin authors can withdraw a host the chart named.
+
+One grammar for both sources: a bare host, `host:port`, a `*.domain` wildcard, or a CIDR block. **The first entry anywhere turns the restriction on** — with none in either source, a credential may name any public host.
+
+A private endpoint needs its **address** named, not only a hostname — bifrost's SSRF-safe dialer refuses RFC 1918 and loopback destinations unless an entry explicitly names a private address or block, because the gateway never resolves a name before deciding (that would reopen the DNS-rebinding race the allowlist exists to close). Link-local addresses (`169.254.0.0/16`, `fe80::/10` — cloud metadata endpoints) are refused no matter what the allowlist says.
+
+`GET /governance/status` on the gateway (proxied at `GET /api/v2/admin/gateway/status`, and shown on **Admin → LLM Proxy → Status**) reports the merged list by source and whether a private destination is actually reachable.
+</Tab>
+<Tab title="Webhooks — ELITEA_WEBHOOK_EGRESS_ALLOWLIST">
+Governs where a tenant-created webhook may dial. **Unset is the safe default**: every RFC 1918, ULA and loopback destination is refused, both when a webhook is created and again at dial time (the destination is re-resolved, not trusted from create time). Set it only to let webhooks reach a private receiver you control; link-local and multicast addresses are refused unconditionally regardless of this variable.
+
+This variable is not a named key in `values.yaml` — set it like any other elitea-main environment variable:
+```bash
+--set-string main.env.ELITEA_WEBHOOK_EGRESS_ALLOWLIST="10.0.0.0/8"
+```
+</Tab>
+</Tabs>
+
+## Budgets need GATEWAY_NATS_URL
+
+Admin → Budgets writes spend-ceiling rows, but the LLM gateway is what **enforces** them, through a NATS JetStream counter — `GATEWAY_NATS_URL` names that cluster (in Kubernetes, the `nats` block resolved in-namespace by default; cross-namespace deployments need the fully qualified `....elitea-gateway.svc.cluster.local` form).
+
+<Warning>
+Leave it unset and the gateway starts, logs a warning, and serves `/llm` with **no budget enforcement**: every budget write still answers 200, every limit reads back exactly as authored, Settings → Usage still reports accrued spend — and no call is ever refused. `GET /governance/status`'s `rate_limits_enforceable` is `false` exactly when this is the case, and Admin → Budgets raises its own warning banner from that field once any budget row exists. The Compose standalone stack runs no NATS service and leaves this unset deliberately, for the same reason.
+</Warning>
+
+## Worker implementation: python (default) or rust
+
+`worker.implementation` selects which agent worker image the chart runs; the values are not interchangeable and the chart handles the difference rather than the operator.
+
+<Tabs>
+<Tab title="python (default)">
+Every catalogued toolkit type and every internal chat-agent tool is available, at the cost of the larger interpreter/dependency image. This is the default in both the Helm chart and `standalone-stack.sh`.
+</Tab>
+<Tab title="rust">
+A smaller, faster process with the platform's native agent runtime (checkpointing, step-limit enforcement) and no Python dependency surface — but, as of this release, **18 toolkit types** are unimplemented (`ado_boards`, `ado_plans`, `ado_repos`, `ado_wiki`, `aha`, `bitbucket`, `confluence`, `figma`, plain `gitlab`, `jira`, PowerPoint, `qtest`, TestIO, TestRail, XRAY Cloud, Zephyr Enterprise, Zephyr Essential, Zephyr Scale) and **six internal chat-agent tools** are skipped with a visible notice instead of run (Image creation, Data Analysis, Elitea MCP Tools, Planner, Swarm Mode, Smart Tools Selection). Every tile still shows, greyed with a reason, rather than disappearing.
+</Tab>
+</Tabs>
+
+`runtime.json` — the worker's own configuration document — is byte-identical either way; only the process and its capability surface differ.
+
+## Object storage and artifacts
+
+`main.env.STORAGE_BACKEND` / `STORAGE_CONTAINER` point at an S3-compatible bucket. It must **exist before the first sync** — the readiness probe tolerates a missing bucket, but the very next boot step (setting the bucket's retention lifecycle) does not, so a missing bucket looks like a green install that then crash-loops. `objectInit.enabled: true` creates it for a self-hosted S3-compatible endpoint you administer directly (RustFS, MinIO); a managed cloud object store almost always withholds `CreateBucket` from an application-scoped credential, so create it out of band there.
+
+## DeepWiki and Inventory: disk needs
+
+Both are the same pattern — a Go `subapp-host` serving the SPI, reaching a Python engine sidecar over a Unix socket. Both are **off by default**, and turning either on is **two settings**, not one: the component block (`deepwiki:` / `inventory:`) **and** the matching `main.env.ELITEA_DEEPWIKI_ENABLED` / `ELITEA_INVENTORY_ENABLED` with its base URL, callback origin, git allowlist and client-certificate paths — elitea-main is the only door to either service, so a provider nobody can reach is a Deployment doing nothing.
+
+<Warning>
+The published `elitea-deepwiki` / `elitea-inventory` images carry the engine **source** but not its dependency closure (DeepWiki alone is roughly 92 packages). The plain image serves the SPI and refuses every tool; only the `-engine` tag can actually run a generation, and that image is materially larger — plan disk and pull-time capacity accordingly. The chart refuses the combination of `runner: legacy` with a non-`-engine` tag rather than installing a service that starts and then refuses everything.
+</Warning>
+
+Each provider's scratch space (`deepwiki.scratch`, sized `8Gi` by default) is ephemeral clone/index space, not durable storage — a wiki publishes to PostgreSQL, and a replica that dies mid-generation only loses work already being redone. `ELITEA_DEEPWIKI_GIT_ALLOWLIST` / the Inventory equivalent are read fail-closed by both halves (the facade and the provider); two values that disagree mean an invocation that starts and then fails.
+
+See [DeepWiki and Inventory](/menus/deepwiki-and-inventory) for the product-facing side.
+
+## Observability
+
+Traces flow over OpenTelemetry to the chart's own `otelCollector` (on by default, `otel/opentelemetry-collector-contrib`), which receives OTLP from elitea-main, elitea-scheduler and elitea-main's own tracing ingest proxy. The shipped pipeline exports to `debug` (log-only) — swap the `otelCollector.config` exporter for a real sink (an OTLP/HTTP endpoint, a vendor backend) before relying on traces outliving the pod. There is no bundled Langfuse or third-party APM integration; every other component's `OTEL_EXPORTER_OTLP_ENDPOINT` should point at the collector's Service (`http://<fullname>:4318` in-namespace).
+
+## Maintenance and the banner
+
+Both are console-editable under **Configuration**, not chart settings: a dismissible banner with its own icon/style/message, and a maintenance mode that answers `503` with a splash screen to every caller without administration access (the admin console and authentication routes stay reachable, so the window is reversible from inside itself). See [Features and configuration](/admin/features-and-configuration#configuration) for the click-through.
+
+{/* source: deploy/README.md:343-388 (SMTP layering), deploy/README.md:766-857 (egress, GATEWAY_NATS_URL); services/elitea-main/internal/api/webhook/ssrf.go:1-90 (webhook allowlist); deploy/helm/elitea/values.yaml:1076, 1120, 1175 (deepwiki/inventory/index-types env keys), 2568-2760 (deepwiki/inventory blocks), 2896-2969 (worker.implementation), 3374-3448 (otelCollector); deploy/helm/elitea/templates/main/configmap.yaml:8,64 (main.env is a free-form map) */}
