@@ -758,7 +758,7 @@ func newFernetKey() ([]byte, error) {
 // not open this" for "there is nothing here" and write over it.  pgx.ErrNoRows
 // is never returned unwrapped, so a transport failure during the lookup cannot
 // be read as an absent vault either.
-func (h *Handler) openVault(ctx context.Context, q vaultQuerier, vaultID string, lock bool) (vaultData, []byte, error) {
+func (h *Handler) openVaultContents(ctx context.Context, q vaultQuerier, vaultID string, lock bool) ([]byte, []byte, error) {
 	query := `SELECT k.data, d.data
 FROM centry.secrets_key AS k
 JOIN centry.secrets_data AS d ON d.id = k.id
@@ -779,24 +779,32 @@ FOR UPDATE OF k, d`
 		var orphanKey []byte
 		switch err := q.QueryRow(ctx, keyOnly, vaultID).Scan(&orphanKey); {
 		case errors.Is(err, pgx.ErrNoRows):
-			return vaultData{}, nil, ErrVaultAbsent
+			return nil, nil, ErrVaultAbsent
 		case err != nil:
-			return vaultData{}, nil, fmt.Errorf("read %s secrets_key: %w", vaultID, err)
+			return nil, nil, fmt.Errorf("read %s secrets_key: %w", vaultID, err)
 		default:
-			return vaultData{}, nil, fmt.Errorf("vault %s has a key row but no data row", vaultID)
+			return nil, nil, fmt.Errorf("vault %s has a key row but no data row", vaultID)
 		}
 	}
 	if err != nil {
-		return vaultData{}, nil, fmt.Errorf("read %s vault rows: %w", vaultID, err)
+		return nil, nil, fmt.Errorf("read %s vault rows: %w", vaultID, err)
 	}
 
 	fernetKey, err := h.decryptKey(keyBytes)
 	if err != nil {
-		return vaultData{}, nil, fmt.Errorf("decrypt %s vault key: %w", vaultID, err)
+		return nil, nil, fmt.Errorf("decrypt %s vault key: %w", vaultID, err)
 	}
 	plaintext, err := fernetDecrypt(fernetKey, dataBytes)
 	if err != nil {
-		return vaultData{}, nil, fmt.Errorf("decrypt %s vault data: %w", vaultID, err)
+		return nil, nil, fmt.Errorf("decrypt %s vault data: %w", vaultID, err)
+	}
+	return plaintext, fernetKey, nil
+}
+
+func (h *Handler) openVault(ctx context.Context, q vaultQuerier, vaultID string, lock bool) (vaultData, []byte, error) {
+	plaintext, fernetKey, err := h.openVaultContents(ctx, q, vaultID, lock)
+	if err != nil {
+		return vaultData{}, nil, err
 	}
 	var v vaultData
 	if err := json.Unmarshal(plaintext, &v); err != nil {
@@ -1404,15 +1412,29 @@ var ErrSecretNotFound = errors.New("secrets: secret not found")
 // ResolveSecretValue resolves a {{secret.name}} reference to its plaintext value.
 func (h *Handler) ResolveSecretValue(ctx context.Context, projectID, secretRef string) (string, error) {
 	name := strings.TrimSuffix(strings.TrimPrefix(secretRef, "{{secret."), "}}")
-	vault, err := h.readVaultCtx(ctx, projectID)
+	plaintext, key, err := h.openVaultContents(ctx, h.pool, dbKey(projectID), false)
 	if err != nil {
 		return "", err
 	}
-	if val, ok := vault.Secrets[name]; ok {
-		return val, nil
+	defer clear(plaintext)
+	defer clear(key)
+	// Current vaults also contain numeric model IDs. Decode only the selected
+	// secret as a string; unrelated values must not break an exact lookup.
+	var vault struct {
+		Secrets       map[string]json.RawMessage `json:"secrets"`
+		HiddenSecrets map[string]json.RawMessage `json:"hidden_secrets"`
 	}
-	if val, ok := vault.HiddenSecrets[name]; ok {
-		return val, nil
+	if err := json.Unmarshal(plaintext, &vault); err != nil {
+		return "", fmt.Errorf("decode vault: %w", err)
+	}
+	for _, collection := range []map[string]json.RawMessage{vault.Secrets, vault.HiddenSecrets} {
+		if raw, ok := collection[name]; ok {
+			var value string
+			if len(raw) == 0 || raw[0] != '"' || json.Unmarshal(raw, &value) != nil {
+				return "", errors.New("selected secret is not a string")
+			}
+			return value, nil
+		}
 	}
 	return "", fmt.Errorf("%w: %q", ErrSecretNotFound, name)
 }
