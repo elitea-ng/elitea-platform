@@ -38,30 +38,46 @@
  * `E2E_WORKER`).
  *
  * ─────────────────────────────────────────────────────────────────────────────
- * WHY A BARE-MODEL CONVERSATION, ADDRESSED THROUGH THE COMPOSER
+ * WHY TWO TURNS, NOT A `meta.internal_tools`-PRESET CONVERSATION
  * ─────────────────────────────────────────────────────────────────────────────
  * `pyodide` is a conversation-level toggle (`meta.internal_tools`), not
- * something an agent version or a toolkit attachment gates — the shortest
- * path to it is a bare ad-hoc chat, exactly the shape `chat.streaming.spec.ts`
- * drives. The conversation is created with `meta.internal_tools` already set
- * (the `Create` handler accepts `meta` directly,
- * `services/elitea-main/internal/api/v2/conversations/handler.go`), so there
- * is no race against the composer's own first-send participant
- * provisioning — the model is only picked, and the participants
- * `useChatBoxSend` adds on send read the conversation's meta as it already
- * stands.
+ * something an agent version or a toolkit attachment gates — but nothing in
+ * the product can set that meta before the conversation itself exists.
+ * `Create` (`services/elitea-main/internal/api/v2/conversations/handler.go`)
+ * accepts a `meta` body, so a conversation CAN be created pre-toggled — but
+ * `useChatBoxSend`'s ad-hoc `dummy` (model) participant is provisioned only
+ * once, inside `createConversationForSend`, at the exact moment the FIRST
+ * send creates the conversation through the composer
+ * (`ChatBox.tsx`→`createConversationForSend`→`addParticipants`); the same is
+ * true of the `user` participant `ResolveCurrentAdhocTurn` also joins on
+ * (`services/elitea-main/internal/db/queries/agent_chat.sql`) — `Create`
+ * itself writes no participant row at all
+ * (`internal/infra/db/repos/conversations.go`'s `Create`). A conversation
+ * made by POSTing straight to `/elitea_core/conversations/...` and then
+ * landing on `/app/chat/:id` therefore carries NEITHER participant, and its
+ * first send 422s at admission (`ResolveCurrentAdhocTurn` returns zero
+ * rows) — the state a real user can never reach, since the product's own
+ * "toggle a tool" control (`useChatBoxInternalTools`) refuses to run before
+ * a conversation id exists in the first place.
+ *
+ * So this journey follows the only order the product actually supports:
+ * an ordinary FIRST turn creates the conversation through the composer
+ * (provisioning both participants as a side effect of that one send), THEN
+ * `pyodide` is switched on via the same write the toggle button makes
+ * (`PUT /elitea_core/conversation/...` with the updated `meta`,
+ * `useChatBoxInternalTools`'s `onInternalToolsConfigChange`), THEN a SECOND
+ * send — now on an existing, already-provisioned conversation — carries the
+ * scripted call.
  *
  * Lives in `streaming/` because a real turn needs the FULL standalone stack
  * (`chat-stream` project, `scripts/chat-stream-e2e.sh`) — the plain journeys
  * stack has no worker and no model.
  */
 import { expect, test } from '@playwright/test';
-import type { APIRequestContext } from '@playwright/test';
 
 import { BASE_URL } from '../../playwright.config';
 import {
   API_BASE,
-  AUTOTEST_PREFIX,
   MOCK_CALL_TOOL_SENTINEL,
   callToolWithArgumentsPrompt,
   expectStoredAssistantAnswer,
@@ -75,37 +91,17 @@ const WORKER = process.env['E2E_WORKER'] ?? 'python';
 /** The model `seed-llm` seeds into every personal project (see `chat.streaming.spec.ts`). */
 const MODEL_NAME = process.env['E2E_CHAT_MODEL'] || 'E2E-MOCK-MODEL';
 
-/**
- * Create a bare conversation with `meta.internal_tools` already set.
- *
- * `Create` reads `body.meta` straight onto the row
- * (`services/elitea-main/internal/api/v2/conversations/handler.go`), so the
- * toggle is a fact about the conversation before the composer ever loads it
- * — no separate PUT, and nothing to race against the first send's own
- * participant provisioning.
- */
-async function createConversationWithInternalTools(
-  request: APIRequestContext,
-  projectId: string,
-  name: string,
-  internalTools: readonly string[],
-): Promise<string> {
-  const created = await request.post(`${API_BASE}/elitea_core/conversations/prompt_lib/${projectId}`, {
-    data: { name, meta: { internal_tools: internalTools } },
-  });
-  expect(created.status(), `the conversation must be created: ${(await created.text()).slice(0, 300)}`).toBe(201);
-  const body = (await created.json()) as { id?: unknown };
-  const id = String(body.id ?? '');
-  expect(id, 'the conversation route addresses by id').not.toBe('');
-  return id;
-}
+const CONVERSATIONS_RE = /\/elitea_core\/conversations\/prompt_lib\/(\d+)$/;
+const START_RE = /\/elitea_core\/messages\/prompt_lib\/\d+\/[0-9a-f-]+/;
 
 test('a scripted call to pyodide_sandbox runs for real and its output comes back verbatim', async ({ page }) => {
   test.skip(
     WORKER !== 'python',
     'pyodide only executes on the Python worker (#872); the Rust worker skips it before the model ever sees it',
   );
-  test.setTimeout(180_000);
+  // Two real turns (conversation create, admission, dispatch, a model call,
+  // the stream back — twice) plus a meta write in between.
+  test.setTimeout(300_000);
 
   const projectId = await readCallerPersonalProjectId(page.request);
   expect(projectId, 'this persona works in its own project').not.toBe('');
@@ -120,28 +116,66 @@ test('a scripted call to pyodide_sandbox runs for real and its output comes back
   const proof = `ELITEA_PYODIDE_PROOF_${String(nonce * 2)}`;
   const code = `print(f"ELITEA_PYODIDE_PROOF_{${String(nonce)} * 2}")`;
 
-  const conversationId = await createConversationWithInternalTools(
-    page.request,
-    projectId,
-    `${AUTOTEST_PREFIX}pyodide-${String(nonce)}`,
-    ['pyodide'],
-  );
+  await page.goto(`${BASE_URL}/app/chat`);
+  await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 30_000 });
 
-  await page.goto(`${BASE_URL}/app/chat/${conversationId}`);
-
-  // Ad-hoc turns carry the model in a `dummy` participant that `useChatBoxSend`
-  // provisions on first send from whatever the picker currently holds — an
-  // empty selection is refused before the request leaves the browser (see
-  // `chat.streaming.spec.ts`).
+  // Ad-hoc turns carry the model in a `dummy` participant that
+  // `createConversationForSend` provisions (alongside the `user` one) the
+  // moment THIS first send creates the conversation — see the header for why
+  // a conversation pre-toggled and pre-created some other way carries
+  // neither.
   await page.getByTestId('model-selector-button').click();
   const modelOption = page.getByRole('menuitem').filter({ hasText: MODEL_NAME }).first();
   await expect(modelOption, `the seeded model ${MODEL_NAME} must be offered`).toBeVisible({ timeout: 20_000 });
   await modelOption.click();
   await expect(page.getByTestId('model-selector-name')).toContainText(MODEL_NAME, { timeout: 10_000 });
 
+  // ── turn 1: an ordinary send, only to create the conversation for real ──
+  const created = page.waitForResponse(
+    (r) => CONVERSATIONS_RE.test(new URL(r.url()).pathname) && r.request().method() === 'POST',
+    { timeout: 45_000 },
+  );
+  const firstStarted = page.waitForResponse((r) => START_RE.test(r.url()) && r.request().method() === 'POST', {
+    timeout: 45_000,
+  });
+  const firstSend = await fillComposer(page, `autotest pyodide setup ${String(nonce)}`);
+  await firstSend.click();
+
+  const createdResponse = await created;
+  expect(createdResponse.status(), 'the send must create a real conversation').toBe(201);
+  const conversationId = ((await createdResponse.json()) as { id?: string }).id ?? '';
+  expect(conversationId).toMatch(/^\d+$/);
+
+  const firstStartResponse = await firstStarted;
+  expect(
+    firstStartResponse.status(),
+    `the setup turn was refused: ${(await firstStartResponse.text()).slice(0, 300)}`,
+  ).toBe(200);
+  await expectStoredAssistantAnswer(page, projectId, conversationId, {
+    timeout: 90_000,
+    message: 'the setup turn never stored an answer, so the conversation is not ready for the scripted one',
+  });
+
+  // ── turn 2: NOW switch `pyodide` on — the same write
+  // `useChatBoxInternalTools`'s toggle button makes, on the conversation this
+  // journey just proved has real participants ──
+  const toggled = await page.request.put(`${API_BASE}/elitea_core/conversation/prompt_lib/${projectId}/${conversationId}`, {
+    data: { meta: { internal_tools: ['pyodide'] } },
+  });
+  expect(toggled.status(), `pyodide must be toggle-able: ${(await toggled.text()).slice(0, 300)}`).toBeLessThan(300);
+
   const prompt = callToolWithArgumentsPrompt('pyodide_sandbox', { code }, `run this in the sandbox ${String(nonce)}`);
+  const secondStarted = page.waitForResponse((r) => START_RE.test(r.url()) && r.request().method() === 'POST', {
+    timeout: 45_000,
+  });
   const sendButton = await fillComposer(page, prompt);
   await sendButton.click();
+
+  const secondStartResponse = await secondStarted;
+  expect(
+    secondStartResponse.status(),
+    `the scripted turn was refused: ${(await secondStartResponse.text()).slice(0, 300)}`,
+  ).toBe(200);
 
   // The mock quotes the tool's result VERBATIM once the runtime resumes the
   // turn with it (`_script_for`'s `call_tool_resumed` branch, deploy/mock-llm/

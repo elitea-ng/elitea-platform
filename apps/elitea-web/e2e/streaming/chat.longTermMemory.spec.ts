@@ -45,7 +45,6 @@ import {
   API_BASE,
   AUTOTEST_PREFIX,
   clearMockLlmJournal,
-  createConversation,
   deleteConversation,
   fillComposer,
   readCallerPersonalProjectId,
@@ -55,6 +54,9 @@ import {
 
 /** The model the standalone stack seeds; overridable for the real-model lane. */
 const MODEL_NAME = process.env['E2E_CHAT_MODEL'] || 'E2E-MOCK-MODEL';
+
+const CONVERSATIONS_RE = /\/elitea_core\/conversations\/prompt_lib\/(\d+)$/;
+const START_RE = /\/elitea_core\/messages\/prompt_lib\/\d+\/[0-9a-f-]+/;
 
 function uniqueToken(tag: string): string {
   return `AUTOTEST${tag}${Date.now().toString(36).toUpperCase()}`;
@@ -85,13 +87,20 @@ test('a memory saved in Settings > Memory reaches a later chat turn’s system p
 
   let conversationId = '';
   try {
-    conversationId = await createConversation(page.request, `${AUTOTEST_PREFIX}${token}-memory-recall`, projectId);
-
-    await page.goto(`${BASE_URL}/app/chat/${conversationId}`);
+    // NOT `createConversation` + navigate-to-id: a conversation made that way
+    // carries no participants at all, and the ad-hoc `dummy` (model) one is
+    // provisioned ONLY by `useChatBoxSend`'s `createConversationForSend`, at
+    // the moment the FIRST send creates the conversation — selecting a model
+    // on an already-existing, participant-less conversation never attaches
+    // one (`LLMModelSelector` is presentational; nothing else calls
+    // `addParticipants` for it). Landing on such a conversation and sending
+    // therefore 422s at `ResolveCurrentAdhocTurn`, which joins on
+    // `entity_name='dummy'` — a state no real user reaches, since the product
+    // never creates a conversation except through that same first-send path.
+    // Same pattern `chat.canvasDocument.spec.ts`'s `seedAnswer` uses.
+    await page.goto(`${BASE_URL}/app/chat`);
     await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 30_000 });
 
-    // Ad-hoc turns carry the model in a `dummy` participant `useChatBoxSend`
-    // provisions on first send from whatever the picker currently holds.
     await page.getByTestId('model-selector-button').click();
     const modelOption = page.getByRole('menuitem').filter({ hasText: MODEL_NAME }).first();
     await expect(modelOption, `the seeded model ${MODEL_NAME} must be offered`).toBeVisible({ timeout: 20_000 });
@@ -103,16 +112,24 @@ test('a memory saved in Settings > Memory reaches a later chat turn’s system p
     // this one's.
     await clearMockLlmJournal(page);
 
-    const started = page.waitForResponse(
-      (r) => /\/elitea_core\/messages\/prompt_lib\/\d+\/[0-9a-f-]+/.test(r.url()) && r.request().method() === 'POST',
+    const created = page.waitForResponse(
+      (r) => CONVERSATIONS_RE.test(new URL(r.url()).pathname) && r.request().method() === 'POST',
       { timeout: 45_000 },
     );
+    const started = page.waitForResponse((r) => START_RE.test(r.url()) && r.request().method() === 'POST', {
+      timeout: 45_000,
+    });
 
     // The prompt itself carries NO trace of the memory's content — proof
     // that anything containing `token` in the system prompt got there
     // through recall, not because this journey typed it into the question.
-    const sendButton = await fillComposer(page, 'What is my favourite constant?');
+    const sendButton = await fillComposer(page, `${AUTOTEST_PREFIX}${token} What is my favourite constant?`);
     await sendButton.click();
+
+    const createdResponse = await created;
+    expect(createdResponse.status(), 'the send must create a real conversation').toBe(201);
+    conversationId = ((await createdResponse.json()) as { id?: string }).id ?? '';
+    expect(conversationId).toMatch(/^\d+$/);
 
     const startResponse = await started;
     expect(startResponse.status(), `the turn was refused: ${(await startResponse.text()).slice(0, 300)}`).toBe(200);

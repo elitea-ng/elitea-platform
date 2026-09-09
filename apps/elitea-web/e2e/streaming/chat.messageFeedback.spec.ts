@@ -130,7 +130,11 @@ test('rating a real assistant message persists, upserts, and reads back through 
     // ── 1. the FIRST vote, through the real control on the real transcript ──
     const answer = page.getByTestId('application-answer').last();
     await expect(answer).toBeVisible({ timeout: 30_000 });
-    const likeButton = answer.getByRole('button', { name: 'Like this answer' });
+    // `exact: true` — Playwright's accessible-name match is a case-insensitive
+    // SUBSTRING match by default, and "dislike this answer" contains "like
+    // this answer" as a literal substring, so the un-exact query resolves to
+    // BOTH buttons (a strict-mode violation) once the row actually renders.
+    const likeButton = answer.getByRole('button', { name: 'Like this answer', exact: true });
     await expect(likeButton, 'the answer must offer a like control').toBeVisible({ timeout: 15_000 });
 
     const posted = page.waitForResponse(

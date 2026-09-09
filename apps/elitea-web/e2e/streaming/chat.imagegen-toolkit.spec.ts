@@ -82,14 +82,25 @@ import {
 const WORKER = process.env['E2E_WORKER'] ?? 'python';
 
 /**
- * The offline-mock upstream and credential type `standalone-stack.sh`'s
- * default `seed-llm` wiring uses (`CRED_TYPE="vllm"`,
- * `API_BASE="http://llm-mock:8090"`) — the same pair every chat model this
- * stack seeds is admitted against, so a model row built with it resolves the
- * same way the seeded chat model does.
+ * The offline-mock upstream `standalone-stack.sh`'s default `seed-llm` wiring
+ * points the CHAT model at (`API_BASE="http://llm-mock:8090"`) — reused here
+ * so the image-generation model resolves against the SAME mock process.
+ *
+ * The credential TYPE is deliberately NOT `vllm` (what `seed-llm` uses for
+ * the chat model): bifrost's vLLM provider hand-refuses every image
+ * operation — `ImageGeneration is not supported by the vLLM provider`
+ * (`core/providers/vllm/vllm.go`, `NewUnsupportedOperationError`) — so a
+ * `vllm`-typed credential 500s `POST /llm/v1/images/generations` before the
+ * request ever reaches this mock's `_images_generations` stub, regardless of
+ * what upstream it names. `open_ai` is bifrost's dialect for this mock
+ * anyway (`deploy/mock-llm/server.py` speaks the OpenAI `/v1/images/
+ * generations` shape) and its provider implements ImageGeneration, honouring
+ * a custom `data.api_base` exactly like `vllm` would have
+ * (`api.model-grants.spec.ts`'s `createPlatformProvider` seeds one the same
+ * way).
  */
 const MOCK_UPSTREAM_BASE = 'http://llm-mock:8090';
-const MOCK_CREDENTIAL_TYPE = 'vllm';
+const MOCK_CREDENTIAL_TYPE = 'open_ai';
 
 /** What `deploy/mock-llm/server.py`'s images stub advertises as a model id. */
 const IMAGE_MODEL_NAME = process.env['MOCK_LLM_IMAGE_MODEL'] ?? 'E2E-MOCK-IMAGE-MODEL';
