@@ -44,7 +44,7 @@ import * as zod from "zod";
 export const SkillSetDefaultVersionRequest = zod
   .object({
     version_id: zod
-      .unknown()
+      .union([zod.string(), zod.int()])
       .describe(
         "The version to mark default. Numeric or string; must name a version of this skill.",
       ),
