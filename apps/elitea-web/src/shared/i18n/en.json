@@ -4326,5 +4326,22 @@
   "skills.edit.restoreError": "Failed to restore this version.",
   "skills.edit.restoreVersion": "Restore",
   "skills.edit.restoreVersionBody": "This copies the current version’s instructions and tags onto base, overwriting base’s current content. This cannot be undone.",
-  "skills.edit.restoreVersionTitle": "Restore this version?"
+  "skills.edit.restoreVersionTitle": "Restore this version?",
+  "artifacts.canvas.unsupportedFormat": "{{name}} is not a supported canvas format — download it instead.",
+  "features.chatMessages.canvas.block.editingDocument": "Document editing...",
+  "features.chatMessages.canvas.block.openDocument": "Edit document",
+  "features.chatMessages.canvas.document.blockquote": "Quote",
+  "features.chatMessages.canvas.document.bold": "Bold",
+  "features.chatMessages.canvas.document.bulletList": "Bullet list",
+  "features.chatMessages.canvas.document.code": "Inline code",
+  "features.chatMessages.canvas.document.heading": "Heading {{level}}",
+  "features.chatMessages.canvas.document.insertTable": "Insert table",
+  "features.chatMessages.canvas.document.italic": "Italic",
+  "features.chatMessages.canvas.document.link": "Link",
+  "features.chatMessages.canvas.document.linkPrompt": "Link URL",
+  "features.chatMessages.canvas.document.loading": "Loading the document editor…",
+  "features.chatMessages.canvas.document.openAsDocument": "Open as document",
+  "features.chatMessages.canvas.document.orderedList": "Numbered list",
+  "features.chatMessages.canvas.document.unlink": "Remove link",
+  "processes.chat.fileCanvas.unsupportedFormat": "This file format is not supported in canvas — download it instead."
 }

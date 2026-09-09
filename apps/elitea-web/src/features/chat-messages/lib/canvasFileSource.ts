@@ -92,7 +92,7 @@ const OPENABLE_TEXT_EXTENSIONS = new Set<string>([
  * `features/artifacts/lib/artifactParsers.ts` already refuses them as a
  * text preview (no converter for any of them is in this bundle).
  */
-export const UNSUPPORTED_BINARY_DOCUMENT_EXTENSIONS = new Set([
+const UNSUPPORTED_BINARY_DOCUMENT_EXTENSIONS = new Set([
   'docx', 'doc', 'odt', 'rtf', 'pdf', 'xlsx', 'xls', 'pptx', 'ppt',
 ]);
 

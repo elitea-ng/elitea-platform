@@ -19,7 +19,6 @@ import { isSystemBucket, normaliseBuckets, sortBucketsPinnedFirst } from '@/enti
 import type { BucketWire } from '@/entities/bucket';
 
 import {
-  CANVAS_FILE_OPEN_SIZE_LIMIT_BYTES,
   detectCanvasFileOpenKind,
   isCanvasFileOpenSizeOk,
   isUnsupportedCanvasDocumentFormat,

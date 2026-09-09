@@ -61,7 +61,7 @@ export interface DocumentEditorHandle {
   readonly setCode: (markdown: string) => void;
 }
 
-export interface DocumentEditorProps {
+interface DocumentEditorProps {
   readonly content: {
     readonly initialMarkdown: string;
     readonly onChange?: ((markdown: string) => void) | undefined;
