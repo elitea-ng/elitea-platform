@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Elitea Docs</title>
+    <meta name="description" content="Elitea documentation: guides and reference for the Elitea platform." />
+    <!-- Inline data-URI favicon: this entry has no publicDir (vite.config.ts),
+         so there is no static file to point a `<link>` at. -->
+    <link
+      rel="icon"
+      type="image/svg+xml"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%236ae8fa'/%3E%3Ctext x='12' y='17' font-family='system-ui' font-size='13' font-weight='700' text-anchor='middle' fill='%230e131d'%3EE%3C/text%3E%3C/svg%3E"
+    />
+    <!-- First-paint theme (mirrors the main app's anti-flash script in
+         apps/elitea-web/index.html, and the same 'system' -> matchMedia
+         fallback): 'data-docs-theme' is what styles.css keys its palette
+         off, and Mermaid.tsx reads it directly from the DOM. -->
+    <script>
+      {
+        let mode = null;
+        try {
+          const stored = localStorage.getItem('docs-theme');
+          if (stored === 'light' || stored === 'dark') mode = stored;
+        } catch {
+          // Storage unavailable: fall through to `prefers-color-scheme`
+          // (styles.css's @media block), which needs no attribute at all.
+        }
+        if (mode !== null) {
+          document.documentElement.setAttribute('data-docs-theme', mode);
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./main.tsx"></script>
+  </body>
+</html>

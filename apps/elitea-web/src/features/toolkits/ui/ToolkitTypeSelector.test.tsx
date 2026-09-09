@@ -230,9 +230,12 @@ describe('ToolkitTypeSelector', () => {
     await waitFor(() => expect(screen.getByText(/Still no local MCP available/)).toBeInTheDocument());
 
     const link = screen.getByRole('link', { name: 'Documentation' });
-    // Brand-derived (ADR-0024 WP8): the served pack states no docsUrl here, so this is the shipped origin.
+    // Brand-derived (ADR-0024 WP8): the served pack states no docsUrl here, so
+    // this falls through to the compiled default pack's docsUrl — the
+    // embedded docs SPA's same-origin /docs/ path (embedded-docs programme),
+    // not an absolute elitea.ai URL as it was before that pack default moved.
     expect(link).toHaveAttribute('href', docsLink('integrations/mcp/create-and-use-server-stdio'));
-    expect(link).toHaveAttribute('href', expect.stringMatching(/^https:\/\/.+\/integrations\/mcp\/create-and-use-server-stdio$/));
+    expect(link).toHaveAttribute('href', '/docs/integrations/mcp/create-and-use-server-stdio');
     expect(link).toHaveAttribute('target', '_blank');
 
     expect(screen.queryByText('No MCPs found')).not.toBeInTheDocument();

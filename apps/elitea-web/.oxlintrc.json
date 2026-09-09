@@ -429,6 +429,21 @@
       "rules": { "elitea/no-raw-webstorage": "off" }
     },
     {
+      // Docs SPA theme toggle (embedded-docs programme, PREAMBLE decision 1).
+      // `elitea/no-raw-webstorage`'s reason is "so logout's clearNamespace()
+      // actually clears it" (§5.4) — but this entry is a SEPARATE Vite mode
+      // (`vite build --mode docs`, its own HTML/JS bundle at `/docs/`) with
+      // no session, no login, and no logout: the main app's `clearNamespace()`
+      // sweep never runs on this page and could not reach a key here even if
+      // it did (different origin path, different bundle). Routing a docs
+      // reader's theme preference through `shared/lib/storage.ts`'s `el.*`
+      // namespace would misrepresent it as application session state it is
+      // not. The stored key (`docs-theme`) is deliberately its own name, not
+      // `el-mode`, for the same reason.
+      "files": ["src/entries/docs/App.tsx"],
+      "rules": { "elitea/no-raw-webstorage": "off" }
+    },
+    {
       // R-A6 sanctioned path (issue #132): the ONE place a response envelope
       // is unwrapped. Its own tests exercise the hand-rolled shapes it exists
       // to replace, so the fence is off for the pair.

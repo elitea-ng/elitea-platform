@@ -41,6 +41,23 @@
       "minJsChunks": 0,
       "initialKB": 300,
       "routeChunkKB": 250
+    },
+    "docs": {
+      "html": "index.html",
+      "initialNote": [
+        "Own line, not folded into 'app' (PREAMBLE decision 7): a separate Vite",
+        "mode with its own dependency set (react + react-dom, minisearch, the",
+        "MDX-compiled content/component tree; no MUI). Measured 156.6 KiB gzip",
+        "on the four placeholder pages this unit ships (embedded-docs W1a,",
+        "2026-09-08); 200 gives headroom for real content before this needs",
+        "raising again with a fresh measurement.",
+        "`mermaid` itself does NOT count here: Mermaid.tsx dynamic-imports it,",
+        "so its ~140 KiB gzip parser chunk (plus one further chunk per diagram",
+        "type it lazy-loads) lands in routeChunkKB below, not the initial set —",
+        "confirmed by index.html carrying no <link rel=modulepreload> for it."
+      ],
+      "initialKB": 200,
+      "routeChunkKB": 250
     }
   }
 }

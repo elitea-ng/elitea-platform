@@ -4,6 +4,10 @@
     "src/entries/admin/main.tsx",
     "src/entries/maintenance/main.tsx",
     "src/entries/brand-preview/main.tsx",
+    // The docs SPA (embedded-docs programme decision 1): index.html AND
+    // 404.html both load this same main.tsx, so one entry covers both built
+    // HTML inputs (vite.config.ts's `docs` mode, rollupOptions.input).
+    "src/entries/docs/main.tsx",
     "scripts/*.mjs",
     // The DeepWiki oracle pipeline: operator-run, not imported. It regenerates
     // src/features/wiki-generation/lib/__fixtures__/generation-oracle.json

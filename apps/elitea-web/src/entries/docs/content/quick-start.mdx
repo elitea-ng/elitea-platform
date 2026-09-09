@@ -1,0 +1,66 @@
+---
+title: Quick start
+description: Sign in and send your first chat message.
+---
+
+This walks through the shortest path from an invite to a working
+conversation.
+
+<Note>
+You need an invite or an account created by your organization's admin —
+Elitea does not have open self-signup.
+</Note>
+
+## Sign in
+
+<Steps>
+  <Step title="Open the app">
+    Go to your organization's Elitea URL and choose your identity provider
+    on the sign-in screen.
+  </Step>
+  <Step title="Land on your personal project">
+    Elitea provisions a personal project for every user on first sign-in —
+    it is where your own chats, agents, and credentials live before you
+    share anything with a team project.
+  </Step>
+  <Step title="Send a message">
+    Open **Chat** and type a message. The default model responds using
+    whatever provider your project has configured.
+  </Step>
+</Steps>
+
+<Screenshot id="chat-home" alt="The chat view immediately after signing in" />
+
+## Choose how you connect
+
+<Tabs>
+  <Tab title="Browser">
+    The web app at your organization's Elitea URL. This is what most people
+    mean by "Elitea" day to day.
+  </Tab>
+  <Tab title="API">
+    The same platform over its `/llm` OpenAI-compatible endpoint, for
+    scripts and integrations that need programmatic access rather than a
+    chat window.
+  </Tab>
+</Tabs>
+
+<Warning>
+An API key inherits the permissions of the project it was issued under.
+Treat it like a password: it is not tied to your browser session and does
+not expire when you sign out.
+</Warning>
+
+## Frequently asked
+
+<AccordionGroup>
+  <Accordion title="Can I use my own model provider?">
+  Yes, provided a project admin has added your provider's credentials under
+  that project's settings. See [Toolkits overview](/toolkits-overview) for
+  how external connections are configured more generally.
+  </Accordion>
+  <Accordion title="What happens to a shared conversation link?">
+  A share link opens the conversation read-only for anyone who has it, with
+  no sign-in required — see [Chat basics](/chat-basics#sharing-a-conversation).
+  </Accordion>
+</AccordionGroup>
