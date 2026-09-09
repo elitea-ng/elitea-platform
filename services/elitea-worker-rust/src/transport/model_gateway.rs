@@ -676,6 +676,15 @@ fn validate_openai_content(
             {
                 Ok(())
             }
+            // #866: `seed_skipped_internal_tools_notice` (agents/session.rs)
+            // seeds exactly this shape — role "tool", a single bounded
+            // `Part::Text`, no `FunctionResponse` to pair — for a tool the
+            // catalogue skipped, before the model's first turn. Without this
+            // arm every session carrying that notice failed HERE, on every
+            // turn, with an empty answer: `validate_llm_request` (this
+            // request's own caller) rejected the whole turn before a single
+            // byte reached the gateway.
+            Part::Text { text } if valid_part_text(text) => Ok(()),
             _ => Err(invalid_llm_request()),
         }),
         _ => Err(invalid_llm_request()),
@@ -747,21 +756,40 @@ fn append_openai_messages(
         "model" | "assistant" => messages.push(openai_assistant_message(content)?),
         "function" | "tool" => {
             for part in &content.parts {
-                let Part::FunctionResponse {
-                    function_response,
-                    id: Some(id),
-                    ..
-                } = part
-                else {
-                    return Err(invalid_llm_request());
-                };
-                let result = serde_json::to_string(&function_response.response)
-                    .map_err(|_| invalid_llm_request())?;
-                messages.push(serde_json::json!({
-                    "role": "tool",
-                    "tool_call_id": id,
-                    "content": result,
-                }));
+                match part {
+                    Part::FunctionResponse {
+                        function_response,
+                        id: Some(id),
+                        ..
+                    } => {
+                        let result = serde_json::to_string(&function_response.response)
+                            .map_err(|_| invalid_llm_request())?;
+                        messages.push(serde_json::json!({
+                            "role": "tool",
+                            "tool_call_id": id,
+                            "content": result,
+                        }));
+                    }
+                    // #866: the skipped-internal-tools notice — no real
+                    // function call to pair a `tool_call_id` with, so it
+                    // carries the event's own fixed id
+                    // (`seed_skipped_internal_tools_notice`,
+                    // agents/session.rs) instead of a per-call one. A
+                    // strict provider that cross-checks `tool_call_id`
+                    // against a preceding assistant `tool_calls` entry is
+                    // the SAME risk the FunctionResponse shape this fix
+                    // avoided would have carried too (see that function's
+                    // own doc comment); the mock and Bifrost's forwarding
+                    // path do not reject an orphaned one.
+                    Part::Text { text } => {
+                        messages.push(serde_json::json!({
+                            "role": "tool",
+                            "tool_call_id": "elitea-skipped-internal-tools",
+                            "content": text,
+                        }));
+                    }
+                    _ => return Err(invalid_llm_request()),
+                }
             }
         }
         _ => return Err(invalid_llm_request()),
