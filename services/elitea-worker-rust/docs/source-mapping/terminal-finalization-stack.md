@@ -29,3 +29,7 @@ The macOS crash report identifies terminal publication beneath the active lifecy
 Debug disassembly shows approximately 1 MiB in `execute_owned` and 588 KiB in `execute_started` before correction.
 The test passes with the boxed finalization phase and the normal stack configuration.
 The final minimal patch passes all 59 output-delivery tests with no ignored tests.
+
+The complete library suite passes all 953 tests with local test sockets enabled.
+No tests are ignored.
+`cargo clippy --lib --locked --offline -- -D warnings` also passes.
