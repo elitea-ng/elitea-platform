@@ -102,29 +102,39 @@ const (
 // Delivery is one logged attempt sequence against one webhook for one event.
 // It is the row webhook_deliveries stores and the shape the "Recent
 // deliveries" panel and GET .../deliveries render.
+// Field tags matter here, not just style: every other handler in this
+// service marshals snake_case (this package's own `Webhook` type included —
+// see handler.go), and the OpenAPI spec / generated web client
+// (webhookDelivery.zod.ts) were authored against that same convention. An
+// UNTAGGED struct still compiles and still "works" against `curl`, so this
+// shipped with no tags at all — Go's default PascalCase field names — and
+// every JSON consumer (the settings page's own "Recent deliveries" panel,
+// AND api.webhook-deliveries.spec.ts's `item.event === 'conversation
+// .created'` filter) read `undefined` off every field forever, which for
+// the E2E journey read as a delivery that simply never got logged (#882 CI).
 type Delivery struct {
-	ID        string
-	WebhookID string
-	ProjectID string
-	Event     string
-	Status    DeliveryStatus
+	ID        string         `json:"id"`
+	WebhookID string         `json:"webhook_id"`
+	ProjectID string         `json:"project_id"`
+	Event     string         `json:"event"`
+	Status    DeliveryStatus `json:"status"`
 	// Attempts is how many HTTP attempts this sequence made — 1 to
 	// maxDeliveryAttempts. It is never 0: a Delivery is only logged after at
 	// least one attempt has run.
-	Attempts     int
-	ResponseCode *int
-	LastError    string
+	Attempts     int    `json:"attempts"`
+	ResponseCode *int   `json:"response_code"`
+	LastError    string `json:"last_error"`
 	// Payload is the EXACT bytes POSTed to the destination (the signed
 	// body), kept so Redeliver resends byte-identical content rather than
 	// re-deriving a payload that may have drifted since (a project rename
 	// between the original event and a redelivery days later, say).
-	Payload json.RawMessage
+	Payload json.RawMessage `json:"payload"`
 	// RedeliveryOf is the id of the Delivery this one resent, or "" for an
 	// original delivery. A redelivery is always a NEW row — see Redeliver's
 	// doc comment for why an update-in-place was rejected.
-	RedeliveryOf string
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	RedeliveryOf string    `json:"redelivery_of"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 // DeliveryRepository is webhook_deliveries' persistence seam.
