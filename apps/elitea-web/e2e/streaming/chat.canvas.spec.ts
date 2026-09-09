@@ -340,6 +340,34 @@ async function seedAnswer(page: Page, token: string, prompt: string): Promise<Se
 }
 
 /**
+ * Sends a SECOND prompt in an already-open conversation and waits for its
+ * answer to be stored — extends a `seedAnswer` conversation to more than one
+ * turn, so a case that follows can target the conversation's true LAST
+ * message rather than its only one. `ChatMessageList.test.tsx`'s own
+ * "canvas-from-selection on the LAST message" case pins the client-side
+ * reason this distinction matters: the per-message streaming state that used
+ * to gate the selection control there is derived in part from a page-level
+ * flag with no guarantee of settling the instant a message's own turn ends —
+ * a risk that a conversation's ONLY message (also trivially its last) cannot
+ * exercise, because nothing upstream of it has had a chance to go stale yet.
+ */
+async function sendFollowUp(page: Page, projectId: string, conversationId: string, token: string, prompt: string): Promise<void> {
+  const started = page.waitForResponse((r) => START_RE.test(r.url()) && r.request().method() === 'POST', { timeout: 45_000 });
+  const input = page.getByTestId('chat-message-input');
+  await expect(input).toBeEditable({ timeout: 20_000 });
+  await input.fill(prompt);
+  await expect(page.getByTestId('chat-send-button')).toBeEnabled({ timeout: 10_000 });
+  await page.getByTestId('chat-send-button').click();
+  const startResponse = await started;
+  expect(startResponse.status(), `the follow-up turn was refused: ${(await startResponse.text()).slice(0, 300)}`).toBe(200);
+  await expectStoredAssistantAnswer(page, projectId, conversationId, {
+    timeout: 120_000,
+    message: 'the follow-up answer was never stored, so there is no LAST message to carve a canvas out of',
+    contains: token,
+  });
+}
+
+/**
  * Carves a canvas out of whichever stored text item holds `body`.
  *
  * The item is looked up at CALL time rather than captured once, because the
@@ -702,18 +730,24 @@ test('a table canvas and a diagram canvas live side by side, and each opens its 
  * comment on the `dblclick` below: aimed at the element's default point this
  * journey selected NOTHING and read as a control that was never wired.
  */
-test('a range selected in an answer becomes a canvas the server keeps', async ({ page }) => {
+test('a range selected in an answer becomes a canvas the server keeps — on the conversation’s LAST message', async ({ page }) => {
   test.setTimeout(300_000);
 
+  const earlierToken = uniqueToken('CANVASEARLIER');
   const token = uniqueToken('CANVASSEL');
   // The token on a line of its own: the paragraph it renders as is then
   // exactly one word, so one double click selects the token and nothing else
   // and the assertion on the stored canvas can be an equality.
-  const seed = await seedAnswer(page, token, `autotest ${token}\n\n${token}`);
+  const seed = await seedAnswer(page, earlierToken, `autotest ${earlierToken}`);
 
   try {
     await page.goto(`${BASE_URL}/app/chat/${seed.conversationId}`);
     await expect(page.getByTestId('chat-message-input')).toBeEditable({ timeout: 30_000 });
+
+    // A SECOND turn, so the row under test is the conversation's true LAST
+    // message and not merely its only one — see `sendFollowUp`'s own doc for
+    // why that distinction is the point of this journey.
+    await sendFollowUp(page, seed.projectId, seed.conversationId, token, `autotest ${token}\n\n${token}`);
 
     const answer = page.getByTestId('application-answer').last();
     await expect(answer).toContainText(token, { timeout: 30_000 });

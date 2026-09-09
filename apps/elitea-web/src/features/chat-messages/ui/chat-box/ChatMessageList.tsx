@@ -65,6 +65,8 @@ export interface ChatMessageListCanvas {
   readonly selected?: CodeBlockInfo | undefined;
   /** Carves a canvas out of a range the reader highlighted in an answer. */
   readonly onCreateFromSelection?: ((payload: AnswerCanvasSelection) => void) | undefined;
+  /** Opens a text-like message attachment in the canvas editor (issue #878) — forwarded to every `UserMessage` row. */
+  readonly onOpenFile?: ((source: { readonly bucket: string; readonly name: string }) => void) | undefined;
 }
 
 /** Read-aloud (TTS) props, grouped to stay under the component-props budget. */
@@ -206,7 +208,7 @@ export function ChatMessageList({
   userId,
   projectId,
   messageActions: { onCopyToClipboard, onDeleteAnswer, onRegenerateAnswer, onSubmitEditedMessage } = {},
-  canvas: { onEdit: onEditCanvas, selected: selectedCodeBlockInfo, onCreateFromSelection: onCreateCanvasFromSelection } = {},
+  canvas: { onEdit: onEditCanvas, selected: selectedCodeBlockInfo, onCreateFromSelection: onCreateCanvasFromSelection, onOpenFile: onOpenFileInCanvas } = {},
   tts: { onAutoSpeak, speakingMessageId, speakingSegments, spokenRange } = {},
   continuation: {
     onContinueMcpExecution,
@@ -319,7 +321,29 @@ export function ChatMessageList({
           const isUser = message.role === 'user';
           const messageId = message.id;
           const isLastMessage = index === chatHistory.length - 1;
-          const messageIsStreaming = Boolean(message.isStreaming) || (isLastMessage && isStreaming);
+          /*
+           * `isLastMessage && isStreaming` is a FALLBACK for the few frames
+           * between a turn's optimistic append and the reducer's first
+           * `isStreaming` stamp on THIS message — a brand-new placeholder
+           * with no answer in it yet. It must not outlive that window: the
+           * page-level `isStreaming` this ORs in is itself an OR of three
+           * sources (composer Stop, persisted-history catch-up, the live
+           * transport — see `ChatBox.tsx`'s own comment on it), and none of
+           * them is guaranteed to settle back to `false` the instant THIS
+           * message's own turn ends — the persisted-history source in
+           * particular is read off a conversation-messages fetch that a
+           * finished turn does not itself invalidate. A last message that
+           * already carries an answer (text, or a stored canvas item) is
+           * proof the placeholder window is over, so its OWN state — not a
+           * page-level flag with three unrelated reasons to be `true` — must
+           * decide whether the reader can still act on it. Before this
+           * guard, a stuck/late page-level flag permanently hid the "Create
+           * canvas" selection control (and disabled regenerate) on the very
+           * last message of a conversation that had visibly finished
+           * answering.
+           */
+          const hasRenderedAnswer = Boolean(message.content) || (message.messageItems?.length ?? 0) > 0;
+          const messageIsStreaming = Boolean(message.isStreaming) || (isLastMessage && isStreaming && !hasRenderedAnswer);
           // Ownership goes through `isOwnMessage` on every branch, so the
           // String-normalisation and the unstated-reader/unstated-author rules
           // are decided in exactly one place (see its docblock).
@@ -347,6 +371,7 @@ export function ChatMessageList({
                   message={message}
                   messageId={messageId}
                   projectId={projectId}
+                  onOpenFileInCanvas={onOpenFileInCanvas}
                   onCopy={handleCopy}
                   onDelete={handleDelete}
                   onSubmit={isEligibleForEdit ? onSubmitEditedMessage : undefined}
