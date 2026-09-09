@@ -873,19 +873,6 @@
       "rules": {
         "max-lines": "off"
       }
-    },
-    {
-      // nav.ts is the SINGLE SOURCE of the docs site's tab/group/page tree
-      // (see the file's own header comment) — enumerated data that grows by
-      // one tab's worth of groups and pages every time a docs wave lands
-      // (most recently the Development and Deployment tabs), the same shape
-      // of exemption `shots.manifest.ts` and `src/shared/api/socket/events.ts`
-      // already have for the same reason. Only `max-lines` is relaxed; every
-      // other rule still applies to this file.
-      "files": ["src/entries/docs/nav.ts"],
-      "rules": {
-        "max-lines": "off"
-      }
     }
   ]
 }
