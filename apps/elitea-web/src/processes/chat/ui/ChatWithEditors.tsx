@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { useCallback } from 'react';
 
-import { useRouteContext } from '@tanstack/react-router';
+import { useParams, useRouteContext } from '@tanstack/react-router';
 
 import Box from '@mui/material/Box';
 import Drawer from '@mui/material/Drawer';
@@ -14,6 +14,7 @@ import { ToolkitEditor } from '@/features/toolkits';
 import ChatPage from '@/pages/chat';
 import { t } from '@/shared/i18n';
 import { DeleteEntityModal } from '@/shared/ui/DeleteEntityModal';
+import { useSelectedProject } from '@/widgets/app-shell';
 
 import { ChatConversationSidebar } from './ChatConversationSidebar';
 import { ChatPlayback } from './ChatPlayback';
@@ -104,6 +105,17 @@ function selectViewerId(context: unknown): string | undefined {
  * "another editor is open" queue-confirm).
  */
 export function ChatWithEditors(): ReactNode {
+  // `strict: false`, this file's established convention (see
+  // `usePlaybackConversationId.ts`'s own doc comment) for a component that
+  // must not depend on which route file mounts it — `ChatWithEditors` is
+  // mounted at `/_shell/chat`, which carries no `conversationId` itself;
+  // the param only exists on the child route `/_shell/chat/$conversationId`.
+  // Needed here (issue #867) so a created agent/pipeline/toolkit can be
+  // attached to the conversation actually open right now.
+  const { conversationId } = useParams({ strict: false }) as { conversationId?: string };
+  const { project } = useSelectedProject();
+  const projectId = project?.id === undefined ? undefined : String(project.id);
+
   const {
     isEditingAgent,
     isEditingPipeline,
@@ -122,7 +134,7 @@ export function ChatWithEditors(): ReactNode {
     handleShowToolkitEditor,
     handleShowCanvasEditor,
     canvas,
-  } = useChatWithEditors();
+  } = useChatWithEditors({ projectId, conversationId });
 
   /*
    * The canvas CREATE. Called HERE and not inside `useChatWithEditors`, for
@@ -199,6 +211,16 @@ export function ChatWithEditors(): ReactNode {
               onShowToolkitEditor: handleShowToolkitEditor,
               onCloseAgentEditor: editAgent.onCloseAgentEditor,
               onClosePipelineEditor: editPipeline.onClosePipelineEditor,
+              /*
+                * "Create new" in the composer's "+" menu (issue #867).
+                * `mutex.onCreate*` already exist — `useEditorMutex` was
+                * built to serve exactly this, queuing behind an open editor
+                * the same way `onEditAgent`/`onEditToolkit`/`onEditPipeline`
+                * do — they were simply never read by anything until now.
+                */
+              onCreateAgent: mutex.onCreateAgent,
+              onCreatePipeline: mutex.onCreatePipeline,
+              onCreateToolkit: mutex.onCreateToolkit,
               /*
                 * The transcript's canvas opener (issue 853). Both halves travel
                 * together: the handler that opens a stored canvas block, and the

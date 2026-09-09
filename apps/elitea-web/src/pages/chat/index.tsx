@@ -136,6 +136,10 @@ export interface ChatEditorCallbacks {
   readonly onShowToolkitEditor?: (participant: Participant) => void;
   readonly onCloseAgentEditor?: () => void;
   readonly onClosePipelineEditor?: () => void;
+  /** "Create new" in the composer's "+" menu (issue #867) — forwarded to `ChatBox` untouched, like every other member of this bag. */
+  readonly onCreateAgent?: () => void;
+  readonly onCreatePipeline?: () => void;
+  readonly onCreateToolkit?: (isMcp?: boolean) => void;
   /** Opens the canvas editor for a stored `canvas_message` block in the transcript (issue 853), and the block already open in it. Forwarded to `ChatBox` untouched, like every other member of this bag. */
   readonly onShowCanvasEditor?: (payload: CanvasEditPayload) => void;
   readonly selectedCanvasBlock?: CodeBlockInfo | undefined;
