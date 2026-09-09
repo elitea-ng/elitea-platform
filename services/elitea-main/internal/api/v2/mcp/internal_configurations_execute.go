@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	configurationsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/configurations"
+	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 )
 
@@ -126,9 +127,24 @@ func internalConfigurationAvailableQuery(arguments map[string]any) (url.Values, 
 }
 
 func internalConfigurationListQuery(arguments map[string]any) (url.Values, *internalApplicationExecution) {
+	if raw, present := arguments["ids"]; present {
+		value, ok := raw.(string)
+		if !ok {
+			result, _ := internalConfigurationBadRequest("ids must be a comma-separated string")
+			return nil, &result
+		}
+		if _, err := configurationapp.ParseCurrentConfigurationIDs(value); err != nil {
+			result, _ := internalConfigurationBadRequest("invalid configuration ids")
+			return nil, &result
+		}
+	}
+
 	query, failure := internalConfigurationAvailableQuery(arguments)
 	if failure != nil {
 		return nil, failure
+	}
+	if raw, present := arguments["ids"]; present {
+		query.Set("ids", raw.(string))
 	}
 	for _, name := range []string{"type"} {
 		values, err := boundedStringArrayArgument(

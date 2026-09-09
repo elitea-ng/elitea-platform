@@ -17,7 +17,7 @@ func TestInternalConfigurationListBuildsOnlyBoundedMainFilters(t *testing.T) {
 		"shared_limit":   json.Number("15"),
 		"sort_by":        "elitea_title",
 		"sort_order":     "asc",
-		"ids":            []any{json.Number("999")},
+		"ids":            "999",
 	})
 	if failure != nil {
 		t.Fatalf("build list query: %s", failure.body)
@@ -36,8 +36,8 @@ func TestInternalConfigurationListBuildsOnlyBoundedMainFilters(t *testing.T) {
 			t.Fatalf("query %s = %q, want %q", key, got, want)
 		}
 	}
-	if _, crossed := query["ids"]; crossed {
-		t.Fatalf("unsupported ids crossed into Main query: %#v", query)
+	if query.Get("ids") != "999" {
+		t.Fatalf("ids did not reach Main query: %#v", query)
 	}
 }
 

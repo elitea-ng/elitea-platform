@@ -448,6 +448,8 @@ type SharedSection struct {
 // applies (application/configurations/crud.go,
 // normalizeCurrentConfigurationListRequest).
 type configurationListQuery struct {
+	ids           []int32
+	idsErr        error
 	sections      []string
 	types         []string
 	search        string
@@ -461,7 +463,9 @@ type configurationListQuery struct {
 }
 
 func parseConfigurationListQuery(values url.Values) configurationListQuery {
+	ids, err := configurationQueryIDs(values)
 	return configurationListQuery{
+		ids: ids, idsErr: err,
 		sections:      values["section"],
 		types:         values["type"],
 		search:        values.Get("query"),
@@ -509,7 +513,7 @@ func configurationListOffset(raw string) int {
 // (application/configurations/crud.go, normalizeCurrentConfigurationListRequest).
 // This route refuses it with the same status and the same message.
 func configurationListQueryInBounds(request configurationListQuery) bool {
-	if len(request.search) > maxConfigurationQueryLength {
+	if request.idsErr != nil || len(request.search) > maxConfigurationQueryLength {
 		return false
 	}
 	return configurationFilterInBounds(request.sections) && configurationFilterInBounds(request.types)
@@ -593,6 +597,11 @@ func configurationOrderBy(sortBy, sortOrder string) string {
 func configurationRowFilter(request configurationListQuery, placeholder int) (string, []any) {
 	clause, args := configurationSectionFilter(request.sections, placeholder)
 	placeholder += len(args)
+	if len(request.ids) > 0 {
+		clause += " AND id = ANY($" + strconv.Itoa(placeholder) + "::integer[])"
+		args = append(args, request.ids)
+		placeholder++
+	}
 	if len(request.types) > 0 {
 		clause += " AND type = ANY($" + strconv.Itoa(placeholder) + ")"
 		args = append(args, request.types)
@@ -831,7 +840,7 @@ func (h *Handler) appendSharedConfigurations(
 	response *ListResponse,
 ) bool {
 	sharedFilter, sharedArgs := configurationRowFilter(
-		configurationListQuery{sections: request.sections, types: request.types}, 1)
+		configurationListQuery{sections: request.sections, types: request.types, ids: request.ids}, 1)
 
 	var sharedTotal int
 	sharedCountQ := fmt.Sprintf(
@@ -2022,4 +2031,12 @@ func decodeBoundedJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 		return false
 	}
 	return true
+}
+
+// configurationQueryIDs rejects repeated filters instead of silently discarding values.
+func configurationQueryIDs(values url.Values) ([]int32, error) {
+	if len(values["ids"]) > 1 {
+		return nil, configurationapp.ErrInvalidCurrentConfigurationRequest
+	}
+	return configurationapp.ParseCurrentConfigurationIDs(values.Get("ids"))
 }

@@ -102,8 +102,8 @@ func TestInternalConfigurationsCategoryPublishesOnlyTruthfulMainOwnedOperations(
 	}
 
 	listProperties := tools[1].InputSchema["properties"].(map[string]any)
-	if _, advertised := listProperties["ids"]; advertised {
-		t.Fatal("list schema advertises the unsupported ids filter")
+	if ids, ok := listProperties["ids"].(map[string]any); !ok || ids["type"] != "string" || ids["maxLength"] != 1200 {
+		t.Fatal("list schema must advertise bounded comma-separated IDs")
 	}
 	updateProperties := tools[4].InputSchema["properties"].(map[string]any)
 	for _, forbidden := range []string{"type", "section", "project_id_override", "author_id", "source", "status_ok"} {

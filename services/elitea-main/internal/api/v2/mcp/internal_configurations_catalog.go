@@ -55,6 +55,7 @@ var internalConfigurationToolDefinitions = []internalConfigurationToolDefinition
 			"project_id": intProperty("Current project ID. The server verifies this value."),
 			"type":       stringArrayProperty("Optional configuration types.", 64, 128),
 			"section":    stringArrayProperty("Optional configuration sections.", 64, 128),
+			"ids":        boundedStringProperty("Optional comma-separated positive configuration IDs. Maximum 100; empty means no filter.", 0, 1200),
 			"query":      boundedStringProperty("Optional label search.", 0, 1024),
 			"offset":     integerMinProperty("Pagination offset.", 0),
 			"limit":      integerRangeProperty("Maximum project-owned results.", 1, 200),
