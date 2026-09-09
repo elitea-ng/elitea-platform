@@ -360,7 +360,7 @@ func (r *MemoriesRepo) RecordCurrentMemoryUsage(
 // overlap scoring and would make nearly every memory "match".
 func memoryKeywordSet(userInput string) map[string]struct{} {
 	words := strings.FieldsFunc(strings.ToLower(userInput), func(r rune) bool {
-		return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9')
+		return (r < 'a' || r > 'z') && (r < '0' || r > '9')
 	})
 	set := make(map[string]struct{}, len(words))
 	for _, w := range words {
@@ -376,7 +376,7 @@ func keywordOverlapScore(content string, keywords map[string]struct{}) int {
 		return 0
 	}
 	contentWords := strings.FieldsFunc(strings.ToLower(content), func(r rune) bool {
-		return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9')
+		return (r < 'a' || r > 'z') && (r < '0' || r > '9')
 	})
 	score := 0
 	seen := make(map[string]struct{}, len(contentWords))
