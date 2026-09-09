@@ -400,6 +400,11 @@
     "description": "Connect Google Places to Elitea: prerequisites, credential setup and the tools it exposes."
   },
   {
+    "slug": "integrations/toolkits/imagegen_toolkit",
+    "title": "ImageGen",
+    "description": "Generate and edit images from an agent or pipeline, saved straight to a project bucket."
+  },
+  {
     "slug": "integrations/toolkits/jira_toolkit",
     "title": "Jira",
     "description": "Connect Jira to Elitea: prerequisites, credential setup and the tools it exposes."

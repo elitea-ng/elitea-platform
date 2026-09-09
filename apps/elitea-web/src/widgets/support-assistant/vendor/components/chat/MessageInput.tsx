@@ -51,7 +51,7 @@ import { AttachmentIcon, CheckIcon, CloseIcon, ErrorIcon, FileIcon, SendIcon, Sp
 import { ATTACHMENT_LIMITS, validateAttachmentFiles } from '@/shared/lib/attachments';
 import { t } from '@/shared/i18n';
 
-export type TAttachmentStatus = 'pending' | 'uploading' | 'done' | 'error';
+type TAttachmentStatus = 'pending' | 'uploading' | 'done' | 'error';
 
 interface TAttachmentEntry {
   readonly id: string;
@@ -60,7 +60,7 @@ interface TAttachmentEntry {
 }
 
 /** Called once per file as `useChat.handleSend` uploads it, in order. */
-export type TAttachmentStatusCallback = (file: File, status: TAttachmentStatus) => void;
+type TAttachmentStatusCallback = (file: File, status: TAttachmentStatus) => void;
 
 type TMessageInputProps = {
   placeholder: string;

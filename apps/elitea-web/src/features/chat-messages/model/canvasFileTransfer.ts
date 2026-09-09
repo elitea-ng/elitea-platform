@@ -18,7 +18,7 @@ import { getConfig } from '@/shared/config';
 import { isSystemBucket, normaliseBuckets, sortBucketsPinnedFirst } from '@/entities/bucket';
 import type { BucketWire } from '@/entities/bucket';
 
-import { CANVAS_FILE_OPEN_SIZE_LIMIT_BYTES, detectCanvasFileOpenKind, isCanvasFileOpenSizeOk } from '../lib/canvasFileSource';
+import { detectCanvasFileOpenKind, isCanvasFileOpenSizeOk } from '../lib/canvasFileSource';
 import type { CanvasFileOpenKind, CanvasFileSource } from '../lib/canvasFileSource';
 
 /** The opened document, ready to hand to `CanvasEditor`'s `selectedCodeBlockInfo`. */
@@ -142,5 +142,3 @@ export async function artifactObjectExists(projectId: string, bucket: string, na
   if (!result.ok || !isArtifactListWire(result.data)) return false;
   return result.data.objects.some((entry) => entry.key === name);
 }
-
-export { CANVAS_FILE_OPEN_SIZE_LIMIT_BYTES };

@@ -147,9 +147,17 @@ describe('WebhooksContent — create', () => {
     fireEvent.change(within(dialog).getByTestId('webhook-form-url').querySelector('input')!, {
       target: { value: 'https://example.com/webhooks/elitea' },
     });
-    fireEvent.change(within(dialog).getByTestId('webhook-form-events').querySelector('input')!, {
-      target: { value: 'application.created, execution.completed' },
-    });
+    // The events field is a `multiple` + `freeSolo` Autocomplete (#876's
+    // second half swapped the comma-separated text field for the catalogue
+    // picker — see webhookHelpers.ts's note on the removed parse/format
+    // helpers), so each event is committed as its own chip: type it, then
+    // Enter. A comma-joined string typed into it is ONE pending free-text
+    // value that never becomes a chip, and the POST would carry `events: []`.
+    const eventsInput = within(dialog).getByTestId('webhook-form-events').querySelector('input')!;
+    for (const eventType of ['application.created', 'execution.completed']) {
+      fireEvent.change(eventsInput, { target: { value: eventType } });
+      fireEvent.keyDown(eventsInput, { key: 'Enter' });
+    }
     fireEvent.click(within(dialog).getByRole('button', { name: 'Create' }));
 
     await waitFor(() => {

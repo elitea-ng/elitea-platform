@@ -16,7 +16,7 @@
  */
 
 /** Extensions this control accepts, matched case-insensitively. */
-export const ALLOWED_ATTACHMENT_EXTENSIONS = [
+const ALLOWED_ATTACHMENT_EXTENSIONS = [
   '.md',
   '.mdx',
   '.txt',

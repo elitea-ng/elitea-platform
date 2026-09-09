@@ -228,6 +228,7 @@ impl std::error::Error for RuntimeContextTransportError {
 pub(crate) struct ClaimScopedEliteaContext {
     project_id: u64,
     token: Zeroizing<String>,
+    execution_id: String,
 }
 
 impl ClaimScopedEliteaContext {
@@ -245,6 +246,14 @@ impl ClaimScopedEliteaContext {
         self.project_id
     }
 
+    /// The execution this claim was redeemed for (issue 875). The model
+    /// gateway sends this as `X-Elitea-Execution-Id` so the gateway's request
+    /// log can attribute LLM cost per execution.
+    #[must_use]
+    pub(super) fn execution_id(&self) -> &str {
+        self.execution_id.as_str()
+    }
+
     #[cfg(test)]
     pub(super) const fn project_id(&self) -> u64 {
         self.project_id
@@ -257,9 +266,19 @@ impl ClaimScopedEliteaContext {
 
     #[cfg(test)]
     pub(super) fn fixture(project_id: u64, token: &str) -> Self {
+        Self::fixture_with_execution_id(project_id, token, "execution/fixture-one")
+    }
+
+    #[cfg(test)]
+    pub(super) fn fixture_with_execution_id(
+        project_id: u64,
+        token: &str,
+        execution_id: &str,
+    ) -> Self {
         Self {
             project_id,
             token: Zeroizing::new(token.to_owned()),
+            execution_id: execution_id.to_owned(),
         }
     }
 }
@@ -651,6 +670,7 @@ async fn redeem_response(
     Ok(ClaimScopedEliteaContext {
         project_id: decoded.project_id,
         token: decoded.token.0,
+        execution_id: binding.execution_id.to_owned(),
     })
 }
 

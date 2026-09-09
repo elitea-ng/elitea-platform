@@ -105,6 +105,13 @@ fn assert_exact_captured_request(request: &CapturedModelRequest) {
     assert_eq!(
         request
             .headers
+            .get("x-elitea-execution-id")
+            .expect("execution id header"),
+        "execution/fixture-one"
+    );
+    assert_eq!(
+        request
+            .headers
             .get(CONTENT_LENGTH)
             .expect("request content length")
             .to_str()
@@ -234,6 +241,49 @@ async fn automatic_max_tokens_omits_the_openai_wire_limit() {
     let body: serde_json::Value =
         serde_json::from_slice(&captured[0].body).expect("model request JSON");
     assert!(body.get("max_completion_tokens").is_none());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn distinct_execution_ids_produce_distinct_execution_id_headers() {
+    let (client, captured) = test_model_gateway_client(
+        vec![TestModelGatewayOutcome::Response(
+            test_model_gateway_response(Body::new(Full::new(Bytes::from(ordinary_sse())))),
+        )],
+        test_model_gateway_config(),
+    )
+    .expect("model gateway client");
+    let bound = client
+        .bind_ordinary(
+            &ClaimScopedEliteaContext::fixture_with_execution_id(
+                17,
+                TOKEN,
+                "execution/distinct-42",
+            ),
+            17,
+            test_model_gateway_invocation(),
+        )
+        .expect("bound model with a distinct execution id");
+
+    drain(
+        bound
+            .generate_for_test(test_model_gateway_request("explain this"))
+            .await
+            .expect("model response stream"),
+    )
+    .await
+    .expect("valid SSE");
+
+    let captured = captured.lock().expect("captured model request");
+    let [request] = captured.as_slice() else {
+        panic!("exactly one model request expected")
+    };
+    assert_eq!(
+        request
+            .headers
+            .get("x-elitea-execution-id")
+            .expect("execution id header"),
+        "execution/distinct-42"
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]

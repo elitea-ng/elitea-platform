@@ -59,7 +59,7 @@ export const MemoryEntry = zod
       .string()
       .nullish()
       .describe(
-        'The conversation this memory was captured from, when it was saved via the \"Remember this\" message action (chat_conversations.uuid). Absent when typed directly into the settings panel. Informational only — the source conversation may since have been deleted (tenant\/0136_personal_memory_entries.sql\'s own header explains why this deliberately holds no foreign key).\n',
+        'The conversation this memory was captured from, when it was saved via the \"Remember this\" message action (chat_conversations.uuid). Absent when typed directly into the settings panel. Informational only — the source conversation may since have been deleted (tenant\/0137_personal_memory_entries.sql\'s own header explains why this deliberately holds no foreign key).\n',
       ),
     enabled: zod.boolean(),
     created_at: zod.iso.datetime({ offset: true }),

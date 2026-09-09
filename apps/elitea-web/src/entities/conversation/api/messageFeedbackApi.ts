@@ -51,7 +51,7 @@ export interface SetMessageFeedbackParams extends MessageFeedbackTarget {
 }
 
 /** The query key every feedback read/write for one message shares — a write's `onSuccess` seeds this directly rather than invalidating and re-fetching. */
-export function messageFeedbackQueryKey(target: MessageFeedbackTarget): readonly unknown[] {
+function messageFeedbackQueryKey(target: MessageFeedbackTarget): readonly unknown[] {
   return ['message-feedback', String(target.projectId), target.messageId] as const;
 }
 

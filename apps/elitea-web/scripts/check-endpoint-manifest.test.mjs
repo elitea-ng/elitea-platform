@@ -600,8 +600,34 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
  * eleven ids that came off testdata/reverse_check_allowlist.txt on the Go
  * side plus restoreSkillVersion, the one genuinely NEW operation (the
  * rollback the issue's title names; skills had no such route before).
+ *
+ * 260 -> 261: the "three above" drift the note directly above already
+ * caught was never identified by name, and a FOURTH went unflagged
+ * entirely. Checking out 1dc57f1f (the commit that set this constant to
+ * 245, the last point it was verified exact) and measuring the real
+ * generated-hook count there gives exactly 245 — no drift at that commit.
+ * Between 1dc57f1f and 884ec9d6 (the commit that wrote 245 -> 260 above),
+ * two features landed real generated operations with no ledger entry of
+ * their own: getMessageFeedback/setMessageFeedback/deleteMessageFeedback
+ * (#880, three operations — the "three above" 245 that produced the
+ * "real count was 248" measurement) and getRuntimeCapabilities (#865/#866,
+ * one operation, landed in the same window but never measured against at
+ * all). 248 + 12 (skill versioning, above) = 260, the number this file
+ * carried; the actual count on disk at 884ec9d6 was 261, one higher,
+ * because the skills note's "248" baseline had already silently absorbed
+ * the message-feedback three but not the runtime-capabilities one.
+ *
+ * 261 -> 266 (#870, persistent personal memories). Five new operations —
+ * listMemories, createMemory, updateMemory, deleteMemory, clearMemories —
+ * landed in api/openapi/v2.yaml alongside internal/api/v2/conversations'
+ * memory routes. Settings > Memory management
+ * (features/settings/ui/memory/LongTermMemoryManagement.tsx) and the chat
+ * composer's "Remember this" action
+ * (features/chat-messages/ui/chat-box/RememberMemoryAction.tsx) both call
+ * them through the generated hooks, so each is `source: 'generated'` in
+ * the manifest (see MANIFEST_ENTRY_COUNT's own note on this step).
  */
-const GENERATED_OPERATION_COUNT = 260;
+const GENERATED_OPERATION_COUNT = 266;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -743,8 +769,41 @@ const GENERATED_OPERATION_COUNT = 260;
  * described, because features/skills still calls it through
  * `features/skills/api/skillsApi.ts`'s raw eliteaFetch wrappers, not the
  * generated hooks.
+ *
+ * 261 -> 262: not counted by any note above, and not new here either. The
+ * commit that shipped `getRuntimeCapabilities` (#865/#866) added
+ * `toolkits.getRuntimeCapabilities` straight to endpoints.manifest.json —
+ * `source: "generated"`, real callers (features/agents, features/toolkits)
+ * — but nothing updated this file's constants or commentary when it did.
+ * Same story as GENERATED_OPERATION_COUNT's own "260 -> 261" note: this is
+ * that omission's manifest-side half, recorded now rather than at the time.
+ *
+ * 262 -> 267 (#870, persistent personal memories). Five entries —
+ * memories.listMemories/createMemory/updateMemory/deleteMemory/
+ * clearMemories — were likewise added straight to endpoints.manifest.json
+ * by the commits that shipped Settings > Memory management and the chat
+ * composer's "Remember this" action (see GENERATED_OPERATION_COUNT's
+ * "261 -> 266" note for the exact callers), again without this file's
+ * commentary tracking the count. All five are `source: "generated"`.
+ *
+ * 267 -> 270, this reconciliation pass (issue gap-fix wave). Three entries
+ * added for message feedback (#880, like/dislike + optional comment on an
+ * assistant message) — chat.getMessageFeedback, chat.setMessageFeedback,
+ * chat.deleteMessageFeedback — which were genuinely missing, not merely
+ * undocumented: the three operations were described in v2.yaml with a
+ * real, single caller
+ * (features/chat-messages/ui/chat-box/MessageFeedbackControl.tsx, composed
+ * into ApplicationAnswer) but had zero manifest bookkeeping until now. All
+ * three stay `source: "handwritten"` with a real `operationId`:
+ * entities/conversation/api/messageFeedbackApi.ts calls `eliteaFetch`
+ * directly rather than the generated per-operation functions, for the same
+ * "orval types the response as an error-shape union" reason
+ * agents.generateContentBlocking and toolkits.testTool already document
+ * above, and because every generated hook here is a `useQuery`
+ * (orval.config.ts's global `query.useQuery: true`, no per-operation
+ * mutation override) — the wrong shape for a POST/DELETE write.
  */
-const MANIFEST_ENTRY_COUNT = 261;
+const MANIFEST_ENTRY_COUNT = 270;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

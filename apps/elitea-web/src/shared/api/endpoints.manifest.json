@@ -3144,6 +3144,45 @@
       "usedBy": [
         "features/project-requests"
       ]
+    },
+    {
+      "$comment": "Issue #880 — thumbs up/down + optional comment on an assistant message. Described in v2.yaml as getMessageFeedback, but called through a HAND-WRITTEN wrapper (entities/conversation/api/messageFeedbackApi.ts): orval types the generated per-operation function's return as the union across every documented status code, and eliteaFetch already throws on non-2xx, so a caller reading `.data` off that union cannot narrow to MessageFeedbackSummary alone. The URL is still built with the GENERATED getGetMessageFeedbackUrl, so the path stays derived from the spec.",
+      "id": "chat.getMessageFeedback",
+      "method": "GET",
+      "path": "/elitea_core/message_feedback/prompt_lib/{projectID}/{messageID}",
+      "operationId": "getMessageFeedback",
+      "source": "handwritten",
+      "responseSchema": "MessageFeedbackSummary",
+      "fixture": null,
+      "usedBy": [
+        "features/chat-messages/ui/chat-box/MessageFeedbackControl.tsx"
+      ]
+    },
+    {
+      "$comment": "Issue #880, same reason as chat.getMessageFeedback above: `query.useQuery: true` is global in orval.config.ts with no per-operation mutation override, so useSetMessageFeedback generates as a useQuery hook rather than a useMutation — the wrong shape for a POST that upserts on click. messageFeedbackApi.ts's hand-written useMutation wraps eliteaFetch directly, reusing the GENERATED getSetMessageFeedbackUrl for the path.",
+      "id": "chat.setMessageFeedback",
+      "method": "POST",
+      "path": "/elitea_core/message_feedback/prompt_lib/{projectID}/{messageID}",
+      "operationId": "setMessageFeedback",
+      "source": "handwritten",
+      "responseSchema": "MessageFeedbackSummary",
+      "fixture": null,
+      "usedBy": [
+        "features/chat-messages/ui/chat-box/MessageFeedbackControl.tsx"
+      ]
+    },
+    {
+      "$comment": "Issue #880, same reason as chat.setMessageFeedback above: the DELETE (retracting one's own vote) needs a useMutation, not the generated useQuery shape. messageFeedbackApi.ts's hand-written useMutation wraps eliteaFetch directly, reusing the GENERATED getDeleteMessageFeedbackUrl for the path.",
+      "id": "chat.deleteMessageFeedback",
+      "method": "DELETE",
+      "path": "/elitea_core/message_feedback/prompt_lib/{projectID}/{messageID}",
+      "operationId": "deleteMessageFeedback",
+      "source": "handwritten",
+      "responseSchema": "MessageFeedbackSummary",
+      "fixture": null,
+      "usedBy": [
+        "features/chat-messages/ui/chat-box/MessageFeedbackControl.tsx"
+      ]
     }
   ]
 }

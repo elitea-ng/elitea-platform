@@ -15,7 +15,7 @@ import { openArtifactFileInCanvas } from '@/features/chat-messages';
 import type { CanvasFileSource } from '@/features/chat-messages';
 import { t } from '@/shared/i18n';
 
-export interface FileCanvasSession {
+interface FileCanvasSession {
   readonly codeBlock: string;
   readonly language: string;
   readonly source: CanvasFileSource;
