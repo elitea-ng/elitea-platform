@@ -65,15 +65,27 @@ const MAX_ANSWER_BYTES: usize = 16 * 1_024;
 const ASK_USER_DESCRIPTION: &str = "Ask the user a clarifying question when information is missing or the requested choice is ambiguous instead of guessing. Present 1-4 questions, each with a short header and selectable options; the user can choose an option or provide another answer when allowed. Use this only for genuine decision points, not to request permission to run another tool.";
 
 /// Strict, frozen set of runtime-owned internal tool capabilities.
+///
+/// `skipped` is a bitmask over `PLATFORM_INTERNAL_TOOLS`' own indices (it has
+/// 8 entries, so a `u8` is exact) rather than a `Vec<&str>`: this type stays
+/// `Copy`, which every existing caller already relies on
+/// (`OrdinaryRuntimeBindings::with_internal_tools` takes it by value, and
+/// `session.rs` reads a copy out of a struct it is about to move — see
+/// `assemble_ordinary_native_with_sessions_and_runtime_catalogs`). A `Vec`
+/// field would force every one of those call sites to clone or restructure.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct InternalToolCatalog {
     ask_user: bool,
+    skipped: u8,
 }
 
 impl InternalToolCatalog {
     #[must_use]
     pub(crate) const fn empty() -> Self {
-        Self { ask_user: false }
+        Self {
+            ask_user: false,
+            skipped: 0,
+        }
     }
 
     pub(crate) fn from_values(values: Option<&Value>) -> Result<Self, InternalToolError> {
@@ -89,13 +101,26 @@ impl InternalToolCatalog {
                     // Same contract as the toolkit-family skip
                     // (`agent_toolkit_skipped` in materialize.rs): the agent
                     // runs WITHOUT a capability its author asked for, and a
-                    // silent drop is how that reads as "the toggle works".
+                    // silent drop is how that reads as "the toggle works" —
+                    // which is why, as of #866, the LOG below is no longer
+                    // the only trace: `skipped` records the name too, and
+                    // `skipped_tools_notice_text` (below) turns it into a
+                    // message `session.rs` seeds into the conversation
+                    // itself, so the run says so, not only the server log.
                     tracing::warn!(
                         event = "agent_internal_tool_skipped",
                         reason_code = "internal_tool_unsupported",
                         internal_tool = name,
                         "internal tool is unavailable in this runtime and was omitted from the agent"
                     );
+                    if let Some(index) = PLATFORM_INTERNAL_TOOLS
+                        .iter()
+                        .position(|candidate| *candidate == name)
+                    {
+                        // PLATFORM_INTERNAL_TOOLS has 8 entries; `skipped` is
+                        // a u8, so every valid index fits in one bit.
+                        catalog.skipped |= 1 << index;
+                    }
                 }
                 Some(_) => return Err(InternalToolError::UnsupportedCapability),
                 None => return Err(InternalToolError::InvalidInput),
@@ -113,6 +138,7 @@ impl InternalToolCatalog {
     pub(crate) const fn merge(self, other: Self) -> Self {
         Self {
             ask_user: self.ask_user || other.ask_user,
+            skipped: self.skipped | other.skipped,
         }
     }
 
@@ -123,7 +149,44 @@ impl InternalToolCatalog {
 
     #[must_use]
     pub(crate) const fn is_empty(self) -> bool {
-        !self.ask_user
+        !self.ask_user && self.skipped == 0
+    }
+
+    /// The platform-catalogue names this runtime skipped, in
+    /// `PLATFORM_INTERNAL_TOOLS`' own order — stable and deterministic, so
+    /// the notice text `skipped_tools_notice_text` builds from it does not
+    /// depend on `HashMap`/set iteration order or on the order the caller
+    /// happened to list them in `meta.internal_tools`.
+    pub(crate) fn skipped_platform_tools(self) -> impl Iterator<Item = &'static str> {
+        PLATFORM_INTERNAL_TOOLS
+            .iter()
+            .copied()
+            .enumerate()
+            .filter(move |(index, _)| self.skipped & (1 << index) != 0)
+            .map(|(_, name)| name)
+    }
+
+    /// One line per skipped tool, in the exact shape #866 asked for: `internal
+    /// tool 'NAME' is not available on this worker`. `None` when nothing was
+    /// skipped, so a caller can `if let Some(text) = …` rather than always
+    /// checking emptiness itself.
+    ///
+    /// This is the text `session.rs` seeds into the conversation
+    /// (`skipped_tools_notice_event`) — the run-visible half of #866's fix.
+    /// Before it, `agent_internal_tool_skipped` above was the ONLY trace: an
+    /// operator reading logs could see the gap, but the user who turned the
+    /// toggle on, and the model answering for them, could not.
+    #[must_use]
+    pub(crate) fn skipped_tools_notice_text(self) -> Option<String> {
+        let mut lines = self
+            .skipped_platform_tools()
+            .map(|name| format!("internal tool '{name}' is not available on this worker"));
+        let first = lines.next()?;
+        Some(lines.fold(first, |mut text, line| {
+            text.push('\n');
+            text.push_str(&line);
+            text
+        }))
     }
 
     pub(crate) fn toolsets(self) -> Vec<Arc<dyn Toolset>> {
@@ -585,6 +648,113 @@ mod tests {
         assert_eq!(
             InternalToolCatalog::from_values(Some(&json!([42]))),
             Err(InternalToolError::InvalidInput)
+        );
+    }
+
+    // #866: a skipped platform tool is no longer traceable ONLY through the
+    // server log — the catalog now records it, in the exact shape session.rs
+    // seeds into the conversation as a visible notice.
+    #[test]
+    fn a_skipped_platform_tool_is_recorded_with_the_exact_866_notice_text() {
+        let catalog = InternalToolCatalog::from_names(&["planner".to_owned()]).expect("catalog");
+        assert_eq!(
+            catalog.skipped_platform_tools().collect::<Vec<_>>(),
+            ["planner"]
+        );
+        assert_eq!(
+            catalog.skipped_tools_notice_text().as_deref(),
+            Some("internal tool 'planner' is not available on this worker")
+        );
+        // ask_user is real and served, and this request never named it.
+        assert!(!catalog.ask_user_enabled());
+    }
+
+    #[test]
+    fn no_skipped_tools_means_no_notice() {
+        let catalog =
+            InternalToolCatalog::from_names(&[ASK_USER_TOOL_NAME.to_owned()]).expect("catalog");
+        assert_eq!(catalog.skipped_platform_tools().count(), 0);
+        assert_eq!(catalog.skipped_tools_notice_text(), None);
+        assert!(
+            !catalog.is_empty(),
+            "ask_user alone is not an empty catalog"
+        );
+
+        assert!(
+            InternalToolCatalog::empty()
+                .skipped_tools_notice_text()
+                .is_none()
+        );
+        assert!(InternalToolCatalog::empty().is_empty());
+    }
+
+    /// The notice text is deterministic and in `PLATFORM_INTERNAL_TOOLS`'
+    /// OWN order — not the order the caller listed the names in — so it
+    /// cannot flap between otherwise-identical requests.
+    #[test]
+    fn multiple_skipped_tools_are_reported_one_per_line_in_a_stable_order() {
+        let listed_swarm_first = InternalToolCatalog::from_names(&[
+            "swarm".to_owned(),
+            "planner".to_owned(),
+            "data_analysis".to_owned(),
+        ])
+        .expect("catalog");
+        let listed_data_analysis_first = InternalToolCatalog::from_names(&[
+            "data_analysis".to_owned(),
+            "planner".to_owned(),
+            "swarm".to_owned(),
+        ])
+        .expect("catalog");
+
+        let expected = "internal tool 'data_analysis' is not available on this worker\n\
+             internal tool 'planner' is not available on this worker\n\
+             internal tool 'swarm' is not available on this worker";
+        assert_eq!(
+            listed_swarm_first.skipped_tools_notice_text().as_deref(),
+            Some(expected)
+        );
+        assert_eq!(
+            listed_swarm_first.skipped_tools_notice_text(),
+            listed_data_analysis_first.skipped_tools_notice_text(),
+            "the same SET of skipped tools must produce the same notice regardless of input order"
+        );
+    }
+
+    /// `merge` is how a nested application's own internal-tool set combines
+    /// with its parent's (`session.rs`); the skipped set must union the same
+    /// way `ask_user_enabled` already does, not overwrite or drop one side.
+    #[test]
+    fn merge_unions_the_skipped_set_from_both_sides() {
+        let mine = InternalToolCatalog::from_names(&["planner".to_owned()]).expect("catalog");
+        let theirs = InternalToolCatalog::from_names(&["swarm".to_owned()]).expect("catalog");
+
+        let mut merged = mine
+            .merge(theirs)
+            .skipped_platform_tools()
+            .collect::<Vec<_>>();
+        merged.sort_unstable();
+        assert_eq!(merged, ["planner", "swarm"]);
+
+        // Merging with an empty catalog is a no-op, same as ask_user_enabled.
+        assert_eq!(
+            mine.merge(InternalToolCatalog::empty())
+                .skipped_platform_tools()
+                .collect::<Vec<_>>(),
+            ["planner"]
+        );
+    }
+
+    /// A repeated toggle (the same duplicate-list scenario
+    /// `a_duplicated_ask_user_toggle_still_serves_exactly_one_tool` covers
+    /// for `ask_user`) must not duplicate the notice line for a skipped name.
+    #[test]
+    fn a_duplicated_skipped_toggle_produces_one_notice_line_not_two() {
+        let catalog =
+            InternalToolCatalog::from_names(&["planner".to_owned(), "planner".to_owned()])
+                .expect("catalog");
+        assert_eq!(
+            catalog.skipped_tools_notice_text().as_deref(),
+            Some("internal tool 'planner' is not available on this worker")
         );
     }
 }

@@ -1461,6 +1461,12 @@ where
     if parallel && runtime.has_confirmation_guards() {
         return Err(invalid_configuration());
     }
+    // Copied out before `runtime` moves into `build_runtime_agent` below —
+    // `InternalToolCatalog` is `Copy` for exactly this (see its own doc
+    // comment). #866: this is what lets a skipped internal tool become a
+    // notice IN THE RUN, not only the `agent_internal_tool_skipped` log line
+    // `InternalToolCatalog::from_values` already writes.
+    let internal_tools = runtime.internal_tools;
     let (agent, projector) = build_runtime_agent(
         model.adk_model(),
         generation_config,
@@ -1485,6 +1491,12 @@ where
             definition_digest,
         )
         .await?;
+        // #866: a fresh session is exactly where `seed_frozen_history` seeds
+        // the frozen prior transcript, so it is also the one place to seed
+        // ONE notice per skipped internal tool without repeating it on every
+        // later turn of the same conversation — the same "once, at session
+        // creation" shape the frozen-history seed itself uses.
+        seed_skipped_internal_tools_notice(sessions.as_ref(), &identity, internal_tools).await?;
     }
     tracing::Span::current().record(
         "session_bootstrap",
@@ -1940,6 +1952,49 @@ async fn seed_frozen_history(
             .map_err(|_| dependency_unavailable())?;
     }
     Ok(())
+}
+
+/// #866: append ONE role-`"tool"` event naming every internal tool this
+/// invocation's `InternalToolCatalog` skipped, so the run itself says what
+/// was requested and not honoured — before this, `InternalToolCatalog::
+/// from_values`'s own `agent_internal_tool_skipped` log line was the ONLY
+/// trace, visible to an operator reading logs and to nobody else: not the
+/// user who turned the toggle on, not the model answering for them.
+///
+/// A no-op when nothing was skipped (`skipped_tools_notice_text` returns
+/// `None`) — the common case, and the same "build nothing, append nothing"
+/// shape `seed_frozen_history` already has for an empty `chat_history`.
+///
+/// Content role is `"tool"` with a plain `Part::Text`, the same shape
+/// `adk_core::Event::tool_progress` uses for a tool's own streamed output
+/// (`adk-core-2.2.0/src/event.rs`) — chosen over a synthesized
+/// `Part::FunctionCall`/`Part::FunctionResponse` pair because there is no
+/// real function-call id to pair it with (this runs BEFORE the model's first
+/// turn, seeding history rather than responding to a call the model made),
+/// and an orphaned `FunctionResponse` risks the model provider's own history
+/// validation rejecting the turn outright — a worse failure than the
+/// pre-#866 silent skip this fix exists to replace.
+async fn seed_skipped_internal_tools_notice(
+    sessions: &dyn SessionService,
+    identity: &AdkIdentity,
+    internal_tools: InternalToolCatalog,
+) -> Result<(), NativeAgentAssemblyError> {
+    let Some(notice) = internal_tools.skipped_tools_notice_text() else {
+        return Ok(());
+    };
+    let mut event = Event::new("elitea-skipped-internal-tools");
+    "system".clone_into(&mut event.author);
+    event.set_content(Content {
+        role: "tool".to_owned(),
+        parts: vec![adk_rust::Part::Text { text: notice }],
+    });
+    sessions
+        .append_event_for_identity(AppendEventRequest {
+            identity: identity.clone(),
+            event,
+        })
+        .await
+        .map_err(|_| dependency_unavailable())
 }
 
 fn frozen_history_event_id(definition_digest: [u8; 32], ordinal: u64) -> String {
