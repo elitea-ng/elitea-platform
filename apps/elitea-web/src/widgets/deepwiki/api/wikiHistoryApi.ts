@@ -6,10 +6,19 @@
  * another browser and on a cleared profile. elitea-main now writes both turns
  * of every wiki chat into the ordinary tenant chat tables — `source =
  * 'deepwiki'`, a participant of `entity_name = 'toolkit'` — so what is left
- * for the browser is to READ them. It writes nothing: a client-authorable
+ * for the browser is to READ them. It writes no TURN: a client-authorable
  * assistant turn would be forgery, and there is no route to do it with.
  *
- * NO NEW ENDPOINT. Both calls below are the conversation routes the chat page
+ * `deleteWikiConversation` (#873) is the one write this module makes, and it
+ * writes nothing a client could forge — it removes a conversation the caller
+ * already owns, through the SAME `DELETE
+ * /elitea_core/conversation/prompt_lib/{projectId}/{id}` route the ordinary
+ * chat page's own conversation list already calls
+ * (`entities/conversation/api/conversationApi.ts`). No new route, no new
+ * authorization rule: a wiki chat is an ordinary tenant conversation, so
+ * deleting one is the ordinary delete.
+ *
+ * NO NEW ENDPOINT. Both read calls below are the conversation routes the chat page
  * already uses; the listing simply asks two more questions of them —
  * `hidden=only`, because a wiki chat is filed hidden precisely so it does not
  * surface in the ordinary chat list, and `mine=true`, because that listing has
@@ -50,11 +59,11 @@ const TRANSCRIPT_LIMIT = 200;
 /**
  * One of a toolkit's stored wiki conversations.
  *
- * NOT exported. The drawer names none of these fields in a type of its own —
- * it reads the array `listWikiConversations` returns — and an exported type
- * nothing imports is what `knip` is for.
+ * EXPORTED as of #873: the session list/resume/delete UI
+ * (`WikiChatSessions.tsx`) renders this array directly rather than the
+ * drawer re-deriving its own shape from it.
  */
-interface WikiConversationSummary {
+export interface WikiConversationSummary {
   readonly id: string;
   readonly name: string;
   readonly updatedAt: string | undefined;
@@ -176,4 +185,22 @@ function textOf(group: MessageGroupWire): string {
 function capabilityOf(group: MessageGroupWire): ChatCapability | undefined {
   const capability = group.meta?.capability;
   return capability === 'ask' || capability === 'research' ? capability : undefined;
+}
+
+/**
+ * Delete one of this toolkit's stored wiki conversations.
+ *
+ * The route answers 204 with no body, so there is nothing to unwrap — unlike
+ * every read above, `eliteaFetch`'s envelope carries only a status here, and
+ * a caller checking a field on it would be checking a field that never
+ * existed on a successful delete either way.
+ */
+export async function deleteWikiConversation(
+  projectId: number | string,
+  conversationId: string,
+): Promise<void> {
+  await eliteaFetch(
+    `/elitea_core/conversation/prompt_lib/${String(projectId)}/${conversationId}`,
+    { method: 'DELETE' },
+  );
 }

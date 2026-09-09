@@ -29,7 +29,12 @@ import { ResizableDrawer } from '@/shared/ui/ResizableDrawer';
 import { isThinkingBlock, useWikiChat } from '@/features/wiki-chat';
 
 import { pollWikiChat, startWikiChat, type WikiChatTarget } from '../api/wikiChatApi';
-import { listWikiConversations, loadWikiTranscript } from '../api/wikiHistoryApi';
+import {
+  deleteWikiConversation,
+  listWikiConversations,
+  loadWikiTranscript,
+  type WikiConversationSummary,
+} from '../api/wikiHistoryApi';
 import {
   createWikiChatStorage,
   createWikiConversationKey,
@@ -39,6 +44,7 @@ import {
 import { ResearchTodosPanel } from './ResearchTodosPanel';
 import { WikiChatComposer } from './WikiChatComposer';
 import { WikiChatMessages } from './WikiChatMessages';
+import { WikiChatSessions } from './WikiChatSessions';
 
 /**
  * Resize bounds in CSS pixels: ResizableDrawer measures the pointer, so its
@@ -188,6 +194,12 @@ export const WikiChatDrawer = memo(function WikiChatDrawer({
         // decides the fate of the local one below.
         stored: conversations.length > 0,
         messages: current ? await loadWikiTranscript(target.projectId, current.id) : [],
+        // The FULL list and the resolved current id, both added for #873's
+        // session picker (`WikiChatSessions`) — the query already asked the
+        // listing for the reasons above; a second fetch just to render it
+        // would be the request this whole comment block exists to avoid.
+        conversations,
+        currentId: current?.id,
       };
     },
   });
@@ -238,6 +250,47 @@ export const WikiChatDrawer = memo(function WikiChatDrawer({
     setHistoryEpoch((epoch) => epoch + 1);
   };
 
+  /**
+   * Switch to a PAST session (#873).
+   *
+   * Adopting the session's own key is the whole mechanism — it is exactly
+   * how a second browser resumes the user's latest conversation above, aimed
+   * instead at a session the reader picked. Refused with no key: a
+   * conversation this listing returned without one cannot be filed into,
+   * because there is nothing to send as `X-Elitea-Wiki-Chat`.
+   */
+  // Not `useCallback`: `startNewConversation` above it is the same plain
+  // function every render already, and closing over it here rather than
+  // memoizing against a stale copy is what keeps this handler from adopting
+  // yesterday's `conversationKey`/`chat` the way a memoized closure would
+  // (the zustand-blocker-closure-staleness shape this codebase has shipped
+  // before).
+  const resumeConversation = (conversation: WikiConversationSummary) => {
+    if (conversation.chatKey === undefined) return;
+    conversationKey.adopt(conversation.chatKey);
+    hydrated.current = null;
+    chat.clear();
+    setHistoryEpoch((epoch) => epoch + 1);
+  };
+
+  /**
+   * Delete a stored session (#873).
+   *
+   * When the deleted row is the one on screen, this also starts a fresh
+   * conversation — the alternative is a drawer left showing a transcript for
+   * a conversation that no longer exists, which the next question would then
+   * try to resume into a 404.
+   */
+  const deleteConversation = (conversation: WikiConversationSummary) => {
+    void deleteWikiConversation(target.projectId, conversation.id).then(() => {
+      if (conversation.id === history.data?.currentId) {
+        startNewConversation();
+      } else {
+        setHistoryEpoch((epoch) => epoch + 1);
+      }
+    });
+  };
+
   const canRegenerate = useMemo(
     () => chat.state.messages.some((message) => !isThinkingBlock(message) && message.role === 'user'),
     [chat.state.messages],
@@ -259,6 +312,13 @@ export const WikiChatDrawer = memo(function WikiChatDrawer({
         <Typography variant="headingSmall" sx={{ flex: 1 }}>
           {t('widgets.deepwiki.chat.title', 'Wiki chat')}
         </Typography>
+        <WikiChatSessions
+          conversations={history.data?.conversations ?? []}
+          currentConversationId={history.data?.currentId}
+          onResume={resumeConversation}
+          onDelete={deleteConversation}
+          disabled={chat.state.isLoading}
+        />
         <IconButton size="small" onClick={onClose} aria-label={t('widgets.deepwiki.chat.close', 'Close')}>
           <CloseIcon fontSize="small" />
         </IconButton>

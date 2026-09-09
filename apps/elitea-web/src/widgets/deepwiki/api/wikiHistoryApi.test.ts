@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { server } from '@/test/setup';
 
-import { listWikiConversations, loadWikiTranscript } from './wikiHistoryApi';
+import { deleteWikiConversation, listWikiConversations, loadWikiTranscript } from './wikiHistoryApi';
 
 const BASE = 'http://elitea.test/api/v2';
 
@@ -175,5 +175,40 @@ describe('loadWikiTranscript', () => {
       ),
     );
     expect(await loadWikiTranscript(7, '11')).toEqual([]);
+  });
+});
+
+describe('deleteWikiConversation', () => {
+  // #873: the session list's delete action goes through the SAME route the
+  // ordinary chat page's conversation list already calls — no new endpoint,
+  // no new authorization rule.
+  it('DELETEs the ordinary conversation route, by project and id', async () => {
+    let seenMethod: string | undefined;
+    let seenUrl: string | undefined;
+    server.use(
+      http.delete(
+        `${BASE}/elitea_core/conversation/prompt_lib/:projectId/:conversationId`,
+        ({ request }) => {
+          seenMethod = request.method;
+          seenUrl = request.url;
+          return new HttpResponse(null, { status: 204 });
+        },
+      ),
+    );
+
+    await deleteWikiConversation(7, '11');
+
+    expect(seenMethod).toBe('DELETE');
+    expect(seenUrl).toBe(`${BASE}/elitea_core/conversation/prompt_lib/7/11`);
+  });
+
+  it('throws on a refused delete rather than reporting success', async () => {
+    server.use(
+      http.delete(`${BASE}/elitea_core/conversation/prompt_lib/:projectId/:conversationId`, () =>
+        HttpResponse.json({ error: 'not found' }, { status: 404 }),
+      ),
+    );
+
+    await expect(deleteWikiConversation(7, '11')).rejects.toThrow();
   });
 });

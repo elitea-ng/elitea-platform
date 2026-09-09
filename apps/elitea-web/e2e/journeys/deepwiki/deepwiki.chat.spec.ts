@@ -360,3 +360,52 @@ test.describe('DeepWiki chat history', () => {
     expect(cleared?.name, 'and still named after the question that opened it').toBe(first);
   });
 });
+
+/**
+ * DWIKI-019 — the session list: every stored wiki chat for this toolkit is
+ * listable, resumable, and deletable, not just the one the browser last
+ * held a key to (#873).
+ */
+test.describe('DeepWiki chat sessions', () => {
+  test.setTimeout(180_000);
+
+  test.use({ storageState: STORAGE_STATE.member });
+
+  test('DWIKI-019: past sessions can be listed, resumed, and deleted', async ({ page }) => {
+    const stamp = Date.now();
+    await seedConversationKey(page, `dwiki-019-${stamp}`);
+    let drawer = await openChatDrawer(page);
+
+    const first = `first session question ${stamp}`;
+    await ask(page, first);
+
+    // "Clear" opens a NEW session; the one just asked stays stored.
+    await drawer.getByRole('button', { name: 'Clear the conversation' }).click();
+    const second = `second session question ${stamp}`;
+    await ask(page, second);
+
+    await drawer.getByTestId('wiki-chat-sessions-button').click();
+    const options = page.getByTestId('wiki-chat-session-option');
+    await expect(options.filter({ hasText: first })).toHaveCount(1);
+    await expect(options.filter({ hasText: second })).toHaveCount(1);
+
+    // Resume the FIRST session — the one this browser is not currently on.
+    await options.filter({ hasText: first }).click();
+    await expect(drawer.getByText(first, { exact: true })).toBeVisible({ timeout: 30_000 });
+    await expect(drawer.getByText(second, { exact: true })).toHaveCount(0);
+
+    // Delete the session now open. The drawer starts a fresh one rather
+    // than showing a transcript for a conversation that no longer exists.
+    await drawer.getByTestId('wiki-chat-sessions-button').click();
+    await options.filter({ hasText: first }).getByTestId('wiki-chat-session-delete').click();
+    const confirmModal = page.getByTestId('wiki-chat-session-delete-modal');
+    await confirmModal.getByRole('button', { name: 'Delete', exact: true }).click();
+    await expect(page.getByText('Ask a question about this repository')).toBeVisible();
+
+    // And it is gone from the list — not merely cleared off screen.
+    drawer = page.getByTestId('wiki-chat-drawer');
+    await drawer.getByTestId('wiki-chat-sessions-button').click();
+    await expect(page.getByTestId('wiki-chat-session-option').filter({ hasText: first })).toHaveCount(0);
+    await expect(page.getByTestId('wiki-chat-session-option').filter({ hasText: second })).toHaveCount(1);
+  });
+});

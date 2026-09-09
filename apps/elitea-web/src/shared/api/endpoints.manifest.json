@@ -1624,7 +1624,8 @@
       "responseSchema": "unknown",
       "fixture": null,
       "usedBy": [
-        "entities/conversation"
+        "entities/conversation",
+        "widgets/deepwiki"
       ]
     },
     {
