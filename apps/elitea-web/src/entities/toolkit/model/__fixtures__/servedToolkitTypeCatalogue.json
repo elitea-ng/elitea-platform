@@ -330,7 +330,8 @@
       "label": "ImageGen",
       "categories": [
         "media"
-      ]
+      ],
+      "hidden": false
     }
   },
   "jira": {

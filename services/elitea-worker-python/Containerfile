@@ -23,6 +23,20 @@ ARG ELITEA_SDK_REVISION=b5113a129329b85d23c2d5c2bf55f18e307414ec
 ARG ELITEA_SDK_ARCHIVE_SHA256=df398b4a378e7b88ea3b72511e31de13a17a02159c69fbada6f0b948a0ecf2d7
 ARG ELITEA_SDK_MCP_PREFLIGHT_PATCH=5c9409779ac0a55f8bf74f6ef438977089187a14
 ARG ELITEA_SDK_MCP_HARD_TIMEOUT_PATCH=07ddc5cd67a0c747f83ca0e26421cde71bd97d9d
+# #864: vendors elitea_sdk/runtime/utils/tool_groups.py (introduced upstream
+# in elitea-sdk#536/e1944e7, after this admitted revision), byte-identical to
+# that version, so the imagegen patch below can import it without backporting
+# the whole tool-groups rollout onto 0.9.8. Superseded with no source
+# difference once ELITEA_SDK_REVISION moves past e1944e7.
+ARG ELITEA_SDK_TOOL_GROUPS_PATCH=4e631ed9e9523b33410a31bd2242c93fa9ec0b4b
+# #864: the `imagegen` toolkit (generate_image/edit_image), cherry-picked onto
+# the admitted 0.9.8 revision the same way the two MCP patches above are.
+# Interim: elitea-sdk PR EliteaAI/elitea-sdk#607 carries this same commit for
+# review against the SDK's own main line; this patch lets the worker dispatch
+# the toolkit now instead of waiting on that PR and a subsequent version bump.
+# Drop this patch (and fold its content into ELITEA_SDK_REVISION) once #607
+# merges and the pin moves to a released SDK version that includes it.
+ARG ELITEA_SDK_IMAGEGEN_PATCH=afff234904b6d5de551436b53c078722f13ff4de
 ARG ELITEA_SDK_VERSION=0.9.8
 
 RUN apt-get update \
@@ -46,8 +60,12 @@ RUN git clone \
     && test "$(git -C ./elitea-sdk archive --format=tar HEAD | sha256sum | cut -d ' ' -f 1)" = "${ELITEA_SDK_ARCHIVE_SHA256}" \
     && git -C ./elitea-sdk cat-file -e "${ELITEA_SDK_MCP_PREFLIGHT_PATCH}^{commit}" \
     && git -C ./elitea-sdk cat-file -e "${ELITEA_SDK_MCP_HARD_TIMEOUT_PATCH}^{commit}" \
+    && git -C ./elitea-sdk cat-file -e "${ELITEA_SDK_TOOL_GROUPS_PATCH}^{commit}" \
+    && git -C ./elitea-sdk cat-file -e "${ELITEA_SDK_IMAGEGEN_PATCH}^{commit}" \
     && git -C ./elitea-sdk cherry-pick --no-commit "${ELITEA_SDK_MCP_PREFLIGHT_PATCH}" \
-    && git -C ./elitea-sdk cherry-pick --no-commit "${ELITEA_SDK_MCP_HARD_TIMEOUT_PATCH}"
+    && git -C ./elitea-sdk cherry-pick --no-commit "${ELITEA_SDK_MCP_HARD_TIMEOUT_PATCH}" \
+    && git -C ./elitea-sdk cherry-pick --no-commit "${ELITEA_SDK_TOOL_GROUPS_PATCH}" \
+    && git -C ./elitea-sdk cherry-pick --no-commit "${ELITEA_SDK_IMAGEGEN_PATCH}"
 RUN --mount=type=cache,target=/root/.cache/pip \
     python -m pip download \
       --dest /sources \

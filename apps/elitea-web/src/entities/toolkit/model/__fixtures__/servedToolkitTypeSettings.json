@@ -1909,6 +1909,16 @@
       "categories": [
         "media"
       ],
+      "check_connection_supported": false,
+      "extra_categories": [
+        "image",
+        "generation",
+        "dall-e",
+        "art"
+      ],
+      "has_function_validators": false,
+      "hidden": false,
+      "icon_url": null,
       "label": "ImageGen"
     },
     "properties": {

@@ -267,6 +267,13 @@ jobs:
           SDK_ARCHIVE_SHA256: df398b4a378e7b88ea3b72511e31de13a17a02159c69fbada6f0b948a0ecf2d7
           SDK_MCP_PREFLIGHT_PATCH: 5c9409779ac0a55f8bf74f6ef438977089187a14
           SDK_MCP_HARD_TIMEOUT_PATCH: 07ddc5cd67a0c747f83ca0e26421cde71bd97d9d
+          # #864: vendors elitea_sdk/runtime/utils/tool_groups.py (introduced
+          # upstream after this revision). See the matching comment in the
+          # Containerfile.
+          SDK_TOOL_GROUPS_PATCH: 4e631ed9e9523b33410a31bd2242c93fa9ec0b4b
+          # #864: imagegen toolkit, cherry-picked the same way as the two MCP
+          # patches above. See the matching comment in the Containerfile.
+          SDK_IMAGEGEN_PATCH: afff234904b6d5de551436b53c078722f13ff4de
         run: |
           git clone --filter=blob:none --no-checkout \
             https://github.com/EliteaAI/elitea-sdk.git \
@@ -276,8 +283,12 @@ jobs:
           test "$(git -C /tmp/elitea-sdk-current archive --format=tar HEAD | sha256sum | cut -d ' ' -f 1)" = "${SDK_ARCHIVE_SHA256}"
           git -C /tmp/elitea-sdk-current cat-file -e "${SDK_MCP_PREFLIGHT_PATCH}^{commit}"
           git -C /tmp/elitea-sdk-current cat-file -e "${SDK_MCP_HARD_TIMEOUT_PATCH}^{commit}"
+          git -C /tmp/elitea-sdk-current cat-file -e "${SDK_TOOL_GROUPS_PATCH}^{commit}"
+          git -C /tmp/elitea-sdk-current cat-file -e "${SDK_IMAGEGEN_PATCH}^{commit}"
           git -C /tmp/elitea-sdk-current cherry-pick --no-commit "${SDK_MCP_PREFLIGHT_PATCH}"
           git -C /tmp/elitea-sdk-current cherry-pick --no-commit "${SDK_MCP_HARD_TIMEOUT_PATCH}"
+          git -C /tmp/elitea-sdk-current cherry-pick --no-commit "${SDK_TOOL_GROUPS_PATCH}"
+          git -C /tmp/elitea-sdk-current cherry-pick --no-commit "${SDK_IMAGEGEN_PATCH}"
 
       - name: Install the pinned worker and protocol packages
         run: |
