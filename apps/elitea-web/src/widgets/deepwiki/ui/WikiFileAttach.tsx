@@ -148,7 +148,7 @@ export const WikiFileAttach = memo(function WikiFileAttach({
               // interactive element in this app carries an explicit
               // `data-testid`; this one now does too, rather than relying on
               // a dev-only MUI internal.
-              deleteIcon={<CancelIcon data-testid="wiki-chat-attach-chip-remove" />}
+              deleteIcon={<CancelIcon fontSize="small" data-testid="wiki-chat-attach-chip-remove" />}
               onDelete={
                 disabled
                   ? undefined
@@ -156,14 +156,6 @@ export const WikiFileAttach = memo(function WikiFileAttach({
                       remove(attachment.name);
                     }
               }
-              // A stable, own testid — NOT MUI's default delete icon, whose
-              // auto `data-testid="CancelIcon"` (`createSvgIcon.js`) is
-              // `process.env.NODE_ENV !== 'production'` ONLY. The e2e stacks
-              // this drawer runs in serve a PRODUCTION build, where that
-              // condition is false and the attribute is never rendered at
-              // all — a chip a real reader can still click, that no
-              // `getByTestId('CancelIcon')` locator can ever find there.
-              deleteIcon={<CancelIcon fontSize="small" data-testid="wiki-chat-attach-chip-remove" />}
             />
           ))}
         </Stack>
