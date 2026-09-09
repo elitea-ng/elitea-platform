@@ -89,6 +89,17 @@ type Handler struct {
 	// dispatcher backs Redeliver's actual re-send. nil answers 501, same as
 	// deliveries — the two are always wired together (see WithDispatcher).
 	dispatcher *Dispatcher
+	// destinationGuard validates `url` on every Create and Update — see
+	// ssrf.go. nil answers 400 on BOTH routes: unlike the dispatcher's own
+	// (best-effort, degrade-gracefully) use of an absent guard, the WRITE
+	// path that admits a new destination into the table is fail-closed, the
+	// same direction every other optional dependency in this file that gates
+	// an admission decision takes (permissionResolver nil -> 403 on every
+	// route). A deployment that has not wired a guard cannot create or
+	// repoint a webhook at all, which is the safe failure: silently
+	// accepting an unchecked destination is the defect this file exists to
+	// close.
+	destinationGuard *DestinationGuard
 }
 
 // Option configures a Handler. Same shape as the other v2 packages'.
@@ -109,6 +120,13 @@ func WithDispatcher(dispatcher *Dispatcher, deliveries DeliveryRepository) Optio
 		h.dispatcher = dispatcher
 		h.deliveries = deliveries
 	}
+}
+
+// WithDestinationGuard wires the SSRF check every Create and Update runs
+// against `url` before it reaches the repository. Without it both routes
+// answer 400 unconditionally — see the destinationGuard field's doc comment.
+func WithDestinationGuard(guard *DestinationGuard) Option {
+	return func(h *Handler) { h.destinationGuard = guard }
 }
 
 func NewHandler(repo Repository, opts ...Option) *Handler {
@@ -195,6 +213,10 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, apierr.BadRequest("invalid request body"))
 		return
 	}
+	if err := h.validateDestination(r.Context(), wh.URL); err != nil {
+		apierr.Write(w, err)
+		return
+	}
 
 	created, err := h.repo.Create(r.Context(), projectID, wh)
 	if err != nil {
@@ -211,6 +233,10 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	var wh Webhook
 	if err := json.NewDecoder(r.Body).Decode(&wh); err != nil {
 		apierr.Write(w, apierr.BadRequest("invalid request body"))
+		return
+	}
+	if err := h.validateDestination(r.Context(), wh.URL); err != nil {
+		apierr.Write(w, err)
 		return
 	}
 
@@ -286,6 +312,20 @@ func (h *Handler) Redeliver(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, delivery)
+}
+
+// validateDestination is Create's and Update's shared gate on `url`. It
+// answers a 400 whose message names the reason (never a bare 500 and never a
+// silent accept) — see the destinationGuard field's doc comment for why a
+// nil guard is also a 400 rather than a pass-through.
+func (h *Handler) validateDestination(ctx context.Context, destinationURL string) error {
+	if h.destinationGuard == nil {
+		return apierr.BadRequest("this deployment cannot validate webhook destinations; contact an administrator")
+	}
+	if err := h.destinationGuard.Validate(ctx, destinationURL); err != nil {
+		return apierr.BadRequest(err.Error())
+	}
+	return nil
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

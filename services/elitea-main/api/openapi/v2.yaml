@@ -8406,7 +8406,15 @@ components:
         directly; `id`/`project_id`/timestamps are server-assigned and
         ignored if sent).
       properties:
-        url: { type: string }
+        url:
+          type: string
+          description: >
+            NOTE(issue 876, SSRF hardening): resolved and checked before the
+            row is written. A destination that resolves to a loopback,
+            private, link-local or multicast address is refused with 400
+            unless ELITEA_WEBHOOK_EGRESS_ALLOWLIST explicitly permits
+            private-network egress (link-local and multicast are refused no
+            matter what that variable says).
         events:
           type: array
           items: { type: string }
@@ -8431,7 +8439,13 @@ components:
           description: The event type this delivery carried, e.g. `conversation.created`.
         status:
           type: string
-          enum: [pending, success, failed]
+          enum: [pending, success, failed, blocked]
+          description: >
+            NOTE(issue 876, SSRF hardening): `blocked` is a delivery the
+            platform's destination guard refused to dial — the destination
+            resolved to a loopback, private, link-local or metadata address
+            this deployment does not permit. It is never retried and cannot
+            be redelivered until the webhook's `url` is corrected.
         attempts:
           type: integer
           description: How many HTTP attempts this sequence made (1-3).

@@ -166,6 +166,54 @@ describe('WebhooksContent — create', () => {
       expect(screen.getByTestId('webhook-secret-value')).toHaveValue(createdBody!.secret);
     });
   });
+
+  // SSRF hardening (issue 876 follow-up): internal/api/webhook/handler.go's
+  // Create now answers 400 with a SPECIFIC reason when the destination
+  // guard refuses `url` (ssrf.go). This proves the reason reaches the user
+  // inline, on the field it is actually about — not just a generic toast —
+  // and that the dialog stays open (nothing was created) so the user can
+  // fix the value in place.
+  it('surfaces the server\'s destination-refusal message on the URL field and keeps the dialog open', async () => {
+    const refusalMessage =
+      'webhook destination refused: "127.0.0.1" does not resolve to a permitted destination ' +
+      '(loopback, private-network, link-local and multicast addresses are refused)';
+    let listCalls = 0;
+    server.use(
+      fullPermissions(),
+      http.get(WEBHOOKS_PATH, () => {
+        listCalls += 1;
+        return HttpResponse.json({ items: [] });
+      }),
+      http.post(WEBHOOKS_PATH, () => HttpResponse.json({ error: refusalMessage }, { status: 400 })),
+    );
+
+    mount();
+
+    await waitFor(() => {
+      expect(listCalls).toBeGreaterThan(0);
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('webhooks-empty')).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Register a new webhook' })).toBeEnabled();
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Register a new webhook' }));
+
+    const dialog = await screen.findByTestId('webhook-form-dialog');
+    fireEvent.change(within(dialog).getByTestId('webhook-form-url').querySelector('input')!, {
+      target: { value: 'http://127.0.0.1:8080/hook' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create' }));
+
+    await waitFor(() => {
+      expect(within(dialog).getByText(refusalMessage)).toBeInTheDocument();
+    });
+    // Nothing was created, and the dialog is still open with the value the
+    // user typed — a refusal must not silently discard their input.
+    expect(screen.getByTestId('webhook-form-dialog')).toBeInTheDocument();
+    expect(within(dialog).getByTestId('webhook-form-url').querySelector('input')).toHaveValue('http://127.0.0.1:8080/hook');
+  });
 });
 
 describe('WebhooksContent — enable/disable and rotate', () => {

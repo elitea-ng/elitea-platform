@@ -44,7 +44,8 @@ import {
 import { webhooksFeature } from '@/features/settings';
 import type { WebhookFormValues, WebhookViewRow } from '@/features/settings';
 
-const { useWebhookPermissions, generateWebhookSecret, WebhookFormDialog, WebhookSecretDialog, WebhooksTable } = webhooksFeature;
+const { useWebhookPermissions, generateWebhookSecret, webhookServerErrorMessage, WebhookFormDialog, WebhookSecretDialog, WebhooksTable } =
+  webhooksFeature;
 
 const EMPTY_WEBHOOKS: Webhook[] = [];
 
@@ -105,19 +106,27 @@ export const WebhooksContent = memo(function WebhooksContent() {
   const [formOpen, setFormOpen] = useState(false);
   const [editingRow, setEditingRow] = useState<WebhookViewRow | null>(null);
   const [revealSecret, setRevealSecret] = useState<string | null>(null);
+  // The server's own reason the LAST submit was refused (typically the SSRF
+  // guard's 400 — internal/api/webhook/ssrf.go), surfaced inline on the URL
+  // field rather than only as the generic toast below. `undefined` when the
+  // form has not failed since it was last opened.
+  const [formServerError, setFormServerError] = useState<string | undefined>(undefined);
 
   const openCreate = useCallback(() => {
     setEditingRow(null);
+    setFormServerError(undefined);
     setFormOpen(true);
   }, []);
   const openEdit = useCallback((row: WebhookViewRow) => {
     setEditingRow(row);
+    setFormServerError(undefined);
     setFormOpen(true);
   }, []);
   const closeForm = useCallback(() => setFormOpen(false), []);
 
   const submitForm = useCallback(
     (values: WebhookFormValues) => {
+      setFormServerError(undefined);
       if (editingRow) {
         // An edit keeps the row's existing secret — rotating is a separate
         // action (see WebhookFormDialog's own header comment on why).
@@ -125,7 +134,14 @@ export const WebhooksContent = memo(function WebhooksContent() {
           { webhookID: editingRow.id, body: writeBody(values.url, values.events, editingRow.secret, values.active) },
           {
             onSuccess: () => setFormOpen(false),
-            onError: onError(t('entities.webhook.error.updateFailed', 'Failed to update the webhook')),
+            onError: (error) => {
+              const message = webhookServerErrorMessage(
+                error,
+                t('entities.webhook.error.updateFailed', 'Failed to update the webhook'),
+              );
+              setFormServerError(message);
+              onError(message)();
+            },
           },
         );
         return;
@@ -136,7 +152,14 @@ export const WebhooksContent = memo(function WebhooksContent() {
           setFormOpen(false);
           setRevealSecret(secret);
         },
-        onError: onError(t('entities.webhook.error.createFailed', 'Failed to create the webhook')),
+        onError: (error) => {
+          const message = webhookServerErrorMessage(
+            error,
+            t('entities.webhook.error.createFailed', 'Failed to create the webhook'),
+          );
+          setFormServerError(message);
+          onError(message)();
+        },
       });
     },
     [editingRow, createMutation, updateMutation, onError],
@@ -207,6 +230,7 @@ export const WebhooksContent = memo(function WebhooksContent() {
         open={formOpen}
         isSaving={createMutation.isPending || updateMutation.isPending}
         initialValues={editingRow ? { url: editingRow.url, events: editingRow.events, active: editingRow.active } : undefined}
+        serverError={formServerError}
         onClose={closeForm}
         onSubmit={submitForm}
       />

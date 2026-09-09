@@ -21,7 +21,7 @@ import { SecretValueCell } from './ui/secrets/SecretValueCell';
 import { useSecretPermissions } from './lib/secrets/useSecretPermissions';
 
 import { useWebhookPermissions } from './lib/webhooks/useWebhookPermissions';
-import { generateWebhookSecret } from './lib/webhooks/webhookHelpers';
+import { generateWebhookSecret, webhookServerErrorMessage } from './lib/webhooks/webhookHelpers';
 import { WebhookFormDialog } from './ui/webhooks/WebhookFormDialog';
 export type { WebhookFormValues } from './ui/webhooks/WebhookFormDialog';
 import { WebhookSecretDialog } from './ui/webhooks/WebhookSecretDialog';
@@ -92,6 +92,7 @@ export const secretsFeature = { SecretsTable, SecretValueCell, useSecretPermissi
 export const webhooksFeature = {
   useWebhookPermissions,
   generateWebhookSecret,
+  webhookServerErrorMessage,
   WebhookFormDialog,
   WebhookSecretDialog,
   WebhooksTable,

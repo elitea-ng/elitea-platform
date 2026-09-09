@@ -242,6 +242,66 @@ func TestDispatcherLogsFailureAfterExhaustingAttempts(t *testing.T) {
 	}
 }
 
+/* ── SSRF guard ───────────────────────────────────────────────────────── */
+
+// TestDispatcherBlocksAndDoesNotRetryASSRFRefusedDestination proves attempt()
+// treats a guard refusal as terminal, not retryable: the destination refuses
+// identically every time, so retrying it would only spend the backoff budget
+// to reach the same answer three times. It also proves no network attempt is
+// even made — the guard check runs BEFORE any dial.
+func TestDispatcherBlocksAndDoesNotRetryASSRFRefusedDestination(t *testing.T) {
+	deliveries := &mockDeliveryRepository{}
+	repo := &mockWebhookRepo{webhooks: []Webhook{{
+		ID: "wh-1", ProjectID: "proj-1", URL: "http://169.254.169.254/latest/meta-data/",
+		Events: []string{"conversation.created"}, Secret: "s", Active: true,
+	}}}
+	guard := NewDestinationGuardWithResolver(nil, fakeIPResolver{})
+	d := NewDispatcher(repo, deliveries, WithGuard(guard))
+
+	d.HandleDomainEvent(context.Background(), "proj-1", "conversation.created", map[string]any{})
+	waitFor(t, func() bool { return len(deliveries.created) == 1 })
+
+	logged := deliveries.created[0]
+	if logged.Status != DeliveryStatusBlocked {
+		t.Errorf("status = %s, want %s", logged.Status, DeliveryStatusBlocked)
+	}
+	if logged.Attempts != 1 {
+		t.Errorf("attempts = %d, want 1 (a blocked destination is not retried)", logged.Attempts)
+	}
+	if logged.LastError == "" {
+		t.Error("last_error is empty on a blocked delivery")
+	}
+	if logged.ResponseCode != nil {
+		t.Errorf("response code = %v, want nil (no dial was attempted)", logged.ResponseCode)
+	}
+}
+
+// TestDispatcherWithoutAGuardDialsUnchecked documents the deliberate degrade:
+// a Dispatcher built with no WithGuard option performs no SSRF check at all.
+// Production always wires one (cmd/elitea-main/main.go); this pins the
+// no-guard behaviour so a future change cannot silently make it fail closed
+// (which would need its own migration/test update, not a surprise).
+func TestDispatcherWithoutAGuardDialsUnchecked(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	deliveries := &mockDeliveryRepository{}
+	repo := &mockWebhookRepo{webhooks: []Webhook{{
+		ID: "wh-1", ProjectID: "proj-1", URL: server.URL, // a loopback address
+		Events: []string{"conversation.created"}, Secret: "s", Active: true,
+	}}}
+	d := NewDispatcher(repo, deliveries) // no WithGuard
+
+	d.HandleDomainEvent(context.Background(), "proj-1", "conversation.created", map[string]any{})
+	waitFor(t, func() bool { return len(deliveries.created) == 1 })
+
+	if deliveries.created[0].Status != DeliveryStatusSuccess {
+		t.Errorf("status = %s, want success (an unguarded Dispatcher does not block loopback)", deliveries.created[0].Status)
+	}
+}
+
 /* ── inactive / unsubscribed webhooks are skipped ────────────────────── */
 
 func TestDispatcherSkipsInactiveAndUnsubscribedWebhooks(t *testing.T) {

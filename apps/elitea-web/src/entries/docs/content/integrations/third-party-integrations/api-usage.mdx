@@ -49,5 +49,5 @@ A token only reaches projects its owner belongs to — a 403 on an otherwise-cor
 </Note>
 
 <Note>
-Webhooks (inbound triggers for pipelines) are API-only: there is no elitea-web page to create, list, rotate or delete one (tracked in #876). The agent's own info panel shows a trigger's URL once one exists.
+Webhooks (both directions) have a UI now: a pipeline's inbound trigger is configured from the pipeline editor's **Triggers & schedules** panel, and the project's outbound webhook registry has its own **Settings › Webhooks** page — see [Webhooks and pipeline triggers](/how-tos/credentials-toolkits/webhooks-and-triggers). Both APIs still work with a personal access token if you'd rather script registration.
 </Note>

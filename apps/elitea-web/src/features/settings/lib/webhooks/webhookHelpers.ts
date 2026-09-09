@@ -12,6 +12,38 @@
  * exact dead-code-with-no-caller class this codebase's own knip/E2E gates
  * exist to catch.
  */
+import { EliteaApiError } from '@/shared/api/generated/mutator';
+
+/**
+ * The SERVER's own explanation, when it sent one — same extraction
+ * `features/settings/api/ai-configuration/api.ts`'s
+ * `modelConfigurationErrorMessage` and `features/agents/lib/errorMessage.ts`'s
+ * `applicationServerErrorMessage` already do (see either's own doc comment
+ * for the full rationale). Rebuilt here rather than imported:
+ * `no-sideways-features` forbids reaching into another feature's internals;
+ * a dozen lines duplicated is this codebase's established answer to that.
+ *
+ * The SSRF hardening (issue 876 follow-up) is what makes this matter for
+ * webhooks specifically: `internal/api/webhook/handler.go`'s Create and
+ * Update now answer 400 with a real, specific reason ("... resolves to a
+ * private-network address ...") whenever a destination is refused, and
+ * `EliteaApiError.message` alone is only the `eliteaFetch: 400 from <url>`
+ * diagnostic — putting THAT in front of a user who just typed a bad URL
+ * would tell them nothing they did not already know from the form turning
+ * red.
+ */
+export function webhookServerErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof EliteaApiError && error.failure.kind === 'http') {
+    const { body } = error.failure;
+    if (typeof body === 'string' && body !== '') return body;
+    if (typeof body === 'object' && body !== null) {
+      const record = body as Record<string, unknown>;
+      const detail = record['error'] ?? record['message'];
+      if (typeof detail === 'string' && detail !== '') return detail;
+    }
+  }
+  return fallback;
+}
 
 /**
  * A random URL-safe secret, matching the shape

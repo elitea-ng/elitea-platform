@@ -43,7 +43,11 @@ import * as zod from "zod";
 
 export const WebhookWriteRequest = zod
   .object({
-    url: zod.string(),
+    url: zod
+      .string()
+      .describe(
+        "NOTE(issue 876, SSRF hardening): resolved and checked before the row is written. A destination that resolves to a loopback, private, link-local or multicast address is refused with 400 unless ELITEA_WEBHOOK_EGRESS_ALLOWLIST explicitly permits private-network egress (link-local and multicast are refused no matter what that variable says).\n",
+      ),
     events: zod.array(zod.string()),
     secret: zod.string().optional(),
     active: zod.boolean(),

@@ -30,6 +30,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -86,6 +87,16 @@ const (
 	DeliveryStatusPending DeliveryStatus = "pending"
 	DeliveryStatusSuccess DeliveryStatus = "success"
 	DeliveryStatusFailed  DeliveryStatus = "failed"
+	// DeliveryStatusBlocked is a delivery this Dispatcher refused to even
+	// attempt, because the destination's DNS answer at send time resolved to
+	// a loopback, private, link-local or multicast address the configured
+	// DestinationGuard does not permit (ssrf.go). It is distinct from
+	// DeliveryStatusFailed on purpose: a "failed" delivery is one the
+	// destination itself rejected or timed out on, which redelivering might
+	// fix; a "blocked" delivery would refuse identically on every retry, so
+	// attempt() does not retry it, and the deliveries panel should not offer
+	// Redeliver the same false hope it offers a transient failure.
+	DeliveryStatusBlocked DeliveryStatus = "blocked"
 )
 
 // Delivery is one logged attempt sequence against one webhook for one event.
@@ -135,6 +146,42 @@ type Dispatcher struct {
 	repo       Repository
 	deliveries DeliveryRepository
 	client     *http.Client
+	// guard is the SSRF check every send() goes through. nil means NO check
+	// is performed at dial time — see WithGuard's doc comment for why an
+	// absent guard degrades rather than fails closed here, unlike
+	// Handler.validateDestination's write-path gate.
+	guard *DestinationGuard
+}
+
+// DispatcherOption configures a Dispatcher built by NewDispatcher.
+type DispatcherOption func(*Dispatcher)
+
+// WithGuard wires the dial-time SSRF check (ssrf.go) into every delivery
+// attempt: the Dispatcher's http.Client dials through guard.Transport()
+// instead of http.DefaultTransport, so a destination that resolves to a
+// disallowed address at SEND time — whether it was smuggled directly into
+// the table, or a previously-valid hostname now resolves somewhere it should
+// not (DNS rebinding, a repointed record) — is refused before any TCP
+// connection opens, and attempt() logs the outcome as DeliveryStatusBlocked.
+//
+// A Dispatcher built WITHOUT this option (guard nil) performs NO destination
+// check at dial time and dials whatever `wh.URL` says, using
+// http.DefaultTransport. That is a deliberate degrade, the same "absent
+// optional dependency" shape `deliveries == nil` already documents on this
+// type: the composition root (cmd/elitea-main/main.go) always supplies a
+// guard in production, and every unit test in this package that does not
+// need to exercise the SSRF path (retry/backoff, signing, redeliver) is
+// unaffected by it, the same way those tests are unaffected by an absent
+// delivery log. The WRITE path this dispatch reads from (Handler.Create/
+// Update, via validateDestination) does fail closed on a nil guard — a
+// row cannot enter the table unchecked even on a deployment that also failed
+// to wire dial-time enforcement, so the two nils are not "either gate is
+// optional", they are "the write gate is mandatory and this one is
+// defence in depth for data already admitted".
+func WithGuard(guard *DestinationGuard) DispatcherOption {
+	return func(d *Dispatcher) {
+		d.guard = guard
+	}
 }
 
 // NewDispatcher builds a Dispatcher. deliveries may be nil — a Dispatcher
@@ -142,14 +189,21 @@ type Dispatcher struct {
 // not persist the outcome, which is the same "degraded, not wrong" shape
 // WithUserContextDefaults documents elsewhere in this service for an absent
 // optional dependency.
-func NewDispatcher(repo Repository, deliveries DeliveryRepository) *Dispatcher {
-	return &Dispatcher{
+func NewDispatcher(repo Repository, deliveries DeliveryRepository, opts ...DispatcherOption) *Dispatcher {
+	d := &Dispatcher{
 		repo:       repo,
 		deliveries: deliveries,
 		client: &http.Client{
 			Timeout: deliveryTimeout,
 		},
 	}
+	for _, opt := range opts {
+		opt(d)
+	}
+	if d.guard != nil {
+		d.client.Transport = d.guard.Transport()
+	}
+	return d
 }
 
 // HandleDomainEvent is internal/events.Sink's method. See the package doc
@@ -227,12 +281,36 @@ func (d *Dispatcher) deliverAndLog(ctx context.Context, wh Webhook, eventType st
 // deliveryBackoff between attempts, and reports the outcome. A 2xx or 3xx
 // response is success; any other status, or a transport error (DNS, refused
 // connection, timeout), counts as a failed attempt and is retried.
+//
+// A destination the configured DestinationGuard refuses is the ONE exception
+// to "retried": refusing 127.0.0.1 (or 169.254.169.254, or a name that now
+// resolves into a private range) does not change between one attempt and the
+// next the way a destination's own 500 or a transient timeout might, so
+// retrying it would only spend three attempts' worth of backoff to reach the
+// same refusal three times. attempt() checks this UP FRONT, before making any
+// network call at all — cheaper than discovering it through the HTTP client
+// — and also recognises the same refusal if it instead surfaces from
+// dialContext during send() (the destination passed the up-front check but
+// failed the dial-time re-resolution: rebinding, or a record that changed in
+// the few milliseconds between the two checks). Either way the outcome is
+// DeliveryStatusBlocked, not DeliveryStatusFailed, and the loop stops.
 func (d *Dispatcher) attempt(ctx context.Context, wh Webhook, eventType string, body []byte) deliveryOutcome {
+	if d.guard != nil {
+		if err := d.guard.Validate(ctx, wh.URL); err != nil {
+			return deliveryOutcome{Attempts: 1, Status: DeliveryStatusBlocked, LastError: err.Error()}
+		}
+	}
 	var outcome deliveryOutcome
 	for i := 0; i < maxDeliveryAttempts; i++ {
 		outcome.Attempts++
 		code, err := d.send(ctx, wh, eventType, body)
 		if err != nil {
+			if errors.Is(err, ErrDestinationRefused) {
+				outcome.Status = DeliveryStatusBlocked
+				outcome.LastError = err.Error()
+				outcome.ResponseCode = nil
+				return outcome
+			}
 			outcome.LastError = err.Error()
 			outcome.ResponseCode = nil
 		} else if code >= 200 && code < 400 {

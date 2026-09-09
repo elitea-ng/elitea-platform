@@ -42,9 +42,14 @@ const rootSx: SxProps<Theme> = { padding: '0.75rem 1rem 1rem 1rem' };
 const emptySx: SxProps<Theme> = { color: 'text.secondary', padding: '0.5rem 0' };
 const loadingSx: SxProps<Theme> = { display: 'flex', justifyContent: 'center', padding: '1rem' };
 
-function statusColor(status: WebhookDelivery['status']): 'success' | 'error' | 'default' {
+function statusColor(status: WebhookDelivery['status']): 'success' | 'error' | 'warning' | 'default' {
   if (status === 'success') return 'success';
   if (status === 'failed') return 'error';
+  // 'blocked' is a destination the platform's SSRF guard refused to dial
+  // (loopback, private, link-local or a metadata address) — a configuration
+  // problem, not a transient delivery failure, so it reads as a warning
+  // rather than the same red as an ordinary failure.
+  if (status === 'blocked') return 'warning';
   return 'default';
 }
 
@@ -140,7 +145,7 @@ export function WebhookDeliveriesPanel({ projectId, webhookId, canRedeliver }: W
                 </Typography>
               </TableCell>
               <TableCell align="right">
-                {canRedeliver && (
+                {canRedeliver && delivery.status !== 'blocked' && (
                   <Tooltip title={t('entities.webhook.deliveries.redeliver', 'Redeliver')}>
                     <span>
                       <IconButton
@@ -151,6 +156,20 @@ export function WebhookDeliveriesPanel({ projectId, webhookId, canRedeliver }: W
                         data-testid={`webhook-redeliver-${delivery.id}`}
                       >
                         {redeliveringId === delivery.id ? <CircularProgress size={16} /> : <ReplayIcon fontSize="small" />}
+                      </IconButton>
+                    </span>
+                  </Tooltip>
+                )}
+                {canRedeliver && delivery.status === 'blocked' && (
+                  <Tooltip
+                    title={t(
+                      'entities.webhook.deliveries.redeliverBlocked',
+                      'This destination was refused by the platform and cannot be redelivered. Update the webhook URL first.',
+                    )}
+                  >
+                    <span>
+                      <IconButton size="small" disabled aria-label={t('entities.webhook.deliveries.redeliverAria', 'Redeliver this event')}>
+                        <ReplayIcon fontSize="small" />
                       </IconButton>
                     </span>
                   </Tooltip>

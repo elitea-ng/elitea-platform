@@ -184,3 +184,35 @@ test('Settings: create, rotate, disable and delete a webhook', async ({ page }, 
 
   await checkA11y(page);
 });
+
+// SSRF hardening (issue 876 follow-up): internal/api/webhook/ssrf.go's
+// DestinationGuard refuses a loopback destination at Create with 400, and
+// the reason shows up inline on the URL field — see
+// features/settings/ui/webhooks/WebhookFormDialog.tsx's `serverError` prop.
+// This is the real backend, not a mock: ELITEA_WEBHOOK_EGRESS_ALLOWLIST is
+// unset on this stack, which is a valid "refuse all private destinations"
+// allowlist (DestinationAllowlistEnv's own doc comment).
+test('Settings: a loopback destination is refused inline and nothing is created', async ({ page }) => {
+  await page.goto(WEBHOOKS_PAGE);
+  await page.getByRole('button', { name: 'Register a new webhook' }).click({ timeout: 10_000 });
+
+  const dialog = page.getByTestId('webhook-form-dialog');
+  await expect(dialog).toBeVisible({ timeout: 5_000 });
+  await dialog.getByTestId('webhook-form-url').locator('input').fill('http://127.0.0.1:9/hook', { timeout: 3_000 });
+
+  const refused = page.waitForResponse(
+    (res) => res.request().method() === 'POST' && res.url().includes('/webhooks/prompt_lib/'),
+    { timeout: 20_000 },
+  );
+  await dialog.getByRole('button', { name: 'Create', exact: true }).click({ timeout: 3_000 });
+  const response = await refused;
+  expect(response.status()).toBe(400);
+
+  // The dialog stays open (nothing was created) and shows the server's own
+  // reason, under the URL field the refusal is actually about.
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText(/refused/i)).toBeVisible({ timeout: 5_000 });
+
+  const rows = await listWebhooks(page.request);
+  expect(rows.find((w) => w.url === 'http://127.0.0.1:9/hook')).toBeUndefined();
+});

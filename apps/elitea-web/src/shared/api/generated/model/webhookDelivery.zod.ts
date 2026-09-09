@@ -51,7 +51,11 @@ export const WebhookDelivery = zod
       .describe(
         "The event type this delivery carried, e.g. `conversation.created`.",
       ),
-    status: zod.enum(["pending", "success", "failed"]),
+    status: zod
+      .enum(["pending", "success", "failed", "blocked"])
+      .describe(
+        "NOTE(issue 876, SSRF hardening): `blocked` is a delivery the platform's destination guard refused to dial — the destination resolved to a loopback, private, link-local or metadata address this deployment does not permit. It is never retried and cannot be redelivered until the webhook's `url` is corrected.\n",
+      ),
     attempts: zod
       .int()
       .describe("How many HTTP attempts this sequence made (1-3)."),

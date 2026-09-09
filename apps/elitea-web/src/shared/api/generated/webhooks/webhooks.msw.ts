@@ -151,6 +151,7 @@ export const getListWebhookDeliveriesResponseMock = (
       "pending",
       "success",
       "failed",
+      "blocked",
     ] as const),
     attempts: faker.number.int(),
     response_code: faker.helpers.arrayElement([
@@ -179,7 +180,12 @@ export const getRedeliverWebhookDeliveryResponseMock = (
   webhook_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
   project_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
   event: faker.string.alpha({ length: { min: 10, max: 20 } }),
-  status: faker.helpers.arrayElement(["pending", "success", "failed"] as const),
+  status: faker.helpers.arrayElement([
+    "pending",
+    "success",
+    "failed",
+    "blocked",
+  ] as const),
   attempts: faker.number.int(),
   response_code: faker.helpers.arrayElement([
     faker.helpers.arrayElement([faker.number.int(), null]),

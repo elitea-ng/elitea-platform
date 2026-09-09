@@ -531,7 +531,14 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// route reuses the `configurations.configuration*` strings 0072 already
 	// grants, so this file has no shared-permission sibling of its own kind
 	// — it IS the shared file, for a table rather than a grant.
-	require.EqualValues(t, 122, Head(shared))
+	//
+	// 123: shared/0123_webhook_delivery_blocked_status.sql, the SSRF-hardening
+	// follow-up's third delivery outcome — a destination the new
+	// DestinationGuard refuses to dial (loopback, private, link-local or
+	// metadata) is logged 'blocked', distinct from 'failed' because it is
+	// never retried. DROP + ADD CONSTRAINT on 0122's CHECK, since 0122 is
+	// checksum-immutable.
+	require.EqualValues(t, 123, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

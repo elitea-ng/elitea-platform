@@ -31,6 +31,17 @@ Separately from pipeline triggers, each project also has a generic outbound webh
 4. Verify the signature on your receiving end: it's an HMAC-SHA256 of the raw request body, keyed with the secret, the same scheme the pipeline trigger's bearer token protects against.
 </Steps>
 
+### Destination rules
+
+The platform checks a webhook's destination before it saves the row, and again every time it actually delivers to it — a URL is not just stored, it's resolved and checked:
+
+- **Scheme.** Only `http://` and `https://` are accepted.
+- **Loopback and private-network addresses** (`127.0.0.1`, `localhost`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, and their IPv6 equivalents) are refused by default. An operator can permit them for a specific deployment (an internal receiver, a service mesh host) through an allowlist; ask your administrator if you need this.
+- **Link-local and multicast addresses** — including `169.254.169.254`, the address every major cloud provider serves its instance-metadata endpoint from — are **always** refused, with no allowlist able to permit them. A webhook pointed there would let the platform's own network identity read out of that endpoint on your behalf, which is exactly what this rule exists to prevent.
+- The check follows DNS: a hostname that resolves to a refused address is refused the same as a literal IP, both when you save the webhook and every time it fires — a name that resolves somewhere permitted today and somewhere refused tomorrow is refused at delivery time even if it passed when you created the row.
+
+If your destination is refused, the form shows the reason inline, under the URL field. If a webhook that once resolved somewhere permitted is later refused at send time — a DNS change, most commonly — the attempt is not retried (retrying would refuse identically every time) and it's logged in Recent deliveries as **blocked**, with the reason in the delivery's error message, so you can see why nothing arrived instead of it silently doing nothing.
+
 <Screenshot id="webhooks-settings-table" alt="The project Webhooks settings page, listing registered webhooks with their events and Active toggle" mask="webhook-secret" />
 
 From the same page you can:
@@ -39,7 +50,7 @@ From the same page you can:
 - **Rotate** the secret — mints a fresh value and shows it once, exactly like creation.
 - **Enable or disable** a webhook without deleting it, with the toggle in the Active column.
 - **Delete** a webhook, with a confirmation step.
-- **Expand a row** to see its **Recent deliveries** — every attempt Elitea made, newest first, with the event, outcome, how many tries it took, and the destination's response code or the transport error. Each delivery has a **Redeliver** action that resends the exact same signed body on demand, for example after you've fixed a receiver that was down.
+- **Expand a row** to see its **Recent deliveries** — every attempt Elitea made, newest first, with the event, outcome, how many tries it took, and the destination's response code or the transport error. A delivery's outcome is `success`, `failed` (the destination rejected it or didn't answer, retried up to three times), or `blocked` (the destination was refused by the platform's destination rules — see above — before any request was made; **Redeliver** is unavailable for a blocked delivery, since it would be refused identically). Each non-blocked delivery has a **Redeliver** action that resends the exact same signed body on demand, for example after you've fixed a receiver that was down.
 
 <Note>
 The webhook API itself still works with a personal access token, if you'd rather script registration: create an entry with a target URL, the events you want, and a secret Elitea will sign requests with.

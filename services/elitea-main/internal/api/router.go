@@ -274,6 +274,15 @@ type RouterConfig struct {
 	// own nil check answers 404 instead of dispatching.
 	WebhookDeliveries webhook.DeliveryRepository
 	WebhookDispatcher *webhook.Dispatcher
+	// WebhookDestinationGuard is the SSRF check (internal/api/webhook/ssrf.go)
+	// every Create and Update runs against `url`. main.go builds it
+	// unconditionally (parsed from ELITEA_WEBHOOK_EGRESS_ALLOWLIST, empty is
+	// a valid "refuse all private destinations" allowlist), so this is nil
+	// only in a test composing RouterConfig by hand — and Handler answers
+	// 400 on both routes when it is nil, never a pass-through. See
+	// webhook.Handler's destinationGuard field for why that direction is
+	// fail-closed unlike WebhookDispatcher's own nil-gated degrade above.
+	WebhookDestinationGuard *webhook.DestinationGuard
 	// EvalDimensionsRepo backs the Agent Evaluation DIMENSION LIBRARY — the
 	// first and, for now, only slice of that feature. Unassigned, the four
 	// routes are not registered at all, which answers 404: a stubbed 200 with
@@ -3920,6 +3929,11 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			// route must not be the thing that decides.
 			if cfg.WebhookRepo != nil {
 				webhookOptions := []webhook.Option{webhook.WithPermissionResolver(coreResolver)}
+				// SSRF hardening: without this, Create and Update fail closed
+				// with 400 on every request — see the field's own doc comment.
+				if cfg.WebhookDestinationGuard != nil {
+					webhookOptions = append(webhookOptions, webhook.WithDestinationGuard(cfg.WebhookDestinationGuard))
+				}
 				// The delivery log routes (#876's second half). Both
 				// WebhookDispatcher and WebhookDeliveries are set together by
 				// main.go's composition (one Dispatcher, one repository) —

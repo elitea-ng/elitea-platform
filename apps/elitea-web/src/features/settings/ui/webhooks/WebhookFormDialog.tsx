@@ -36,6 +36,16 @@ export interface WebhookFormDialogProps {
   readonly isSaving: boolean;
   /** Present when editing an existing webhook; absent for create. */
   readonly initialValues?: WebhookFormValues | undefined;
+  /**
+   * The server's own refusal reason for the LAST submit, if it failed —
+   * typically the SSRF guard's 400 ("... resolves to a private-network
+   * address ...", internal/api/webhook/ssrf.go). Rendered under the URL
+   * field, the one input a destination refusal is actually about. Cleared
+   * locally the moment the field changes (see the `onChange` handler below):
+   * a stale server message surviving an edit would read as still-current
+   * feedback on text the user has already changed.
+   */
+  readonly serverError?: string | undefined;
   readonly onClose: () => void;
   readonly onSubmit: (values: WebhookFormValues) => void;
 }
@@ -43,11 +53,14 @@ export interface WebhookFormDialogProps {
 const contentSx: SxProps<Theme> = { display: 'flex', flexDirection: 'column', gap: '1.25rem', minWidth: '25rem' };
 const descriptionSx: SxProps<Theme> = { color: 'text.secondary' };
 
-export function WebhookFormDialog({ open, isSaving, initialValues, onClose, onSubmit }: WebhookFormDialogProps) {
+export function WebhookFormDialog({ open, isSaving, initialValues, serverError, onClose, onSubmit }: WebhookFormDialogProps) {
   const [url, setUrl] = useState('');
   const [events, setEvents] = useState<readonly string[]>([]);
   const [active, setActive] = useState(true);
   const [urlError, setUrlError] = useState('');
+  // Tracks whether the CURRENT `serverError` value has already been shown
+  // and the field edited since — see `serverError`'s own doc comment.
+  const [serverErrorDismissed, setServerErrorDismissed] = useState(false);
 
   // Resets the form to the row being edited (or blank, for create) every time
   // the dialog opens — mirrors `PipelineWebhookModal`'s own open-triggered
@@ -58,7 +71,14 @@ export function WebhookFormDialog({ open, isSaving, initialValues, onClose, onSu
     setEvents(initialValues?.events ?? []);
     setActive(initialValues?.active ?? true);
     setUrlError('');
+    setServerErrorDismissed(false);
   }, [open, initialValues]);
+
+  // A NEW server refusal (a second failed submit) is shown again even if the
+  // previous one was dismissed by editing.
+  useEffect(() => {
+    setServerErrorDismissed(false);
+  }, [serverError]);
 
   const handleSubmit = useCallback(() => {
     const trimmedUrl = url.trim();
@@ -68,6 +88,8 @@ export function WebhookFormDialog({ open, isSaving, initialValues, onClose, onSu
     }
     onSubmit({ url: trimmedUrl, events, active });
   }, [url, events, active, onSubmit]);
+
+  const displayedUrlError = urlError || (!serverErrorDismissed && serverError ? serverError : '');
 
   const isEdit = initialValues !== undefined;
 
@@ -93,9 +115,10 @@ export function WebhookFormDialog({ open, isSaving, initialValues, onClose, onSu
             onChange={(event) => {
               setUrl(event.target.value);
               setUrlError('');
+              setServerErrorDismissed(true);
             }}
-            error={urlError !== ''}
-            helperText={urlError || undefined}
+            error={displayedUrlError !== ''}
+            helperText={displayedUrlError || undefined}
             data-testid="webhook-form-url"
           />
           <Autocomplete
