@@ -220,7 +220,6 @@ func TestRootRedirectKeepsTheQueryString(t *testing.T) {
 var notAtTheBrowserEdge = map[string]string{
 	"/readyz":   "the readiness body names each dependency's state; the Helm probe and the compose healthcheck reach the pod directly",
 	"/startupz": "the startup probe, for the same reason as /readyz",
-	"/docs":     "the Swagger UI. No product page links to it on this origin, so this edge does not publish it",
 }
 
 // edgeForwards answers whether one edge sends requestPath to elitea-main. Each

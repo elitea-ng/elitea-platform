@@ -1100,7 +1100,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	openapiDocsHandler := v2openapidocs.NewHandler()
 	r.Get("/api/openapi.yaml", openapiDocsHandler.Spec)
 	r.Get("/api/openapi.json", openapiDocsHandler.SpecJSON)
-	r.Get("/docs", openapiDocsHandler.UI)
+	r.Get("/api/docs", openapiDocsHandler.UI)
 
 	// Admin UI SPA — serves the admin panel with server-side config injection
 	if cfg.AdminUI != nil {

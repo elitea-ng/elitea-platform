@@ -71,7 +71,7 @@ var publicByDesign = map[string]string{
 	// becomes public here.
 	"/api/openapi.yaml": "the OpenAPI document. Static, tenant-free, and public on purpose (router.go:903).",
 	"/api/openapi.json": "the same document as JSON.",
-	"/docs":             "the page that renders the document above. It fetches /api/openapi.json and nothing else.",
+	"/api/docs":         "the page that renders the document above. It fetches /api/openapi.json and nothing else.",
 }
 
 // publicPrefixes covers surfaces whose whole subtree is anonymous.

@@ -53,7 +53,7 @@ func TestSpecJSONConvertsTheSameDocumentRealOperationsSurvive(t *testing.T) {
 func TestUIServesSelfContainedHTMLWithNoExternalReferences(t *testing.T) {
 	handler := openapidocs.NewHandler()
 	response := httptest.NewRecorder()
-	handler.UI(response, httptest.NewRequest(http.MethodGet, "/docs", nil))
+	handler.UI(response, httptest.NewRequest(http.MethodGet, "/api/docs", nil))
 
 	if response.Code != http.StatusOK {
 		t.Fatalf("status=%d", response.Code)
